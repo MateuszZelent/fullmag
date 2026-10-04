@@ -1524,7 +1524,8 @@ fn validate_conservative_current_view(
     if view.boundary_faces.len() != expected_faces.len() {
         return Err(vec![format!(
             "{prefix} must classify every exterior/periodic Tri3 facet exactly once (authored {}, mesh {})",
-            view.boundary_faces.len(), expected_faces.len()
+            view.boundary_faces.len(),
+            expected_faces.len()
         )]);
     }
     let mut authored_faces = BTreeSet::new();
@@ -1803,7 +1804,9 @@ fn require_full_fem_domain(mask: &[bool], label: &str) -> Result<(), Vec<String>
     if mask.iter().all(|selected| *selected) && !mask.is_empty() {
         Ok(())
     } else {
-        Err(vec![format!("FEM conforming-H1 M1 requires {label} to cover the complete resolved mesh; submesh restriction is not implemented")])
+        Err(vec![format!(
+            "FEM conforming-H1 M1 requires {label} to cover the complete resolved mesh; submesh restriction is not implemented"
+        )])
     }
 }
 
@@ -2983,9 +2986,11 @@ fn structured_boundary_face(
         "y_max" | "y+" => (StructuredBoundaryFaceIR::YMax, [0.0, 1.0, 0.0]),
         "z_min" | "z-" => (StructuredBoundaryFaceIR::ZMin, [0.0, 0.0, -1.0]),
         "z_max" | "z+" => (StructuredBoundaryFaceIR::ZMax, [0.0, 0.0, 1.0]),
-        other => return Err(vec![format!(
-            "structured FDM surface_id '{other}' is unsupported; use x_min/x_max/y_min/y_max/z_min/z_max"
-        )]),
+        other => {
+            return Err(vec![format!(
+                "structured FDM surface_id '{other}' is unsupported; use x_min/x_max/y_min/y_max/z_min/z_max"
+            )]);
+        }
     };
     if surface
         .orientation

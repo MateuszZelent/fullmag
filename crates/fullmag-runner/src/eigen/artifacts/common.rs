@@ -22,6 +22,73 @@ pub(crate) fn validated_modal_gamma0(gamma0_rad_s_per_a_m: f64) -> std::io::Resu
     Ok(gamma0_rad_s_per_a_m)
 }
 
+/// Immutable identity of the run that owns a frequency-domain artifact.
+///
+/// Writers require this context instead of persisting aliases such as
+/// `current` or `run:current`. Transport routes are resolved later by the API;
+/// the stored artifact keeps only the exact owning identities.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrequencyDomainArtifactIdentity {
+    pub session_id: String,
+    pub run_id: String,
+    pub stage_id: String,
+    pub runtime_id: String,
+}
+
+impl FrequencyDomainArtifactIdentity {
+    pub fn try_new(
+        session_id: impl Into<String>,
+        run_id: impl Into<String>,
+        stage_id: impl Into<String>,
+        runtime_id: impl Into<String>,
+    ) -> std::io::Result<Self> {
+        let identity = Self {
+            session_id: session_id.into(),
+            run_id: run_id.into(),
+            stage_id: stage_id.into(),
+            runtime_id: runtime_id.into(),
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    pub fn validate(&self) -> std::io::Result<()> {
+        for (label, value) in [
+            ("session_id", self.session_id.as_str()),
+            ("run_id", self.run_id.as_str()),
+            ("stage_id", self.stage_id.as_str()),
+            ("runtime_id", self.runtime_id.as_str()),
+        ] {
+            let normalized = value.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("frequency-domain artifact {label} must not be empty"),
+                ));
+            }
+            if normalized == "current"
+                || normalized == "run:current"
+                || normalized.ends_with(":current")
+                || normalized == "runtime:not_provided"
+            {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "frequency-domain artifact {label} must be an exact identity, got `{value}`"
+                    ),
+                ));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("frequency-domain artifact {label} contains a control character"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn finite_or_default(value: Option<f64>, default: f64) -> f64 {
     value
         .filter(|candidate| candidate.is_finite())
@@ -75,9 +142,10 @@ pub(super) struct FrequencyDomainArtifactManifest<'a> {
     pub(super) analysis_family: &'static str,
     pub(super) study_product: &'static str,
     pub(super) revision: String,
-    pub(super) session_id: &'static str,
-    pub(super) run_id: &'static str,
-    pub(super) stage_id: &'static str,
+    pub(super) session_id: &'a str,
+    pub(super) run_id: &'a str,
+    pub(super) stage_id: &'a str,
+    pub(super) runtime_id: &'a str,
     pub(super) stage_kind: &'static str,
     pub(super) created_at: String,
     pub(super) requested_execution: FrequencyDomainRequestedExecution<'a>,
@@ -227,7 +295,7 @@ pub(super) struct FrequencyDomainArtifactIndex {
     pub(super) frequency_point_paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(super) struct FrequencyDomainResourceIndex {
     pub(super) spectrum_resource_key: Option<&'static str>,
     pub(super) branches_resource_key: Option<&'static str>,
@@ -347,12 +415,6 @@ pub struct ServerArtifactTopology {
 
 pub(super) fn eigen_mode_field_id(sample_index: usize, raw_mode_index: usize) -> String {
     format!("analysis:eigen:sample-{sample_index:04}:mode-{raw_mode_index:04}")
-}
-
-pub(super) fn eigen_mode_field_resource_key(mode_field_id: &str) -> String {
-    format!(
-        "/v2/sessions/current/data/fields/{mode_field_id}/samples/vector?view=phase_rotated_real&phase_rad=0"
-    )
 }
 
 pub(super) fn result_mode(

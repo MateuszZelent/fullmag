@@ -443,9 +443,9 @@ async fn read_hysteresis_points(
         Err(error) if is_missing_stage_artifact(&error, "hysteresis_points.json") => {
             if stage_reports_completed_hysteresis_points(state, stage_id).await {
                 return Err(ApiError::conflict(format!(
-                        "stage {} reports completed hysteresis points but hysteresis_points.json is missing",
-                        stage_id
-                    )));
+                    "stage {} reports completed hysteresis points but hysteresis_points.json is missing",
+                    stage_id
+                )));
             }
             None
         }
@@ -665,14 +665,17 @@ pub async fn get_points(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisPointsResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let points = read_hysteresis_points(&state, &stage_id).await?;
     let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
-    Ok(Json(HysteresisPointsResource {
+    let resource = HysteresisPointsResource {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         points,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -691,14 +694,17 @@ pub async fn get_metrics(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisMetricsResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let metrics = read_typed_stage_artifact(&state, &stage_id, "hysteresis_metrics.json").await?;
     let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
-    Ok(Json(HysteresisMetricsResource {
+    let resource = HysteresisMetricsResource {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         metrics,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -717,14 +723,17 @@ pub async fn get_saturation(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisSaturationResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let saturation = read_hysteresis_saturation_result(&state, &stage_id).await?;
     let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
-    Ok(Json(HysteresisSaturationResource {
+    let resource = HysteresisSaturationResource {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         saturation,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -743,14 +752,17 @@ pub async fn get_adaptive_refinement(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisAdaptiveRefinementResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let adaptive_refinement = read_hysteresis_adaptive_refinement(&state, &stage_id).await?;
     let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
-    Ok(Json(HysteresisAdaptiveRefinementResource {
+    let resource = HysteresisAdaptiveRefinementResource {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         adaptive_refinement,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -769,6 +781,7 @@ pub async fn get_branches(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisBranchesResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let points = read_hysteresis_points(&state, &stage_id).await?;
     let mut branches = Vec::new();
     if !points.is_empty() {
@@ -782,12 +795,14 @@ pub async fn get_branches(
         }
     }
     let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
-    Ok(Json(HysteresisBranchesResource {
+    let resource = HysteresisBranchesResource {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         branches,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -806,8 +821,11 @@ pub async fn get_bookmarks(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisBookmarksResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
-    Ok(Json(hysteresis_bookmarks_resource(&state, &stage).await))
+    let resource = hysteresis_bookmarks_resource(&state, &stage).await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -828,6 +846,7 @@ pub async fn post_bookmark(
     Path(stage_id): Path<String>,
     Json(request): Json<HysteresisBookmarkPointRequest>,
 ) -> Result<Json<HysteresisBookmarksResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let points = read_hysteresis_points(&state, &stage.stage_id).await?;
     let point = points
@@ -876,6 +895,11 @@ pub async fn post_bookmark(
         measurement_axis: point.measurement_axis,
     };
 
+    // Serialize the final mutation with session transitions. The first
+    // validation rejects a stale read before it reaches the store, while the
+    // transition guard closes the race between validation and the write.
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     let mut guard = state.current_hysteresis_bookmarks.write().await;
     let store =
         guard
@@ -886,10 +910,10 @@ pub async fn post_bookmark(
             });
     store.revision = store.revision.max(stage.revision).saturating_add(1);
     store.bookmarks.insert(bookmark_id, bookmark);
-    Ok(Json(hysteresis_bookmarks_resource_from_store(
-        &stage,
-        Some(&*store),
-    )))
+    let resource = hysteresis_bookmarks_resource_from_store(&stage, Some(&*store));
+    drop(guard);
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 pub(crate) async fn hysteresis_bookmarks_resource(
@@ -934,6 +958,7 @@ pub async fn get_angular_family(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisAngularFamilyResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let metrics = match read_typed_stage_artifact::<HysteresisMetricsSchema>(
         &state,
@@ -1001,7 +1026,7 @@ pub async fn get_angular_family(
                 points: variant_points,
             });
         }
-        return Ok(Json(HysteresisAngularFamilyResource {
+        let resource = HysteresisAngularFamilyResource {
             revision: stage.revision,
             stage_id: stage.stage_id,
             stage_index: stage.stage_index,
@@ -1009,7 +1034,9 @@ pub async fn get_angular_family(
             label: (!artifact.label.is_empty()).then_some(artifact.label),
             active_variant_id,
             series,
-        }));
+        };
+        crate::validate_current_live_request_context(&state, &request_context).await?;
+        return Ok(Json(resource));
     }
 
     let Some(family_value) = stage.value.get("angular_family") else {
@@ -1095,7 +1122,7 @@ pub async fn get_angular_family(
         });
     }
 
-    Ok(Json(HysteresisAngularFamilyResource {
+    let resource = HysteresisAngularFamilyResource {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
@@ -1110,7 +1137,9 @@ pub async fn get_angular_family(
             .map(str::to_string),
         active_variant_id,
         series,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -1130,9 +1159,10 @@ pub async fn get_angular_family_variant_points(
     State(state): State<Arc<AppState>>,
     Path((stage_id, variant_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<HysteresisPointSchema>>, ApiError> {
-    Ok(Json(
-        read_hysteresis_family_variant_points(&state, &stage_id, &variant_id).await?,
-    ))
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let points = read_hysteresis_family_variant_points(&state, &stage_id, &variant_id).await?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(points))
 }
 
 #[utoipa::path(
@@ -1150,6 +1180,7 @@ pub async fn get_minor_loops(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisMinorLoopsResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let minor_loops = match read_optional_typed_stage_artifact_with_path::<
         Vec<HysteresisMinorLoopSchema>,
     >(&state, &stage_id, "hysteresis_minor_loops.json")
@@ -1169,12 +1200,14 @@ pub async fn get_minor_loops(
         Err(error) => return Err(error),
     };
     let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
-    Ok(Json(HysteresisMinorLoopsResource {
+    let resource = HysteresisMinorLoopsResource {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         minor_loops,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -1192,6 +1225,7 @@ pub async fn get_reversal_fields(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisReversalFieldsResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let points = read_hysteresis_points(&state, &stage_id).await?;
     let mut reversal_fields = Vec::new();
     if points.len() >= 3 {
@@ -1209,12 +1243,14 @@ pub async fn get_reversal_fields(
         }
     }
     let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
-    Ok(Json(HysteresisReversalFieldsResource {
+    let resource = HysteresisReversalFieldsResource {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         reversal_fields,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -1234,16 +1270,17 @@ pub async fn get_point_by_id(
     State(state): State<Arc<AppState>>,
     Path((stage_id, point_id)): Path<(String, usize)>,
 ) -> Result<Json<HysteresisPointSchema>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let points = read_hysteresis_points(&state, &stage_id).await?;
-    for point in points {
-        if point.point_id == point_id {
-            return Ok(Json(point));
-        }
-    }
-    Err(ApiError::not_found(format!(
-        "point {} not found in stage {}",
-        point_id, stage_id
-    )))
+    let point = points.into_iter().find(|point| point.point_id == point_id);
+    let point = point.ok_or_else(|| {
+        ApiError::not_found(format!(
+            "point {} not found in stage {}",
+            point_id, stage_id
+        ))
+    })?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(point))
 }
 
 fn branch_id_for_direction(direction: i32) -> &'static str {
@@ -1470,15 +1507,18 @@ pub async fn get_stage_settle_trace(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisSettleTraceResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let settle_trace: Vec<HysteresisSettleTraceEntrySchema> =
         read_typed_stage_artifact(&state, &stage_id, "hysteresis_settle_trace.json").await?;
     let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
-    Ok(Json(HysteresisSettleTraceResource {
+    let resource = HysteresisSettleTraceResource {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         settle_trace,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -1497,6 +1537,7 @@ pub async fn get_settle_trace(
     State(state): State<Arc<AppState>>,
     Path((stage_id, point_id)): Path<(String, usize)>,
 ) -> Result<Json<Vec<HysteresisSettleTraceEntrySchema>>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let trace: Vec<HysteresisSettleTraceEntrySchema> =
         read_typed_stage_artifact(&state, &stage_id, "hysteresis_settle_trace.json").await?;
     let point_trace = trace
@@ -1509,5 +1550,6 @@ pub async fn get_settle_trace(
             point_id, stage_id
         )));
     }
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(point_trace))
 }

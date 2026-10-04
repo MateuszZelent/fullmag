@@ -74,6 +74,8 @@ pub struct KittelFitArtifact {
     pub artifact_id: String,
     pub source: ServerArtifactSource,
     pub source_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub run_id: String,
     pub stage_id: String,
     pub scope_id: String,
@@ -1228,6 +1230,21 @@ fn select_k0_kittel_branch(
 pub fn build_kittel_fit_artifact(
     result: &PathSolveResult,
 ) -> std::io::Result<Option<KittelFitArtifact>> {
+    build_kittel_fit_artifact_impl(result, None)
+}
+
+pub fn build_kittel_fit_artifact_with_identity(
+    result: &PathSolveResult,
+    identity: &FrequencyDomainArtifactIdentity,
+) -> std::io::Result<Option<KittelFitArtifact>> {
+    identity.validate()?;
+    build_kittel_fit_artifact_impl(result, Some(identity))
+}
+
+fn build_kittel_fit_artifact_impl(
+    result: &PathSolveResult,
+    identity: Option<&FrequencyDomainArtifactIdentity>,
+) -> std::io::Result<Option<KittelFitArtifact>> {
     let Some(validation) = result.k0_kittel_validation.as_ref() else {
         return Ok(None);
     };
@@ -1341,10 +1358,17 @@ pub fn build_kittel_fit_artifact(
             revision: source_revision.clone(),
         },
         source_revision,
-        run_id: "run:current".to_string(),
-        stage_id: "stage:eigenmodes".to_string(),
+        session_id: identity.map(|identity| identity.session_id.clone()),
+        run_id: identity
+            .map(|identity| identity.run_id.clone())
+            .unwrap_or_else(|| "run:current".to_string()),
+        stage_id: identity
+            .map(|identity| identity.stage_id.clone())
+            .unwrap_or_else(|| "stage:eigenmodes".to_string()),
         scope_id: "scope:k0-kittel-postsolve".to_string(),
-        runtime_id,
+        runtime_id: identity
+            .map(|identity| identity.runtime_id.clone())
+            .unwrap_or(runtime_id),
         revision: String::new(),
         content_sha256: String::new(),
         status,
@@ -1388,6 +1412,20 @@ pub fn write_kittel_fit_artifact(
     result: &PathSolveResult,
 ) -> std::io::Result<bool> {
     let Some(artifact) = build_kittel_fit_artifact(result)? else {
+        return Ok(false);
+    };
+    let fmr_dir = base_dir.join("fmr");
+    fs::create_dir_all(&fmr_dir)?;
+    write_json_atomic(&fmr_dir.join("kittel_fit.v1.json"), &artifact)?;
+    Ok(true)
+}
+
+pub fn write_kittel_fit_artifact_with_identity(
+    base_dir: &Path,
+    result: &PathSolveResult,
+    identity: &FrequencyDomainArtifactIdentity,
+) -> std::io::Result<bool> {
+    let Some(artifact) = build_kittel_fit_artifact_with_identity(result, identity)? else {
         return Ok(false);
     };
     let fmr_dir = base_dir.join("fmr");

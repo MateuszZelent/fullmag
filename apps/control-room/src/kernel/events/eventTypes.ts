@@ -64,6 +64,8 @@ export interface KernelEventMap {
   };
   "workspace:new-problem-requested": {
     source: "menu" | "shortcut" | "workspace";
+    /** Preselects the discretization; absent keeps the dialog default. */
+    solver?: "FDM" | "FEM";
   };
   "explorer:texture-load-node-requested": {
     objectId: string;
@@ -75,7 +77,7 @@ export interface KernelEventMap {
   };
   "footer:tab-requested": {
     reason?: string;
-    tab: "diagnostics" | "engine" | "logs" | "mesh" | "quick-chart" | "telemetry";
+    tab: "diagnostics" | "engine" | "logs" | "operations" | "problems" | "quick-chart" | "telemetry";
   };
   "diagnostics:recorder-open-requested": {
     source: string;

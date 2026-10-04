@@ -51,7 +51,10 @@ fn json_request<T>(request: Result<Json<T>, JsonRejection>) -> Result<T, ApiErro
 pub async fn list_frozen_spins(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<FrozenSpinsCollectionResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     Ok(Json(collection_resource(&scene, None)))
 }
 
@@ -70,8 +73,11 @@ pub async fn create_frozen_spins(
     State(state): State<Arc<AppState>>,
     request: Result<Json<FrozenSpinsMutationRequest>, JsonRejection>,
 ) -> Result<Json<FrozenSpinsDefinitionResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let request = json_request(request)?;
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_revision(scene.revision, request.expected_revision)?;
     if scene
         .magnetization_constraints
@@ -87,10 +93,13 @@ pub async fn create_frozen_spins(
     scene
         .magnetization_constraints
         .push(MagnetizationConstraintIR::FrozenSpins(request.definition));
-    let committed = crate::commit_current_live_scene_document(&state, scene)
-        .await
-        .map_err(map_authoring_error)?;
-    let runtime_application = pending_runtime_application(&state, committed.revision).await;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await
+            .map_err(map_authoring_error)?;
+    let runtime_application =
+        pending_runtime_application_for_context(&state, &request_context, committed.revision)
+            .await?;
     definition_resource(&committed, &definition_id, Some(runtime_application)).map(Json)
 }
 
@@ -108,7 +117,10 @@ pub async fn get_frozen_spins(
     State(state): State<Arc<AppState>>,
     Path(constraint_id): Path<String>,
 ) -> Result<Json<FrozenSpinsDefinitionResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     definition_resource(&scene, &constraint_id, None).map(Json)
 }
 
@@ -130,8 +142,11 @@ pub async fn patch_frozen_spins(
     Path(constraint_id): Path<String>,
     request: Result<Json<FrozenSpinsMutationRequest>, JsonRejection>,
 ) -> Result<Json<FrozenSpinsDefinitionResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let request = json_request(request)?;
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_revision(scene.revision, request.expected_revision)?;
     if request.definition.id != constraint_id {
         return Err(ApiError::conflict(
@@ -148,10 +163,13 @@ pub async fn patch_frozen_spins(
             ))
         })?;
     *slot = MagnetizationConstraintIR::FrozenSpins(request.definition);
-    let committed = crate::commit_current_live_scene_document(&state, scene)
-        .await
-        .map_err(map_authoring_error)?;
-    let runtime_application = pending_runtime_application(&state, committed.revision).await;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await
+            .map_err(map_authoring_error)?;
+    let runtime_application =
+        pending_runtime_application_for_context(&state, &request_context, committed.revision)
+            .await?;
     definition_resource(&committed, &constraint_id, Some(runtime_application)).map(Json)
 }
 
@@ -173,8 +191,11 @@ pub async fn delete_frozen_spins(
     Path(constraint_id): Path<String>,
     request: Result<Json<FrozenSpinsDeleteRequest>, JsonRejection>,
 ) -> Result<Json<FrozenSpinsCollectionResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let request = json_request(request)?;
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_revision(scene.revision, request.expected_revision)?;
     let before = scene.magnetization_constraints.len();
     scene
@@ -185,10 +206,13 @@ pub async fn delete_frozen_spins(
             "frozen spins definition not found: {constraint_id}"
         )));
     }
-    let committed = crate::commit_current_live_scene_document(&state, scene)
-        .await
-        .map_err(map_authoring_error)?;
-    let runtime_application = pending_runtime_application(&state, committed.revision).await;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await
+            .map_err(map_authoring_error)?;
+    let runtime_application =
+        pending_runtime_application_for_context(&state, &request_context, committed.revision)
+            .await?;
     Ok(Json(collection_resource(
         &committed,
         Some(runtime_application),
@@ -210,11 +234,19 @@ pub async fn create_frozen_spins_preview(
     State(state): State<Arc<AppState>>,
     request: Result<Json<FrozenSpinsPreviewRequest>, JsonRejection>,
 ) -> Result<Json<FrozenSpinsPreviewResponse>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let request = json_request(request)?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let scene = snapshot
         .scene_document
         .as_ref()
@@ -480,7 +512,7 @@ pub async fn create_frozen_spins_preview(
         frozen_mask: resolved.frozen_mask,
     };
     drop(guard);
-    insert_current_preview_record(&state, preview_id, record).await?;
+    insert_current_preview_record(&state, &request_context, preview_id, record).await?;
     Ok(Json(response))
 }
 
@@ -499,7 +531,8 @@ pub async fn get_frozen_spins_preview(
     State(state): State<Arc<AppState>>,
     Path(preview_id): Path<String>,
 ) -> Result<Json<FrozenSpinsPreviewResponse>, ApiError> {
-    let record = current_preview_record(&state, &preview_id)
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let record = current_preview_record(&state, &request_context, &preview_id)
         .await?
         .ok_or_else(|| {
             ApiError::not_found(format!("frozen spins preview not found: {preview_id}"))
@@ -526,8 +559,8 @@ pub async fn activate_frozen_spins_preview(
     request: Result<Json<FrozenSpinsPreviewActivationRequest>, JsonRejection>,
 ) -> Result<Json<FrozenSpinsPreviewActivationResponse>, ApiError> {
     let request = json_request(request)?;
-    let _transition = state.current_live_session_transition.lock().await;
-    let record = match current_preview_record(&state, &preview_id).await? {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let record = match current_preview_record(&state, &request_context, &preview_id).await? {
         Some(record) => record,
         None => {
             if state
@@ -557,7 +590,9 @@ pub async fn activate_frozen_spins_preview(
         )));
     }
 
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_revision(scene.revision, request.expected_revision)?;
     validate_activation_definition(&scene, &record, &request.definition)?;
     let definition_id = request.definition.id.clone();
@@ -571,9 +606,10 @@ pub async fn activate_frozen_spins_preview(
             ))
         })?;
     *slot = MagnetizationConstraintIR::FrozenSpins(request.definition);
-    let committed = crate::commit_current_live_scene_document(&state, scene)
-        .await
-        .map_err(map_authoring_error)?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await
+            .map_err(map_authoring_error)?;
     let definition = committed
         .magnetization_constraints
         .iter()
@@ -593,7 +629,9 @@ pub async fn activate_frozen_spins_preview(
             "stale_activation_candidate: activation candidate was already consumed",
         ));
     }
-    let runtime_application = pending_runtime_application(&state, committed.revision).await;
+    let runtime_application =
+        pending_runtime_application_for_context(&state, &request_context, committed.revision)
+            .await?;
     Ok(Json(FrozenSpinsPreviewActivationResponse {
         schema_version: "frozen_spins_activation.v1".to_string(),
         preview_id,
@@ -617,13 +655,19 @@ pub async fn activate_frozen_spins_preview(
 
 pub(crate) async fn insert_current_preview_record(
     state: &Arc<AppState>,
+    request_context: &crate::types::CurrentLiveRequestContext,
     preview_id: String,
     record: FrozenSpinsPreviewRecord,
 ) -> Result<(), ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    let session_epoch = state
+        .current_live_session_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(snapshot, request_context, session_epoch)?;
     if snapshot.session.session_id != record.session_id {
         return Err(ApiError::conflict(
             "selection_stale_revision: preview was computed for a superseded session",
@@ -681,12 +725,18 @@ fn validate_activation_definition(
 
 pub(crate) async fn current_preview_record(
     state: &Arc<AppState>,
+    request_context: &crate::types::CurrentLiveRequestContext,
     preview_id: &str,
 ) -> Result<Option<FrozenSpinsPreviewRecord>, ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    let session_epoch = state
+        .current_live_session_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(snapshot, request_context, session_epoch)?;
     let record = {
         let mut previews = state.frozen_spins_previews.write().await;
         previews.retain_session(&snapshot.session.session_id);
@@ -1067,16 +1117,17 @@ fn definition_resource(
     })
 }
 
-async fn pending_runtime_application(
+async fn pending_runtime_application_for_context(
     state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
     revision: u64,
-) -> FrozenSpinsRuntimeApplication {
-    let application_command_id = crate::router_v2::handlers::simulation::commands::enqueue_frozen_spins_runtime_replan_if_running(
-        state,
-        revision,
-    )
-    .await;
-    FrozenSpinsRuntimeApplication {
+) -> Result<FrozenSpinsRuntimeApplication, ApiError> {
+    let application_command_id = crate::router_v2::handlers::simulation::commands::
+        enqueue_frozen_spins_runtime_replan_if_running_with_context(
+            state, context, revision,
+        )
+        .await?;
+    Ok(FrozenSpinsRuntimeApplication {
         state: FrozenSpinsRuntimeApplicationState::PendingRuntimePlan,
         pending_revision: revision,
         apply_boundary: if application_command_id.is_some() {
@@ -1086,7 +1137,7 @@ async fn pending_runtime_application(
         },
         current_runtime_unchanged: true,
         application_command_id,
-    }
+    })
 }
 
 fn check_revision(current: u64, expected: u64) -> Result<(), ApiError> {

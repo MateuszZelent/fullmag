@@ -15,6 +15,7 @@ import { overlayManifest } from "./overlay/manifest";
 import { ribbonManifest } from "./ribbon/manifest";
 import { resultsNavigatorManifest } from "./results-navigator/manifest";
 import { statusBarManifest } from "./status-bar/manifest";
+import { startScreenManifest } from "./start/manifest";
 import { viewport3dManifest } from "./viewport-3d/manifest";
 
 const REGISTERED_MODULES: ModuleManifest[] = [
@@ -32,6 +33,7 @@ const REGISTERED_MODULES: ModuleManifest[] = [
   footerManifest,
   overlayManifest,
   statusBarManifest,
+  startScreenManifest,
 ];
 
 export function resolveControlRoomModules(

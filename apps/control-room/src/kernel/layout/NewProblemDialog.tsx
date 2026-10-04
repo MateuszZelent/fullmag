@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import {
   MODEL_SCENE_PATH,
@@ -9,6 +9,7 @@ import {
   SESSION_CURRENT_PATH,
 } from "../api/apiPaths";
 import { useKernel } from "../KernelContext";
+import { createProblemWithPendingFormGuard } from "./createProblemWithPendingFormGuard";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 import { Checkbox } from "@/shared/ui/Checkbox";
@@ -24,42 +25,81 @@ import {
 import { Input } from "@/shared/ui/Input";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
-type Backend = "fdm" | "fem";
+export type NewProblemBackend = "fdm" | "fem";
+
+export interface NewProblemRequest {
+  readonly backend?: NewProblemBackend;
+  /** Changes on every request, so the dialog remounts with fresh defaults. */
+  readonly key: number;
+  readonly open: boolean;
+}
+
+export function useNewProblemRequest(): readonly [NewProblemRequest, (open: boolean) => void] {
+  const kernel = useKernel();
+  const [request, setRequest] = useState<NewProblemRequest>({ key: 0, open: false });
+  useEffect(
+    () =>
+      kernel.bus.on("workspace:new-problem-requested", ({ solver }) => {
+        setRequest((current) => ({
+          backend: solver === "FEM" ? "fem" : solver === "FDM" ? "fdm" : undefined,
+          key: current.key + 1,
+          open: true,
+        }));
+      }),
+    [kernel.bus],
+  );
+  const setOpen = useCallback((open: boolean) => {
+    setRequest((current) => (current.open === open ? current : { ...current, open }));
+  }, []);
+  return [request, setOpen] as const;
+}
 
 export function NewProblemDialog({
   hasActiveSession,
+  initialBackend = "fdm",
   onOpenChange,
   open,
 }: {
   readonly hasActiveSession: boolean;
+  readonly initialBackend?: NewProblemBackend;
   readonly onOpenChange: (open: boolean) => void;
   readonly open: boolean;
 }) {
   const kernel = useKernel();
-  const [backend, setBackend] = useState<Backend>("fdm");
+  const [backend, setBackend] = useState<NewProblemBackend>(initialBackend);
   const [name, setName] = useState("Untitled problem");
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
+  const [creationAccepted, setCreationAccepted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const create = async () => {
     setPending(true);
     setError(null);
     try {
-      const response = await kernel.api.sessions.create({
+      const outcome = await createProblemWithPendingFormGuard(kernel.api.sessions, kernel.pendingForms, {
         backend,
         device: "cpu",
         name,
         precision: "double",
         replace_current: hasActiveSession,
-      });
-      const revision = response.revisions.state_version;
+      }, () => kernel.authoringHistory?.clear());
+      setCreationAccepted(true);
+      const response = outcome.response;
+      // state_version is scoped to the created session and resets when a
+      // current session is replaced. Use the new identity for the cross-
+      // session invalidation so a reset to zero cannot be treated as stale.
+      const revision = `session:${response.session_id}`;
       kernel.resources.invalidate(SESSIONS_PATH, revision);
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       kernel.resources.invalidatePrefix(SESSION_CURRENT_PATH, revision);
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
       kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
-      onOpenChange(false);
+      if (outcome.draftsPreserved || outcome.finalizationError) {
+        setError("The session was created. Close this dialog and review your Inspector changes before continuing.");
+      } else {
+        onOpenChange(false);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to create the simulation.");
     } finally {
@@ -68,7 +108,7 @@ export function NewProblemDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!pending) onOpenChange(nextOpen); }}>
       <DialogContent aria-describedby="fm-new-problem-description">
         <DialogHeader>
           <DialogTitle>New Problem</DialogTitle>
@@ -99,8 +139,8 @@ export function NewProblemDialog({
           {error ? <p className="text-fm-control text-fm-danger" role="alert">{error}</p> : null}
         </div>
         <DialogFooter>
-          <DialogClose asChild><Button disabled={pending} size="sm" type="button" variant="ghost">Cancel</Button></DialogClose>
-          <Button disabled={pending || !name.trim() || (hasActiveSession && !replaceConfirmed)} size="sm" type="button" onClick={create}>{pending ? "Creating…" : "Create"}</Button>
+          <DialogClose asChild><Button disabled={pending} size="sm" type="button" variant="ghost">{creationAccepted ? "Close" : "Cancel"}</Button></DialogClose>
+          <Button disabled={pending || creationAccepted || !name.trim() || (hasActiveSession && !replaceConfirmed)} size="sm" type="button" onClick={create}>{pending ? "Creating…" : "Create"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -334,11 +334,19 @@ pub(crate) fn build_grid_preview_field_from_flat_plan(
 }
 
 pub(crate) fn mesh_quantity_active_mask(quantity: &str, mesh: &MeshIR) -> Option<Vec<bool>> {
+    mesh_quantity_active_mask_with_element_markers(quantity, mesh, &mesh.element_markers)
+}
+
+pub(crate) fn mesh_quantity_active_mask_with_element_markers(
+    quantity: &str,
+    mesh: &MeshIR,
+    element_markers: &[u32],
+) -> Option<Vec<bool>> {
     let domain = quantity_spatial_domain(quantity);
     if domain != "magnetic_only" {
         return None;
     }
-    let magnetic_element_mask = magnetic_element_mask_from_markers(&mesh.element_markers);
+    let magnetic_element_mask = magnetic_element_mask_from_markers(element_markers);
     let mut active_mask = vec![false; mesh.nodes.len()];
     for cell in mesh.cells.iter() {
         if !magnetic_element_mask

@@ -27,8 +27,8 @@ pub(super) fn eigen_path_mode_publication_json(
 ) -> Value {
     let available = selected_fields.contains(&SampleModeId::new(sample_index, raw_mode_index));
     value["mode_field_available"] = serde_json::json!(available);
-    if !available {
-        value["mode_field_resource_key"] = Value::Null;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("mode_field_resource_key");
     }
     value
 }
@@ -498,7 +498,7 @@ mod output_publication_tests {
         let value = eigen_path_mode_publication_json(metadata.clone(), 2, 7, &BTreeSet::new());
         assert_eq!(value["mode_field_id"], "stable-id");
         assert_eq!(value["mode_field_available"], false);
-        assert!(value["mode_field_resource_key"].is_null());
+        assert!(value.get("mode_field_resource_key").is_none());
         let value = eigen_path_mode_publication_json(
             metadata,
             2,
@@ -506,7 +506,7 @@ mod output_publication_tests {
             &BTreeSet::from([SampleModeId::new(2, 7)]),
         );
         assert_eq!(value["mode_field_available"], true);
-        assert_eq!(value["mode_field_resource_key"], "field-resource");
+        assert!(value.get("mode_field_resource_key").is_none());
     }
 
     #[test]
@@ -1583,16 +1583,6 @@ pub(super) fn eigen_path_mode_field_id(sample_index: usize, raw_mode_index: usiz
     format!("analysis:eigen:sample-{sample_index:04}:mode-{raw_mode_index:04}")
 }
 
-pub(super) fn eigen_path_mode_field_resource_key(
-    sample_index: usize,
-    raw_mode_index: usize,
-) -> String {
-    format!(
-        "/v2/sessions/current/data/fields/{}/samples/vector?view=phase_rotated_real&phase_rad=0",
-        eigen_path_mode_field_id(sample_index, raw_mode_index)
-    )
-}
-
 pub(super) fn eigen_path_line_width_hz(frequency_imag_hz: f64) -> Option<String> {
     if !frequency_imag_hz.is_finite() || frequency_imag_hz <= 0.0 {
         return None;
@@ -1761,10 +1751,6 @@ pub(super) fn eigen_path_mode_json(
         "linearization_state_sha256": provenance_value("linearization_state_sha256"),
         "periodic_mesh_certificate_sha256": provenance_value("periodic_mesh_certificate_sha256"),
         "mode_field_id": eigen_path_mode_field_id(
-            sample.sample_index,
-            mode.raw_mode_index,
-        ),
-        "mode_field_resource_key": eigen_path_mode_field_resource_key(
             sample.sample_index,
             mode.raw_mode_index,
         ),

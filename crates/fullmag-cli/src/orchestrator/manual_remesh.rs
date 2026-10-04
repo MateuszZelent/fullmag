@@ -42,6 +42,28 @@ fn manual_remesh_intent(command: &SessionCommand) -> serde_json::Value {
     intent
 }
 
+fn record_manual_remesh_failure(
+    workspace: &mut serde_json::Value,
+    mut attempt: serde_json::Value,
+    error: &str,
+    phase: Option<serde_json::Value>,
+    outcome: &MeshCommandOutcome,
+    duration_ms: u64,
+) {
+    attempt["kind"] = serde_json::json!("mesh_build_failed");
+    attempt["status"] = serde_json::to_value(outcome.status).expect("status serializes");
+    attempt["error"] = serde_json::json!(error);
+    attempt["phase"] = phase.unwrap_or(serde_json::Value::Null);
+    attempt["completed_at_unix_ms"] = serde_json::json!(outcome.completed_at_unix_ms);
+    attempt["duration_ms"] = serde_json::json!(duration_ms);
+
+    workspace["active_build"] = serde_json::Value::Null;
+    workspace["last_build_attempt"] = attempt;
+    workspace["last_build_error"] = serde_json::json!(error);
+    workspace["mesh_pipeline_status"] = serde_json::json!("failed");
+    record_mesh_command_outcome(workspace, outcome);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prepare_fdm_grid_refresh(
     command: &SessionCommand,
@@ -367,36 +389,86 @@ pub(super) fn execute_manual_interactive_remesh(
             Some(candidate.plan_summary)
         }
         Err(error) => {
-            outcome.error = Some(error.to_string());
+            let error_message = error.to_string();
+            outcome.error = Some(error_message.clone());
+            let duration_ms = saturating_duration_millis_u64(started.elapsed());
             live_workspace.update(|state| {
                 let workspace = state
                     .mesh_workspace
                     .get_or_insert_with(|| serde_json::json!({}));
                 let phase = workspace.get("mesh_pipeline_status").cloned();
-                let mut summary = manual_remesh_intent(command);
-                summary["kind"] = serde_json::json!("mesh_build_failed");
-                summary["status"] =
-                    serde_json::to_value(outcome.status).expect("status serializes");
-                summary["error"] = serde_json::json!(error.to_string());
-                summary["phase"] = serde_json::json!(phase);
-                summary["completed_at_unix_ms"] = serde_json::json!(outcome.completed_at_unix_ms);
-                summary["duration_ms"] =
-                    serde_json::json!(saturating_duration_millis_u64(started.elapsed()));
-                workspace["active_build"] = serde_json::Value::Null;
-                workspace["last_build_summary"] = summary;
-                workspace["last_build_error"] = serde_json::json!(error.to_string());
-                workspace["mesh_pipeline_status"] = serde_json::json!("failed");
-                record_mesh_command_outcome(workspace, &outcome);
+                record_manual_remesh_failure(
+                    workspace,
+                    manual_remesh_intent(command),
+                    &error_message,
+                    phase,
+                    &outcome,
+                    duration_ms,
+                );
             });
             live_workspace.push_log(
                 "error",
                 format!(
-                    "Remesh failed — command {}: {error}; previous mesh and continuation retained",
-                    command.command_id
+                    "Remesh failed — command {}: {error_message}; previous mesh and continuation retained",
+                    command.command_id,
                 ),
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_remesh_records_attempt_without_replacing_last_success() {
+        let last_success = serde_json::json!({
+            "build_id": "mesh:good",
+            "status": "completed",
+            "source_scene_revision": 14
+        });
+        let mut workspace = serde_json::json!({
+            "last_build_summary": last_success,
+            "effective_airbox_target": { "hmax": "5e-9" },
+            "effective_per_object_targets": { "film": { "hmax": "2e-9" } },
+            "active_build": { "build_id": "mesh:bad" }
+        });
+        let outcome = MeshCommandOutcome {
+            command_id: "bad".to_string(),
+            build_id: "mesh:bad".to_string(),
+            status: MeshCommandStatus::Failed,
+            state_policy: MESH_STATE_POLICY.to_string(),
+            completed_at_unix_ms: 42,
+            mesh_generation_id: None,
+            error: Some("mesher rejected the candidate".to_string()),
+        };
+
+        record_manual_remesh_failure(
+            &mut workspace,
+            serde_json::json!({ "build_id": "mesh:bad" }),
+            "mesher rejected the candidate",
+            Some(serde_json::json!({ "phase": "meshing" })),
+            &outcome,
+            17,
+        );
+
+        assert_eq!(workspace["last_build_summary"]["build_id"], "mesh:good");
+        assert_eq!(workspace["last_build_summary"]["source_scene_revision"], 14);
+        assert_eq!(workspace["last_build_attempt"]["build_id"], "mesh:bad");
+        assert_eq!(workspace["last_build_attempt"]["kind"], "mesh_build_failed");
+        assert_eq!(workspace["last_build_attempt"]["phase"]["phase"], "meshing");
+        assert_eq!(
+            workspace["last_build_error"],
+            "mesher rejected the candidate"
+        );
+        assert_eq!(workspace["effective_airbox_target"]["hmax"], "5e-9");
+        assert_eq!(
+            workspace["effective_per_object_targets"]["film"]["hmax"],
+            "2e-9"
+        );
+        assert!(workspace["active_build"].is_null());
     }
 }
 
@@ -953,12 +1025,18 @@ fn prepare_manual_interactive_remesh(
                     });
                     if let Ok(mut overlay) = build_overlay.lock() {
                         overlay.active_build = None;
-                        overlay.effective_airbox_target = provenance
-                            .and_then(|value| value.get("effective_airbox_target"))
-                            .cloned();
-                        overlay.effective_per_object_targets = provenance
-                            .and_then(|value| value.get("effective_per_object_targets"))
-                            .cloned();
+                        overlay.effective_airbox_target = Some(
+                            summary
+                                .get("effective_airbox_target")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
+                        );
+                        overlay.effective_per_object_targets = Some(
+                            summary
+                                .get("effective_per_object_targets")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
+                        );
                         overlay.last_build_summary = Some(summary);
                         overlay.last_build_error = None;
                         transition_mesh_build_phase(&mut overlay, "ready");

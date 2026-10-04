@@ -1,13 +1,79 @@
 [package]
 name = "fullmag-api"
+default-run = "fullmag-api"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "fullmag-api"
+path = "src/main.rs"
+
+[[bin]]
+name = "fullmag-api-accepted-worker"
+path = "src/accepted_worker_main.rs"
+
+[[bin]]
+name = "fullmag-api-accepted-fem-preparer"
+path = "src/accepted_fem_preparer_main.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fullmag-api-accepted-fem-preparation-supervisor"
+path = "src/accepted_fem_preparation_supervisor_main.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fullmag-api-accepted-fem-preparation-scheduler"
+path = "src/accepted_fem_preparation_scheduler_main.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fullmag-api-accepted-supervisor"
+path = "src/accepted_supervisor_main.rs"
+
+[[bin]]
+name = "fullmag-api-accepted-scheduler"
+path = "src/accepted_scheduler_main.rs"
+
+[[bin]]
+name = "fullmag-runtime-service"
+path = "src/runtime_service_main.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fullmag-api-resource-pool"
+path = "src/resource_pool_main.rs"
+
+[[bin]]
+name = "fullmag-api-preparation-resource-pool"
+path = "src/preparation_resource_pool_main.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fullmag-api-preparation-retry"
+path = "src/preparation_retry_main.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fullmag-api-openapi"
+path = "src/main.rs"
+required-features = ["openapi-codegen"]
+test = false
+bench = false
+
 [features]
 default = []
+openapi-codegen = []
 cuda = ["fullmag-runner/cuda"]
-fem-gpu = ["fullmag-runner/fem-gpu"]
+fem-native = ["fullmag-runner/fem-native"]
+fem-gpu = ["fem-native", "fullmag-runner/fem-gpu"]
 stage-autosave-hdf5 = ["fullmag-runner/stage-autosave-hdf5"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
 
@@ -33,12 +99,19 @@ fullmag-plan = { path = "../fullmag-plan" }
 fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-runner = { path = "../fullmag-runner" }
 fullmag-session = { path = "../fullmag-session" }
+fullmag-runtime-control = { path = "../fullmag-runtime-control" }
 png = "0.17"
 tiny-skia = "0.11"
 fontdue = "0.9"
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"], optional = true }
 uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

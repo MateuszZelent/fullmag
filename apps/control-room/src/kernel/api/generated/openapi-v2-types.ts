@@ -20,6 +20,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/imports/inspections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_imports_inspections"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects": {
         parameters: {
             query?: never;
@@ -36,6 +52,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/authoring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_authoring"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/open": {
         parameters: {
             query?: never;
@@ -46,6 +78,230 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["persistence_post_persistence_projects_open"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs"];
+        put?: never;
+        post: operations["persistence_post_persistence_projects_project_id_runs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/materialization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_project_id_runs_run_id_materialization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_materialized_dataset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/materialized-dataset/slice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_materialized_dataset_slice"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry/support": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_support"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/saved-field-geometry/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_topology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets/{solution_set_id}/revisions/{revision}/members/{member_id}/artifacts/{artifact_id}/scalar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_scalar"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_cancellation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -76,6 +332,54 @@ export interface paths {
             cookie?: never;
         };
         get: operations["platform_get_platform_capabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/development-backend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_development_backend"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/development-restart-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["platform_post_platform_development_restart_requests"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/development-restart-requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_development_restart_requests_request_id"];
         put?: never;
         post?: never;
         delete?: never;
@@ -124,6 +428,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["platform_get_platform_openapi_json"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/runtime-service": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_runtime_service"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1788,6 +2108,54 @@ export interface paths {
             cookie?: never;
         };
         get: operations["data_get_sessions_current_data_mesh_region_memberships"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/observation-frames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_observation_frames"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/observation-frames/{frame_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_observation_frames_frame_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/observation-frames/{frame_id}/magnetization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_observation_frames_frame_id_magnetization"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3515,22 +3883,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v2/sessions/current/persistence/imports/inspections": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["persistence_post_sessions_current_persistence_imports_inspections"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v2/sessions/current/persistence/recovery": {
         parameters: {
             query?: never;
@@ -3621,6 +3973,22 @@ export interface paths {
         get: operations["simulation_get_sessions_current_simulation_preparation"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/preparation/materialization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["simulation_post_sessions_current_simulation_preparation_materialization"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3992,6 +4360,26 @@ export interface components {
             /** Format: double */
             source_time_seconds?: number | null;
             topology_revision: string;
+        };
+        AcceptedStateGenerationResource: {
+            /** Format: int64 */
+            accepted_revision: number;
+            /** Format: int64 */
+            runtime_epoch: number;
+        };
+        AcceptedStateIdResource: {
+            /** Format: int64 */
+            accepted_step: number;
+            clock_digest: string;
+            domain_digest: string;
+            plan_digest: string;
+            run_id: string;
+            stage_id?: string | null;
+            state_digest: string;
+        };
+        AcceptedStateRefResource: {
+            generation: components["schemas"]["AcceptedStateGenerationResource"];
+            id: components["schemas"]["AcceptedStateIdResource"];
         };
         /**
          * @description Stable machine-readable classification for an active-lane operation reason.
@@ -4771,6 +5159,10 @@ export interface components {
         };
         CommandDetailResource: {
             accepted_at_unix_ms?: number | null;
+            /** Format: int64 */
+            applied_step?: number | null;
+            /** Format: double */
+            applied_time_seconds?: number | null;
             artifact_refs?: string[];
             checkpoint_ref?: string | null;
             client_intent_id?: string | null;
@@ -4812,6 +5204,7 @@ export interface components {
             resource_invalidations?: components["schemas"]["CommandResourceInvalidationResource"][];
             resume_from_checkpoint_ref?: string | null;
             run_id?: string | null;
+            segment_id?: string | null;
             /** Format: int64 */
             seq: number;
             solver_policy?: null | components["schemas"]["SolverPolicyRequest"];
@@ -5079,6 +5472,53 @@ export interface components {
             /** Format: double */
             position_fraction: number;
         };
+        /** @enum {string} */
+        DevelopmentBackendReason: "disabled" | "configuration_invalid" | "observation_unavailable" | "observation_invalid" | "observation_stale" | "watcher_stopped" | "build_pending" | "build_failed" | "restart_integration_pending";
+        /** @description Compilation observation only; applying a build requires a separate guarded command. */
+        DevelopmentBackendResource: {
+            configured: boolean;
+            current_build?: null | components["schemas"]["DevelopmentBuildIdentity"];
+            ready_build?: null | components["schemas"]["DevelopmentBuildIdentity"];
+            reason: components["schemas"]["DevelopmentBackendReason"];
+            restart_available: boolean;
+            /** Format: int64 */
+            revision: number;
+            schema_version: string;
+            state: components["schemas"]["DevelopmentBackendState"];
+        };
+        /** @enum {string} */
+        DevelopmentBackendState: "disabled" | "waiting" | "building" | "ready" | "failed" | "superseded" | "stopped" | "unknown";
+        DevelopmentBuildIdentity: {
+            /** @description Opaque identity: running product version or verified candidate manifest digest. */
+            id: string;
+            source_sha256: string;
+        };
+        /** @description Independent UI owners; the canonical scene is acquired privately by the launcher. */
+        DevelopmentRestartRequest: {
+            editor: unknown;
+            project_document: unknown;
+            request_id: string;
+            schema: string;
+            /** Format: int64 */
+            session_epoch: number;
+            session_id: string | null;
+            workspace: unknown;
+        };
+        DevelopmentRestartResource: {
+            editor?: unknown;
+            new_api_instance_id?: string | null;
+            project_document?: unknown;
+            public_reason?: string | null;
+            request_id: string;
+            schema: string;
+            /** Format: int64 */
+            session_epoch?: number | null;
+            session_id?: string | null;
+            state: components["schemas"]["DevelopmentRestartState"];
+            workspace?: unknown;
+        };
+        /** @enum {string} */
+        DevelopmentRestartState: "pending" | "ready" | "failed" | "unknown";
         DisplayPatch: {
             active_quantity_id?: string | null;
             auto_contrast?: boolean | null;
@@ -7678,6 +8118,25 @@ export interface components {
             schema_version: string;
             solver: components["schemas"]["SceneSpinSolverPolicy"];
         };
+        /**
+         * @description Typed request for preparing the immutable scene revision in the current
+         *     Live session. Execution intent and display projection are captured by the
+         *     server from that same session snapshot.
+         */
+        LivePreparationMaterializationRequest: {
+            preparation_id: string;
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        LivePreparationMaterializationResource: {
+            disposition: components["schemas"]["PreparationMaterializationDisposition"];
+            plan_fingerprint: string;
+            preparation_id: string;
+            receipt_sha256: string;
+            run_id: string;
+            /** Format: int64 */
+            scene_revision: number;
+        };
         LivePublisherDiagnosticsResource: {
             /** Format: int64 */
             coalesced_wake_count: number;
@@ -7901,6 +8360,281 @@ export interface components {
             /** Format: int64 */
             scene_revision: number;
         };
+        MaterializedDatasetActiveSupportResource: {
+            selection?: null | components["schemas"]["MaterializedDatasetSelectionResource"];
+            support_fingerprint: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetApproximationResource: "exact_only" | "allow_declared_approximation";
+        /** @enum {string} */
+        MaterializedDatasetAvailabilityResource: "ready" | "not_recorded" | "not_applicable" | "not_yet_computed" | "unsupported" | "missing" | "corrupt";
+        /** @enum {string} */
+        MaterializedDatasetAxisKindResource: "time" | "frequency" | "wave_vector" | "mode" | "parameter";
+        MaterializedDatasetAxisResource: {
+            axis_id: string;
+            length: string;
+            unit: string;
+        };
+        MaterializedDatasetAxisSelectionResource: {
+            axis_id: string;
+            coordinate_ids: string[];
+            kind: components["schemas"]["MaterializedDatasetAxisKindResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetComplexEncodingResource: "real" | "real_imag_pair";
+        MaterializedDatasetCoverageResource: {
+            chunk_count: string;
+            component_count: string;
+            dtype: components["schemas"]["MaterializedDatasetDtypeResource"];
+            endian: string;
+            total_bytes: string;
+            total_elements: string;
+        };
+        MaterializedDatasetDefinitionResource: {
+            axes: components["schemas"]["MaterializedDatasetAxisSelectionResource"][];
+            definition_id: string;
+            domain_selection: components["schemas"]["MaterializedDatasetSelectionResource"];
+            evaluation_policy: components["schemas"]["MaterializedDatasetEvaluationPolicyResource"];
+            revision: string;
+            schema_version: string;
+            source: components["schemas"]["MaterializedDatasetPinnedSourceResource"];
+            transforms: components["schemas"]["MaterializedDatasetTransformResource"][];
+        };
+        /** @enum {string} */
+        MaterializedDatasetDtypeResource: "u8" | "i32" | "u32" | "f32" | "f64";
+        MaterializedDatasetEvaluationPolicyResource: {
+            approximation: components["schemas"]["MaterializedDatasetApproximationResource"];
+            precision: components["schemas"]["MaterializedDatasetEvaluationPrecisionResource"];
+            unavailable_data: components["schemas"]["MaterializedDatasetUnavailableDataResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetEvaluationPrecisionResource: "f32" | "f64";
+        MaterializedDatasetFieldDescriptorResource: {
+            active_support: components["schemas"]["MaterializedDatasetActiveSupportResource"];
+            axes: components["schemas"]["MaterializedDatasetAxisResource"][];
+            carrier_id: string;
+            complex_encoding: components["schemas"]["MaterializedDatasetComplexEncodingResource"];
+            component_axis?: string | null;
+            frame: components["schemas"]["MaterializedDatasetFrameResource"];
+            function_space?: null | components["schemas"]["MaterializedDatasetFunctionSpaceResource"];
+            harmonic_convention?: null | components["schemas"]["MaterializedDatasetHarmonicConventionResource"];
+            layout_digest: string;
+            modal_semantics?: null | components["schemas"]["MaterializedDatasetModalSemanticsResource"];
+            normalization: components["schemas"]["MaterializedDatasetNormalizationResource"];
+            quantity_id: components["schemas"]["MaterializedDatasetQuantityResource"];
+            resolution: components["schemas"]["MaterializedDatasetResolutionResource"];
+            sample_location: components["schemas"]["MaterializedDatasetSampleLocationResource"];
+            tensor_rank: string;
+            topology_id: string;
+            unit: string;
+            value_representation: components["schemas"]["MaterializedDatasetValueRepresentationResource"];
+        };
+        MaterializedDatasetFieldProjectionResource: {
+            method: components["schemas"]["MaterializedDatasetProjectionMethodResource"];
+            producer_version: string;
+            target_space_id: string;
+        };
+        MaterializedDatasetFieldResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            coverage: components["schemas"]["MaterializedDatasetCoverageResource"];
+            descriptor: components["schemas"]["MaterializedDatasetFieldDescriptorResource"];
+            field_id: string;
+            group_id: string;
+            item_id: string;
+            plane: components["schemas"]["MaterializedDatasetPlaneResource"];
+            producer_id: string;
+            producer_version: string;
+            sample_id: string;
+            tensor_artifact: components["schemas"]["MaterializedDatasetTensorArtifactResource"];
+            tensor_byte_length: string;
+            tensor_schema_id: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetFrameKindResource: "laboratory" | "object" | "material" | "local_basis";
+        MaterializedDatasetFrameResource: {
+            frame_id: string;
+            kind: components["schemas"]["MaterializedDatasetFrameKindResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetFunctionSpaceOrderingResource: "by_node" | "by_component" | "lexicographic" | "native_with_mapping";
+        MaterializedDatasetFunctionSpaceResource: {
+            basis_id: string;
+            constraints_fingerprint?: string | null;
+            family: string;
+            order: string;
+            ordering: components["schemas"]["MaterializedDatasetFunctionSpaceOrderingResource"];
+            orientation_mapping_ref?: string | null;
+            partition_fingerprint?: string | null;
+            space_id: string;
+            vector_dimension: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetHarmonicConventionResource: "exp_positive_i_omega_t" | "exp_negative_i_omega_t";
+        MaterializedDatasetIdentityResource: {
+            dataset_id: string;
+            definition_id: string;
+            definition_revision: string;
+            revision: string;
+            schema_version: string;
+            source: components["schemas"]["MaterializedDatasetPinnedSourceResource"];
+            status: components["schemas"]["MaterializedDatasetStatusResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetIntegrityResource: "verified";
+        /** @enum {string} */
+        MaterializedDatasetModalAmplitudeResource: "relative_eigenvector" | "physical_driven_response";
+        /** @enum {string} */
+        MaterializedDatasetModalNormalizationKindResource: "l2" | "max_abs" | "energy" | "biorthogonal";
+        MaterializedDatasetModalNormalizationResource: {
+            kind: components["schemas"]["MaterializedDatasetModalNormalizationKindResource"];
+            scale: string;
+            unit: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetModalReconstructionResource: "physical_components" | "function_space_basis_expansion" | "local_tangent_basis_to_cartesian";
+        MaterializedDatasetModalSemanticsResource: {
+            amplitude_semantics: components["schemas"]["MaterializedDatasetModalAmplitudeResource"];
+            equilibrium_state: components["schemas"]["SolutionAcceptedStateIdResource"];
+            linearization_id: string;
+            modal_basis_id: string;
+            normalization: components["schemas"]["MaterializedDatasetModalNormalizationResource"];
+            phase_reference_id: string;
+            producer_version: string;
+            reconstruction: components["schemas"]["MaterializedDatasetModalReconstructionResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetNormalizationResource: "none" | "unit_vector" | "max_abs" | "l2" | "modal" | "physical_amplitude";
+        MaterializedDatasetPinnedSourceResource: {
+            artifact_id: string;
+            member_id: string;
+            run_id: string;
+            run_spec_digest: string;
+            solution_revision: string;
+            solution_set_id: string;
+            tensor_object_ref: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetPlaneResource: "values" | "real" | "imaginary";
+        /** @enum {string} */
+        MaterializedDatasetProjectionMethodResource: "nearest" | "linear" | "conservative" | "l2";
+        /** @enum {string} */
+        MaterializedDatasetQuantityResource: "m" | "frozen_spins" | "H_ex" | "H_demag" | "H_ext" | "H_ant" | "H_drive" | "H_eff" | "torque" | "H_ani" | "H_dmi" | "H_rotated_dmi" | "H_mel" | "u" | "eps" | "sigma" | "H_ani_cubic" | "H_dmi_bulk" | "H_oe" | "H_therm" | "E_ex" | "E_demag" | "E_ext" | "E_drive" | "E_ani" | "E_dmi" | "E_rotated_dmi" | "E_el" | "E_kin_el" | "elastic_residual_norm" | "E_total" | "mode_amplitude" | "mode_real" | "mode_imag" | "mode_phase" | "eden_ex" | "eden_demag" | "demag_phi" | "eden_ext" | "eden_drive" | "eden_ani" | "eden_dmi" | "eden_rotated_dmi" | "eden_total" | "mat_ms" | "mat_aex" | "mat_alpha" | "mat_dind" | "mat_dbulk" | "dm_dt" | "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt" | "torque_sot";
+        /** @enum {string} */
+        MaterializedDatasetResolutionResource: "quantitative" | "preview_only";
+        MaterializedDatasetResource: {
+            artifact_id: string;
+            containing_solution_revision: string;
+            dataset: components["schemas"]["MaterializedDatasetIdentityResource"];
+            definition: components["schemas"]["MaterializedDatasetDefinitionResource"];
+            field: components["schemas"]["MaterializedDatasetFieldResource"];
+            field_id: string;
+            integrity: components["schemas"]["MaterializedDatasetIntegrityResource"];
+            item_id: string;
+            manifest_byte_length: string;
+            manifest_object_ref: string;
+            member_id: string;
+            owner_execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            owner_scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            owner_solution_revision: string;
+            project_id: string;
+            run_id: string;
+            sample_id: string;
+            schema_version: string;
+            solution_set_id: string;
+            source: components["schemas"]["MaterializedDatasetPinnedSourceResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetSampleLocationResource: "node" | "cell" | "degree_of_freedom" | "integration_point" | "global";
+        MaterializedDatasetSelectionResource: {
+            selection_id: string;
+            selection_revision: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetSliceByteOrderResource: "little_endian";
+        MaterializedDatasetSliceEnvelopeResource: {
+            artifact_id: string;
+            containing_solution_revision: string;
+            /** @description Complete quantity, units, layout, support and complex semantics. */
+            descriptor: components["schemas"]["MaterializedDatasetFieldDescriptorResource"];
+            integrity: components["schemas"]["MaterializedDatasetSliceIntegrityResource"];
+            manifest_byte_length: string;
+            manifest_object_ref: string;
+            member_id: string;
+            project_id: string;
+            run_id: string;
+            schema_version: string;
+            slice: components["schemas"]["MaterializedDatasetSliceManifestResource"];
+            solution_set_id: string;
+            source: components["schemas"]["MaterializedDatasetPinnedSourceResource"];
+        };
+        /** @enum {string} */
+        MaterializedDatasetSliceIntegrityResource: "verified_returned_ranges";
+        MaterializedDatasetSliceManifestResource: {
+            byte_order: components["schemas"]["MaterializedDatasetSliceByteOrderResource"];
+            component_count: string;
+            dataset_id: string;
+            dataset_revision: string;
+            element_count: string;
+            element_offset: string;
+            field_id: string;
+            field_layout_digest: string;
+            item_id: string;
+            /** @description Body ranges follow this order. Plane offsets are relative to this slice. */
+            parts: components["schemas"]["MaterializedDatasetSlicePartResource"][];
+            payload_bytes: string;
+            precision: components["schemas"]["MaterializedDatasetSlicePrecisionResource"];
+            sample_id: string;
+            schema_version: string;
+            total_elements: string;
+        };
+        MaterializedDatasetSlicePartResource: {
+            byte_length: string;
+            object_offset_bytes: string;
+            object_ref: string;
+            plane: components["schemas"]["MaterializedDatasetPlaneResource"];
+            plane_offset_bytes: string;
+            range_sha256: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetSlicePrecisionResource: "f32" | "f64";
+        MaterializedDatasetStatusResource: {
+            actions: components["schemas"]["MaterializedDatasetUnavailableActionResource"][];
+            availability: components["schemas"]["MaterializedDatasetAvailabilityResource"];
+            reason?: string | null;
+        };
+        MaterializedDatasetTensorArtifactResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            artifact_id: string;
+            byte_length: string;
+            object_ref: string;
+            schema_id: string;
+        };
+        MaterializedDatasetTransformResource: {
+            /** @enum {string} */
+            kind: "projection";
+            method: components["schemas"]["MaterializedDatasetProjectionMethodResource"];
+            producer_version: string;
+            target_space_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "cut";
+            selection: components["schemas"]["MaterializedDatasetSelectionResource"];
+        } | {
+            component: string;
+            /** @enum {string} */
+            kind: "composition";
+        } | {
+            /** @enum {string} */
+            kind: "difference";
+            projection?: null | components["schemas"]["MaterializedDatasetFieldProjectionResource"];
+            rhs_dataset_id: string;
+        };
+        /** @enum {string} */
+        MaterializedDatasetUnavailableActionResource: "select_available_quantity" | "recompute_from_recorded_state" | "create_new_run" | "repair_or_restore_artifact";
+        /** @enum {string} */
+        MaterializedDatasetUnavailableDataResource: "fail" | "preserve_unavailable";
+        /** @enum {string} */
+        MaterializedDatasetValueRepresentationResource: "physical_field" | "modal_physical_components" | "modal_function_space_coefficients" | "modal_local_tangent_coefficients";
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
             active_build?: Record<string, never> | null;
@@ -8900,6 +9634,48 @@ export interface components {
             base_revision?: number | null;
             region_ids: string[];
         };
+        ObservationFrameListQuery: {
+            /** @description Return entries strictly after this immutable frame identity. */
+            cursor?: string | null;
+            /**
+             * Format: int32
+             * @description Page size. Defaults to 50 and is capped at 200.
+             */
+            limit?: number | null;
+            /** @description Optional exact run precondition. It must equal the active session run. */
+            run_id?: string | null;
+            /** @description Optional exact study stage filter. */
+            stage_id?: string | null;
+        };
+        ObservationFrameListResource: {
+            frames: components["schemas"]["ObservationFrameResource"][];
+            next_cursor?: string | null;
+            run_id: string;
+        };
+        /**
+         * @description Thin immutable descriptor for a durable observation source. Heavy field
+         *     values remain in the canonical field binary data plane.
+         */
+        ObservationFrameResource: {
+            accepted_state_ref: components["schemas"]["AcceptedStateRefResource"];
+            adapter_id: string;
+            attempt_id: string;
+            frame_id: string;
+            grid_cells: number[];
+            magnetization_href: string;
+            /** Format: int64 */
+            ownership_epoch: number;
+            quantity_ids: string[];
+            run_id: string;
+            schema_version: string;
+            stage_id: string;
+            state_codec_id: string;
+            state_codec_version: string;
+            status: components["schemas"]["ObservationFrameStatus"];
+            task_id: string;
+        };
+        /** @enum {string} */
+        ObservationFrameStatus: "complete";
         OerstedFieldCommitResource: {
             committed_scene: components["schemas"]["SceneResource"];
             resource: components["schemas"]["SceneOerstedField"];
@@ -9459,6 +10235,8 @@ export interface components {
         };
         /** @enum {string} */
         PreparationLogLevel: "info" | "warning" | "error";
+        /** @enum {string} */
+        PreparationMaterializationDisposition: "accepted" | "replayed";
         PreparationProgressStage: {
             clock_adjustment?: null | components["schemas"]["PreparationClockAdjustment"];
             /** Format: int64 */
@@ -9474,6 +10252,18 @@ export interface components {
             /** Format: int64 */
             started_at_unix_ms?: number | null;
             status: components["schemas"]["PreparationStageStatus"];
+        };
+        /**
+         * @description Identity-only view of the durable preparation receipt.  The complete
+         *     certificates stay in the session store; the browser receives enough
+         *     provenance to distinguish the accepted plan from an in-flight candidate.
+         */
+        PreparationReceiptResource: {
+            payload_sha256: string;
+            plan_fingerprint: string;
+            preparation_id: string;
+            run_id: string;
+            schema_version: string;
         };
         /** @enum {string} */
         PreparationStageId: "runtime_startup" | "script_materialization" | "validation" | "planning" | "domain_preparation" | "meshing" | "mesh_postprocessing" | "solver_initialization" | "ready";
@@ -9502,6 +10292,28 @@ export interface components {
             archive_base64: string;
             /** @description Stable label used for diagnostics; it is not a filesystem path. */
             display_name: string;
+        };
+        /**
+         * @description Runtime-free authoring update for a portable project archive.  The scene
+         *     map is parsed through the typed `fullmag_authoring::SceneDocument` contract
+         *     by the handler; the surrounding archive remains source-preserving.
+         */
+        ProjectAuthoringUpdateRequest: {
+            /** @description Base64-encoded `.fms` archive bytes. */
+            archive_base64: string;
+            /** @description Stable label used for diagnostics; it is not a filesystem path. */
+            display_name: string;
+            /** @description Project identity observed by the caller. */
+            expected_project_id: string;
+            /**
+             * Format: int64
+             * @description Definition revision observed by the caller.
+             */
+            expected_revision: number;
+            /** @description Complete typed `scene.v2` document supplied by the authoring surface. */
+            scene_document: {
+                [key: string]: unknown;
+            };
         };
         ProjectCreateRequest: {
             /**
@@ -9542,6 +10354,148 @@ export interface components {
             source_schema: string;
             target_schema: string;
             warnings: string[];
+        };
+        /** @enum {string} */
+        ProjectRunCatalogState: "pending_materialization" | "materialized";
+        /** @enum {string} */
+        ProjectRunExecutionState: "pending_materialization" | "pending_preparation";
+        ProjectRunListQuery: {
+            /** @description Last RunId returned on the previous page. */
+            cursor?: string | null;
+            /**
+             * Format: int32
+             * @description Page size, from 1 to 100; defaults to 50.
+             */
+            limit?: number | null;
+        };
+        ProjectRunListResource: {
+            next_cursor?: string | null;
+            project_id: string;
+            runs: components["schemas"]["ProjectRunSummaryResource"][];
+        };
+        ProjectRunMaterializationResource: {
+            /** Format: int64 */
+            catalog_revision: number;
+            /** @description Task identities are durable, but preparation and scheduling are pending. */
+            execution_state: components["schemas"]["ProjectRunExecutionState"];
+            run_id: string;
+            task_ids: string[];
+        };
+        ProjectRunMinimumResourceBudgetResource: {
+            /** Format: int64 */
+            cpu_millis: number;
+            /** Format: int64 */
+            gpu_memory_bytes: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            /** Format: int64 */
+            storage_bytes: number;
+        };
+        /** @enum {string} */
+        ProjectRunObservationState: "live" | "stale" | "disconnected" | "reconciling";
+        ProjectRunRequestedExecutionResource: {
+            backend: string;
+            device: string;
+            minimum_resources?: null | components["schemas"]["ProjectRunMinimumResourceBudgetResource"];
+            mode: string;
+            precision: string;
+        };
+        ProjectRunResource: {
+            /** Format: int64 */
+            catalog_revision?: number | null;
+            catalog_state: components["schemas"]["ProjectRunCatalogState"];
+            payload_fingerprint: string;
+            project_id: string;
+            requested_execution: components["schemas"]["ProjectRunRequestedExecutionResource"];
+            run_id: string;
+            /** Format: int32 */
+            scheduling_priority: number;
+            tasks: components["schemas"]["ProjectRunTaskResource"][];
+        };
+        /** @enum {string} */
+        ProjectRunSubmitDisposition: "accepted" | "replayed";
+        /**
+         * @description Complete immutable submission inputs. The server parses the JSON objects
+         *     into their versioned application, authoring and planner contracts.
+         */
+        ProjectRunSubmitRequest: {
+            /** @description Exact base64-encoded portable project archive accepted for this run. */
+            archive_base64: string;
+            /** @description Explicit immutable asset ID to path inside `project/assets/`. */
+            asset_paths: {
+                [key: string]: string;
+            };
+            /** @description Versioned `run_intent.v1` object; parsed and validated by the application contract. */
+            run_intent: {
+                [key: string]: unknown;
+            };
+            /** @description Versioned `study_plan.v2` object with typed steps, references and runner controls. */
+            study_plan: {
+                [key: string]: unknown;
+            };
+            /** @description Versioned `study_problem_catalog.v1` object bound to the exact study digest. */
+            study_problem_catalog: {
+                [key: string]: unknown;
+            };
+        };
+        ProjectRunSubmitResource: {
+            disposition: components["schemas"]["ProjectRunSubmitDisposition"];
+            /** @description Reflects whether the durable task catalog exists at response time. */
+            execution_state: components["schemas"]["ProjectRunExecutionState"];
+            payload_fingerprint: string;
+            run_id: string;
+        };
+        ProjectRunSummaryResource: {
+            accepted_at: string;
+            /** Format: int64 */
+            catalog_revision?: number | null;
+            catalog_state: components["schemas"]["ProjectRunCatalogState"];
+            payload_fingerprint: string;
+            requested_execution: components["schemas"]["ProjectRunRequestedExecutionResource"];
+            run_id: string;
+            /** Format: int32 */
+            scheduling_priority: number;
+            /** Format: int64 */
+            task_count: number;
+        };
+        /** @enum {string} */
+        ProjectRunTaskCancellationDisposition: "accepted" | "replayed";
+        ProjectRunTaskCancellationRequest: {
+            /** @description Stable operator-visible reason persisted in the fenced Stop command. */
+            reason: string;
+        };
+        ProjectRunTaskCancellationResource: {
+            /** Format: int64 */
+            catalog_revision: number;
+            command_id: string;
+            disposition: components["schemas"]["ProjectRunTaskCancellationDisposition"];
+            lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
+            run_id: string;
+            task_id: string;
+        };
+        /** @enum {string} */
+        ProjectRunTaskLifecycle: "accepted" | "queued" | "preparing" | "running" | "stopping" | "succeeded" | "failed" | "cancelled" | "interrupted";
+        ProjectRunTaskReadiness: {
+            /** @enum {string} */
+            state: "ready";
+        } | {
+            reason: string;
+            /** @enum {string} */
+            state: "blocked";
+        };
+        ProjectRunTaskResource: {
+            accepted_state_ref?: null | components["schemas"]["AcceptedStateRefResource"];
+            artifact_ids: string[];
+            attempt_id?: string | null;
+            input_fingerprint: string;
+            lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
+            observation?: null | components["schemas"]["ProjectRunObservationState"];
+            /** Format: int64 */
+            ownership_epoch?: number | null;
+            readiness: components["schemas"]["ProjectRunTaskReadiness"];
+            resolved_input_fingerprint?: string | null;
+            resource_id?: string | null;
+            task_id: string;
         };
         QuantityCatalogEntry: {
             /** @description Capability of the resolved backend/plan, independent of field cache. */
@@ -9778,6 +10732,8 @@ export interface components {
             scene_revision: number;
         };
         RegionPatchRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
             enabled?: boolean | null;
             magnetization_ref?: null | components["schemas"]["NullableStringPatchValue"];
             name?: string | null;
@@ -9987,6 +10943,25 @@ export interface components {
             /** @enum {string} */
             kind: "command_id";
         };
+        RuntimeServiceStatusReason: {
+            code: string;
+            message: string;
+        };
+        /**
+         * @description Read-only status of the optional native application runtime service.
+         *
+         *     The resource intentionally contains no process path, store path, PID, or
+         *     scheduler payload.  Consumers get the bounded state and a machine-readable
+         *     reason while the native observer retains ownership of operational details.
+         */
+        RuntimeServiceStatusResource: {
+            configured: boolean;
+            reason: components["schemas"]["RuntimeServiceStatusReason"];
+            schema_version: string;
+            state: components["schemas"]["RuntimeServiceStatusState"];
+        };
+        /** @enum {string} */
+        RuntimeServiceStatusState: "not_configured" | "configuration_error" | "not_ready" | "starting" | "ready" | "draining" | "drained" | "failed" | "unknown" | "observation_unknown";
         SamplingPeriodPolicyResource: {
             /** @enum {string} */
             kind: "auto_sinc_cutoff";
@@ -10020,6 +10995,94 @@ export interface components {
          * @enum {string}
          */
         SaveProfile: "compact" | "solved" | "resume" | "archive" | "recovery";
+        SavedFieldGeometryArtifactResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            artifact_id: string;
+            /** @description Canonical decimal u64. */
+            byte_length: string;
+            kind: components["schemas"]["SolutionArtifactKindResource"];
+            object_ref: string;
+            schema_id: string;
+        };
+        /** @enum {string} */
+        SavedFieldGeometryBinaryIntegrityResource: "verified_returned_body";
+        SavedFieldGeometryDatasetResource: {
+            dataset_id: string;
+            descriptor: components["schemas"]["MaterializedDatasetFieldDescriptorResource"];
+            field_id: string;
+            group_id: string;
+            item_id: string;
+            /** @description Canonical decimal u64. */
+            revision: string;
+            sample_id: string;
+        };
+        /**
+         * @description CAS-only geometry payload identity.  The payload is referenced by the
+         *     saved geometry manifest but is not a separate SolutionSet artifact.
+         */
+        SavedFieldGeometryPayloadResource: {
+            /** @description Canonical decimal u64. */
+            byte_length: string;
+            object_ref: string;
+            schema_id: string;
+        };
+        SavedFieldGeometryPinnedSourceResource: {
+            member_id: string;
+            run_id: string;
+            run_spec_digest: string;
+            /** @description Canonical decimal u64. */
+            solution_revision: string;
+            solution_set_id: string;
+            tensor_artifact_id: string;
+            tensor_object_ref: string;
+        };
+        /** @enum {string} */
+        SavedFieldGeometryRepresentationEvidenceResource: "not_verified";
+        SavedFieldGeometryResource: {
+            active_node_count: string;
+            cell_count: string;
+            /** @description Revision selected by the containing route. */
+            containing_solution_revision: string;
+            coordinate_unit: string;
+            dataset: components["schemas"]["SavedFieldGeometryDatasetResource"];
+            dataset_manifest: components["schemas"]["SavedFieldGeometryArtifactResource"];
+            facet_count: string;
+            /** @description Existing cold reader limit.  Peak RAM is not certified by this value. */
+            geometry_decode_budget_bytes: string;
+            geometry_manifest: components["schemas"]["SavedFieldGeometryArtifactResource"];
+            geometry_payload: components["schemas"]["SavedFieldGeometryPayloadResource"];
+            geometry_schema_version: string;
+            layout_digest: string;
+            member_id: string;
+            /** @description Canonical decimal u64 counts. */
+            node_count: string;
+            /** @description Exact historical revision that owns the pinned tensor and geometry. */
+            owner_solution_revision: string;
+            producer_id: string;
+            producer_version: string;
+            project_id: string;
+            representation_evidence: components["schemas"]["SavedFieldGeometryRepresentationEvidenceResource"];
+            run_id: string;
+            schema_version: string;
+            solution_set_id: string;
+            source: components["schemas"]["SavedFieldGeometryPinnedSourceResource"];
+            /** @description Complete FMSP body length, including its 24-byte header. */
+            support_binary_byte_length: string;
+            support_binary_schema: string;
+            /**
+             * @description SHA-256 of the complete FMSP body.  Absent when the support body is
+             *     over the bounded support transport budget.
+             */
+            support_binary_sha256?: string | null;
+            support_fingerprint: string;
+            tensor_artifact: components["schemas"]["SavedFieldGeometryArtifactResource"];
+            /** @description Complete FMMT v2 body length, when it fits the bounded transport. */
+            topology_binary_byte_length?: string | null;
+            topology_binary_schema: string;
+            /** @description SHA-256 of the complete FMMT v2 body, when it fits the bounded transport. */
+            topology_binary_sha256?: string | null;
+            topology_fingerprint: string;
+        };
         ScalarWindow: {
             columns: string[];
             observation_frames: components["schemas"]["AcceptedObservationFrameRef"][];
@@ -10474,6 +11537,9 @@ export interface components {
             }[];
             magnetization_constraints?: components["schemas"]["MagnetizationConstraintSchema"][];
             materials?: components["schemas"]["SceneMaterialResource"][];
+            monitors?: {
+                [key: string]: unknown;
+            } | null;
             objects?: components["schemas"]["SceneObjectResource"][];
             oersted_fields?: components["schemas"]["SceneOerstedField"][];
             outputs?: {
@@ -10707,6 +11773,8 @@ export interface components {
         SceneTransportExecutionMode: "strict" | "extended";
         /** @enum {string} */
         SceneTransportPrecision: "single" | "double";
+        /** @enum {string} */
+        ScientificAssessmentStatusResource: "converged" | "tolerance_not_met" | "limit_reached" | "invalid" | "unassessed";
         ScratchSceneDocumentResource: {
             objects: components["schemas"]["SceneObjectResource"][];
             /** Format: int64 */
@@ -11066,7 +12134,9 @@ export interface components {
         SessionSummary: {
             created_at: string;
             name: string;
-            /** @description Immutable identity of the active session incarnation. */
+            /** @description API-instance and transition identity for current-session HTTP/cache ownership. */
+            request_scope_epoch: string;
+            /** @description Scientific session identity shared with observation frames. */
             session_epoch: string;
             session_id: string;
             workspace_root: string;
@@ -11084,6 +12154,7 @@ export interface components {
             failure?: null | components["schemas"]["PreparationFailureResource"];
             log_tail: components["schemas"]["PreparationLogEntryResource"][];
             preparation_id: string;
+            receipt?: null | components["schemas"]["PreparationReceiptResource"];
             requested_execution: components["schemas"]["PreparationExecutionSummary"];
             resolved_execution?: null | components["schemas"]["PreparationExecutionSummary"];
             /** Format: int64 */
@@ -11183,6 +12254,177 @@ export interface components {
         SlonczewskiRealizationKind: "thin_layer_homogenized";
         /** @enum {string} */
         SlonczewskiRealizationVersion: "slonczewski_thin_layer_homogenized.v1";
+        SolutionAcceptedStateIdResource: {
+            accepted_step: string;
+            clock_digest: string;
+            domain_digest: string;
+            plan_digest: string;
+            run_id: string;
+            stage_id?: string | null;
+            state_digest: string;
+        };
+        /** @enum {string} */
+        SolutionArtifactIntegrityStatusResource: "not_verified";
+        /** @enum {string} */
+        SolutionArtifactKindResource: "state" | "trajectory" | "modal" | "frequency_response" | "table" | "diagnostic" | "quality_report" | "other";
+        /** @enum {string} */
+        SolutionCoverageStateResource: "complete" | "partial" | "unknown";
+        SolutionCoverageSummaryResource: {
+            committed_samples: string;
+            expected_samples?: string | null;
+            /** Format: int64 */
+            segment_count: number;
+            state: components["schemas"]["SolutionCoverageStateResource"];
+        };
+        /** @enum {string} */
+        SolutionExecutionStatusResource: "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+        SolutionProvenanceResource: {
+            acquisition_digest: string;
+            discretization_digest: string;
+            model_digest: string;
+            physics_digest: string;
+            resolved_plan_digest: string;
+            run_spec_digest: string;
+            seed_digest?: string | null;
+        };
+        /**
+         * @description CAS verification does not certify the scientific result.
+         * @enum {string}
+         */
+        SolutionScalarIntegrityResource: "verified";
+        /** @description One verified scalar payload, independent of the active session. */
+        SolutionScalarResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            artifact_id: string;
+            attempt_id: string;
+            byte_length: string;
+            execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            integrity: components["schemas"]["SolutionScalarIntegrityResource"];
+            manifest_digest: string;
+            manifest_state: components["schemas"]["SolutionSetManifestStateResource"];
+            member_execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            member_id: string;
+            member_scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            object_ref: string;
+            ownership_epoch: string;
+            project_id: string;
+            provenance: components["schemas"]["SolutionProvenanceResource"];
+            quantity_id: string;
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            solution_set_id: string;
+            /** @description Canonical decimal u64, preserved without browser rounding. */
+            step: string;
+            task_id: string;
+            /** Format: double */
+            time_s: number;
+            unit: string;
+            /** Format: double */
+            value_si: number;
+        };
+        SolutionScientificAssessmentResource: {
+            /** Format: int64 */
+            evidence_artifact_count: number;
+            reason?: string | null;
+            status: components["schemas"]["ScientificAssessmentStatusResource"];
+        };
+        SolutionSetArtifactPageQuery: {
+            after_artifact_id?: string | null;
+            /** @description Default 50, maximum 100. */
+            limit?: number | null;
+        };
+        SolutionSetArtifactPageResource: {
+            items: components["schemas"]["SolutionSetArtifactResource"][];
+            manifest_digest: string;
+            member_id: string;
+            next_after_artifact_id?: string | null;
+            project_id: string;
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            solution_set_id: string;
+        };
+        SolutionSetArtifactResource: {
+            accepted_state?: null | components["schemas"]["SolutionAcceptedStateIdResource"];
+            artifact_id: string;
+            /** @description Canonical decimal u64, preserved without rounding. */
+            byte_length: string;
+            coverage?: null | components["schemas"]["SolutionCoverageSummaryResource"];
+            integrity: components["schemas"]["SolutionArtifactIntegrityStatusResource"];
+            kind: components["schemas"]["SolutionArtifactKindResource"];
+            object_ref: string;
+            schema_id: string;
+            scientific_evidence: boolean;
+        };
+        SolutionSetDiscoveryPageQuery: {
+            cursor?: string | null;
+            /** @description Default 25, maximum 50. */
+            limit?: number | null;
+        };
+        SolutionSetDiscoveryPageResource: {
+            items: components["schemas"]["SolutionSetDiscoveryRefResource"][];
+            next_cursor?: string | null;
+            project_id: string;
+            run_id: string;
+            schema_version: string;
+        };
+        SolutionSetDiscoveryRefResource: {
+            manifest_digest: string;
+            /** @description Canonical positive decimal u64, preserved without rounding. */
+            revision: string;
+            solution_set_id: string;
+        };
+        /** @enum {string} */
+        SolutionSetManifestStateResource: "open" | "closed";
+        SolutionSetMemberPageQuery: {
+            after_member_id?: string | null;
+            /** @description Default 50, maximum 100. */
+            limit?: number | null;
+        };
+        SolutionSetMemberPageResource: {
+            items: components["schemas"]["SolutionSetMemberResource"][];
+            manifest_digest: string;
+            next_after_member_id?: string | null;
+            project_id: string;
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            solution_set_id: string;
+        };
+        SolutionSetMemberResource: {
+            /** Format: int64 */
+            artifact_count: number;
+            attempt_id: string;
+            case_id?: string | null;
+            execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            member_id: string;
+            /** @description Canonical decimal u64, preserved without rounding. */
+            ownership_epoch: string;
+            scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            stage_id: string;
+            task_id: string;
+        };
+        SolutionSetResource: {
+            /** Format: int64 */
+            artifact_count: number;
+            /** Format: int64 */
+            coverage_count: number;
+            execution_status: components["schemas"]["SolutionExecutionStatusResource"];
+            manifest_digest: string;
+            manifest_state: components["schemas"]["SolutionSetManifestStateResource"];
+            /** Format: int64 */
+            member_count: number;
+            project_id: string;
+            provenance: components["schemas"]["SolutionProvenanceResource"];
+            /** @description Canonical positive decimal u64; a string prevents browser precision loss. */
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            scientific_assessment: components["schemas"]["SolutionScientificAssessmentResource"];
+            solution_set_id: string;
+        };
         SolverEnergyCurrentResource: {
             /** Format: double */
             anisotropy: number;
@@ -12818,7 +14060,10 @@ export interface components {
         ZhangLiOperatorVersion: "zl_central_reference_v1" | "zl_mumax3_central_v1";
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+        FullmagSessionScope: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -12836,6 +14081,37 @@ export interface operations {
         responses: {
             /** @description V2 API discovery index */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_imports_inspections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionImportInspectRequest"];
+            };
+        };
+        responses: {
+            /** @description Project archive import inspection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportInspectResponse"];
+                };
+            };
+            /** @description Invalid .fms payload */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12874,6 +14150,51 @@ export interface operations {
             };
         };
     };
+    persistence_post_persistence_projects_authoring: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectAuthoringUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated runtime-free project document bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDocumentResource"];
+                };
+            };
+            /** @description Invalid project archive or scene document */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project identity, revision, or read-only conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Canonical source rendering failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     persistence_post_persistence_projects_open: {
         parameters: {
             query?: never;
@@ -12898,6 +14219,863 @@ export interface operations {
             };
             /** @description Invalid or unsupported project archive */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs: {
+        parameters: {
+            query?: {
+                /** @description Page size, from 1 to 100; defaults to 50. */
+                limit?: number | null;
+                /** @description Last RunId returned on the previous page. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Page of durable runs for one project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunListResource"];
+                };
+            };
+            /** @description Invalid page size or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_project_id_runs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectRunSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Identical submit replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunSubmitResource"];
+                };
+            };
+            /** @description Durable run intent accepted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunSubmitResource"];
+                };
+            };
+            /** @description Invalid immutable submission inputs */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project identity or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Durable non-terminal run backlog is full */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Accepted durable run identity */
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Durable run intent and task catalog snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunResource"];
+                };
+            };
+            /** @description Accepted run intent is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Run belongs to another project */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_project_id_runs_run_id_materialization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Accepted durable run identity */
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Idempotent durable task catalog materialization */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunMaterializationResource"];
+                };
+            };
+            /** @description Immutable study cannot be materialized */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Accepted run intent is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Run belongs to another project */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                /** @description Default 25, maximum 50. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded immutable SolutionSet references for one accepted run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionSetDiscoveryPageResource"];
+                };
+            };
+            /** @description Invalid, foreign, or unknown cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing accepted run storage or intent */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Solution ownership or RunSpec mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pinned historical metadata; no runtime or CAS payload read */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionSetResource"];
+                };
+            };
+            /** @description Invalid identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing run or solution revision */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project/run ownership mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members: {
+        parameters: {
+            query?: {
+                after_member_id?: string;
+                /** @description Default 50, maximum 100. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                revision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded members of an immutable revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionSetMemberPageResource"];
+                };
+            };
+            /** @description Invalid page boundary */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing run or solution revision */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Ownership mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts: {
+        parameters: {
+            query?: {
+                after_artifact_id?: string;
+                /** @description Default 50, maximum 100. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                revision: string;
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded immutable CAS references; integrity is not_verified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionSetArtifactPageResource"];
+                };
+            };
+            /** @description Invalid page boundary */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing revision or member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Ownership mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_materialized_dataset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verified typed materialized dataset manifest */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterializedDatasetResource"];
+                };
+            };
+            /** @description Invalid identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing run, solution revision, member, or artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Ownership mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid or oversized manifest */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_materialized_dataset_slice: {
+        parameters: {
+            query: {
+                schema_version: string;
+                dataset_id: string;
+                dataset_revision: string;
+                sample_id: string;
+                item_id: string;
+                field_id: string;
+                /** @description Bare lowercase SHA-256 CAS hash of the selected manifest. */
+                expected_manifest_object_ref: string;
+                element_offset: string;
+                element_count: string;
+                /** @description Payload budget only; FMDS header and metadata add at most 1 MiB + 12 B. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMDS v1: 12-byte header, bounded JSON MaterializedDatasetSliceEnvelopeResource, then exact raw part bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Invalid identity, canonical counters, bounds or budget */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing accepted run, revision, member or artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned manifest, dataset or ownership mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested slice metadata exceeds the 1 MiB envelope budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Corrupt, nonfinite or unsupported persisted field */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                /** @description Selected materialized dataset artifact ID */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exact immutable saved FEM geometry metadata; no active-runtime fallback */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedFieldGeometryResource"];
+                };
+            };
+            /** @description Invalid identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned geometry or dataset manifest is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned owner, dataset, geometry, or tensor identity mismatch */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Corrupt or oversized persisted geometry */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_support: {
+        parameters: {
+            query: {
+                /** @description Bare lowercase SHA-256 of the exact materialized dataset manifest. */
+                expected_dataset_manifest_object_ref: string;
+                /** @description Bare lowercase SHA-256 of the exact saved geometry binding manifest. */
+                expected_geometry_manifest_object_ref: string;
+                /** @description Bare lowercase SHA-256 of the exact saved geometry payload. */
+                expected_geometry_object_ref: string;
+                /** @description Maximum complete binary body size, including its fixed header. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                /** @description Selected materialized dataset artifact ID */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pinned saved FEM active-node support in FMSP v1 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial FMSP body for a single byte Range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Pinned support is unchanged */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity, hash, or byte budget */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned geometry or dataset manifest is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Expected pinned identity differs from the immutable artifact */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested byte Range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FMSP body exceeds the bounded support transport budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_saved_field_geometry_topology: {
+        parameters: {
+            query: {
+                /** @description Bare lowercase SHA-256 of the exact materialized dataset manifest. */
+                expected_dataset_manifest_object_ref: string;
+                /** @description Bare lowercase SHA-256 of the exact saved geometry binding manifest. */
+                expected_geometry_manifest_object_ref: string;
+                /** @description Bare lowercase SHA-256 of the exact saved geometry payload. */
+                expected_geometry_object_ref: string;
+                /** @description Maximum complete binary body size, including its fixed header. */
+                max_response_bytes: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                /** @description Selected materialized dataset artifact ID */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pinned saved FEM topology in the existing FMMT v2 binary format */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial FMMT v2 body for a single byte Range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Pinned topology is unchanged */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid identity, hash, or byte budget */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pinned geometry or dataset manifest is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Expected pinned identity differs from the immutable artifact */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested byte Range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FMMT v2 body exceeds the bounded geometry transport budget */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_solution_sets_solution_set_id_revisions_revision_members_member_id_artifacts_artifact_id_scalar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                solution_set_id: string;
+                /** @description Canonical positive decimal u64 */
+                revision: string;
+                member_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verified bounded scalar; scientific assessment remains independent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolutionScalarResource"];
+                };
+            };
+            /** @description Invalid identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing run, revision, member or artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Foreign owner or incompatible artifact schema */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Corrupt, oversized or invalid scalar */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_cancellation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Accepted durable run identity */
+                run_id: string;
+                /** @description Exact durable task identity */
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectRunTaskCancellationRequest"];
+            };
+        };
+        responses: {
+            /** @description Identical Stop command replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunTaskCancellationResource"];
+                };
+            };
+            /** @description Durable Stop command accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunTaskCancellationResource"];
+                };
+            };
+            /** @description Invalid task identity or cancellation reason */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Accepted run intent is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Task is not preparing/running or a conflicting cancellation exists */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12942,6 +15120,104 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RuntimeCapabilityMatrix"];
                 };
+            };
+        };
+    };
+    platform_get_platform_development_backend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only native development compilation status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentBackendResource"];
+                };
+            };
+            /** @description Development backend status has not changed */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_post_platform_development_restart_requests: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Bearer token generated before submission */
+                Authorization: string;
+                /** @description Exact launcher UI origin */
+                Origin: string;
+                /** @description Current API instance pin */
+                "x-fullmag-api-instance": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentRestartRequest"];
+            };
+        };
+        responses: {
+            /** @description Restart intent durably queued; no process restart is implied */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentRestartResource"];
+                };
+            };
+            /** @description Restart coordinator unavailable or request conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_development_restart_requests_request_id: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Bearer status token; omit stale API instance header */
+                Authorization: string;
+            };
+            path: {
+                /** @description Opaque restart request identity */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Token-bound restart status and confirmed restore payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentRestartResource"];
+                };
+            };
+            /** @description Request unavailable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -12994,6 +15270,33 @@ export interface operations {
         responses: {
             /** @description OpenAPI v2 document */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_runtime_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only native application runtime service status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeServiceStatusResource"];
+                };
+            };
+            /** @description Runtime service status not modified for the supplied ETag */
+            304: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13062,7 +15365,10 @@ export interface operations {
     sessions_get_sessions_current: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13105,7 +15411,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_eigen_branches_v2: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13130,7 +15439,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_eigen_dispersion_csv: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13155,7 +15467,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_eigen_modes_sample_index_mode_index: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description K-path sample index */
                 sample_index: number;
@@ -13185,7 +15500,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_eigen_spectrum_v2: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13210,7 +15528,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_eigenmodes_branches: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13235,7 +15556,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_eigenmodes_dispersion: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13265,7 +15589,10 @@ export interface operations {
                 /** @description Optional k-sample index */
                 sample_index?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13290,7 +15617,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_eigenmodes_spectrum: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13322,7 +15652,10 @@ export interface operations {
                 stage_id?: string;
                 method?: components["schemas"]["TopologicalChargeMethod"];
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Object id */
                 object_id: string;
@@ -13345,7 +15678,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_eigen_branches_v2: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13365,7 +15701,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_eigen_diagnostics_v2: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13385,7 +15724,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_eigen_dispersion: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13405,7 +15747,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_eigen_field_sweep: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13425,7 +15770,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_eigen_mode_field_sample_index_mode_index_meta: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description K-path sample index */
                 sample_index: number;
@@ -13450,7 +15798,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_eigen_modes_sample_index_mode_index: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description K-path sample index */
                 sample_index: number;
@@ -13475,7 +15826,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v2: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13495,7 +15849,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v3: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13515,7 +15872,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_fmr_kittel_fit: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13535,7 +15895,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_fmr_peaks: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13555,7 +15918,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_fmr_resonance_fits: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13575,7 +15941,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_manifest_v1: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13595,7 +15964,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_response_cancel_requested_v1: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13615,7 +15987,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13635,7 +16010,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_solver_v1: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13655,7 +16033,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_response_field_frequency_index_meta: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Frequency point index */
                 frequency_index: number;
@@ -13678,7 +16059,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_response_frequency_points_frequency_index: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Frequency point index */
                 frequency_index: number;
@@ -13701,7 +16085,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_response_magnetic_sweep: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13721,7 +16108,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_domain_response_progress_v1: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13741,7 +16131,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -13766,7 +16159,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_family_stage_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -13796,7 +16192,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_family_stage_id_variants_variant_id_points: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -13828,7 +16227,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_adaptive_refinement: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -13858,7 +16260,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_bookmarks: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -13888,7 +16293,10 @@ export interface operations {
     analysis_post_sessions_current_analysis_hysteresis_stage_id_bookmarks: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -13922,7 +16330,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_branches: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -13952,7 +16363,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_metrics: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -13982,7 +16396,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_minor_loops: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -14005,7 +16422,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_points: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -14035,7 +16455,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_reversal_fields: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -14058,7 +16481,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_saturation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -14088,7 +16514,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_settle_trace: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -14118,7 +16547,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_steps_point_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -14150,7 +16582,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_hysteresis_stage_id_steps_point_id_settle_trace: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -14193,7 +16628,10 @@ export interface operations {
                 residual_max?: number;
                 sort?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
             };
@@ -14215,7 +16653,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14256,7 +16697,10 @@ export interface operations {
                 residual_max?: number;
                 sort?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14298,7 +16742,10 @@ export interface operations {
                 residual_max?: number;
                 sort?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14321,7 +16768,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14363,7 +16813,10 @@ export interface operations {
                 residual_max?: number;
                 sort?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14405,7 +16858,10 @@ export interface operations {
                 residual_max?: number;
                 sort?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14428,7 +16884,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items_item_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14452,7 +16911,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_projections_projection_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14494,7 +16956,10 @@ export interface operations {
                 residual_max?: number;
                 sort?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14517,7 +16982,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations_relation_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14559,7 +17027,10 @@ export interface operations {
                 residual_max?: number;
                 sort?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 run_id: string;
                 dataset_id: string;
@@ -14582,7 +17053,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_spin_wave_dynamic_structure_factor_v1: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -14609,7 +17083,10 @@ export interface operations {
     analysis_get_sessions_current_analysis_spin_wave_gamma_v1: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -14636,7 +17113,10 @@ export interface operations {
     data_get_sessions_current_data_artifacts: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -14670,7 +17150,10 @@ export interface operations {
     data_get_sessions_current_data_artifacts_artifact_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Artifact relative path */
                 artifact_id: string;
@@ -14703,6 +17186,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for the FMBM payload */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path: {
                 /** @description Stable native multilayer layer identity */
@@ -14774,6 +17259,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for the FMRM payload */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path: {
                 /** @description Stable native multilayer layer identity */
@@ -14840,7 +17327,10 @@ export interface operations {
     data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_region_memberships: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Stable native multilayer layer identity */
                 layer_id: string;
@@ -14877,7 +17367,10 @@ export interface operations {
     data_get_sessions_current_data_domain_fdm_multilayer_layout: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -14911,7 +17404,10 @@ export interface operations {
     data_get_sessions_current_data_domain_meta: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -14942,7 +17438,10 @@ export interface operations {
                 cut_world?: number;
                 cut_norm?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -14995,6 +17494,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for chunked FMMT topology reads */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path?: never;
             cookie?: never;
@@ -15064,6 +17565,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for the FMRM payload */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path?: never;
             cookie?: never;
@@ -15141,6 +17644,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for the FMRM payload */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path: {
                 /** @description Canonical authored region ID */
@@ -15213,7 +17718,10 @@ export interface operations {
     data_get_sessions_current_data_fdm_region_memberships: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -15254,7 +17762,10 @@ export interface operations {
     data_get_sessions_current_data_fields: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -15293,7 +17804,10 @@ export interface operations {
                 /** @description Optional owner used to disambiguate duplicate FDM region identifiers. */
                 owner_object_id?: string | null;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -15346,7 +17860,10 @@ export interface operations {
                 /** @description Optional hysteresis stage id that owns `snapshot_id`. */
                 stage_id?: string | null;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -15408,7 +17925,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
             };
@@ -15489,7 +18009,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
             };
@@ -15577,7 +18100,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
             };
@@ -15659,7 +18185,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
             };
@@ -15734,7 +18263,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
             };
@@ -15808,7 +18340,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
             };
@@ -15889,7 +18424,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
             };
@@ -15970,7 +18508,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
                 monitor_id: string;
@@ -16052,7 +18593,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
                 monitor_id: string;
@@ -16134,7 +18678,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
                 monitor_id: string;
@@ -16217,7 +18764,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
                 monitor_id: string;
@@ -16293,7 +18843,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
                 monitor_id: string;
@@ -16368,7 +18921,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
                 monitor_id: string;
@@ -16450,7 +19006,10 @@ export interface operations {
                 expected_carrier_revision?: string;
                 expected_field_revision?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 quantity_id: string;
                 monitor_id: string;
@@ -16542,7 +19101,10 @@ export interface operations {
                 /** @description Tile edge size in pixels for progressive raster fetches. */
                 tile_size?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -16602,7 +19164,10 @@ export interface operations {
                 max_points?: number;
                 format?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -16674,7 +19239,10 @@ export interface operations {
                 /** @description Tile edge size in pixels for progressive raster fetches. */
                 tile_size?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -16732,7 +19300,10 @@ export interface operations {
                 /** @description Maximum profile samples returned after depth sorting. */
                 max_samples?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -16801,7 +19372,10 @@ export interface operations {
                 show_mesh?: boolean;
                 show_arrows?: boolean;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -16873,7 +19447,10 @@ export interface operations {
                 /** @description Tile edge size in pixels for progressive raster fetches. */
                 tile_size?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -16940,7 +19517,10 @@ export interface operations {
                 /** @description Hard cap on number of arrow glyphs returned. */
                 max_arrows?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -17005,7 +19585,10 @@ export interface operations {
                 samples?: number;
                 format?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -17079,7 +19662,10 @@ export interface operations {
                 /** @description Hard cap on number of arrow glyphs returned. */
                 max_arrows?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -17155,7 +19741,10 @@ export interface operations {
                 show_mesh?: boolean;
                 show_arrows?: boolean;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -17229,7 +19818,10 @@ export interface operations {
                 /** @description Hard cap on number of arrow glyphs returned. */
                 max_arrows?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -17371,6 +19963,8 @@ export interface operations {
             header?: {
                 /** @description Strong ETag from a previous field-vector response */
                 "If-None-Match"?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path: {
                 /** @description Quantity identifier */
@@ -17479,6 +20073,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for the binary payload */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path: {
                 /** @description Resolved preview mask identity */
@@ -17571,7 +20167,10 @@ export interface operations {
     data_get_sessions_current_data_material_fields: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -17598,7 +20197,10 @@ export interface operations {
     data_get_sessions_current_data_material_fields_field_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Material-parameter assignment id */
                 field_id: string;
@@ -17634,7 +20236,10 @@ export interface operations {
                  */
                 owner_object_id?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Authored or realized region id */
                 region_id: string;
@@ -17680,7 +20285,10 @@ export interface operations {
     data_get_sessions_current_data_mesh_region_memberships: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -17713,10 +20321,146 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_observation_frames: {
+        parameters: {
+            query?: {
+                /** @description Optional exact run precondition. It must equal the active session run. */
+                run_id?: string | null;
+                /** @description Optional exact study stage filter. */
+                stage_id?: string | null;
+                /** @description Return entries strictly after this immutable frame identity. */
+                cursor?: string | null;
+                /** @description Page size. Defaults to 50 and is capped at 200. */
+                limit?: number | null;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable observation frames for the active durable run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationFrameListResource"];
+                };
+            };
+            /** @description Invalid cursor or page size */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active durable run or run storage */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested run differs from the active session */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_observation_frames_frame_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Immutable observation frame identity */
+                frame_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable observation frame descriptor */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationFrameResource"];
+                };
+            };
+            /** @description Observation frame was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_observation_frames_frame_id_magnetization: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Immutable observation frame identity */
+                frame_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source-qualified FMVP v4 magnetization */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Magnetization payload is unchanged */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Observation frame was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Observation source cannot materialize magnetization */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_quantities: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -17745,7 +20489,10 @@ export interface operations {
                 /** @description Comma-separated scalar columns to return, e.g. step,time,e_total */
                 columns?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -17765,7 +20512,10 @@ export interface operations {
     data_get_sessions_current_data_tables: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -17785,7 +20535,10 @@ export interface operations {
     data_get_sessions_current_data_tables_table_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Table resource id */
                 table_id: string;
@@ -17815,7 +20568,10 @@ export interface operations {
     data_get_sessions_current_data_tables_table_id_columns: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Table resource id */
                 table_id: string;
@@ -17866,7 +20622,10 @@ export interface operations {
                 /** @description Comma-separated table columns to return */
                 columns?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Table resource id */
                 table_id: string;
@@ -17917,7 +20676,10 @@ export interface operations {
                 /** @description Comma-separated table columns to return */
                 columns?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Table resource id */
                 table_id: string;
@@ -17967,7 +20729,10 @@ export interface operations {
     diagnostics_get_sessions_current_diagnostics_engine_log: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18021,7 +20786,10 @@ export interface operations {
     diagnostics_get_sessions_current_diagnostics_solver_profile: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18055,7 +20823,10 @@ export interface operations {
     platform_get_sessions_current_events_communication_policy: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18075,7 +20846,10 @@ export interface operations {
     platform_patch_sessions_current_events_communication_policy: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18141,7 +20915,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_builds: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18175,7 +20952,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_builds_current: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18209,7 +20989,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_builds_latest_successful: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18243,7 +21026,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_capabilities: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18270,7 +21056,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18316,6 +21105,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for chunked FMPP reads */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path?: never;
             cookie?: never;
@@ -18373,7 +21164,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_interfaces_interface_id_quality: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical stable interface id */
                 interface_id: string;
@@ -18403,7 +21197,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_interfaces_interface_id_report: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical stable interface id */
                 interface_id: string;
@@ -18433,7 +21230,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_objects_object_id_quality: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -18463,7 +21263,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_objects_object_id_report: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -18493,7 +21296,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_objects_object_id_size_field: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -18528,6 +21334,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for chunked FMMT topology reads */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path: {
                 /** @description Canonical scene object id */
@@ -18600,6 +21408,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for chunked FMMT topology reads */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path: {
                 /** @description Stable FEM mesh part id, for example an airbox part */
@@ -18667,7 +21477,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_regions_region_id_quality: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Authored or realized region id */
                 region_id: string;
@@ -18711,7 +21524,10 @@ export interface operations {
                 include_polygons?: boolean;
                 include_wireframe?: boolean;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18774,7 +21590,10 @@ export interface operations {
                 edge_width?: number;
                 dpr?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18835,7 +21654,10 @@ export interface operations {
                 position_percent: number;
                 metric: components["schemas"]["CrossSectionQualityMetric"];
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18885,7 +21707,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_shared_domain_manifest: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18926,7 +21751,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_shared_domain_quality: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18953,7 +21781,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_shared_domain_quality_gates: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -18983,6 +21814,8 @@ export interface operations {
             header?: {
                 /** @description Strong ETag from a previous per-element quality response */
                 "If-None-Match"?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path?: never;
             cookie?: never;
@@ -19024,7 +21857,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_shared_domain_realized_size_fields: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19051,7 +21887,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_shared_domain_report: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19083,6 +21922,8 @@ export interface operations {
                 "If-None-Match"?: string | null;
                 /** @description Optional single byte range for chunked FMMT topology reads */
                 Range?: string | null;
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
             path?: never;
             cookie?: never;
@@ -19147,7 +21988,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_universe_quality: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19174,7 +22018,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_universe_report: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19201,7 +22048,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_mesh_id_parts_part_id_histogram_bins_metric_bin_index_elements: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Shared-domain mesh id. The aliases shared-domain, shared_domain, and study_domain resolve to the current FEM solver mesh. */
                 mesh_id: string;
@@ -19260,7 +22110,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_policies_interfaces_interface_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical stable interface id */
                 interface_id: string;
@@ -19290,7 +22143,10 @@ export interface operations {
     meshing_put_sessions_current_meshing_policies_interfaces_interface_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical stable interface id */
                 interface_id: string;
@@ -19331,7 +22187,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_policies_objects_object_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -19361,7 +22220,10 @@ export interface operations {
     meshing_put_sessions_current_meshing_policies_objects_object_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -19402,7 +22264,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_policies_shared_domain: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19429,7 +22294,10 @@ export interface operations {
     meshing_put_sessions_current_meshing_policies_shared_domain: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19467,7 +22335,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_policies_universe: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19494,7 +22365,10 @@ export interface operations {
     meshing_put_sessions_current_meshing_policies_universe: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19532,7 +22406,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_semantics: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19559,7 +22436,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_summary: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19593,7 +22473,10 @@ export interface operations {
     model_get_sessions_current_model_couplings: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19620,7 +22503,10 @@ export interface operations {
     model_post_sessions_current_model_couplings: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19658,7 +22544,10 @@ export interface operations {
     model_delete_sessions_current_model_couplings_coupling_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Coupling id */
                 coupling_id: string;
@@ -19699,7 +22588,10 @@ export interface operations {
     model_patch_sessions_current_model_couplings_coupling_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Coupling id */
                 coupling_id: string;
@@ -19747,7 +22639,10 @@ export interface operations {
     model_get_sessions_current_model_current_transports: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19766,7 +22661,10 @@ export interface operations {
     model_post_sessions_current_model_current_transports: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19795,7 +22693,10 @@ export interface operations {
     model_get_sessions_current_model_current_transports_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -19822,7 +22723,10 @@ export interface operations {
     model_delete_sessions_current_model_current_transports_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -19853,7 +22757,10 @@ export interface operations {
     model_patch_sessions_current_model_current_transports_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -19884,7 +22791,10 @@ export interface operations {
     model_get_sessions_current_model_field_drives: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19911,7 +22821,10 @@ export interface operations {
     model_post_sessions_current_model_field_drives: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19949,7 +22862,10 @@ export interface operations {
     model_put_sessions_current_model_field_drives_drive_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Stable field drive id */
                 drive_id: string;
@@ -19997,7 +22913,10 @@ export interface operations {
     model_delete_sessions_current_model_field_drives_drive_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Stable field drive id */
                 drive_id: string;
@@ -20038,7 +22957,10 @@ export interface operations {
     model_get_sessions_current_model_frozen_spins: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20057,7 +22979,10 @@ export interface operations {
     model_post_sessions_current_model_frozen_spins: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20098,7 +23023,10 @@ export interface operations {
     model_post_sessions_current_model_frozen_spins_previews: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20139,7 +23067,10 @@ export interface operations {
     model_get_sessions_current_model_frozen_spins_previews_preview_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 preview_id: string;
             };
@@ -20178,7 +23109,10 @@ export interface operations {
     model_post_sessions_current_model_frozen_spins_previews_preview_id_activate: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 preview_id: string;
             };
@@ -20230,7 +23164,10 @@ export interface operations {
     model_get_sessions_current_model_frozen_spins_constraint_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 constraint_id: string;
             };
@@ -20260,7 +23197,10 @@ export interface operations {
     model_delete_sessions_current_model_frozen_spins_constraint_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 constraint_id: string;
             };
@@ -20312,7 +23252,10 @@ export interface operations {
     model_patch_sessions_current_model_frozen_spins_constraint_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 constraint_id: string;
             };
@@ -20364,7 +23307,10 @@ export interface operations {
     model_get_sessions_current_model_geometry_capabilities: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20391,7 +23337,10 @@ export interface operations {
     model_get_sessions_current_model_geometry_diagnostics: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20418,7 +23367,10 @@ export interface operations {
     model_get_sessions_current_model_geometry_diagnostics_diagnostic_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Geometry diagnostic id */
                 diagnostic_id: string;
@@ -20448,7 +23400,10 @@ export interface operations {
     model_post_sessions_current_model_geometry_realizations: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20486,7 +23441,10 @@ export interface operations {
     model_get_sessions_current_model_geometry_realizations_current: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20513,7 +23471,10 @@ export interface operations {
     model_get_sessions_current_model_geometry_validation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20540,7 +23501,10 @@ export interface operations {
     model_get_sessions_current_model_magnetization_assets_asset_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical magnetization asset id */
                 asset_id: string;
@@ -20570,7 +23534,10 @@ export interface operations {
     model_patch_sessions_current_model_magnetization_assets_asset_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical magnetization asset id */
                 asset_id: string;
@@ -20618,7 +23585,10 @@ export interface operations {
     model_get_sessions_current_model_material_fields: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20645,7 +23615,10 @@ export interface operations {
     model_get_sessions_current_model_materials_material_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical material asset id */
                 material_id: string;
@@ -20675,7 +23648,10 @@ export interface operations {
     model_patch_sessions_current_model_materials_material_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical material asset id */
                 material_id: string;
@@ -20709,7 +23685,10 @@ export interface operations {
     model_post_sessions_current_model_objects: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20747,7 +23726,10 @@ export interface operations {
     model_delete_sessions_current_model_objects_object_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -20777,7 +23759,10 @@ export interface operations {
     model_patch_sessions_current_model_objects_object_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -20811,7 +23796,10 @@ export interface operations {
     model_patch_sessions_current_model_objects_object_id_geometry: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -20859,7 +23847,10 @@ export interface operations {
     model_get_sessions_current_model_objects_object_id_interactions_interaction_kind: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -20891,7 +23882,10 @@ export interface operations {
     model_patch_sessions_current_model_objects_object_id_interactions_interaction_kind: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -20934,7 +23928,10 @@ export interface operations {
     model_post_sessions_current_model_objects_object_id_regions: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -20975,7 +23972,10 @@ export interface operations {
     model_post_sessions_current_model_objects_object_id_regions_reorder: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -21016,7 +24016,10 @@ export interface operations {
     model_delete_sessions_current_model_objects_object_id_regions_region_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -21048,7 +24051,10 @@ export interface operations {
     model_patch_sessions_current_model_objects_object_id_regions_region_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -21091,7 +24097,10 @@ export interface operations {
     model_post_sessions_current_model_objects_object_id_regions_region_id_duplicate: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -21134,7 +24143,10 @@ export interface operations {
     model_get_sessions_current_model_oersted_fields: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21153,7 +24165,10 @@ export interface operations {
     model_post_sessions_current_model_oersted_fields: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21182,7 +24197,10 @@ export interface operations {
     model_get_sessions_current_model_oersted_fields_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -21209,7 +24227,10 @@ export interface operations {
     model_delete_sessions_current_model_oersted_fields_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -21240,7 +24261,10 @@ export interface operations {
     model_patch_sessions_current_model_oersted_fields_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -21271,7 +24295,10 @@ export interface operations {
     model_get_sessions_current_model_physics_graph: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21305,7 +24332,10 @@ export interface operations {
     model_get_sessions_current_model_planar_monitors: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21324,7 +24354,10 @@ export interface operations {
     model_post_sessions_current_model_planar_monitors: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21361,7 +24394,10 @@ export interface operations {
     model_get_sessions_current_model_planar_monitors_monitor_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 monitor_id: string;
             };
@@ -21389,7 +24425,10 @@ export interface operations {
     model_delete_sessions_current_model_planar_monitors_monitor_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 monitor_id: string;
             };
@@ -21428,7 +24467,10 @@ export interface operations {
     model_patch_sessions_current_model_planar_monitors_monitor_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 monitor_id: string;
             };
@@ -21467,7 +24509,10 @@ export interface operations {
     model_post_sessions_current_model_planar_monitors_monitor_id_duplicate: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 monitor_id: string;
             };
@@ -21506,7 +24551,10 @@ export interface operations {
     model_get_sessions_current_model_readiness: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21533,7 +24581,10 @@ export interface operations {
     model_get_sessions_current_model_realized_regions: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21560,7 +24611,10 @@ export interface operations {
     model_get_sessions_current_model_region_diagnostics: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21587,7 +24641,10 @@ export interface operations {
     model_get_sessions_current_model_regions: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21614,7 +24671,10 @@ export interface operations {
     model_patch_sessions_current_model_regions_region_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Object-derived region id or name */
                 region_id: string;
@@ -21643,12 +24703,22 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Base scene revision does not match current scene revision */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     model_get_sessions_current_model_scene: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21675,13 +24745,16 @@ export interface operations {
     model_put_sessions_current_model_scene: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": unknown;
+                "application/json": components["schemas"]["SceneResource"];
             };
         };
         responses: {
@@ -21720,7 +24793,10 @@ export interface operations {
     model_patch_sessions_current_model_scene: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21765,7 +24841,10 @@ export interface operations {
     model_get_sessions_current_model_script: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21792,7 +24871,10 @@ export interface operations {
     model_get_sessions_current_model_spin_interfaces: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21811,7 +24893,10 @@ export interface operations {
     model_get_sessions_current_model_spin_torques: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21830,7 +24915,10 @@ export interface operations {
     model_post_sessions_current_model_spin_torques: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21859,7 +24947,10 @@ export interface operations {
     model_get_sessions_current_model_spin_torques_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -21886,7 +24977,10 @@ export interface operations {
     model_delete_sessions_current_model_spin_torques_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -21917,7 +25011,10 @@ export interface operations {
     model_patch_sessions_current_model_spin_torques_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -21948,7 +25045,10 @@ export interface operations {
     model_get_sessions_current_model_spin_transports: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21967,7 +25067,10 @@ export interface operations {
     model_post_sessions_current_model_spin_transports: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21996,7 +25099,10 @@ export interface operations {
     model_get_sessions_current_model_spin_transports_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -22023,7 +25129,10 @@ export interface operations {
     model_delete_sessions_current_model_spin_transports_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -22054,7 +25163,10 @@ export interface operations {
     model_patch_sessions_current_model_spin_transports_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 id: string;
             };
@@ -22085,7 +25197,10 @@ export interface operations {
     model_get_sessions_current_model_study: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22112,7 +25227,10 @@ export interface operations {
     model_patch_sessions_current_model_study: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22143,7 +25261,10 @@ export interface operations {
     model_post_sessions_current_model_syncs: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22174,7 +25295,10 @@ export interface operations {
     model_post_sessions_current_model_transactions: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22219,7 +25343,10 @@ export interface operations {
     model_post_sessions_current_model_transport_validation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22248,7 +25375,10 @@ export interface operations {
     model_get_sessions_current_model_universe: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22275,7 +25405,10 @@ export interface operations {
     model_patch_sessions_current_model_universe: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22320,7 +25453,10 @@ export interface operations {
     model_post_sessions_current_model_universe_fit: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22365,7 +25501,10 @@ export interface operations {
     persistence_post_sessions_current_persistence_assets_import: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22396,7 +25535,10 @@ export interface operations {
     persistence_get_sessions_current_persistence_checkpoints: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22423,7 +25565,10 @@ export interface operations {
     persistence_post_sessions_current_persistence_checkpoints: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22461,7 +25606,10 @@ export interface operations {
     persistence_get_sessions_current_persistence_checkpoints_checkpoint_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Checkpoint id */
                 checkpoint_id: string;
@@ -22491,7 +25639,10 @@ export interface operations {
     persistence_post_sessions_current_persistence_checkpoints_checkpoint_id_restore: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Checkpoint id */
                 checkpoint_id: string;
@@ -22532,7 +25683,10 @@ export interface operations {
     persistence_post_sessions_current_persistence_exports: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22563,7 +25717,10 @@ export interface operations {
     persistence_post_sessions_current_persistence_field_states_exports: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22601,7 +25758,10 @@ export interface operations {
     persistence_post_sessions_current_persistence_field_states_imports: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22639,7 +25799,10 @@ export interface operations {
     persistence_post_sessions_current_persistence_field_states_imports_inspections: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22677,7 +25840,10 @@ export interface operations {
     persistence_post_sessions_current_persistence_imports: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22705,41 +25871,13 @@ export interface operations {
             };
         };
     };
-    persistence_post_sessions_current_persistence_imports_inspections: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SessionImportInspectRequest"];
-            };
-        };
-        responses: {
-            /** @description Session import inspection */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionImportInspectResponse"];
-                };
-            };
-            /** @description Invalid .fms payload */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     persistence_get_sessions_current_persistence_recovery: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22759,7 +25897,10 @@ export interface operations {
     persistence_delete_sessions_current_persistence_recovery: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22779,7 +25920,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_commands: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22806,7 +25950,10 @@ export interface operations {
     simulation_post_sessions_current_simulation_commands: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22837,7 +25984,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_commands_command_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Command identifier */
                 command_id: string;
@@ -22867,7 +26017,10 @@ export interface operations {
     simulation_post_sessions_current_simulation_commands_command_id_failure: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Command identifier */
                 command_id: string;
@@ -22901,7 +26054,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_objects_object_id_metrics: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Scene object id or name */
                 object_id: string;
@@ -22931,7 +26087,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_preparation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22957,10 +26116,58 @@ export interface operations {
             };
         };
     };
+    simulation_post_sessions_current_simulation_preparation_materialization: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LivePreparationMaterializationRequest"];
+            };
+        };
+        responses: {
+            /** @description Preparation receipt accepted for the current Live run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LivePreparationMaterializationResource"];
+                };
+            };
+            /** @description Current Live preparation or scene is not available */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description The session, preparation, or scene revision changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
     simulation_get_sessions_current_simulation_runs_current: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -22987,7 +26194,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_runs_run_id: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Run identifier. The local runtime currently exposes the active run read-model. */
                 run_id: string;
@@ -23017,7 +26227,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_solver_energies_current: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23047,7 +26260,10 @@ export interface operations {
                 /** @description Optional max number of most recent rows to return. */
                 limit?: number | null;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23074,7 +26290,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_solver_status: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23101,7 +26320,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_stages_execution: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23142,7 +26364,10 @@ export interface operations {
                 include_warnings?: boolean | null;
                 include_snapshots?: boolean | null;
             };
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -23172,7 +26397,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_orientation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -23202,7 +26430,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_plan: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -23232,7 +26463,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_progress: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -23262,7 +26496,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_protocol: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -23292,7 +26529,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_saturation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -23322,7 +26562,10 @@ export interface operations {
     simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_settle_pipeline: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path: {
                 /** @description Hysteresis stage index or stage identifier */
                 stage_id: string;
@@ -23352,7 +26595,10 @@ export interface operations {
     sessions_get_sessions_current_status: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23379,7 +26625,10 @@ export interface operations {
     visualization_get_sessions_current_visualization_client_acks: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23399,7 +26648,10 @@ export interface operations {
     visualization_post_sessions_current_visualization_client_acks: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23430,7 +26682,10 @@ export interface operations {
     visualization_get_sessions_current_visualization_display: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23457,7 +26712,10 @@ export interface operations {
     visualization_put_sessions_current_visualization_display: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23488,7 +26746,10 @@ export interface operations {
     visualization_patch_sessions_current_visualization_display: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23519,7 +26780,10 @@ export interface operations {
     visualization_get_sessions_current_visualization_mode_compositions_active: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23539,7 +26803,10 @@ export interface operations {
     visualization_patch_sessions_current_visualization_mode_compositions_active: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23577,7 +26844,10 @@ export interface operations {
     visualization_get_sessions_current_visualization_state: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23604,7 +26874,10 @@ export interface operations {
     visualization_put_sessions_current_visualization_state: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23635,7 +26908,10 @@ export interface operations {
     visualization_patch_sessions_current_visualization_state: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23666,7 +26942,10 @@ export interface operations {
     workspace_get_sessions_current_workspace_layout: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23693,7 +26972,10 @@ export interface operations {
     workspace_put_sessions_current_workspace_layout: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23724,7 +27006,10 @@ export interface operations {
     workspace_get_sessions_current_workspace_ribbon: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23751,7 +27036,10 @@ export interface operations {
     workspace_put_sessions_current_workspace_ribbon: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23782,7 +27070,10 @@ export interface operations {
     workspace_get_sessions_current_workspace_selection: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23809,7 +27100,10 @@ export interface operations {
     workspace_put_sessions_current_workspace_selection: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23840,7 +27134,10 @@ export interface operations {
     workspace_get_sessions_current_workspace_tree_active_node: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -23867,7 +27164,10 @@ export interface operations {
     workspace_put_sessions_current_workspace_tree_active_node: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
             path?: never;
             cookie?: never;
         };

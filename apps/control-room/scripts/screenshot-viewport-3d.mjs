@@ -11,6 +11,7 @@ const apiBase =
   null;
 const allowMissingSession =
   process.env.CONTROL_ROOM_SCREENSHOT_ALLOW_MISSING_SESSION === "1";
+const webglOnly = process.env.CONTROL_ROOM_SCREENSHOT_WEBGL_ONLY === "1";
 const defaultRequiredScenes = allowMissingSession ? "fdm" : "fdm,fem,object";
 const requiredScenes = new Set(
   (process.env.CONTROL_ROOM_SCREENSHOT_SCENES ?? defaultRequiredScenes)
@@ -102,7 +103,13 @@ try {
     );
   }
   await waitForCanvasClipBox(page);
-  assertViewportWebGLState(await readViewportWebGLState(page), "main FDM fixture");
+  const webglState = await readViewportWebGLState(page);
+  assertViewportWebGLState(webglState, "main FDM fixture");
+  if (webglOnly) {
+    console.log(
+      `Viewport 3D WebGL gate passed: visible=true contextLost=${webglState.contextLost} drawingBuffer=${webglState.width}x${webglState.height}.`,
+    );
+  } else {
   if (useMainPageFdmFixture) {
     await verifyRegionOverlayModeControl(page);
     const uncoloredSample = await sampleCanvasComposite(page);
@@ -182,6 +189,7 @@ try {
       ? `fdmFixtureChangedPixels=${fdmFixtureDelta.changedPixels}/${fdmFixtureDelta.sampledPixels}`
       : "fdmFixture=live",
   );
+  }
 } finally {
   await browser.close();
 }
@@ -828,6 +836,20 @@ async function installFdmFixtureApi(page, fixtureRequests) {
       controlRoomApiBase: baseUrl,
     };
   }, fixtureBase);
+
+  await page.route("**/v2/sessions", async (route) => {
+    await fulfillJson(route, {
+      schema_version: "session_list.v1",
+      sessions: [
+        {
+          current: true,
+          name: "fdm-screenshot-fixture",
+          session_id: "fdm-fixture",
+          status: "active",
+        },
+      ],
+    });
+  });
 
   await page.route("**/v2/sessions/current/**", async (route) => {
     const request = route.request();

@@ -48,6 +48,7 @@ export type {
   DecodedCrossSectionQuality,
   DecodedComplexFieldVector,
   DecodedFieldVector,
+  DecodedFieldVectorSourceKind,
   DecodedMeshQualityData,
   DecodedTableRows,
   DecodedTopology,

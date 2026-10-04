@@ -42,6 +42,107 @@ is_windows_shell() {
   return 1
 }
 
+# Admit this fixed helper before generic diagnostic substring handling, so a
+# composite command cannot use a diagnostic marker to bypass its argument check.
+case "${recipe}" in
+  *"scripts/windows/recover_runtime.py"*)
+    runtime_recovery_pattern='^[^[:space:]]+ "[^"]+/scripts/windows/recover_runtime.py" --repo-root "[^"]+" --web-port "([1-9][0-9]{0,4})"$'
+    if [[ ! "${recipe}" =~ ${runtime_recovery_pattern} ]]; then
+      echo "[fullmag just] invalid native runtime recovery recipe" >&2
+      exit 2
+    fi
+    web_port="${BASH_REMATCH[1]}"
+    if ! is_windows_shell || (( web_port > 65535 )); then
+      echo "[fullmag just] native runtime recovery requires Windows and a port from 1 to 65535" >&2
+      exit 2
+    fi
+    # This fixed helper owns resolver validation, both managed locks, process
+    # inspection and the exact-status archive/receipt transition.
+    exec "${python_cmd}" "${script_dir}/windows/recover_runtime.py" --repo-root "${repo_root}" --web-port "${web_port}"
+    ;;
+  *"scripts/windows/run_fullmag.ps1"*" -RunMode workspace "*)
+    windows_ui_pattern='^powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/run_fullmag.ps1" -BuildMode "(auto|true|false)" -Frontend "(static|dev)" -BackendProfile "(auto|dev|release)" -RunMode workspace -WebPort "([1-9][0-9]{0,4})"( -BuildOnly)?$'
+    if [[ ! "${recipe}" =~ ${windows_ui_pattern} ]]; then
+      echo "[fullmag just] invalid native Windows workspace recipe" >&2
+      exit 2
+    fi
+    build_mode="${BASH_REMATCH[1]}"; frontend="${BASH_REMATCH[2]}"; backend_profile="${BASH_REMATCH[3]}"; web_port="${BASH_REMATCH[4]}"; build_only="${BASH_REMATCH[5]}"
+    if ! is_windows_shell || (( web_port > 65535 )); then
+      echo "[fullmag just] native Windows workspace requires Windows and a port from 1 to 65535" >&2
+      exit 2
+    fi
+    if [[ -n "${build_only}" && ( "${build_mode}" == "false" || "${backend_profile}" == "auto" ) ]]; then
+      echo "[fullmag just] build-only requires build=auto|true and backend_profile=dev|release" >&2
+      exit 2
+    fi
+    # The native launcher owns storage preflight, locking and terminal receipts.
+    # Dispatch only this checkout's launcher; never evaluate the recipe text.
+    launcher_arguments=(-NoLogo -NoProfile -ExecutionPolicy Bypass -File "${repo_root}/scripts/windows/run_fullmag.ps1" -BuildMode "${build_mode}" -Frontend "${frontend}" -BackendProfile "${backend_profile}" -RunMode workspace -WebPort "${web_port}")
+    if [[ -n "${build_only}" ]]; then launcher_arguments+=(-BuildOnly); fi
+    exec powershell.exe "${launcher_arguments[@]}"
+    ;;
+  *"scripts/windows/watch_backend.py"*)
+    backend_watch_pattern='^python "[^"]+/scripts/windows/watch_backend.py" --repo-root "[^"]+" --web-port "([1-9][0-9]{0,4})"$'
+    if [[ ! "${recipe}" =~ ${backend_watch_pattern} ]]; then
+      echo "[fullmag just] invalid native backend watcher recipe" >&2
+      exit 2
+    fi
+    web_port="${BASH_REMATCH[1]}"
+    if ! is_windows_shell || (( web_port > 65535 )); then
+      echo "[fullmag just] native backend watcher requires Windows and a port from 1 to 65535" >&2
+      exit 2
+    fi
+    # The watcher acquires its own closed watch lease and delegates each build
+    # to run-windows-workspace-build; do not wrap its lifetime in the generic
+    # worktree build lock.
+    exec "${python_cmd}" "${script_dir}/windows/watch_backend.py" --repo-root "${repo_root}" --web-port "${web_port}"
+    ;;
+  *"scripts/export_runner_openapi.py"*)
+    export_openapi_pattern='^[^[:space:]]+ "[^"]+/scripts/export_runner_openapi.py" --repo-root "[^"]+" --job-id "([0-9a-f]{32})" --expected-commit "([0-9a-f]{40})"$'
+    if [[ ! "${recipe}" =~ ${export_openapi_pattern} ]]; then
+      echo "[fullmag just] invalid managed OpenAPI export recipe" >&2
+      exit 2
+    fi
+    # The helper owns read-only admission, path checks and its terminal proof.
+    # Invoke only this checkout's helper, never the supplied recipe text.
+    exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
+    ;;
+    *"scripts/verify_development_backend_api.py"*)
+      restart_consumer_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --restart-consumer-only$'
+      if [[ "${recipe}" =~ ${restart_consumer_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --restart-consumer-only
+      fi
+      observer_pause_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --observer-pause-only$'
+      if [[ "${recipe}" =~ ${observer_pause_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --observer-pause-only
+      fi
+      restart_transport_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --restart-transport-only$'
+      if [[ "${recipe}" =~ ${restart_transport_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --restart-transport-only
+      fi
+      project_document_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --project-document-only$'
+      if [[ "${recipe}" =~ ${project_document_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --project-document-only
+      fi
+      development_api_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --cross-build-bundle "([0-9a-f]{32})?"$'
+      if [[ ! "${recipe}" =~ ${development_api_pattern} ]]; then
+        echo "[fullmag just] invalid development API check recipe" >&2
+        exit 2
+      fi
+      exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --cross-build-bundle "${BASH_REMATCH[1]:-}"
+      ;;
+    *"scripts/verify_development_handoff.py"*)
+    handoff_check_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_handoff.py" --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${handoff_check_pattern} ]]; then
+      echo "[fullmag just] invalid development handoff check recipe" >&2
+      exit 2
+    fi
+    # This fixed interpreted route owns preflight, its worktree lease and
+    # terminal evidence; it does not prepare or migrate compatibility links.
+    exec "${python_cmd}" "${script_dir}/verify_development_handoff.py" --repo-root "${repo_root}"
+    ;;
+esac
+
 # Read-only listing/help recipes must not create a storage marker or any
 # compatibility path.  The resolver's own read-only actions can therefore be
 # used for inspection even when the checkout has not been initialized yet.
@@ -102,6 +203,44 @@ esac
 # paths/lock inside the dedicated helper. Do not run the generic compatibility-
 # link or heavy-build wrapper for them.
 case "${recipe}" in
+  *"scripts/run_managed_browser.py"*)
+    managed_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/run_managed_browser.py" --repo-root "[^"]+" --job-id ([0-9a-f]{32}) --commit ([0-9a-f]{40}) --port ([0-9]{4,5})$'
+    if [[ ! "${recipe}" =~ ${managed_browser_pattern} ]]; then
+      echo "[fullmag just] invalid managed browser recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/run_managed_browser.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --commit "${BASH_REMATCH[2]}" --port "${BASH_REMATCH[3]}"
+    ;;
+  *"scripts/verify_saved_fem_archive_roundtrip.py"*)
+    roundtrip_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_saved_fem_archive_roundtrip.py" --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${roundtrip_recipe_pattern} ]]; then
+      echo "[fullmag just] invalid saved FEM archive recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/verify_saved_fem_archive_roundtrip.py" --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_pinned_dataset_browser.py"*)
+    project_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3251 --scenario project-document-handoff$'
+    if [[ "${recipe}" =~ ${project_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3251 --scenario project-document-handoff
+    fi
+    browser_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${browser_recipe_pattern} ]]; then
+      echo "[fullmag just] invalid pinned dataset browser recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_control_room_sources.py"*)
+    # Never execute the recipe text: accept only the fixed argument shape and
+    # invoke the trusted helper from this checkout with the selected route.
+    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint|openapi-import-check|react-doctor|development-restart-check) --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${source_recipe_pattern} ]]; then
+      echo "[fullmag just] invalid lightweight frontend recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/verify_control_room_sources.py" --route "${BASH_REMATCH[1]}" --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_project_entrypoint_runtime.py"*)
     exec "${python_cmd}" "${script_dir}/verify_project_entrypoint_runtime.py" --repo-root "${repo_root}"
     ;;
@@ -109,10 +248,19 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/verify_project_python_runtime.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_project_api_runtime.py"*)
+    if [[ "${recipe}" == *"--include-project-run"* ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_project_api_runtime.py" --include-project-run --repo-root "${repo_root}"
+    fi
     if [[ "${recipe}" == *"--include-websocket"* ]]; then
       exec "${python_cmd}" "${script_dir}/verify_project_api_runtime.py" --include-websocket --repo-root "${repo_root}"
     fi
     exec "${python_cmd}" "${script_dir}/verify_project_api_runtime.py" --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_resource_discovery_runtime.py"*)
+    exec "${python_cmd}" "${script_dir}/verify_resource_discovery_runtime.py" --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_accepted_fdm_gpu_runtime.py"*)
+    exec "${python_cmd}" "${script_dir}/verify_accepted_fdm_gpu_runtime.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_project_active_run_runtime.py"*)
     exec "${python_cmd}" "${script_dir}/verify_project_active_run_runtime.py" --repo-root "${repo_root}"
@@ -126,8 +274,102 @@ case "${recipe}" in
   *"scripts/verify_session_persistence.py"*"--route project-entrypoint-check"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-entrypoint-check --repo-root "${repo_root}"
     ;;
+  *"scripts/verify_session_persistence.py"*"--route cli-source-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route cli-source-check --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-source-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-source-check --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-resource-pool-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-resource-pool-check --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-resource-pool-discovery-smoke"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-resource-pool-discovery-smoke --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route runtime-control-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route runtime-control-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-worker-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-worker-check --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-supervisor-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-supervisor-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-supervisor-cancel-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-cancel-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-supervisor-prestart-cancel-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-prestart-cancel-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-supervisor-automatic-retry-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-automatic-retry-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-supervisor-retry-recovery-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-retry-recovery-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-supervisor-process-exit-recovery-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-process-exit-recovery-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-pool-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-pool-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-discovery-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-discovery-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-persistent-cursor-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-persistent-cursor-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-parallel-resources-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-parallel-resources-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-resource-pool-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-resource-pool-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-dynamic-resource-pool-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-dynamic-resource-pool-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-resident-discovery-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-resident-discovery-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-resident-drain-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-resident-drain-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-retry-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-retry-e2e --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-preparation-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-preparation-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-project-run-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-project-run-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-recovery-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-recovery-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-scene-resource-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-scene-resource-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route authoring-contract-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route authoring-contract-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route authoring-scene-adapter-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route authoring-scene-adapter-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-openapi-codegen"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-openapi-codegen --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_session_persistence.py"*"--route fem-capability-contract"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route fem-capability-contract --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route"*)
+    echo "Unsupported explicit verification route; refusing default session tests" >&2
+    exit 2
     ;;
   *"scripts/verify_session_persistence.py"*"--repo-root"*)
     if [[ "${recipe}" == *"prepare-links"* || "${recipe}" == *"fullmag_storage.py"* || "${recipe}" == *"cargo test"* ]]; then

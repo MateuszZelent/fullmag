@@ -17,6 +17,7 @@ import type { ResourceKey } from "./resourceTypes";
 
 import { useResource } from "./useResource";
 import { PHYSICS_GRAPH_RESOURCE_KEY } from "./physicsGraphResources";
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 
 export const CURRENT_TRANSPORTS_RESOURCE_KEY = "model.current-transports";
 export const SPIN_TORQUES_RESOURCE_KEY = "model.spin-torques";
@@ -60,70 +61,85 @@ function sceneRevision(resource: { scene_revision: number } | null | undefined):
 
 export function useCurrentTransportsResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    CURRENT_TRANSPORTS_RESOURCE_KEY,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.model.currentTransports({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => api.model.currentTransports({ sessionScopeKey, signal }),
     [api],
   );
   return useResource<CurrentTransportListResource>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
-    resourceKey: CURRENT_TRANSPORTS_RESOURCE_KEY,
+    resourceKey,
   });
 }
 
 export function useSpinTorquesResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    SPIN_TORQUES_RESOURCE_KEY,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.model.spinTorques({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => api.model.spinTorques({ sessionScopeKey, signal }),
     [api],
   );
   return useResource<SpinTorqueListResource>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
-    resourceKey: SPIN_TORQUES_RESOURCE_KEY,
+    resourceKey,
   });
 }
 
 export function useSpinTransportsResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    SPIN_TRANSPORTS_RESOURCE_KEY,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.model.spinTransports({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => api.model.spinTransports({ sessionScopeKey, signal }),
     [api],
   );
   return useResource<SpinTransportListResource>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
-    resourceKey: SPIN_TRANSPORTS_RESOURCE_KEY,
+    resourceKey,
   });
 }
 
 export function useSpinInterfacesResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    SPIN_INTERFACES_RESOURCE_KEY,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.model.spinInterfaces({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => api.model.spinInterfaces({ sessionScopeKey, signal }),
     [api],
   );
   return useResource<SpinInterfaceListResource>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
-    resourceKey: SPIN_INTERFACES_RESOURCE_KEY,
+    resourceKey,
   });
 }
 
 export function useOerstedFieldsResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    OERSTED_FIELDS_RESOURCE_KEY,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.model.oerstedFields({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => api.model.oerstedFields({ sessionScopeKey, signal }),
     [api],
   );
   return useResource<OerstedFieldListResource>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
-    resourceKey: OERSTED_FIELDS_RESOURCE_KEY,
+    resourceKey,
   });
 }

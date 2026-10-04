@@ -1,4 +1,6 @@
 import tempfile
+import hashlib
+import json
 import unittest
 from unittest.mock import Mock, patch
 from contextlib import nullcontext
@@ -63,6 +65,114 @@ class BuildExecutorTests(unittest.TestCase):
             for bad in (None, '', ['/opt/cuda/compat/libcuda.so']):
                 self.assertFalse(executor.valid_cpu_modal_driver_attestation({**valid, name: bad}))
             self.assertFalse(executor.valid_cpu_modal_driver_attestation({key: value for key, value in valid.items() if key != name}))
+
+    def test_runtime_v2_receipt_contract_disables_cuda_and_fem_gpu(self):
+        v1 = executor.RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v1']['cmake_options']
+        v2 = executor.RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v2']['cmake_options']
+        self.assertEqual(v1['FULLMAG_ENABLE_CUDA'], 'ON')
+        self.assertEqual(v1['FULLMAG_ENABLE_FEM_GPU'], 'ON')
+        self.assertEqual(v2['FULLMAG_ENABLE_CUDA'], 'OFF')
+        self.assertEqual(v2['FULLMAG_ENABLE_FEM_GPU'], 'OFF')
+        self.assertEqual(v2['FULLMAG_USE_MFEM_STACK'], 'ON')
+        self.assertEqual(v2['FULLMAG_FEM_WITH_SLEPC'], 'ON')
+
+    def test_extended_profile_registry_does_not_promote_specialized_outputs_to_release(self):
+        from local_runner import build_entrypoint as entrypoint
+        for profile in (
+            'fem-cpu-current-contracts-v1',
+            'fem-cpu-slepc-modal-v1',
+            'fem-cpu-slepc-runtime-v2',
+        ):
+            with self.subTest(profile=profile):
+                self.assertEqual(
+                    entrypoint.required_outputs_for_profile(profile),
+                    entrypoint.BASE_REQUIRED_OUTPUTS,
+                )
+        self.assertEqual(
+            entrypoint.required_outputs_for_profile('fem-cpu-release'),
+            entrypoint.REQUIRED_OUTPUTS,
+        )
+
+    def _write_release_receipt(self, root, *, profile='fem-cpu-release', empty=None, accepted=True):
+        outputs = ['bin/fullmag-bin', 'bin/fullmag-api', '_fullmag_core.so',
+                   'web/index.html', 'launcher-build-mode']
+        if accepted:
+            outputs += ['bin/' + name for name in (
+                'fullmag-api-accepted-worker', 'fullmag-api-accepted-supervisor',
+                'fullmag-api-accepted-scheduler', 'fullmag-runtime-service', 'fullmag-api-resource-pool',
+                'fullmag-api-accepted-fem-preparer',
+                'fullmag-api-accepted-fem-preparation-supervisor',
+                'fullmag-api-accepted-fem-preparation-scheduler',
+                'fullmag-api-preparation-resource-pool', 'fullmag-api-preparation-retry')]
+        native = {'head_commit_full': 'c' * 40, 'source_snapshot_sha256': 'd' * 64,
+                  'source_snapshot_dirty': False}
+        job = dict(job_id='a' * 32, source_digest='b' * 64, profile=profile,
+                   payload={'native_source_identity': native})
+        journal = {'image_digest': 'sha256:' + 'e' * 64}
+        entries = []
+        for relative in outputs:
+            path = root / 'outputs/.fullmag/local' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = b'' if relative == empty else b'production-artifact'
+            path.write_bytes(data)
+            entries.append({'path': path.relative_to(root).as_posix(), 'size': len(data),
+                            'sha256': hashlib.sha256(data).hexdigest()})
+        from local_runner.worker_entrypoint import canonical
+        receipt = {**job, 'state': 'succeeded', 'qualification': 'NOT VERIFIED',
+                   'image_digest': journal['image_digest'], 'native_source_identity': native,
+                   'native_source_identity_sha256': hashlib.sha256(canonical(native)).hexdigest(),
+                   'artifacts': entries, 'stages': [{'name': name, 'exit_code': 0} for name in
+                       ('native-build', 'frontend-dependencies', 'frontend-build')]}
+        (root / 'build-receipt.json').write_text(json.dumps(receipt))
+        return job, journal
+
+    def test_release_receipts_reject_missing_accepted_runtime(self):
+        for profile in ('fem-cpu-release', 'fem-gpu-release', 'fdm-cpu-release'):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                job, journal = self._write_release_receipt(root, profile=profile, accepted=False)
+                with self.assertRaisesRegex(ValueError, 'Required build outputs missing'):
+                    executor.validate_build_receipt(root, job, journal)
+
+    def test_release_receipts_require_each_accepted_binary_record(self):
+        for profile in ('fem-cpu-release', 'fem-gpu-release', 'fdm-cpu-release'):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                job, journal = self._write_release_receipt(root, profile=profile)
+                path = root / 'build-receipt.json'
+                receipt = json.loads(path.read_text())
+                binaries = [entry for entry in receipt['artifacts']
+                            if '/bin/fullmag-api-' in entry['path']
+                            or entry['path'].endswith('/bin/fullmag-runtime-service')]
+                self.assertEqual(len(binaries), 10)
+                for binary in binaries:
+                    with self.subTest(profile=profile, binary=binary['path']):
+                        missing = {**receipt, 'artifacts': [entry for entry in receipt['artifacts']
+                                                          if entry != binary]}
+                        path.write_text(json.dumps(missing))
+                        with self.assertRaisesRegex(ValueError, 'Required build outputs missing'):
+                            executor.validate_build_receipt(root, job, journal)
+
+    def test_required_empty_artifact_is_rejected_even_with_matching_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            job, journal = self._write_release_receipt(root, empty='bin/fullmag-bin')
+            with self.assertRaisesRegex(ValueError, 'Required build output is empty'):
+                executor.validate_build_receipt(root, job, journal)
+
+    def test_complete_release_receipts_and_empty_optional_logs_are_accepted(self):
+        for profile in ('fem-cpu-release', 'fem-gpu-release', 'fdm-cpu-release'):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                job, journal = self._write_release_receipt(root, profile=profile)
+                log = root / 'stderr.log'
+                log.write_bytes(b'')
+                path = root / 'build-receipt.json'
+                receipt = json.loads(path.read_text())
+                receipt['artifacts'].append({'path': 'stderr.log', 'size': 0,
+                                            'sha256': hashlib.sha256(b'').hexdigest()})
+                path.write_text(json.dumps(receipt))
+                self.assertEqual(executor.validate_build_receipt(root, job, journal)['state'], 'succeeded')
 
     def test_mutable_caches_do_not_reuse_legacy_root_owned_trees(self):
         root = Path('/storage')

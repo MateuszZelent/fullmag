@@ -1,6 +1,14 @@
 # P0 — status implementacji i bramek A–F
 
-Data: 20.09.2026. Ten dokument jest statusowym uzupełnieniem [inwentarza P0-A](01-inventory.md) i [baseline’u P0-E](02-baseline.md). Rozdziela stan źródeł od dowodu wykonania. Nie jest receipt’em builda, runtime’u, nauki ani wydania.
+Stan bazowy: 20.09.2026. Ten dokument jest statusowym uzupełnieniem [inwentarza P0-A](01-inventory.md) i [baseline’u P0-E](02-baseline.md). Rozdziela stan źródeł od dowodu wykonania. Nie jest receipt’em builda, runtime’u, nauki ani wydania.
+
+## Aktualizacja 24.09.2026 — P0-C
+
+Na bieżącym dirty `master@93f11dbc564c00b725d174ccb2fd0ff9a96493c9` audyt wszystkich writerów wykazał, że zapisy `SessionStore`, CAS, capture checkpointu, import/eksport FMS i kopiowanie artefaktów API korzystają ze wspólnego lease. `reconcile_run_catalog` było wyjątkiem w granicy transakcji: odczytywało katalog przed pobraniem lease, a blokowało dopiero publikację. Dodano regresję, która odtwarzała udany zwrot z reconciliation podczas lease innego writera, oraz przesunięto lease przed odczyt; walidacja i publikacja katalogu odbywają się teraz w tej samej transakcji.
+
+Zarządzana trasa `just verify-session-persistence` na dokładnym dirty snapshotcie zakończyła się `passed`, `exit_code=0`, `source_changed_during_run=false`, source digest `7d493829a29ed894aa20cf5c75bd569dc9cf4215b1a6d80365f24aba4d80b8a9`. Run `81a582e260214cdab02181e2805850f4`: 58 testów biblioteki i 19 integracyjnych zaliczonych; 0 doctestów; nowa regresja jest wśród 58 testów biblioteki. SHA-256 receiptu `6F66575FF2321BFB3BA1C3D7A0D7E56C7B9E365FCCEC22E536634AFA617E3BED`, logu `DFC9FFD06535B3A5D50884E73CAB15851331DFFA1580548298B918E22234D66D`. Próba przed poprawką (`20ccb6c4d96c4847a02a894c35d9a2b3`) potwierdziła oczekiwaną awarię nowej regresji.
+
+To zamyka lukę w granicy source-level transakcji reconciliation, ale nie zmienia kwalifikacji durability: awaria zasilania, Windows directory durability i profile innych systemów plików pozostają `NOT VERIFIED`. Procent P0 pozostaje bez zmian, bo te bramki nadal blokują zamknięcie etapu.
 
 ## Bieżący checkpoint weryfikacji
 
@@ -36,7 +44,7 @@ Receipt, tożsamość źródeł oraz rozmiary i hashe artefaktów zostały spraw
 |---|---|---|---|---|
 | **P0-A inventory** | `SOURCE_COMPLETE` | `INVENTORY_PINNED` | `SOURCE_GATE_PASS`; runtime/API/browser/physics/release `NOT_RUN` | `01-inventory.md`, `inventory.json`, `scripts/audit_refactor_p0.py`; owner: koordynator po review kompletności |
 | **P0-B GC/reachability/capture** | `SOURCE_IMPLEMENTED` | `SCOPED_CONTRACT_PRESENT` | `MINIMAL_WINDOWS_GATE_PASS`; API/runtime pending | Syntetyczny store, unknown-root refusal i capture/restore przeszły w runie `236ce87237184c099c89d5e75f89d63b`; zob. `05-minimal-gate.md` |
-| **P0-C writer/durability/lock** | `SOURCE_IMPLEMENTED` | `LIMITATIONS_EXPLICIT` | `MINIMAL_WINDOWS_GATE_PASS`; power-loss `NOT VERIFIED` | Native lock/process death, fault injection przed i po rename przeszły; Windows directory durability i inne platformy niekwalifikowane |
+| **P0-C writer/durability/lock** | `SOURCE_IMPLEMENTED` | `LIMITATIONS_EXPLICIT` | `MINIMAL_WINDOWS_GATE_PASS`; power-loss `NOT VERIFIED` | Dodatkowa bieżąca regresja reconciliation przeszła w runie `81a582e260214cdab02181e2805850f4` (58 + 7 + 12); wcześniejsze native lock/fault injection pozostają dowodem historycznego snapshotu; Windows directory durability i inne platformy niekwalifikowane |
 | **P0-D ADR/authority/build contract** | `DECISION_SOURCE_PRESENT` | `SCOPED_DECISION_PRESENT` | `REVIEW_AND_DEPENDENT_GATES_PENDING` | `docs/adr/0032-fdm-cpu-authority-and-runtime-selection.md` oraz zmiany ADR-0009/0025/0030, backend masterplan, instrukcji backendu, capability/API specs; decyzja dokumentacyjna nie jest kwalifikacją lane’u |
 | **P0-E fixture/receipt/baseline** | `SOURCE_COMPLETE` | `BASELINE_RULES_PRESENT` | Testy persistence odświeżone; pomiary baseline `NOT_RUN` | `02-baseline.md`, `02-baseline-manifest.json`; fixture’y zachowane, ale brak bieżącego pomiaru wydajności. Testy persistence nie zastępują baseline’u operacji ani transferów |
 | **P0-F import/path containment** | `SOURCE_IMPLEMENTED` | `TRUSTED_ROOT_EXPLICIT` | `MINIMAL_WINDOWS_GATE_PASS` | Testy ID/path/absolute/traversal/junction i niepustego destination przeszły; brak gwarancji przeciw wrogiemu lokalnemu procesowi podmieniającemu ścieżki |

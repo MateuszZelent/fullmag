@@ -16,6 +16,7 @@ members = [
   "crates/fullmag-py-core",
   "crates/fullmag-quantities",
   "crates/fullmag-runner",
+  "crates/fullmag-runtime-control",
   "crates/fullmag-session",
 ]
 resolver = "2"
@@ -41,3 +42,19 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 pyo3 = { version = "0.29", features = ["macros", "abi3-py310"] }
 numpy = "0.29"
+
+# Fast iteration of application code without removing optimization from the
+# current FDM CPU numerical kernels. Production continues to use release.
+[profile.backend-dev]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+incremental = true
+lto = "off"
+codegen-units = 256
+
+[profile.backend-dev.package.fullmag-engine]
+opt-level = 3
+
+[profile.backend-dev.package.fullmag-fdm-demag]
+opt-level = 3

@@ -36,6 +36,7 @@ export type SlotId =
   | "panel-right"
   | "panel-bottom"
   | "status-bar"
+  | "start-screen"
   | "overlay";
 
 export type ModuleId = string;

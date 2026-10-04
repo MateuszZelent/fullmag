@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -24,6 +24,10 @@ import uuid
 
 
 SCHEMA = "fullmag_storage_v1"
+WINDOWS_WORKSPACE_STORAGE_PROFILES = {
+    "release": "windows-native-fdm-cpu",
+    "dev": "windows-native-fdm-cpu-dev",
+}
 PATH_OVERRIDES = {
     "FULLMAG_WINDOWS_BUILD_ROOT": "build_root",
     "FULLMAG_WINDOWS_CACHE_ROOT": "cache_root",
@@ -634,16 +638,57 @@ def process_alive(pid):
         return True
 
 
+def _is_native_windows():
+    return os.name == "nt"
+
+
+def resolve_windows_workspace_backend_profile(frontend, backend_profile="release"):
+    """Resolve the bounded Windows workspace compiler profile."""
+    if frontend not in ("static", "dev"):
+        raise StorageError("Windows workspace frontend must be static or dev")
+    if backend_profile == "auto":
+        return "dev" if frontend == "dev" else "release"
+    if backend_profile not in WINDOWS_WORKSPACE_STORAGE_PROFILES:
+        raise StorageError("Windows workspace backend profile must be auto, dev or release")
+    return backend_profile
+
+
+def _validate_windows_workspace_profile(layout, backend_profile):
+    expected = WINDOWS_WORKSPACE_STORAGE_PROFILES.get(backend_profile)
+    if expected is None or layout.get("profile") != expected:
+        raise StorageError(
+            "Native Windows workspace storage profile must match the selected compiler profile "
+            f"({backend_profile!r} requires {expected!r})"
+        )
+
+
 @contextmanager
-def managed_heavy_lock(layout):
+def managed_heavy_lock(layout, *, native_user_build=False):
     """Share the local heavy slot with snapshot workers, including recovery.
 
 Nested managed commands are validated by build_lock below. An orphaned
 container keeps its durable queue lease even after the host file lock closes.
 """
-    if layout['profile'].startswith('windows-') and (Path(layout['storage_root']) / 'index' / 'local-runner-container.json').exists():
+    if native_user_build and (
+        not _is_native_windows()
+        or layout.get("profile") not in WINDOWS_WORKSPACE_STORAGE_PROFILES.values()
+    ):
+        raise StorageError("Native user build requires one of the fixed Windows workspace profiles")
+    if native_user_build:
+        # User-requested native Windows builds are independent of the Linux
+        # queue. Serialize only other native builds using this host toolchain.
+        root = Path(layout["storage_root"])
+        with file_lock(validate_path(root / "locks" / "fullmag-native-windows-heavy.lock", root), "native Windows Fullmag build"):
+            yield
+        return
+    if (
+        layout['profile'].startswith('windows-')
+        and (Path(layout['storage_root']) / 'index' / 'local-runner-container.json').exists()
+        and not native_user_build
+    ):
         raise StorageError('Container runner owns heavy builds on this host; submit a snapshot through just runner-build')
     if not layout['profile'].startswith('windows-') or (
+            not native_user_build and
             os.environ.get('FULLMAG_STORAGE_LOCK_TOKEN') and
             os.environ.get('FULLMAG_STORAGE_LOCK_KEY') == layout['worktree_id']):
         yield
@@ -658,15 +703,61 @@ container keeps its durable queue lease even after the host file lock closes.
         yield
 
 
-def run(layout, command):
+def _run_managed_command(
+    layout,
+    command,
+    *,
+    acquire_heavy_slot=True,
+    native_user_build=False,
+    native_workspace_paths=False,
+    workspace_backend_profile=None,
+    execution_mode="managed",
+):
+    if native_user_build or native_workspace_paths:
+        _validate_windows_workspace_profile(layout, workspace_backend_profile)
+        if not _is_native_windows() or execution_mode not in (
+            "windows-workspace",
+            "windows-workspace-build",
+        ):
+            raise StorageError("Native workspace paths require the fixed Windows workspace operation")
+        if native_user_build and (
+            not native_workspace_paths or execution_mode != "windows-workspace-build"
+        ):
+            raise StorageError("Native user builds require the closed Windows workspace build operation")
     if not command:
         raise StorageError("A command is required after --")
+    if native_workspace_paths:
+        from windows.runtime_lease import active_runtime, assert_no_independent_service
+        # An uncertain previous owner must block even registry/bootstrap writes.
+        # Recheck after acquiring the build lease before any dependency mutation.
+        active_runtime(layout)
+        assert_no_independent_service(layout)
     initialize(layout)
-    with managed_heavy_lock(layout), build_lock(layout):
+    heavy_lock = (
+        managed_heavy_lock(layout, native_user_build=native_user_build)
+        if acquire_heavy_slot
+        else nullcontext()
+    )
+    if execution_mode == "windows-workspace" and native_workspace_paths:
+        from windows.runtime_lease import run_sealed_runtime
+        return run_sealed_runtime(layout, command, {**os.environ, **layout["env"]}, workspace_backend_profile)
+    with heavy_lock, build_lock(layout):
+        child_env = {**os.environ, **layout["env"]}
+        if execution_mode == "windows-workspace-build" and native_user_build:
+            from windows.runtime_lease import active_runtime, assert_frozen_dependencies, assert_no_independent_service
+            assert_no_independent_service(layout, child_env)
+            active = active_runtime(layout)
+            child_env.pop("FULLMAG_NATIVE_RUNTIME_ACTIVE", None)
+            if active:
+                if workspace_backend_profile != "dev" or command[command.index("-Frontend") + 1] != "dev":
+                    raise StorageError("Save and close the active workspace before changing its build profile")
+                assert_frozen_dependencies(layout, active)
+                child_env["FULLMAG_NATIVE_RUNTIME_ACTIVE"] = "1"
         # `prepare-links` may have run in a separate shell and lock scope.  A
         # different lane can therefore have rebound the shared target link in
         # between; never execute a command against that stale profile.
-        validate_prepared_links_for_run(layout)
+        if not native_workspace_paths:
+            validate_prepared_links_for_run(layout)
         record = validate_path(Path(layout["build_root"]) / "build-status.json", layout["build_storage_root"], "build status")
         validate_existing_build_status(record, layout)
         state = {"schema": SCHEMA, "worktree_id": layout["worktree_id"], "profile": layout["profile"],
@@ -675,10 +766,11 @@ def run(layout, command):
                  "pid": os.getpid(), "host": socket.gethostname(), "started_at": now(),
                  "state": "running", "executable": Path(command[0]).name,
                  "build_root": layout["build_root"], "frontend_root": layout["frontend_root"],
-                 "runtime_root": layout["runtime_root"], "qualification": "not_assessed"}
+                 "runtime_root": layout["runtime_root"], "qualification": "not_assessed",
+                 "execution_mode": execution_mode}
         atomic_json(record, state)
         try:
-            result = subprocess.run(command, cwd=layout["repo_root"], env={**os.environ, **layout["env"]})
+            result = subprocess.run(command, cwd=layout["repo_root"], env=child_env)
             state.update(state="completed" if result.returncode == 0 else "failed", exit_code=result.returncode)
             return result.returncode
         except BaseException:
@@ -687,6 +779,124 @@ def run(layout, command):
         finally:
             state["finished_at"] = now()
             atomic_json(record, state)
+
+
+def run(layout, command):
+    return _run_managed_command(layout, command, acquire_heavy_slot=True, execution_mode="managed")
+
+
+def _windows_workspace_request(layout, frontend, web_port, backend_profile):
+    selected_profile = resolve_windows_workspace_backend_profile(frontend, backend_profile)
+    if not _is_native_windows():
+        raise StorageError("Windows workspace runtime requires native Windows")
+    _validate_windows_workspace_profile(layout, selected_profile)
+    try:
+        port = int(web_port)
+    except (TypeError, ValueError) as error:
+        raise StorageError("Windows workspace web port must be an integer from 1 to 65535") from error
+    if not 1 <= port <= 65535:
+        raise StorageError("Windows workspace web port must be an integer from 1 to 65535")
+    launcher = validate_path(
+        Path(layout["repo_root"]) / "scripts" / "windows" / "run_fullmag.ps1",
+        layout["repo_root"],
+        "Windows workspace launcher",
+    )
+    if not launcher.is_file():
+        raise StorageError(f"Windows workspace launcher is missing: {launcher}")
+    return selected_profile, port, launcher
+
+
+def run_windows_workspace(
+    layout, frontend, web_port, build_mode="auto", backend_profile="release",
+    skip_local_changes=False,
+):
+    """Build, when requested, then run the native empty authoring workspace.
+
+    This is deliberately a closed operation rather than a second spelling of
+    ``run``: it accepts only the packaged Windows workspace parameters and
+    derives the launcher command from this checkout.  An ``auto`` or ``true``
+    build is admitted under the shared heavy slot, then the UI runtime runs
+    with ``BuildMode=false`` after that slot is released.  Build and solver
+    routes outside this closed operation continue to use ``run`` unchanged.
+    """
+    if build_mode not in ("auto", "true", "false"):
+        raise StorageError("Windows workspace build mode must be auto, true or false")
+    selected_profile, port, launcher = _windows_workspace_request(
+        layout, frontend, web_port, backend_profile
+    )
+    runtime_command = [
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+        "-ExecutionPolicy", "Bypass", "-File", str(launcher),
+        "-BuildMode", "false", "-Frontend", frontend,
+        "-BackendProfile", selected_profile,
+        "-Backend", "auto", "-Device", "auto", "-RunMode", "workspace",
+        "-WebPort", str(port),
+    ]
+    if skip_local_changes:
+        runtime_command.append("-SkipLocalChanges")
+    if build_mode != "false":
+        build_command = [
+            "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass", "-File", str(launcher),
+            "-BuildMode", build_mode, "-Frontend", frontend,
+            "-BackendProfile", selected_profile,
+            "-Backend", "auto", "-Device", "auto", "-RunMode", "workspace",
+            "-WebPort", str(port), "-BuildOnly",
+        ]
+        if skip_local_changes:
+            build_command.append("-SkipLocalChanges")
+        build_result = _run_managed_command(
+            layout,
+            build_command,
+            acquire_heavy_slot=True,
+            native_user_build=True,
+            native_workspace_paths=True,
+            workspace_backend_profile=selected_profile,
+            execution_mode="windows-workspace-build",
+        )
+        if build_result != 0:
+            return build_result
+    return _run_managed_command(
+        layout,
+        runtime_command,
+        acquire_heavy_slot=False,
+        native_workspace_paths=True,
+        workspace_backend_profile=selected_profile,
+        execution_mode="windows-workspace",
+    )
+
+
+def run_windows_workspace_build(
+    layout, frontend, web_port, backend_profile, build_mode="auto",
+    skip_local_changes=False,
+):
+    """Build the native workspace through its fixed, receipt-backed route."""
+    if backend_profile not in WINDOWS_WORKSPACE_STORAGE_PROFILES:
+        raise StorageError("Windows workspace build profile must be dev or release")
+    if build_mode not in ("auto", "true"):
+        raise StorageError("Windows workspace build-only mode must be auto or true")
+    selected_profile, port, launcher = _windows_workspace_request(
+        layout, frontend, web_port, backend_profile
+    )
+    command = [
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+        "-ExecutionPolicy", "Bypass", "-File", str(launcher),
+        "-BuildMode", build_mode, "-Frontend", frontend,
+        "-BackendProfile", selected_profile,
+        "-Backend", "auto", "-Device", "auto", "-RunMode", "workspace",
+        "-WebPort", str(port), "-BuildOnly",
+    ]
+    if skip_local_changes:
+        command.append("-SkipLocalChanges")
+    return _run_managed_command(
+        layout,
+        command,
+        acquire_heavy_slot=True,
+        native_user_build=True,
+        native_workspace_paths=True,
+        workspace_backend_profile=selected_profile,
+        execution_mode="windows-workspace-build",
+    )
 
 
 def register(layout, task_id, owner, purpose, state="active"):
@@ -715,7 +925,7 @@ def inventory(layout):
     for path in sorted((root / "index").glob("*.json")):
         validate_path(path, root, "index record")
         record = json.loads(path.read_text(encoding="utf-8"))
-        if record.get("schema") == SCHEMA and record.get("worktree_id"):
+        if isinstance(record, dict) and record.get("schema") == SCHEMA and record.get("worktree_id"):
             records.append(record)
     owners = {os.path.normcase(record["repo_root"]): record for record in records}
     checkouts = []
@@ -742,13 +952,18 @@ def inventory(layout):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("resolve", "validate", "run", "register", "finish", "inventory", "prepare-links", "assert-lock"))
+    parser.add_argument("action", choices=("resolve", "validate", "run", "run-windows-workspace", "run-windows-workspace-build", "register", "finish", "inventory", "prepare-links", "assert-lock"))
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--profile")
     parser.add_argument("--format", choices=("json", "sh"), default="json")
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--path")
     parser.add_argument("--frontend", action="store_true")
+    parser.add_argument("--workspace-frontend", choices=("static", "dev"))
+    parser.add_argument("--workspace-backend-profile", choices=("auto", "dev", "release"))
+    parser.add_argument("--workspace-web-port", type=int)
+    parser.add_argument("--workspace-build-mode", choices=("auto", "true", "false"), default="auto")
+    parser.add_argument("--workspace-skip-local-changes", action="store_true")
     parser.add_argument("--compat", action="store_true")
     parser.add_argument("--next-dist-dir")
     parser.add_argument("--task-id")
@@ -762,7 +977,25 @@ def main(argv=None):
         args_list, command = args_list[:position], args_list[position + 1:]
     args = parser.parse_args(args_list)
     try:
-        layout = resolve_layout(args.repo_root, args.profile)
+        selected_workspace_profile = None
+        selected_storage_profile = None
+        if args.action == "run-windows-workspace":
+            selected_workspace_profile = resolve_windows_workspace_backend_profile(
+                args.workspace_frontend,
+                args.workspace_backend_profile or "release",
+            )
+            selected_storage_profile = WINDOWS_WORKSPACE_STORAGE_PROFILES[selected_workspace_profile]
+        elif args.action == "run-windows-workspace-build":
+            if args.workspace_backend_profile not in WINDOWS_WORKSPACE_STORAGE_PROFILES:
+                raise StorageError("Windows workspace build requires an explicit dev or release backend profile")
+            selected_workspace_profile = args.workspace_backend_profile
+            selected_storage_profile = WINDOWS_WORKSPACE_STORAGE_PROFILES[selected_workspace_profile]
+        if selected_storage_profile:
+            if args.profile and args.profile != selected_storage_profile:
+                raise StorageError("Windows workspace storage profile does not match the selected compiler profile")
+            layout = resolve_layout(args.repo_root, selected_storage_profile)
+        else:
+            layout = resolve_layout(args.repo_root, args.profile)
         if args.action == "assert-lock":
             if not os.environ.get("FULLMAG_STORAGE_LOCK_TOKEN") or os.environ.get("FULLMAG_STORAGE_LOCK_KEY") != layout["worktree_id"]:
                 raise StorageError("No inherited managed lock; enter through the storage runner")
@@ -771,6 +1004,28 @@ def main(argv=None):
             return 0
         if args.action == "run":
             return run(layout, command)
+        if args.action in ("run-windows-workspace", "run-windows-workspace-build"):
+            if command:
+                raise StorageError(f"{args.action} does not accept an arbitrary command")
+            if args.workspace_frontend is None or args.workspace_web_port is None:
+                raise StorageError(f"{args.action} requires --workspace-frontend and --workspace-web-port")
+            if args.action == "run-windows-workspace-build":
+                return run_windows_workspace_build(
+                    layout,
+                    args.workspace_frontend,
+                    args.workspace_web_port,
+                    selected_workspace_profile,
+                    args.workspace_build_mode,
+                    args.workspace_skip_local_changes,
+                )
+            return run_windows_workspace(
+                layout,
+                args.workspace_frontend,
+                args.workspace_web_port,
+                args.workspace_build_mode,
+                selected_workspace_profile,
+                args.workspace_skip_local_changes,
+            )
         if args.action == "prepare-links":
             print(json.dumps(prepare_links(layout, args.frontend, args.compat, args.next_dist_dir), indent=2))
             return 0

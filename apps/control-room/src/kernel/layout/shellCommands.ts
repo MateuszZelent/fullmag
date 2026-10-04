@@ -1,6 +1,9 @@
 import { requestThemeToggle } from "@/design/theme/themeEvents";
 
+import { homeView } from "./homeView";
+
 import type { CommandContribution } from "../commands/commandTypes";
+import { applyAuthoringHistoryWorkspaceTransition } from "../authoring/authoringHistoryWorkspaceRestore";
 import { pickProjectArchive } from "../persistence/ProjectDocumentController";
 
 function disabledPlaceholder(
@@ -131,6 +134,17 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.docs", "Physics Documentation", "Application"),
   disabledPlaceholder("workspace.about", "About Fullmag", "Application"),
   {
+    id: "workspace.home",
+    title: "Home",
+    group: "workspace",
+    category: "View",
+    scope: "global",
+    run: () => {
+      homeView.toggle();
+      return { status: "completed" };
+    },
+  },
+  {
     id: "workspace.new-problem",
     title: "New Problem",
     group: "workspace",
@@ -138,6 +152,7 @@ export const SHELL_COMMANDS: CommandContribution[] = [
     scope: "global",
     shortcut: "Ctrl+N",
     run: (ctx) => {
+      const requested = (ctx.input as { solver?: unknown } | null | undefined)?.solver;
       ctx.bus?.emit("workspace:new-problem-requested", {
         source:
           ctx.source === "shortcut"
@@ -145,6 +160,7 @@ export const SHELL_COMMANDS: CommandContribution[] = [
             : ctx.source === "menu"
               ? "menu"
               : "workspace",
+        ...(requested === "FDM" || requested === "FEM" ? { solver: requested } : {}),
       });
       return { status: "completed" };
     },
@@ -292,8 +308,11 @@ export const SHELL_COMMANDS: CommandContribution[] = [
           status: "failed",
         };
       }
-      await ctx.api.model.syncAuthoringScript({});
-      const script = await ctx.api.model.authoringScript();
+      const requestOptions = ctx.sessionScopeKey
+        ? { sessionScopeKey: ctx.sessionScopeKey }
+        : undefined;
+      await ctx.api.model.syncAuthoringScript({}, requestOptions);
+      const script = await ctx.api.model.authoringScript(requestOptions);
       if (typeof document !== "undefined") {
         const blob = new Blob([script.source], { type: "text/x-python;charset=utf-8" });
         const href = URL.createObjectURL(blob);
@@ -386,7 +405,10 @@ export const SHELL_COMMANDS: CommandContribution[] = [
           status: "failed",
         };
       }
-      return context.authoringHistory.undo();
+      return context.authoringHistory.undo(context.sessionScopeKey, (transition) => {
+        if (context.isCurrentSessionScope?.() === false) return;
+        applyAuthoringHistoryWorkspaceTransition(context, transition);
+      });
     },
   },
   {
@@ -412,7 +434,10 @@ export const SHELL_COMMANDS: CommandContribution[] = [
           status: "failed",
         };
       }
-      return context.authoringHistory.redo();
+      return context.authoringHistory.redo(context.sessionScopeKey, (transition) => {
+        if (context.isCurrentSessionScope?.() === false) return;
+        applyAuthoringHistoryWorkspaceTransition(context, transition);
+      });
     },
   },
   disabledPlaceholder("workspace.view-2d", "2D Slice Workspace", "View", "2"),
@@ -422,7 +447,4 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.diagnostics", "Diagnostics", "Tools"),
   disabledPlaceholder("workspace.api-console", "API Console", "Tools"),
   disabledPlaceholder("workspace.script-view", "Script View", "Tools"),
-  disabledPlaceholder("workspace.search-docs", "Search Docs", "Help"),
-  disabledPlaceholder("workspace.reference", "Reference", "Help"),
-  disabledPlaceholder("workspace.about-help", "About", "Help"),
 ];

@@ -1,4 +1,5 @@
 import type { RequestDiagnosticsController } from "../api/RequestDiagnosticsController";
+import { isApiInstanceId } from "../api/apiInstancePin";
 import type { KernelEventMap } from "../events/eventTypes";
 
 import {
@@ -23,11 +24,16 @@ interface RealtimeBridge {
 }
 
 interface RealtimeClientOptions {
+  beforeConnect?: () => Promise<boolean>;
   bridge: RealtimeBridge;
-  createSocket?: (url: string, protocol: string) => RealtimeWebSocketLike;
+  createSocket?: (url: string, protocol: string, instanceProtocol?: string) => RealtimeWebSocketLike;
   diagnostics?: RequestDiagnosticsController;
+  expectedRequestScopeEpoch?: string | null;
+  expectedSessionId?: string | null;
+  expectedApiInstance?: string | null;
   /** Called after an already-established socket connects again. */
   onReconnected?: () => void;
+  onScopeMismatch?: () => void;
   onStatusChange?: (status: RealtimeConnectionStatus) => void;
   scheduleReconnect?: (callback: () => void, delayMs: number) => () => void;
   url: string;
@@ -37,10 +43,13 @@ export type RealtimeConnectionStatus =
   KernelEventMap["session:status-changed"]["status"];
 
 export class RealtimeClient {
+  private connectionGeneration = 0;
+  private validatingConnection = false;
   private closedByClient = false;
   private hasConnected = false;
   private lastSeenSeq: number | null = null;
   private reconnectCancel: (() => void) | null = null;
+  private scopeAccepted = false;
   private socket: RealtimeWebSocketLike | null = null;
   private readonly handleClose = () => {
     const socket = this.socket;
@@ -67,6 +76,33 @@ export class RealtimeClient {
     const byteLength = byteLengthFromText(event.data);
     try {
       const parsed = JSON.parse(event.data) as Record<string, unknown>;
+      if (
+        this.options.expectedSessionId &&
+        parsed.session_id !== this.options.expectedSessionId
+      ) {
+        this.options.onScopeMismatch?.();
+        this.close();
+        return;
+      }
+      if (this.options.expectedRequestScopeEpoch) {
+        if (parsed.type === "hello") {
+          const payload =
+            parsed.payload && typeof parsed.payload === "object"
+              ? (parsed.payload as Record<string, unknown>)
+              : null;
+          if (
+            payload?.request_scope_epoch !==
+            this.options.expectedRequestScopeEpoch
+          ) {
+            this.options.onScopeMismatch?.();
+            this.close();
+            return;
+          }
+          this.scopeAccepted = true;
+        } else if (!this.scopeAccepted) {
+          return;
+        }
+      }
       this.options.diagnostics?.record({
         byteLength,
         channel: "websocket",
@@ -109,19 +145,55 @@ export class RealtimeClient {
   }
 
   connect(): void {
-    if (this.socket) {
+    if (this.socket || this.validatingConnection) {
       return;
     }
     this.closedByClient = false;
     this.reconnectCancel?.();
     this.reconnectCancel = null;
+    this.scopeAccepted = false;
     this.notifyStatus("connecting");
 
+    const generation = ++this.connectionGeneration;
+    if (this.options.beforeConnect) {
+      this.validatingConnection = true;
+      void Promise.resolve().then(this.options.beforeConnect).then((allowed) => {
+        if (generation !== this.connectionGeneration || this.closedByClient) return;
+        this.validatingConnection = false;
+        if (!allowed) {
+          this.close();
+          this.notifyStatus("disconnected");
+          this.options.onScopeMismatch?.();
+          return;
+        }
+        this.openSocket();
+      }).catch(() => {
+        if (generation !== this.connectionGeneration || this.closedByClient) return;
+        this.validatingConnection = false;
+        this.notifyStatus("disconnected");
+        this.scheduleReconnect();
+      });
+      return;
+    }
+    this.openSocket();
+  }
+
+  private openSocket(): void {
     const url = this.connectionUrl();
-    const socket = this.options.createSocket?.(
-      url,
-      FULLMAG_LIVE_SUBPROTOCOL,
-    ) ?? new WebSocket(url, FULLMAG_LIVE_SUBPROTOCOL);
+    const pin = this.options.expectedApiInstance;
+    if (pin && !isApiInstanceId(pin)) {
+      this.close();
+      this.options.onScopeMismatch?.();
+      return;
+    }
+    const instanceProtocol = pin ? `fullmag.api-instance.${pin}` : undefined;
+    const socket = this.options.createSocket
+      ? instanceProtocol
+        ? this.options.createSocket(url, FULLMAG_LIVE_SUBPROTOCOL, instanceProtocol)
+        : this.options.createSocket(url, FULLMAG_LIVE_SUBPROTOCOL)
+      : new WebSocket(url, instanceProtocol
+        ? [FULLMAG_LIVE_SUBPROTOCOL, instanceProtocol]
+        : FULLMAG_LIVE_SUBPROTOCOL);
     this.options.diagnostics?.record({
       byteLength: byteLengthFromText(FULLMAG_LIVE_SUBPROTOCOL),
       channel: "websocket",
@@ -142,10 +214,13 @@ export class RealtimeClient {
   }
 
   close(): void {
+    this.connectionGeneration++;
+    this.validatingConnection = false;
     this.closedByClient = true;
     this.hasConnected = false;
     this.reconnectCancel?.();
     this.reconnectCancel = null;
+    this.scopeAccepted = false;
     if (!this.socket) {
       this.notifyStatus("idle");
       return;

@@ -45,6 +45,10 @@ export interface CommandContext {
   projectDocument?: ProjectDocumentController;
   resourceData?: Readonly<Record<string, unknown>>;
   resources?: ResourceInvalidationController;
+  /** Session identity used to partition current-session API request coalescing. */
+  sessionScopeKey?: string | null;
+  /** Recheck after await before applying a session-owned UI effect. */
+  isCurrentSessionScope?: () => boolean;
   selection?: SelectionController;
   sourceDetail?: string;
   visualization?: ObjectVisualizationController;

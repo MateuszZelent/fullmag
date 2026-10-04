@@ -1,16 +1,22 @@
 import type { AuthoringHistoryRecord } from "@/kernel/authoring/AuthoringHistoryController";
-import type { SceneResource } from "@/kernel/api/apiTypes";
+import type { RequestOptions, SceneResource } from "@/kernel/api/apiTypes";
 
 import type { InspectorEditSession } from "./InspectorEditSession";
 
 export interface InspectorHistoryApi {
   model: {
-    scene: () => Promise<SceneResource>;
+    scene: (options?: RequestOptions) => Promise<SceneResource>;
   };
 }
 
 export interface InspectorHistoryRecorder {
   record: (record: AuthoringHistoryRecord) => void;
+}
+
+export interface InspectorHistoryFence {
+  isHistoryGenerationCurrent?: () => boolean;
+  isCurrent?: () => boolean;
+  requestOptions?: RequestOptions;
 }
 
 function sceneRevision(scene: SceneResource): number | null {
@@ -20,9 +26,12 @@ function sceneRevision(scene: SceneResource): number | null {
     : null;
 }
 
-async function captureScene(api: InspectorHistoryApi): Promise<SceneResource | null> {
+async function captureScene(
+  api: InspectorHistoryApi,
+  requestOptions?: RequestOptions,
+): Promise<SceneResource | null> {
   try {
-    return await api.model.scene();
+    return await api.model.scene(requestOptions);
   } catch {
     // Applying a valid Inspector draft must not be turned into a false failure
     // only because the optional history snapshot could not be read.
@@ -41,18 +50,29 @@ export async function applyInspectorSessionWithHistory(
   api: InspectorHistoryApi | null,
   history: InspectorHistoryRecorder | null,
   label = "Inspector changes",
+  fence?: InspectorHistoryFence,
 ): Promise<boolean> {
   if (!session) return false;
+  const isCurrent = () => fence?.isCurrent?.() !== false;
+  const isHistoryGenerationCurrent = () =>
+    fence?.isHistoryGenerationCurrent?.() !== false;
+  if (!isCurrent() || !isHistoryGenerationCurrent()) return false;
   if (session.mode !== "staged" || !api || !history) {
-    return (await session.apply()) === true;
+    const applied = (await session.apply()) === true;
+    return applied && isCurrent();
   }
 
-  const before = await captureScene(api);
+  const before = await captureScene(api, fence?.requestOptions);
+  if (!isCurrent() || !isHistoryGenerationCurrent()) return false;
   const applied = await session.apply();
-  if (applied !== true || !before) return applied === true;
+  if (!isCurrent()) return false;
+  if (!isHistoryGenerationCurrent()) return false;
+  if (!before) return applied === true;
 
-  const after = await captureScene(api);
-  if (!after) return true;
+  const after = await captureScene(api, fence?.requestOptions);
+  if (!isCurrent()) return false;
+  if (!isHistoryGenerationCurrent()) return false;
+  if (!after) return applied === true;
 
   const beforeRevision = sceneRevision(before);
   const afterRevision = sceneRevision(after);
@@ -68,5 +88,5 @@ export async function applyInspectorSessionWithHistory(
       label,
     });
   }
-  return true;
+  return applied === true;
 }

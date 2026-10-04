@@ -2,10 +2,11 @@
 
 use crate::artifact_pipeline::ArtifactPipelineSummary;
 use crate::dispatch::{
-    effective_fem_device_request, requested_registry_device_for_fdm, runtime_device,
-    runtime_precision,
+    effective_fem_device_request, normalized_runtime_element_markers,
+    requested_registry_device_for_fdm, runtime_device, runtime_precision,
 };
 use fullmag_ir::BackendPlanIR;
+use fullmag_quantities::fem_state_field::FemP1MagnetizationFieldSemantics;
 use sha2::{Digest, Sha256};
 
 use crate::types::{
@@ -1747,6 +1748,7 @@ pub(crate) struct FieldArtifactContext {
     pub source_hash: Option<String>,
     pub execution_mode: fullmag_ir::ExecutionMode,
     pub layout: serde_json::Value,
+    pub magnetization_field_semantics: Result<Option<FemP1MagnetizationFieldSemantics>, String>,
     pub execution_resolution: Option<FinalExecutionResolutionProvenance>,
 }
 
@@ -1754,14 +1756,55 @@ pub(crate) fn build_field_context(
     problem: &fullmag_ir::ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> FieldArtifactContext {
+    let magnetization_field_semantics = fem_p1_magnetization_field_semantics(plan);
     FieldArtifactContext {
         problem_name: problem.problem_meta.name.clone(),
         ir_version: problem.ir_version.clone(),
         source_hash: problem.problem_meta.source_hash.clone(),
         execution_mode: plan.common.execution_mode,
         layout: field_layout(plan),
+        magnetization_field_semantics,
         execution_resolution: None,
     }
+}
+
+/// Build the typed producer envelope for the serial FEM H1/P1 magnetization
+/// field.  The envelope is intentionally limited to the ordinary FEM plan:
+/// eigen, frequency-response, FDM, and higher-order FEM plans remain
+/// unqualified until their own field producers provide an equivalent
+/// contract.
+pub fn fem_p1_magnetization_field_semantics(
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<Option<FemP1MagnetizationFieldSemantics>, String> {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return Ok(None);
+    };
+    if fem.fe_order != 1 {
+        return Ok(None);
+    }
+
+    // The preview adapter has compatibility handling for incomplete markers;
+    // a quantitative producer must supply the same validated runtime mesh.
+    fullmag_ir::validate_mesh_for_execution(&fem.mesh)
+        .map_err(|errors| errors.join("; "))?;
+    let normalized_markers = normalized_runtime_element_markers(fem)
+        .map_err(|error| error.message)?;
+    let active_node_mask = crate::preview::mesh_quantity_active_mask_with_element_markers(
+        "m",
+        &fem.mesh,
+        &normalized_markers,
+    )
+    .ok_or_else(|| "FEM magnetization active support is unavailable".to_string())?;
+    // Preserve the accepted source mesh identity; runtime marker normalization
+    // only supplies the support mask used by this artifact.
+    let topology_fingerprint = fem.mesh.topology_fingerprint_v6();
+    FemP1MagnetizationFieldSemantics::new(
+        &topology_fingerprint,
+        fem.mesh.nodes.len(),
+        active_node_mask,
+    )
+    .map(Some)
+    .map_err(|error| error.to_string())
 }
 
 fn collect_streamed_provenance_files(
@@ -2035,7 +2078,7 @@ pub(crate) fn write_artifacts(
         &executed.initial_magnetization,
     )?;
 
-    let final_stats = accepted_steps.last().cloned().unwrap_or(StepStats {
+    let mut final_stats = accepted_steps.last().cloned().unwrap_or(StepStats {
         step: 0,
         time: 0.0,
         dt: 0.0,
@@ -2050,7 +2093,13 @@ pub(crate) fn write_artifacts(
         wall_time_ns: 0,
         ..StepStats::default()
     });
-    write_field_file(
+    let final_snapshot_receipt = final_native_snapshot_receipt(
+        &field_context,
+        executed,
+        &mut final_stats,
+    )?;
+    let final_node_map = final_native_node_map(executed, final_snapshot_receipt.as_ref())?;
+    write_field_file_with_native_snapshot(
         &output_dir.join("m_final.json"),
         &field_context,
         &execution_provenance,
@@ -2059,6 +2108,8 @@ pub(crate) fn write_artifacts(
         final_stats.time,
         final_stats.dt,
         &executed.result.final_magnetization,
+        final_snapshot_receipt.as_ref(),
+        final_node_map.as_ref(),
     )?;
 
     if streamed.is_none() {
@@ -4455,6 +4506,86 @@ fn write_sampling_resolution_artifact(
     )
 }
 
+fn final_native_snapshot_receipt(
+    context: &FieldArtifactContext,
+    executed: &ExecutedRun,
+    stats: &mut StepStats,
+) -> std::io::Result<
+    Option<fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
+> {
+    use fullmag_quantities::fem_state_snapshot_receipt::{
+        parse_fem_snapshot_receipt, FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT,
+    };
+    let mut artifacts = executed
+        .auxiliary_artifacts
+        .iter()
+        .filter(|artifact| artifact.relative_path == FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT);
+    let Some(artifact) = artifacts.next() else {
+        return Ok(None);
+    };
+    if artifacts.next().is_some()
+        || context
+            .layout
+            .get("backend")
+            .and_then(serde_json::Value::as_str)
+            != Some("fem")
+        || !matches!(
+            executed.provenance.execution_engine.as_str(),
+            "fem_cpu_native" | "fem_native_gpu"
+        )
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "ambiguous or nonnative final FEM snapshot receipt",
+        ));
+    }
+    let receipt = parse_fem_snapshot_receipt(&artifact.bytes)
+        .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+    receipt
+        .validate_snapshot(
+            receipt.snapshot_step,
+            receipt.snapshot_time_s,
+            receipt.snapshot_solver_dt_s,
+            &executed.result.final_magnetization,
+        )
+        .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+    // A sampled diagnostic trace can omit the final endpoint. The receipt
+    // captured with final m is the authority for this artifact's timestamp.
+    stats.step = receipt.snapshot_step;
+    stats.time = receipt.snapshot_time_s;
+    stats.dt = receipt.snapshot_solver_dt_s;
+    Ok(Some(receipt))
+}
+fn final_native_node_map(
+    executed: &ExecutedRun,
+    receipt: Option<&fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt>,
+) -> std::io::Result<Option<fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap>> {
+    use fullmag_quantities::fem_local_node_map::{
+        parse_fem_local_node_map, FEM_FINAL_NODE_MAP_ARTIFACT,
+    };
+    let mut artifacts = executed
+        .auxiliary_artifacts
+        .iter()
+        .filter(|artifact| artifact.relative_path == FEM_FINAL_NODE_MAP_ARTIFACT);
+    let map = artifacts
+        .next()
+        .map(|artifact| parse_fem_local_node_map(&artifact.bytes))
+        .transpose()
+        .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+    if artifacts.next().is_some() || (map.is_some() && receipt.is_none()) {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "ambiguous or unbound final FEM node map",
+        ));
+    }
+    if let Some(receipt) = receipt {
+        receipt
+            .validate_node_map(map.as_ref())
+            .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+    }
+    Ok(map)
+}
+
 pub(crate) fn write_field_file(
     path: &Path,
     context: &FieldArtifactContext,
@@ -4465,17 +4596,187 @@ pub(crate) fn write_field_file(
     solver_dt: f64,
     values: &[[f64; 3]],
 ) -> std::io::Result<()> {
-    let field_json = serde_json::json!({
+    write_field_file_with_native_snapshot(path, context, provenance, observable, step, time, solver_dt, values, None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_field_file_with_native_snapshot(
+    path: &Path,
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+    observable: &str,
+    step: u64,
+    time: f64,
+    solver_dt: f64,
+    values: &[[f64; 3]],
+    snapshot_receipt: Option<
+        &fullmag_quantities::fem_state_snapshot_receipt::FemLocalNodeSnapshotReceipt,
+    >,
+    node_map: Option<&fullmag_quantities::fem_local_node_map::FemLocalNodeIndexMap>,
+) -> std::io::Result<()> {
+    let mut layout = context.layout.clone();
+    if observable == "m" {
+        let semantics = context
+            .magnetization_field_semantics
+            .as_ref()
+            .map_err(|error| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!("FEM magnetization field semantics unavailable: {error}"),
+                )
+            })?;
+        if let Some(semantics) = semantics {
+            if values.len() != semantics.active_node_mask.len() {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "FEM H1/P1 magnetization payload length {} does not match the declared node count {}",
+                        values.len(),
+                        semantics.active_node_mask.len()
+                    ),
+                ));
+            }
+            if values
+                .iter()
+                .flat_map(|value| value.iter())
+                .any(|component| !component.is_finite())
+            {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "FEM H1/P1 magnetization payload contains a non-finite value",
+                ));
+            }
+            let layout_object = layout.as_object_mut().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "magnetization field layout is not a JSON object",
+                )
+            })?;
+            let field_semantics = serde_json::to_value(semantics)
+                .map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
+            layout_object.insert("field_semantics".to_string(), field_semantics);
+        }
+    }
+    let mut field_json = serde_json::json!({
         "observable": observable,
         "unit": field_unit(observable),
         "step": step,
         "time": time,
         "solver_dt": solver_dt,
-        "layout": context.layout,
+        "layout": layout,
         "provenance": artifact_provenance_json(context, provenance),
         "values": values,
     });
+    if let Some(receipt) = snapshot_receipt {
+        if observable != "m"
+            || context
+                .layout
+                .get("backend")
+                .and_then(serde_json::Value::as_str)
+                != Some("fem")
+            || !matches!(
+                provenance.execution_engine.as_str(),
+                "fem_cpu_native" | "fem_native_gpu"
+            )
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "native state receipt requires native FEM m output",
+            ));
+        }
+        receipt
+            .validate_snapshot(step, time, solver_dt, values)
+            .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+        receipt
+            .validate_node_map(node_map)
+            .map_err(|message| Error::new(ErrorKind::InvalidData, message))?;
+        field_json
+            .as_object_mut()
+            .expect("field artifact is an object")
+            .insert(
+                "native_state_snapshot".into(),
+                serde_json::to_value(receipt)?,
+            );
+    }
+    if let Some(map) = node_map {
+        if snapshot_receipt.is_none() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "native node map requires snapshot receipt",
+            ));
+        }
+        field_json
+            .as_object_mut()
+            .expect("field artifact is an object")
+            .insert("native_node_map".into(), serde_json::to_value(map)?);
+    }
+    if observable == "m" {
+        let layout = field_json.get("layout").ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                "magnetization field layout is missing",
+            )
+        })?;
+        let backend = layout
+            .get("backend")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "magnetization field layout has no backend identity",
+                )
+            })?;
+        let layout_bytes = serde_json::to_vec(layout)
+            .map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
+        let layout_sha256 = format!("{:x}", Sha256::digest(layout_bytes));
+        field_json
+            .as_object_mut()
+            .expect("field artifact JSON is an object")
+            .insert(
+                "state_identity".into(),
+                serde_json::json!({
+                    "schema_version": "magnetization_state.v1",
+                    "backend": backend,
+                    "layout_sha256": layout_sha256,
+                    "sample_count": values.len(),
+                }),
+            );
+    }
+    if node_map.is_some() {
+        validate_mapped_state_byte_budget(
+            &field_json,
+            fullmag_quantities::fem_local_node_map::MAX_FEM_MAPPED_STATE_JSON_BYTES,
+        )?;
+    }
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
+}
+
+fn validate_mapped_state_byte_budget(
+    value: &serde_json::Value,
+    max_bytes: usize,
+) -> std::io::Result<()> {
+    struct Budget {
+        used: usize,
+        max_bytes: usize,
+    }
+    impl std::io::Write for Budget {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.max_bytes.saturating_sub(self.used) {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "mapped native FEM state exceeds the shared source JSON budget",
+                ));
+            }
+            self.used += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer_pretty(Budget { used: 0, max_bytes }, value)
+        .map_err(|error| Error::new(ErrorKind::InvalidData, error))
 }
 
 #[derive(Debug, Clone)]
@@ -4808,6 +5109,10 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
                 "origin_m": fdm.origin_m,
                 "grid_cells": fdm.grid.cells,
                 "cell_size": fdm.cell_size,
+                "grid_fingerprint": fdm
+                    .grid_certificate
+                    .as_ref()
+                    .map(|certificate| certificate.grid_fingerprint.clone()),
                 "total_cell_count": total_cells,
                 "active_mask_present": fdm.active_mask.is_some(),
                 "active_mask": fdm.active_mask.as_ref().map(|mask| mask.as_slice()),
@@ -4864,6 +5169,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "mesh_source": fem.mesh_source,
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "n_nodes": fem.mesh.nodes.len(),
             "n_elements": fem.mesh.cell_count(),
         }),
@@ -4873,6 +5179,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "mesh_source": fem.mesh_source,
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "n_nodes": fem.mesh.nodes.len(),
             "n_elements": fem.mesh.cell_count(),
             "mode_count": fem.count,
@@ -4890,6 +5197,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "mesh_source": fem.mesh_source,
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "n_nodes": fem.mesh.nodes.len(),
             "n_elements": fem.mesh.cell_count(),
             "frequency_count": fem.frequencies_hz.values_hz.len(),
@@ -5431,6 +5739,7 @@ mod tests {
             source_hash: Some("source-bound".into()),
             execution_mode: ExecutionMode::Hybrid,
             layout: serde_json::json!({"backend": "fem"}),
+            magnetization_field_semantics: Ok(None),
             execution_resolution: None,
         };
         let mut provenance = ExecutionProvenance::default();
@@ -5504,6 +5813,7 @@ mod tests {
             source_hash: None,
             execution_mode: ExecutionMode::Strict,
             layout: serde_json::json!({"backend": "fdm", "grid_cells": [2, 1, 1]}),
+            magnetization_field_semantics: Ok(None),
             execution_resolution: None,
         };
         let snapshot = FieldSnapshot::new(
@@ -6731,6 +7041,108 @@ mod tests {
             auxiliary_artifacts: Vec::new(),
             provenance,
         }
+    }
+
+    #[test]
+    fn final_native_snapshot_uses_captured_endpoint_and_rejects_corrupt_or_duplicate_proof() {
+        use fullmag_quantities::fem_state_snapshot_receipt::{
+            FemLocalNodeSnapshotReceipt, FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT,
+        };
+        use fullmag_quantities::{
+            FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
+        };
+        let plan = test_fem_execution_plan();
+        let context = FieldArtifactContext {
+            problem_name: "native-final-state".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: ExecutionMode::Strict,
+            layout: field_layout(&plan),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut executed = final_execution_test_run(ExecutionProvenance {
+            execution_engine: "fem_cpu_native".into(),
+            ..ExecutionProvenance::default()
+        });
+        let receipt = FemLocalNodeSnapshotReceipt::capture(
+            9,
+            0.9,
+            0.1,
+            &executed.result.final_magnetization,
+            FemRepresentationReceipt {
+                schema_version: 1,
+                state_space: FemStateRepresentation::LocalNodeAos,
+                ms_location: FemMaterialFieldLocation::Scalar,
+                a_location: FemMaterialFieldLocation::Scalar,
+                local_node_count: 4,
+                true_node_count: 2,
+                periodic_map_revision: 13,
+                representation_copy_count: 0,
+                gather_scatter_bytes: 0,
+                invalid_space_assertion_count: 0,
+                hot_loop_representation_copy_count: 0,
+                hot_loop_gather_scatter_bytes: 0,
+            },
+        )
+        .unwrap();
+        executed
+            .auxiliary_artifacts
+            .push(crate::types::AuxiliaryArtifact {
+                relative_path: FEM_FINAL_SNAPSHOT_RECEIPT_ARTIFACT.into(),
+                bytes: serde_json::to_vec(&receipt).unwrap(),
+            });
+        let mut stats = executed.result.steps[0].clone();
+        let captured = final_native_snapshot_receipt(&context, &executed, &mut stats).unwrap();
+        assert_eq!((stats.step, stats.time, stats.dt), (9, 0.9, 0.1));
+        assert!(context.layout.get("native_state_snapshot").is_none());
+        assert_eq!(captured.unwrap(), receipt);
+        {
+            use fullmag_quantities::fem_local_node_map::{FemLocalNodeIndexMap, FEM_LOCAL_NODE_MAP_SCHEMA, FEM_FINAL_NODE_MAP_ARTIFACT};
+            let map = FemLocalNodeIndexMap { schema_version: FEM_LOCAL_NODE_MAP_SCHEMA.into(), local_node_count: 4,
+                mfem_local_dof_count: 4, mfem_true_dof_count: 4, core_periodic_class_count: 2,
+                core_periodic_map_revision: 13, canonical_node_to_mfem_local_dof: vec![0,1,2,3],
+                local_node_to_core_class: vec![0,1,0,1], core_class_representatives: vec![0,1] };
+            let mut bound_receipt = receipt.clone();
+            bound_receipt.native_node_map_sha256 = Some(map.content_sha256().unwrap());
+            assert!(final_native_node_map(&executed, Some(&bound_receipt)).is_err());
+            let mut mapped = executed.clone();
+            mapped.auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+                relative_path: FEM_FINAL_NODE_MAP_ARTIFACT.into(), bytes: serde_json::to_vec(&map).unwrap(),
+            });
+            assert_eq!(final_native_node_map(&mapped, Some(&bound_receipt)).unwrap(), Some(map));
+            assert!(final_native_node_map(&mapped, None).is_err());
+            assert!(final_native_node_map(&mapped, Some(&receipt)).is_err());
+            mapped.auxiliary_artifacts.push(mapped.auxiliary_artifacts.last().unwrap().clone());
+            assert!(final_native_node_map(&mapped, Some(&bound_receipt)).is_err());
+        }
+        let mut invalid = executed.clone();
+        invalid.result.final_magnetization[0][0] = 0.5;
+        assert!(final_native_snapshot_receipt(&context, &invalid, &mut stats).is_err());
+        invalid = executed.clone();
+        invalid.provenance.execution_engine = "fem_cpu_baseline_internal".into();
+        assert!(final_native_snapshot_receipt(&context, &invalid, &mut stats).is_err());
+        invalid = executed.clone();
+        invalid
+            .auxiliary_artifacts
+            .push(invalid.auxiliary_artifacts[0].clone());
+        assert!(final_native_snapshot_receipt(&context, &invalid, &mut stats).is_err());
+        invalid = executed.clone();
+        invalid.auxiliary_artifacts.clear();
+        let legacy = final_native_snapshot_receipt(&context, &invalid, &mut stats).unwrap();
+        assert!(legacy.is_none());
+    }
+
+    #[test]
+    fn mapped_source_budget_covers_values_map_and_metadata_together() {
+        let value = serde_json::json!({ "values": [[1.0, 0.0, 0.0]],
+            "native_node_map": { "canonical_node_to_mfem_local_dof": [0] },
+            "state_identity": { "backend": "fem" } });
+        let length = serde_json::to_vec_pretty(&value).unwrap().len();
+        validate_mapped_state_byte_budget(&value, length).unwrap();
+        assert!(validate_mapped_state_byte_budget(&value, length - 1).is_err());
+        assert!(serde_json::to_vec_pretty(&value["values"]).unwrap().len() < length - 1);
+        assert!(serde_json::to_vec_pretty(&value["native_node_map"]).unwrap().len() < length - 1);
     }
 
     fn write_final_execution_test_metadata(
@@ -8978,6 +9390,269 @@ mod tests {
         assert_eq!(layout["active_cell_count"], 8);
         assert_eq!(layout["inactive_cell_count"], 0);
         assert_eq!(layout["active_fraction"], serde_json::json!(1.0));
+        assert!(layout["grid_fingerprint"].as_str().is_some());
+    }
+
+    #[test]
+    fn final_magnetization_artifact_binds_layout_and_sample_identity() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-state-identity-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state identity fixture");
+
+        let plan = test_execution_plan(None);
+        let context = FieldArtifactContext {
+            problem_name: "state-identity".into(),
+            ir_version: "v0".into(),
+            source_hash: Some("source-bound".into()),
+            execution_mode: ExecutionMode::Strict,
+            layout: field_layout(&plan),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let path = root.join("m_final.json");
+        write_field_file(
+            &path,
+            &context,
+            &ExecutionProvenance::default(),
+            "m",
+            8,
+            8.0e-12,
+            1.0e-12,
+            &[[1.0, 0.0, 0.0]; 8],
+        )
+        .expect("write final magnetization field");
+        let field: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read field artifact"))
+                .expect("parse field artifact JSON");
+        let layout_bytes = serde_json::to_vec(&context.layout).expect("serialize layout");
+        assert_eq!(
+            field["state_identity"]["schema_version"],
+            "magnetization_state.v1"
+        );
+        assert_eq!(field["state_identity"]["backend"], "fdm");
+        assert_eq!(
+            field["state_identity"]["layout_sha256"],
+            format!("{:x}", Sha256::digest(layout_bytes))
+        );
+        assert_eq!(field["state_identity"]["sample_count"], 8);
+
+        fs::remove_dir_all(root).expect("remove state identity fixture");
+    }
+
+    #[test]
+    fn fem_p1_magnetization_artifact_emits_typed_semantics_only_for_m() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-fem-p1-field-semantics-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create FEM field semantics fixture");
+
+        let plan = test_fem_execution_plan();
+        let context = build_field_context(
+            &fullmag_ir::ProblemIR::bootstrap_example(),
+            &plan,
+        );
+        assert!(context.magnetization_field_semantics.is_ok());
+        assert!(context
+            .magnetization_field_semantics
+            .as_ref()
+            .expect("FEM magnetization semantics result")
+            .is_some());
+
+        let magnetization_path = root.join("m_final.json");
+        write_field_file(
+            &magnetization_path,
+            &context,
+            &ExecutionProvenance::default(),
+            "m",
+            4,
+            4.0e-12,
+            1.0e-12,
+            &[[1.0, 0.0, 0.0]; 4],
+        )
+        .expect("write FEM magnetization field");
+        let magnetization: serde_json::Value = serde_json::from_slice(
+            &fs::read(&magnetization_path).expect("read FEM magnetization field"),
+        )
+        .expect("parse FEM magnetization field");
+        assert_eq!(
+            magnetization["layout"]["field_semantics"]["format"],
+            fullmag_quantities::fem_state_field::FEM_P1_MAGNETIZATION_FIELD_SEMANTICS_FORMAT
+        );
+        assert_eq!(
+            magnetization["state_identity"]["schema_version"],
+            "magnetization_state.v1"
+        );
+        let layout_bytes = serde_json::to_vec(&magnetization["layout"])
+            .expect("serialize FEM magnetization layout");
+        assert_eq!(
+            magnetization["state_identity"]["layout_sha256"],
+            format!("{:x}", Sha256::digest(layout_bytes))
+        );
+
+        let field_path = root.join("H_eff_final.json");
+        write_field_file(
+            &field_path,
+            &context,
+            &ExecutionProvenance::default(),
+            "H_eff",
+            4,
+            4.0e-12,
+            1.0e-12,
+            &[[0.0, 0.0, 0.0]; 4],
+        )
+        .expect("write FEM effective field");
+        let field: serde_json::Value =
+            serde_json::from_slice(&fs::read(&field_path).expect("read FEM effective field"))
+                .expect("parse FEM effective field");
+        assert!(field["layout"].get("field_semantics").is_none());
+        assert!(field.get("state_identity").is_none());
+
+        fs::remove_dir_all(root).expect("remove FEM field semantics fixture");
+    }
+
+    #[test]
+    fn fem_magnetization_writer_rejects_semantics_error_but_other_fields_continue() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-fem-p1-field-semantics-error-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create FEM field semantics error fixture");
+
+        let context = FieldArtifactContext {
+            problem_name: "fem-p1-semantics-error".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: ExecutionMode::Strict,
+            layout: serde_json::json!({"backend": "fem"}),
+            magnetization_field_semantics: Err("invalid FEM mesh".into()),
+            execution_resolution: None,
+        };
+        let error = write_field_file(
+            &root.join("m_final.json"),
+            &context,
+            &ExecutionProvenance::default(),
+            "m",
+            1,
+            0.0,
+            1.0e-12,
+            &[[1.0, 0.0, 0.0]],
+        )
+        .expect_err("m must reject an unavailable semantics result");
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert!(error
+            .to_string()
+            .contains("FEM magnetization field semantics unavailable"));
+
+        let other_path = root.join("H_eff_final.json");
+        write_field_file(
+            &other_path,
+            &context,
+            &ExecutionProvenance::default(),
+            "H_eff",
+            1,
+            0.0,
+            1.0e-12,
+            &[[0.0, 0.0, 0.0]],
+        )
+        .expect("other observables must not consume m semantics errors");
+        let other: serde_json::Value = serde_json::from_slice(
+            &fs::read(&other_path).expect("read effective field after semantics error"),
+        )
+        .expect("parse effective field after semantics error");
+        assert!(other["layout"].get("field_semantics").is_none());
+
+        fs::remove_dir_all(root).expect("remove FEM field semantics error fixture");
+    }
+
+    #[test]
+    fn fem_p1_magnetization_factory_rejects_invalid_execution_mesh() {
+        let mut plan = test_fem_execution_plan();
+        {
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                panic!("test plan must be FEM");
+            };
+            fem.mesh.nodes[3] = [0.0, 0.0, 0.0];
+        }
+
+        let error = fem_p1_magnetization_field_semantics(&plan)
+            .expect_err("invalid FEM geometry must not receive field semantics");
+        assert!(error.contains("degenerate tetra volume"), "{error}");
+    }
+
+    #[test]
+    fn fem_p1_magnetization_factory_uses_runtime_marker_normalization_for_support() {
+        let mut plan = test_fem_execution_plan();
+        let expected_mask = {
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                panic!("test plan must be FEM");
+            };
+            fem.mesh.nodes.push([2.0, 0.0, 0.0]);
+            fem.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [1, 2, 3, 4]]);
+            fem.mesh.element_markers = vec![1, 0];
+            fem.object_segments.clear();
+            fem.region_materials = vec![fullmag_ir::FemRegionMaterialIR {
+                object_id: "free".to_string(),
+                material: fem.material.clone(),
+                element_marker: 1,
+            }];
+
+            let normalized_markers = normalized_runtime_element_markers(fem)
+                .expect("region-material markers should normalize");
+            crate::preview::mesh_quantity_active_mask_with_element_markers(
+                "m",
+                &fem.mesh,
+                &normalized_markers,
+            )
+            .expect("magnetization support mask")
+        };
+        let semantics = fem_p1_magnetization_field_semantics(&plan)
+            .expect("valid region-material mesh should produce semantics")
+            .expect("FEM H1/P1 semantics should be present");
+        assert_eq!(semantics.active_node_mask, expected_mask);
+        assert_eq!(semantics.active_node_mask, vec![true, true, true, true, false]);
+
+        let mut all_zero_plan = test_fem_execution_plan();
+        {
+            let BackendPlanIR::Fem(all_zero_fem) = &mut all_zero_plan.backend_plan else {
+                panic!("test plan must be FEM");
+            };
+            all_zero_fem.mesh.element_markers = vec![0];
+        }
+        let all_zero_semantics = fem_p1_magnetization_field_semantics(&all_zero_plan)
+            .expect("all-zero marker fallback should be accepted by runtime normalization")
+            .expect("all-zero mesh should keep a quantitative FEM field");
+        assert_eq!(all_zero_semantics.active_node_mask, vec![true; 4]);
+
+        let mut ambiguous_plan = test_fem_execution_plan();
+        {
+            let BackendPlanIR::Fem(ambiguous_fem) = &mut ambiguous_plan.backend_plan else {
+                panic!("test plan must be FEM");
+            };
+            ambiguous_fem.mesh.nodes.push([2.0, 0.0, 0.0]);
+            ambiguous_fem
+                .mesh
+                .set_tet4_cells(vec![[0, 1, 2, 3], [1, 2, 3, 4]]);
+            ambiguous_fem.mesh.element_markers = vec![1, 2];
+            ambiguous_fem.object_segments.clear();
+        }
+        let error = fem_p1_magnetization_field_semantics(&ambiguous_plan)
+            .expect_err("ambiguous positive markers must not receive semantics");
+        assert!(error.contains("ambiguous FEM magnetic region contract"), "{error}");
     }
 
     #[test]

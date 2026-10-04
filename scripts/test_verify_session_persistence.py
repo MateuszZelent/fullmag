@@ -6,6 +6,9 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import os
+import shutil
+import subprocess
 
 import pytest
 
@@ -19,12 +22,39 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+def test_unknown_explicit_route_is_not_silently_replaced_with_session_tests() -> None:
+    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+    bash = str(git_bash) if git_bash.is_file() else shutil.which("bash")
+    if not bash:
+        pytest.skip("Bash is required to exercise the just shell adapter")
+    result = subprocess.run(
+        [bash, "scripts/just_storage_shell.sh",
+         "python scripts/verify_session_persistence.py --route unknown-recovery-route --repo-root ."],
+        cwd=ROOT, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 2
+    assert "Unsupported explicit verification route" in result.stderr
+    assert '"receipt"' not in result.stdout
+
+
 def test_command_scope_is_fixed_to_session_package() -> None:
     expected = ("cargo", "test", "--locked", "-p", "fullmag-session")
     assert MODULE.ALLOWED_COMMAND == expected
     assert MODULE.validate_command(expected) == expected
     with pytest.raises(MODULE.SessionCheckError):
         MODULE.validate_command(("cargo", "test", "--workspace"))
+
+
+def test_cli_source_route_excludes_test_and_native_targets() -> None:
+    route = MODULE.ROUTES["cli-source-check"]
+    assert route.command == (
+        "cargo", "check", "--locked", "-p", "fullmag-cli", "--bin", "fullmag"
+    )
+    assert route.local_dependency_manifest == "crates/fullmag-cli/Cargo.toml"
+    assert "crates/fullmag-runtime-control/src" in route.source_paths
+    assert MODULE.validate_command(route.command, route) == route.command
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "-p", "fullmag-cli"), route)
 
 
 def test_application_routes_have_separate_fixed_commands_and_profiles() -> None:
@@ -74,6 +104,465 @@ def test_project_entrypoint_route_covers_cli_python_and_desktop() -> None:
     assert "crates/fullmag-cli/src" in route.source_paths
     assert "crates/fullmag-py-core/src" in route.source_paths
     assert "apps/desktop/src-tauri/src" in route.source_paths
+
+
+def test_api_preparation_route_is_fixed_and_tracks_api_sources() -> None:
+    route = MODULE.ROUTES["api-preparation-tests"]
+    assert route.command == (
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api",
+        "preparation_materialization_route_tests::",
+        "--",
+        "--nocapture",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_api_preparation_test_v1"
+    assert route.requires_python is True
+    assert "crates/fullmag-api/src" in route.source_paths
+    assert "crates/fullmag-application/src" in route.source_paths
+    assert "packages/fullmag-py/pyproject.toml" in route.source_paths
+    assert "packages/fullmag-py/uv.lock" in route.source_paths
+    assert "packages/fullmag-py/src" in route.source_paths
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_worker_route_is_fixed_and_tracks_api_sources() -> None:
+    route = MODULE.ROUTES["api-accepted-worker-check"]
+    assert route.command == (
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_api_accepted_worker_check_v1"
+    assert "crates/fullmag-api/src" in route.source_paths
+    assert "crates/fullmag-api/Cargo.toml" in route.source_paths
+
+
+def test_api_accepted_supervisor_route_is_fixed_and_tracks_api_sources() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-tests"]
+    assert route.command == (
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-supervisor",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_api_accepted_supervisor_test_v1"
+    assert "crates/fullmag-api/src" in route.source_paths
+    assert "crates/fullmag-api/Cargo.toml" in route.source_paths
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "check", "--workspace"), route)
+
+
+def test_api_accepted_supervisor_e2e_route_builds_both_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-e2e"]
+    assert route.command == (
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api",
+        "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+        "--",
+        "--exact",
+        "--nocapture",
+    )
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-supervisor",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert route.binary_env == (
+        ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+        ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+    )
+    assert route.receipt_schema == "fullmag_api_accepted_supervisor_e2e_v1"
+
+
+def test_api_accepted_supervisor_cancel_e2e_route_builds_both_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-cancel-e2e"]
+    assert route.setup_commands == MODULE.ROUTES["api-accepted-supervisor-e2e"].setup_commands
+    assert route.binary_env == MODULE.ROUTES["api-accepted-supervisor-e2e"].binary_env
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SUPERVISOR_CANCEL_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS": "3000",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_supervisor_cancel_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_supervisor_prestart_cancel_e2e_route_builds_both_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-prestart-cancel-e2e"]
+    assert route.setup_commands == MODULE.ROUTES["api-accepted-supervisor-e2e"].setup_commands
+    assert route.binary_env == MODULE.ROUTES["api-accepted-supervisor-e2e"].binary_env
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SUPERVISOR_PRESTART_CANCEL_E2E": "1",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_supervisor_prestart_cancel_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_supervisor_automatic_retry_e2e_route_builds_both_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-automatic-retry-e2e"]
+    assert route.setup_commands == MODULE.ROUTES["api-accepted-supervisor-e2e"].setup_commands
+    assert route.binary_env == MODULE.ROUTES["api-accepted-supervisor-e2e"].binary_env
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SUPERVISOR_AUTOMATIC_RETRY_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT": "1",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_supervisor_automatic_retry_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_supervisor_retry_recovery_e2e_route_builds_both_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-retry-recovery-e2e"]
+    assert route.setup_commands == MODULE.ROUTES["api-accepted-supervisor-e2e"].setup_commands
+    assert route.binary_env == MODULE.ROUTES["api-accepted-supervisor-e2e"].binary_env
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SUPERVISOR_RETRY_RECOVERY_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT": "1",
+        "FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_RETRY_DECISION": "1",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_supervisor_retry_recovery_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_supervisor_process_exit_recovery_e2e_route_builds_both_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-process-exit-recovery-e2e"]
+    assert route.setup_commands == MODULE.ROUTES["api-accepted-supervisor-e2e"].setup_commands
+    assert route.binary_env == MODULE.ROUTES["api-accepted-supervisor-e2e"].binary_env
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SUPERVISOR_PROCESS_EXIT_RECOVERY_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT": "1",
+        "FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_PROCESS_EXIT_RECEIPT": "1",
+    }
+    assert (
+        route.receipt_schema
+        == "fullmag_api_accepted_supervisor_process_exit_recovery_e2e_v1"
+    )
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {"FULLMAG_ACCEPTED_SCHEDULER_E2E": "1"}
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_pool_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-pool-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {"FULLMAG_ACCEPTED_SCHEDULER_POOL_E2E": "1"}
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_pool_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_discovery_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-discovery-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {"FULLMAG_ACCEPTED_SCHEDULER_DISCOVERY_E2E": "1"}
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_discovery_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_persistent_cursor_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-persistent-cursor-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_PERSISTENT_CURSOR_E2E": "1"
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_persistent_cursor_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_parallel_resources_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-parallel-resources-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_PARALLEL_RESOURCES_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS": "5000",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_parallel_resources_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_resource_pool_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-resource-pool-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_RESOURCE_POOL_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS": "5000",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_resource_pool_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_resident_discovery_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-resident-discovery-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_RESIDENT_DISCOVERY_E2E": "1"
+    }
+    assert (
+        route.receipt_schema
+        == "fullmag_api_accepted_scheduler_resident_discovery_e2e_v1"
+    )
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_resident_drain_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-resident-drain-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_RESIDENT_DRAIN_E2E": "1"
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_resident_drain_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_retry_e2e_route_builds_all_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-retry-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-supervisor",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN": "fullmag-api-accepted-supervisor",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_RETRY_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT": "1",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_retry_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_scene_resource_route_is_fixed_and_tracks_api_sources() -> None:
+    route = MODULE.ROUTES["api-scene-resource-tests"]
+    assert route.command == (
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api",
+        "router_v2::tests::scene_resource_preserves_selection_and_frozen_spins_authoring_state",
+        "--",
+        "--exact",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_api_scene_resource_test_v1"
+    assert "crates/fullmag-api/src" in route.source_paths
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_authoring_scene_adapter_route_is_fixed_and_tracks_authoring_sources() -> None:
+    route = MODULE.ROUTES["authoring-scene-adapter-tests"]
+    assert route.command == (
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "fullmag-authoring",
+        "--lib",
+        "scene_document",
+        "--",
+        "--nocapture",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_authoring_scene_adapter_test_v1"
+    assert "crates/fullmag-authoring/src" in route.source_paths
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_preparation_route_pins_python_for_the_child_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    route = MODULE.ROUTES["api-preparation-tests"]
+    monkeypatch.delenv("FULLMAG_PYTHON", raising=False)
+    runtime = MODULE.python_runtime_identity(route)
+    assert runtime is not None
+    assert runtime["executable"] == str(Path(sys.executable).resolve())
+    assert runtime["version"].startswith("Python ")
+
+    paths = {
+        name: tmp_path / name
+        for name in ("target_dir", "cargo_home", "rustup_home", "temp_dir")
+    }
+    tools = {"cargo": Path(sys.executable), "rustc": Path(sys.executable)}
+    child = MODULE.child_environment({"env": {}}, paths, tools, route, runtime)
+    assert child["FULLMAG_PYTHON"] == runtime["executable"]
 
 
 def test_run_paths_are_contained_by_canonical_storage(tmp_path: Path) -> None:
@@ -138,10 +627,50 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert '--route project-application-test --repo-root' in justfile
     assert '--route project-entrypoint-check --repo-root' in justfile
     assert '--route fem-capability-contract --repo-root' in justfile
+    assert '--route api-accepted-worker-check --repo-root' in justfile
+    assert '--route runtime-control-tests --repo-root' in justfile
+    assert '--route api-accepted-supervisor-tests --repo-root' in justfile
+    assert '--route api-accepted-supervisor-e2e --repo-root' in justfile
+    assert '--route api-accepted-supervisor-cancel-e2e --repo-root' in justfile
+    assert '--route api-accepted-supervisor-prestart-cancel-e2e --repo-root' in justfile
+    assert '--route api-accepted-supervisor-automatic-retry-e2e --repo-root' in justfile
+    assert '--route api-accepted-supervisor-retry-recovery-e2e --repo-root' in justfile
+    assert '--route api-accepted-supervisor-process-exit-recovery-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-pool-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-discovery-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-persistent-cursor-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-resource-pool-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-resident-discovery-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-resident-drain-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-retry-e2e --repo-root' in justfile
+    assert '--route api-preparation-tests --repo-root' in justfile
+    assert '--route api-scene-resource-tests --repo-root' in justfile
+    assert '--route authoring-scene-adapter-tests --repo-root' in justfile
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-application-check' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-application-test' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-entrypoint-check' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route fem-capability-contract' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-worker-check' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route runtime-control-tests' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-tests' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-cancel-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-prestart-cancel-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-automatic-retry-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-retry-recovery-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-process-exit-recovery-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-pool-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-discovery-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-persistent-cursor-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-resource-pool-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-resident-discovery-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-resident-drain-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-retry-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-preparation-tests' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-scene-resource-tests' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route authoring-scene-adapter-tests' in shell
     dedicated = shell.index('exec "${python_cmd}" "${script_dir}/verify_session_persistence.py"')
     generic = shell.index('"${python_cmd}" "${resolver}" prepare-links')
     assert dedicated < generic

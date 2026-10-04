@@ -631,14 +631,14 @@
     },
     {
       "id": "fdm-exchange-field",
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs",
       "symbol": "cell_exchange_field",
       "responsibility": "Implement the rectangular-grid CPU reference specialization of harmonic face exchange and the per-cell exchange field; it does not prove arbitrary unstructured face geometry.",
       "evidence_status": "implemented"
     },
     {
       "id": "fdm-exchange-energy",
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/energy.rs",
       "symbol": "exchange_energy_from_vectors",
       "responsibility": "Implement the rectangular-grid CPU reference exchange energy with harmonic neighboring material coefficients.",
       "evidence_status": "implemented"

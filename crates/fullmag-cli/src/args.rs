@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "fullmag")]
+#[command(name = "fullmag", version = fullmag_build_info::version())]
 #[command(
     about = "Rust-hosted Fullmag CLI for Python-authored ProblemIR validation, planning, and execution"
 )]
@@ -80,7 +80,32 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = false)]
         execution_plan: bool,
     },
+    /// Submit and materialize an immutable accepted-run request through the public API v2.
     RunJson {
+        /// JSON containing archive_base64, RunIntent, StudyPlan, and StudyProblemCatalog.
+        path: PathBuf,
+        /// Fullmag API origin, for example http://127.0.0.1:8000.
+        #[arg(long)]
+        api_url: String,
+        /// Accept the immutable intent without materializing its task catalog.
+        #[arg(long, default_value_t = false)]
+        submit_only: bool,
+    },
+    /// Deprecated compatibility alias for `run-json`.
+    #[command(hide = true)]
+    SubmitRunJson {
+        /// JSON containing archive_base64, RunIntent, StudyPlan, and StudyProblemCatalog.
+        path: PathBuf,
+        /// Fullmag API origin, for example http://127.0.0.1:8000.
+        #[arg(long)]
+        api_url: String,
+        /// Accept the immutable intent without materializing its task catalog.
+        #[arg(long, default_value_t = false)]
+        submit_only: bool,
+    },
+    /// Execute a canonical ProblemIR directly for internal qualification tooling.
+    #[command(hide = true)]
+    RunProblemJsonDirect {
         path: PathBuf,
         #[arg(long)]
         until: f64,
@@ -201,7 +226,7 @@ pub(crate) struct UiCli {
     pub mode: Option<ModeArg>,
     #[arg(long, value_enum)]
     pub precision: Option<PrecisionArg>,
-    /// Use web dev server instead of static assets
+    /// Use the frontend dev server with hot updates instead of static assets
     #[arg(long, default_value_t = false)]
     pub dev: bool,
     #[arg(
@@ -213,6 +238,66 @@ pub(crate) struct UiCli {
 
 #[derive(Subcommand)]
 pub(crate) enum RuntimeCommand {
+    /// Internal native-thread proof of the observer pause protocol.
+    #[command(hide = true)]
+    VerifyDevelopmentObserverPause,
+    /// Internal managed end-to-end proof of the native restart consumer.
+    #[command(hide = true)]
+    VerifyDevelopmentRestartConsumer,
+    /// Internal managed diagnostic for the native CLI owner protocol.
+    #[command(hide = true)]
+    VerifyDevelopmentApiOwner,
+    /// Internal managed probe of the native replacement completion client.
+    #[command(hide = true)]
+    VerifyDevelopmentCompletionOwner,
+    /// Initialize only a new explicitly scoped accepted store.
+    #[command(hide = true)]
+    InitializeScopedAcceptedStore,
+    /// Internal managed proof of one-shot durable handoff acceptance.
+    #[command(hide = true)]
+    VerifyDevelopmentHandoffCommit {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        corrupt_store: PathBuf,
+    },
+    /// Internal managed proof of an existing cold accepted-store reservation.
+    #[command(hide = true)]
+    VerifyDevelopmentColdIdle {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Internal managed proof of the production client's idle service drain.
+    #[command(hide = true)]
+    VerifyDevelopmentServiceDrain {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Internal operator-level start/attach for an explicitly selected store.
+    #[command(hide = true)]
+    ServiceEnsure {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Observe an already running native service without starting or stopping it.
+    ServiceStatus {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        target: String,
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u64).range(1..=30))]
+        timeout_seconds: u64,
+    },
+    /// Internal cold integrity gate for an explicitly pinned saved FEM tensor.
+    #[command(hide = true)]
+    VerifySavedFemSnapshot {
+        #[arg(long)]
+        store: std::path::PathBuf,
+        #[arg(long)]
+        source: std::path::PathBuf,
+        #[arg(long)]
+        source_artifact_id: String,
+    },
     /// Diagnose installed runtime packs and host capabilities
     Doctor,
     /// Print native FEM CPU/GPU availability from the linked runtime

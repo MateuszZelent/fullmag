@@ -3,7 +3,9 @@ use fullmag_application::{
     DocumentMode, DurabilityGuarantee, FileProjectRepository, ProjectApplication, ProjectSource,
     ProjectTarget, SaveProjectRequest,
 };
+use crate::{compute_probe, provenance, recent_index};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
@@ -345,10 +347,28 @@ fn save_project_archive_to_target(
         ));
     }
     if opened.view.source_hash != existing_view.source_hash {
-        let candidate = incoming
+        let mut candidate = incoming
             .current_document()
             .cloned()
             .ok_or_else(|| "project archive has no current document".to_string())?;
+        // The save changes the project, so it is recorded. History comes from
+        // the document already on disk: the archive the webview sends back can
+        // predate earlier saves and must not overwrite them. `replace_draft`
+        // advances the revision by one, which is the revision being recorded.
+        let stored = application.current_document().and_then(|document| {
+            document
+                .opaque_documents
+                .iter()
+                .find(|stored| stored.path() == provenance::PROVENANCE_PATH)
+                .cloned()
+        });
+        provenance::stamp_envelope(
+            &mut candidate,
+            stored.as_ref(),
+            &provenance::author_identity(),
+            &recent_index::rfc3339_utc(std::time::SystemTime::now()),
+            existing_view.revision.saturating_add(1),
+        );
         application
             .replace_draft(candidate, existing_view.revision)
             .map_err(|error| error.to_string())?;
@@ -391,6 +411,137 @@ pub async fn save_project_archive(
         }
     };
     save_project_archive_to_target(request, target)
+}
+
+fn recent_index_file(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join(recent_index::INDEX_FILE_NAME))
+        .map_err(|error| format!("app data directory is unavailable: {error}"))
+}
+
+/// Locations scanned on rebuild: `FULLMAG_PROJECT_ROOTS` (path-list syntax of
+/// the platform), the roots the last scan used, and `<Documents>/Fullmag`.
+fn recent_project_roots(app: &AppHandle, file: &Path) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(configured) = std::env::var_os("FULLMAG_PROJECT_ROOTS") {
+        roots.extend(std::env::split_paths(&configured));
+    }
+    if let Ok(index) = recent_index::read_index(file) {
+        for location in index
+            .get("scanned_locations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(path) = location.get("path").and_then(Value::as_str) {
+                roots.push(PathBuf::from(path));
+            }
+        }
+    }
+    if let Ok(documents) = app.path().document_dir() {
+        roots.push(documents.join("Fullmag"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    roots.retain(|root| seen.insert(root.clone()));
+    roots
+}
+
+/// What this desktop build is, for the About page and bug reports.
+#[tauri::command]
+pub fn app_build_info() -> Value {
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "project_schema": fullmag_application::CURRENT_PROJECT_SCHEMA,
+    })
+}
+
+/// Who the user is, for the start screen's greeting: git config, then the OS user.
+#[tauri::command]
+pub async fn author_identity() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(provenance::author_identity)
+        .await
+        .map_err(|error| format!("identity lookup was interrupted: {error}"))
+}
+
+/// Authors, citation, history and runs of the archive at `path`, read lazily
+/// when the inspector opens a provenance tab.
+#[tauri::command]
+pub async fn project_provenance_read(path: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || provenance::read_from_archive(Path::new(&path)))
+        .await
+        .map_err(|error| format!("provenance read was interrupted: {error}"))?
+}
+
+/// GPU, CUDA, VRAM and CPU threads for the start screen's rail. Runs off the
+/// async executor because it spawns `nvidia-smi`.
+#[tauri::command]
+pub async fn compute_probe() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(compute_probe::probe)
+        .await
+        .map_err(|error| format!("compute probe was interrupted: {error}"))
+}
+
+#[tauri::command]
+pub async fn recent_index_read(app: AppHandle) -> Result<Value, String> {
+    recent_index::read_index(&recent_index_file(&app)?)
+}
+
+/// Rescan the project locations. Runs off the async executor: it walks the
+/// file system and opens every archive it finds.
+#[tauri::command]
+pub async fn recent_index_rebuild(app: AppHandle) -> Result<Value, String> {
+    let file = recent_index_file(&app)?;
+    let roots = recent_project_roots(&app, &file);
+    tauri::async_runtime::spawn_blocking(move || {
+        recent_index::rebuild_index(&file, &roots, std::time::SystemTime::now())
+    })
+    .await
+    .map_err(|error| format!("index rebuild was interrupted: {error}"))?
+}
+
+#[tauri::command]
+pub async fn recent_index_pin(
+    app: AppHandle,
+    project_id: String,
+    pinned: bool,
+) -> Result<Value, String> {
+    recent_index::set_pinned(&recent_index_file(&app)?, &project_id, pinned)
+}
+
+/// Removes the row from the list only; the project file is never touched.
+#[tauri::command]
+pub async fn recent_index_forget(app: AppHandle, project_id: String) -> Result<Value, String> {
+    recent_index::forget(&recent_index_file(&app)?, &project_id)
+}
+
+/// Read an archive the index points at and return the validated bytes, the
+/// same way the file dialog does, so the webview never receives a free path.
+#[tauri::command]
+pub async fn open_project_archive_path(
+    app: AppHandle,
+    path: String,
+) -> Result<ProjectOpenArchive, String> {
+    let file_path = PathBuf::from(&path);
+    let (summary, bytes) = read_project_archive(&file_path)?;
+    let file_name = file_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("fullmag-project.fms")
+        .to_string();
+    // Best effort: a stale index must never stop a project from opening.
+    if let Ok(index_file) = recent_index_file(&app) {
+        let _ = recent_index::touch_opened(&index_file, &file_path, std::time::SystemTime::now());
+    }
+    Ok(ProjectOpenArchive {
+        path: file_path.display().to_string(),
+        file_name,
+        archive_base64: STANDARD.encode(bytes),
+        summary,
+    })
 }
 
 #[tauri::command]

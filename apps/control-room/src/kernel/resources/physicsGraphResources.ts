@@ -5,6 +5,7 @@ import { useCallback } from "react";
 import type { PhysicsGraphResource, ResourceRevision } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useResource } from "./useResource";
 
 export const PHYSICS_GRAPH_RESOURCE_KEY = "model.physics-graph";
@@ -22,14 +23,18 @@ function sceneRevision(
 /** Read the canonical authored physics-module graph for Explorer placement. */
 export function usePhysicsGraphResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    PHYSICS_GRAPH_RESOURCE_KEY,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.model.physicsGraph({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.model.physicsGraph({ sessionScopeKey, signal }),
     [api],
   );
   return useResource<PhysicsGraphResource>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision: sceneRevision,
-    resourceKey: PHYSICS_GRAPH_RESOURCE_KEY,
+    resourceKey,
   });
 }

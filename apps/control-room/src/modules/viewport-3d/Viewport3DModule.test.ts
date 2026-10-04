@@ -173,6 +173,24 @@ describe("FEM visualization ACK data identity", () => {
     );
     expect(callback).not.toContain("ackKind.dataIdentity");
   });
+
+  it("forwards the request scope epoch with viewport acknowledgements", () => {
+    const source = readFileSync(
+      "src/modules/viewport-3d/Viewport3DModule.tsx",
+      "utf8",
+    );
+    const callbackStart = source.indexOf(
+      "const onVisualizationFrameCommitted = useCallback",
+    );
+    const callback = source.slice(
+      callbackStart,
+      source.indexOf("useEffect(() => {", callbackStart),
+    );
+
+    expect(callback).toContain(
+      "requestScopeEpoch: sessionIdentity?.requestScopeEpoch ?? null",
+    );
+  });
 });
 
 function scalarColorbarPart(

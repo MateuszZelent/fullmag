@@ -1,10 +1,10 @@
+import { fieldVectorResourceKey as canonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-  DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
 import type { FrequencyDomainKPathMetadataResource } from "@/kernel/api/apiTypes";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
@@ -603,7 +603,7 @@ function frequencyChartScale(valuesHz: readonly number[]): FrequencyChartScale {
 }
 
 function fieldVectorResourceKey(fieldId: string): string {
-  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
+  return canonicalFieldVectorResourceKey(fieldId, { view: "phase_rotated_real", phase_rad: 0 });
 }
 
 function susceptibilityValues(value: unknown): number[] {
@@ -1286,7 +1286,7 @@ export function buildEigenBranchesModel(
       const modeFieldId = stringValue(point?.mode_field_id ?? point?.modeFieldId);
       const rawModeFieldResourceKey = stringValue(
         point?.mode_field_resource_key ?? point?.modeFieldResourceKey,
-      );
+      ) ?? (modeFieldId ? fieldVectorResourceKey(modeFieldId) : null);
       const modeFieldAvailable = parsedModeFieldAvailability(
         point ?? {},
         modeFieldId,
@@ -2032,7 +2032,7 @@ function parseDispersionCsv(csv: string): {
     const modeFieldId = stringValue(row.mode_field_id ?? row.modeFieldId);
     const rawModeFieldResourceKey = stringValue(
       row.mode_field_resource_key ?? row.modeFieldResourceKey,
-    );
+    ) ?? (modeFieldId ? fieldVectorResourceKey(modeFieldId) : null);
     const modeFieldAvailable = parsedModeFieldAvailability(
       row,
       modeFieldId,

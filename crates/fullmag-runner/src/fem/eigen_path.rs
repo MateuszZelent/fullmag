@@ -1315,6 +1315,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         plan,
         &tracking_outputs,
         None, // we collect artifacts manually below
+        None,
         plan.mode_tracking.as_ref(),
     )?;
     // Guard before any spectrum or mode JSON can serialize nonfinite gamma to null.
@@ -1581,8 +1582,6 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                             p.raw_mode_index,
                         ),
                         "mode_field_available": selection.contains_field_mode(p.sample_index, p.raw_mode_index),
-                        "mode_field_resource_key": selection.contains_field_mode(p.sample_index, p.raw_mode_index).then(||
-                            eigen_path_mode_field_resource_key(p.sample_index, p.raw_mode_index)),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -1761,7 +1760,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
             }
 
             let mut dispersion_v2_lines = vec![
-            "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,mode_field_resource_key"
+            "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id"
                 .to_string(),
         ];
             for sample_result in &path_result.samples {
@@ -1803,7 +1802,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                     let validation_columns =
                         eigen_path_de_bv_analytic_csv_columns(plan, &sample_result.sample, mode);
                     dispersion_v2_lines.push(format!(
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                         sample_result.sample.sample_index,
                         eigen_path_sample_id(plan, &sample_result.sample),
                         sample_result.sample.path_s,
@@ -1832,14 +1831,6 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                             sample_result.sample.sample_index,
                             mode.raw_mode_index,
                         ),
-                        if mode_field_available {
-                            eigen_path_mode_field_resource_key(
-                                sample_result.sample.sample_index,
-                                mode.raw_mode_index,
-                            )
-                        } else {
-                            String::new()
-                        },
                     ));
                 }
             }

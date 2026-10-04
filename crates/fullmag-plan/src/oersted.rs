@@ -374,9 +374,7 @@ fn resolve_fem_oersted_from_current_solution(
         return Err(PlanError {
             reasons: vec![format!(
                 "energy_terms[{term_index}] oersted_field source '{}' solve_region '{}' resolves to geometry '{}' but no FEM source elements were found for midpoint Biot-Savart lowering",
-                source,
-                resolved.solve_region,
-                resolved.geometry_name,
+                source, resolved.solve_region, resolved.geometry_name,
             )],
         });
     }
@@ -530,13 +528,11 @@ fn apply_current_source_envelope(
                 t_off: *t_off_s,
             }),
         )),
-        TimeEnvelopeIR::PiecewiseLinear { .. } | TimeEnvelopeIR::Sinc { .. } => {
-            Err(PlanError {
-                reasons: vec![format!(
-                    "energy_terms[{term_index}] oersted_field source '{source}' requires a full stage envelope evaluator; FDM/FEM cylindrical lowering currently supports constant, sinusoidal, or pulse envelopes only"
-                )],
-            })
-        }
+        TimeEnvelopeIR::PiecewiseLinear { .. } | TimeEnvelopeIR::Sinc { .. } => Err(PlanError {
+            reasons: vec![format!(
+                "energy_terms[{term_index}] oersted_field source '{source}' requires a full stage envelope evaluator; FDM/FEM cylindrical lowering currently supports constant, sinusoidal, or pulse envelopes only"
+            )],
+        }),
         TimeEnvelopeIR::Tabulated { artifact_ref, .. } => Err(PlanError {
             reasons: vec![format!(
                 "energy_terms[{term_index}] oersted_field source '{source}' tabulated current envelope requires materialized artifact '{artifact_ref}'"
@@ -926,9 +922,7 @@ fn midpoint_biot_savart_grid_field(
         return Err(PlanError {
             reasons: vec![format!(
                 "energy_terms[{term_index}] oersted_field source '{}' requires midpoint Biot-Savart on {} active FDM cells, which exceeds the current public planner limit of {}; refine the source analytically (cylindrical path) or use the native FEM midpoint path instead",
-                source,
-                active_source_count,
-                MAX_GENERAL_FDM_SOURCE_CELLS
+                source, active_source_count, MAX_GENERAL_FDM_SOURCE_CELLS
             )],
         });
     }

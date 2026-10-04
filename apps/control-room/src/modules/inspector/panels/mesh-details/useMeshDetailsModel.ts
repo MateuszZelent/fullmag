@@ -7,6 +7,7 @@ import { useCallback, useMemo } from "react";
 import type { JsonObject, LiveStatusResource, MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
+  MESH_CAPABILITIES_RESOURCE_KEY,
   useMeshBuildCurrent,
   useMeshBuildHistoryResource,
   useMeshBuildLatestSuccessful,
@@ -28,7 +29,10 @@ import {
   shouldLoadRuntimeMeshSummary,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useKernel } from "@/kernel/KernelContext";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import {
   normalizeMeshPipelineStatus,
@@ -102,6 +106,7 @@ export interface MeshDetailsModel {
   buildHistoryEntries: ReturnType<typeof normalizeMeshBuildHistory>;
   buildMode: unknown;
   buildStatus: string;
+  sharedDomainBuildDisabledReason: string | null;
   capabilitiesData: unknown;
   editorCapabilities: MeshEditorCapabilityModel;
   capabilitiesStatus: string;
@@ -127,6 +132,7 @@ export interface MeshDetailsModel {
   policyDiffRows: MeshPolicyDiffRow[];
   qualityRefinementState: ReturnType<typeof resolveMeshQualityRefinementState>;
   qualityStatistics: ReturnType<typeof normalizeMeshQualityStatistics>;
+  retainedArtifact: RetainedMeshArtifactPresentation | null;
   sceneRevision: number | null;
   semanticLayers: string;
   semanticsData: unknown;
@@ -148,6 +154,16 @@ export interface MeshDetailsModel {
   onRestoreBuildToDraft: (entry: MeshBuildHistoryEntry) => void;
   onSelectMetric: (metric: MeshQualityMetric["id"]) => void;
   onSelectWorstElement: (element: MeshWorstElement) => void;
+}
+
+export interface RetainedMeshArtifactPresentation {
+  buildId: string | null;
+  generationId: string | null;
+  meshId: string | null;
+  meshName: string | null;
+  meshRevision: number | null;
+  sourceSceneRevision: number | null;
+  state: "identity-unavailable" | "retained";
 }
 
 function selectMeshDetailsRuntimeStatus(status: {
@@ -224,6 +240,55 @@ function firstNumericRevision(...values: unknown[]): number | null {
     if (revision !== null) return revision;
   }
   return null;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+export function resolveRetainedMeshArtifact({
+  lastBuildError,
+  latestSuccess,
+  manifest,
+  meshRevision,
+}: {
+  lastBuildError: unknown;
+  latestSuccess: unknown;
+  manifest: unknown;
+  meshRevision: unknown;
+}): RetainedMeshArtifactPresentation | null {
+  if (!nonEmptyString(lastBuildError)) return null;
+
+  const success = asRecord(latestSuccess);
+  if (!success) return null;
+
+  const published = asRecord(manifest);
+  const presentation: RetainedMeshArtifactPresentation = {
+    buildId: nonEmptyString(success.build_id),
+    generationId: nonEmptyString(published?.generation_id),
+    meshId: nonEmptyString(published?.mesh_id),
+    meshName:
+      nonEmptyString(published?.mesh_name) ?? nonEmptyString(success.mesh_name),
+    meshRevision: numericRevision(meshRevision),
+    sourceSceneRevision: firstNumericRevision(
+      published?.source_scene_revision,
+      success.source_scene_revision,
+    ),
+    state: "identity-unavailable",
+  };
+  const hasPublishedIdentity =
+    presentation.meshRevision !== null &&
+    Boolean(
+      presentation.meshId ??
+        presentation.generationId ??
+        presentation.meshName,
+    );
+  return {
+    ...presentation,
+    state: hasPublishedIdentity ? "retained" : "identity-unavailable",
+  };
 }
 
 function jsonObject(value: unknown): JsonObject | null {
@@ -435,10 +500,30 @@ export function useMeshDetailsModel(
   const buildContext = useMemo(
     () =>
       createCommandContext("inspector", kernel, {
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: runtimeStatus,
+          [MESH_CAPABILITIES_RESOURCE_KEY]: capabilities.data,
+        },
         sourceDetail: "mesh-details",
       }),
-    [kernel],
+    [capabilities.data, kernel, runtimeStatus],
   );
+  const lastBuildError =
+    activeBuild.data?.last_build_error ?? latestBuild.data?.last_build_error;
+  const retainedArtifact = resolveRetainedMeshArtifact({
+    lastBuildError,
+    latestSuccess: latestBuild.data?.last_success,
+    manifest: manifest.data,
+    meshRevision: summary.data?.revision,
+  });
+  const sharedDomainBuildDisabledReason = useMemo(() => {
+    const commandId = "mesh.build-shared-domain";
+    if (kernel.commands.isEnabled(commandId, buildContext)) return null;
+    return (
+      kernel.commands.get(commandId)?.disabledReason?.(buildContext) ??
+      "Command is unavailable."
+    );
+  }, [buildContext, kernel.commands]);
   const selectWorstElement = useCallback(
     (element: MeshWorstElement) => {
       const nodeId = `model:mesh:quality:element:${element.elementIndex}`;
@@ -525,6 +610,7 @@ export function useMeshDetailsModel(
     buildHistoryEntries,
     buildMode: activeBuild.data?.shared_domain_build_report?.build_mode,
     buildStatus,
+    sharedDomainBuildDisabledReason,
     capabilitiesData: capabilities.data,
     editorCapabilities: resolveMeshEditorCapabilities(capabilities.data),
     capabilitiesStatus: capabilities.status,
@@ -534,8 +620,7 @@ export function useMeshDetailsModel(
     lane,
     meshBuildReport: semantics.data?.solver_mesh?.build_report,
     latestSuccessAvailable: Boolean(latestBuild.data?.last_success),
-    lastBuildError:
-      activeBuild.data?.last_build_error ?? latestBuild.data?.last_build_error,
+    lastBuildError,
     manifest: manifest.data,
     manifestStatus: manifest.status,
     meshFreshness,
@@ -566,6 +651,7 @@ export function useMeshDetailsModel(
     }),
     qualityRefinementState,
     qualityStatistics,
+    retainedArtifact,
     sceneRevision,
     semanticLayers: semantics.data?.render_only_controls_do_not_change_solver_domain
       ? "universe / object / shared-domain"

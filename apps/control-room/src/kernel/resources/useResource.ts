@@ -30,6 +30,8 @@ import type { ResourceKey, ResourceResult } from "./resourceTypes";
 import { markResourceLoading, type ResourceState } from "./resourceState";
 
 interface LoadContext {
+  resourceKey: ResourceKey;
+  sessionScopeKey?: string;
   signal: AbortSignal;
 }
 

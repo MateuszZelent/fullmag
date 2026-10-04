@@ -76,6 +76,12 @@ pierwotnych nośników. `domain_digest` obejmuje domenę, grid/mesh, ownership i
 materiały. `plan_digest` obejmuje znormalizowany `ProblemIR`, resolved plan oraz
 requested/resolved execution. Wszystkie preimage są długościowo prefiksowane,
 mają ustaloną kolejność pól i nie zależą od kolejności mapy ani platformy.
+Kanoniczne ramkowanie pola ma postać `u64_be(length) || bytes`. Zegar koduje
+kolejno separator domeny, `accepted_step`, bity `t`, jednobajtowy znacznik
+obecności `dt` i — tylko gdy znacznik wynosi `1` — bity `dt`. Primary carriers
+w `state_digest` są sortowane leksykograficznie po niepustym `carrier_id`,
+identyfikatory muszą być unikalne, a preimage zawiera ich liczbę oraz dla
+każdego długościowo prefiksowane `carrier_id` i kanoniczny payload.
 
 `AcceptedStateGeneration` jest lokalnym guardem epoki i rewizji. Pola
 `runtime_epoch` i `accepted_revision` nie wchodzą do trwałych digestów;
@@ -209,3 +215,14 @@ Gate źródłowy wymaga pięciu definicji i braku starej reguły eager. Dalsze t
 muszą dowieść zerowej mutacji live state, atomowości batchu i importu, czasu
 ramki, typed missing-carrier, cache isolation oraz osobnych receipts dla FDM
 CPU/GPU i FEM CPU/GPU. GPU proof musi podać device identity i zero fallbacku.
+
+## Stan implementacji — 29.09.2026
+
+Prosty lane FDM CPU publikuje `observation_source.v1` i primary carriers w CAS,
+a fail-closed loader odtwarza izolowany `ObservationRuntime` dla dokładnego
+`AcceptedStateRef`. API v2 projektuje immutable katalog ramek i materializuje
+historyczne `m` przez ten loader do kanonicznego FMVP v4. Format zachowuje
+source identity i field generation zarówno w payloadzie, jak i nagłówkach.
+Control Room używa wygenerowanego OpenAPI, centralnej fasady i wspólnego
+dekodera. Ogólny batch `ComputeQuantities`, pozostałe lane'y, autosave aktywnego
+stage i managed/runtime qualification pozostają otwarte.

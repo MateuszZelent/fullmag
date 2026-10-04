@@ -66,10 +66,18 @@ pub struct ModelReadinessResource {
 pub async fn get_model_readiness(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ModelReadinessResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let snapshot = state.current_live_state.read().await;
     let snapshot = snapshot
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local session"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let scene = snapshot
         .scene_document
         .as_ref()

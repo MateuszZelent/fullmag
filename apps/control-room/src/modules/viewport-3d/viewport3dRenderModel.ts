@@ -23,6 +23,7 @@ import {
   fieldVectorUsesDirectNodeOrder,
   type ScalarColorBuffer,
   type ScalarRange,
+  type Viewport3DFieldVector,
 } from "./viewport3dFieldMapping";
 import { buildViewport3DVectorGlyphJobKey } from "./build-engine/viewport3dBuildJobKeys";
 import {
@@ -63,6 +64,7 @@ export {
 } from "./viewport3dTopologyIndexModel";
 
 export const FULL_VIEWPORT_3D_TARGET_ID = "full";
+export type { Viewport3DFieldVector } from "./viewport3dFieldMapping";
 
 export interface Viewport3DNodeSelection {
   nodeCount?: number;
@@ -256,7 +258,7 @@ export interface Viewport3DFieldRenderOptions {
     phasorAmplitudeMax: number;
     representation: string;
   } | null;
-  partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
+  partFieldVectors?: ReadonlyMap<string, Viewport3DFieldVector>;
   partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
   partQuantityIds?: ReadonlyMap<string, string>;
   partScalarColorModes?: ReadonlyMap<string, string>;
@@ -362,7 +364,7 @@ for (const [id, label] of VIEWPORT_3D_RENDER_CACHE_DEFINITIONS) {
 }
 
 const scalarColorCache = new WeakMap<
-  DecodedFieldVector,
+  Viewport3DFieldVector,
   Map<string, ScalarColorBuffer | null>
 >();
 const complexPhaseProjectionCache = new WeakMap<
@@ -371,19 +373,19 @@ const complexPhaseProjectionCache = new WeakMap<
 >();
 const partScalarColorCache = new WeakMap<
   Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
-  WeakMap<DecodedFieldVector, Map<string, ScalarColorBuffer | null>>
+  WeakMap<Viewport3DFieldVector, Map<string, ScalarColorBuffer | null>>
 >();
 const mappedScalarColorCache = new WeakMap<
   Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  WeakMap<DecodedFieldVector, Map<string, ScalarColorBuffer | null>>
+  WeakMap<Viewport3DFieldVector, Map<string, ScalarColorBuffer | null>>
 >();
 const fullVectorSegmentCache = new WeakMap<
   Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  WeakMap<DecodedFieldVector, Map<string, Float32Array | null>>
+  WeakMap<Viewport3DFieldVector, Map<string, Float32Array | null>>
 >();
 const partVectorSegmentCache = new WeakMap<
   Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
-  WeakMap<DecodedFieldVector, Map<string, Float32Array | null>>
+  WeakMap<Viewport3DFieldVector, Map<string, Float32Array | null>>
 >();
 const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
 const topologySurfaceIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
@@ -717,7 +719,7 @@ export function buildViewport3DFieldRenderModel(
     | Viewport3DTopologyRenderModel<Viewport3DRenderablePart>
     | null
     | undefined,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   scale: number,
   options: Viewport3DFieldRenderOptions = {},
 ): Viewport3DFieldRenderModel | null {
@@ -1241,8 +1243,8 @@ function resolveViewport3DTargetFieldBufferState({
   partFieldVector,
 }: {
   explicitPartFieldBuffer: Viewport3DTargetFieldBuffer | null;
-  explicitPartFieldVector: DecodedFieldVector | null;
-  partFieldVector: DecodedFieldVector | null;
+  explicitPartFieldVector: Viewport3DFieldVector | null;
+  partFieldVector: Viewport3DFieldVector | null;
 }): Viewport3DTargetFieldBufferState {
   if (explicitPartFieldBuffer) return "target-buffer";
   if (explicitPartFieldVector) return "legacy-implicit";
@@ -1371,7 +1373,7 @@ function buildVectorGlyphBuildReference({
   vectorSurfaceOffsetScale,
 }: {
   budget: number;
-  fieldVector: DecodedFieldVector | null | undefined;
+  fieldVector: Viewport3DFieldVector | null | undefined;
   fieldBuffer?: Viewport3DTargetFieldBuffer | null;
   options: Viewport3DFieldRenderOptions;
   scale: number;
@@ -1470,7 +1472,7 @@ function attachScalarColorSourceIdentity(
 
 function resolveFieldBufferSourceIdentity(
   fieldBuffer: Viewport3DTargetFieldBuffer | null,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
 ): { fieldBufferId: string | null; resourceKey: string | null } {
   if (fieldBuffer) {
     return {
@@ -1653,9 +1655,9 @@ function attachComplexShaderValues(
 }
 
 function isFullTopologyFieldVector(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-): fieldVector is DecodedFieldVector {
+): fieldVector is Viewport3DFieldVector {
   return Boolean(fieldVector) &&
     fieldVectorMatchesTopology(fieldVector, topology) &&
     fieldVectorUsesDirectNodeOrder(fieldVector, topology.nodeCount);
@@ -1664,7 +1666,7 @@ function isFullTopologyFieldVector(
 function buildCachedSurfaceFaceScalarColors(
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   colorMode: string | undefined,
   colorPalette: string | undefined,
   scalarRange?: ScalarRange | null,
@@ -1706,7 +1708,7 @@ function buildCachedSurfaceFaceScalarColors(
 function buildCachedThicknessAverageZScalarColors(
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   colorMode: string | undefined,
   colorPalette: string | undefined,
   scalarRange?: ScalarRange | null,
@@ -1749,7 +1751,7 @@ function buildCachedThicknessAverageZScalarColors(
 
 function buildCachedMappedVertexScalarColors(
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   targetNodeIndices: Uint32Array | null | undefined,
   colorMode: string | undefined,
   colorPalette: string | undefined,
@@ -1777,7 +1779,7 @@ function buildCachedMappedVertexScalarColors(
 }
 
 function buildCachedVertexScalarColors(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   vertexCount: number,
   colorMode: string | undefined,
   colorPalette: string | undefined,
@@ -1879,7 +1881,7 @@ function buildNodeIndexFieldValueResolver(
 function buildCachedPartVertexScalarColors(
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   targetNodeIndices: Uint32Array | null,
   colorMode: string | undefined,
   colorPalette: string | undefined,
@@ -1951,7 +1953,7 @@ function buildNodeSelectionIndices(
 }
 
 function resolveLegacyPartFieldNodeIndices(
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): Uint32Array | null {
@@ -1975,7 +1977,7 @@ function nodeIndicesToSelection(
 }
 
 function resolveFieldVectorNodeIndices(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): Uint32Array | null {
   if (!fieldVector || fieldVector.pointCount <= 0) return null;
@@ -2002,7 +2004,7 @@ function resolveFieldVectorNodeIndices(
 }
 
 function fieldVectorMatchesTopology(
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): boolean {
   if (!fieldVector) return false;
@@ -2019,7 +2021,7 @@ function fieldVectorMatchesTopology(
 
 function buildCachedFullVectorSegments(
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   scale: number,
   budget: number,
   vectorOptions: Viewport3DVectorSegmentOptions = {},
@@ -2049,7 +2051,7 @@ function buildCachedFullVectorSegments(
 function buildCachedPartVectorSegments(
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   vectorSelection: Viewport3DNodeSelection,
   vectorScope: "surface" | "full",
   scale: number,
@@ -2114,17 +2116,17 @@ function getCachedValue<TKey extends object, TValue>(
 function getCachedNestedFieldValue<TOwner extends object, TValue>(
   cache: WeakMap<
     TOwner,
-    WeakMap<DecodedFieldVector, Map<string, TValue>>
+    WeakMap<Viewport3DFieldVector, Map<string, TValue>>
   >,
   owner: TOwner,
-  fieldVector: DecodedFieldVector,
+  fieldVector: Viewport3DFieldVector,
   key: string,
   build: () => TValue,
   statsId?: string,
 ): TValue {
   let fieldCache = cache.get(owner);
   if (!fieldCache) {
-    fieldCache = new WeakMap<DecodedFieldVector, Map<string, TValue>>();
+    fieldCache = new WeakMap<Viewport3DFieldVector, Map<string, TValue>>();
     cache.set(owner, fieldCache);
   }
 
@@ -2189,7 +2191,7 @@ function estimateRenderCacheValueByteLength(value: unknown): number {
   if (ArrayBuffer.isView(value)) return value.byteLength;
   if (typeof value !== "object") return 0;
 
-  const maybeDecodedFieldVector = value as Partial<DecodedFieldVector>;
+  const maybeDecodedFieldVector = value as Partial<Viewport3DFieldVector>;
   if (ArrayBuffer.isView(maybeDecodedFieldVector.values)) {
     return maybeDecodedFieldVector.values.byteLength;
   }
@@ -2573,7 +2575,7 @@ export function combineViewport3DBounds(
 
 export function buildVectorLineSegments(
   topology: DecodedTopology | null | undefined,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   scale: number,
   maxVectors = 2048,
   options: Viewport3DVectorSegmentOptions = {},
@@ -2652,7 +2654,7 @@ export function resolveViewport3DVectorSegmentScale(
 
 function buildVectorLineSegmentsFromPositions(
   topology: Viewport3DPositionSource,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   scale: number,
   maxVectors = 2048,
   options: Viewport3DVectorSegmentOptions = {},
@@ -2760,7 +2762,7 @@ function buildVectorLineSegmentsFromPositions(
 
 export function buildVectorLineSegmentsForNodeSelection(
   topology: DecodedTopology | null | undefined,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   nodeSelection: Viewport3DNodeSelection | null | undefined,
   scale: number,
   maxVectors = 2048,
@@ -2783,7 +2785,7 @@ export function buildVectorLineSegmentsForNodeSelection(
 
 function buildVectorLineSegmentsForNodeSelectionFromPositions(
   topology: Viewport3DPositionSource,
-  fieldVector: DecodedFieldVector | null | undefined,
+  fieldVector: Viewport3DFieldVector | null | undefined,
   nodeSelection: Viewport3DNodeSelection | null | undefined,
   scale: number,
   maxVectors = 2048,

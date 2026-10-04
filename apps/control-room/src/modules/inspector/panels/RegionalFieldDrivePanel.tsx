@@ -1,8 +1,14 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
+import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import {
+  captureAuthoringMutationFence,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -27,6 +33,7 @@ import { SincPulsePreview } from "./SincPulsePreview";
 export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const { api, resources } = kernel;
+  const sessionScopeKey = kernel.commands.getSessionScopeKey?.() ?? null;
   const resource = useFieldDrivesResource();
   const scene = useSceneResource();
   const selectorOptions = useMemo(
@@ -37,10 +44,17 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     () => resolveRegionalFieldDrivePanelModel(selection, resource.data ?? null),
     [resource.data, selection],
   );
-  const [pending, setPending] = useState(false);
+  const [pendingOperation, setPendingOperation] = useState<{
+    draftKey: string;
+    id: number;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextPendingOperationId = useRef(0);
   const [feedback, setFeedback] = useState<string | null>(null);
   const drive = model.drive;
-  const draftKey = `${drive?.id ?? "none"}:${model.sceneRevision ?? "none"}`;
+  const draftKey = `${sessionScopeKey ?? "no-session"}:${drive?.id ?? "none"}:${model.sceneRevision ?? "none"}`;
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey &&
+    pendingOperation.draftKey === draftKey;
   const [draftState, setDraftState] = useState<{
     key: string;
     value: RegionalFieldDriveResource | null;
@@ -94,20 +108,52 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
 
   async function save(): Promise<boolean> {
     if (!draft || model.sceneRevision === null) return false;
+    if (model.mode !== "create" && model.mode !== "found") return false;
     if (validationErrors.length > 0) {
       setFeedback(validationErrors.join(" "));
       return false;
     }
-    setPending(true);
+    const mutationContext = captureAuthoringMutationFence(
+      createCommandContext("inspector", kernel, {
+        resourceData: scene.data ? { [MODEL_SCENE_PATH]: scene.data } : undefined,
+        sourceDetail: "RegionalFieldDrivePanel",
+      }),
+    );
+    const mutationSessionScopeKey = mutationContext.sessionScopeKey;
+    if (!mutationSessionScopeKey || mutationContext.isCurrentSessionScope?.() !== true) {
+      setFeedback("An active session is required to save this field drive.");
+      return false;
+    }
+    const operationId = ++nextPendingOperationId.current;
+    setPendingOperation({
+      draftKey,
+      id: operationId,
+      sessionScopeKey: mutationSessionScopeKey,
+    });
     setFeedback(null);
     try {
-      if (model.mode !== "create" && model.mode !== "found") return false;
-      const response = await commitRegionalFieldDrive(
-        api.model,
-        model.mode,
-        model.sceneRevision,
-        draft,
+      const response = await runAuthoringMutationWithHistory(
+        mutationContext,
+        `${model.mode === "create" ? "Create" : "Update"} field drive ${draft.id}`,
+        ({ baseRevision }) => {
+          const committedRevision = baseRevision ?? model.sceneRevision;
+          if (
+            typeof committedRevision !== "number" ||
+            !Number.isSafeInteger(committedRevision) ||
+            committedRevision < 0
+          ) {
+            throw new Error("The canonical scene revision is unavailable. Refetch before saving the field drive.");
+          }
+          return commitRegionalFieldDrive(
+            api.model,
+            model.mode as "create" | "found",
+            committedRevision,
+            draft,
+            { sessionScopeKey: mutationSessionScopeKey },
+          );
+        },
       );
+      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
       for (const resourceKey of fieldDriveMutationResourceKeys()) {
         resources.invalidate(resourceKey, response.scene_revision);
       }
@@ -129,10 +175,11 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
       setFeedback(model.mode === "create" ? "Field drive created." : "Field drive saved.");
       return true;
     } catch (error) {
+      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
       setFeedback(error instanceof Error ? error.message : String(error));
       return false;
     } finally {
-      setPending(false);
+      setPendingOperation((current) => current?.id === operationId ? null : current);
     }
   }
 
@@ -148,10 +195,11 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     "staged",
     pending,
     dirty,
-    Boolean(draft && model.sceneRevision !== null && validationErrors.length === 0),
+    Boolean(draft && sessionScopeKey && model.sceneRevision !== null && validationErrors.length === 0),
     undefined,
     save,
     resetInspectorDraft,
+    { historyMode: "mutation-owned" },
   );
 
   const driveTarget = draft?.target;

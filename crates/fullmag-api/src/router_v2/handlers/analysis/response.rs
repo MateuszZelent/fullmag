@@ -24,9 +24,9 @@ const MAGNETIC_RESPONSE_SWEEP_V1_ARTIFACT: &str = "response/magnetic_response_sw
 pub async fn get_magnetic_response_sweep_v1(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    Ok(Json(read_json_artifact_value(
-        &artifact_dir,
-        MAGNETIC_RESPONSE_SWEEP_V1_ARTIFACT,
-    )?))
+    let payload = read_json_artifact_value(&artifact_dir, MAGNETIC_RESPONSE_SWEEP_V1_ARTIFACT)?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(payload))
 }

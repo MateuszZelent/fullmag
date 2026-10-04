@@ -167,6 +167,108 @@ function Invoke-FullmagStorageManagedScript {
   }
 }
 
+function Invoke-FullmagStorageWindowsWorkspace {
+  param(
+    [Parameter(Mandatory = $true)][string]$RepoRoot,
+    [Parameter(Mandatory = $true)][string]$Profile,
+    [Parameter(Mandatory = $true)][ValidateSet("static", "dev")][string]$Frontend,
+    [Parameter(Mandatory = $true)][ValidateSet("dev", "release")][string]$BackendProfile,
+    [Parameter()][ValidateSet("auto", "true", "false")][string]$BuildMode = "auto",
+    [Parameter(Mandatory = $true)][ValidateRange(1, 65535)][int]$WebPort,
+    [Parameter()][switch]$SkipLocalChanges
+  )
+
+  $expectedProfile = if ($BackendProfile -eq "dev") { "windows-native-fdm-cpu-dev" } else { "windows-native-fdm-cpu" }
+  if ($Profile -ne $expectedProfile) {
+    throw "Native Windows workspace storage profile must match backend profile $BackendProfile ($expectedProfile)"
+  }
+  $resolver = Join-Path $RepoRoot "scripts\fullmag_storage.py"
+  if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) {
+    throw "Fullmag storage resolver is missing: $resolver"
+  }
+  $python = Get-Command "python" -ErrorAction SilentlyContinue
+  if (-not $python) {
+    throw "Python is required to invoke the native Windows workspace"
+  }
+
+  # This action is intentionally separate from Invoke-FullmagStorageManagedScript:
+  # it admits only the no-build workspace operation and never becomes a generic
+  # heavy-slot bypass. The resolver derives and validates the child command.
+  $previousSentinel = $env:FULLMAG_STORAGE_MANAGED_ENTRY
+  $env:FULLMAG_STORAGE_MANAGED_ENTRY = "1"
+  try {
+    $resolverArguments = @(
+      $resolver, "run-windows-workspace", "--repo-root", $RepoRoot,
+      "--profile", $Profile, "--workspace-frontend", $Frontend,
+      "--workspace-backend-profile", $BackendProfile,
+      "--workspace-build-mode", $BuildMode,
+      "--workspace-web-port", $WebPort.ToString()
+    )
+    if ($SkipLocalChanges) { $resolverArguments += "--workspace-skip-local-changes" }
+    & $python.Source @resolverArguments | Out-Host
+    return [int]$LASTEXITCODE
+  }
+  finally {
+    if ($null -eq $previousSentinel) {
+      Remove-Item Env:FULLMAG_STORAGE_MANAGED_ENTRY -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:FULLMAG_STORAGE_MANAGED_ENTRY = $previousSentinel
+    }
+  }
+}
+
+function Invoke-FullmagStorageWindowsWorkspaceBuild {
+  param(
+    [Parameter(Mandatory = $true)][string]$RepoRoot,
+    [Parameter(Mandatory = $true)][string]$Profile,
+    [Parameter(Mandatory = $true)][ValidateSet("static", "dev")][string]$Frontend,
+    [Parameter(Mandatory = $true)][ValidateSet("dev", "release")][string]$BackendProfile,
+    [Parameter(Mandatory = $true)][ValidateSet("auto", "true")][string]$BuildMode,
+    [Parameter(Mandatory = $true)][ValidateRange(1, 65535)][int]$WebPort,
+    [Parameter()][switch]$SkipLocalChanges
+  )
+
+  $expectedProfile = if ($BackendProfile -eq "dev") { "windows-native-fdm-cpu-dev" } else { "windows-native-fdm-cpu" }
+  if ($Profile -ne $expectedProfile) {
+    throw "Native Windows workspace storage profile must match backend profile $BackendProfile ($expectedProfile)"
+  }
+  $resolver = Join-Path $RepoRoot "scripts\fullmag_storage.py"
+  if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) {
+    throw "Fullmag storage resolver is missing: $resolver"
+  }
+  $python = Get-Command "python" -ErrorAction SilentlyContinue
+  if (-not $python) {
+    throw "Python is required to invoke the native Windows workspace build"
+  }
+
+  # This resolver action is the sole build-only admission path. It acquires
+  # the native heavy slot, validates the fixed profile and records a terminal
+  # receipt; the child launcher is constrained to BuildOnly.
+  $previousSentinel = $env:FULLMAG_STORAGE_MANAGED_ENTRY
+  $env:FULLMAG_STORAGE_MANAGED_ENTRY = "1"
+  try {
+    $resolverArguments = @(
+      $resolver, "run-windows-workspace-build", "--repo-root", $RepoRoot,
+      "--profile", $Profile, "--workspace-frontend", $Frontend,
+      "--workspace-backend-profile", $BackendProfile,
+      "--workspace-build-mode", $BuildMode,
+      "--workspace-web-port", $WebPort.ToString()
+    )
+    if ($SkipLocalChanges) { $resolverArguments += "--workspace-skip-local-changes" }
+    & $python.Source @resolverArguments | Out-Host
+    return [int]$LASTEXITCODE
+  }
+  finally {
+    if ($null -eq $previousSentinel) {
+      Remove-Item Env:FULLMAG_STORAGE_MANAGED_ENTRY -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:FULLMAG_STORAGE_MANAGED_ENTRY = $previousSentinel
+    }
+  }
+}
+
 function Set-FullmagStorageEnvironment {
   param([Parameter(Mandatory = $true)]$Layout)
 

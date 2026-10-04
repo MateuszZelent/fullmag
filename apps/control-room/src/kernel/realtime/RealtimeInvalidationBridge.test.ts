@@ -25,6 +25,7 @@ import { frequencyDomainModeFieldMetaResourceKey } from "../resources/frequencyD
 import {
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  SESSIONS_PATH,
   DATA_FIELD_AVAILABILITY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
@@ -656,6 +657,7 @@ describe("RealtimeInvalidationBridge", () => {
     ).toBe(true);
 
     expect(resources.getRevision("session:status")).toBe("session:session-new:2");
+    expect(resources.getRevision(SESSIONS_PATH)).toBe("session:session-new:2");
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(
       "session:session-new:2",
     );

@@ -201,16 +201,20 @@ class LoadedProblem:
         asset_cache: dict[str, dict[str, object] | None] | None = None,
         include_geometry_assets: bool = True,
         runtime_device_override: str | None = None,
+        source_root: str | Path | None = None,
         _copy_cached_geometry_assets: bool = True,
     ) -> dict[str, object]:
         study_pipeline = self.study_pipeline_document()
         base_problem = self.pipeline_base_problem()
+        effective_source_root = (
+            Path(source_root) if source_root is not None else self.source_path.parent
+        )
         ir = base_problem.to_ir(
             requested_backend=requested_backend,
             execution_mode=execution_mode,
             execution_precision=execution_precision,
             script_source=self.script_source,
-            source_root=self.source_path.parent,
+            source_root=effective_source_root,
             entrypoint_kind=self.entrypoint_kind,
               asset_cache=asset_cache,
               include_geometry_assets=include_geometry_assets,
@@ -233,7 +237,7 @@ class LoadedProblem:
             execution_mode=execution_mode,
             execution_precision=execution_precision,
             script_source=self.script_source,
-            source_root=self.source_path.parent,
+            source_root=effective_source_root,
             entrypoint_kind="flat_workspace",
             asset_cache=asset_cache,
             include_geometry_assets=False,

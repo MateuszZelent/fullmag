@@ -55,12 +55,22 @@ pub struct TableRowsQuery {
 pub async fn list_tables(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<TableListResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
-    let snapshot = guard.as_ref();
-    let all_rows = snapshot.map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    let all_rows = &snapshot.scalar_rows[..];
     Ok(Json(TableListResource {
         revision: all_rows.len() as u64,
-        tables: vec![default_table_resource(snapshot)],
+        tables: vec![default_table_resource(Some(snapshot))],
     }))
 }
 
@@ -79,8 +89,19 @@ pub async fn get_table(
     Path(table_id): Path<String>,
 ) -> Result<Json<TableResource>, ApiError> {
     ensure_default_table(&table_id)?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
-    Ok(Json(default_table_resource(guard.as_ref())))
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    Ok(Json(default_table_resource(Some(snapshot))))
 }
 
 #[utoipa::path(
@@ -98,8 +119,19 @@ pub async fn get_table_columns(
     Path(table_id): Path<String>,
 ) -> Result<Json<Vec<TableColumnMeta>>, ApiError> {
     ensure_default_table(&table_id)?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
-    Ok(Json(default_table_columns(guard.as_ref())))
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    Ok(Json(default_table_columns(Some(snapshot))))
 }
 
 #[utoipa::path(
@@ -131,10 +163,21 @@ pub async fn get_table_rows(
 ) -> Result<Json<TableRowsResource>, ApiError> {
     ensure_default_table(&table_id)?;
 
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
-    let snapshot = guard.as_ref();
-    let all_rows = snapshot.map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
-    let window = build_table_rows_resource(table_id, all_rows, &query, table_columns(snapshot))?;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    let all_rows = &snapshot.scalar_rows[..];
+    let window =
+        build_table_rows_resource(table_id, all_rows, &query, table_columns(Some(snapshot)))?;
 
     Ok(Json(window))
 }
@@ -168,10 +211,21 @@ pub async fn get_table_rows_binary(
 ) -> Result<impl IntoResponse, ApiError> {
     ensure_default_table(&table_id)?;
 
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
-    let snapshot = guard.as_ref();
-    let all_rows = snapshot.map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
-    let window = build_table_rows_resource(table_id, all_rows, &query, table_columns(snapshot))?;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    let all_rows = &snapshot.scalar_rows[..];
+    let window =
+        build_table_rows_resource(table_id, all_rows, &query, table_columns(Some(snapshot)))?;
     let payload = encode_table_rows_binary(&window);
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(

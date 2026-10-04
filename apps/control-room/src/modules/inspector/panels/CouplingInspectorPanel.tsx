@@ -13,6 +13,8 @@ import {
   publishCommittedSceneResource,
   useModelCouplingsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -40,6 +42,7 @@ function errorMessage(error: unknown): string {
 
 export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
   const { api, authoringHistory, resources } = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const couplings = useModelCouplingsResource();
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<{
@@ -59,16 +62,22 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
       return;
     }
 
+    const operationSessionScopeKey = sessionScopeKey;
     setPending(true);
     try {
       const response = await runAuthoringMutationWithHistory(
-        { api, authoringHistory },
+        {
+          api,
+          authoringHistory,
+          sessionScopeKey: operationSessionScopeKey,
+        },
         action === "delete"
           ? `Delete coupling ${model.couplingId}`
           : `Toggle coupling ${model.couplingId}`,
         async ({ baseRevision }) => {
           const options = authoringWriteOptions(
             baseRevision ?? couplings.data?.scene_revision,
+            operationSessionScopeKey,
           );
           if (action === "delete") {
             return options
@@ -90,6 +99,9 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
         resources,
         response.committed_scene,
         response.scene_revision,
+        undefined,
+        true,
+        operationSessionScopeKey,
       );
       resources.invalidate(
         MODEL_COUPLINGS_RESOURCE_KEY,

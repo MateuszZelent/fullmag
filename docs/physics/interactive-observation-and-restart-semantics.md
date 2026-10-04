@@ -63,6 +63,11 @@ obejmuje kanoniczną domenę, grid/mesh, ownership i materiały. `plan_digest`
 obejmuje znormalizowany `ProblemIR`, resolved plan i requested/resolved
 execution. Każdy digest jest liczony z długościowo prefiksowanych bajtów, z
 ustaloną kolejnością pól i bez zależności od kolejności mapy lub platformy.
+Ramkowanie `u64_be(length) || bytes` rozdziela każde pole. Zegar koduje
+`accepted_step`, bity `t`, znacznik obecności `dt` i opcjonalne bity `dt`.
+`state_digest` zawiera ten sam kanoniczny zegar oraz uporządkowaną
+leksykograficznie listę unikalnych, nazwanych primary carriers wraz z ich
+kanonicznymi payloadami.
 
 `AcceptedStateGeneration` ma dokładnie pola `runtime_epoch` i
 `accepted_revision`; jest lokalnym guardem przeciw stale command i nie wchodzi
@@ -337,7 +342,17 @@ całej lane ani pozostałych kontraktów tej strony.
 - [x] brak zmian Python/`ProblemIR` opisany jawnie
 - [x] runtime/API/proweniencja opisane
 - [x] walidacja i typowane błędy opisane
-- [ ] implementacja `AcceptedStateRef` i `ObservationRuntime`
+- [x] backend-neutralny typ i strict walidacja `AcceptedStateRef`
+- [x] kanoniczny builder `clock_digest`/`state_digest` dla kompletu nazwanych primary carriers
+- [x] źródłowy snapshot prostego lane'u FDM CPU z transakcyjnego stanu solvera
+- [x] trwały `AcceptedStateRef` prostego FDM CPU w worker receipt, manifeście v2 i publicznym GET run
+- [x] źródłowy snapshot i trwała ścieżka refa prostego FDM GPU; managed CUDA requalification pozostaje otwarta
+- [x] fail-closed klasyfikacja checkpointu i exact restore dla kompletnego FDM CPU coupled M3
+- [x] izolowany source-level rdzeń `ObservationRuntime` dla jednej content-bound ramki i atomowego batchu quantity
+- [x] source-level adapter prostego FDM CPU dla historycznej quantity `m`, związany z preimage stanu i digestem magnetyzacji
+- [x] fenced descriptor `observation_source.v1` prostego FDM CPU z primary snapshotem i terminalnym `m` w CAS, niezależny od deklarowanych portów study
+- [x] fail-closed loader manifest/CAS historycznego `ObservationRuntime` z exact `AcceptedStateRef` i stale-generation reject
+- [ ] pełna materializacja `AcceptedStateRef` przez wszystkie lane'y oraz `ObservationRuntime`
 - [ ] atomowy autosave frame descriptor i reader
 - [ ] transactional `.fms` runtime import/export
 - [ ] receipts numeryczne, managed CPU/GPU i browser/WebGL
@@ -356,7 +371,17 @@ całej lane ani pozostałych kontraktów tej strony.
 | Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Dowód |
 |---|---|---|---|---|---|
 | docelowy funkcjonał obserwacji | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:observation-functional` | planowany backend-neutralny funkcjonał quantity | wszystkie | planned contract, bez runtime proof |
-| docelowa accepted-state identity | `docs/adr/0025-persistent-runtime-and-observation-sources.md` | `DOC-ANCHOR:accepted-state-identity` | planowany `AcceptedStateRef` | wszystkie | planned contract, bez runtime proof |
+| normatywna accepted-state identity | `docs/adr/0025-persistent-runtime-and-observation-sources.md` | `DOC-ANCHOR:accepted-state-identity` | siedem pól trwałego ID i osobna generacja runtime'u | wszystkie | accepted contract |
+| accepted-state identity | `crates/fullmag-quantities/src/accepted_state.rs` | `AcceptedStateRef`, `ObservationClock`, `accepted_state_digests` | pojedynczy backend-neutralny owner typu, strict wire validation, kanoniczny zegar i content-bound primary carriers | wszystkie | source contract i known vector PASS; materializacja pozostałych lane'ów i runtime proof otwarte |
+| accepted-state lane snapshot | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `fullmag.fdm.cpu.accepted-state-snapshot.v1` | zegar oraz `state_digest` prostego FDM CPU związany z transakcyjnym stanem solvera | FDM CPU | source/in-process PASS; coupled transport, Frozen Spins i managed runtime otwarte |
+| accepted-state GPU snapshot | `crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs` | `fullmag.fdm.gpu.accepted-state-snapshot.v1` | końcowy odczyt magnetyzacji urządzenia, kanoniczny digest `f64be`, zegar terminalny i odmowa częściowego refa dla transportu, Frozen Spins oraz termicznego RNG | prosty nietermiczny FDM GPU | builder/validator 2/2 PASS; managed CUDA execution NOT VERIFIED |
+| trwałe związanie accepted state | `crates/fullmag-api/src/accepted_study_worker.rs` | `accepted_state_ref_from_runner_snapshot`, `WorkerExecutionCompletedReceipt.accepted_state_ref` | wiąże snapshot z RunId/stage, preparation, ProblemIR/resolved plan/requested execution i ownership epoch; recovery wymaga exact match | prosty FDM CPU/GPU | CPU process proof PASS; GPU source/check PASS, managed requalification otwarta |
+| manifest i publiczny readback | `crates/fullmag-session/src/types.rs`, `crates/fullmag-api/src/router_v2/handlers/persistence/projects.rs` | `FmsStudyOutputManifest`, `ProjectRunTaskResource.accepted_state_ref` | v3 publikuje ref pod fenced lease, zachowuje odczyt v1/v2 i projektuje ref z CAS przez GET run bez prywatnego katalogu workera | prosty FDM CPU/GPU | CPU HTTP in-process PASS; GPU managed readback NOT VERIFIED; inne lane'y i browser otwarte |
+| trwałe źródło obserwacji FDM CPU | `crates/fullmag-session/src/types.rs`, `crates/fullmag-runtime-control/src/study.rs`, `crates/fullmag-api/src/accepted_study_worker.rs` | `FmsObservationSourceDescriptor`, `validate_observation_source_payload`, `collect_fdm_cpu_observation_source` | wiąże accepted snapshot i terminalne `m` z systemowymi artifact IDs/CAS, gridem i allow-listą quantity; worker, recovery i completion barrier walidują exact source niezależnie od portów study | prosty FDM CPU | `cargo check` PASS; regresja E2E zapisana, tymczasowo NOT RUN; managed runtime/API compute otwarte |
+| loader historycznego evaluatora | `crates/fullmag-runtime-control/src/study.rs` | `load_study_observation_runtime` | rozwiązuje task i manifest z exact AcceptedStateRef, wymaga succeeded attemptu, artifact lineage i carrierów CAS, po czym tworzy evaluator bez live runtime | prosty FDM CPU | source check PASS; batch `m` i stale epoch regresja zapisana, tymczasowo NOT RUN; publiczny coordinator/data plane otwarty |
+| checkpoint compatibility | `crates/fullmag-session/src/capture.rs`, `crates/fullmag-api/src/session_persistence.rs` | `determine_restore_class`, `supported_checkpoint_restore_class` | brakujące identity nie porównują się jako zgodne; exact wymaga kompletnego runtime identity i materialnego backend state; publiczny restore odmawia niższej klasy przed mutacją | FDM CPU coupled M3 | klasyfikator 3/3, exact restore 1/1 i magnetization-only fail-closed 1/1 PASS; ogólny exact/logical resume otwarty |
+| izolowany evaluator historyczny | `crates/fullmag-runner/src/observation_runtime.rs` | `ObservationRuntime`, `ObservationFrame`, `compute_quantities` | przejmuje jedną ramkę, wiąże clock/state digest z primary carriers, egzekwuje allow-list i publikuje cache dopiero po całym poprawnym batchu; nie ma live commands ani publishera | neutralny rdzeń, bez adaptera lane'u | `cargo check` PASS; testy zapisane, lecz tymczasowo NOT RUN; autosave/CAS/API/lane/runtime receipts otwarte |
+| adapter obserwacji FDM CPU | `crates/fullmag-runner/src/observation.rs`, `crates/fullmag-runner/src/observation_runtime.rs`, `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `FdmCpuAcceptedStateSnapshotV1`, `from_fdm_cpu_accepted_state` | nowe snapshoty zachowują transactional-state preimage i digest magnetyzacji; adapter wymaga obu, exact source identity i zgodnego gridu, po czym udostępnia tylko `m` | prosty FDM CPU | `cargo check` PASS; test adaptera zapisany, lecz tymczasowo NOT RUN; CAS/API/E2E otwarte |
 | docelowa availability | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:quantity-availability` | planowane przecięcie katalogu, fizyki, planu, lane'u i nośników | wszystkie | planned contract, bez runtime proof |
 | docelowa semantyka resume | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:resume-trajectory` | planowane rozróżnienie logical/exact | wszystkie | planned contract, bez runtime proof |
 | obecny eager batch do zastąpienia | `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | bieżąca luka: terminalny snapshot FDM | FDM CPU/GPU | superseded/gap evidence, nie źródło równania docelowego |

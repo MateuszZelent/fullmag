@@ -18,6 +18,18 @@ const LOCK_DESCRIPTOR: &[u8] = b"fullmag.writer.lock.v1\n";
 const LOCK_DESCRIPTOR_PATH: &str = "WRITER.lock";
 const OWNER_RECORD_PATH: &str = "WRITER.owner.json";
 
+/// A transient conflict with an active native writer, safe to retry later.
+#[derive(Debug)]
+pub struct StoreWriterBusy;
+
+impl std::fmt::Display for StoreWriterBusy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("session store writer is busy")
+    }
+}
+
+impl std::error::Error for StoreWriterBusy {}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct OwnerRecord {
     schema: String,
@@ -63,7 +75,7 @@ impl Writer {
             .map_err(|_| anyhow::anyhow!("writer mutex poisoned"))?;
         if let Some(active) = held.as_mut() {
             if active.thread != std::thread::current().id() {
-                bail!("session store writer is busy on another thread");
+                return Err(StoreWriterBusy.into());
             }
             let mut record = active.record.clone();
             record.heartbeat_at = chrono::Utc::now();
@@ -161,7 +173,7 @@ fn open_lock_descriptor(root: &Path) -> Result<File> {
 
     match file.try_lock() {
         Ok(()) => {}
-        Err(TryLockError::WouldBlock) => bail!("session store writer is busy"),
+        Err(TryLockError::WouldBlock) => return Err(StoreWriterBusy.into()),
         Err(TryLockError::Error(error)) => {
             return Err(error).context("acquiring native session writer lock");
         }

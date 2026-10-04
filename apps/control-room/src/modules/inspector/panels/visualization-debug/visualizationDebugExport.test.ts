@@ -379,6 +379,7 @@ function testLifecycleEvidence(): VisualizationDebugLifecycleEvidence {
         created_at: "2026-08-20T18:00:00Z",
         name: "debug-session",
         session_epoch: "epoch-17",
+        request_scope_epoch: "test-api:17",
         session_id: "session-17",
         workspace_root: "/workspace",
       },

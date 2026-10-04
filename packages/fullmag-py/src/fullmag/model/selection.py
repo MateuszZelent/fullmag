@@ -69,6 +69,188 @@ class SelectionGeometry:
     def to_ir(self) -> dict[str, object]:
         return self._expression.to_ir()
 
+    def contains(
+        self,
+        point_m: object,
+        *,
+        boundary: str = "inclusive",
+        absolute_tolerance_m: object = 0.0,
+        relative_tolerance: object = 1.0e-12,
+    ) -> bool:
+        """Evaluate analytic occupancy for one world-space point.
+
+        The evaluator mirrors the canonical Rust geometry predicate.  It is
+        intentionally limited to analytic nodes; imported solids fail closed
+        until a qualified producer supplies their occupancy certificate.
+        """
+
+        return evaluate_geometry_predicate(
+            self,
+            point_m,
+            boundary=boundary,
+            absolute_tolerance_m=absolute_tolerance_m,
+            relative_tolerance=relative_tolerance,
+        )
+
+
+def evaluate_geometry_predicate(
+    geometry: SelectionGeometry | Mapping[str, object],
+    point_m: object,
+    *,
+    boundary: str = "inclusive",
+    absolute_tolerance_m: object = 0.0,
+    relative_tolerance: object = 1.0e-12,
+) -> bool:
+    """Evaluate one canonical selection geometry at a finite world point."""
+
+    expression = (
+        geometry._expression
+        if isinstance(geometry, SelectionGeometry)
+        else _parse_geometry_expr(geometry, "selection geometry")
+    )
+    point = _vector(point_m, 3, "point_m")
+    boundary_ir = _boundary_ir(
+        boundary,
+        absolute_tolerance_m,
+        relative_tolerance,
+    )
+    return _contains_geometry_expression(expression, point, boundary_ir)
+
+
+def _contains_geometry_expression(
+    expression: _GeometryExpr,
+    point: tuple[float, float, float],
+    boundary: Mapping[str, object],
+) -> bool:
+    fields = dict(expression.fields)
+    kind = expression.kind
+    if kind == "box":
+        center = fields["center_m"]
+        size = fields["size_m"]
+        return all(
+            _boundary_contains(
+                abs(point[index] - center[index]),
+                0.5 * size[index],
+                boundary,
+            )
+            for index in range(3)
+        )
+    if kind == "cylinder":
+        center = fields["center_m"]
+        axis = fields["axis"]
+        relative = _sub(point, center)
+        axial = _dot(relative, axis)
+        if not _boundary_contains(abs(axial), 0.5 * fields["height_m"], boundary):
+            return False
+        radial = _sub(relative, _scale(axis, axial))
+        return _boundary_contains(_norm(radial), fields["radius_m"], boundary)
+    if kind == "sphere":
+        center = fields["center_m"]
+        return _boundary_contains(_norm(_sub(point, center)), fields["radius_m"], boundary)
+    if kind == "ellipsoid":
+        center = fields["center_m"]
+        radii = fields["radii_m"]
+        normalized_radius_squared = 0.0
+        effective_radii: list[float] = []
+        for radius in radii:
+            tolerance = _boundary_tolerance(radius, boundary)
+            effective = radius + tolerance if boundary["kind"] == "inclusive" else max(radius - tolerance, 0.0)
+            effective_radii.append(effective)
+        if any(radius == 0.0 for radius in effective_radii):
+            return False
+        for index, radius in enumerate(effective_radii):
+            normalized_radius_squared += ((point[index] - center[index]) / radius) ** 2
+        return (
+            normalized_radius_squared <= 1.0
+            if boundary["kind"] == "inclusive"
+            else normalized_radius_squared < 1.0
+        )
+    if kind == "union":
+        return _contains_geometry_expression(fields["a"], point, boundary) or _contains_geometry_expression(fields["b"], point, boundary)
+    if kind == "intersection":
+        return _contains_geometry_expression(fields["a"], point, boundary) and _contains_geometry_expression(fields["b"], point, boundary)
+    if kind == "difference":
+        return _contains_geometry_expression(fields["base"], point, boundary) and not _contains_geometry_expression(fields["tool"], point, boundary)
+    if kind == "xor":
+        return _contains_geometry_expression(fields["a"], point, boundary) ^ _contains_geometry_expression(fields["b"], point, boundary)
+    if kind == "complement":
+        return _contains_geometry_expression(fields["domain"], point, boundary) and not _contains_geometry_expression(fields["geometry"], point, boundary)
+    if kind == "affine":
+        return _contains_geometry_expression(
+            fields["geometry"],
+            _inverse_affine_point(point, fields),
+            boundary,
+        )
+    if kind == "imported_solid":
+        raise ValueError(
+            "selection_imported_solid_unqualified: imported solid has no qualified analytic occupancy evaluator"
+        )
+    raise ValueError(f"selection geometry has unsupported kind {kind!r}")
+
+
+def _boundary_tolerance(limit: float, boundary: Mapping[str, object]) -> float:
+    return float(boundary["absolute_tolerance_m"]) + float(boundary["relative_tolerance"]) * abs(limit)
+
+
+def _boundary_contains(value: float, limit: float, boundary: Mapping[str, object]) -> bool:
+    tolerance = _boundary_tolerance(limit, boundary)
+    if boundary["kind"] == "inclusive":
+        return value <= limit + tolerance
+    return value < max(limit - tolerance, 0.0)
+
+
+def _dot(left: Sequence[float], right: Sequence[float]) -> float:
+    return sum(left[index] * right[index] for index in range(3))
+
+
+def _sub(left: Sequence[float], right: Sequence[float]) -> tuple[float, float, float]:
+    return tuple(left[index] - right[index] for index in range(3))  # type: ignore[return-value]
+
+
+def _scale(value: Sequence[float], factor: float) -> tuple[float, float, float]:
+    return tuple(component * factor for component in value)  # type: ignore[return-value]
+
+
+def _norm(value: Sequence[float]) -> float:
+    return math.sqrt(_dot(value, value))
+
+
+def _rotate_by_unit_quaternion(
+    point: Sequence[float], quaternion_xyzw: Sequence[float]
+) -> tuple[float, float, float]:
+    vector = (
+        quaternion_xyzw[1] * point[2] - quaternion_xyzw[2] * point[1],
+        quaternion_xyzw[2] * point[0] - quaternion_xyzw[0] * point[2],
+        quaternion_xyzw[0] * point[1] - quaternion_xyzw[1] * point[0],
+    )
+    doubled = _scale(vector, 2.0)
+    cross_again = (
+        quaternion_xyzw[1] * doubled[2] - quaternion_xyzw[2] * doubled[1],
+        quaternion_xyzw[2] * doubled[0] - quaternion_xyzw[0] * doubled[2],
+        quaternion_xyzw[0] * doubled[1] - quaternion_xyzw[1] * doubled[0],
+    )
+    return tuple(
+        point[index] + quaternion_xyzw[3] * doubled[index] + cross_again[index]
+        for index in range(3)
+    )  # type: ignore[return-value]
+
+
+def _inverse_affine_point(
+    point: Sequence[float], fields: Mapping[str, object]
+) -> tuple[float, float, float]:
+    translation = fields["translation_m"]
+    pivot = fields["pivot_m"]
+    scale = fields["scale"]
+    quaternion = fields["rotation_xyzw"]
+    shifted = tuple(
+        point[index] - translation[index] - pivot[index] for index in range(3)
+    )
+    inverse_rotation = (-quaternion[0], -quaternion[1], -quaternion[2], quaternion[3])
+    rotated = _rotate_by_unit_quaternion(shifted, inverse_rotation)
+    return tuple(
+        rotated[index] / scale[index] + pivot[index] for index in range(3)
+    )  # type: ignore[return-value]
+
 
 class SelectionScalar:
     """Typed scalar expression used only inside a selection predicate."""

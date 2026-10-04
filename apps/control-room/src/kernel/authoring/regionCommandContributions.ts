@@ -6,6 +6,7 @@ import {
 } from "../api/apiPaths";
 import type { RegionListResource } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
+import { obsoleteSessionResult } from "../commands/commandSessionScope";
 import {
   authoringWriteOptions,
   runAuthoringMutationWithHistory,
@@ -117,6 +118,8 @@ function regionPriorityCommand(
     isEnabled: (context) => regionOrderDisabledReason(context) === null,
     disabledReason: regionOrderDisabledReason,
     run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const target = selectedRegion(context);
       const nextOrder = movedRegionOrder(context, direction);
       if (!target || !nextOrder || !context.api) {
@@ -125,11 +128,12 @@ function regionPriorityCommand(
           status: "failed",
         };
       }
+      const sessionScopeKey = context.sessionScopeKey;
       await runAuthoringMutationWithHistory(
-        context,
+        { ...context, sessionScopeKey },
         `Move ${target.regionId} region priority ${direction}`,
         async ({ baseRevision }) => {
-          const options = authoringWriteOptions(baseRevision);
+          const options = authoringWriteOptions(baseRevision, sessionScopeKey);
           return options
             ? context.api!.model.reorderObjectRegions(
                 target.objectId,
@@ -142,6 +146,8 @@ function regionPriorityCommand(
               );
         },
       );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
       invalidateAuthoringModel(context);
       return { status: "completed" };
     },
@@ -172,15 +178,18 @@ export const REGION_COMMANDS: CommandContribution[] = [
     isEnabled: (context) => regionDisabledReason(context) === null,
     disabledReason: regionDisabledReason,
     run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const target = selectedRegion(context);
       if (!target || !context.api) {
         return { message: regionDisabledReason(context) ?? undefined, status: "failed" };
       }
+      const sessionScopeKey = context.sessionScopeKey;
       await runAuthoringMutationWithHistory(
-        context,
+        { ...context, sessionScopeKey },
         `Duplicate region ${target.regionId}`,
         async ({ baseRevision }) => {
-          const options = authoringWriteOptions(baseRevision);
+          const options = authoringWriteOptions(baseRevision, sessionScopeKey);
           return options
             ? context.api!.model.duplicateObjectRegion(
                 target.objectId,
@@ -195,6 +204,8 @@ export const REGION_COMMANDS: CommandContribution[] = [
               );
         },
       );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
       invalidateAuthoringModel(context);
       return { status: "completed" };
     },
@@ -208,15 +219,18 @@ export const REGION_COMMANDS: CommandContribution[] = [
     isEnabled: (context) => regionDisabledReason(context) === null,
     disabledReason: regionDisabledReason,
     run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const target = selectedRegion(context);
       if (!target || !context.api) {
         return { message: regionDisabledReason(context) ?? undefined, status: "failed" };
       }
+      const sessionScopeKey = context.sessionScopeKey;
       await runAuthoringMutationWithHistory(
-        context,
+        { ...context, sessionScopeKey },
         `Delete region ${target.regionId}`,
         async ({ baseRevision }) => {
-          const options = authoringWriteOptions(baseRevision);
+          const options = authoringWriteOptions(baseRevision, sessionScopeKey);
           return options
             ? context.api!.model.deleteObjectRegion(
                 target.objectId,
@@ -229,6 +243,8 @@ export const REGION_COMMANDS: CommandContribution[] = [
               );
         },
       );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
       invalidateAuthoringModel(context);
       context.selection?.clear("inspector");
       return { status: "completed" };
@@ -249,15 +265,18 @@ export const REGION_COMMANDS: CommandContribution[] = [
     isEnabled: (context) => couplingDisabledReason(context) === null,
     disabledReason: couplingDisabledReason,
     run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const couplingId = selectedCouplingId(context);
       if (!couplingId || !context.api) {
         return { message: couplingDisabledReason(context) ?? undefined, status: "failed" };
       }
+      const sessionScopeKey = context.sessionScopeKey;
       await runAuthoringMutationWithHistory(
-        context,
+        { ...context, sessionScopeKey },
         `Disable coupling ${couplingId}`,
         async ({ baseRevision }) => {
-          const options = authoringWriteOptions(baseRevision);
+          const options = authoringWriteOptions(baseRevision, sessionScopeKey);
           return options
             ? context.api!.model.patchCoupling(
                 couplingId,
@@ -267,6 +286,8 @@ export const REGION_COMMANDS: CommandContribution[] = [
             : context.api!.model.patchCoupling(couplingId, { enabled: false });
         },
       );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
       invalidateAuthoringModel(context);
       return { status: "completed" };
     },
@@ -280,20 +301,25 @@ export const REGION_COMMANDS: CommandContribution[] = [
     isEnabled: (context) => couplingDisabledReason(context) === null,
     disabledReason: couplingDisabledReason,
     run: async (context) => {
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const couplingId = selectedCouplingId(context);
       if (!couplingId || !context.api) {
         return { message: couplingDisabledReason(context) ?? undefined, status: "failed" };
       }
+      const sessionScopeKey = context.sessionScopeKey;
       await runAuthoringMutationWithHistory(
-        context,
+        { ...context, sessionScopeKey },
         `Delete coupling ${couplingId}`,
         async ({ baseRevision }) => {
-          const options = authoringWriteOptions(baseRevision);
+          const options = authoringWriteOptions(baseRevision, sessionScopeKey);
           return options
             ? context.api!.model.deleteCoupling(couplingId, options)
             : context.api!.model.deleteCoupling(couplingId);
         },
       );
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
       invalidateAuthoringModel(context);
       context.selection?.clear("inspector");
       return { status: "completed" };

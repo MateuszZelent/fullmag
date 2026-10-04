@@ -738,7 +738,7 @@ pub(crate) fn validate_fmmq_v2_payload(
             _ => {
                 return Err(ApiError::internal(format!(
                     "FMMQ v2 family {family} is unsupported"
-                )))
+                )));
             }
         };
         if element_count_for_family == 0

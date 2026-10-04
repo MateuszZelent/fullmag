@@ -12,7 +12,7 @@
 
 use crate::eigen::artifacts::{
     write_branch_bundle_with_sample_namespace, write_frequency_domain_eigen_manifest,
-    write_mode_bundle, write_path_bundle_with_sample_namespace,
+    write_mode_bundle, write_path_bundle_with_sample_namespace, FrequencyDomainArtifactIdentity,
 };
 use crate::eigen::path::expand_k_sampling;
 use crate::eigen::tracking::track_branches;
@@ -37,6 +37,7 @@ pub fn run_path_or_single<S: SingleKSolver>(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     output_dir: Option<&Path>,
+    artifact_identity: Option<&FrequencyDomainArtifactIdentity>,
     mode_tracking: Option<&ModeTrackingIR>,
 ) -> Result<PathSolveResult, RunError> {
     let sample_descriptors =
@@ -108,6 +109,12 @@ pub fn run_path_or_single<S: SingleKSolver>(
     track_branches(&mut result, mode_tracking);
 
     if let Some(output_dir) = output_dir {
+        let artifact_identity = artifact_identity.ok_or_else(|| RunError {
+            message: "frequency-domain artifact output requires exact session, run, stage, and runtime identity".to_string(),
+        })?;
+        artifact_identity.validate().map_err(|error| RunError {
+            message: format!("invalid frequency-domain artifact identity: {error}"),
+        })?;
         write_path_bundle_with_sample_namespace(
             output_dir,
             &result,
@@ -127,9 +134,11 @@ pub fn run_path_or_single<S: SingleKSolver>(
         write_mode_bundle(output_dir, &result).map_err(|error| RunError {
             message: format!("failed to write mode bundle: {error}"),
         })?;
-        write_frequency_domain_eigen_manifest(output_dir, &result).map_err(|error| RunError {
-            message: format!("failed to write frequency-domain eigen manifest: {error}"),
-        })?;
+        write_frequency_domain_eigen_manifest(output_dir, &result, artifact_identity).map_err(
+            |error| RunError {
+                message: format!("failed to write frequency-domain eigen manifest: {error}"),
+            },
+        )?;
     }
 
     Ok(result)
@@ -166,6 +175,16 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    fn artifact_identity() -> FrequencyDomainArtifactIdentity {
+        FrequencyDomainArtifactIdentity::try_new(
+            "session:test-orchestrator",
+            "run:test-orchestrator",
+            "stage:eigenmodes",
+            "runtime:test-orchestrator",
+        )
+        .expect("test artifact identity should be valid")
     }
 
     struct FakeSolver;
@@ -310,6 +329,7 @@ mod tests {
     #[test]
     fn run_path_or_single_writes_frequency_domain_eigen_manifest() {
         let temp = TempDirGuard::new("orchestrator-eigen-manifest");
+        let identity = artifact_identity();
         run_path_or_single(
             &FakeSolver,
             &minimal_plan(Some(KSamplingIR::Single {
@@ -317,6 +337,7 @@ mod tests {
             })),
             &[],
             Some(&temp.path),
+            Some(&identity),
             None,
         )
         .expect("orchestrator should solve and write artifacts");
@@ -337,9 +358,31 @@ mod tests {
             "eigen/modes/sample_0000/mode_0002.json"
         );
         assert_eq!(
-            family_manifest["resources"]["mode_field_resources"][0],
-            "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/2/meta"
+            family_manifest["resources"]["mode_field_resources"],
+            serde_json::json!([])
         );
+        assert!(!family_manifest.to_string().contains("/v2/sessions/current"));
+    }
+
+    #[test]
+    fn run_path_or_single_rejects_artifact_output_without_exact_identity() {
+        let temp = TempDirGuard::new("orchestrator-missing-artifact-identity");
+        let error = run_path_or_single(
+            &FakeSolver,
+            &minimal_plan(Some(KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            })),
+            &[],
+            Some(&temp.path),
+            None,
+            None,
+        )
+        .expect_err("persistent output without exact identity must fail closed");
+
+        assert!(error
+            .message
+            .contains("requires exact session, run, stage, and runtime identity"));
+        assert!(!temp.path.join("frequency_domain/manifest.v1.json").exists());
     }
 
     #[test]
@@ -424,7 +467,7 @@ mod tests {
             closed: false,
         }));
 
-        let err = run_path_or_single(&solver, &plan, &[], None, None)
+        let err = run_path_or_single(&solver, &plan, &[], None, None, None)
             .expect_err("mixed production/reference samples must not be aggregated");
 
         assert!(err.message.contains("mixed single-k solver models"));

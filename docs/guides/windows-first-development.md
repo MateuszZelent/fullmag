@@ -1,6 +1,6 @@
 # Windows-first development
 
-Windows is the host build and orchestration environment. The supported lanes are:
+Windows is the host build and orchestration environment. The current development routes are:
 
 | Lane | Build/runtime |
 |---|---|
@@ -8,6 +8,85 @@ Windows is the host build and orchestration environment. The supported lanes are
 | FDM GPU | native Windows/MSVC + CUDA Toolkit |
 | FEM CPU | Docker Desktop Linux container |
 | FEM GPU | Docker Desktop Linux/CUDA container |
+
+## Docelowy produkt Windows — doprecyzowanie 02.10.2026
+
+Pakiet Windows ma uruchamiać UI, zapisywać/odtwarzać projekty i sesje oraz
+wykonywać deklarowane realizacje FDM/FEM bez Docker Desktop, WSL i Linuxa.
+Tabela powyżej opisuje bieżące trasy rozwojowe; kontenerowy FEM nie realizuje
+docelowej bramki natywnego produktu. Pełny pakiet Windows pozostaje
+**NOT VERIFIED**. Osobny Linux/managed target zachowuje swoje bramki.
+
+Launcher deweloperski ma jawny tryb pustego workspace. Kanoniczna recepta
+`just` uruchamia natywną trasę Windows bez skryptu wejściowego, a domyślnie
+wybiera developerski frontend, port 3197 i automatyczną decyzję o budowie:
+
+```powershell
+just windows-ui
+```
+
+Tryb developerski używa izolowanego workspace frontendu w storage: katalogi
+źródłowe są zwykłymi plikami synchronizowanymi z checkoutem przez watcher.
+Cache i wynik pracy pozostają w osobnym katalogu. Edycje React/CSS są
+widoczne bez unieważniania pakietu backendu; zmiany konfiguracji lub
+zależności wymagają ponownego przygotowania workspace. Tryb statyczny kopiuje źródła do izolowanego
+workspace przed zbudowaniem eksportu. Przykłady:
+
+```powershell
+just windows-ui dev 3197 auto
+just windows-ui static 3197 false
+just windows-ui dev 3197 true
+```
+
+Watcher backendu domyślnie rozpoczyna kompilację po 120 sekundach bez zmian
+jego źródeł. Każdy zapis zeruje odliczanie; zapis podczas kompilacji powoduje
+odrzucenie tego wyniku i ponowne oczekiwanie. HMR frontendu działa od razu.
+Wartość można zmienić przed startem (1–300 sekund):
+
+```powershell
+$env:FULLMAG_BACKEND_DEV_DEBOUNCE_SECONDS = "120"
+just windows-ui dev
+```
+
+Już działający watcher zachowuje ustawienie ze swojego startu. Nowa wartość
+obowiązuje po ponownym uruchomieniu workspace; najpierw zapisz model i szkice.
+
+Odpowiednik bezpośredni w PowerShell:
+
+```powershell
+.\scripts\windows\run_fullmag.ps1 -BuildMode auto -Frontend dev -RunMode workspace -WebPort 3197
+```
+
+`build=auto` buduje brakujący lub nieaktualny pakiet, `build=false` wymaga
+zgodnego istniejącego pakietu, a `build=true` wymusza budowę. Automatyczna
+budowa jest zamknięta w trasie `run-windows-workspace` resolvera i korzysta z
+odrębnego natywnego locka heavy; nie zmienia zasad ogólnej trasy Linuxowego
+runnera ani kolejki/job 219. Budowa na żądanie użytkownika jest dozwolona dla
+tej konkretnej natywnej trasy, przy zachowaniu preflightu storage, blokad,
+manifestu, hashów i terminalnego receiptu. `fullmag ui` otwiera pusty
+workspace; backend i urządzenie wybiera się przy tworzeniu problemu w UI,
+więc launcher odrzuca parametry obliczeń zamiast je ignorować.
+
+03.10.2026: 88 interpretowanych regresji, 2 pominięcia i 13 subtestów oraz
+4 kontrole Node synchronizacji źródeł i granicy Tailwind PASS. Natywny build
+wytworzył wersjonowane CLI/API/UI. Browser na 3197, utworzenie pustej sesji,
+boxa i zmienionego cylindra oraz działający WebGL PASS. Poprawka Inspectora
+dotarła przez HMR bez nowej kompilacji Rust. Cały przebieg po zamknięciu
+własnego okna zakończył się kodem 0. Save/restart, pełny authoring
+regionów/materiałów, inne porty, instalator i pełna kwalifikacja Windows
+pozostają **NOT VERIFIED**. [Dowody](../plans/active/refactor_runtime/final/p8/50-windows-empty-ui-just-route.md).
+
+Wersja bazowa Cargo pozostaje numerem planowanego wydania. Automatyczny
+rekord buildu dodaje datę UTC, commit i snapshot lokalnych zmian, np.
+`0.1.0-dev.20261003.gbdc8578d0493.dirty.s081c18f2caeb+9772`.
+Python otrzymuje równoważną wersję PEP 440; CLI/API/UI i metadata EXE
+korzystają z jednego rekordu. [Kontrakt wersji](../plans/active/refactor_runtime/final/p8/51-development-build-version.md).
+
+Build obejmujący Control Room musi wytworzyć również `fullmag-ui.exe`
+z pakietu `fullmag-desktop`. Manifest zapisuje `desktop_binary_sha256`,
+a launcher sprawdza ten hash przed użyciem istniejącego pakietu.
+Starszy manifest bez hasha UI wymaga przebudowy; samo kopiowanie dowolnego
+`fullmag-ui.exe` nie jest dopuszczonym naprawieniem pakietu.
 
 The canonical FEM entry point is `scripts/windows/run_fullmag_fem.ps1`. It does
 not invoke `wsl.exe`: Docker Desktop may use WSL2 internally, but Fullmag does
@@ -117,6 +196,17 @@ separate toolchain store is required, register it as a profile cache under the
 project storage and keep Cargo outputs in that profile's build directory.
 
 ## Commands
+
+### Okno zapory przy uruchamianiu Windows
+
+Zapora przypisuje zgodę do pełnej ścieżki programu. Natywny launcher świeżego
+workspace publikuje sprawdzone EXE pod stałą ścieżką profilu
+`runtime_root/native-launch/dev/bin` lub `native-launch/release/bin`.
+Kopie UUID nadal służą do weryfikacji pochodzenia. Pierwsze uruchomienie nowej
+ścieżki może wymagać zgody; dev i release są odrębne. Launcher nie zmienia
+reguł zapory. Dla lokalnej pracy na localhost sieć publiczna nie jest potrzebna.
+
+Dowody i ograniczenia: [P8-53R](../plans/active/refactor_runtime/final/p8/53r-native-development-reliability.md).
 
 ```powershell
 just windows-doctor

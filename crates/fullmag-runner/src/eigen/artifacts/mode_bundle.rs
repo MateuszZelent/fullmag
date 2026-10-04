@@ -44,7 +44,6 @@ struct ModeArtifact {
     normalization: &'static str,
     damping_policy: &'static str,
     mode_field_id: String,
-    mode_field_resource_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_norm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -247,7 +246,6 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
             let amplitude = mode.amplitude.as_deref().unwrap_or(&[]);
             let mode_field_id =
                 eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
-            let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
             let compatibility_binary_payload_path = format!(
                 "eigen/mode_fields/sample_{:04}/mode_{:04}/vector.bin",
                 sample.sample.sample_index, mode.raw_mode_index
@@ -286,9 +284,7 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 normalization: "unit_l2",
                 damping_policy: "ignore",
                 mode_field_id,
-                mode_field_resource_key,
-                residual_norm: residual_absolute_l2,
-                residual_absolute_l2,
+                residual_norm: residual_absolute_l2,                residual_absolute_l2,
                 residual_relative_l2,
                 residual_linf,
                 mass_norm: resolved_mode_mass_norm(mode),

@@ -248,6 +248,7 @@ PROFILES["fem-cpu-slepc-runtime-v2"] = Profile(
     environment={
         **PROFILES["fem-cpu-slepc-runtime-v1"].environment,
         "FULLMAG_FEM_NATIVE_CUDA": "0",
+        "FULLMAG_FEM_ENABLE_CUDA": "0",
         "CMAKE_PREFIX_PATH": "/opt/fullmag-mfem-cpu",
         "LD_LIBRARY_PATH": "/opt/fullmag-mfem-cpu/lib",
         "PKG_CONFIG_PATH": "/opt/fullmag-mfem-cpu/lib/pkgconfig",
@@ -261,7 +262,8 @@ PROFILES["fem-cpu-slepc-runtime-v2"] = Profile(
     runtime_contract_schema="fullmag.fem.cpu.slepc_runtime_contract.v2",
 )
 
-REQUIRED_OUTPUTS = (
+
+BASE_REQUIRED_OUTPUTS = (
     "bin/fullmag-bin",
     "bin/fullmag-api",
     "_fullmag_core.so",
@@ -273,6 +275,19 @@ HEADLESS_REQUIRED_OUTPUTS = (
     "bin/fullmag-api",
     "_fullmag_core.so",
     "launcher-build-mode",
+)
+RELEASE_PROFILE_NAMES = frozenset(("fdm-cpu-release", "fem-cpu-release", "fem-gpu-release"))
+REQUIRED_OUTPUTS = BASE_REQUIRED_OUTPUTS + (
+    "bin/fullmag-api-accepted-worker",
+    "bin/fullmag-api-accepted-supervisor",
+    "bin/fullmag-api-accepted-scheduler",
+    "bin/fullmag-runtime-service",
+    "bin/fullmag-api-resource-pool",
+    "bin/fullmag-api-accepted-fem-preparer",
+    "bin/fullmag-api-accepted-fem-preparation-supervisor",
+    "bin/fullmag-api-accepted-fem-preparation-scheduler",
+    "bin/fullmag-api-preparation-resource-pool",
+    "bin/fullmag-api-preparation-retry",
 )
 EXPECTED_BUILD_MARKER = {
     "fem-cpu-release": "fem-cpu",
@@ -302,7 +317,9 @@ def _runtime_contract(profile: Profile) -> dict[str, Any] | None:
             "FULLMAG_ENABLE_CUDA": (
                 "OFF" if profile.name == "fem-cpu-slepc-runtime-v2" else "ON"
             ),
-            "FULLMAG_ENABLE_FEM_GPU": "ON",
+            "FULLMAG_ENABLE_FEM_GPU": (
+                "OFF" if profile.name == "fem-cpu-slepc-runtime-v2" else "ON"
+            ),
             "FULLMAG_USE_MFEM_STACK": "ON",
             "FULLMAG_FEM_WITH_SLEPC": "ON",
         },
@@ -509,8 +526,8 @@ def materialize_capsule(manifest: Mapping[str, Any], source: Path, workspace: Pa
             if child.is_symlink():
                 raise BuildEntryPointError(f"source capsule contains a symlink: {child}")
             if child.is_dir():
-                # Refresh private source mtimes so persistent build caches see changed inputs.
-                # Preserve immutable capsule bytes and source timestamps.
+                # Keep capsule bytes and timestamps immutable; the private copy gets fresh
+                # mtimes so persistent build fingerprints observe the captured source revision.
                 shutil.copytree(child, destination, copy_function=shutil.copy)
                 # Only the private copy is writable. Never recurse into the
                 # persistent mountpoints or change the readonly capsule.
@@ -732,7 +749,7 @@ def preflight(profile: Profile, *, release: bool = True) -> dict[str, str]:
     }
     try:
         rustup_result = subprocess.run(
-            [tools["rustup"], "toolchain", "list"],
+            [tools["rustup"], "run", "nightly", "rustc", "--version"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -743,14 +760,12 @@ def preflight(profile: Profile, *, release: bool = True) -> dict[str, str]:
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise BuildEntryPointError(
-            f"cannot inspect installed Rust toolchains: {_error_text(error)}"
+            f"cannot inspect installed Rust nightly: {_error_text(error)}"
         ) from error
-    installed_toolchains = rustup_result.stdout or ""
-    if rustup_result.returncode != 0 or not any(
-        line.strip().split()[0].startswith("nightly")
-        for line in installed_toolchains.splitlines()
-        if line.strip()
-    ):
+    version_tokens = (rustup_result.stdout or "").strip().split()
+    if (rustup_result.returncode != 0 or len(version_tokens) < 2
+            or version_tokens[0] != "rustc"
+            or not version_tokens[1].endswith("-nightly")):
         raise BuildEntryPointError(
             "required Rust nightly toolchain is not installed; provision it in the "
             "pinned image or mounted RUSTUP_HOME (fresh host: `rustup toolchain "
@@ -800,12 +815,16 @@ def toolchain_versions(tools: Mapping[str, str]) -> dict[str, Any]:
     versions: dict[str, Any] = {}
     for name, command in (
         ("python", ["python3", "--version"]),
-        ("rustc", [tools["rustc"], "--version"]),
-        ("cargo", [tools["cargo"], "--version"]),
+        # Match Make's +nightly without allowing a source rust-toolchain.toml
+        # to select or implicitly install another channel during observation.
+        ("rustc", [tools["rustup"], "run", "nightly", "rustc", "--version"]),
+        ("cargo", [tools["rustup"], "run", "nightly", "cargo", "--version"]),
         ("rustup", [tools["rustup"], "--version"]),
         ("make", [tools["make"], "--version"]),
     ):
         versions[name] = _command_version(command)
+        if name in ("rustc", "cargo") and versions[name]["exit_code"] != 0:
+            raise BuildEntryPointError(f"cannot observe installed nightly {name} version")
     if "pnpm" in tools:
         versions["pnpm"] = _command_version([tools["pnpm"], "--version"])
     elif "corepack" in tools:
@@ -1009,30 +1028,38 @@ def run_stage(
     }
 
 
+def required_outputs_for_profile(profile_name: str) -> tuple[str, ...]:
+    # Keep release qualification independent of specialized registry additions.
+    return REQUIRED_OUTPUTS if profile_name in RELEASE_PROFILE_NAMES else BASE_REQUIRED_OUTPUTS
+
+
 def _required_output_paths(
-    output: Path,
-    required_outputs: tuple[str, ...] = REQUIRED_OUTPUTS,
+    output: Path, outputs: tuple[str, ...] = REQUIRED_OUTPUTS,
 ) -> tuple[Path, ...]:
-    return tuple(output.joinpath(*relative.split("/")) for relative in required_outputs)
+    return tuple(output.joinpath(*relative.split("/")) for relative in outputs)
 
 
 def _validate_required_outputs(
     output: Path,
     profile: Profile,
     *,
-    required_outputs: tuple[str, ...] = REQUIRED_OUTPUTS,
+    required_outputs: tuple[str, ...] | None = None,
 ) -> None:
+    outputs = (
+        required_outputs
+        if required_outputs is not None
+        else required_outputs_for_profile(profile.name)
+    )
     if not output.exists():
-        missing = required_outputs[0] if required_outputs else "runtime output"
+        missing = outputs[0] if outputs else "runtime output"
         raise BuildEntryPointError(f"required Fullmag output is missing: {missing}")
     if output.is_symlink() or not output.is_dir():
         raise BuildEntryPointError("Fullmag output directory is not a regular directory")
-    for relative, path in zip(
-        required_outputs,
-        _required_output_paths(output, required_outputs),
-    ):
+    for relative, path in zip(outputs, _required_output_paths(output, outputs)):
         if path.is_symlink() or not path.is_file():
             raise BuildEntryPointError(f"required Fullmag output is missing: {relative}")
+        if path.stat().st_size == 0:
+            raise BuildEntryPointError(f"required Fullmag output is empty: {relative}")
     marker = output / "launcher-build-mode"
     try:
         observed = marker.read_text(encoding="utf-8").strip()

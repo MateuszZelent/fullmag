@@ -1416,7 +1416,7 @@ def test_fixture_execution_command_consumes_exact_canonical_ir() -> None:
 
     assert command == [
         "/runtime/fullmag",
-        "run-json",
+        "run-problem-json-direct",
         "/tmp/canonical.problem-ir.json",
         "--until",
         "1e-12",

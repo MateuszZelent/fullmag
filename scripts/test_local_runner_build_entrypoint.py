@@ -17,6 +17,18 @@ from local_runner import build_entrypoint as entrypoint
 
 
 class BuildEntryPointTests(unittest.TestCase):
+    def test_specialized_profile_keeps_baseline_outputs_without_release_runtime(self) -> None:
+        output = self.root / "specialized-output"
+        output.mkdir()
+        for relative in entrypoint.BASE_REQUIRED_OUTPUTS:
+            path = output / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"artifact")
+        (output / "launcher-build-mode").write_text("fem-cpu", encoding="utf-8")
+        profile = entrypoint.Profile(name="fem-cpu-slepc-runtime-v2", lane="fem-cpu", environment={})
+        with patch.dict(entrypoint.EXPECTED_BUILD_MARKER, {profile.name: "fem-cpu"}):
+            entrypoint._validate_required_outputs(output, profile)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="fullmag-build-entrypoint-")
         self.addCleanup(self.temporary.cleanup)
@@ -135,6 +147,19 @@ class BuildEntryPointTests(unittest.TestCase):
             (output / "web").mkdir()
         (output / "bin" / "fullmag-bin").write_bytes(b"cli")
         (output / "bin" / "fullmag-api").write_bytes(b"api")
+        for name in (
+            "fullmag-api-accepted-worker",
+            "fullmag-api-accepted-supervisor",
+            "fullmag-api-accepted-scheduler",
+            "fullmag-runtime-service",
+            "fullmag-api-resource-pool",
+            "fullmag-api-accepted-fem-preparer",
+            "fullmag-api-accepted-fem-preparation-supervisor",
+            "fullmag-api-accepted-fem-preparation-scheduler",
+            "fullmag-api-preparation-resource-pool",
+            "fullmag-api-preparation-retry",
+        ):
+            (output / "bin" / name).write_bytes(b"accepted-runtime")
         (output / "_fullmag_core.so").write_bytes(b"core")
         (output / "launcher-build-mode").write_text(marker + "\n", encoding="utf-8")
         if include_web:
@@ -142,6 +167,34 @@ class BuildEntryPointTests(unittest.TestCase):
         if include_fem_library:
             (output / "lib" / "libfullmag_fem.so.0").write_bytes(b"fem-native")
         return output
+
+    def test_incomplete_accepted_runtime_package_is_rejected(self) -> None:
+        output = self._write_outputs()
+        binaries = sorted(output.joinpath("bin").glob("fullmag-api-*")) + [output / "bin" / "fullmag-runtime-service"]
+        self.assertEqual(len(binaries), 10)
+        for binary in binaries:
+            with self.subTest(binary=binary.name):
+                original = binary.read_bytes()
+                binary.unlink()
+                try:
+                    with self.assertRaisesRegex(entrypoint.BuildEntryPointError, binary.name):
+                        entrypoint._validate_required_outputs(output, entrypoint.profile_for(self.profile))
+                finally:
+                    binary.write_bytes(original)
+
+    def test_empty_native_runtime_service_is_rejected(self) -> None:
+        output = self._write_outputs()
+        binary = output / "bin" / "fullmag-runtime-service"
+        binary.write_bytes(b"")
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, binary.name):
+            entrypoint._validate_required_outputs(output, entrypoint.profile_for(self.profile))
+
+    def test_empty_accepted_runtime_binary_is_rejected(self) -> None:
+        output = self._write_outputs()
+        binary = output / "bin" / "fullmag-api-accepted-fem-preparer"
+        binary.write_bytes(b"")
+        with self.assertRaisesRegex(entrypoint.BuildEntryPointError, binary.name):
+            entrypoint._validate_required_outputs(output, entrypoint.profile_for(self.profile))
 
     def test_profile_environment_cannot_silently_fallback(self) -> None:
         identity = self._identity()
@@ -209,6 +262,7 @@ class BuildEntryPointTests(unittest.TestCase):
         contract = entrypoint._runtime_contract(profile)
         self.assertTrue(profile.runtime_only)
         self.assertEqual(profile.environment["FULLMAG_FEM_NATIVE_CUDA"], "0")
+        self.assertEqual(profile.environment["FULLMAG_FEM_ENABLE_CUDA"], "0")
         self.assertEqual(profile.environment["CMAKE_PREFIX_PATH"], "/opt/fullmag-mfem-cpu")
         self.assertEqual(profile.environment["LD_LIBRARY_PATH"], "/opt/fullmag-mfem-cpu/lib")
         self.assertEqual(profile.environment["PKG_CONFIG_PATH"],
@@ -217,6 +271,7 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertEqual(profile.environment["SLEPC_DIR"], "/opt/fullmag-mfem-cpu")
         self.assertEqual(profile.environment["PETSC_ARCH"], "")
         self.assertEqual(contract["cmake_options"]["FULLMAG_ENABLE_CUDA"], "OFF")
+        self.assertEqual(contract["cmake_options"]["FULLMAG_ENABLE_FEM_GPU"], "OFF")
         self.assertEqual(contract["schema"],
                          "fullmag.fem.cpu.slepc_runtime_contract.v2")
 
@@ -1417,13 +1472,17 @@ class BuildEntryPointTests(unittest.TestCase):
 
     def test_rust_inventory_and_versions_do_not_sync_project_override(self) -> None:
         installed = entrypoint.subprocess.CompletedProcess(
-            ["rustup", "toolchain", "list"], 0,
-            "nightly-x86_64-unknown-linux-gnu (default)\n", "")
+            ["/usr/bin/rustup", "run", "nightly", "rustc", "--version"], 0,
+            "rustc 1.101.0-nightly (test fixture)\n", "")
         with patch.object(entrypoint.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"), \
              patch.object(entrypoint.subprocess, "run", return_value=installed) as run, \
              patch.object(entrypoint, "require_cpu_modal_dependencies") as dependencies:
             entrypoint.preflight(entrypoint.profile_for("fem-cpu-slepc-runtime-v2"), release=False)
             dependencies.assert_called_once_with(Path("/opt/fullmag-mfem-cpu"))
+            self.assertEqual(
+                run.call_args.args[0],
+                ["/usr/bin/rustup", "run", "nightly", "rustc", "--version"],
+            )
             environment = run.call_args.kwargs.get("env", {})
             self.assertEqual(environment.get("RUSTUP_TOOLCHAIN"), "nightly")
             self.assertEqual(environment.get("RUSTUP_AUTO_INSTALL"), "0")
@@ -1474,7 +1533,8 @@ class BuildEntryPointTests(unittest.TestCase):
             entrypoint.subprocess,
             "run",
             return_value=entrypoint.subprocess.CompletedProcess(
-                ["rustup", "toolchain", "list"], 0, "stable-x86_64-unknown-linux-gnu\n", ""
+                ["rustup", "run", "nightly", "rustc", "--version"],
+                0, "rustc 1.99.0 (stable)\n", ""
             ),
         ):
             with self.assertRaisesRegex(entrypoint.BuildEntryPointError, "nightly"):
@@ -1489,7 +1549,8 @@ class BuildEntryPointTests(unittest.TestCase):
             entrypoint.subprocess,
             "run",
             return_value=entrypoint.subprocess.CompletedProcess(
-                ["rustup", "toolchain", "list"], 0, "stable-x86_64-unknown-linux-gnu\n", ""
+                ["rustup", "run", "nightly", "rustc", "--version"],
+                1, "toolchain nightly is not installed\n", ""
             ),
         ):
             with self.assertRaisesRegex(
@@ -1497,6 +1558,47 @@ class BuildEntryPointTests(unittest.TestCase):
                 r"rustup toolchain install nightly.*never downloads",
             ):
                 entrypoint.preflight(entrypoint.profile_for("fdm-cpu-release"), release=False)
+
+    def test_preflight_probes_the_exact_installed_channel_without_install(self) -> None:
+        with patch.object(entrypoint.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"), patch.object(
+            entrypoint.subprocess, "run",
+            return_value=entrypoint.subprocess.CompletedProcess(
+                [], 0, "rustc 1.101.0-nightly (0abfedbc7 2026-10-02)\n", ""
+            ),
+        ) as run:
+            entrypoint.preflight(entrypoint.profile_for("fdm-cpu-release"), release=False)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], [
+            "/usr/bin/rustup", "run", "nightly", "rustc", "--version",
+        ])
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+        self.assertEqual(run.call_args.kwargs["stdin"], entrypoint.subprocess.DEVNULL)
+
+    def test_receipt_observes_nightly_even_when_source_selects_stable(self) -> None:
+        # A source override must never be queried by the receipt probes.
+        (self.workspace / "rust-toolchain.toml").write_text(
+            '[toolchain]\nchannel = "stable"\n', encoding="utf-8"
+        )
+        tools = {name: f"/usr/bin/{name}" for name in ("rustup", "rustc", "cargo", "make")}
+        with patch.object(entrypoint, "_command_version", side_effect=lambda command: {
+            "command": command, "exit_code": 0, "output": "installed tool version",
+        }):
+            versions = entrypoint.toolchain_versions(tools)
+        for name in ("rustc", "cargo"):
+            self.assertEqual(versions[name]["command"], [
+                tools["rustup"], "run", "nightly", name, "--version",
+            ])
+
+    def test_failed_nightly_receipt_probe_is_not_accepted_as_build_evidence(self) -> None:
+        tools = {name: name for name in ("rustup", "rustc", "cargo", "make")}
+        for failed_tool in ("rustc", "cargo"):
+            with self.subTest(failed_tool=failed_tool):
+                def probe(command):
+                    failed = command[1:4] == ["run", "nightly", failed_tool]
+                    return {"command": command, "exit_code": 1 if failed else 0, "output": "probe"}
+                with patch.object(entrypoint, "_command_version", side_effect=probe):
+                    with self.assertRaisesRegex(entrypoint.BuildEntryPointError, failed_tool):
+                        entrypoint.toolchain_versions(tools)
 
     def test_context_keeps_capsule_digest_separate_from_native_v2_identity(self) -> None:
         context_path = self._write_context()
@@ -1548,6 +1650,8 @@ class BuildEntryPointTests(unittest.TestCase):
             )
 
     def test_materialization_preserves_mode_and_does_not_create_git(self) -> None:
+        original = self.source / "tree" / "README.txt"
+        entrypoint.os.utime(original, (1000, 1000))
         manifest = entrypoint.verify_source(self.source, self.source_digest)
         entrypoint.materialize_capsule(manifest, self.source, self.workspace)
         source_mode = stat.S_IMODE((self.source / "tree" / "README.txt").stat().st_mode)
@@ -1556,6 +1660,8 @@ class BuildEntryPointTests(unittest.TestCase):
             self.assertEqual(target_mode, 0o755)
         self.assertEqual((self.workspace / "README.txt").read_text(encoding="utf-8"), "immutable source\n")
         self.assertFalse((self.workspace / ".git").exists())
+        self.assertGreater((self.workspace / "README.txt").stat().st_mtime, 1000)
+        self.assertEqual(original.stat().st_mtime, 1000)
 
     def test_materialization_makes_private_dirs_writable_without_changing_capsule(self) -> None:
         nested = self.source / "tree" / "readonly" / "nested"

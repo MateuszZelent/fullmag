@@ -279,6 +279,9 @@ describe("flattenVisibleExplorerRows", () => {
     expect(explorerTreeViewSource).toContain(
       "resourceData={commandResourceData}",
     );
+    expect(explorerTreeViewSource).toContain(
+      "[MODEL_SCENE_PATH]: sceneResourceData",
+    );
   });
 
   it("renders nonselectable semantic roots without selection affordances", () => {

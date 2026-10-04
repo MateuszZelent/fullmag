@@ -3,10 +3,13 @@
 const FIELD_VECTOR_BINARY_HEADER_LEN: usize = 48;
 const FIELD_VECTOR_BINARY_VERSION: u8 = 2;
 const FIELD_VECTOR_BINARY_VERSION_V3: u8 = 3;
+const FIELD_VECTOR_BINARY_VERSION_V4: u8 = 4;
 const FIELD_VECTOR_BINARY_KIND_F64: u8 = 1;
 const FIELD_VECTOR_BINARY_QUANTITY_ID_LEN: usize = 16;
 const FIELD_VECTOR_METADATA_FIXED_LEN: usize = 68;
 const FIELD_VECTOR_METADATA_VERSION: u16 = 2;
+const FIELD_VECTOR_METADATA_V4_FIXED_LEN: usize = 80;
+const FIELD_VECTOR_METADATA_V4_VERSION: u16 = 3;
 const FEM_MESH_TOPOLOGY_BINARY_HEADER_LEN: usize = 32;
 const FEM_MESH_TOPOLOGY_BINARY_VERSION: u8 = 1;
 const FEM_MESH_TOPOLOGY_BINARY_V2_HEADER_LEN: usize = 64;
@@ -52,6 +55,21 @@ pub(crate) struct FieldVectorBinaryMetadata<'a> {
     pub scope_id: &'a str,
     pub indexing: FieldVectorIndexing,
     pub node_indices: &'a [u32],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FieldVectorBinaryMetadataV4<'a> {
+    pub domain_generation_id: &'a str,
+    pub mesh_topology_revision: u64,
+    pub mesh_topology_hash: [u8; 32],
+    pub scope_kind: &'a str,
+    pub scope_id: &'a str,
+    pub indexing: FieldVectorIndexing,
+    pub node_indices: &'a [u32],
+    pub source_kind: &'a str,
+    pub source_id: &'a str,
+    pub source_revision: u64,
+    pub field_generation_id: &'a str,
 }
 
 pub(crate) fn serialize_field_vector_binary_v2(
@@ -123,6 +141,69 @@ pub(crate) fn serialize_field_vector_binary_v3(
     write_f64_values(&mut out, values);
 
     Ok(out)
+}
+
+pub(crate) fn serialize_field_vector_binary_v4(
+    quantity_id: &str,
+    n_comp: usize,
+    grid: [u32; 3],
+    values: &[f64],
+    metadata: &FieldVectorBinaryMetadataV4<'_>,
+) -> Result<Vec<u8>, String> {
+    validate_field_vector_payload(n_comp, grid, values)?;
+    validate_indexing(
+        point_count(values, n_comp),
+        metadata.indexing,
+        metadata.node_indices,
+        4,
+    )?;
+    let metadata_block = encode_field_vector_metadata_v4(metadata)?;
+    let mut out = Vec::with_capacity(
+        FIELD_VECTOR_BINARY_HEADER_LEN + metadata_block.len() + values.len() * 8,
+    );
+    write_field_vector_header(
+        &mut out,
+        FIELD_VECTOR_BINARY_VERSION_V4,
+        n_comp,
+        metadata_block.len(),
+        values.len(),
+        grid,
+        quantity_id,
+    );
+    out.extend_from_slice(&metadata_block);
+    debug_assert_eq!(out.len() % 8, 0);
+    write_f64_values(&mut out, values);
+    Ok(out)
+}
+
+fn point_count(values: &[f64], n_comp: usize) -> usize {
+    values.len() / n_comp
+}
+
+fn validate_indexing(
+    point_count: usize,
+    indexing: FieldVectorIndexing,
+    node_indices: &[u32],
+    version: u8,
+) -> Result<(), String> {
+    match indexing {
+        FieldVectorIndexing::ExplicitNodeIndices | FieldVectorIndexing::SampledNodeIndices => {
+            if node_indices.len() != point_count {
+                return Err(format!(
+                    "FMVP v{version} node_indices length mismatch: expected {point_count}, got {}",
+                    node_indices.len()
+                ));
+            }
+        }
+        FieldVectorIndexing::FullDomain | FieldVectorIndexing::LegacyCountOnly => {
+            if !node_indices.is_empty() {
+                return Err(format!(
+                    "FMVP v{version} full/legacy indexing must not include node_indices"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_field_vector_payload(
@@ -228,6 +309,72 @@ fn encode_field_vector_metadata(
         out.extend_from_slice(&node_index.to_le_bytes());
     }
     out.resize(metadata_len, 0);
+    Ok(out)
+}
+
+fn encode_field_vector_metadata_v4(
+    metadata: &FieldVectorBinaryMetadataV4<'_>,
+) -> Result<Vec<u8>, String> {
+    let scope_kind = metadata.scope_kind.as_bytes();
+    let scope_id = metadata.scope_id.as_bytes();
+    let domain_generation_id = metadata.domain_generation_id.as_bytes();
+    let source_kind = metadata.source_kind.as_bytes();
+    let source_id = metadata.source_id.as_bytes();
+    let field_generation_id = metadata.field_generation_id.as_bytes();
+    for (value, label, required) in [
+        (scope_kind, "scope_kind", false),
+        (scope_id, "scope_id", false),
+        (domain_generation_id, "domain_generation_id", true),
+        (source_kind, "source_kind", true),
+        (source_id, "source_id", true),
+        (field_generation_id, "field_generation_id", true),
+    ] {
+        if (required && value.is_empty()) || value.len() > u16::MAX as usize {
+            return Err(format!("FMVP v4 {label} must fit a non-empty u16 string"));
+        }
+    }
+    if !matches!(metadata.source_kind, "live" | "observation_frame") {
+        return Err("FMVP v4 source_kind must be live or observation_frame".to_string());
+    }
+    if metadata.node_indices.len() > u32::MAX as usize {
+        return Err("FMVP v4 node_indices exceeds u32 length".to_string());
+    }
+
+    let raw_len = FIELD_VECTOR_METADATA_V4_FIXED_LEN
+        + scope_kind.len()
+        + scope_id.len()
+        + domain_generation_id.len()
+        + source_kind.len()
+        + source_id.len()
+        + field_generation_id.len()
+        + metadata.node_indices.len() * std::mem::size_of::<u32>();
+    let mut out = Vec::with_capacity(align_to_eight(raw_len));
+    out.extend_from_slice(b"FMMI");
+    out.extend_from_slice(&FIELD_VECTOR_METADATA_V4_VERSION.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(domain_generation_id.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(source_kind.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(source_id.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(field_generation_id.len() as u16).to_le_bytes());
+    out.extend_from_slice(&metadata.mesh_topology_revision.to_le_bytes());
+    out.extend_from_slice(&metadata.mesh_topology_hash);
+    out.extend_from_slice(&metadata.indexing.code().to_le_bytes());
+    out.extend_from_slice(&(metadata.node_indices.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(scope_kind.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(scope_id.len() as u16).to_le_bytes());
+    out.extend_from_slice(&metadata.source_revision.to_le_bytes());
+    out.extend_from_slice(&[0u8; 4]);
+    debug_assert_eq!(out.len(), FIELD_VECTOR_METADATA_V4_FIXED_LEN);
+    out.extend_from_slice(scope_kind);
+    out.extend_from_slice(scope_id);
+    out.extend_from_slice(domain_generation_id);
+    out.extend_from_slice(source_kind);
+    out.extend_from_slice(source_id);
+    out.extend_from_slice(field_generation_id);
+    for node_index in metadata.node_indices {
+        out.extend_from_slice(&node_index.to_le_bytes());
+    }
+    out.resize(align_to_eight(raw_len), 0);
     Ok(out)
 }
 
@@ -632,7 +779,8 @@ mod tests {
     use super::{
         checked_fem_mesh_topology_binary_v2_len, serialize_fem_mesh_topology_binary_v2,
         serialize_field_vector_binary_v2, serialize_field_vector_binary_v3,
-        FieldVectorBinaryMetadata, FieldVectorIndexing,
+        serialize_field_vector_binary_v4, FieldVectorBinaryMetadata, FieldVectorBinaryMetadataV4,
+        FieldVectorIndexing,
     };
 
     fn mixed_topology_mesh() -> fullmag_runner::FemMeshPayload {
@@ -788,6 +936,38 @@ mod tests {
             .expect_err("non-finite FMVP payloads must be rejected");
 
         assert!(error.contains("non-finite"));
+    }
+
+    #[test]
+    fn field_vector_v4_embeds_exact_observation_source_identity() {
+        let metadata = FieldVectorBinaryMetadataV4 {
+            domain_generation_id: "sha256:domain",
+            mesh_topology_revision: 17,
+            mesh_topology_hash: [0xab; 32],
+            scope_kind: "full",
+            scope_id: "",
+            indexing: FieldVectorIndexing::FullDomain,
+            node_indices: &[],
+            source_kind: "observation_frame",
+            source_id: "frame-123",
+            source_revision: 29,
+            field_generation_id: "field:frame-123:m:29",
+        };
+
+        let binary =
+            serialize_field_vector_binary_v4("m", 3, [1, 1, 1], &[1.0, 0.0, 0.0], &metadata)
+                .expect("source-qualified FMVP v4 should serialize");
+
+        assert_eq!(&binary[..4], b"FMVP");
+        assert_eq!(binary[4], 4);
+        assert_eq!(&binary[48..52], b"FMMI");
+        assert_eq!(u16::from_le_bytes(binary[52..54].try_into().unwrap()), 3);
+        assert_eq!(u64::from_le_bytes(binary[116..124].try_into().unwrap()), 29);
+        let metadata_length = u32::from_le_bytes(binary[8..12].try_into().unwrap()) as usize;
+        let metadata_text = String::from_utf8_lossy(&binary[128..48 + metadata_length]);
+        assert!(metadata_text.contains("observation_frame"));
+        assert!(metadata_text.contains("frame-123"));
+        assert!(metadata_text.contains("field:frame-123:m:29"));
     }
 
     #[test]

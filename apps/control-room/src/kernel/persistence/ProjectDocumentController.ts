@@ -1,9 +1,19 @@
 import type {
   ProjectArchiveRequest,
+  ProjectAuthoringUpdateRequest,
   ProjectCreateRequest,
   ProjectDocumentResource,
 } from "../api/apiTypes";
 import type { ControlRoomApi } from "../api/ControlRoomApi";
+import {
+  assertProjectDocumentReopenMatches,
+  captureProjectDocumentDevelopmentHandoff,
+  cloneBoundedProjectJsonObject,
+  validateProjectDocumentDevelopmentHandoff,
+  validateProjectDocumentResource,
+  type CaptureProjectDocumentDevelopmentHandoffOptions,
+  type ProjectDocumentDevelopmentHandoff,
+} from "./ProjectDocumentDevelopmentHandoff";
 
 const DEFAULT_PROJECT_NAME = "Untitled project";
 const DEFAULT_PROJECT_FILE_NAME = "fullmag-project.fms";
@@ -14,7 +24,7 @@ export interface ProjectArchiveSource {
   readonly hostPath?: string;
 }
 
-type TauriInvoke = <T = unknown>(
+export type TauriInvoke = <T = unknown>(
   command: string,
   args?: Record<string, unknown>,
 ) => Promise<T>;
@@ -79,6 +89,9 @@ export interface ProjectDocumentApi {
         request: ProjectCreateRequest,
       ): Promise<ProjectDocumentResource>;
       open(request: ProjectArchiveRequest): Promise<ProjectDocumentResource>;
+      authoringUpdate(
+        request: ProjectAuthoringUpdateRequest,
+      ): Promise<ProjectDocumentResource>;
     };
   };
 }
@@ -94,6 +107,13 @@ export const EMPTY_PROJECT_DOCUMENT_SNAPSHOT: ProjectDocumentSnapshot = {
 export class ProjectDocumentController {
   private snapshot: ProjectDocumentSnapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
   private readonly listeners = new Set<() => void>();
+  private activeOperation:
+    | "create"
+    | "open"
+    | "save"
+    | "restore"
+    | "authoring"
+    | null = null;
 
   constructor(private readonly api: ProjectDocumentApi | ControlRoomApi) {}
 
@@ -119,7 +139,7 @@ export class ProjectDocumentController {
    */
   close(discardChanges = false): boolean {
     const snapshot = this.snapshot;
-    if (snapshot.state === "loading") return false;
+    if (this.activeOperation !== null || snapshot.state === "loading") return false;
     if (
       (snapshot.state === "ready" || snapshot.state === "error") &&
       snapshot.resource?.dirty &&
@@ -138,12 +158,14 @@ export class ProjectDocumentController {
   }
 
   async create(name = DEFAULT_PROJECT_NAME): Promise<ProjectDocumentResource> {
+    this.assertOperationAvailable();
     const trimmedName = name.trim();
     if (!trimmedName) {
       throw new Error("Project name cannot be empty.");
     }
-    this.setLoading();
+    this.beginOperation("create");
     try {
+      this.setLoading();
       const resource = await this.api.persistence.projects.create({
         name: trimmedName,
       });
@@ -152,15 +174,19 @@ export class ProjectDocumentController {
     } catch (error) {
       this.setError(error);
       throw error;
+    } finally {
+      this.finishOperation("create");
     }
   }
 
   async open(source: ProjectArchiveSource): Promise<ProjectDocumentResource> {
+    this.assertOperationAvailable();
     if (source.bytes.byteLength === 0) {
       throw new Error("The selected project archive is empty.");
     }
-    this.setLoading(source.fileName, source.hostPath ?? null);
+    this.beginOperation("open");
     try {
+      this.setLoading(source.fileName, source.hostPath ?? null);
       const request: ProjectArchiveRequest = {
         archive_base64: bytesToBase64(source.bytes),
         display_name: source.fileName,
@@ -175,10 +201,160 @@ export class ProjectDocumentController {
     } catch (error) {
       this.setError(error, source.fileName);
       throw error;
+    } finally {
+      this.finishOperation("open");
+    }
+  }
+
+  captureDevelopmentHandoff(
+    options: CaptureProjectDocumentDevelopmentHandoffOptions = {},
+  ): ProjectDocumentDevelopmentHandoff {
+    this.assertOperationAvailable();
+    return captureProjectDocumentDevelopmentHandoff(this.snapshot, options);
+  }
+
+  /**
+   * Restore a captured bytes-only document into a fresh empty controller.
+   * The controller remains empty until the API has reproduced and verified the
+   * captured identity, mode, migration policy, and canonical archive bytes.
+   */
+  async restoreDevelopmentHandoff(value: unknown): Promise<void> {
+    this.assertOperationAvailable();
+    if (this.snapshot.state !== "empty") {
+      throw new Error("Project document handoff restore requires an empty controller.");
+    }
+    const handoff = validateProjectDocumentDevelopmentHandoff(value);
+    if (handoff.snapshot.state === "empty") return;
+
+    this.beginOperation("restore");
+    try {
+      const captured = handoff.snapshot;
+      const reopened = await this.api.persistence.projects.open({
+        archive_base64: captured.resource.archive_base64,
+        display_name: captured.fileName,
+      });
+      const validatedReopen = validateProjectDocumentResource(reopened);
+      assertProjectDocumentReopenMatches(captured.resource, validatedReopen);
+
+      // The API reopen proves the archive is still byte-identical and
+      // compatible. Keep the captured metadata as source provenance; no host
+      // filesystem save or durability claim is made by this operation.
+      this.setReady(captured.resource, captured.fileName, captured.hostPath);
+    } finally {
+      this.finishOperation("restore");
+    }
+  }
+
+  /**
+   * Synchronize an explicit scene document into the current portable archive.
+   * This updates only the in-memory project snapshot; durable Save remains a
+   * separate user action.
+   */
+  async synchronizeAuthoring(
+    sceneDocument: Record<string, unknown>,
+  ): Promise<ProjectDocumentResource> {
+    this.assertOperationAvailable();
+    const currentSnapshot = this.snapshot;
+    if (currentSnapshot.state !== "ready") {
+      throw new Error("No project document is open.");
+    }
+
+    const currentResource = validateProjectDocumentResource(
+      currentSnapshot.resource,
+    );
+    if (
+      currentResource.mode.kind !== "read_write" ||
+      !currentResource.migration.can_write
+    ) {
+      throw new Error(
+        currentResource.mode.kind === "read_only"
+          ? currentResource.mode.reason || "This project is read-only."
+          : "This project cannot be authored under its migration policy.",
+      );
+    }
+    if (!Number.isSafeInteger(currentResource.revision)) {
+      throw new Error("The current project revision is invalid.");
+    }
+
+    this.beginOperation("authoring");
+    try {
+      const detachedSceneDocument =
+        cloneBoundedProjectJsonObject(sceneDocument);
+      const request: ProjectAuthoringUpdateRequest = {
+        archive_base64: currentResource.archive_base64,
+        display_name: currentSnapshot.fileName,
+        expected_project_id: currentResource.project_id,
+        expected_revision: currentResource.revision,
+        scene_document: detachedSceneDocument,
+      };
+      const response = validateProjectDocumentResource(
+        await this.api.persistence.projects.authoringUpdate(request),
+      );
+      assertAuthoringUpdateStableMetadata(currentResource, response);
+
+      if (response.revision === currentResource.revision) {
+        if (response.archive_base64 !== currentResource.archive_base64) {
+          throw new Error(
+            "Project authoring returned changed archive bytes without advancing the revision.",
+          );
+        }
+        return currentSnapshot.resource;
+      }
+
+      const nextRevision = currentResource.revision + 1;
+      if (
+        !Number.isSafeInteger(nextRevision) ||
+        response.revision !== nextRevision
+      ) {
+        throw new Error(
+          "Project authoring must advance the project revision by exactly one.",
+        );
+      }
+      if (response.dirty !== true) {
+        throw new Error(
+          "Project authoring returned a changed archive that is not marked dirty.",
+        );
+      }
+      if (response.archive_base64 === currentResource.archive_base64) {
+        throw new Error(
+          "Project authoring advanced the revision without changing archive bytes.",
+        );
+      }
+
+      const preservedResource: ProjectDocumentResource = {
+        ...response,
+        dirty: true,
+      };
+      if (Object.hasOwn(currentResource, "persisted_revision")) {
+        preservedResource.persisted_revision =
+          currentResource.persisted_revision;
+      } else {
+        delete preservedResource.persisted_revision;
+      }
+      if (Object.hasOwn(currentResource, "source_hash")) {
+        preservedResource.source_hash = currentResource.source_hash;
+      } else {
+        delete preservedResource.source_hash;
+      }
+
+      const updatedResource =
+        validateProjectDocumentResource(preservedResource);
+      this.snapshot = {
+        error: null,
+        fileName: currentSnapshot.fileName,
+        hostPath: currentSnapshot.hostPath,
+        resource: updatedResource,
+        state: "ready",
+      };
+      this.notify();
+      return updatedResource;
+    } finally {
+      this.finishOperation("authoring");
     }
   }
 
   async save(): Promise<void> {
+    this.assertOperationAvailable();
     if (this.snapshot.state !== "ready") {
       throw new Error("No project document is open.");
     }
@@ -188,46 +364,75 @@ export class ProjectDocumentController {
           "This project is read-only and cannot be saved.",
       );
     }
-    const bytes = base64ToBytes(this.snapshot.resource.archive_base64);
-    const invoke = tauriInvoke();
-    if (invoke) {
-      const result = await invoke<TauriProjectSaveSummary>("save_project_archive", {
-        request: {
-          archive_base64: this.snapshot.resource.archive_base64,
-          display_name: this.snapshot.fileName,
-          target_path: this.snapshot.hostPath,
-          expected_project_id: this.snapshot.resource.project_id,
-          expected_revision: this.snapshot.resource.persisted_revision,
-          client_intent_id: `control-room-${Date.now()}`,
-        },
-      });
-      const resource = this.snapshot.resource;
-      const revision =
-        typeof result.revision === "number" ? result.revision : resource.revision;
-      const persistedRevision =
-        typeof result.revision === "number"
-          ? result.revision
-          : resource.persisted_revision ?? resource.revision;
-      this.snapshot = {
-        ...this.snapshot,
-        error: null,
-        hostPath: result.path,
-        resource: {
-          ...resource,
-          dirty: false,
-          persisted_revision: persistedRevision,
-          project_id: result.project_id ?? resource.project_id,
-          revision,
-          source_hash:
-            result.source_hash === undefined
-              ? resource.source_hash
-              : result.source_hash,
-        },
-      };
-      this.notify();
-      return;
+    this.beginOperation("save");
+    try {
+      const snapshot = this.snapshot;
+      if (snapshot.state !== "ready") {
+        throw new Error("No project document is open.");
+      }
+      const bytes = base64ToBytes(snapshot.resource.archive_base64);
+      const invoke = tauriInvoke();
+      if (invoke) {
+        const result = await invoke<TauriProjectSaveSummary>("save_project_archive", {
+          request: {
+            archive_base64: snapshot.resource.archive_base64,
+            display_name: snapshot.fileName,
+            target_path: snapshot.hostPath,
+            expected_project_id: snapshot.resource.project_id,
+            expected_revision: snapshot.resource.persisted_revision,
+            client_intent_id: `control-room-${Date.now()}`,
+          },
+        });
+        const revision =
+          typeof result.revision === "number"
+            ? result.revision
+            : snapshot.resource.revision;
+        const persistedRevision =
+          typeof result.revision === "number"
+            ? result.revision
+            : snapshot.resource.persisted_revision ?? snapshot.resource.revision;
+        this.snapshot = {
+          ...snapshot,
+          error: null,
+          hostPath: result.path,
+          resource: {
+            ...snapshot.resource,
+            dirty: false,
+            persisted_revision: persistedRevision,
+            project_id: result.project_id ?? snapshot.resource.project_id,
+            revision,
+            source_hash:
+              result.source_hash === undefined
+                ? snapshot.resource.source_hash
+                : result.source_hash,
+          },
+        };
+        this.notify();
+        return;
+      }
+      downloadProjectArchive(bytes, snapshot.fileName);
+    } finally {
+      this.finishOperation("save");
     }
-    downloadProjectArchive(bytes, this.snapshot.fileName);
+  }
+
+  private assertOperationAvailable(): void {
+    if (this.activeOperation !== null || this.snapshot.state === "loading") {
+      throw new Error("A project document operation is already in progress.");
+    }
+  }
+
+  private beginOperation(
+    operation: "create" | "open" | "save" | "restore" | "authoring",
+  ): void {
+    this.assertOperationAvailable();
+    this.activeOperation = operation;
+  }
+
+  private finishOperation(
+    operation: "create" | "open" | "save" | "restore" | "authoring",
+  ): void {
+    if (this.activeOperation === operation) this.activeOperation = null;
   }
 
   private setLoading(
@@ -327,7 +532,7 @@ export async function pickProjectArchive(): Promise<ProjectArchiveSource | null>
   }
 }
 
-function tauriInvoke(): TauriInvoke | null {
+export function tauriInvoke(): TauriInvoke | null {
   if (typeof window === "undefined") return null;
   return typeof window.__TAURI__?.core?.invoke === "function"
     ? window.__TAURI__.core.invoke
@@ -387,4 +592,22 @@ function downloadProjectArchive(bytes: Uint8Array, fileName: string): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Project document operation failed.";
+}
+
+function assertAuthoringUpdateStableMetadata(
+  current: ProjectDocumentResource,
+  updated: ProjectDocumentResource,
+): void {
+  if (
+    updated.project_id !== current.project_id ||
+    updated.name !== current.name ||
+    updated.schema_version !== current.schema_version ||
+    updated.mode.kind !== current.mode.kind ||
+    updated.migration.can_write !== current.migration.can_write ||
+    updated.migration.target_schema !== current.migration.target_schema
+  ) {
+    throw new Error(
+      "Project authoring changed project identity or writable document metadata.",
+    );
+  }
 }

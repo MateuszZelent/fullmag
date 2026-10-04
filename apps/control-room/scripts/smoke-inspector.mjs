@@ -34,6 +34,10 @@ const INSPECTOR_REQUEST_LIMITS = new Map([
     1,
   ],
   [
+    "POST /v2/sessions/current/simulation/commands",
+    1,
+  ],
+  [
     "PATCH /v2/sessions/current/visualization/state",
     32,
   ],
@@ -99,6 +103,23 @@ await page.addInitScript((baseUrl) => {
   };
 }, new URL(workspaceUrl).origin);
 await installInspectorFixtureApi(page, fixture);
+
+if (process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1") {
+  try {
+    const { qualifyFdmBuildGrid } = await import("./lib/fdm-build-grid-browser.mjs");
+    await qualifyFdmBuildGrid({
+      consoleErrors,
+      fixture,
+      notFoundResponses,
+      outputDir,
+      page,
+      workspaceUrl,
+    });
+  } finally {
+    await browser.close();
+  }
+  process.exit(0);
+}
 
 if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
   try {
@@ -1550,6 +1571,8 @@ async function assertHealthyViewportCanvas(page, label) {
 }
 
 function createInspectorFixture() {
+  const fdmBuildGridMode =
+    process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1";
   const revision = 12;
   const scene = {
     metadata: {
@@ -1619,7 +1642,7 @@ function createInspectorFixture() {
     ],
     outputs: { items: [] },
     study: {
-      requested_backend: "fem",
+      requested_backend: fdmBuildGridMode ? "fdm" : "fem",
       requested_device: "cpu",
       requested_mode: "strict",
       requested_precision: "double",
@@ -1633,6 +1656,8 @@ function createInspectorFixture() {
   };
   const requestBudget = createInspectorRequestBudgetState();
   return {
+    fdmBuildGridMode,
+    gridCommandBodies: [],
     manifest: {
       generation_id: "1",
       mesh_name: "Inspector fixture mesh",
@@ -1891,6 +1916,20 @@ async function installInspectorFixtureApi(page, fixture) {
         status: "synced",
       });
     }
+    if (
+      path === "/v2/sessions/current/simulation/commands" &&
+      request.method() === "POST" &&
+      fixture.fdmBuildGridMode
+    ) {
+      const body = request.postDataJSON() ?? {};
+      fixture.gridCommandBodies.push(body);
+      return fulfillJson(route, {
+        accepted: true,
+        command_id: "fixture-fdm-grid-command",
+        error: null,
+        request_id: body.client_intent_id ?? null,
+      });
+    }
     const objectInteractionMatch =
       /^\/v2\/sessions\/current\/model\/objects\/([^/]+)\/interactions\/([^/]+)$/.exec(path);
     if (objectInteractionMatch && request.method() === "GET") {
@@ -1998,6 +2037,24 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/model/current-transports") return fulfillJson(route, { items: [], scene_revision: fixture.revision });
     if (path === "/v2/sessions/current/model/geometry/capabilities") return fulfillJson(route, { csg_capabilities: [], primitive_capabilities: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/geometry/validation") return fulfillJson(route, { diagnostics: [], revision: fixture.revision, valid: true });
+    if (path === "/v2/sessions/current/model/geometry/diagnostics") {
+      return fulfillJson(route, {
+        backend_target: fixture.fdmBuildGridMode ? "fdm" : "fem",
+        diagnostics: fixture.fdmBuildGridMode
+          ? [{
+              blocks: ["grid"],
+              code: "GRID_EXTENT_REVIEW_REQUIRED",
+              geometry_path: "objects/film",
+              id: "fixture-grid-extent-problem",
+              message: "Grid extent requires operator review.",
+              object_id: "film",
+              severity: "error",
+            }]
+          : [],
+        scene_revision: fixture.revision,
+        status: fixture.fdmBuildGridMode ? "invalid" : "valid",
+      });
+    }
     if (path === "/v2/sessions/current/model/planar-monitors") return fulfillJson(route, { count: 0, monitors: [], scene_revision: fixture.revision });
     if (path === "/v2/sessions/current/model/universe") return fulfillJson(route, {
       mesh_dirty: false,
@@ -2008,8 +2065,36 @@ async function installInspectorFixtureApi(page, fixture) {
       universe: null,
     });
     if (path === "/v2/sessions/current/simulation/preparation") return fulfillJson(route, inspectorPreparationResource());
-    if (path === "/v2/sessions/current/data/domain/meta") return fulfillJson(route, inspectorDomainMeta());
-    if (path === "/v2/sessions/current/data/fields") return fulfillJson(route, inspectorFieldCatalog());
+    if (path === "/v2/sessions/current/data/domain/meta") return fulfillJson(route, inspectorDomainMeta(fixture));
+    if (
+      path === "/v2/sessions/current/data/domain/fdm-multilayer-layout" &&
+      fixture.fdmBuildGridMode
+    ) {
+      return fulfillJson(route, {
+        airbox: null,
+        available: false,
+        backend: "fdm",
+        common_transform_layout: null,
+        domain_generation_id: "1",
+        execution_revision: fixture.revision,
+        layers: [],
+        layout_fingerprint: null,
+        layout_revision: fixture.revision,
+        observation_revision: fixture.revision,
+        requested_mode: "single_grid",
+        resolved_mode: "single_grid",
+        schema_version: "fdm-multilayer-layout.v1",
+        strategy: "single_grid",
+        unavailable_reason: "single_grid_session",
+      });
+    }
+    if (
+      path === "/v2/sessions/current/data/fdm-region-memberships" &&
+      fixture.fdmBuildGridMode
+    ) {
+      return fulfillEmpty(route, 204);
+    }
+    if (path === "/v2/sessions/current/data/fields") return fulfillJson(route, inspectorFieldCatalog(fixture));
     if (path === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualization);
     if (path === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") return fulfillJson(route, fixture.manifest);
     if (path === "/v2/sessions/current/meshing/builds") return fulfillJson(route, { history: [], revision: 7 });
@@ -2060,12 +2145,94 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/meshing/meshes/shared-domain/quality") return fulfillJson(route, { quality: null, revision: 7 });
     if (path === "/v2/sessions/current/meshing/meshes/universe/report") return fulfillJson(route, { report: null, revision: 7 });
     if (path === "/v2/sessions/current/meshing/meshes/universe/quality") return fulfillJson(route, { quality: null, revision: 7 });
-    if (path === "/v2/sessions/current/meshing/builds/current") return fulfillJson(route, { active_build: null, mesh_pipeline_status: "ready", revision: 7 });
-    if (path === "/v2/sessions/current/meshing/builds/latest-successful") return fulfillJson(route, { provenance: { scene_revision: fixture.revision }, revision: 7, status: "completed" });
+    if (path === "/v2/sessions/current/meshing/builds/current") {
+      const failedCandidate = process.env.CONTROL_ROOM_INSPECTOR_RETAINED_MESH === "1";
+      return fulfillJson(route, {
+        active_build: null,
+        last_build_error: failedCandidate ? "fixture mesher rejected the candidate" : null,
+        last_build_summary: {
+          build_id: "mesh:inspector-good",
+          mesh_name: fixture.manifest.mesh_name,
+          source_scene_revision: fixture.revision,
+          status: "completed",
+        },
+        mesh_pipeline_status: failedCandidate ? "failed" : "ready",
+        revision: 7,
+      });
+    }
+    if (path === "/v2/sessions/current/meshing/builds/latest-successful") {
+      const failedCandidate = process.env.CONTROL_ROOM_INSPECTOR_RETAINED_MESH === "1";
+      return fulfillJson(route, {
+        last_build_error: failedCandidate ? "fixture mesher rejected the candidate" : null,
+        last_success: {
+          build_id: "mesh:inspector-good",
+          mesh_name: fixture.manifest.mesh_name,
+          provenance: { scene_revision: fixture.revision },
+          source_scene_revision: fixture.revision,
+          status: "completed",
+        },
+        revision: 7,
+        source_scene_revision: fixture.revision,
+      });
+    }
     if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
     if (path === "/v2/sessions/current/simulation/stages/execution") return fulfillJson(route, { stages: [], stage_statuses: [], total_stages: 0, revision: fixture.revision });
     if (path === "/v2/sessions/current/simulation/solver/status") return fulfillJson(route, { can_accept_commands: true, is_busy: false, runtime_state: "idle", revision: fixture.revision });
-    if (path === "/v2/sessions/current/simulation/commands") return fulfillJson(route, { commands: [], latest_completed: null, revision: fixture.revision });
+    if (
+      path === "/v2/sessions/current/simulation/commands/fixture-fdm-grid-command" &&
+      fixture.fdmBuildGridMode
+    ) {
+      const requestBody = fixture.gridCommandBodies.at(-1) ?? {};
+      return fulfillJson(route, {
+        client_intent_id: requestBody.client_intent_id ?? null,
+        command_id: "fixture-fdm-grid-command",
+        completion_status: "completed",
+        kind: "fdm_grid_refresh",
+        reason: "explicit_build_grid",
+        resource_invalidations: [
+          { resource_key: "data/domain/meta", revision: fixture.revision + 1 },
+        ],
+        seq: fixture.revision + 1,
+        status: "completed",
+      });
+    }
+    if (path === "/v2/sessions/current/simulation/commands") {
+      const commandBody = fixture.fdmBuildGridMode
+        ? fixture.gridCommandBodies.at(-1)
+        : null;
+      const commands = commandBody
+        ? [{
+            client_intent_id: commandBody.client_intent_id ?? null,
+            command_id: "fixture-fdm-grid-command",
+            completed_at_unix_ms: Date.now(),
+            completion_status: "completed",
+            created_at_unix_ms: Date.now(),
+            kind: "fdm_grid_refresh",
+            reason: "explicit_build_grid",
+            seq: fixture.revision + 1,
+            status: "completed",
+          }]
+        : [];
+      return fulfillJson(route, {
+        accepted_count: 0,
+        can_accept_commands: true,
+        commands,
+        completed_count: commands.length,
+        dispatched_count: 0,
+        failed_count: 0,
+        pending_count: 0,
+        rejected_count: 0,
+        revision: fixture.revision + commands.length,
+        running_count: 0,
+        runtime_controls: [],
+      });
+    }
+    if (
+      path === "/v2/sessions/current/diagnostics/engine-log" &&
+      fixture.fdmBuildGridMode
+    ) {
+      return fulfillJson(route, { entries: [], revision: 1, total: 0 });
+    }
     if (path === "/v2/sessions/current/data/artifacts") return fulfillJson(route, []);
     if (path === "/v2/sessions/current/data/scalars") return fulfillJson(route, {
       columns: (url.searchParams.get("columns") ?? "").split(",").filter(Boolean),
@@ -2144,6 +2311,7 @@ function mergeInspectorVisualizationState(state, patch) {
 }
 
 function inspectorSessionStatus(fixture) {
+  const discretization = fixture.fdmBuildGridMode ? "fdm" : "fem";
   return {
     api_contract_version: "1.0.0",
     capabilities: {
@@ -2151,19 +2319,23 @@ function inspectorSessionStatus(fixture) {
       binary_fields: true,
       cell_fields: true,
       eigen_modes: true,
-      explicit_topology: true,
+      explicit_topology: !fixture.fdmBuildGridMode,
       gpu_telemetry: false,
       node_fields: true,
       preview_2d: true,
       preview_3d: true,
       scalar_history: true,
-      structured_grid: false,
+      structured_grid: fixture.fdmBuildGridMode,
       ...(fixture.physicsGuardEnabled
         ? { active_lane: inspectorPhysicsGuardLane() }
         : {}),
     },
     display: { active_quantity_id: "m", field_component: "magnitude", view_mode: "3d", vector_glyphs: true },
-    domain: { cell_count: 3, discretization: "fem", generation_id: 1 },
+    domain: {
+      cell_count: fixture.fdmBuildGridMode ? 32 : 3,
+      discretization,
+      generation_id: 1,
+    },
     energies: {},
     metrics: { steps_per_second: null, total: { steps: 0, time_seconds: 0 }, total_steps: 0, uptime_seconds: 0 },
     resources: {
@@ -2190,7 +2362,14 @@ function inspectorSessionStatus(fixture) {
     },
     run: null,
     runtime_bundle_version: "inspector-routing-smoke",
-    session: { created_at: "2026-08-11T00:00:00.000Z", name: "Inspector routing smoke", session_id: "inspector-routing-smoke", workspace_root: "/tmp/fullmag-inspector-routing-smoke" },
+    session: {
+      created_at: "2026-08-11T00:00:00.000Z",
+      name: "Inspector routing smoke",
+      request_scope_epoch: "inspector-request-scope-1",
+      session_epoch: "inspector-session-epoch-1",
+      session_id: "inspector-routing-smoke",
+      workspace_root: "/tmp/fullmag-inspector-routing-smoke",
+    },
     solver: { state: "idle" },
   };
 }
@@ -2289,7 +2468,24 @@ function inspectorObjectMetrics() {
   };
 }
 
-function inspectorDomainMeta() {
+function inspectorDomainMeta(fixture) {
+  if (fixture.fdmBuildGridMode) {
+    return {
+      bounds: { max: [8e-9, 4e-9, 1e-9], min: [0, 0, 0] },
+      coordinate_system: "cartesian",
+      counts: { cells: 32 },
+      dimension: 3,
+      discretization: "fdm",
+      domain_id: "inspector-routing-fdm-domain",
+      generation_id: 1,
+      grid: {
+        origin: [0, 0, 0],
+        shape: [8, 4, 1],
+        spacing: [1e-9, 1e-9, 1e-9],
+      },
+      units: { length: "m" },
+    };
+  }
   return {
     bounds: { max: [5e-7, 5e-7, 5e-7], min: [-5e-7, -5e-7, -5e-7] },
     counts: { cells: 3, nodes: 12 },
@@ -2300,7 +2496,7 @@ function inspectorDomainMeta() {
   };
 }
 
-function inspectorFieldCatalog() {
+function inspectorFieldCatalog(fixture) {
   return {
     domain_generation_id: 1,
     quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({
@@ -2310,7 +2506,7 @@ function inspectorFieldCatalog() {
       field_revision: 1,
       kind: "vector",
       label: quantity_id,
-      location: "nodes",
+      location: fixture.fdmBuildGridMode ? "cells" : "nodes",
       quantity_id,
       state: "complete",
       unit: quantity_id === "m" ? "1" : "A/m",

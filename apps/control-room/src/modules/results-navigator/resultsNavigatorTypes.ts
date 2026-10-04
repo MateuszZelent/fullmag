@@ -11,6 +11,7 @@ import type {
   FrequencyDomainTextArtifactResource,
 } from "@/kernel/api/apiTypes";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
+import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 
 import type { ResultsSelectionRef } from "./resultsNavigatorSelection";
@@ -750,7 +751,12 @@ function fieldSweepModeFromPayload(
   const rawModeIndex = Math.max(0, Math.trunc(finiteNumber(mode.raw_mode_index) ?? position));
   const modeId = nonEmptyString(mode.mode_id);
   const modeFieldId = nonEmptyString(mode.mode_field_id);
-  const modeFieldResourceKey = nonEmptyString(mode.mode_field_resource_key);
+  const modeArtifactPath = nonEmptyString(mode.mode_artifact_path);
+  // Derive transport in the view model without mutating the hashed artifact.
+  const modeFieldResourceKey = nonEmptyString(mode.mode_field_resource_key)
+    ?? (modeFieldId && modeArtifactPath
+      ? fieldVectorResourceKey(modeFieldId, { view: "phase_rotated_real", phase_rad: 0 })
+      : null);
   const explicitModeFieldAvailable = (mode as { mode_field_available?: unknown })
     .mode_field_available;
   const modeSourceRevision = nonEmptyString(mode.source_revision);
@@ -777,7 +783,7 @@ function fieldSweepModeFromPayload(
     fieldAvailability: hasFieldIdentity ? "available" : "unavailable",
     fieldStatus: nonEmptyString(mode.field_status),
     frequencyHz: finiteNumber(mode.frequency_hz),
-    modeArtifactPath: nonEmptyString(mode.mode_artifact_path),
+    modeArtifactPath,
     modeFieldId: hasFieldIdentity ? modeFieldId : null,
     modeFieldResourceKey: hasFieldIdentity ? modeFieldResourceKey : null,
     modeId: hasStableModeIdentity ? modeId : null,

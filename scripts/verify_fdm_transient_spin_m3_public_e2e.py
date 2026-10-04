@@ -153,7 +153,7 @@ def main() -> None:
         run(
             [
                 binary,
-                "run-json",
+                "run-problem-json-direct",
                 str(problem_path),
                 "--until",
                 "2e-13",
@@ -164,7 +164,7 @@ def main() -> None:
         run(
             [
                 binary,
-                "run-json",
+                "run-problem-json-direct",
                 str(problem_path),
                 "--until",
                 "4e-13",
@@ -175,7 +175,7 @@ def main() -> None:
         run(
             [
                 binary,
-                "run-json",
+                "run-problem-json-direct",
                 str(problem_path),
                 "--until",
                 "2e-13",

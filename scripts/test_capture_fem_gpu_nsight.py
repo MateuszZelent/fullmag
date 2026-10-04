@@ -687,7 +687,7 @@ def test_ncu_passes_are_individually_bounded_to_top_five_kernels() -> None:
     top = capture.top_kernel_names(kernel_rows)
     commands = capture.build_ncu_commands(
         top,
-        ["fullmag", "run-json", "fixture.json"],
+        ["fullmag", "run-problem-json-direct", "fixture.json"],
         Path("ncu"),
     )
 

@@ -86,6 +86,7 @@ pub(crate) type NativeFrequencyDomainApplyWithPotentialCallback =
 #[derive(Clone)]
 #[allow(dead_code)]
 pub(crate) struct NativeDrivenFrequencyResponseRequest<'a> {
+    pub artifact_identity: Option<&'a crate::eigen::FrequencyDomainArtifactIdentity>,
     pub node_count: u64,
     pub tangent_dof_count: u64,
     pub alpha: f64,
@@ -1216,6 +1217,31 @@ fn positive_env_u64(primary: &str, alias: &str) -> u64 {
 fn solve_native_driven_frequency_response_impl(
     request: NativeDrivenFrequencyResponseRequest<'_>,
 ) -> Result<NativeDrivenFrequencyResponseResult, String> {
+    let identity_strings = request
+        .artifact_identity
+        .map(|identity| {
+            identity.validate().map_err(|error| error.to_string())?;
+            let value = |text: &str| CString::new(text).map_err(|error| error.to_string());
+            Ok::<_, String>([
+                value(&identity.session_id)?,
+                value(&identity.run_id)?,
+                value(&identity.stage_id)?,
+                value(&identity.runtime_id)?,
+            ])
+        })
+        .transpose()?;
+    let ffi_identity =
+        identity_strings
+            .as_ref()
+            .map(|values| ffi::FullmagFemFrequencyDomainArtifactIdentityV1 {
+                abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ARTIFACT_IDENTITY_V1,
+                struct_size: std::mem::size_of::<ffi::FullmagFemFrequencyDomainArtifactIdentityV1>()
+                    as u32,
+                session_id: values[0].as_ptr(),
+                run_id: values[1].as_ptr(),
+                stage_id: values[2].as_ptr(),
+                runtime_id: values[3].as_ptr(),
+            });
     let output_directory = CString::new(request.output_directory.to_string_lossy().as_bytes())
         .map_err(|_| "native FEM frequency response output path contains NUL".to_string())?;
     let operator_diagnostics_json = request
@@ -1619,7 +1645,14 @@ fn solve_native_driven_frequency_response_impl(
         mfem_operator.and_then(|problem| problem.apply_demag_tangent_with_potential);
     let mut ffi_result = NativeDrivenFrequencyResponseFfiResult::default();
     let rc = unsafe {
-        if mfem_apply_demag_tangent_with_potential.is_some() {
+        if let Some(identity) = ffi_identity.as_ref() {
+            ffi::fullmag_fem_frequency_domain_solve_driven_response_with_identity_v1(
+                &ffi_request,
+                identity,
+                mfem_apply_demag_tangent_with_potential,
+                &mut ffi_result.inner,
+            )
+        } else if mfem_apply_demag_tangent_with_potential.is_some() {
             ffi::fullmag_fem_frequency_domain_solve_driven_response_v10(
                 &ffi_request,
                 mfem_apply_demag_tangent_with_potential,
@@ -5033,6 +5066,7 @@ mod tests {
             let frequencies_hz = [1.0e9];
             let err =
                 solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+                    artifact_identity: None,
                     node_count: 2,
                     tangent_dof_count: 4,
                     alpha: 0.01,
@@ -5845,6 +5879,7 @@ mod tests {
         }];
 
         let err = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: None,
             node_count: 2,
             tangent_dof_count: 4,
             alpha: 0.01,
@@ -5915,6 +5950,7 @@ mod tests {
         }];
 
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: None,
             node_count: 2,
             tangent_dof_count: 4,
             alpha: 0.01,
@@ -6012,7 +6048,14 @@ mod tests {
             unique_suffix
         ));
 
+        let identity = crate::eigen::FrequencyDomainArtifactIdentity {
+            session_id: "session:native-fmr".into(),
+            run_id: "run:native-fmr-\"\\-α".into(),
+            stage_id: "stage:native-fmr".into(),
+            runtime_id: "runtime:native-fmr".into(),
+        };
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: Some(&identity),
             node_count: 2,
             tangent_dof_count: 4,
             alpha: 0.01,
@@ -6065,6 +6108,16 @@ mod tests {
         .expect("native frequency response boundary should return a structured result");
 
         assert_eq!(result.status, NativeFrequencyDomainStatus::ValidationError);
+        let owned_manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&result.artifact_manifest_path).unwrap())
+                .unwrap();
+        assert_eq!(owned_manifest["session_id"], identity.session_id);
+        assert_eq!(owned_manifest["run_id"], identity.run_id);
+        assert_eq!(owned_manifest["stage_id"], identity.stage_id);
+        assert_eq!(owned_manifest["runtime_id"], identity.runtime_id);
+        assert!(!owned_manifest["resources"]
+            .to_string()
+            .contains("/v2/sessions/current/"));
         assert_eq!(result.total_frequency_count, 2);
         assert_eq!(result.completed_frequency_count, 0);
         assert_eq!(result.written_frequency_point_artifacts, 0);
@@ -6125,6 +6178,7 @@ mod tests {
         ));
 
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: None,
             node_count: 2,
             tangent_dof_count: 4,
             alpha: 0.01,
@@ -6229,6 +6283,7 @@ mod tests {
         ));
 
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: None,
             node_count: 1,
             tangent_dof_count: 2,
             alpha: 0.01,
@@ -6290,6 +6345,7 @@ mod tests {
         let drive_real = [1.0, 0.0];
 
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: None,
             node_count: 1,
             tangent_dof_count: 2,
             alpha: 0.01,
@@ -6351,6 +6407,7 @@ mod tests {
         let drive_real = [1.0, 2.0];
 
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: None,
             node_count: 1,
             tangent_dof_count: 2,
             alpha: 0.01,
@@ -6400,6 +6457,7 @@ mod tests {
 
         let gpu_result =
             solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+                artifact_identity: None,
                 node_count: 1,
                 tangent_dof_count: 2,
                 alpha: 0.01,
@@ -6575,7 +6633,14 @@ mod tests {
             unique_suffix
         ));
 
+        let identity = crate::eigen::FrequencyDomainArtifactIdentity {
+            session_id: "session:native-fmr".into(),
+            run_id: "run:native-fmr-\"\\-α".into(),
+            stage_id: "stage:native-fmr".into(),
+            runtime_id: "runtime:native-fmr".into(),
+        };
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: Some(&identity),
             node_count: 1,
             tangent_dof_count: 2,
             alpha: 0.01,
@@ -6634,6 +6699,16 @@ mod tests {
             result.error_message,
             result.diagnostics_json
         );
+        let owned_manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&result.artifact_manifest_path).unwrap())
+                .unwrap();
+        assert_eq!(owned_manifest["session_id"], identity.session_id);
+        assert_eq!(owned_manifest["run_id"], identity.run_id);
+        assert_eq!(owned_manifest["stage_id"], identity.stage_id);
+        assert_eq!(owned_manifest["runtime_id"], identity.runtime_id);
+        assert!(!owned_manifest["resources"]
+            .to_string()
+            .contains("/v2/sessions/current/"));
         assert_eq!(result.total_frequency_count, 1);
         assert_eq!(result.completed_frequency_count, 1);
         assert_eq!(result.written_frequency_point_artifacts, 1);
@@ -6675,6 +6750,7 @@ mod tests {
         let demag_tangent_matrix = [0.5, 0.0, 0.0, 0.25];
 
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: None,
             node_count: 1,
             tangent_dof_count: 2,
             alpha: 0.01,
@@ -6775,6 +6851,7 @@ mod tests {
         }];
 
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            artifact_identity: None,
             node_count: 4,
             tangent_dof_count: 8,
             alpha: 0.01,

@@ -16,7 +16,11 @@ from local_runner.coordinator import CoordinatorError, docker, inspect_owned
 from local_runner.queue import JobQueue
 from local_runner.worker import _resolve_storage_dir, _format_cpus, _format_memory
 from local_runner.worker_entrypoint import verify_source
-from local_runner.build_entrypoint import BuildEntryPointError, validate_native_source_snapshot
+from local_runner.build_entrypoint import (
+    BuildEntryPointError,
+    required_outputs_for_profile,
+    validate_native_source_snapshot,
+)
 
 
 PROFILES = {
@@ -78,6 +82,7 @@ RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v2'] = {
     'cmake_options': {
         **RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v1']['cmake_options'],
         'FULLMAG_ENABLE_CUDA': 'OFF',
+        'FULLMAG_ENABLE_FEM_GPU': 'OFF',
     },
 }
 
@@ -458,6 +463,15 @@ def build_command(job_id, source_digest, profile, config, paths, storage):
     return argv
 
 
+def artifact_sha256(path):
+    """Stream artifacts on both coordinator and Python 3.10 runtime hosts."""
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def validate_build_receipt(artifacts, job, journal):
     path = artifacts / 'build-receipt.json'
     validate_path(path, artifacts, 'build receipt')
@@ -666,16 +680,8 @@ def validate_build_receipt(artifacts, job, journal):
         ):
             raise ValueError('SLEPc runtime receipt does not prove native-only build')
     elif contract is None:
-        required = {
-            'outputs/.fullmag/local/' + name
-            for name in (
-                'bin/fullmag-bin',
-                'bin/fullmag-api',
-                '_fullmag_core.so',
-                'web/index.html',
-                'launcher-build-mode',
-            )
-        }
+        outputs = required_outputs_for_profile(job['profile'])
+        required = {'outputs/.fullmag/local/' + name for name in outputs}
         if not required.issubset({entry.get('path') for entry in entries}):
             raise ValueError('Required build outputs missing')
         stages = receipt.get('stages', [])
@@ -886,8 +892,9 @@ def validate_build_receipt(artifacts, job, journal):
         artifact = validate_path(artifacts / relative, artifacts, 'build artifact')
         if not artifact.is_file() or artifact.stat().st_size != entry['size']:
             raise ValueError('Artifact size mismatch')
-        with artifact.open('rb') as stream:
-            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if relative in required and artifact.stat().st_size == 0:
+            raise ValueError('Required build output is empty: ' + relative)
+        digest = artifact_sha256(artifact)
         if digest != entry['sha256']:
             raise ValueError('Artifact hash mismatch')
     return receipt

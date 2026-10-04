@@ -1,0 +1,278 @@
+{
+  "schema": "fullmag_approved_frontend_cache_cleanup_v1",
+  "authorization": "explicit_user_approval_2026-10-02",
+  "manifest_sha256": "425D7F8EE91A74243A45422C892D69BC348B9F11C08F06E3B008D29D62940EB2",
+  "started_at": "2026-10-02T05:52:13.6522636Z",
+  "state": "succeeded",
+  "candidates": 44,
+  "deleted": [
+    {
+      "run_id": "06247ed07230446a875ebc690c032cf7",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\06247ed07230446a875ebc690c032cf7\\frontend\\next\\dev-3250",
+      "logical_bytes": 488299278,
+      "files": 1060
+    },
+    {
+      "run_id": "0aa28875b1114b7a972f82814147cb50",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\0aa28875b1114b7a972f82814147cb50\\frontend\\next\\dev-3250",
+      "logical_bytes": 215368131,
+      "files": 822
+    },
+    {
+      "run_id": "0dd2665a463940d380ffbf16394bde94",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\0dd2665a463940d380ffbf16394bde94\\frontend\\next\\dev-3250",
+      "logical_bytes": 212568896,
+      "files": 686
+    },
+    {
+      "run_id": "14bcb2c7689f49c28920491da3b5e058",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\14bcb2c7689f49c28920491da3b5e058\\frontend\\next\\dev-3250",
+      "logical_bytes": 212108863,
+      "files": 635
+    },
+    {
+      "run_id": "23a8f44b80e243e9815504b772573ede",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\23a8f44b80e243e9815504b772573ede\\frontend\\next\\dev-3250",
+      "logical_bytes": 491055458,
+      "files": 1043
+    },
+    {
+      "run_id": "2737a4f0f4844261b0c9b6b0293e7d8b",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\2737a4f0f4844261b0c9b6b0293e7d8b\\frontend\\next\\dev-3250",
+      "logical_bytes": 211589207,
+      "files": 597
+    },
+    {
+      "run_id": "315e151080844c2baaa1cf7d83956821",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\315e151080844c2baaa1cf7d83956821\\frontend\\next\\dev-3250",
+      "logical_bytes": 193112822,
+      "files": 193
+    },
+    {
+      "run_id": "3469f4eb4236478da9813a5254627678",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\3469f4eb4236478da9813a5254627678\\frontend\\next\\dev-3250",
+      "logical_bytes": 216649222,
+      "files": 890
+    },
+    {
+      "run_id": "373378d47ba04d3ba20dc86c24975b79",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\373378d47ba04d3ba20dc86c24975b79\\frontend\\next\\dev-3250",
+      "logical_bytes": 228271809,
+      "files": 1230
+    },
+    {
+      "run_id": "38dcbbde33e44f019610834ccad49809",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\38dcbbde33e44f019610834ccad49809\\frontend\\next\\dev-3250",
+      "logical_bytes": 221035658,
+      "files": 1026
+    },
+    {
+      "run_id": "464b0e94d04744bb900cf487b5f6c20b",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\464b0e94d04744bb900cf487b5f6c20b\\frontend\\next\\dev-3250",
+      "logical_bytes": 204793346,
+      "files": 431
+    },
+    {
+      "run_id": "48f34dbae7ba4db0bd724544749c18c8",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\48f34dbae7ba4db0bd724544749c18c8\\frontend\\next\\dev-3250",
+      "logical_bytes": 228424438,
+      "files": 1228
+    },
+    {
+      "run_id": "54f2b796a24a4c768b68cdb11704f508",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\54f2b796a24a4c768b68cdb11704f508\\frontend\\next\\dev-3250",
+      "logical_bytes": 218660689,
+      "files": 958
+    },
+    {
+      "run_id": "61eb30972324468a81cb4d3f5695b5ae",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\61eb30972324468a81cb4d3f5695b5ae\\frontend\\next\\dev-3250",
+      "logical_bytes": 220350471,
+      "files": 992
+    },
+    {
+      "run_id": "67518819a1a745a78d58f2436be3ceb4",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\67518819a1a745a78d58f2436be3ceb4\\frontend\\next\\dev-3250",
+      "logical_bytes": 205425387,
+      "files": 414
+    },
+    {
+      "run_id": "746cd56dfe4c40639650fdfaede5c5aa",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\746cd56dfe4c40639650fdfaede5c5aa\\frontend\\next\\dev-3250",
+      "logical_bytes": 490430993,
+      "files": 1077
+    },
+    {
+      "run_id": "7ef7ebe1e63a49eab25c66bf421767e0",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\7ef7ebe1e63a49eab25c66bf421767e0\\frontend\\next\\dev-3250",
+      "logical_bytes": 211470013,
+      "files": 567
+    },
+    {
+      "run_id": "85131388173242c99beba44952deb2c4",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\85131388173242c99beba44952deb2c4\\frontend\\next\\dev-3250",
+      "logical_bytes": 221288562,
+      "files": 1009
+    },
+    {
+      "run_id": "86b4eeaf24f94286be3b2e77d8a4487f",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\86b4eeaf24f94286be3b2e77d8a4487f\\frontend\\next\\dev-3250",
+      "logical_bytes": 194349180,
+      "files": 225
+    },
+    {
+      "run_id": "8fc66d09571c4999930d0573a2bd42d1",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\8fc66d09571c4999930d0573a2bd42d1\\frontend\\next\\dev-3250",
+      "logical_bytes": 220450142,
+      "files": 992
+    },
+    {
+      "run_id": "914c8069b85e4d23a319c3b4c6b3d829",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\914c8069b85e4d23a319c3b4c6b3d829\\frontend\\next\\dev-3250",
+      "logical_bytes": 220904875,
+      "files": 1007
+    },
+    {
+      "run_id": "92d0c767518240f9aeb0e69907e74933",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\92d0c767518240f9aeb0e69907e74933\\frontend\\next\\dev-3250",
+      "logical_bytes": 194468903,
+      "files": 227
+    },
+    {
+      "run_id": "9c7743582ed6453b90ee598f46701271",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\9c7743582ed6453b90ee598f46701271\\frontend\\next\\dev-3250",
+      "logical_bytes": 227865283,
+      "files": 1196
+    },
+    {
+      "run_id": "9e025e380d434572ae1c9aceb721cc59",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\9e025e380d434572ae1c9aceb721cc59\\frontend\\next\\dev-3250",
+      "logical_bytes": 209572051,
+      "files": 516
+    },
+    {
+      "run_id": "9f07a06c5d634a4fa344538fe4691c4b",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\9f07a06c5d634a4fa344538fe4691c4b\\frontend\\next\\dev-3250",
+      "logical_bytes": 215716783,
+      "files": 839
+    },
+    {
+      "run_id": "a586f9a0ecc743fa8915d86115778fc5",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\a586f9a0ecc743fa8915d86115778fc5\\frontend\\next\\dev-3250",
+      "logical_bytes": 220534634,
+      "files": 992
+    },
+    {
+      "run_id": "a83b0c506be44a1388d832a3781cb97c",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\a83b0c506be44a1388d832a3781cb97c\\frontend\\next\\dev-3250",
+      "logical_bytes": 210464985,
+      "files": 533
+    },
+    {
+      "run_id": "ac37d939885448959fa2cbf0d620ca47",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\ac37d939885448959fa2cbf0d620ca47\\frontend\\next\\dev-3250",
+      "logical_bytes": 541076548,
+      "files": 1766
+    },
+    {
+      "run_id": "b4c7ef3944af42ebae4a71592e4693d2",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\b4c7ef3944af42ebae4a71592e4693d2\\frontend\\next\\dev-3250",
+      "logical_bytes": 215867892,
+      "files": 839
+    },
+    {
+      "run_id": "b6d08cb2db6d42cb93aa43555fbe8596",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\b6d08cb2db6d42cb93aa43555fbe8596\\frontend\\next\\dev-3250",
+      "logical_bytes": 204333284,
+      "files": 414
+    },
+    {
+      "run_id": "b9944ecab1de494bae232da19d7572eb",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\b9944ecab1de494bae232da19d7572eb\\frontend\\next\\dev-3250",
+      "logical_bytes": 215621879,
+      "files": 839
+    },
+    {
+      "run_id": "c2f9f0ff87fa4479b015563c68dc0d60",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\c2f9f0ff87fa4479b015563c68dc0d60\\frontend\\next\\dev-3250",
+      "logical_bytes": 492850726,
+      "files": 1077
+    },
+    {
+      "run_id": "c4db46c7c77d449ca8cafc2e032853e7",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\c4db46c7c77d449ca8cafc2e032853e7\\frontend\\next\\dev-3250",
+      "logical_bytes": 226307934,
+      "files": 1176
+    },
+    {
+      "run_id": "c9e04a0b6fe64410a73d1d5b51fccf01",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\c9e04a0b6fe64410a73d1d5b51fccf01\\frontend\\next\\dev-3250",
+      "logical_bytes": 478958963,
+      "files": 766
+    },
+    {
+      "run_id": "cb544e6e39784f8e90d581f29c01c193",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\cb544e6e39784f8e90d581f29c01c193\\frontend\\next\\dev-3250",
+      "logical_bytes": 228259995,
+      "files": 1228
+    },
+    {
+      "run_id": "d1a85d2572c64743b952d874cb7a41b3",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\d1a85d2572c64743b952d874cb7a41b3\\frontend\\next\\dev-3250",
+      "logical_bytes": 212223889,
+      "files": 652
+    },
+    {
+      "run_id": "d4005c7b30454456a4cdcf239a289d91",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\d4005c7b30454456a4cdcf239a289d91\\frontend\\next\\dev-3250",
+      "logical_bytes": 220572803,
+      "files": 992
+    },
+    {
+      "run_id": "d836530e926145f58d371a3f3506764d",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\d836530e926145f58d371a3f3506764d\\frontend\\next\\dev-3250",
+      "logical_bytes": 228153931,
+      "files": 1213
+    },
+    {
+      "run_id": "daa68f0747e84930ba9158ecb4a3a52b",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\daa68f0747e84930ba9158ecb4a3a52b\\frontend\\next\\dev-3250",
+      "logical_bytes": 217934797,
+      "files": 854
+    },
+    {
+      "run_id": "dc1e76d4d26c49dd9b214ec311170dc8",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\dc1e76d4d26c49dd9b214ec311170dc8\\frontend\\next\\dev-3250",
+      "logical_bytes": 205297073,
+      "files": 431
+    },
+    {
+      "run_id": "e122bce4d0ae4cd58460e3aac024c759",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\e122bce4d0ae4cd58460e3aac024c759\\frontend\\next\\dev-3250",
+      "logical_bytes": 216103940,
+      "files": 856
+    },
+    {
+      "run_id": "e35a34cff59c42bea9cefff100567bc1",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\e35a34cff59c42bea9cefff100567bc1\\frontend\\next\\dev-3250",
+      "logical_bytes": 228129491,
+      "files": 1210
+    },
+    {
+      "run_id": "f09ec602d25c42519084c13693372e74",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\f09ec602d25c42519084c13693372e74\\frontend\\next\\dev-3250",
+      "logical_bytes": 225715234,
+      "files": 1162
+    },
+    {
+      "run_id": "f9adf801660745d0b43b71473c4ef658",
+      "path": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\windows-control-room-browser-fixture\\pinned-dataset-browser\\f9adf801660745d0b43b71473c4ef658\\frontend\\next\\dev-3250",
+      "logical_bytes": 479050142,
+      "files": 1225
+    }
+  ],
+  "preserved_evidence_verified": true,
+  "protected_evidence_files": 349,
+  "finished_at": "2026-10-02T05:53:54.3430675Z",
+  "deleted_logical_bytes": 11441688600.0
+}

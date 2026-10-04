@@ -1,0 +1,30 @@
+[package]
+name = "fullmag-runtime-control"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fullmag-build-info.workspace = true
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde_json.workspace = true
+serde.workspace = true
+sha2 = "0.10"
+fullmag-application = { path = "../fullmag-application" }
+fullmag-session = { path = "../fullmag-session" }
+fullmag-authoring = { path = "../fullmag-authoring" }
+fullmag-ir = { path = "../fullmag-ir" }
+fullmag-plan = { path = "../fullmag-plan" }
+fullmag-quantities = { path = "../fullmag-quantities" }
+fullmag-runner = { path = "../fullmag-runner" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_SystemInformation"] }

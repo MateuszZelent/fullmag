@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import {
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
@@ -9,9 +9,9 @@ import {
 } from "@/kernel/api/apiPaths";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import {
-  deleteObjectTransaction,
-  patchObjectTransaction,
-} from "@/kernel/authoring/geometryLifecycleCommands";
+  deleteObjectWithHistory,
+  patchObjectIdentityWithHistory,
+} from "@/kernel/authoring/objectGeneralMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -33,6 +33,7 @@ import { useObjectVisualizationSelector } from "@/kernel/visualization/useObject
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { ObjectExtensionsSection } from "../extensions/ObjectExtensionsSection";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
@@ -58,6 +59,13 @@ interface DraftState {
 interface FeedbackState {
   feedback: Feedback | null;
   key: string;
+}
+
+interface PendingOperationState {
+  draftKey: string;
+  operationId: number;
+  pending: boolean;
+  sessionScopeKey: string | null;
 }
 
 type GeometryObjectVisualizationColors = Pick<
@@ -102,9 +110,17 @@ function invalidateAuthoringResources(
   resources: ReturnType<typeof useKernel>["resources"],
   revision: number,
   committedScene?: SceneResource,
+  sessionScopeKey?: string | null,
 ): void {
   if (committedScene) {
-    publishCommittedSceneResource(resources, committedScene, revision);
+    publishCommittedSceneResource(
+      resources,
+      committedScene,
+      revision,
+      undefined,
+      false,
+      sessionScopeKey,
+    );
   } else {
     resources.invalidate(MODEL_SCENE_PATH, revision);
   }
@@ -118,10 +134,8 @@ function invalidateAuthoringResources(
 export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const {
-    api,
     authoringHistory,
     resources,
-    selection: selectionController,
   } = kernel;
   const scene = useSceneResource();
   const validation = useGeometryValidationResource();
@@ -145,7 +159,17 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
     feedback: null,
     key: draftKey,
   });
-  const [pending, setPending] = useState(false);
+  const [pendingState, setPendingState] = useState<PendingOperationState>({
+    draftKey,
+    operationId: 0,
+    pending: false,
+    sessionScopeKey: kernel.commands.getSessionScopeKey() ?? null,
+  });
+  const pendingOperationId = useRef(0);
+  const currentSessionScopeKey = kernel.commands.getSessionScopeKey() ?? null;
+  const pending = pendingState.pending &&
+    pendingState.draftKey === draftKey &&
+    pendingState.sessionScopeKey === currentSessionScopeKey;
 
   const draftName = draftState.key === draftKey ? draftState.name : object.name;
   const draftNotes = draftState.key === draftKey ? draftState.notes : object.notes;
@@ -173,6 +197,21 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
 
   const metricsModel = resolveObjectMetricsPanelModel(objectMetrics.data);
 
+  function createAuthoringMutationContext() {
+    const commandContext = createCommandContext("inspector", kernel, {
+      resourceData: scene.data ? { [MODEL_SCENE_PATH]: scene.data } : undefined,
+      sourceDetail: "ObjectGeneralPanel",
+    });
+    const historyGeneration = authoringHistory?.getGeneration?.();
+    return {
+      ...commandContext,
+      isCurrentSessionScope: () =>
+        commandContext.isCurrentSessionScope?.() !== false &&
+        (historyGeneration === undefined ||
+          authoringHistory?.getGeneration?.() === historyGeneration),
+    };
+  }
+
   function updateDraft(field: "name" | "notes", value: string): void {
     setDraftState((current) => ({
       ...current,
@@ -188,61 +227,80 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
     });
   }
 
-  async function applyIdentityPatch(): Promise<void> {
-    if (object.mode !== "committed") return;
-    setPending(true);
+  function beginPendingOperation(): () => void {
+    const operationId = ++pendingOperationId.current;
+    const sessionScopeKey = kernel.commands.getSessionScopeKey() ?? null;
+    setPendingState({ draftKey, operationId, pending: true, sessionScopeKey });
+    return () => {
+      setPendingState((current) =>
+        current.operationId === operationId
+          ? { ...current, pending: false }
+          : current,
+      );
+    };
+  }
+
+  async function applyIdentityPatch(): Promise<boolean> {
+    if (object.mode !== "committed") return false;
+    const finishPending = beginPendingOperation();
+    let isCurrentMutationContext: (() => boolean) | null = null;
     try {
-      const response = await patchObjectTransaction(api, object.objectId, {
-        base_revision: object.revision,
+      const mutationContext = createAuthoringMutationContext();
+      isCurrentMutationContext = mutationContext.isCurrentSessionScope;
+      const response = await patchObjectIdentityWithHistory(mutationContext, {
+        baseRevision: object.revision,
         name: draftName,
         notes: draftNotes,
+        objectId: object.objectId,
       });
+      if (mutationContext.isCurrentSessionScope() === false) return false;
       const nextRevision =
         typeof response.revision === "number"
           ? response.revision
           : (object.revision ?? 0) + 1;
-      if (scene.data) {
-        authoringHistory?.record({
-          after: response,
-          before: scene.data,
-          committedRevision: nextRevision,
-          label: `Edit identity ${draftName}`,
-        });
-      }
-      invalidateAuthoringResources(resources, nextRevision);
+      invalidateAuthoringResources(
+        resources,
+        nextRevision,
+        response,
+        mutationContext.sessionScopeKey,
+      );
       setFeedback({ kind: "success", message: "Object identity committed." });
+      return true;
     } catch (error) {
+      if (isCurrentMutationContext?.() === false) return false;
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return false;
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
-  async function deleteObject(): Promise<void> {
-    if (object.mode !== "committed") return;
-    setPending(true);
+  async function deleteObject(): Promise<boolean> {
+    if (object.mode !== "committed" || identityDraftDirty) return false;
+    const finishPending = beginPendingOperation();
+    let isCurrentMutationContext: (() => boolean) | null = null;
     try {
-      const response = await deleteObjectTransaction(api, object.objectId, {
-        base_revision: object.revision,
+      const mutationContext = createAuthoringMutationContext();
+      isCurrentMutationContext = mutationContext.isCurrentSessionScope;
+      const response = await deleteObjectWithHistory(mutationContext, {
+        baseRevision: object.revision,
+        name: object.name,
+        objectId: object.objectId,
       });
-      if (scene.data) {
-        authoringHistory?.record({
-          after: response.committed_scene,
-          before: scene.data,
-          committedRevision: response.scene_revision,
-          label: `Delete ${object.name}`,
-        });
-      }
+      if (mutationContext.isCurrentSessionScope() === false) return false;
       invalidateAuthoringResources(
         resources,
         response.scene_revision,
         response.committed_scene,
+        mutationContext.sessionScopeKey,
       );
-      selectionController.clear("geometry-authoring");
+      return true;
     } catch (error) {
+      if (isCurrentMutationContext?.() === false) return false;
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return false;
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
@@ -250,6 +308,19 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
     setDraftState({ name: object.name, notes: object.notes, key: draftKey });
     setFeedback(null);
   }
+
+  const identityDraftDirty = object.mode === "committed" &&
+    (draftName !== object.name || draftNotes !== object.notes);
+  useRegisterInspectorEditSession(
+    object.mode === "committed" ? "staged" : null,
+    pending,
+    identityDraftDirty,
+    true,
+    undefined,
+    applyIdentityPatch,
+    revertDraft,
+    { historyMode: "mutation-owned" },
+  );
 
   function patchObjectColor(
     field: "primitiveColor" | "frameColor",
@@ -366,10 +437,11 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
               </Button>
               <span className="fm-inspector-toolbar__spacer" />
               <Button
-                disabled={pending}
+                disabled={pending || identityDraftDirty}
                 size="sm"
                 type="button"
                 variant="danger"
+                title={identityDraftDirty ? "Apply or revert identity changes before deleting this object." : undefined}
                 onClick={() => void deleteObject()}
               >
                 Delete

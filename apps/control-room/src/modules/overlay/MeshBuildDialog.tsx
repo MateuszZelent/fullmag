@@ -138,7 +138,7 @@ export function meshBuildDialogUnavailableMessage(
   if (lane === "fdm") {
     return (
       fdmGridRefreshReason ??
-      "FDM grid and membership masks are rebuilt by an atomic execution-plan replan. Use Study → Apply Grid."
+      "FDM grid and membership masks are rebuilt by an atomic execution-plan replan. Use Mesh → Build Grid."
     );
   }
   if (lane === "unknown") return UNKNOWN_MESH_COMMAND_LANE_REASON;

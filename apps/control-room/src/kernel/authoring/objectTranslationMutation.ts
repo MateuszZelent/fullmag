@@ -1,6 +1,6 @@
 import { ControlRoomApiError, type ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
-import type { SceneResource } from "@/kernel/api/apiTypes";
+import type { RequestOptions, SceneResource } from "@/kernel/api/apiTypes";
 
 import {
   acknowledgedAuthoringSceneRevision,
@@ -25,19 +25,34 @@ export async function commitObjectTranslation({
   baseRevision,
   objectId,
   resources,
+  sessionScopeKey,
+  isCurrentSessionScope,
   translation,
 }: {
   api: ControlRoomApi;
   baseRevision: number;
   objectId: string;
   resources: ResourceInvalidationController;
+  sessionScopeKey?: string;
+  isCurrentSessionScope?: () => boolean;
   translation: ObjectTranslation;
 }): Promise<{ committedScene?: SceneResource; revision: number }> {
-  const response = await commitObjectTransformTransaction(api, objectId, {
-    base_revision: baseRevision,
-    transform: { translation },
-  });
+  const requestOptions: RequestOptions | undefined = sessionScopeKey
+    ? { sessionScopeKey }
+    : undefined;
+  const response = await commitObjectTransformTransaction(
+    api,
+    objectId,
+    {
+      base_revision: baseRevision,
+      transform: { translation },
+    },
+    requestOptions,
+  );
   const revision = acknowledgedAuthoringSceneRevision(response);
+  if (isCurrentSessionScope?.() === false) {
+    return { committedScene: response.committed_scene, revision };
+  }
   if (response.committed_scene) {
     publishCommittedSceneResource(
       resources,
@@ -45,6 +60,7 @@ export async function commitObjectTranslation({
       revision,
       undefined,
       false,
+      sessionScopeKey,
     );
   }
   invalidateAuthoringMutationDependents(resources, "geometry", revision);

@@ -27,6 +27,28 @@ artifacts/response/field_payloads.zarr/
 artifacts/mesh/periodic_pairs.v1.json
 ```
 
+### Trwały manifest FMR a transport
+
+Bezpośredni writer FMR z jawnym `FrequencyDomainArtifactIdentity` zapisuje
+dokładnego właściciela oraz względne ścieżki w `artifacts`. Nie utrwala
+odnośników HTTP do aktywnej sesji: opcjonalne klucze transportowe w `resources`
+mają wartość `null`, a listy odnośników transportowych są puste. Kształt
+`frequency_domain_manifest.v1` pozostaje niezmieniony. Dostępność sweepu
+wynika z `artifacts.response_sweep_v1_path` lub `response_sweep_v2_path`,
+a zapisane punkty pozostają w `artifacts.frequency_point_paths`.
+
+Adapter API jest miejscem projekcji transportu po rozwiązaniu właściciela;
+usunięcie odnośników nie jest dowodem gotowej obsługi historycznych runów.
+Stare wejścia writera bez identity zachowują odnośniki legacy i nie stanowią
+dowodu nowej publikacji. Manifest modalny z dokładną tożsamością stosuje
+ten sam pusty indeks transportu. Bezpośrednie Rust writers spectrum v2/v3,
+mode metadata i branches zapisują `mode_field_id` bez `mode_field_resource_key`;
+CSV nie publikuje kolumny transportowej. Walidatory dopuszczają jej brak,
+a każdy obecny legacy key nadal musi odpowiadać temu samemu ID. API i modele
+widoku wyliczają transport bez zmiany persisted payloadu. Niemigrowane native
+writers, copy-on-write starych artefaktów oraz historyczne pinned API pozostają
+odrębną pracą; nie jest to dowód pełnego cutoveru ani runtime qualification.
+
 ## A1S — typed server-side analysis artifacts (schema freeze)
 
 Poniższy kontrakt jest właścicielem serwerowych danych używanych przez późniejszą
@@ -43,7 +65,7 @@ Każdy z artefaktów A1S publikuje te same pola identyfikujące zakres i pochodz
 | `artifact_id` | `string` | Stabilny identyfikator produktu analizy, niezależny od ścieżki pliku. |
 | `source` | `{kind, artifact, revision}` | Bezpośrednie źródło danych; `revision` musi być zgodne z `source_revision`. |
 | `source_revision` | `string` | Digest `sha256:<hex>` źródła, a nie timestamp ani długość pliku. |
-| `run_id`, `stage_id`, `scope_id`, `runtime_id` | `string` | Tożsamość sesji/run/stage/zakresu/runtime. Brak runtime proof jest jawnie oznaczany `runtime:not_provided`. |
+| `session_id`, `run_id`, `stage_id`, `scope_id`, `runtime_id` | `string` | Dokładna tożsamość właściciela sesji/run/stage/zakresu/runtime. Nowy producer nie może zapisać `current`, `run:current` ani `runtime:not_provided`; historyczny dokument z takim tokenem pozostaje legacy i nie może być reinterpretowany bez prawdziwego ID. |
 | `revision` | `string` | Digest treści artefaktu; zmiana dowolnego pola naukowego musi go zmienić. |
 | `content_sha256` | `string` | Ten sam digest co `revision`; obliczany z pełnego JSON po wyzerowaniu `revision` i `content_sha256`. |
 | `status` | enum | `complete`, `partial`, `interrupted` albo `corrupt`. |
@@ -79,6 +101,13 @@ rzeczywistych bajtów odpowiednio `eigen/spectrum.v2.json` i
 niezależny od digestu source i obejmuje po wyzerowaniu tych dwóch pól całą
 deklarację skanu.
 
+Trwały field-sweep zapisuje `mode_field_id` i względny `mode_artifact_path`
+dla dostępnego payloadu, bez HTTP `mode_field_resource_key`. Reader akceptuje
+starszą kompletną parę ID/key, lecz key bez ID oraz puste wartości są błędem.
+Transport może być wyliczony w modelu widoku przez warstwę API; nie wolno
+wzbogacać nim hashed payloadu ani zmieniać jego JSON przy zachowaniu starego
+`content_sha256`. Spectrum-only nadal nie ma referencji do payloadu.
+
 ```json
 {
   "schema_version": "eigen/field_sweep.v1",
@@ -105,7 +134,6 @@ deklarację skanu.
       "angular_frequency_rad_per_s": 6.283185307179586e9,
       "mode_artifact_path": "eigen/modes/sample_0000/mode_0000.json",
       "mode_field_id": "analysis:eigen:sample-0000:mode-0000",
-      "mode_field_resource_key": "/v2/sessions/current/data/fields/...",
       "residual_relative_l2": 1.0e-9,
       "source_revision": "sha256:...",
       "status": "complete"
@@ -624,7 +652,7 @@ Each mode summary must include:
 - `raw_mode_index`,
 - optional `branch_id`,
 - `mode_field_id`,
-- `mode_field_resource_key`,
+- optional legacy `mode_field_resource_key` (new direct writers omit HTTP transport),
 - `frequency_real_hz`,
 - `frequency_imag_hz`,
 - `angular_frequency_rad_per_s`,
@@ -735,7 +763,7 @@ Each point must include:
 - `tracking_score_source`,
 - `modal_overlap_available`,
 - `mode_field_id`,
-- `mode_field_resource_key`,
+- optional legacy `mode_field_resource_key` (new direct writers omit HTTP transport),
 - optional `overlap_prev`,
 - optional `modal_overlap_unavailable_reason`.
 
@@ -799,7 +827,7 @@ hand off to mode-field resources.
 The CSV header must include:
 
 ```text
-sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,mode_field_resource_key
+sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id
 ```
 
 The current FEM path writer publishes `sample_id` in each spectrum sample and
@@ -827,24 +855,26 @@ last segment returns from the final control point to the first control point;
 the final CSV sample therefore has the first control point k-vector at the
 total closed-loop arclength.
 
-The eigen artifact validator treats every header field listed above as
-required for current FEM writer output and production modal k-path gates. For
-legacy CSV, the identity triplet `sample_id`, `mode_id`, and
-`mode_field_available` may be absent together; if any member is present, all
-three are required and validated.
+The eigen artifact validator treats the identity and numerical columns listed
+above as required for current FEM writer output and production modal k-path
+gates. Legacy CSV may omit the triplet `sample_id`, `mode_id`, and
+`mode_field_available` together; a partial triplet is rejected.
+The legacy `mode_field_resource_key` column is optional. When present for an
+available field, it must match the canonical legacy route for that field ID.
+New direct writers omit transport routes; the owning API dataset projects them
+from durable field identities without mutating the hashed artifact payload.
+
 **Authoritative explicit mode sample**
 
 An explicit sample selects only
-`eigen/modes/sample_XXXX/mode_YYYY.json` in the artifact root of the active
-workspace. The legacy-compatible `analysis/eigenmodes/modes/{mode_id}`
-endpoint must not replace that selection with `eigen/modes/mode_YYYY.json`
-when its `sample_index` query is present. A missing selected artifact remains
-not-found; an unreadable or malformed artifact preserves its read/parse error.
-Only a request without `sample_index` reads the legacy path. The positional
-`analysis/eigen/modes/{sample_index}/{mode_index}` endpoint uses the same
-explicit-sample selection rule. This does not change response shapes or add
-frontend endpoint adapters; the resource-first mode route remains the browser
-owner. Selection by path does not itself certify payload or run/stage provenance.
+`eigen/modes/sample_XXXX/mode_YYYY.json` in the active artifact root.
+`analysis/eigenmodes/modes/{mode_id}` must not replace an explicit `sample_index`
+with the legacy `eigen/modes/mode_YYYY.json` path. Missing artifacts remain
+not-found; read and parse errors are preserved. Only requests without
+`sample_index` select the legacy path. The positional
+`analysis/eigen/modes/{sample_index}/{mode_index}` route follows the same rule.
+The API validates the request session context after the artifact read so that
+an old session cannot publish its result into a new workspace.
 
 Each public mode key `(sample_index, raw_mode_index)` published in
 `eigen/spectrum.v2.json` must appear exactly once in `dispersion.csv`.
@@ -912,8 +942,9 @@ mass-weighted overlap, unweighted overlap, mass-weighted subspace transport,
 frequency-fallback point, or has unavailable tracking provenance. When
 `eigen/branches.v2.json` is present, the CSV `tracking_score_source` must match
 the branch point with the same `(sample_index, raw_mode_index)`.
-`mode_field_id` and `mode_field_resource_key` must match the selected mode
-payload resource when a mode field is emitted, so a dispersion point can be
+`mode_field_id` must match the selected mode payload when a mode field is
+emitted. An optional legacy `mode_field_resource_key`, if present, must match
+the same ID; the API/view adapter derives the route when absent. A dispersion point can be
 handed off to the same 3D mode overlay as the corresponding branch point.
 When the modal payload has positive `frequency_imag_hz`, `line_width_hz` is
 required and equals `2 * frequency_imag_hz`, matching `linewidth_fwhm_hz`.
@@ -1052,7 +1083,7 @@ Required fields:
 - `normalization`,
 - `damping_policy`,
 - `mode_field_id`,
-- `mode_field_resource_key`,
+- optional legacy `mode_field_resource_key` (new direct writers omit HTTP transport),
 - `residual_norm`,
 - `residual_absolute_l2`,
 - `residual_relative_l2`,
@@ -1074,7 +1105,8 @@ Required fields:
 Mode metadata must not inline large vector arrays such as `real`, `imag`,
 `amplitude`, or `phase`. Reconstructed physical vectors live in
 `eigen/mode_fields.zarr` by default and are exposed through the data-plane
-field resource referenced by `mode_field_resource_key`.
+field resource derived from `mode_field_id` by the API/view adapter; a legacy
+`mode_field_resource_key` remains readable when present.
 
 The per-mode metadata payload is the detailed version of the corresponding
 `eigen/spectrum.v2.json` mode summary, not a second source of truth. For the
@@ -1613,6 +1645,10 @@ Reference modal manifest:
   "schema_version": "frequency_domain_manifest.v1",
   "analysis_family": "magnetic_frequency_domain",
   "study_product": "modal_eigen",
+  "session_id": "session:exact-id",
+  "run_id": "run:exact-id",
+  "stage_id": "stage:eigenmodes",
+  "runtime_id": "runtime:exact-id",
   "stage_kind": "eigenmodes",
   "phase_convention": "exp_i_omega_t",
   "frequency_units": "Hz",
@@ -1627,6 +1663,10 @@ Reference driven manifest:
   "schema_version": "frequency_domain_manifest.v1",
   "analysis_family": "magnetic_frequency_domain",
   "study_product": "driven_response",
+  "session_id": "session:exact-id",
+  "run_id": "run:exact-id",
+  "stage_id": "stage:frequency-response",
+  "runtime_id": "runtime:exact-id",
   "stage_kind": "frequency_response",
   "phase_convention": "exp_i_omega_t",
   "frequency_units": "Hz",

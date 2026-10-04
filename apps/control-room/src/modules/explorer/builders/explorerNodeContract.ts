@@ -6,6 +6,7 @@ import type {
   FrequencyDomainJsonArtifactResource,
   FrequencyDomainManifestResource,
   FrequencyDomainTextArtifactResource,
+  ObservationFrameListResource,
   PlanarMonitorCollectionResource,
   TableListResource,
 } from "@/kernel/api/apiTypes";
@@ -26,6 +27,8 @@ export interface ExplorerTreeResources {
   frequencyDomainManifest?: FrequencyDomainManifestResource | null;
   frequencyDomainResponseSweep?: FrequencyDomainJsonArtifactResource | null;
   frequencyDomainSpectrum?: FrequencyDomainJsonArtifactResource | null;
+  observationFrames?: RuntimeResourceSnapshot<ObservationFrameListResource>;
+  pinnedObservationFrameId?: string | null;
   pinnedQuickChart?: PinnedQuickChart | null;
   tableCatalog?: RuntimeResourceSnapshot<TableListResource>;
 }

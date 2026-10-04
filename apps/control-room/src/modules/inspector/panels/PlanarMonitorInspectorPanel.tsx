@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   MODEL_PLANAR_MONITORS_PATH,
@@ -15,6 +15,8 @@ import { useKernel } from "@/kernel/KernelContext";
 import {
   usePlanarMonitorResource,
 } from "@/kernel/resources/planarMonitorResources";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import {
   isPlanarMonitorRevisionConflict,
   planarMonitorDraftFromMonitor,
@@ -80,11 +82,19 @@ function CommittedPlanarMonitorEditor({
   definitionAvailability: ReturnType<typeof usePlanarMonitorDefinitionAvailability>;
 }) {
   const kernel = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const visualizationState = useVisualizationStateResource();
   const [draft, setDraft] = useState<PlanarMonitorDraft>(() => planarMonitorDraftFromMonitor(monitor));
   const [feedback, setFeedback] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [pending, setPending] = useState(false);
+  const [pendingOperation, setPendingOperation] = useState<{
+    id: number;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextPendingOperationId = useRef(0);
+  const [commandPending, setCommandPending] = useState(false);
+  const pending =
+    commandPending || pendingOperation?.sessionScopeKey === sessionScopeKey;
   const errors = [
     ...planarMonitorValidationErrors(draft.monitor),
     ...(draft.monitor.id === monitor.id ? [] : ["Committed monitor ID must match the resource path ID."]),
@@ -109,31 +119,59 @@ function CommittedPlanarMonitorEditor({
 
   const apply = async () => {
     if (!dirty || errors.length > 0) return;
-    setPending(true);
+    const operationSessionScopeKey = sessionScopeKey;
+    if (!operationSessionScopeKey) {
+      setFeedback("Session identity is not ready. Try again after it loads.");
+      return;
+    }
+    const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+    const historyContext = createCommandContext("inspector", kernel, {
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: visualizationState.data,
+      },
+      sessionScopeKey: operationSessionScopeKey,
+      isCurrentSessionScope: () =>
+        kernel.commands.getSessionScopeKey() === operationSessionScopeKey &&
+        (historyGeneration === undefined ||
+          kernel.authoringHistory?.getGeneration?.() === historyGeneration),
+      sourceDetail: "planar-monitor-inspector",
+    });
+    const operationId = ++nextPendingOperationId.current;
+    setPendingOperation({ id: operationId, sessionScopeKey: operationSessionScopeKey });
     setFeedback(null);
     setConflict(false);
     try {
       const response = await runAuthoringMutationWithHistory(
-        createCommandContext("inspector", kernel, {
-          resourceData: {
-            [VISUALIZATION_STATE_PATH]: visualizationState.data,
-          },
-          sourceDetail: "planar-monitor-inspector",
-        }),
+        historyContext,
         "Update planar monitor",
         async ({ baseRevision }) => {
-          const writeOptions = authoringWriteOptions(baseRevision);
+          const commitRevision = baseRevision ?? sceneRevision;
+          if (typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
+            throw new Error(
+              "The canonical scene revision is unavailable. Refetch the scene before applying.",
+            );
+          }
+          const writeOptions = authoringWriteOptions(
+            commitRevision,
+            operationSessionScopeKey,
+          );
+          if (!writeOptions?.sessionScopeKey || writeOptions.baseRevision === undefined) {
+            throw new Error(
+              "The session-scoped scene revision is unavailable. Refetch the scene before applying.",
+            );
+          }
           return kernel.api.model.planarMonitors.patch(monitor.id, {
-            expected_scene_revision:
-              writeOptions?.baseRevision ?? sceneRevision,
+            expected_scene_revision: writeOptions.baseRevision,
             monitor: structuredClone(draft.monitor),
-          });
+          }, writeOptions);
         },
       );
+      if (historyContext.isCurrentSessionScope?.() === false) return;
       setDraft(planarMonitorDraftFromMonitor(response.monitor, draft.ui.displayLengthUnit));
       kernel.resources.invalidate(MODEL_PLANAR_MONITORS_PATH, response.scene_revision);
       refetch();
     } catch (error) {
+      if (historyContext.isCurrentSessionScope?.() === false) return;
       const revisionConflict = isPlanarMonitorRevisionConflict(error);
       setConflict(revisionConflict);
       setFeedback(
@@ -144,12 +182,14 @@ function CommittedPlanarMonitorEditor({
             : "Planar monitor update failed.",
       );
     } finally {
-      setPending(false);
+      setPendingOperation((current) =>
+        current?.id === operationId ? null : current,
+      );
     }
   };
 
   const duplicate = async () => {
-    setPending(true);
+    setCommandPending(true);
     setFeedback(null);
     try {
       const result = await run("planar-monitor.duplicate");
@@ -159,7 +199,7 @@ function CommittedPlanarMonitorEditor({
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Planar monitor duplication failed.");
     } finally {
-      setPending(false);
+      setCommandPending(false);
     }
   };
 

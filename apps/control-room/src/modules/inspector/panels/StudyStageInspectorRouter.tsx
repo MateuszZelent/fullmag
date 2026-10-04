@@ -88,6 +88,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     state.authoringBusy ? "Study stage changes are being saved." : undefined,
     commitStageDrafts,
     resetStageDrafts,
+    { historyMode: "mutation-owned" },
   );
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = resolveStudyStageInspectorKind(selection.kind, selectedStageKind);

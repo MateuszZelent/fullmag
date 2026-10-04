@@ -75,6 +75,32 @@ CAPABILITY_SOURCE_PATHS = COMMON_SOURCE_PATHS + (
     "docs/specs/capability-matrix-v0.json",
     "scripts/validate_mixed_p1_capability_contract.py",
 )
+API_SOURCE_PATHS = COMMON_SOURCE_PATHS + (
+    "crates/fullmag-authoring/Cargo.toml",
+    "crates/fullmag-authoring/src",
+    "crates/fullmag-ir/Cargo.toml",
+    "crates/fullmag-ir/src",
+    "crates/fullmag-plan/Cargo.toml",
+    "crates/fullmag-plan/src",
+    "crates/fullmag-runtime-control/Cargo.toml",
+    "crates/fullmag-runtime-control/src",
+    "crates/fullmag-api/Cargo.toml",
+    "crates/fullmag-api/src",
+    "crates/fullmag-application/Cargo.toml",
+    "crates/fullmag-application/src",
+    "crates/fullmag-session/Cargo.toml",
+    "crates/fullmag-session/src",
+)
+API_PREPARATION_SOURCE_PATHS = API_SOURCE_PATHS + (
+    "packages/fullmag-py/pyproject.toml",
+    "packages/fullmag-py/uv.lock",
+    "packages/fullmag-py/src",
+)
+AUTHORING_SOURCE_PATHS = COMMON_SOURCE_PATHS + (
+    "crates/fullmag-authoring/Cargo.toml",
+    "crates/fullmag-authoring/src",
+    "crates/fullmag-authoring/tests",
+)
 
 
 @dataclass(frozen=True)
@@ -85,9 +111,24 @@ class RouteSpec:
     command: tuple[str, ...]
     source_paths: tuple[str, ...]
     local_dependency_manifest: str | None = None
+    requires_python: bool = False
+    setup_commands: tuple[tuple[str, ...], ...] = ()
+    binary_env: tuple[tuple[str, str], ...] = ()
+    environment: tuple[tuple[str, str], ...] = ()
 
 
 ROUTES = {
+    "cli-source-check": RouteSpec(
+        name="cli-source-check",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_cli_source_check_v1",
+        command=("cargo", "check", "--locked", "-p", "fullmag-cli", "--bin", "fullmag"),
+        source_paths=API_SOURCE_PATHS + (
+            "crates/fullmag-cli/Cargo.toml",
+            "crates/fullmag-cli/src",
+        ),
+        local_dependency_manifest="crates/fullmag-cli/Cargo.toml",
+    ),
     "session-persistence": RouteSpec(
         name="session-persistence",
         profile="windows-session-check",
@@ -127,6 +168,822 @@ ROUTES = {
             "fullmag-desktop",
         ),
         source_paths=PROJECT_ENTRYPOINT_SOURCE_PATHS,
+    ),
+    "api-source-check": RouteSpec(
+        name="api-source-check",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_source_check_v1",
+        command=("cargo", "check", "--locked", "-p", "fullmag-api", "--bin", "fullmag-api"),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-resource-pool-check": RouteSpec(
+        name="api-resource-pool-check",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_resource_pool_check_v1",
+        command=(
+            "cargo",
+            "check",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-resource-pool",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-resource-pool-discovery-smoke": RouteSpec(
+        name="api-resource-pool-discovery-smoke",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_resource_pool_discovery_smoke_v1",
+        command=(
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-resource-pool",
+            "--",
+            "--store-root",
+            ".",
+            "--pool-id",
+            "local-discovery-smoke",
+            "--expected-generation",
+            "0",
+            "--discover-local",
+            "true",
+            "--host-resource-id",
+            "local-smoke-host",
+            "--include-cpu",
+            "true",
+            "--require-gpu",
+            "false",
+            "--cpu-reserve-millis",
+            "0",
+            "--memory-reserve-bytes",
+            "0",
+            "--storage-reserve-bytes",
+            "0",
+            "--dry-run",
+            "true",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "runtime-control-tests": RouteSpec(
+        name="runtime-control-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_runtime_control_test_v1",
+        command=("cargo", "test", "--locked", "-p", "fullmag-runtime-control"),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-runtime-control/Cargo.toml",
+    ),
+    "api-accepted-worker-check": RouteSpec(
+        name="api-accepted-worker-check",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_worker_check_v1",
+        command=(
+            "cargo",
+            "check",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-tests": RouteSpec(
+        name="api-accepted-supervisor-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_test_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-e2e": RouteSpec(
+        name="api-accepted-supervisor-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-cancel-e2e": RouteSpec(
+        name="api-accepted-supervisor-cancel-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_cancel_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_CANCEL_E2E", "1"),
+            ("FULLMAG_ENABLE_TEST_HOOKS", "1"),
+            ("FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS", "3000"),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-prestart-cancel-e2e": RouteSpec(
+        name="api-accepted-supervisor-prestart-cancel-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_prestart_cancel_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(("FULLMAG_ACCEPTED_SUPERVISOR_PRESTART_CANCEL_E2E", "1"),),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-automatic-retry-e2e": RouteSpec(
+        name="api-accepted-supervisor-automatic-retry-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_automatic_retry_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_AUTOMATIC_RETRY_E2E", "1"),
+            ("FULLMAG_ENABLE_TEST_HOOKS", "1"),
+            ("FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT", "1"),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-retry-recovery-e2e": RouteSpec(
+        name="api-accepted-supervisor-retry-recovery-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_retry_recovery_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_RETRY_RECOVERY_E2E", "1"),
+            ("FULLMAG_ENABLE_TEST_HOOKS", "1"),
+            ("FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT", "1"),
+            ("FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_RETRY_DECISION", "1"),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-process-exit-recovery-e2e": RouteSpec(
+        name="api-accepted-supervisor-process-exit-recovery-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_process_exit_recovery_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_PROCESS_EXIT_RECOVERY_E2E", "1"),
+            ("FULLMAG_ENABLE_TEST_HOOKS", "1"),
+            ("FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT", "1"),
+            (
+                "FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_PROCESS_EXIT_RECEIPT",
+                "1",
+            ),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-e2e": RouteSpec(
+        name="api-accepted-scheduler-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(("FULLMAG_ACCEPTED_SCHEDULER_E2E", "1"),),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-pool-e2e": RouteSpec(
+        name="api-accepted-scheduler-pool-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_pool_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(("FULLMAG_ACCEPTED_SCHEDULER_POOL_E2E", "1"),),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-discovery-e2e": RouteSpec(
+        name="api-accepted-scheduler-discovery-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_discovery_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(("FULLMAG_ACCEPTED_SCHEDULER_DISCOVERY_E2E", "1"),),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-persistent-cursor-e2e": RouteSpec(
+        name="api-accepted-scheduler-persistent-cursor-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_persistent_cursor_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(("FULLMAG_ACCEPTED_SCHEDULER_PERSISTENT_CURSOR_E2E", "1"),),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-parallel-resources-e2e": RouteSpec(
+        name="api-accepted-scheduler-parallel-resources-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_parallel_resources_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_PARALLEL_RESOURCES_E2E", "1"),
+            ("FULLMAG_ENABLE_TEST_HOOKS", "1"),
+            ("FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS", "5000"),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-resource-pool-e2e": RouteSpec(
+        name="api-accepted-scheduler-resource-pool-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_resource_pool_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_RESOURCE_POOL_E2E", "1"),
+            ("FULLMAG_ENABLE_TEST_HOOKS", "1"),
+            ("FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS", "5000"),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-dynamic-resource-pool-e2e": RouteSpec(
+        name="api-accepted-scheduler-dynamic-resource-pool-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_dynamic_resource_pool_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-worker",
+            "--bin",
+            "fullmag-api-resource-pool",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+            ("FULLMAG_RESOURCE_POOL_E2E_BIN", "fullmag-api-resource-pool"),
+        ),
+        environment=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_DYNAMIC_RESOURCE_POOL_E2E", "1"),
+            ("FULLMAG_ENABLE_TEST_HOOKS", "1"),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-resident-discovery-e2e": RouteSpec(
+        name="api-accepted-scheduler-resident-discovery-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_resident_discovery_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(("FULLMAG_ACCEPTED_SCHEDULER_RESIDENT_DISCOVERY_E2E", "1"),),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-resident-drain-e2e": RouteSpec(
+        name="api-accepted-scheduler-resident-drain-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_resident_drain_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(("FULLMAG_ACCEPTED_SCHEDULER_RESIDENT_DRAIN_E2E", "1"),),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-scheduler-retry-e2e": RouteSpec(
+        name="api-accepted-scheduler-retry-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_scheduler_retry_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-scheduler",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN", "fullmag-api-accepted-scheduler"),
+            ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(
+            ("FULLMAG_ACCEPTED_SCHEDULER_RETRY_E2E", "1"),
+            ("FULLMAG_ENABLE_TEST_HOOKS", "1"),
+            ("FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT", "1"),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-preparation-tests": RouteSpec(
+        name="api-preparation-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_preparation_test_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "preparation_materialization_route_tests::",
+            "--",
+            "--nocapture",
+        ),
+        source_paths=API_PREPARATION_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+        requires_python=True,
+    ),
+    "api-project-run-tests": RouteSpec(
+        name="api-project-run-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_project_run_test_v1",
+        command=("cargo", "test", "--locked", "-p", "fullmag-api",
+                 "--bin", "fullmag-api", "router_v2::tests::project_documents::"),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-recovery-tests": RouteSpec(
+        name="api-recovery-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_recovery_test_v1",
+        command=("cargo", "test", "--locked", "-p", "fullmag-api",
+                 "--bin", "fullmag-api", "router_v2::tests::session_recovery_"),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-scene-resource-tests": RouteSpec(
+        name="api-scene-resource-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_scene_resource_test_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::scene_resource_preserves_selection_and_frozen_spins_authoring_state",
+            "--",
+            "--exact",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "authoring-contract-tests": RouteSpec(
+        name="authoring-contract-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_authoring_contract_test_v1",
+        command=("cargo", "test", "--locked", "-p", "fullmag-authoring", "--lib"),
+        source_paths=AUTHORING_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-authoring/Cargo.toml",
+    ),
+    "authoring-scene-adapter-tests": RouteSpec(
+        name="authoring-scene-adapter-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_authoring_scene_adapter_test_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-authoring",
+            "--lib",
+            "scene_document",
+            "--",
+            "--nocapture",
+        ),
+        source_paths=AUTHORING_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-authoring/Cargo.toml",
+    ),
+    "api-openapi-codegen": RouteSpec(
+        name="api-openapi-codegen",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_openapi_codegen_v1",
+        command=("cargo", "run", "--locked", "-p", "fullmag-api", "--features", "openapi-codegen", "--bin", "fullmag-api-openapi"),
+        source_paths=COMMON_SOURCE_PATHS + (
+            "crates/fullmag-api/Cargo.toml",
+            "crates/fullmag-api/src",
+            "crates/fullmag-application/src",
+            "crates/fullmag-session/src",
+        ),
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
     ),
     "fem-capability-contract": RouteSpec(
         name="fem-capability-contract",
@@ -394,14 +1251,51 @@ def toolchain_identity() -> tuple[dict[str, Any], dict[str, Path]]:
     return versions, {"cargo": cargo, "rustc": rustc}
 
 
+def python_runtime_identity(route: str | RouteSpec) -> dict[str, str] | None:
+    """Pin and identify Python only for routes that exercise the Python DSL."""
+    spec = route_spec(route)
+    if not spec.requires_python:
+        return None
+
+    requested = os.environ.get("FULLMAG_PYTHON")
+    selected = requested or sys.executable
+    resolved = shutil.which(selected) if not Path(selected).is_absolute() else selected
+    executable = Path(resolved or selected).expanduser()
+    if not executable.is_file():
+        raise SessionCheckError(f"Selected Python interpreter is not a file: {selected}")
+    result = subprocess.run(
+        [str(executable), "-c", "import sys; print(sys.version.split()[0])"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise SessionCheckError(
+            "Selected Python interpreter failed its version probe: "
+            f"{result.stderr.strip() or result.stdout.strip() or result.returncode}"
+        )
+    return {
+        "executable": str(executable.resolve()),
+        "version": f"Python {result.stdout.strip()}",
+    }
+
+
 def child_environment(
     layout: Mapping[str, Any],
     paths: Mapping[str, Path],
     tools: Mapping[str, Path],
     route: str | RouteSpec = SESSION_ROUTE,
+    python_runtime: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     spec = route_spec(route)
     env = {str(key): str(value) for key, value in os.environ.items()}
+    env.pop("FULLMAG_PROJECT_RUN_FIXTURE_PATH", None)
+    if spec.name == "api-project-run-tests":
+        env["FULLMAG_PROJECT_RUN_FIXTURE_PATH"] = str(paths["run_root"] / "project-run-request.json")
+    executable_suffix = ".exe" if os.name == "nt" else ""
+    for variable, binary_name in spec.binary_env:
+        env[variable] = str(paths["target_dir"] / "debug" / f"{binary_name}{executable_suffix}")
+    env.update(dict(spec.environment))
     env.update({str(key): str(value) for key, value in layout["env"].items()})
     env.update(
         {
@@ -417,6 +1311,12 @@ def child_environment(
             "TMP": str(paths["temp_dir"]),
         }
     )
+    if spec.requires_python:
+        if not python_runtime or not python_runtime.get("executable"):
+            raise SessionCheckError(
+                f"Route {spec.name} requires a pinned Python interpreter"
+            )
+        env["FULLMAG_PYTHON"] = python_runtime["executable"]
     # Cargo is invoked by its selected absolute path and rustc is pinned too;
     # putting the same toolchain bin directories first protects build scripts
     # from finding a rustup shim after RUSTUP_HOME is redirected to storage.
@@ -477,6 +1377,8 @@ def run_route(repo_root: Path, route: str | RouteSpec = SESSION_ROUTE) -> int:
         }
         source_error: str | None = None
         tool_error: str | None = None
+        python_error: str | None = None
+        python_runtime: dict[str, str] | None = None
         try:
             receipt["source"] = source_identity(repo_root, spec)
         except Exception as error:  # receipt must explain a preflight failure
@@ -490,29 +1392,79 @@ def run_route(repo_root: Path, route: str | RouteSpec = SESSION_ROUTE) -> int:
             receipt["toolchain"] = {"error": tool_error}
             tools = None
 
+        if spec.requires_python:
+            try:
+                python_runtime = python_runtime_identity(spec)
+                receipt["python_runtime"] = python_runtime
+            except Exception as error:  # receipt must explain a preflight failure
+                python_error = f"{type(error).__name__}: {error}"
+                receipt["python_runtime"] = {"error": python_error}
+
         _write_atomic_json(paths["receipt"], receipt)
         return_code = 2
         try:
-            if source_error or tool_error or tools is None:
+            if source_error or tool_error or python_error or tools is None:
                 receipt["state"] = "not_run"
-                receipt["error"] = source_error or tool_error
+                receipt["error"] = source_error or tool_error or python_error
             else:
-                env = child_environment(layout, paths, tools, spec)
+                env = child_environment(layout, paths, tools, spec, python_runtime)
                 receipt["state"] = "running"
                 receipt["execution_command"] = [str(tools["cargo"]), *spec.command[1:]]
+                receipt["setup_commands"] = [
+                    [str(tools["cargo"]), *command[1:]] for command in spec.setup_commands
+                ]
                 _write_atomic_json(paths["receipt"], receipt)
+                result: subprocess.CompletedProcess[str] | None = None
+                return_code = 0
                 with paths["log"].open("w", encoding="utf-8", newline="\n") as log:
-                    result = subprocess.run(
-                        [str(tools["cargo"]), *spec.command[1:]],
-                        cwd=repo_root,
-                        env=env,
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        check=False,
-                    )
-                return_code = result.returncode
+                    for command in spec.setup_commands:
+                        log.write("setup command: " + " ".join(command) + "\n")
+                        log.flush()
+                        setup_result = subprocess.run(
+                            [str(tools["cargo"]), *command[1:]],
+                            cwd=repo_root,
+                            env=env,
+                            stdout=log,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            encoding="utf-8",
+                            check=False,
+                        )
+                        return_code = setup_result.returncode
+                        if return_code != 0:
+                            break
+                    if return_code == 0:
+                        result = subprocess.run(
+                            [str(tools["cargo"]), *spec.command[1:]],
+                            cwd=repo_root,
+                            env=env,
+                            stdout=subprocess.PIPE if spec.name == "api-openapi-codegen" else log,
+                            stderr=log if spec.name == "api-openapi-codegen" else subprocess.STDOUT,
+                            text=True,
+                            encoding="utf-8",
+                            check=False,
+                        )
+                        return_code = result.returncode
+                if return_code == 0 and spec.name == "api-openapi-codegen":
+                    assert result is not None
+                    document = json.loads(result.stdout)
+                    if "/v2/sessions/current/status" not in document.get("paths", {}) or "/v2/persistence/projects/{project_id}/runs" not in document.get("paths", {}):
+                        raise SessionCheckError("Generated OpenAPI omitted a required route")
+                    identity = document.get("x-fullmag-build-identity")
+                    if not isinstance(identity, dict) or any(not identity.get(field) for field in ("built_at_utc", "git_commit", "source_snapshot_sha256", "worktree_state")):
+                        raise SessionCheckError("Generated OpenAPI has no complete build identity")
+                    for field in ("built_at_utc", "git_commit", "source_snapshot_sha256", "worktree_state"):
+                        identity[field] = "generated-artifact"
+                    output = repo_root / "apps/control-room/src/kernel/api/generated/openapi-v2.json"
+                    _write_atomic_json(output, document)
+                    receipt["generated_artifact"] = {"path": str(output), "sha256": _sha256_file(output)}
                 receipt["exit_code"] = return_code
+                if return_code == 0 and spec.name == "api-project-run-tests":
+                    fixture = paths["run_root"] / "project-run-request.json"
+                    payload = json.loads(fixture.read_text(encoding="utf-8"))
+                    if not all(key in payload for key in ("archive_base64", "run_intent", "study_plan", "study_problem_catalog")):
+                        raise SessionCheckError("Project run fixture omitted required immutable inputs")
+                    receipt["project_run_fixture"] = {"path": str(fixture), "sha256": _sha256_file(fixture)}
                 receipt["test_summaries"] = _test_summaries(paths["log"])
                 receipt["state"] = "passed" if return_code == 0 else "failed"
         except BaseException as error:

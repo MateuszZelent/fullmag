@@ -10,8 +10,8 @@ import {
   FilePlus2,
   Gauge,
   HelpCircle,
-  Info,
   LayoutDashboard,
+  Layers3,
   ListChecks,
   Pause,
   Play,
@@ -58,9 +58,6 @@ const HIDDEN_PLACEHOLDER_COMMAND_IDS = new Set([
   "workspace.diagnostics",
   "workspace.api-console",
   "workspace.script-view",
-  "workspace.search-docs",
-  "workspace.reference",
-  "workspace.about-help",
 ]);
 
 function hidePlaceholderMenuNodes(nodes: AppMenuNode[]): AppMenuNode[] {
@@ -75,13 +72,6 @@ function hidePlaceholderMenuNodes(nodes: AppMenuNode[]): AppMenuNode[] {
     return [{ ...node, children }];
   });
 }
-
-const APP_DROPDOWN_ITEM_DEFINITIONS: AppMenuNode[] = [
-  { id: "workspace.theme-toggle", label: "Toggle Theme", icon: <Settings size={14} /> },
-  { id: "workspace.preferences", label: "Preferences", icon: <Settings size={14} /> },
-  { id: "workspace.docs", label: "Physics Documentation", icon: <BookOpen size={14} /> },
-  { id: "workspace.about", label: "About Fullmag", icon: <Info size={14} /> },
-];
 
 const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
   {
@@ -130,6 +120,7 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
     id: "simulation",
     label: "Simulation",
     children: [
+      { id: "study.prepare-live", label: "Prepare Live Study", icon: <Layers3 size={14} /> },
       { id: "study.run", label: "Compute Study", icon: <Play size={14} />, shortcut: "F5" },
       { id: "study.pause", label: "Pause", icon: <Pause size={14} /> },
       { id: "study.resume", label: "Resume", icon: <Play size={14} /> },
@@ -179,10 +170,6 @@ const QUICK_ACTION_DEFINITIONS: HeaderQuickAction[] = [
   { id: "workspace.undo", label: "Undo", icon: <Undo2 size={14} /> },
   { id: "workspace.redo", label: "Redo", icon: <Redo2 size={14} /> },
 ];
-
-export const APP_DROPDOWN_ITEMS: AppMenuNode[] = hidePlaceholderMenuNodes(
-  APP_DROPDOWN_ITEM_DEFINITIONS,
-);
 
 export const MAIN_MENUS: AppMenuNode[] = hidePlaceholderMenuNodes(
   MAIN_MENU_DEFINITIONS,

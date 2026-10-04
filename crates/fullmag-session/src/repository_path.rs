@@ -113,6 +113,70 @@ pub fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Read bounded operational metadata from a regular file on a supported local FS.
+/// The root and its ancestors must remain trusted, as with `checked_path`.
+/// Unix nonblocking/no-follow flags prevent a replaced FIFO or final symlink
+/// from turning observation into a blocking stream read. Validate the opened
+/// handle as well as the path; Windows opens final reparse points themselves.
+pub fn read_bounded_regular_file(root: &Path, relative: &str, maximum: usize) -> Result<Vec<u8>> {
+    use std::io::Read;
+
+    let limit = maximum
+        .checked_add(1)
+        .context("metadata byte limit overflow")?;
+    crate::writer::require_local_filesystem(root)?;
+    let path = checked_path(root, relative)?;
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata.is_file() || metadata.len() > maximum as u64 {
+        bail!("operational metadata must be a regular file within its byte budget");
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(&path)?;
+    let opened = file.metadata()?;
+    #[cfg(windows)]
+    let reparse = {
+        use std::os::windows::fs::MetadataExt;
+        opened.file_attributes() & 0x400 != 0
+    };
+    #[cfg(not(windows))]
+    let reparse = false;
+    if !opened.is_file() || reparse || opened.len() > maximum as u64 {
+        bail!("opened operational metadata is not a bounded regular file");
+    }
+    let mut bytes = Vec::new();
+    file.take(limit as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > maximum {
+        bail!("operational metadata exceeds its byte budget");
+    }
+    Ok(bytes)
+}
+
+/// Create a new directory under a trusted local repository root. Existing
+/// leaves are never reused, including after a partially failed initialization.
+/// Parent publication uses the platform's available durability barriers.
+pub fn create_new_directory(root: &Path, relative: &str) -> Result<PathBuf> {
+    crate::writer::require_local_filesystem(root)?;
+    let path = create_parent(root, relative)?;
+    fs::create_dir(&path)?;
+    crate::durability::sync_directory(
+        path.parent()
+            .context("new repository directory has no parent")?,
+    )?;
+    checked_path(root, relative)
+}
+
 pub(crate) fn create_parent(root: &Path, relative: &str) -> Result<PathBuf> {
     checked_path(root, relative)?;
     let mut directory = root.to_path_buf();
@@ -132,6 +196,41 @@ pub(crate) fn create_parent(root: &Path, relative: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_metadata_reader_preserves_file_and_refuses_directory_or_oversize() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("metadata.json"), b"{}").unwrap();
+        assert_eq!(
+            read_bounded_regular_file(directory.path(), "metadata.json", 2).unwrap(),
+            b"{}"
+        );
+        assert!(read_bounded_regular_file(directory.path(), "metadata.json", 1).is_err());
+        fs::create_dir(directory.path().join("not-a-file")).unwrap();
+        assert!(read_bounded_regular_file(directory.path(), "not-a-file", 100).is_err());
+        assert_eq!(
+            fs::read(directory.path().join("metadata.json")).unwrap(),
+            b"{}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_metadata_reader_refuses_fifo_and_symlink_without_stream_read() {
+        use std::os::unix::ffi::OsStrExt;
+        let directory = tempfile::tempdir().unwrap();
+        let fifo = directory.path().join("metadata.json");
+        let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        assert!(read_bounded_regular_file(directory.path(), "metadata.json", 100).is_err());
+        fs::write(directory.path().join("regular.json"), b"{}").unwrap();
+        std::os::unix::fs::symlink(
+            directory.path().join("regular.json"),
+            directory.path().join("link.json"),
+        )
+        .unwrap();
+        assert!(read_bounded_regular_file(directory.path(), "link.json", 100).is_err());
+    }
 
     #[test]
     fn portable_project_names_preserve_spaces_and_unicode() {

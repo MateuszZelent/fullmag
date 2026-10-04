@@ -30,11 +30,10 @@ use crate::{
 };
 
 use fullmag_session::{
-    capture_checkpoint, determine_restore_class, inspect_fms, pack_fms, preflight_fms,
-    unpack_fms_for_visualization, CaptureRequest, CheckpointCompatibility,
-    CheckpointSnapshotProvider, FieldCapturePolicy, FmsExportProfile, FmsPreflight, FmsRunManifest,
-    FmsSessionManifest, FmsWorkspaceManifest, PackOptions, SaveProfile, SessionInspection,
-    SessionStore, SolverEnergies,
+    capture_checkpoint, determine_restore_class, pack_fms, preflight_fms_staged, unpack_fms_staged,
+    CaptureRequest, CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy,
+    FmsExportProfile, FmsStagedPreflight, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest,
+    PackOptions, SaveProfile, SessionInspection, SessionStore, SolverEnergies,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -674,11 +673,49 @@ struct HysteresisMagnetizationSnapshotArtifact {
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn session_store_root(state: &AppState) -> std::path::PathBuf {
-    state
-        .repo_root
-        .join(".fullmag")
-        .join("local-live")
-        .join("session-store")
+    session_store_path(
+        &state.repo_root,
+        state.current_command_journal_store_root.as_deref(),
+    )
+}
+
+fn session_store_path(
+    repo_root: &std::path::Path,
+    configured: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    // Startup resolves the writable state once. Checkpoints and the command
+    // journal must use that same store, including installed Windows packages.
+    configured
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| {
+            repo_root
+                .join(".fullmag")
+                .join("local-live")
+                .join("session-store")
+        })
+}
+
+#[cfg(test)]
+mod session_store_path_tests {
+    use super::session_store_path;
+
+    #[test]
+    fn checkpoint_store_uses_the_frozen_startup_state_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let install = directory.path().join("read-only-install");
+        let store = directory.path().join("user-state/local-live/session-store");
+        assert_eq!(session_store_path(&install, Some(&store)), store);
+        assert!(!install.exists());
+    }
+
+    #[test]
+    fn unconfigured_legacy_state_keeps_its_existing_store() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            session_store_path(directory.path(), None),
+            directory.path().join(".fullmag/local-live/session-store")
+        );
+    }
 }
 
 fn default_checkpoint_profile() -> SaveProfile {
@@ -689,7 +726,7 @@ fn default_field_state_format() -> String {
     "field_state_json".to_string()
 }
 
-fn open_store(state: &AppState) -> Result<SessionStore, ApiError> {
+pub(crate) fn open_store(state: &AppState) -> Result<SessionStore, ApiError> {
     SessionStore::open(session_store_root(state)).map_err(|e| ApiError::internal(e.to_string()))
 }
 
@@ -1000,9 +1037,19 @@ pub(crate) async fn export_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SessionExportRequest>,
 ) -> Result<Json<SessionExportResponse>, ApiError> {
+    export_session_with_context(State(state), Json(req), None).await
+}
+
+pub(crate) async fn export_session_with_context(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SessionExportRequest>,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Json<SessionExportResponse>, ApiError> {
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
     let session_id = current_session_id(&state).await?;
     let script = read_canonical_script(&state).await?;
-    let store = open_store(&state)?;
 
     let name = if let Some(n) = req.name {
         n
@@ -1056,6 +1103,19 @@ pub(crate) async fn export_session(
 
     let export_profile = FmsExportProfile::for_profile(req.profile);
     let docs = collect_project_documents(&state, req.ui_state.as_ref(), script).await;
+
+    // The archive is written to the session store after all slow reads have
+    // completed. Hold the transition fence for the transaction so a session
+    // replacement cannot publish an export assembled from mixed identities.
+    let _transition = if request_context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
+    let store = open_store(&state)?;
     // No await may occur while this thread-owned transaction is held.
     let _transaction = store
         .write_transaction()
@@ -1124,15 +1184,29 @@ pub(crate) async fn export_session(
     }))
 }
 
-/// `POST /v2/sessions/current/persistence/imports/inspections`
+fn archive_preflight_error(error: anyhow::Error, operation: &str) -> ApiError {
+    let infrastructure = error.downcast_ref::<fullmag_session::ArchiveCapacityUnavailable>().is_some()
+        || error.chain().any(|cause| cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            !matches!(io.kind(), std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof)
+        }));
+    let message = format!("{operation}: {error}");
+    if infrastructure { ApiError::internal(message) } else { ApiError::bad_request(message) }
+}
+
+/// `POST /v2/persistence/imports/inspections`
 pub(crate) async fn import_session_inspect(
+    State(state): State<Arc<AppState>>,
     Json(req): Json<SessionImportInspectRequest>,
 ) -> Result<Json<SessionImportInspectResponse>, ApiError> {
     let fms_bytes = base64_decode(&req.fms_base64)
         .map_err(|e| ApiError::bad_request(format!("invalid base64: {e}")))?;
 
-    let inspection = inspect_fms(Cursor::new(&fms_bytes))
-        .map_err(|e| ApiError::bad_request(format!("invalid .fms file: {e}")))?;
+    let decoding_root = session_store_root(&state).join("imports");
+    std::fs::create_dir_all(&decoding_root)
+        .map_err(|error| ApiError::internal(format!("creating archive decode root: {error}")))?;
+    let staged = preflight_fms_staged(Cursor::new(&fms_bytes), &[], &decoding_root)
+        .map_err(|error| archive_preflight_error(error, "invalid_fms_preflight"))?;
+    let inspection = staged.inspection.clone();
 
     Ok(Json(SessionImportInspectResponse { inspection }))
 }
@@ -1338,7 +1412,7 @@ fn safe_import_session_id(session_id: &str) -> String {
 }
 
 fn validate_imported_snapshot_run(
-    preflight: &FmsPreflight,
+    preflight: &FmsStagedPreflight,
     persisted: &PersistedCurrentLiveSnapshot,
 ) -> Result<(), ApiError> {
     if persisted.session.session_id != preflight.session.session_id {
@@ -1358,12 +1432,12 @@ fn validate_imported_snapshot_run(
             "invalid_fms_snapshot: active run '{run_id}' is not declared by manifest/session.json"
         )));
     }
-    let run_bytes = preflight.documents.get(&run_ref).ok_or_else(|| {
+    let run_bytes = preflight.read_document(&run_ref).map_err(|_| {
         ApiError::bad_request(format!(
             "invalid_fms_snapshot: declared run manifest '{run_ref}' is missing"
         ))
     })?;
-    let run_manifest: FmsRunManifest = serde_json::from_slice(run_bytes).map_err(|error| {
+    let run_manifest: FmsRunManifest = serde_json::from_slice(&run_bytes).map_err(|error| {
         ApiError::bad_request(format!(
             "invalid_fms_snapshot: declared run manifest '{run_ref}' is invalid: {error}"
         ))
@@ -1379,7 +1453,7 @@ fn validate_imported_snapshot_run(
         "project/ui_state.json",
         "project/current_live_snapshot.json",
     ] {
-        if !preflight.documents.contains_key(document) {
+        if !preflight.contains_document(document) {
             return Err(ApiError::bad_request(format!(
                 "invalid_fms_snapshot: required document '{document}' is missing"
             )));
@@ -1422,32 +1496,33 @@ fn normalize_imported_read_only(persisted: &mut PersistedCurrentLiveSnapshot) {
 
 fn publish_imported_session(
     state: &AppState,
-    fms_bytes: &[u8],
-    preflight: &FmsPreflight,
+    preflight: &FmsStagedPreflight,
     persisted: &PersistedCurrentLiveSnapshot,
-    restore_mode: SessionRestoreMode,
     import_id: &str,
 ) -> Result<PathBuf, ApiError> {
+    if matches!(preflight.session.profile, SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive) {
+        preflight.reachability.require_complete()
+            .map_err(|error| ApiError::bad_request(format!("invalid_fms_graph: {error}")))?;
+    }
     let imports = session_store_root(state).join("imports");
     std::fs::create_dir_all(&imports)
         .map_err(|error| ApiError::internal(format!("creating import root: {error}")))?;
     let published = imports.join(&import_id);
     let staging = imports.join(format!(".{import_id}.staging"));
 
+    // Exclusive UUID paths belong only to this operation. Uncertain durable
+    // writes retain their staging directory for reconciliation.
+    std::fs::create_dir(&staging)
+        .map_err(|error| ApiError::internal(format!("creating exclusive import staging: {error}")))?;
+    let mut retain_staging = false;
     let result = (|| -> Result<(), ApiError> {
         let staging_store = SessionStore::open(&staging)
             .map_err(|error| ApiError::internal(format!("creating import staging: {error}")))?;
-        let imported_session = (match restore_mode {
-            SessionRestoreMode::VisualizationOnly | SessionRestoreMode::ReplaceProject => {
-                unpack_fms_for_visualization(Cursor::new(fms_bytes), &staging_store)
-            }
-            SessionRestoreMode::Resume => {
-                return Err(ApiError::conflict(
-                    "checkpoint_restore_unsupported: this runtime cannot restore an FMS checkpoint",
-                ));
-            }
-        })
-        .map_err(|error| ApiError::bad_request(format!("invalid_fms_unpack: {error}")))?;
+        let imported_session = unpack_fms_staged(preflight, &staging_store)
+            .map_err(|error| {
+                retain_staging = error.downcast_ref::<fullmag_session::PublicationUncertain>().is_some();
+                ApiError::internal(format!("archive import storage failure at {}: {error}", staging.display()))
+            })?;
         if imported_session.session_id != preflight.session.session_id {
             return Err(ApiError::bad_request(
                 "invalid_fms_unpack: session manifest changed during import",
@@ -1464,17 +1539,23 @@ fn publish_imported_session(
                 })?,
             )
             .map_err(|error| {
+                retain_staging = error.downcast_ref::<fullmag_session::PublicationUncertain>().is_some();
                 ApiError::internal(format!(
-                    "persisting rebased imported session snapshot: {error}"
+                    "persisting rebased imported session snapshot at {}: {error}", staging.display()
                 ))
             })?;
-        std::fs::rename(&staging, &published).map_err(|error| {
-            ApiError::internal(format!("publishing imported session snapshot: {error}"))
+        // Release writer ownership through its original path before moving
+        // the private root. All handles are closed at the publication boundary.
+        drop(staging_store);
+        fullmag_session::publish_directory(&staging, &published).map_err(|error| {
+            retain_staging = error.downcast_ref::<fullmag_session::PublicationUncertain>().is_some()
+                || error.downcast_ref::<fullmag_session::WriterReleaseUnconfirmed>().is_some();
+            ApiError::internal(format!("publishing imported session snapshot at {}: {error}", published.display()))
         })?;
         Ok(())
     })();
     if let Err(error) = result {
-        let _ = std::fs::remove_dir_all(&staging);
+        if !retain_staging { let _ = std::fs::remove_dir_all(&staging); }
         return Err(error);
     }
     Ok(published)
@@ -1485,22 +1566,35 @@ pub(crate) async fn import_session_commit(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SessionImportCommitRequest>,
 ) -> Result<Json<SessionImportCommitResponse>, ApiError> {
+    import_session_commit_with_context(State(state), Json(req), None).await
+}
+
+pub(crate) async fn import_session_commit_with_context(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SessionImportCommitRequest>,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Json<SessionImportCommitResponse>, ApiError> {
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
     let fms_bytes = base64_decode(&req.fms_base64)
         .map_err(|e| ApiError::bad_request(format!("invalid base64: {e}")))?;
 
     // The archive, persisted snapshot, presentation migration, and semantic
     // report must all be valid before opening a SessionStore or mutating live
     // application state.
-    let preflight = preflight_fms(
+    let decoding_root = session_store_root(&state).join("imports");
+    std::fs::create_dir_all(&decoding_root)
+        .map_err(|error| ApiError::internal(format!("creating archive decode root: {error}")))?;
+    let preflight = preflight_fms_staged(
         Cursor::new(&fms_bytes),
         &["project/current_live_snapshot.json"],
+        &decoding_root,
     )
-    .map_err(|error| ApiError::bad_request(format!("invalid_fms_preflight: {error}")))?;
-    let snapshot_bytes = preflight
-        .documents
-        .get("project/current_live_snapshot.json")
-        .expect("preflight required the current snapshot document");
-    let mut persisted: PersistedCurrentLiveSnapshot = serde_json::from_slice(snapshot_bytes)
+    .map_err(|error| archive_preflight_error(error, "invalid_fms_preflight"))?;
+    let snapshot_bytes = preflight.read_document("project/current_live_snapshot.json")
+        .map_err(|error| ApiError::bad_request(format!("invalid_fms_snapshot: {error}")))?;
+    let mut persisted: PersistedCurrentLiveSnapshot = serde_json::from_slice(&snapshot_bytes)
         .map_err(|error| ApiError::bad_request(format!("invalid_fms_snapshot: {error}")))?;
     let restored_display_presentation = restore_display_presentation(
         persisted.display_presentation_schema_version,
@@ -1542,17 +1636,28 @@ pub(crate) async fn import_session_commit(
         run.artifact_dir = restored_artifact_dir;
     }
     let restored: SessionStateResponse = persisted.clone().into();
-    let published_root = publish_imported_session(
-        &state,
-        &fms_bytes,
-        &preflight,
-        &persisted,
-        req.restore_mode,
-        &import_id,
-    )?;
-    let published_store = SessionStore::open(&published_root)
-        .map_err(|error| ApiError::internal(format!("opening published import: {error}")))?;
+    validate_imported_snapshot_run(&preflight, &persisted)?;
+    let restored_ui_state = preflight.read_document("project/ui_state.json")
+        .map_err(|error| ApiError::bad_request(format!("invalid_fms_ui_state: {error}")))
+        .map(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())?;
 
+    // Publishing an imported workspace replaces the mutable `current` root.
+    // Revalidate the request identity after preflight and keep the transition
+    // fence until the replacement and its realtime publication are complete.
+    let _transition = if request_context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
+    publish_imported_session(&state, &preflight, &persisted, &import_id)?;
+
+    // Drop queues, replay, and other session-owned side channels before the
+    // imported snapshot becomes visible. The imported presentation below then
+    // repopulates the workspace-specific stores from the archive.
+    crate::reset_current_live_session_resources(&state).await;
     {
         let mut current = state.current_live_state.write().await;
         *current = Some(restored.clone());
@@ -1577,6 +1682,9 @@ pub(crate) async fn import_session_commit(
         let mut layout = state.current_workspace_layout.write().await;
         *layout = persisted.workspace_layout.clone();
     }
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     let realtime_state = current_live_realtime_state_from_snapshot(
         &state,
         &restored,
@@ -1585,13 +1693,8 @@ pub(crate) async fn import_session_commit(
     .await;
     publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
 
-    let restored_ui_state = published_store
-        .read_document("project/ui_state.json")
-        .map_err(|e| ApiError::internal(format!("reading ui_state document: {e}")))?
-        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok());
-
     Ok(Json(SessionImportCommitResponse {
-        session_id: preflight.session.session_id,
+        session_id: preflight.session.session_id.clone(),
         restore_mode: req.restore_mode,
         restore_class: preflight.inspection.restore_class,
         warnings,
@@ -1601,22 +1704,44 @@ pub(crate) async fn import_session_commit(
 }
 
 /// `GET /v2/sessions/current/persistence/checkpoints`
-pub(crate) async fn list_checkpoints(
+pub(crate) async fn list_checkpoints_with_context(
     State(state): State<Arc<AppState>>,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<Json<CheckpointListResponse>, ApiError> {
+    let (run_id, current) = {
+        let _transition = if context.is_some() {
+            Some(state.current_live_session_transition.lock().await)
+        } else {
+            None
+        };
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+        if let Some(context) = context {
+            crate::ensure_current_live_request_context(
+                snapshot,
+                context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+        }
+        (
+            snapshot.session.run_id.clone(),
+            checkpoint_context_from_snapshot(snapshot, 0),
+        )
+    };
     let store = open_store(&state)?;
-
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
-    let run_id = snapshot.session.run_id.clone();
-    let current = checkpoint_context_from_snapshot(snapshot, 0);
-    drop(guard);
 
     let checkpoints = store
         .list_checkpoints(&run_id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    if let Some(context) = context {
+        let _transition = state.current_live_session_transition.lock().await;
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
 
     let checkpoints = checkpoints
         .into_iter()
@@ -1627,21 +1752,42 @@ pub(crate) async fn list_checkpoints(
 }
 
 /// `GET /v2/sessions/current/persistence/checkpoints/{checkpoint_id}`
-pub(crate) async fn get_checkpoint(
+pub(crate) async fn get_checkpoint_with_context(
     State(state): State<Arc<AppState>>,
     checkpoint_id: String,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<Json<CheckpointEntry>, ApiError> {
+    let (run_id, current) = {
+        let _transition = if context.is_some() {
+            Some(state.current_live_session_transition.lock().await)
+        } else {
+            None
+        };
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+        if let Some(context) = context {
+            crate::ensure_current_live_request_context(
+                snapshot,
+                context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+        }
+        (
+            snapshot.session.run_id.clone(),
+            checkpoint_context_from_snapshot(snapshot, 0),
+        )
+    };
     let store = open_store(&state)?;
 
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
-    let run_id = snapshot.session.run_id.clone();
-    let current = checkpoint_context_from_snapshot(snapshot, 0);
-    drop(guard);
-
     let checkpoint = read_checkpoint_for_run(&store, &run_id, &checkpoint_id)?;
+    if let Some(context) = context {
+        let _transition = state.current_live_session_transition.lock().await;
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
     Ok(Json(checkpoint_entry(checkpoint, &current, None)))
 }
 
@@ -1650,12 +1796,40 @@ pub(crate) async fn create_checkpoint(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CheckpointCreateRequest>,
 ) -> Result<Json<CheckpointCreateResponse>, ApiError> {
+    create_checkpoint_with_context(State(state), Json(req), None).await
+}
+
+pub(crate) async fn create_checkpoint_with_context(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CheckpointCreateRequest>,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Json<CheckpointCreateResponse>, ApiError> {
+    // Pin the session identity across the synchronous capture and the final
+    // state publication. The legacy wrapper remains available for internal
+    // callers that have not yet migrated to the request-context contract.
+    let _transition = if request_context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
     let store = open_store(&state)?;
 
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if let Some(context) = request_context {
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
     if let Some(expected_state_version) = req.expected_state_version {
         if snapshot.state_version != expected_state_version {
             return Err(ApiError::conflict(format!(
@@ -1692,6 +1866,15 @@ pub(crate) async fn create_checkpoint(
     let current_snapshot = guard
         .as_mut()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if let Some(context) = request_context {
+        crate::ensure_current_live_request_context(
+            current_snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
     if current_snapshot.session.run_id != capture_run_id
         || current_snapshot.state_version != capture_state_version
         || current_snapshot
@@ -1740,12 +1923,40 @@ pub(crate) async fn restore_checkpoint(
     checkpoint_id: String,
     Json(req): Json<CheckpointRestoreRequest>,
 ) -> Result<Json<CheckpointRestoreResponse>, ApiError> {
+    restore_checkpoint_with_context(State(state), checkpoint_id, Json(req), None).await
+}
+
+pub(crate) async fn restore_checkpoint_with_context(
+    State(state): State<Arc<AppState>>,
+    checkpoint_id: String,
+    Json(req): Json<CheckpointRestoreRequest>,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Json<CheckpointRestoreResponse>, ApiError> {
+    // Keep the transition fence while loading and applying the checkpoint so
+    // a replacement of the `current` workspace cannot receive stale data.
+    let _transition = if context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
+    if let Some(context) = context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
     let store = open_store(&state)?;
 
     let mut guard = state.current_live_state.write().await;
     let snapshot = guard
         .as_mut()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if let Some(context) = context {
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
     if let Some(expected_state_version) = req.expected_state_version {
         if snapshot.state_version != expected_state_version {
             return Err(ApiError::conflict(format!(
@@ -1809,10 +2020,13 @@ pub(crate) async fn restore_checkpoint(
     }
     validate_checkpoint_restore_shape(snapshot, magnetization.len())?;
 
-    let restore_class = determine_restore_class(
-        &checkpoint.compatibility,
-        &checkpoint_compatibility(snapshot),
-    );
+    let restore_class =
+        supported_checkpoint_restore_class(&checkpoint, &checkpoint_compatibility(snapshot));
+    if restore_class != fullmag_session::RestoreClass::ExactResume {
+        return Err(ApiError::conflict(format!(
+            "checkpoint_restore_requires_exact_resume: checkpoint is classified as {restore_class:?}"
+        )));
+    }
     let flat_magnetization = flatten_magnetization(&magnetization);
     let live_state = snapshot
         .live_state
@@ -1884,15 +2098,41 @@ pub(crate) async fn export_field_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldStateExportRequest>,
 ) -> Result<Json<FieldStateExportResponse>, ApiError> {
+    export_field_state_with_context(State(state), Json(req), None).await
+}
+
+pub(crate) async fn export_field_state_with_context(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldStateExportRequest>,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Json<FieldStateExportResponse>, ApiError> {
     let export_format = normalize_field_state_export_format(&req.format)?;
     validate_supported_field_state_export(&req)?;
     let file_name = sanitize_field_state_file_name(req.file_name.as_deref(), &req)?;
     let repo_root = state.repo_root.clone();
 
+    let _transition = if request_context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
+
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if let Some(context) = request_context {
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
     let latest = snapshot
         .live_state
         .as_ref()
@@ -1950,6 +2190,15 @@ pub(crate) async fn export_field_state(
 
     let mut guard = state.current_live_state.write().await;
     if let Some(snapshot) = guard.as_mut() {
+        if let Some(context) = request_context {
+            crate::ensure_current_live_request_context(
+                snapshot,
+                context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+        }
         if !snapshot
             .artifacts
             .iter()
@@ -1962,6 +2211,8 @@ pub(crate) async fn export_field_state(
             });
             snapshot.state_version = snapshot.state_version.saturating_add(1);
         }
+    } else if request_context.is_some() {
+        return Err(ApiError::not_found("no active workspace"));
     }
 
     Ok(Json(FieldStateExportResponse {
@@ -1980,13 +2231,38 @@ pub(crate) async fn inspect_field_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldStateInspectRequest>,
 ) -> Result<Json<FieldStateInspectResponse>, ApiError> {
+    inspect_field_state_with_context(State(state), Json(req), None).await
+}
+
+pub(crate) async fn inspect_field_state_with_context(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldStateInspectRequest>,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Json<FieldStateInspectResponse>, ApiError> {
     if let Some(format) = req.format.as_deref() {
         validate_field_state_json_format(format)?;
+    }
+    let _transition = if request_context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
     }
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if let Some(context) = request_context {
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
     let artifact =
         read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref, &req.target)?;
     let mut warnings = Vec::new();
@@ -2034,15 +2310,40 @@ pub(crate) async fn import_field_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldStateImportRequest>,
 ) -> Result<Json<FieldStateImportResponse>, ApiError> {
+    import_field_state_with_context(State(state), Json(req), None).await
+}
+
+pub(crate) async fn import_field_state_with_context(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldStateImportRequest>,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Json<FieldStateImportResponse>, ApiError> {
     let mode = req
         .mode
         .clone()
         .unwrap_or_else(|| default_field_state_mode(&req.target, &req.quantity_id));
+    let _transition = if request_context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
     if mode == "attach" {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+        if let Some(context) = request_context {
+            crate::ensure_current_live_request_context(
+                snapshot,
+                context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+        }
         let artifact =
             read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref, &req.target)?;
         validate_field_state_request_match(&artifact, &req.target, &req.quantity_id)?;
@@ -2095,6 +2396,15 @@ pub(crate) async fn import_field_state(
     let snapshot = guard
         .as_mut()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if let Some(context) = request_context {
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
     let artifact =
         read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref, &req.target)?;
     validate_field_state_request_match(&artifact, &req.target, &req.quantity_id)?;
@@ -2146,10 +2456,32 @@ pub(crate) async fn import_field_state(
 pub(crate) async fn list_recovery(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RecoveryListResponse>, ApiError> {
+    list_recovery_with_context(State(state), None).await
+}
+
+pub(crate) async fn list_recovery_with_context(
+    State(state): State<Arc<AppState>>,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Json<RecoveryListResponse>, ApiError> {
+    // Recovery is stored outside the in-memory live snapshot. When the caller
+    // has pinned a current-session context, hold the transition fence through
+    // the synchronous store read so a session swap cannot retarget the read.
+    let _transition = match request_context {
+        Some(_) => Some(state.current_live_session_transition.lock().await),
+        None => None,
+    };
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
     let store = open_store(&state)?;
 
-    let snapshots = store
-        .list_recovery()
+    let manifests = match request_context {
+        Some(context) => store
+            .read_session_recovery(&context.session_id)
+            .map(|snapshot| snapshot.into_iter().collect()),
+        None => store.list_recovery(),
+    };
+    let snapshots = manifests
         .map_err(|e| ApiError::internal(e.to_string()))?
         .into_iter()
         .map(|m| RecoveryEntry {
@@ -2167,15 +2499,39 @@ pub(crate) async fn list_recovery(
 pub(crate) async fn clear_recovery(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RecoveryClearResponse>, ApiError> {
+    clear_recovery_with_context(State(state), None).await
+}
+
+pub(crate) async fn clear_recovery_with_context(
+    State(state): State<Arc<AppState>>,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Json<RecoveryClearResponse>, ApiError> {
+    // Validate immediately before the destructive store operation. The
+    // context-free wrapper remains only for unmigrated internal callers.
+    let _transition = match request_context {
+        Some(_) => Some(state.current_live_session_transition.lock().await),
+        None => None,
+    };
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
     let store = open_store(&state)?;
 
-    let before = store
-        .list_recovery()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .len();
-    store
-        .clear_recovery()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let before = match request_context {
+        Some(context) => store
+            .clear_session_recovery(&context.session_id)
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+        None => {
+            let count = store
+                .list_recovery()
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .len();
+            store
+                .clear_recovery()
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            count
+        }
+    };
 
     Ok(Json(RecoveryClearResponse { cleared: before }))
 }
@@ -2681,7 +3037,7 @@ fn checkpoint_entry(
         field_revision: context.field_revision,
         scene_revision: context.scene_revision,
         backend_family: context.backend_family.clone(),
-        resume_class: checkpoint_resume_class(&checkpoint.compatibility),
+        resume_class: checkpoint_resume_class(&checkpoint),
         artifact_ref: checkpoint.common_state_ref,
         checksum: context.checksum.clone(),
     }
@@ -2898,14 +3254,21 @@ fn now_unix_ms() -> u128 {
 }
 
 fn checkpoint_resume_class(
-    compatibility: &CheckpointCompatibility,
+    checkpoint: &fullmag_session::FmsCheckpoint,
 ) -> fullmag_session::RestoreClass {
-    if compatibility.restart_abi.is_some() {
-        fullmag_session::RestoreClass::ExactResume
-    } else if compatibility.discretization_signature.is_some() {
+    supported_checkpoint_restore_class(checkpoint, &checkpoint.compatibility)
+}
+
+fn supported_checkpoint_restore_class(
+    checkpoint: &fullmag_session::FmsCheckpoint,
+    current: &CheckpointCompatibility,
+) -> fullmag_session::RestoreClass {
+    let class = determine_restore_class(&checkpoint.compatibility, current);
+    if class == fullmag_session::RestoreClass::ExactResume && checkpoint.backend_state_ref.is_none()
+    {
         fullmag_session::RestoreClass::LogicalResume
     } else {
-        fullmag_session::RestoreClass::InitialConditionImport
+        class
     }
 }
 
@@ -2923,20 +3286,43 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
         .or_else(|| snapshot.session.resolved_device.clone())
         .unwrap_or_else(|| "fdm_cpu_reference".to_string());
 
-    let restart_abi = Some(format!(
-        "{}:{}",
-        runtime_family,
-        snapshot
-            .session
-            .resolved_engine_id
-            .as_deref()
-            .unwrap_or("default")
-    ));
-    let problem_hash = snapshot.scene_document.as_ref().and_then(|scene| {
-        serde_json::to_vec(scene)
-            .ok()
-            .map(|bytes| format!("problem:sha256:{:x}", Sha256::digest(bytes)))
+    let checkpoint_schema = snapshot
+        .coupled_checkpoint
+        .as_ref()
+        .and_then(|checkpoint| checkpoint["schema"].as_str());
+    let exact_resume_supported = checkpoint_schema == Some("fullmag.fdm.coupled_m3_checkpoint.v1");
+    let restart_abi = exact_resume_supported.then(|| {
+        format!(
+            "{}:{}:{}",
+            runtime_family,
+            snapshot
+                .session
+                .resolved_engine_id
+                .as_deref()
+                .unwrap_or("default"),
+            checkpoint_schema.expect("exact resume schema was matched")
+        )
     });
+    let problem_hash = snapshot
+        .scene_document
+        .as_ref()
+        .and_then(|scene| {
+            serde_json::to_vec(scene)
+                .ok()
+                .map(|bytes| format!("problem:sha256:{:x}", Sha256::digest(bytes)))
+        })
+        .or_else(|| {
+            snapshot
+                .coupled_checkpoint
+                .as_ref()
+                .and_then(|checkpoint| checkpoint.get("identity"))
+                .map(|identity| {
+                    format!(
+                        "problem:sha256:{}",
+                        fullmag_session::canonical_json_sha256(identity)
+                    )
+                })
+        });
     let plan_hash = serde_json::to_vec(&snapshot.session.plan_summary)
         .ok()
         .map(|bytes| format!("plan:sha256:{:x}", Sha256::digest(bytes)));
@@ -2955,7 +3341,13 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
                 .clone()
                 .unwrap_or_else(|| snapshot.session.requested_precision.clone()),
         ),
-        study_kind: None,
+        study_kind: checkpoint_schema.map(|schema| match schema {
+            "fullmag.fdm.coupled_m3_checkpoint.v1" => "fdm_coupled_m3".to_string(),
+            fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA => {
+                "fdm_frozen_spins".to_string()
+            }
+            other => format!("unsupported:{other}"),
+        }),
         discretization_signature: Some(format!(
             "mesh:{};vectors:{}",
             snapshot.mesh_revision, vector_count
@@ -3130,7 +3522,7 @@ fn convert_field_state_with_python(
     repo_root: &std::path::Path,
     artifact_path: &std::path::Path,
 ) -> Result<FieldStateJsonArtifact, String> {
-    let workspace_root = fullmag_python_workspace_root(repo_root);
+    let workspace_root = crate::script::python_workspace_root(repo_root);
     let python_path = workspace_root.join("packages/fullmag-py/src");
     let existing_python_path = std::env::var_os("PYTHONPATH");
     let mut python_path_value = std::ffi::OsString::from(python_path.as_os_str());
@@ -3140,12 +3532,18 @@ fn convert_field_state_with_python(
     }
 
     let python_exe = crate::script::python_executable(repo_root);
-    let output = std::process::Command::new(&python_exe)
+    let mut command = std::process::Command::new(&python_exe);
+    crate::script::configure_python_command(repo_root, &mut command)
+        .map_err(|error| format!("configuring Python field-state loader failed: {error}"))?;
+    command
         .arg("-m")
         .arg("fullmag.init.field_state_cli")
         .arg(artifact_path)
-        .env("PYTHONPATH", python_path_value)
-        .current_dir(&workspace_root)
+        .current_dir(&workspace_root);
+    if fullmag_runtime_control::python_runtime::packaged_windows_python(&workspace_root).is_none() {
+        command.env("PYTHONPATH", python_path_value);
+    }
+    let output = command
         .output()
         .map_err(|error| format!("running Python field-state loader failed: {error}"))?;
     if !output.status.success() {
@@ -3176,7 +3574,7 @@ fn write_field_state_with_python(
         ))
     })?;
 
-    let workspace_root = fullmag_python_workspace_root(repo_root);
+    let workspace_root = crate::script::python_workspace_root(repo_root);
     let python_path = workspace_root.join("packages/fullmag-py/src");
     let existing_python_path = std::env::var_os("PYTHONPATH");
     let mut python_path_value = std::ffi::OsString::from(python_path.as_os_str());
@@ -3186,19 +3584,27 @@ fn write_field_state_with_python(
     }
 
     let python_exe = crate::script::python_executable(repo_root);
-    let output = std::process::Command::new(&python_exe)
-        .arg("-m")
-        .arg("fullmag.init.field_state_cli")
-        .arg("write")
-        .arg(artifact_path)
-        .arg("--input-json")
-        .arg(&json_path)
-        .arg("--format")
-        .arg(format)
-        .env("PYTHONPATH", python_path_value)
-        .current_dir(&workspace_root)
-        .output()
-        .map_err(|error| ApiError::internal(format!("running Python field-state writer: {error}")));
+    let mut command = std::process::Command::new(&python_exe);
+    let output = crate::script::configure_python_command(repo_root, &mut command).and_then(|_| {
+        command
+            .arg("-m")
+            .arg("fullmag.init.field_state_cli")
+            .arg("write")
+            .arg(artifact_path)
+            .arg("--input-json")
+            .arg(&json_path)
+            .arg("--format")
+            .arg(format)
+            .current_dir(&workspace_root);
+        if fullmag_runtime_control::python_runtime::packaged_windows_python(&workspace_root)
+            .is_none()
+        {
+            command.env("PYTHONPATH", python_path_value);
+        }
+        command.output().map_err(|error| {
+            ApiError::internal(format!("running Python field-state writer: {error}"))
+        })
+    });
 
     let _ = std::fs::remove_file(&json_path);
 
@@ -3212,16 +3618,6 @@ fn write_field_state_with_python(
         )));
     }
     Ok(())
-}
-
-fn fullmag_python_workspace_root(repo_root: &std::path::Path) -> std::path::PathBuf {
-    if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
-        return repo_root.to_path_buf();
-    }
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf())
 }
 
 fn resolve_session_artifact_ref(
@@ -3714,5 +4110,20 @@ mod planar_presentation_migration_tests {
             serde_json::from_str(r#"{"expected_state_version": 99}"#)
                 .expect("deserialize restore req");
         assert_eq!(req_restore.expected_state_version, Some(99));
+    }
+}
+
+#[cfg(test)]
+mod archive_error_regressions {
+    use super::*;
+
+    #[test]
+    fn archive_format_errors_and_storage_errors_have_distinct_http_statuses() {
+        let malformed = archive_preflight_error(
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "CRC mismatch").into(), "preflight");
+        assert_eq!(malformed.status, axum::http::StatusCode::BAD_REQUEST);
+        let storage = archive_preflight_error(
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "staging denied").into(), "preflight");
+        assert_eq!(storage.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

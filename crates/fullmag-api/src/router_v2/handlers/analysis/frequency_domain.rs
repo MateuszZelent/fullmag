@@ -1089,13 +1089,15 @@ impl From<fullmag_runner::FrequencyDomainManifest> for FrequencyDomainManifestRe
 )]
 pub async fn get_frequency_domain_manifest_v1(
     State(state): State<Arc<AppState>>,
-) -> Json<FrequencyDomainManifestResource> {
+) -> Result<Json<FrequencyDomainManifestResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let mut manifest: FrequencyDomainManifestResource =
         fullmag_runner::frequency_domain_manifest_v1().into();
     manifest.response_progress = response_progress_resource(&state).await.ok();
     manifest.response_cancel_requested = response_cancel_requested_resource(&state).await.ok();
     manifest.result_manifest = frequency_domain_result_manifest_resource(&state).await.ok();
-    Json(manifest)
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(manifest))
 }
 
 async fn frequency_domain_result_manifest_resource(
@@ -1283,6 +1285,7 @@ pub async fn get_frequency_domain_eigen_mode_field_meta(
     State(state): State<Arc<AppState>>,
     Path((sample_index, mode_index)): Path<(u32, u32)>,
 ) -> Result<Json<FrequencyDomainFieldResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
     let artifact_path =
         eigen_mode_field_preferred_payload_path(&artifact_dir, sample_index, mode_index)?;
@@ -1294,6 +1297,8 @@ pub async fn get_frequency_domain_eigen_mode_field_meta(
         eigen_mode_field_metadata(&artifact_dir, sample_index, mode_index, &artifact_path)?;
     field_resource(
         &state,
+        &request_context,
+        &artifact_dir,
         "frequency_domain_mode_field.v1",
         &field_id,
         &artifact_path,
@@ -1407,26 +1412,29 @@ pub async fn get_frequency_domain_response_cancel_requested_v1(
 async fn response_cancel_requested_resource(
     state: &Arc<AppState>,
 ) -> Result<FrequencyDomainSweepProgressResource, ApiError> {
+    let request_context = crate::capture_current_live_request_context(state).await?;
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
     if try_resolve_artifact_path(&artifact_dir, "response/cancel_requested.v1.json")?.is_none() {
         return Err(ApiError::not_found(
             "frequency-domain response cancel-requested progress artifact is missing",
         ));
     }
-    serde_json::from_value::<FrequencyDomainSweepProgressResource>(read_json_artifact_value(
-        &artifact_dir,
-        "response/cancel_requested.v1.json",
-    )?)
+    let progress = serde_json::from_value::<FrequencyDomainSweepProgressResource>(
+        read_json_artifact_value(&artifact_dir, "response/cancel_requested.v1.json")?,
+    )
     .map_err(|error| {
         ApiError::internal(format!(
             "invalid response cancel-requested progress artifact: {error}"
         ))
-    })
+    })?;
+    crate::validate_current_live_request_context(state, &request_context).await?;
+    Ok(progress)
 }
 
 async fn response_progress_resource(
     state: &Arc<AppState>,
 ) -> Result<FrequencyDomainSweepProgressResource, ApiError> {
+    let request_context = crate::capture_current_live_request_context(state).await?;
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
     if try_resolve_artifact_path(&artifact_dir, "response/progress.v1.json")?.is_some() {
         let progress = serde_json::from_value::<FrequencyDomainSweepProgressResource>(
@@ -1435,6 +1443,7 @@ async fn response_progress_resource(
         .map_err(|error| {
             ApiError::internal(format!("invalid response progress artifact: {error}"))
         })?;
+        crate::validate_current_live_request_context(state, &request_context).await?;
         return Ok(progress);
     }
 
@@ -1533,7 +1542,7 @@ async fn response_progress_resource(
                 && completed_frequency_points == total_frequency_points
         });
     let partial_artifacts_available = written_frequency_point_artifacts > 0 || sweep_path.is_some();
-    let state = if interrupted {
+    let progress_state = if interrupted {
         "interrupted"
     } else if unavailable {
         "unavailable"
@@ -1559,7 +1568,7 @@ async fn response_progress_resource(
         "schema_version": "frequency_domain_sweep_progress.v1",
         "status": status.clone(),
         "complete": complete,
-        "state": state,
+        "state": progress_state,
         "total_frequency_points": total_frequency_points,
         "completed_frequency_points": completed_frequency_points,
         "written_frequency_point_artifacts": written_frequency_point_artifacts,
@@ -1571,10 +1580,10 @@ async fn response_progress_resource(
     })
     .to_string();
 
-    Ok(FrequencyDomainSweepProgressResource {
+    let progress = FrequencyDomainSweepProgressResource {
         schema_version: "frequency_domain_sweep_progress.v1".to_string(),
         status,
-        state: state.to_string(),
+        state: progress_state.to_string(),
         complete,
         total_frequency_points,
         completed_frequency_points,
@@ -1592,7 +1601,9 @@ async fn response_progress_resource(
                 .then(|| "response sweep progress artifacts are not present".to_string())
         },
         progress_json: Some(progress_json),
-    })
+    };
+    crate::validate_current_live_request_context(state, &request_context).await?;
+    Ok(progress)
 }
 
 #[utoipa::path(
@@ -1642,6 +1653,7 @@ pub async fn get_frequency_domain_response_frequency_point(
     State(state): State<Arc<AppState>>,
     Path(frequency_index): Path<u32>,
 ) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
     let artifact_path =
         response_frequency_point_artifact_path_from_sweep(&artifact_dir, frequency_index)?
@@ -1651,10 +1663,12 @@ pub async fn get_frequency_domain_response_frequency_point(
                     frequency_index
                 )
             });
-    json_artifact_resource(
+    json_artifact_resource_first_existing_with_context(
         &state,
+        &request_context,
+        &artifact_dir,
         "frequency_domain_response_frequency_point.v1",
-        &artifact_path,
+        &[artifact_path.as_str()],
         &format!(
             "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/{}",
             frequency_index
@@ -1686,6 +1700,7 @@ pub async fn get_frequency_domain_response_field_meta(
     State(state): State<Arc<AppState>>,
     Path(frequency_index): Path<u32>,
 ) -> Result<Json<FrequencyDomainFieldResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
     let frequency_point_artifact_path =
         response_frequency_point_artifact_path_from_sweep(&artifact_dir, frequency_index)?
@@ -1727,6 +1742,8 @@ pub async fn get_frequency_domain_response_field_meta(
     );
     field_resource(
         &state,
+        &request_context,
+        &artifact_dir,
         "frequency_domain_response_field.v1",
         &field_id,
         &artifact_path,
@@ -1868,15 +1885,34 @@ async fn json_artifact_resource_first_existing(
     artifact_paths: &[&str],
     resource_key: &str,
 ) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(state).await?;
     let artifact_dir = require_current_live_artifact_dir(state).await?;
+    json_artifact_resource_first_existing_with_context(
+        state,
+        &request_context,
+        &artifact_dir,
+        schema_version,
+        artifact_paths,
+        resource_key,
+    )
+    .await
+}
+
+async fn json_artifact_resource_first_existing_with_context(
+    state: &Arc<AppState>,
+    request_context: &crate::types::CurrentLiveRequestContext,
+    artifact_dir: &std::path::Path,
+    schema_version: &str,
+    artifact_paths: &[&str],
+    resource_key: &str,
+) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
     for artifact_path in artifact_paths {
-        if try_resolve_artifact_path(&artifact_dir, artifact_path)?.is_some() {
+        if let Some((payload_value, content_digest)) =
+            super::results::read_result_artifact_snapshot(artifact_dir, artifact_path)?
+        {
             let live_identity = frequency_domain_live_artifact_identity(state, artifact_path).await;
-            let payload_value = read_json_artifact_value(&artifact_dir, artifact_path)?;
             let payload = decode_frequency_domain_artifact_payload(artifact_path, payload_value)?;
-            let content_digest =
-                frequency_domain_artifact_content_digest(&artifact_dir, artifact_path)?;
-            return Ok(Json(FrequencyDomainJsonArtifactResource {
+            let response = Json(FrequencyDomainJsonArtifactResource {
                 schema_version: schema_version.to_string(),
                 status: "ready".to_string(),
                 artifact_path: (*artifact_path).to_string(),
@@ -1889,10 +1925,12 @@ async fn json_artifact_resource_first_existing(
                 stage_id: live_identity.stage_id,
                 mesh_generation_id: live_identity.mesh_generation_id,
                 missing_reason: None,
-            }));
+            });
+            crate::validate_current_live_request_context(state, request_context).await?;
+            return Ok(response);
         }
     }
-    Ok(Json(FrequencyDomainJsonArtifactResource {
+    let response = Json(FrequencyDomainJsonArtifactResource {
         schema_version: schema_version.to_string(),
         status: "missing".to_string(),
         artifact_path: artifact_paths
@@ -1909,7 +1947,9 @@ async fn json_artifact_resource_first_existing(
         stage_id: None,
         mesh_generation_id: None,
         missing_reason: Some("artifact is not present in the active workspace".to_string()),
-    }))
+    });
+    crate::validate_current_live_request_context(state, request_context).await?;
+    Ok(response)
 }
 
 #[derive(Default)]
@@ -1984,21 +2024,6 @@ async fn frequency_domain_live_artifact_identity(
                     .and_then(|mesh| mesh.generation_id.clone())
             }),
     }
-}
-
-fn frequency_domain_artifact_content_digest(
-    artifact_dir: &std::path::Path,
-    artifact_path: &str,
-) -> Result<String, ApiError> {
-    let resolved = try_resolve_artifact_path(artifact_dir, artifact_path)?
-        .ok_or_else(|| ApiError::not_found(format!("artifact '{artifact_path}' is not present")))?;
-    let bytes = std::fs::read(&resolved).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to read frequency-domain artifact '{}': {error}",
-            artifact_path
-        ))
-    })?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 pub(crate) fn decode_frequency_domain_artifact_payload(
@@ -2140,6 +2165,51 @@ pub(crate) fn decode_frequency_domain_artifact_payload(
         validate_frequency_domain_field_sweep(field_sweep)?;
     }
     Ok(payload)
+}
+
+// Persisted field identity does not require an HTTP route. Legacy readers may
+// still carry a transport key, but a key without an identity remains invalid.
+fn modal_field_has_reference(
+    field_id: Option<&str>,
+    transport_key: Option<&str>,
+) -> Result<bool, ApiError> {
+    match (field_id, transport_key) {
+        (Some(field_id), None) if !field_id.trim().is_empty() => Ok(true),
+        (Some(field_id), Some(key)) if !field_id.trim().is_empty() && !key.trim().is_empty() => {
+            Ok(true)
+        }
+        (None, None) => Ok(false),
+        _ => Err(ApiError::internal(
+            "eigen field sweep mode has an invalid field identity or orphan transport key",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod durable_field_reference_tests {
+    use super::modal_field_has_reference;
+
+    #[test]
+    fn durable_field_identity_keeps_payload_available_without_transport() {
+        assert!(
+            modal_field_has_reference(
+                Some("analysis:eigen:sample-0000:mode-0000"),
+                None
+            )
+            .unwrap()
+        );
+        assert!(
+            modal_field_has_reference(
+                Some("field:legacy"),
+                Some("/v2/sessions/current/data/fields/legacy")
+            )
+            .unwrap()
+        );
+        assert!(!modal_field_has_reference(None, None).unwrap());
+        assert!(modal_field_has_reference(None, Some("/route")).is_err());
+        assert!(modal_field_has_reference(Some(""), None).is_err());
+        assert!(modal_field_has_reference(Some("field:owned"), Some(" ")).is_err());
+    }
 }
 
 fn validate_frequency_domain_field_sweep(
@@ -2328,26 +2398,16 @@ fn validate_frequency_domain_field_sweep(
                         ));
                     }
                 }
-                let has_field_reference = match (
-                    &mode.mode_field_id,
-                    &mode.mode_field_resource_key,
-                ) {
-                    (Some(field_id), Some(resource_key))
-                        if !field_id.trim().is_empty() && !resource_key.trim().is_empty() => true,
-                    (None, None) => false,
-                    _ => {
-                        return Err(ApiError::internal(
-                            "eigen field sweep mode field identity and resource key must be published together",
-                        ))
-                    }
-                };
+                let has_field_reference = modal_field_has_reference(
+                    mode.mode_field_id.as_deref(), mode.mode_field_resource_key.as_deref(),
+                )?;
                 let has_mode_artifact = match &mode.mode_artifact_path {
                     Some(path) if !path.trim().is_empty() => true,
                     None => false,
                     Some(_) => {
                         return Err(ApiError::internal(
                             "eigen field sweep mode mode_artifact_path must not be empty",
-                        ))
+                        ));
                     }
                 };
                 if has_field_reference != has_mode_artifact {
@@ -2491,16 +2551,10 @@ fn validate_frequency_domain_spectrum_v3(
                     "eigen spectrum v3 contains invalid residual_relative_l2",
                 ));
             }
-            match (&mode.mode_field_id, &mode.mode_field_resource_key) {
-                (Some(field_id), Some(resource_key))
-                    if !field_id.trim().is_empty() && !resource_key.trim().is_empty() => {}
-                (None, None) => {}
-                _ => {
-                    return Err(ApiError::internal(
-                        "eigen spectrum v3 mode field identity and resource key must be published together",
-                    ))
-                }
-            }
+            modal_field_has_reference(
+                mode.mode_field_id.as_deref(),
+                mode.mode_field_resource_key.as_deref(),
+            )?;
             validate_modal_participation(&mode.component_participation)?;
         }
     }
@@ -3036,19 +3090,23 @@ async fn text_artifact_resource(
     resource_key: &str,
     content_type: &str,
 ) -> Result<Json<FrequencyDomainTextArtifactResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(state).await?;
     let artifact_dir = require_current_live_artifact_dir(state).await?;
     if try_resolve_artifact_path(&artifact_dir, artifact_path)?.is_some() {
+        let text = read_text_artifact_value(&artifact_dir, artifact_path)?;
+        crate::validate_current_live_request_context(state, &request_context).await?;
         return Ok(Json(FrequencyDomainTextArtifactResource {
             schema_version: schema_version.to_string(),
             status: "ready".to_string(),
             artifact_path: artifact_path.to_string(),
             resource_key: resource_key.to_string(),
             content_type: content_type.to_string(),
-            text: Some(read_text_artifact_value(&artifact_dir, artifact_path)?),
+            text: Some(text),
             path_metadata: None,
             missing_reason: None,
         }));
     }
+    crate::validate_current_live_request_context(state, &request_context).await?;
     Ok(Json(FrequencyDomainTextArtifactResource {
         schema_version: schema_version.to_string(),
         status: "missing".to_string(),
@@ -3063,6 +3121,8 @@ async fn text_artifact_resource(
 
 async fn field_resource(
     state: &Arc<AppState>,
+    request_context: &crate::types::CurrentLiveRequestContext,
+    artifact_dir: &std::path::Path,
     schema_version: &str,
     field_id: &str,
     artifact_path: &str,
@@ -3071,12 +3131,12 @@ async fn field_resource(
     quantity: &str,
     metadata: Option<FrequencyDomainFieldMetadata>,
 ) -> Result<Json<FrequencyDomainFieldResource>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(state).await?;
     let present = try_resolve_artifact_path(&artifact_dir, artifact_path)?.is_some();
     let metadata = metadata.unwrap_or_default();
     let content_digest = present
         .then(|| frequency_domain_field_content_digest(&artifact_dir, artifact_path, &metadata))
         .transpose()?;
+    crate::validate_current_live_request_context(state, request_context).await?;
     Ok(Json(FrequencyDomainFieldResource {
         schema_version: schema_version.to_string(),
         status: if present { "ready" } else { "missing" }.to_string(),

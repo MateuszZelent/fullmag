@@ -4,9 +4,31 @@ Data: 20.09.2026. Baza: `14c8e73a6f3c55f4fc080835a6156f2a4db8f111`, lokalny `mas
 
 ## Aktualizacja wykonawcza — 21.09.2026
 
-Poniższy audyt zachowuje stan źródeł i ustalenia z 20.09. Po jego zapisaniu użytkownik autoryzował implementację i testowanie na `masterze`. Bieżący stan wykonawczy jest prowadzony osobno w [P0](p0/03-implementation-status.md), [P1](p1/README.md), [P2](p2/README.md) i [tabeli globalnej](06-status-realizacji.md): minimalna bramka P0 przeszła, P1-A/B/D oraz większość P1-C wykonano, ikonę chowania Inspektora zweryfikowano w browser smoke, a slice'y P2-A canonical bytes/parameter AST z podpięciem do `ProblemIR` i generated-script round-trip, P2-B geometry feature sequence i P2-C izolacji kontekstu Python mają zapisane dowody źródłowe. Nie należy traktować historycznych zdań „nie wykonano” poniżej jako opisu bieżącego checkoutu.
+Poniższy audyt zachowuje stan źródeł i ustalenia z 20.09. Po jego zapisaniu użytkownik autoryzował implementację i testowanie na `masterze`. Bieżący stan wykonawczy jest prowadzony osobno w [P0](p0/03-implementation-status.md), [P1](p1/README.md), [P2](p2/README.md), [P3](p3/README.md) i [tabeli globalnej](06-status-realizacji.md): minimalna bramka P0 przeszła, P1-A/B/D oraz większość P1-C wykonano, ikonę chowania Inspektora zweryfikowano w browser smoke, slice'y P2-A canonical bytes/parameter AST z podpięciem do `ProblemIR` i generated-script round-trip, typed projection `ModelDefinition`/`ComponentDefinition`/`PhysicsConfiguration` z Rust canonical digest, P2-B geometry feature sequence i P2-C izolacji kontekstu Python mają zapisane dowody źródłowe, a P3 ma typed `StudyPlan v2`, `study_execution_plan.v2` z jawnym horyzontem TimeEvolution, immutable `study_problem_catalog.v1`, jawne lowering przez canonical planner, immutable `RunSpecification`, procesowy ledger idempotency, trwały accepted-intent journal, monotoniczny run catalog, restartowe `reconciling`, fenced artifact catalog, typowane Task/Attempt/Ownership identities, `ResolvedTaskInput`, procesowy registry, durable `resource_lease.v1`, `worker_protocol.v2` z dedup/conflict i terminal fencing, `WorkerCoordinator` oraz idempotentne zastosowanie retry do katalogu. Nie należy traktować historycznych zdań „nie wykonano” poniżej jako opisu bieżącego checkoutu.
 
-Aktualny inventory P0-A (`audit_refactor_p0.py --check`) obejmuje **300 operacji OpenAPI, 300 rozpoznanych handlerów, 0 nierozpoznanych handlerów/konsumentów, 2 router-only i 0 OpenAPI-only**. Pozostałe bramki produkcyjne — power-loss, pełna recovery runtime, fizyczny Tauri, baseline naukowy oraz kwalifikacja release — nadal pozostają `NOT VERIFIED`; P2-A ma canonical-bytes/parameter-AST slice podpięty do `ProblemIR` i generated Python, P2-B ma feature-sequence slice, P2-D ma revision-fenced Undo/Redo, registry aktywnego formularza, wrapper staged sessions i helper revision-fenced immediate mutations, a pełny Model/Component/PhysicsConfiguration roundtrip, browser/Rust roundtrip, meshing/ambiguity, pozostałe bezpośrednie/multistep handlers oraz granica P2-C obejmująca definicję → materializację, bridge `fullmag-py-core` i równoległe capture/load są `IN PROGRESS`.
+Aktualny inventory P0-A (`audit_refactor_p0.py --check`) obejmuje **300 operacji OpenAPI, 300 rozpoznanych handlerów, 0 nierozpoznanych handlerów/konsumentów, 2 router-only i 0 OpenAPI-only**. Pozostałe bramki produkcyjne — power-loss, pełna recovery runtime, fizyczny Tauri, baseline naukowy oraz kwalifikacja release — nadal pozostają `NOT VERIFIED`; P2-A ma canonical-bytes/parameter-AST slice podpięty do `ProblemIR` i generated Python oraz read-only typed projection z testem Python, P2-B ma feature-sequence slice, P2-D ma revision-fenced Undo/Redo, registry aktywnego formularza, wrapper staged sessions i helper revision-fenced immediate mutations obejmujący także monitory, Frozen Spins i material authoring, a trwały Model/Component/PhysicsConfiguration roundtrip, browser/Rust roundtrip, meshing/ambiguity, pozostałe bezpośrednie/multistep handlers oraz granica P2-C obejmująca definicję → materializację, bridge `fullmag-py-core` i równoległe capture/load są `IN PROGRESS`.
+
+Rewalidacja 21.09.2026 obejmuje także durable `retry_decision.v1` oraz
+`coordinator_journal.v1` w `fullmag-session`: zapisy są idempotentne i fenced
+do obserwowanego claimu, a `SessionStore::apply_retry_decision` stosuje retry
+do katalogu w sposób idempotentny i blokuje aktywny lease. Nadal nie zastępują
+transportu coordinatora ani dowodu zatrzymania starego workera.
+
+Dodano również pilot P3a-A dla GET/PUT/PATCH sceny authoringu, przyjęcia
+komendy obliczeniowej, binarnego odczytu FMRM, listy/pobrania/capture/restore checkpointu oraz
+polityki events.
+Legacy `/sessions/current` jest tam przypięte do
+niemutowalnego `session_id`/`run_id`/epoch i odrzuca zmianę `current` po await;
+enqueue komendy dodatkowo serializuje finalną mutację i publikację pod blokadą
+przejścia sesji. Kolejne slice'y P3a-B opakowują cache/decode wektorów preview,
+planar field i pól modalnych, model/runtime/workspace, meshing,
+membership/domain, katalogi data-plane, analysis-result, analysis runtime,
+diagnostics/runtime explorer oraz zasoby authoringu i preparation w
+`session_id + epoch`, a kontroler invalidacji rozpoznaje kanoniczny prefiks API
+za sesyjnie opakowanym kluczem. Scheduler binary decode odrzuca wynik po
+abort starego requestu. Export/commit archiwum sesji mają context fence przed
+transakcją/publikacją. Pozostają pełna macierz recovery, persistence/events,
+browser/runtime i pełna kwalifikacja.
 
 ## 1. Werdykt
 

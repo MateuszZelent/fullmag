@@ -44,6 +44,7 @@ function apiFor(
       projects: {
         create: vi.fn(async () => createResponse),
         open: vi.fn(async () => openResponse),
+        authoringUpdate: vi.fn(async () => openResponse),
       },
     },
   };
@@ -55,6 +56,21 @@ afterEach(() => {
 });
 
 describe("ProjectDocumentController", () => {
+  it("rejects a competing project operation while the first response is pending", async () => {
+    let release!: (value: ProjectDocumentResource) => void;
+    const pending = new Promise<ProjectDocumentResource>((resolve) => { release = resolve; });
+    const api = apiFor();
+    api.persistence.projects.create.mockImplementationOnce(() => pending);
+    const controller = new ProjectDocumentController(api);
+    const creating = controller.create("First project");
+    await expect(controller.open({ bytes: new Uint8Array([1]), fileName: "second.fms" }))
+      .rejects.toThrow("already in progress");
+    expect(api.persistence.projects.open).not.toHaveBeenCalled();
+    expect(controller.close(true)).toBe(false);
+    release(resource({ name: "First project" }));
+    await creating;
+    expect(controller.getSnapshot().resource?.name).toBe("First project");
+  });
   it("creates a project through the resource facade and exposes a ready snapshot", async () => {
     const api = apiFor(resource({ name: "New study" }));
     const controller = new ProjectDocumentController(api);

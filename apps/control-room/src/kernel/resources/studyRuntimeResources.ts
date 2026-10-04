@@ -87,6 +87,7 @@ import type {
   EngineLogResource,
   FieldCatalogResource,
   QuantityCatalogResource,
+  ResourceRevision,
   FieldMetaResource,
   FieldMetaQuery,
   CpuTelemetryResource,
@@ -162,7 +163,9 @@ import {
 } from "./useSessionStatus";
 import { emitResourceLoadFailed } from "./resourceLoadFailure";
 import type { ResourceResult } from "./resourceTypes";
+import type { ResourceRetryPolicy } from "./ResourceRuntimeStore";
 import { useResource } from "./useResource";
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 
 /** Browser trace state is bounded and mutates only on sampled profile events. */
 export const solverTraceObserver = createSolverTraceObserver();
@@ -207,6 +210,32 @@ function ignoreMissingFieldMetaResource<T>({
 
 interface RuntimeResourceOptions {
   enabled?: boolean;
+}
+
+interface SessionScopedResourceOptions<TData> {
+  abortStaleInflight?: boolean;
+  enabled?: boolean;
+  load: (context: { sessionScopeKey?: string; signal: AbortSignal }) => Promise<TData>;
+  minRefetchIntervalMs?: number;
+  pauseLoad?: boolean;
+  retryPolicy?: ResourceRetryPolicy | null;
+  resolveRevision?: (data: TData) => ResourceRevision | null;
+  resourceKey: string;
+}
+
+function useSessionScopedResource<TData>({
+  enabled = true,
+  resourceKey: unscopedResourceKey,
+  ...options
+}: SessionScopedResourceOptions<TData>) {
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
+  return useResource<TData>({
+    ...options,
+    enabled: enabled && sessionIdentity !== null,
+    resourceKey,
+  });
 }
 
 interface RuntimeCommandControlResourceOptions extends RuntimeResourceOptions {
@@ -674,17 +703,20 @@ export function useCommandQueueResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    SIMULATION_COMMANDS_PATH,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.commands.list({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.commands.list({ sessionScopeKey, signal }),
     [api],
   );
 
   return useResource<CommandQueueStatusResource>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data.revision,
-    resourceKey: SIMULATION_COMMANDS_PATH,
+    resourceKey,
   });
 }
 
@@ -692,21 +724,24 @@ export function useCommandDetailResource(
   commandId: string | null | undefined,
 ) {
   const { api } = useKernel();
-  const resourceKey = commandId
+  const unscopedResourceKey = commandId
     ? SIMULATION_COMMAND_DETAIL_PATH.replace("{command_id}", commandId)
     : `${SIMULATION_COMMANDS_PATH}:none`;
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       commandId
         ? api.commands
-            .detail(commandId, { signal })
+            .detail(commandId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<CommandDetailResource>)
         : Promise.resolve(null),
     [api, commandId],
   );
 
   return useResource<CommandDetailResource | null>({
-    enabled: Boolean(commandId),
+    enabled: Boolean(commandId) && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.seq ?? null,
     resourceKey,
@@ -717,19 +752,22 @@ export function useCurrentRunResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    SIMULATION_RUN_CURRENT_PATH,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation
-        .currentRun({ signal })
+        .currentRun({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<CurrentRunResource>),
     [api],
   );
 
   return useResource<CurrentRunResource | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.revision ?? null,
-    resourceKey: SIMULATION_RUN_CURRENT_PATH,
+    resourceKey,
   });
 }
 
@@ -738,21 +776,24 @@ export function useResultContextRunResource(
   { enabled = true }: RuntimeResourceOptions = {},
 ) {
   const { api } = useKernel();
-  const resourceKey = runId
+  const unscopedResourceKey = runId
     ? SIMULATION_RUN_PATH.replace("{run_id}", runId)
     : `${SIMULATION_RUN_PATH}:none`;
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       runId
         ? api.simulation
-            .run(runId, { signal })
+            .run(runId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<CurrentRunResource>)
         : Promise.resolve(null),
     [api, runId],
   );
 
   return useResource<CurrentRunResource | null>({
-    enabled: enabled && Boolean(runId),
+    enabled: enabled && Boolean(runId) && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
@@ -836,19 +877,22 @@ export function useStageExecutionResource({
     },
   );
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity: resourceSessionIdentity } = useSessionScopedResourceKey(
+    SIMULATION_STAGES_EXECUTION_PATH,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation.stages
-        .execution({ signal })
+        .execution({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<StageExecutionResource>),
     [api],
   );
 
   const stageExecutionResource = useResource<StageExecutionResource | null>({
-    enabled: enabled && sessionIdentity !== null,
+    enabled: enabled && resourceSessionIdentity !== null && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.revision ?? null,
-    resourceKey: SIMULATION_STAGES_EXECUTION_PATH,
+    resourceKey,
   });
   const {
     data: stageExecutionData,
@@ -915,13 +959,16 @@ export function useArtifactsResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    DATA_ARTIFACTS_PATH,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.data.artifacts.list({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => api.data.artifacts.list({ sessionScopeKey, signal }),
     [api],
   );
 
   return useResource<ArtifactResource[]>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (artifacts) => artifacts
       .map((artifact) => {
@@ -931,7 +978,7 @@ export function useArtifactsResource({
           : `${artifact.path}:${artifact.kind}`;
       })
       .join("|"),
-    resourceKey: DATA_ARTIFACTS_PATH,
+    resourceKey,
   });
 }
 
@@ -939,16 +986,19 @@ export function useMeshPeriodicPairsResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    MESHING_PERIODIC_PAIRS_PATH,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.meshing
-        .periodicPairs({ signal })
+        .periodicPairs({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<MeshPeriodicPairsResource>),
     [api],
   );
 
   return useResource<MeshPeriodicPairsResource | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     // Periodic pairs are an optional overlay. Keep the error state for
     // degraded/unavailable consumers without turning its timeout into a
@@ -956,7 +1006,7 @@ export function useMeshPeriodicPairsResource({
     // visible to the global error surface.
     notifyOnError: shouldNotifyMeshPeriodicPairsFailure,
     resolveRevision: (data) => data?.revision ?? null,
-    resourceKey: MESHING_PERIODIC_PAIRS_PATH,
+    resourceKey,
   });
 }
 
@@ -970,16 +1020,16 @@ export function useHysteresisStagePlanResource(
     : `${SIMULATION_STAGE_HYSTERESIS_PLAN_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.simulation.stages.hysteresis
-            .plan(stageId, { signal })
+            .plan(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisStagePlanSchema>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisStagePlanSchema | null>({
+  return useSessionScopedResource<HysteresisStagePlanSchema | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -997,16 +1047,16 @@ export function useHysteresisProtocolResource(
     : `${SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.simulation.stages.hysteresis
-            .protocol(stageId, { signal })
+            .protocol(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisProtocolSchema>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisProtocolSchema | null>({
+  return useSessionScopedResource<HysteresisProtocolSchema | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1027,16 +1077,16 @@ export function useHysteresisStageSaturationResource(
     : `${SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.simulation.stages.hysteresis
-            .saturation(stageId, { signal })
+            .saturation(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisStageSaturationSchema>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisStageSaturationSchema | null>({
+  return useSessionScopedResource<HysteresisStageSaturationSchema | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1054,16 +1104,16 @@ export function useHysteresisOrientationResource(
     : `${SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.simulation.stages.hysteresis
-            .orientation(stageId, { signal })
+            .orientation(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisOrientationSchema>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisOrientationSchema | null>({
+  return useSessionScopedResource<HysteresisOrientationSchema | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1084,16 +1134,16 @@ export function useHysteresisSettlePipelineResource(
     : `${SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.simulation.stages.hysteresis
-            .settlePipeline(stageId, { signal })
+            .settlePipeline(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisSettlePipelineSchema>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisSettlePipelineSchema | null>({
+  return useSessionScopedResource<HysteresisSettlePipelineSchema | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1133,7 +1183,7 @@ export function useHysteresisExecutionTreeResource(
     : `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.simulation.stages.hysteresis
             .executionTree(
@@ -1146,7 +1196,7 @@ export function useHysteresisExecutionTreeResource(
                 include_warnings,
                 window,
               },
-              { signal },
+              { sessionScopeKey, signal },
             )
             .catch(ignoreMissingResource<HysteresisExecutionTreeResource>)
         : Promise.resolve(null),
@@ -1162,7 +1212,7 @@ export function useHysteresisExecutionTreeResource(
     ],
   );
 
-  return useResource<HysteresisExecutionTreeResource | null>({
+  return useSessionScopedResource<HysteresisExecutionTreeResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1208,16 +1258,16 @@ export function useHysteresisProgressResource(
     : `${SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.simulation.stages.hysteresis
-            .progress(stageId, { signal })
+            .progress(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisProgressSchema>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisProgressSchema | null>({
+  return useSessionScopedResource<HysteresisProgressSchema | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1230,14 +1280,14 @@ export function useSolverStatusResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation.solver
-        .status({ signal })
+        .status({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<SolverStatusResource>),
     [api],
   );
 
-  return useResource<SolverStatusResource | null>({
+  return useSessionScopedResource<SolverStatusResource | null>({
     enabled,
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1250,14 +1300,14 @@ export function useSolverEnergyCurrentResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation.solver.energies
-        .current({ signal })
+        .current({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<SolverEnergyCurrentResource>),
     [api],
   );
 
-  return useResource<SolverEnergyCurrentResource | null>({
+  return useSessionScopedResource<SolverEnergyCurrentResource | null>({
     enabled,
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1272,14 +1322,14 @@ export function useSolverEnergyHistoryResource(
   const { api } = useKernel();
   const resourceKey = `${SIMULATION_SOLVER_ENERGIES_HISTORY_PATH}?limit=${limit}`;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation.solver.energies
-        .history(limit, { signal })
+        .history(limit, { sessionScopeKey, signal })
         .catch(ignoreMissingResource<SolverEnergyHistoryResource>),
     [api, limit],
   );
 
-  return useResource<SolverEnergyHistoryResource | null>({
+  return useSessionScopedResource<SolverEnergyHistoryResource | null>({
     enabled,
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1292,14 +1342,14 @@ export function useMagneticResponseSweepResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.analysis.frequencyResponse
-        .magneticSweepV1({ signal })
+        .magneticSweepV1({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<MagneticResponseSweepResource>),
     [api],
   );
 
-  return useResource<MagneticResponseSweepResource | null>({
+  return useSessionScopedResource<MagneticResponseSweepResource | null>({
     enabled,
     load,
     resourceKey: ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
@@ -1315,14 +1365,14 @@ export function useFrequencyDomainManifestResource({
     { isEqual: studyRuntimeCommandSessionStatusEquals },
   );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.analysis.frequencyDomain
-        .manifestV1({ signal })
+        .manifestV1({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<FrequencyDomainManifestResource>),
     [api],
   );
 
-  return useResource<FrequencyDomainManifestResource | null>({
+  return useSessionScopedResource<FrequencyDomainManifestResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
     resolveRevision: frequencyDomainManifestRevision,
@@ -1335,8 +1385,8 @@ export function useFrequencyDomainEigenSpectrumResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.frequencyDomain.eigenSpectrumV2({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.eigenSpectrumV2({ sessionScopeKey, signal }),
     [api],
   );
   return useFrequencyDomainJsonResource(
@@ -1351,8 +1401,8 @@ export function useFrequencyDomainEigenSpectrumV3Resource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.frequencyDomain.eigenSpectrumV3({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.eigenSpectrumV3({ sessionScopeKey, signal }),
     [api],
   );
   return useFrequencyDomainJsonResource(
@@ -1367,9 +1417,9 @@ export function useFrequencyDomainEigenFieldSweepResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.analysis.frequencyDomain
-        .eigenFieldSweep({ signal })
+        .eigenFieldSweep({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<FrequencyDomainJsonArtifactResource>),
     [api],
   );
@@ -1385,9 +1435,9 @@ export function useFrequencyDomainFmrPeaksResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.analysis.frequencyDomain
-        .fmrPeaks({ signal })
+        .fmrPeaks({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<FrequencyDomainJsonArtifactResource>),
     [api],
   );
@@ -1403,9 +1453,9 @@ export function useFrequencyDomainFmrResonanceFitsResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.analysis.frequencyDomain
-        .fmrResonanceFits({ signal })
+        .fmrResonanceFits({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<FrequencyDomainJsonArtifactResource>),
     [api],
   );
@@ -1421,9 +1471,9 @@ export function useFrequencyDomainFmrKittelFitResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.analysis.frequencyDomain
-        .fmrKittelFit({ signal })
+        .fmrKittelFit({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<FrequencyDomainJsonArtifactResource>),
     [api],
   );
@@ -1439,8 +1489,8 @@ export function useFrequencyDomainEigenBranchesResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.frequencyDomain.eigenBranchesV2({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.eigenBranchesV2({ sessionScopeKey, signal }),
     [api],
   );
   return useFrequencyDomainJsonResource(
@@ -1455,8 +1505,8 @@ export function useFrequencyDomainEigenDiagnosticsResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.frequencyDomain.eigenDiagnosticsV2({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.eigenDiagnosticsV2({ sessionScopeKey, signal }),
     [api],
   );
   return useFrequencyDomainJsonResource(
@@ -1475,11 +1525,11 @@ export function useFrequencyDomainEigenDispersionResource({
     { isEqual: studyRuntimeCommandSessionStatusEquals },
   );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.frequencyDomain.eigenDispersion({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.eigenDispersion({ sessionScopeKey, signal }),
     [api],
   );
-  return useResource<FrequencyDomainTextArtifactResource | null>({
+  return useSessionScopedResource<FrequencyDomainTextArtifactResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
     resolveRevision: frequencyDomainTextArtifactRevision,
@@ -1504,15 +1554,15 @@ export function useFrequencyDomainEigenModeResource(
           .replace("{mode_index}", String(modeIndex))
       : `${ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH}:none`;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       sampleIndex != null && modeIndex != null
         ? api.analysis.frequencyDomain
-            .eigenMode(sampleIndex, modeIndex, { signal })
+            .eigenMode(sampleIndex, modeIndex, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<FrequencyDomainJsonArtifactResource>)
         : Promise.resolve(null),
     [api, modeIndex, sampleIndex],
   );
-  return useResource<FrequencyDomainJsonArtifactResource | null>({
+  return useSessionScopedResource<FrequencyDomainJsonArtifactResource | null>({
     enabled:
       sampleIndex != null &&
       modeIndex != null &&
@@ -1528,8 +1578,8 @@ export function useFrequencyDomainResponseSweepResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.frequencyDomain.responseMagneticSweep({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.responseMagneticSweep({ sessionScopeKey, signal }),
     [api],
   );
   return useFrequencyDomainJsonResource(
@@ -1554,11 +1604,11 @@ export function useFrequencyDomainResponseProgressResource({
     { isEqual: studyRuntimeCommandSessionStatusEquals },
   );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.frequencyDomain.responseProgressV1({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.responseProgressV1({ sessionScopeKey, signal }),
     [api],
   );
-  return useResource<FrequencyDomainSweepProgressResource | null>({
+  return useSessionScopedResource<FrequencyDomainSweepProgressResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
     resolveRevision: frequencyDomainSweepProgressRevision,
@@ -1575,13 +1625,13 @@ export function useFrequencyDomainResponseCancelRequestedResource({
     { isEqual: studyRuntimeCommandSessionStatusEquals },
   );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.analysis.frequencyDomain
-        .responseCancelRequestedV1({ signal })
+        .responseCancelRequestedV1({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<FrequencyDomainSweepProgressResource>),
     [api],
   );
-  return useResource<FrequencyDomainSweepProgressResource | null>({
+  return useSessionScopedResource<FrequencyDomainSweepProgressResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
     resolveRevision: frequencyDomainSweepProgressRevision,
@@ -1594,8 +1644,8 @@ export function useFrequencyDomainResponseDiagnosticsResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.frequencyDomain.responseDiagnosticsV1({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.responseDiagnosticsV1({ sessionScopeKey, signal }),
     [api],
   );
   return useFrequencyDomainJsonResource(
@@ -1615,19 +1665,23 @@ export function useFrequencyDomainEigenModeFieldMetaResource(
     selectStudyRuntimeCommandSessionStatus,
     { isEqual: studyRuntimeCommandSessionStatusEquals },
   );
-  const resourceKey =
+  const unscopedResourceKey =
     sampleIndex != null && modeIndex != null
       ? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH
           .replace("{sample_index}", String(sampleIndex))
           .replace("{mode_index}", String(modeIndex))
       : `${ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH}:none`;
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       sampleIndex != null && modeIndex != null
         ? api.analysis.frequencyDomain.eigenModeFieldMeta(
             sampleIndex,
             modeIndex,
             {
+              sessionScopeKey,
               signal,
             },
           )
@@ -1638,6 +1692,7 @@ export function useFrequencyDomainEigenModeFieldMetaResource(
     enabled:
       sampleIndex != null &&
       modeIndex != null &&
+      sessionIdentity !== null &&
       shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
     resolveRevision: frequencyDomainFieldRevision,
@@ -1658,9 +1713,10 @@ export function useFrequencyDomainResponseFrequencyPointResource(
         )
       : `${ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH}:none`;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       frequencyIndex != null
         ? api.analysis.frequencyDomain.responseFrequencyPoint(frequencyIndex, {
+            sessionScopeKey,
             signal,
           })
         : Promise.resolve(null),
@@ -1693,13 +1749,13 @@ export function useFrequencyDomainResponseFieldMetaResource(
         )
       : `${ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH}:none`;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       frequencyIndex != null
-        ? api.analysis.frequencyDomain.responseFieldMeta(frequencyIndex, { signal })
+        ? api.analysis.frequencyDomain.responseFieldMeta(frequencyIndex, { sessionScopeKey, signal })
         : Promise.resolve(null),
     [api, frequencyIndex],
   );
-  return useResource<FrequencyDomainFieldResource | null>({
+  return useSessionScopedResource<FrequencyDomainFieldResource | null>({
     enabled:
       frequencyIndex != null &&
       shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
@@ -1718,14 +1774,14 @@ export function useFrequencyResponseFieldMetaResource(
 
 function useFrequencyDomainJsonResource(
   resourceKey: string,
-  load: (context: { signal: AbortSignal }) => Promise<FrequencyDomainJsonArtifactResource | null>,
+  load: (context: { sessionScopeKey?: string; signal: AbortSignal }) => Promise<FrequencyDomainJsonArtifactResource | null>,
   enabled: boolean,
 ) {
   const sessionStatus = useSessionStatusSelector(
     selectStudyRuntimeCommandSessionStatus,
     { isEqual: studyRuntimeCommandSessionStatusEquals },
   );
-  return useResource<FrequencyDomainJsonArtifactResource | null>({
+  return useSessionScopedResource<FrequencyDomainJsonArtifactResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
     resolveRevision: frequencyDomainJsonArtifactRevision,
@@ -1735,14 +1791,14 @@ function useFrequencyDomainJsonResource(
 
 function useFrequencyDomainIndexedJsonResource(
   resourceKey: string,
-  load: (context: { signal: AbortSignal }) => Promise<FrequencyDomainJsonArtifactResource | null>,
+  load: (context: { sessionScopeKey?: string; signal: AbortSignal }) => Promise<FrequencyDomainJsonArtifactResource | null>,
   enabled: boolean,
 ) {
   const sessionStatus = useSessionStatusSelector(
     selectStudyRuntimeCommandSessionStatus,
     { isEqual: studyRuntimeCommandSessionStatusEquals },
   );
-  return useResource<FrequencyDomainJsonArtifactResource | null>({
+  return useSessionScopedResource<FrequencyDomainJsonArtifactResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
     resolveRevision: frequencyDomainJsonArtifactRevision,
@@ -1760,16 +1816,16 @@ export function useHysteresisPointsResource(
     : `${ANALYSIS_HYSTERESIS_POINTS_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .points(stageId, { signal })
+            .points(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisPointsResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisPointsResource | null>({
+  return useSessionScopedResource<HysteresisPointsResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1787,16 +1843,16 @@ export function useHysteresisMetricsResource(
     : `${ANALYSIS_HYSTERESIS_METRICS_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .metrics(stageId, { signal })
+            .metrics(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisMetricsResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisMetricsResource | null>({
+  return useSessionScopedResource<HysteresisMetricsResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1814,16 +1870,16 @@ export function useHysteresisSaturationResource(
     : `${ANALYSIS_HYSTERESIS_SATURATION_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .saturation(stageId, { signal })
+            .saturation(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisSaturationResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisSaturationResource | null>({
+  return useSessionScopedResource<HysteresisSaturationResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1841,16 +1897,16 @@ export function useHysteresisAdaptiveRefinementResource(
     : `${ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .adaptiveRefinement(stageId, { signal })
+            .adaptiveRefinement(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisAdaptiveRefinementResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisAdaptiveRefinementResource | null>({
+  return useSessionScopedResource<HysteresisAdaptiveRefinementResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1872,16 +1928,16 @@ export function useHysteresisStageSettleTraceResource(
     : `${ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .stageSettleTrace(stageId, { signal })
+            .stageSettleTrace(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisSettleTraceResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisSettleTraceResource | null>({
+  return useSessionScopedResource<HysteresisSettleTraceResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1899,16 +1955,16 @@ export function useHysteresisBookmarksResource(
     : `${ANALYSIS_HYSTERESIS_BOOKMARKS_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .bookmarks(stageId, { signal })
+            .bookmarks(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisBookmarksResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisBookmarksResource | null>({
+  return useSessionScopedResource<HysteresisBookmarksResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1926,16 +1982,16 @@ export function useHysteresisBranchesResource(
     : `${ANALYSIS_HYSTERESIS_BRANCHES_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .branches(stageId, { signal })
+            .branches(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisBranchesResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisBranchesResource | null>({
+  return useSessionScopedResource<HysteresisBranchesResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1953,16 +2009,16 @@ export function useHysteresisFamilyResource(
     : `${ANALYSIS_HYSTERESIS_FAMILY_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .family(stageId, { signal })
+            .family(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisAngularFamilyResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisAngularFamilyResource | null>({
+  return useSessionScopedResource<HysteresisAngularFamilyResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -1980,16 +2036,16 @@ export function useHysteresisMinorLoopsResource(
     : `${ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .minorLoops(stageId, { signal })
+            .minorLoops(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisMinorLoopsResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisMinorLoopsResource | null>({
+  return useSessionScopedResource<HysteresisMinorLoopsResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -2011,16 +2067,16 @@ export function useHysteresisPointResource(
       : `${ANALYSIS_HYSTERESIS_POINT_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId && pointId != null
         ? api.analysis.hysteresis
-            .point(stageId, pointId, { signal })
+            .point(stageId, pointId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisPointSchema>)
         : Promise.resolve(null),
     [api, pointId, stageId],
   );
 
-  return useResource<HysteresisPointSchema | null>({
+  return useSessionScopedResource<HysteresisPointSchema | null>({
     enabled: enabled && Boolean(stageId) && pointId != null,
     load,
     resourceKey,
@@ -2041,16 +2097,16 @@ export function useHysteresisSettleTraceResource(
       : `${ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId && pointId != null
         ? api.analysis.hysteresis
-            .settleTrace(stageId, pointId, { signal })
+            .settleTrace(stageId, pointId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisSettleTraceEntry[]>)
         : Promise.resolve(null),
     [api, pointId, stageId],
   );
 
-  return useResource<HysteresisSettleTraceEntry[] | null>({
+  return useSessionScopedResource<HysteresisSettleTraceEntry[] | null>({
     enabled: enabled && Boolean(stageId) && pointId != null,
     load,
     resolveRevision: (data) => data?.length ?? null,
@@ -2068,16 +2124,16 @@ export function useHysteresisReversalFieldsResource(
     : `${ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH}:none`;
 
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       stageId
         ? api.analysis.hysteresis
-            .reversalFields(stageId, { signal })
+            .reversalFields(stageId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<HysteresisReversalFieldsResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisReversalFieldsResource | null>({
+  return useSessionScopedResource<HysteresisReversalFieldsResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -2089,17 +2145,20 @@ export function useFieldCatalogResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    DATA_FIELDS_PATH,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.data.fields.catalog({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.data.fields.catalog({ sessionScopeKey, signal }),
     [api],
   );
 
   return useResource<FieldCatalogResource>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data.revision,
-    resourceKey: DATA_FIELDS_PATH,
+    resourceKey,
   });
 }
 
@@ -2107,17 +2166,20 @@ export function useQuantityCatalogResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    DATA_QUANTITIES_PATH,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.data.quantities.catalog({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.data.quantities.catalog({ sessionScopeKey, signal }),
     [api],
   );
 
   return useResource<QuantityCatalogResource>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data.schema_version,
-    resourceKey: DATA_QUANTITIES_PATH,
+    resourceKey,
   });
 }
 
@@ -2219,14 +2281,17 @@ export function useFieldMetaResource({
     }),
     [component, owner_object_id, scope_id, scope_kind, snapshot_id, stage_id],
   );
-  const resourceKey = useMemo(
+  const unscopedResourceKey = useMemo(
     () => resolveFieldMetaResourceKey(resolvedQuantityId, query),
     [query, resolvedQuantityId],
   );
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.data.fields
-        .meta(resolvedQuantityId, query, { signal })
+        .meta(resolvedQuantityId, query, { sessionScopeKey, signal })
         .catch((error: unknown) =>
           ignoreMissingFieldMetaResource<FieldMetaResource>({
             bus,
@@ -2238,7 +2303,7 @@ export function useFieldMetaResource({
   );
 
   return useResource<FieldMetaResource | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: fieldMetaFreshnessRevision,
     resourceKey,
@@ -2253,17 +2318,25 @@ export function useScalarWindowResource({
   tail,
 }: ScalarWindowQuery & { enabled?: boolean } = {}) {
   const { api } = useKernel();
-  const resourceKey = scalarWindowResourceKey({ columns, limit, sinceRevision, tail });
+  const unscopedResourceKey = scalarWindowResourceKey({
+    columns,
+    limit,
+    sinceRevision,
+    tail,
+  });
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.data.scalars
-        .window({ columns, limit, sinceRevision, tail }, { signal })
+        .window({ columns, limit, sinceRevision, tail }, { sessionScopeKey, signal })
         .catch(ignoreMissingResource<ScalarWindowResource>),
     [api, columns, limit, sinceRevision, tail],
   );
 
   return useResource<ScalarWindowResource | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
     resolveRevision: (data) => data?.revision ?? null,
@@ -2273,19 +2346,22 @@ export function useScalarWindowResource({
 
 export function useTableListResource({ enabled = true }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    DATA_TABLES_PATH,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.data.tables
-        .list({ signal })
+        .list({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<TableListResource>),
     [api],
   );
 
   return useResource<TableListResource | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.revision ?? null,
-    resourceKey: DATA_TABLES_PATH,
+    resourceKey,
   });
 }
 
@@ -2294,17 +2370,20 @@ export function useTableResource(
   { enabled = true }: RuntimeResourceOptions = {},
 ) {
   const { api } = useKernel();
-  const resourceKey = DATA_TABLE_PATH.replace("{table_id}", tableId);
+  const unscopedResourceKey = DATA_TABLE_PATH.replace("{table_id}", tableId);
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.data.tables
-        .detail(tableId, { signal })
+        .detail(tableId, { sessionScopeKey, signal })
         .catch(ignoreMissingResource<TableResource>),
     [api, tableId],
   );
 
   return useResource<TableResource | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
@@ -2316,17 +2395,23 @@ export function useTableColumnsResource(
   { enabled = true }: RuntimeResourceOptions = {},
 ) {
   const { api } = useKernel();
-  const resourceKey = DATA_TABLE_COLUMNS_PATH.replace("{table_id}", tableId);
+  const unscopedResourceKey = DATA_TABLE_COLUMNS_PATH.replace(
+    "{table_id}",
+    tableId,
+  );
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.data.tables
-        .columns(tableId, { signal })
+        .columns(tableId, { sessionScopeKey, signal })
         .catch(ignoreMissingResource<TableColumnMeta[]>),
     [api, tableId],
   );
 
   return useResource<TableColumnMeta[] | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.length ?? null,
     resourceKey,
@@ -2350,7 +2435,7 @@ export function useTableRowsResource(
   }: TableRowsQuery & { enabled?: boolean } = {},
 ) {
   const { api } = useKernel();
-  const resourceKey = tableRowsResourceKey(tableId, {
+  const unscopedResourceKey = tableRowsResourceKey(tableId, {
     columns,
     cursor,
     decimation,
@@ -2362,8 +2447,11 @@ export function useTableRowsResource(
     toRow,
     toT,
   });
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.data.tables
         .rows(
           tableId,
@@ -2379,7 +2467,7 @@ export function useTableRowsResource(
             toRow,
             toT,
           },
-          { signal },
+          { sessionScopeKey, signal },
         )
         .catch(ignoreMissingResource<TableRowsResource>),
     [
@@ -2399,7 +2487,7 @@ export function useTableRowsResource(
   );
 
   return useResource<TableRowsResource | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
     resolveRevision: (data) => data?.revision ?? null,
@@ -2425,7 +2513,7 @@ export function useTableRowsBinaryResource(
   }: TableRowsQuery & { enabled?: boolean; pauseLoad?: boolean } = {},
 ) {
   const { api } = useKernel();
-  const resourceKey = `${tableRowsResourceKey(tableId, {
+  const unscopedResourceKey = `${tableRowsResourceKey(tableId, {
     columns,
     cursor,
     decimation,
@@ -2437,8 +2525,11 @@ export function useTableRowsBinaryResource(
     toRow,
     toT,
   })}#binary`;
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.data.tables
         .rowsBinary(
           tableId,
@@ -2454,7 +2545,7 @@ export function useTableRowsBinaryResource(
             toRow,
             toT,
           },
-          { signal },
+          { sessionScopeKey, signal },
         )
         .catch(ignoreMissingResource<BinaryResourceResult<DecodedTableRows>>),
     [
@@ -2474,7 +2565,7 @@ export function useTableRowsBinaryResource(
   );
 
   return useResource<BinaryResourceResult<DecodedTableRows> | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
     pauseLoad,
@@ -2488,19 +2579,22 @@ export function useCheckpointCatalogResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    PERSISTENCE_CHECKPOINTS_PATH,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.persistence.checkpoints
-        .list({ signal })
+        .list({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<CheckpointListResource>),
     [api],
   );
 
   return useResource<CheckpointListResource | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.checkpoints.at(0)?.created_at ?? null,
-    resourceKey: PERSISTENCE_CHECKPOINTS_PATH,
+    resourceKey,
   });
 }
 
@@ -2508,21 +2602,24 @@ export function useCheckpointDetailResource(
   checkpointId: string | null | undefined,
 ) {
   const { api } = useKernel();
-  const resourceKey = checkpointId
+  const unscopedResourceKey = checkpointId
     ? PERSISTENCE_CHECKPOINT_PATH.replace("{checkpoint_id}", checkpointId)
     : `${PERSISTENCE_CHECKPOINTS_PATH}:none`;
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    unscopedResourceKey,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       checkpointId
         ? api.persistence.checkpoints
-            .detail(checkpointId, { signal })
+            .detail(checkpointId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<CheckpointEntry>)
         : Promise.resolve(null),
     [api, checkpointId],
   );
 
   return useResource<CheckpointEntry | null>({
-    enabled: Boolean(checkpointId),
+    enabled: Boolean(checkpointId) && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.created_at ?? null,
     resourceKey,
@@ -2534,14 +2631,14 @@ export function useEngineLogResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.diagnostics
-        .engineLog({ signal })
+        .engineLog({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<EngineLogResource>),
     [api],
   );
 
-  return useResource<EngineLogResource | null>({
+  return useSessionScopedResource<EngineLogResource | null>({
     enabled,
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -2554,8 +2651,8 @@ export function useGpuTelemetryResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.diagnostics.gpuTelemetry({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.diagnostics.gpuTelemetry({ sessionScopeKey, signal }),
     [api],
   );
 
@@ -2572,8 +2669,8 @@ export function useCpuTelemetryResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.diagnostics.cpuTelemetry({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.diagnostics.cpuTelemetry({ sessionScopeKey, signal }),
     [api],
   );
 
@@ -2590,10 +2687,10 @@ export function useSolverProfileResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const startedAtMs = solverTraceNow();
       const profile = await api.diagnostics
-        .solverProfile({ signal })
+        .solverProfile({ sessionScopeKey, signal })
         .catch(ignoreMissingResource<SolverProfileResource>);
       solverTraceObserver.observeProfileLoad(
         profile,
@@ -2605,7 +2702,7 @@ export function useSolverProfileResource({
     [api],
   );
 
-  const resource = useResource<SolverProfileResource | null>({
+  const resource = useSessionScopedResource<SolverProfileResource | null>({
     enabled,
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -2629,11 +2726,11 @@ export function useModelReadinessResource({
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.model.readiness({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => api.model.readiness({ sessionScopeKey, signal }),
     [api],
   );
 
-  return useResource<ModelReadinessResource>({
+  return useSessionScopedResource<ModelReadinessResource>({
     enabled,
     load,
     resolveRevision: (data) => data.scene_revision,
@@ -2827,16 +2924,16 @@ export function useObjectMetricsResource(objectId: string | null | undefined) {
     ? SIMULATION_OBJECT_METRICS_PATH.replace("{object_id}", objectId)
     : `${SIMULATION_OBJECT_METRICS_PATH}:none`;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       objectId
         ? api.simulation.objects
-            .metrics(objectId, { signal })
+            .metrics(objectId, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<ObjectMetricsResource>)
         : Promise.resolve(null),
     [api, objectId],
   );
 
-  return useResource<ObjectMetricsResource | null>({
+  return useSessionScopedResource<ObjectMetricsResource | null>({
     enabled: Boolean(objectId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
@@ -2857,16 +2954,16 @@ export function useObjectTopologicalChargeResource(
     ? `${ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", objectId)}?${queryToken}`
     : `${ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH}:none`;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       objectId
         ? api.analysis.extensions.objects
-            .topologicalCharge(objectId, JSON.parse(queryToken) as TopologicalChargeQuery, { signal })
+            .topologicalCharge(objectId, JSON.parse(queryToken) as TopologicalChargeQuery, { sessionScopeKey, signal })
             .catch(ignoreMissingResource<TopologicalChargeResource>)
         : Promise.resolve(null),
     [api, objectId, queryToken],
   );
 
-  return useResource<TopologicalChargeResource | null>({
+  return useSessionScopedResource<TopologicalChargeResource | null>({
     enabled: Boolean(objectId) && options.enabled !== false,
     load,
     pauseLoad: options.pauseLoad,

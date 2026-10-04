@@ -45,14 +45,12 @@ pub async fn ws_current_live(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<impl axum::response::IntoResponse, ApiError> {
-    if state.current_live_state.read().await.is_none() {
-        return Err(ApiError::not_found("no active local live workspace"));
-    }
+    let context = crate::capture_current_live_request_context(&state).await?;
     ensure_realtime_subprotocol(&headers)?;
     Ok(ws
         .protocols([FULLMAG_LIVE_SUBPROTOCOL])
         .on_upgrade(move |socket| {
-            crate::handle_current_live_realtime_ws(socket, state, query.after_seq)
+            crate::handle_current_live_realtime_ws(socket, state, context, query.after_seq)
         }))
 }
 
@@ -67,8 +65,26 @@ pub async fn ws_current_live(
 pub async fn get_communication_policy(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RealtimeCommunicationPolicyResource>, ApiError> {
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &context).await?;
     let policy = state.current_live_realtime_policy.read().await;
     Ok(Json(current_live_realtime_policy_resource(&policy)))
+}
+
+pub(crate) async fn patch_communication_policy_with_context(
+    state: &Arc<AppState>,
+    patch: RealtimeCommunicationPolicyPatch,
+    context: &crate::types::CurrentLiveRequestContext,
+) -> Result<RealtimeCommunicationPolicyResource, ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(state, context).await?;
+    let resource = {
+        let mut policy = state.current_live_realtime_policy.write().await;
+        patch_current_live_realtime_policy(&mut policy, patch)?
+    };
+    publish_communication_policy_change_locked(state, resource.revision, Some(context)).await?;
+    Ok(resource)
 }
 
 #[utoipa::path(
@@ -85,20 +101,44 @@ pub async fn patch_communication_policy(
     State(state): State<Arc<AppState>>,
     Json(patch): Json<RealtimeCommunicationPolicyPatch>,
 ) -> Result<Json<RealtimeCommunicationPolicyResource>, ApiError> {
-    let resource = {
-        let mut policy = state.current_live_realtime_policy.write().await;
-        patch_current_live_realtime_policy(&mut policy, patch)?
-    };
-    publish_communication_policy_change(&state, resource.revision).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let resource = patch_communication_policy_with_context(&state, patch, &context).await?;
     Ok(Json(resource))
 }
 
-async fn publish_communication_policy_change(
+pub(crate) async fn publish_communication_policy_change_with_context(
     state: &Arc<AppState>,
     revision: u64,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<(), ApiError> {
-    let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() else {
-        return Ok(());
+    let _transition = if context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
+    publish_communication_policy_change_locked(state, revision, context).await
+}
+
+async fn publish_communication_policy_change_locked(
+    state: &Arc<AppState>,
+    revision: u64,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<(), ApiError> {
+    let snapshot = {
+        let current = state.current_live_state.read().await;
+        let Some(snapshot) = current.as_ref() else {
+            return Ok(());
+        };
+        if let Some(context) = context {
+            crate::ensure_current_live_request_context(
+                snapshot,
+                context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+        }
+        snapshot.clone()
     };
     let display_revision = state.current_display_selection.read().await.revision;
     let realtime_state =

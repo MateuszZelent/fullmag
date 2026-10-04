@@ -1,49 +1,72 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+async function renderClosedPalette(sessionState: "no-session" | "ready") {
+  vi.resetModules();
+  const useStudyRuntimeCommandResourceData = vi.fn(() => ({}));
+  vi.doMock("@/kernel/resources/studyRuntimeResources", () => ({
+    useCommandDetailResource: () => ({
+      data: null,
+      error: null,
+      refetch: () => undefined,
+      revision: null,
+      status: "idle",
+    }),
+    useStudyRuntimeCommandResourceData,
+  }));
+  vi.doMock("@/kernel/resources/useSessionCollection", () => ({
+    useSessionCollection: () => ({ resource: { data: null }, state: sessionState }),
+  }));
+  vi.doMock("@/kernel/resources/useSessionStatus", () => ({
+    useSessionResourceIdentity: () =>
+      sessionState === "ready" ? { sessionId: "session-1" } : null,
+  }));
+  const MeshBuildDialog = vi.fn(() => null);
+  vi.doMock("./MeshBuildDialog", () => ({ MeshBuildDialog }));
+
+  const { default: CommandPaletteModule } = await import(
+    "./CommandPaletteModule"
+  );
+
+  const markup = renderToStaticMarkup(
+    <CommandPaletteModule
+      config={{}}
+      kernel={
+        {
+          bus: { on: () => () => undefined, subscribe: () => () => undefined },
+          commands: {
+            all: () => [],
+            getVersion: () => 0,
+            subscribe: () => () => undefined,
+          },
+        } as never
+      }
+      moduleId="command-palette"
+      setConfig={() => undefined}
+      slotId="overlay"
+    />,
+  );
+
+  vi.doUnmock("@/kernel/resources/studyRuntimeResources");
+  vi.doUnmock("@/kernel/resources/useSessionCollection");
+  vi.doUnmock("@/kernel/resources/useSessionStatus");
+  vi.doUnmock("./MeshBuildDialog");
+  return { MeshBuildDialog, markup, useStudyRuntimeCommandResourceData };
+}
+
 describe("CommandPaletteModule lazy runtime resources", () => {
   it("does not subscribe to the full runtime command bundle while closed", async () => {
-    vi.resetModules();
-    const useStudyRuntimeCommandResourceData = vi.fn(() => ({}));
-    vi.doMock("@/kernel/resources/studyRuntimeResources", () => ({
-      useCommandDetailResource: () => ({
-        data: null,
-        error: null,
-        refetch: () => undefined,
-        revision: null,
-        status: "idle",
-      }),
-      useStudyRuntimeCommandResourceData,
-    }));
-    vi.doMock("./MeshBuildDialog", () => ({
-      MeshBuildDialog: () => null,
-    }));
+    const rendered = await renderClosedPalette("ready");
 
-    const { default: CommandPaletteModule } = await import(
-      "./CommandPaletteModule"
-    );
+    expect(rendered.useStudyRuntimeCommandResourceData).not.toHaveBeenCalled();
+    expect(rendered.MeshBuildDialog).toHaveBeenCalled();
+  });
 
-    renderToStaticMarkup(
-      <CommandPaletteModule
-        config={{}}
-        kernel={
-          {
-            bus: { on: () => () => undefined },
-            commands: {
-              all: () => [],
-              getVersion: () => 0,
-              subscribe: () => () => undefined,
-            },
-          } as never
-        }
-        moduleId="command-palette"
-        setConfig={() => undefined}
-        slotId="overlay"
-      />,
-    );
+  it("mounts no session-scoped surfaces on the start screen", async () => {
+    const rendered = await renderClosedPalette("no-session");
 
-    expect(useStudyRuntimeCommandResourceData).not.toHaveBeenCalled();
-    vi.doUnmock("@/kernel/resources/studyRuntimeResources");
-    vi.doUnmock("./MeshBuildDialog");
+    expect(rendered.useStudyRuntimeCommandResourceData).not.toHaveBeenCalled();
+    expect(rendered.MeshBuildDialog).not.toHaveBeenCalled();
+    expect(rendered.markup).toBe("");
   });
 });

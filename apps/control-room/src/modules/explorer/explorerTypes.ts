@@ -9,6 +9,7 @@ import type {
   DomainMetaResource,
   FdmMultilayerLayoutResource,
   HysteresisExecutionTreeResource,
+  ObservationFrameResource,
   ResourceRevision,
 } from "@/kernel/api/apiTypes";
 import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
@@ -182,6 +183,8 @@ export type ExplorerNodeKind =
   | "results.dispersion.driven.field_at_k"
   | "results.dispersion.driven.provenance"
   | "results.hysteresis.root"
+  | "results.observation_frames.root"
+  | "results.observation_frame"
   | "results.analysis_views.root"
   | "results.analysis_views.definition"
   | "results.derived_values.root"
@@ -309,6 +312,7 @@ export interface ExplorerNode {
   activeAnalysisField?: boolean;
   analysisFieldRepresentation?: "complex-vector-xyz";
   normalization?: string;
+  observationFrame?: ObservationFrameResource;
   badge?: string;
   children?: ExplorerNode[];
   contextCommands?: CommandId[];

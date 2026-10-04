@@ -54,6 +54,7 @@ export interface CameraRegistrySnapshot {
 
 interface CameraRegistryControllerOptions {
   api: CameraRegistryApi;
+  getSessionScopeKey?: () => string | null;
   documentTarget?: CameraRegistryDocumentTarget | null;
   idleFlushMs?: number | null;
   now?: () => number;
@@ -93,11 +94,15 @@ const INITIAL_SNAPSHOT: CameraRegistrySnapshot = {
 
 export class CameraRegistryController {
   private readonly api: CameraRegistryApi;
+  private readonly getSessionScopeKey?: () => string | null;
   private readonly documentTarget: CameraRegistryDocumentTarget | null;
   private readonly idleFlushMs: number | null;
   private readonly listeners = new Set<CameraRegistryListener>();
   private readonly now: () => number;
   private flushPromise: Promise<void> | null = null;
+  private sessionScopeKey: string | null | undefined;
+  private scopeGeneration = 0;
+  private flushAbort: AbortController | null = null;
   private readonly handlePageHide = () => {
     void this.flushDue("pagehide");
   };
@@ -120,6 +125,7 @@ export class CameraRegistryController {
 
   constructor({
     api,
+    getSessionScopeKey,
     documentTarget =
       typeof document === "undefined" ? null : document,
     idleFlushMs = DEFAULT_CAMERA_REGISTRY_IDLE_FLUSH_MS,
@@ -128,6 +134,7 @@ export class CameraRegistryController {
       typeof window === "undefined" ? null : window,
   }: CameraRegistryControllerOptions) {
     this.api = api;
+    this.getSessionScopeKey = getSessionScopeKey;
     this.documentTarget = documentTarget;
     this.idleFlushMs = idleFlushMs;
     this.now = now;
@@ -136,6 +143,24 @@ export class CameraRegistryController {
 
   getSnapshot(): CameraRegistrySnapshot {
     return this.snapshot;
+  }
+
+  setSessionScopeKey(sessionScopeKey: string | null): void {
+    if (this.sessionScopeKey === sessionScopeKey) return;
+    this.sessionScopeKey = sessionScopeKey;
+    this.scopeGeneration += 1;
+    this.flushAbort?.abort();
+    this.flushAbort = null;
+    this.flushPromise = null;
+    this.clearIdleFlushTimer();
+    this.localDirty = false;
+    this.activeInteractionEpoch = null;
+    this.interactionActive = false;
+    this.interactionEpochExplicit = false;
+    this.suppressedCameraInvalidationRevisions.clear();
+    this.inflightCameraInvalidationSuppressed = false;
+    this.snapshot = { ...INITIAL_SNAPSHOT, version: this.snapshot.version + 1 };
+    this.notify();
   }
 
   observeRemoteState(
@@ -294,8 +319,16 @@ export class CameraRegistryController {
   }
 
   flushNow(reason: CameraRegistryFlushReason = "manual"): Promise<void> {
+    if (this.sessionScopeKey === null) return Promise.resolve();
+    if (this.getSessionScopeKey && this.getSessionScopeKey() !== this.sessionScopeKey) return Promise.resolve();
     if (this.flushPromise) return this.flushPromise;
     if (!this.snapshot.dirty) return Promise.resolve();
+    const generation = this.scopeGeneration;
+    const sessionScopeKey = this.sessionScopeKey;
+    const abort = new AbortController();
+    this.flushAbort = abort;
+    const isCurrent = () => generation === this.scopeGeneration && !abort.signal.aborted &&
+      (!this.getSessionScopeKey || this.getSessionScopeKey() === sessionScopeKey);
 
     const camera = cloneCameraState(this.snapshot.camera);
     this.clearIdleFlushTimer();
@@ -310,15 +343,20 @@ export class CameraRegistryController {
     };
     this.notify();
 
-    this.flushPromise = this.api
-      .patch({ camera: cameraStatePatch(camera) })
+    const patch = { camera: cameraStatePatch(camera) };
+    const request = sessionScopeKey === undefined
+      ? this.api.patch(patch)
+      : this.api.patch(patch, { sessionScopeKey, signal: abort.signal });
+    this.flushPromise = request
       .then((state) => {
+        if (!isCurrent()) return;
         this.suppressedCameraInvalidationRevisions.add(
           resourceRevisionKey(state.revision),
         );
         this.applyRemoteState(state, "sync", this.now());
       })
       .catch((error: unknown) => {
+        if (!isCurrent()) return;
         this.localDirty = true;
         this.snapshot = {
           ...this.snapshot,
@@ -333,6 +371,8 @@ export class CameraRegistryController {
         this.scheduleIdleFlush();
       })
       .finally(() => {
+        if (!isCurrent()) return;
+        this.flushAbort = null;
         this.flushPromise = null;
         if (!this.snapshot.inflightCamera && !this.snapshot.syncInFlight) return;
         this.snapshot = {

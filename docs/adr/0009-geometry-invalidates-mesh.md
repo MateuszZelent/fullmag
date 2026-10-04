@@ -77,12 +77,36 @@ or silently reuse the previous topology. Opening a document never executes a
 preparation plan. This preserves the distinction between a visible primitive,
 stale topology and current solver topology.
 
+Preparation source identity follows the owning lifecycle. Live preparation
+continues to use the v1 `scene_revision` contract. A ProjectRun preparation
+uses the v2 `accepted_run_step` source, carrying the immutable `run_id`, the
+full RunSpecification fingerprint and `step_id`; it has no Live scene
+revision. A Live receipt cannot be rebound into an accepted run even when its
+ProblemIR and execution plan happen to match. This keeps the explicit Compute
+boundary while making accepted-run ownership independent of mutable session
+state. Previously persisted v1 receipts that already carry a complete,
+matching accepted-run binding remain readable; an unbound v1 Live receipt is
+never promoted automatically.
+
+An accepted-run preparation receipt is persisted per study task at
+`runs/<run_id>/task_preparation_receipts/<task_id>.json`. The task ID is derived
+from the accepted run and step ID; the immutable envelope repeats the task
+input fingerprint and accepted-run source identity. Publication requires both
+the durable RunIntent and task catalog, and an identical replay is idempotent.
+This first slice does not change task readiness: receipts are preparation
+evidence, not dependency resolution, admission, worker execution, or proof of
+solver output. The existing top-level `preparation_receipt.json` remains the
+Live receipt location.
+
 ## Implementation
 
 - `dirtyGraphReducer` handles `geometry.changed` action.
 - `deriveRunGate(dirtyGraph)` returns blockers with actionable commands (e.g., "Build Mesh" → `mesh.build.all`).
-- `PreparationPlan` records the requested producer, committed scene revision,
-  resolved backend target, mesh artifact identity and publication status.
+- `PreparationPlan` v1 records the requested producer, committed scene
+  revision, resolved backend target, mesh artifact identity and publication
+  status. Accepted-run v2 records the immutable run-step source in place of a
+  scene revision. Readers retain v1 compatibility; producers must not silently
+  translate between the two source identities.
 - `Compute` consumes only a current mesh artifact or a completed explicit
   preparation plan; it does not create an implicit build command.
 - The UI shows blockers in the Run panel with one-click fix buttons.

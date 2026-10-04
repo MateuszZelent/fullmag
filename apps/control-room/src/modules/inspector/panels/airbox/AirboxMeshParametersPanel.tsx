@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { runFdmGridRefreshOperation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import { useKernel } from "@/kernel/KernelContext";
+import {
+  sessionRequestScopeKey,
+} from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
@@ -14,7 +18,10 @@ import {
 } from "@/kernel/resources/geometryLifecycleResources";
 import { Button } from "@/shared/ui/Button";
 
-import { useRegisterInspectorEditSession } from "../../InspectorEditSession";
+import {
+  useInspectorEditSession,
+  useRegisterInspectorEditSession,
+} from "../../InspectorEditSession";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { AirboxFieldRow as FieldRow, boundedDisplayText } from "./airboxDisplay";
@@ -45,8 +52,11 @@ type Feedback = { kind: "error" | "success" | "warning"; message: string } | nul
 
 export async function submitAirboxPolicyDraft(
   draft: AirboxMeshPolicyDraft,
-  replace: (request: MeshUniverseConfigReplaceRequest) => Promise<MeshUniverseConfigResource>,
-  options: { lane?: AirboxMeshPolicyLane } = {},
+  replace: (
+    request: MeshUniverseConfigReplaceRequest,
+    options?: { sessionScopeKey?: string },
+  ) => Promise<MeshUniverseConfigResource>,
+  options: { lane?: AirboxMeshPolicyLane; sessionScopeKey?: string | null } = {},
 ): Promise<
   | { error: string; kind: "error" }
   | { kind: "noop" }
@@ -55,7 +65,10 @@ export async function submitAirboxPolicyDraft(
   const result = buildAirboxMeshPolicyReplaceRequest(draft, options);
   if ("error" in result) return { error: result.error, kind: "error" };
   if (result.request === null) return { kind: "noop" } as const;
-  return { kind: "submitted", resource: await replace(result.request) } as const;
+  const requestOptions = options.sessionScopeKey
+    ? { sessionScopeKey: options.sessionScopeKey }
+    : undefined;
+  return { kind: "submitted", resource: await replace(result.request, requestOptions) } as const;
 }
 type AirboxMeshPolicyTextKey = Exclude<
   keyof AirboxMeshPolicyDraft,
@@ -119,13 +132,14 @@ export function AirboxMeshParametersPanel({
   const isFdm = lane === "fdm";
   const kernel = useKernel();
   const { api, commands, resources } = kernel;
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const policy = useUniverseMeshPolicyResource();
   const resource = policy.data ?? defaultUniverseMeshPolicyResource();
   const baseDraft = useMemo(
     () => draftFromUniverseMeshPolicyResource(resource),
     [resource],
   );
-  const baseKey = draftKeyForUniverseMeshPolicyResource(resource);
+  const baseKey = `${sessionScopeKey ?? "no-session"}:${draftKeyForUniverseMeshPolicyResource(resource)}`;
   const identityKey = draftIdentityKeyForUniverseMeshPolicyResource();
   const [draftState, setDraftState] = useState<
     InspectorDraftState<AirboxMeshPolicyDraft>
@@ -136,10 +150,35 @@ export function AirboxMeshParametersPanel({
       identityKey,
     }),
   );
-  const [feedback, setFeedback] = useState<Feedback>(null);
-  const [pending, setPending] = useState(false);
-  const [buildPending, setBuildPending] = useState(false);
-  const buildInFlight = useRef(false);
+  const [feedbackState, setFeedbackState] = useState<{
+    sessionScopeKey: string | null;
+    value: Feedback;
+  } | null>(null);
+  const feedback = feedbackState?.sessionScopeKey === sessionScopeKey
+    ? feedbackState.value
+    : null;
+  const setFeedback = useCallback(
+    (value: Feedback) => setFeedbackState({ sessionScopeKey, value }),
+    [sessionScopeKey],
+  );
+  const [pendingOperation, setPendingOperation] = useState<{
+    id: number;
+    identityKey: string;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextPendingOperationId = useRef(0);
+  const silentApplyInFlight = useRef(false);
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey &&
+    pendingOperation.identityKey === identityKey;
+  const [buildPendingOperation, setBuildPendingOperation] = useState<{
+    id: number;
+    identityKey: string;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextBuildOperationId = useRef(0);
+  const buildInFlight = useRef<{ id: number; sessionScopeKey: string } | null>(null);
+  const buildPending = buildPendingOperation?.sessionScopeKey === sessionScopeKey &&
+    buildPendingOperation.identityKey === identityKey;
   const { dirty, draft } = resolveInspectorDraftState({
     baseDraft,
     baseKey,
@@ -150,11 +189,13 @@ export function AirboxMeshParametersPanel({
   const commandContext = useMemo(
     () =>
       createCommandContext("inspector", kernel, {
+        sessionScopeKey,
         sourceDetail: "airbox-mesh-parameters",
         input: { origin: "airbox" },
       }),
-    [kernel],
+    [kernel, sessionScopeKey],
   );
+  const inspectorEditSession = useInspectorEditSession();
 
   const updateDraft = (patch: Partial<AirboxMeshPolicyDraft>) =>
     setDraftState(
@@ -198,22 +239,39 @@ export function AirboxMeshParametersPanel({
     });
     if (policy.status === "ready") kernel.bus.emit("mesh:build-history-editor-ready", { target: "universe" });
     return offRestore;
-  }, [baseDraft, baseKey, identityKey, kernel.bus, policy.status, resource]);
+  }, [baseDraft, baseKey, identityKey, kernel.bus, policy.status, resource, setFeedback]);
 
   const applyPolicy = async ({ silent = false } = {}) => {
-    setPending(true);
+    const operationSessionScopeKey = sessionScopeKey;
+    const operationContext = commandContext;
+    const isCurrentOperation = () => Boolean(
+      operationSessionScopeKey &&
+      operationContext.sessionScopeKey === operationSessionScopeKey &&
+      operationContext.isCurrentSessionScope?.() === true,
+    );
+    if (!operationSessionScopeKey || !isCurrentOperation()) {
+      if (!silent) setFeedback({ kind: "error", message: "An active session is required to save the Airbox policy." });
+      return false;
+    }
+    const operationId = ++nextPendingOperationId.current;
+    setPendingOperation({
+      id: operationId,
+      identityKey,
+      sessionScopeKey: operationSessionScopeKey,
+    });
     try {
       const submission = await submitAirboxPolicyDraft(
         draft,
-        (request) => api.meshing.replaceUniversePolicy(request),
-        { lane },
+        (request, requestOptions) => api.meshing.replaceUniversePolicy(request, requestOptions),
+        { lane, sessionScopeKey: operationSessionScopeKey },
       );
+      if (!isCurrentOperation()) return false;
       if (submission.kind === "error") {
         setFeedback({ kind: "error", message: submission.error });
         return false;
       }
       if (submission.kind === "noop") {
-        if (!silent) setFeedback({ kind: "success", message: "No authored Airbox policy changes to apply." });
+        if (!silent && !silentApplyInFlight.current) setFeedback({ kind: "success", message: "No authored Airbox policy changes to apply." });
         return true;
       }
       const next = submission.resource;
@@ -223,7 +281,10 @@ export function AirboxMeshParametersPanel({
       let fdmReplanMessage: Feedback | null = null;
       if (isFdm) {
         try {
-          const committedScene = await api.model.scene();
+          const committedScene = await api.model.scene({
+            sessionScopeKey: operationSessionScopeKey,
+          });
+          if (!isCurrentOperation()) return false;
           const currentSceneRevision =
             committedScene.scene_revision ??
             committedScene.revision ??
@@ -232,11 +293,12 @@ export function AirboxMeshParametersPanel({
             throw new Error("Committed scene revision is unavailable.");
           }
           resources.invalidate(SCENE_RESOURCE_KEY, currentSceneRevision);
-          const result = await runFdmGridRefreshOperation(commandContext, {
+          const result = await runFdmGridRefreshOperation(operationContext, {
             kind: "fdm_grid_refresh",
             reason: "airbox_policy_commit",
             precondition: { scene_revision: currentSceneRevision },
           });
+          if (!isCurrentOperation()) return false;
           fdmReplanMessage = {
             kind: result.status === "completed" ? "success" : result.status === "failed" ? "error" : "warning",
             message:
@@ -248,6 +310,7 @@ export function AirboxMeshParametersPanel({
                   : "Canonical Airbox policy saved. FDM grid replan remains active; see Mesh Jobs."),
           };
         } catch (error) {
+          if (!isCurrentOperation()) return false;
           fdmReplanMessage = {
             kind: "warning",
             message: `Canonical Airbox policy saved, but the FDM grid replan could not be submitted: ${
@@ -256,7 +319,8 @@ export function AirboxMeshParametersPanel({
           };
         }
       }
-      if (!silent) {
+      if (!isCurrentOperation()) return false;
+      if (!silent && !silentApplyInFlight.current) {
         setFeedback({
           kind: fdmReplanMessage?.kind ?? "success",
           message:
@@ -266,23 +330,55 @@ export function AirboxMeshParametersPanel({
       }
       return true;
     } catch (error) {
+      if (!isCurrentOperation()) return false;
       setFeedback({
         kind: "error",
         message: boundedDisplayText(error instanceof Error ? error.message : String(error)) ?? "Backend request failed.",
       });
       return false;
     } finally {
-      setPending(false);
+      setPendingOperation((current) => current?.id === operationId ? null : current);
     }
   };
 
   const build = async () => {
-    if (pending || buildInFlight.current) return;
-    buildInFlight.current = true;
-    setBuildPending(true);
+    const operationSessionScopeKey = sessionScopeKey;
+    const operationContext = commandContext;
+    const isCurrentOperation = () => Boolean(
+      operationSessionScopeKey &&
+      operationContext.sessionScopeKey === operationSessionScopeKey &&
+      operationContext.isCurrentSessionScope?.() === true,
+    );
+    if (!operationSessionScopeKey || !isCurrentOperation()) {
+      setFeedback({ kind: "error", message: "An active session is required to build the shared-domain mesh." });
+      return;
+    }
+    if (pending || buildInFlight.current?.sessionScopeKey === operationSessionScopeKey) return;
+    const operationId = ++nextBuildOperationId.current;
+    buildInFlight.current = { id: operationId, sessionScopeKey: operationSessionScopeKey };
+    setBuildPendingOperation({
+      id: operationId,
+      identityKey,
+      sessionScopeKey: operationSessionScopeKey,
+    });
     try {
-      if (dirty && !(await applyPolicy({ silent: true }))) return;
-      const result = await commands.execute("mesh.build-shared-domain", commandContext);
+      if (dirty) {
+        let applied = false;
+        if (inspectorEditSession) {
+          silentApplyInFlight.current = true;
+          try {
+            applied = await inspectorEditSession.apply();
+          } finally {
+            silentApplyInFlight.current = false;
+          }
+        } else {
+          applied = await applyPolicy({ silent: true });
+        }
+        if (!applied) return;
+      }
+      if (!isCurrentOperation()) return;
+      const result = await commands.execute("mesh.build-shared-domain", operationContext);
+      if (!isCurrentOperation()) return;
       setFeedback({
         kind: result.status === "completed" ? "success" : result.status === "failed" ? "error" : "warning",
         message: result.message ?? (result.status === "completed"
@@ -292,13 +388,14 @@ export function AirboxMeshParametersPanel({
           : "Mesh build was not submitted."),
       });
     } catch (error) {
+      if (!isCurrentOperation()) return;
       setFeedback({
         kind: "error",
         message: boundedDisplayText(error instanceof Error ? error.message : String(error)) ?? "Backend request failed.",
       });
     } finally {
-      buildInFlight.current = false;
-      setBuildPending(false);
+      if (buildInFlight.current?.id === operationId) buildInFlight.current = null;
+      setBuildPendingOperation((current) => current?.id === operationId ? null : current);
     }
   };
 
@@ -311,7 +408,15 @@ export function AirboxMeshParametersPanel({
   const validationError = "error" in validation ? validation.error : null;
   const jsonError = airboxMeshPolicyJsonError(draft.configText);
   const fieldError = (label: string) => validationError?.toLowerCase().includes(label.toLowerCase()) ? validationError : undefined;
-  useRegisterInspectorEditSession("staged", pending, dirty, validationError === null, undefined, applyPolicy, revert);
+  useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    sessionScopeKey !== null && validationError === null,
+    undefined,
+    applyPolicy,
+    revert,
+  );
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-mesh-policy-draft="airbox">
@@ -333,11 +438,11 @@ export function AirboxMeshParametersPanel({
           />
         ) : null}
         <div className="fm-inspector-toolbar">
-          <Button disabled={pending || validationError !== null} size="sm" type="button" variant="primary" onClick={() => void applyPolicy()}>
+          <Button disabled={!sessionScopeKey || pending || validationError !== null} size="sm" type="button" variant="primary" onClick={() => void (inspectorEditSession?.apply() ?? applyPolicy())}>
             Apply Airbox Policy
           </Button>
           {!isFdm ? (
-            <Button disabled={pending || buildPending || validationError !== null} size="sm" type="button" variant="secondary" onClick={() => void build()}>
+            <Button disabled={!sessionScopeKey || pending || buildPending || validationError !== null} size="sm" type="button" variant="secondary" onClick={() => void build()}>
               {buildPending ? "Waiting for mesh build…" : dirty ? "Apply & Build Shared-Domain Mesh" : "Build Shared-Domain Mesh"}
             </Button>
           ) : null}

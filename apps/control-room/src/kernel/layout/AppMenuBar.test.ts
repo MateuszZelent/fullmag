@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  APP_DROPDOWN_ITEMS,
   MAIN_MENUS,
   QUICK_ACTIONS,
   type AppMenuNode,
@@ -62,7 +61,6 @@ describe("app menu command model", () => {
       }
     }
     const exposedIds = [
-      ...flattenMenuIds(APP_DROPDOWN_ITEMS),
       ...flattenMenuIds(MAIN_MENUS),
       ...QUICK_ACTIONS.map((action) => action.id),
     ].filter((id) => placeholderIds.has(id));
@@ -91,6 +89,16 @@ describe("app menu command model", () => {
       label: "Restore Runtime State",
       shortcut: "Ctrl+Shift+O",
     });
+  });
+
+  it("exposes Live preparation as a distinct Simulation menu command", () => {
+    const simulationMenu = MAIN_MENUS.find((menu) => menu.id === "simulation");
+    expect(simulationMenu?.children).toContainEqual(
+      expect.objectContaining({
+        id: "study.prepare-live",
+        label: "Prepare Live Study",
+      }),
+    );
   });
 
   it("exposes the solver profiler toggle from the Tools menu", () => {

@@ -5,6 +5,7 @@
 
 namespace mfem {
 class Mesh;
+class FiniteElementSpace;
 }
 
 namespace fullmag::fem {
@@ -23,6 +24,13 @@ struct FemMeshRuntimeState;
 bool build_mfem_mesh(
     const FemMeshRuntimeState &source,
     std::unique_ptr<mfem::Mesh> &mesh,
+    std::string &error);
+
+// Check the actual scalar local DOF indices before any node-indexed field is
+// uploaded. This does not certify MFEM true DOF or periodic-class numbering.
+bool verify_mfem_local_node_ordering(
+    const FemMeshRuntimeState &source,
+    const mfem::FiniteElementSpace &space,
     std::string &error);
 #endif
 

@@ -6,6 +6,11 @@ import {
   acknowledgedAuthoringSceneRevision,
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
+import {
+  prepareAuthoringMutation,
+  recordAuthoringMutationHistory,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   publishCommittedSceneResource,
@@ -15,6 +20,7 @@ import {
   useObjectInteractionResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { sessionRequestScopeKey, sessionResourceIdentityKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
@@ -104,6 +110,10 @@ interface AssignmentFailureState {
   transactionId: number;
 }
 
+interface ApplyMaterialMutationOptions {
+  recordHistory?: boolean;
+}
+
 function effectiveAssignmentRefreshPhase(
   failure: AssignmentFailureState,
   scene: ReturnType<typeof useSceneResource>,
@@ -149,12 +159,13 @@ function errorMessage(error: unknown): string {
 }
 
 function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
   const sessionIdentity = useSessionResourceIdentity();
+  const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const scene = useSceneResource();
   const object = resolveGeometryObjectDraft(selection, scene.data);
   const sessionIdentityKey = sessionIdentity
-    ? `${sessionIdentity.sessionId}:${sessionIdentity.sessionEpoch}`
+    ? sessionResourceIdentityKey(sessionIdentity)
     : "session:unknown";
   const scopeKey = `${sessionIdentityKey}|${object.mode}|${object.objectId}`;
   const scopeRef = useRef<PanelScope>({ key: scopeKey, token: Symbol(scopeKey) });
@@ -333,7 +344,9 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     });
   }
 
-  async function applyAnisotropy(): Promise<boolean> {
+  async function applyAnisotropy({
+    recordHistory = true,
+  }: ApplyMaterialMutationOptions = {}): Promise<boolean> {
     if (!object.objectId || object.mode !== "committed") {
       setFeedback({ kind: "error", message: "No committed scene object." });
       return false;
@@ -348,16 +361,33 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     }
     const value = anisotropy.value ?? { axis: [0, 0, 1] as [number, number, number], ku1: 0 };
     const operationScope = scope;
+    const operationSessionScopeKey = sessionScopeKey;
     startPending("anisotropy", operationScope);
     try {
-      const response = await api.model.patchObjectInteraction(
-        object.objectId,
-        "uniaxial_anisotropy",
-        {
-          present: anisotropyDraft.present,
-          params: { ku1: value.ku1, axis: value.axis },
-        },
-      );
+      const mutation = ({ baseRevision }: { baseRevision: number | null }) =>
+        api.model.patchObjectInteraction(
+          object.objectId,
+          "uniaxial_anisotropy",
+          {
+            base_revision: baseRevision ?? anisotropyInteraction.data?.scene_revision ?? null,
+            present: anisotropyDraft.present,
+            params: { ku1: value.ku1, axis: value.axis },
+          },
+          operationSessionScopeKey
+            ? { sessionScopeKey: operationSessionScopeKey }
+            : undefined,
+        );
+      const response = recordHistory
+        ? await runAuthoringMutationWithHistory(
+            {
+              api,
+              authoringHistory,
+              sessionScopeKey: operationSessionScopeKey,
+            },
+            "Update uniaxial anisotropy",
+            mutation,
+          )
+        : await mutation({ baseRevision: null });
       const revision = acknowledgedAuthoringSceneRevision(response);
       if (!isCurrentScope()) return false;
       resources.invalidate(
@@ -423,19 +453,37 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     });
   }
 
-  async function applyMaterial(): Promise<boolean> {
+  async function applyMaterial({
+    recordHistory = true,
+  }: ApplyMaterialMutationOptions = {}): Promise<boolean> {
     if (object.mode !== "committed") {
       setFeedback({ kind: "error", message: "No committed scene object." });
       return false;
     }
 
     const operationScope = scope;
+    const operationSessionScopeKey = sessionScopeKey;
     startPending("assignment", operationScope);
     try {
-      const sceneResponse = await api.model.patchObject(
-        object.objectId,
-        buildMaterialAssignmentPatch(draft, object.baseRevision),
-      );
+      const mutation = ({ baseRevision }: { baseRevision: number | null }) =>
+        api.model.patchObject(
+          object.objectId,
+          buildMaterialAssignmentPatch(draft, baseRevision ?? object.baseRevision),
+          operationSessionScopeKey
+            ? { sessionScopeKey: operationSessionScopeKey }
+            : undefined,
+        );
+      const sceneResponse = recordHistory
+        ? await runAuthoringMutationWithHistory(
+            {
+              api,
+              authoringHistory,
+              sessionScopeKey: operationSessionScopeKey,
+            },
+            "Update object material assignment",
+            mutation,
+          )
+        : await mutation({ baseRevision: null });
       const revision = acknowledgedAuthoringSceneRevision(sceneResponse);
       if (!isCurrentScope()) return false;
       invalidateMagneticParameterResources(revision);
@@ -453,7 +501,9 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     }
   }
 
-  async function applyParameters(): Promise<boolean> {
+  async function applyParameters({
+    recordHistory = true,
+  }: ApplyMaterialMutationOptions = {}): Promise<boolean> {
     if (!materialId || !material.data) {
       setFeedback({
         kind: "error",
@@ -476,9 +526,36 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     }
 
     const operationScope = scope;
+    const operationSessionScopeKey = sessionScopeKey;
     startPending("parameters", operationScope);
     try {
-      const response = await api.model.patchMaterial(materialId, result.patch);
+      const mutation = ({ baseRevision }: { baseRevision: number | null }) =>
+        api.model.patchMaterialAsset(
+          materialId,
+          result.patch,
+          (() => {
+            const options =
+              baseRevision === null
+                ? object.baseRevision === null
+                  ? undefined
+                  : { baseRevision: object.baseRevision }
+                : { baseRevision };
+            return operationSessionScopeKey
+              ? { ...options, sessionScopeKey: operationSessionScopeKey }
+              : options;
+          })(),
+        );
+      const response = recordHistory
+        ? await runAuthoringMutationWithHistory(
+            {
+              api,
+              authoringHistory,
+              sessionScopeKey: operationSessionScopeKey,
+            },
+            "Update material parameters",
+            mutation,
+          )
+        : await mutation({ baseRevision: null });
       const revision = acknowledgedAuthoringSceneRevision(response);
       if (!isCurrentScope()) return false;
       resources.invalidate(resolveMaterialResourceKey(materialId), revision);
@@ -545,7 +622,20 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   }
 
   async function createAndAssignMaterial(): Promise<void> {
-    if (!object.objectId || object.mode !== "committed" || object.baseRevision === null) {
+    const operationScope = scope;
+    const operationSessionScopeKey = sessionScopeKey;
+    if (!object.objectId || object.mode !== "committed") {
+      setFeedback({ kind: "error", message: "No committed scene object with a known revision." });
+      return;
+    }
+    const historyContext = {
+      api,
+      authoringHistory,
+      sessionScopeKey: operationSessionScopeKey,
+    };
+    const preparation = await prepareAuthoringMutation(historyContext);
+    const baseRevision = preparation.baseRevision ?? object.baseRevision;
+    if (baseRevision === null) {
       setFeedback({ kind: "error", message: "No committed scene object with a known revision." });
       return;
     }
@@ -554,7 +644,6 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       setFeedback({ kind: "error", message: validation.error });
       return;
     }
-    const operationScope = scope;
     const transactionId = ++draftTransactionRevisionRef.current;
     const expectedDraftRevisions = new Map(draftFieldRevisionsRef.current);
     startPending("create-assign", operationScope);
@@ -566,7 +655,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         api,
         object.objectId,
         createDraft,
-        object.baseRevision,
+        baseRevision,
         (created) => {
           if (!isCurrentScope()) return;
           publishCommittedSceneResource(
@@ -575,6 +664,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
             created.scene_revision,
             undefined,
             false,
+            operationSessionScopeKey,
           );
           resources.invalidate(
             resolveMaterialResourceKey(validation.value.materialId),
@@ -583,6 +673,13 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
           invalidateMagneticParameterResources(created.scene_revision);
         },
         isCurrentScope,
+        operationSessionScopeKey,
+      );
+      await recordAuthoringMutationHistory(
+        historyContext,
+        "Create and assign material",
+        preparation,
+        result.assigned,
       );
       if (!isCurrentScope()) return;
       const assignmentRevision = acknowledgedAuthoringSceneRevision(result.assigned);
@@ -592,6 +689,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         assignmentRevision,
         undefined,
         false,
+        operationSessionScopeKey,
       );
       invalidateMagneticParameterResources(assignmentRevision);
       mergeDraftPatch({ materialRef: result.materialId }, expectedDraftRevisions, operationScope);
@@ -603,6 +701,14 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
           : "Material created and assigned.",
       });
     } catch (error) {
+      if (error instanceof MaterialAssignmentAfterCreateError) {
+        await recordAuthoringMutationHistory(
+          historyContext,
+          "Create material (assignment pending)",
+          preparation,
+          error.created.committed_scene,
+        );
+      }
       if (!isCurrentScope()) return;
       if (error instanceof MaterialAssignmentAfterCreateError) {
         stageDeferredAnisotropy(error.deferredAnisotropy, operationScope);
@@ -664,16 +770,33 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   async function retryFailedAssignment(): Promise<void> {
     if (!assignmentFailure || assignmentFailure.rebasedRevision === null || !isCurrentScope()) return;
     const operationScope = scope;
+    const operationSessionScopeKey = sessionScopeKey;
     const failure = assignmentFailure;
     const rebasedRevision = failure.rebasedRevision;
     if (rebasedRevision === null) return;
     const expectedDraftRevisions = new Map(draftFieldRevisionsRef.current);
     startPending("retry-assign", operationScope);
     try {
-      const assigned = await failure.error.retry(api, rebasedRevision);
+      const assigned = await runAuthoringMutationWithHistory(
+        {
+          api,
+          authoringHistory,
+          sessionScopeKey: operationSessionScopeKey,
+        },
+        "Retry material assignment",
+        async ({ baseRevision }) =>
+          failure.error.retry(api, baseRevision ?? rebasedRevision),
+      );
       if (!isCurrentScope()) return;
       const assignmentRevision = acknowledgedAuthoringSceneRevision(assigned);
-      publishCommittedSceneResource(resources, assigned, assignmentRevision, undefined, false);
+      publishCommittedSceneResource(
+        resources,
+        assigned,
+        assignmentRevision,
+        undefined,
+        false,
+        operationSessionScopeKey,
+      );
       invalidateMagneticParameterResources(assignmentRevision);
       mergeDraftPatch({ materialRef: failure.error.materialId }, expectedDraftRevisions, operationScope);
       setAssignmentFailureState((current) =>
@@ -798,7 +921,7 @@ function ObjectMaterialPanelView({
   ].every((value) => Number.isFinite(Number(value)));
   const applyInspectorDraft = useCallback(async () => {
     if (parametersTargetChanged) {
-      if (!(await applyMaterial())) return false;
+      if (!(await applyMaterial({ recordHistory: false }))) return false;
       if (parametersDirty) {
         setFeedback({
           kind: "success",
@@ -806,10 +929,10 @@ function ObjectMaterialPanelView({
         });
         return false;
       }
-    } else if (parametersDirty && !(await applyParameters())) {
+    } else if (parametersDirty && !(await applyParameters({ recordHistory: false }))) {
       return false;
     }
-    if (anisotropyDirty && !(await applyAnisotropy())) return false;
+    if (anisotropyDirty && !(await applyAnisotropy({ recordHistory: false }))) return false;
     return true;
   }, [
     anisotropyDirty,

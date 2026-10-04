@@ -44,7 +44,7 @@ Przed implementacją odczytać aktualne `AGENTS.md`, skill `using-git-worktrees`
 
 Spójne zweryfikowane przyrosty commitować na branchu zadania według reguł projektu; staging obejmuje wyłącznie własny zakres. Integracja: wymagane testy/review → push → PR do master → wymagane kontrole → merge → weryfikacja głównego checkoutu → bezpieczne usunięcie dokładnie własnego worktree i wpis końcowy. Blokadę CI, review, aktywnego mountu lub dirty checkoutu zapisać jawnie; nie wymuszać cleanup.
 
-Historyczna wersja tego planu zawierała zakaz kompilowania testów jednostkowych i tryb plan-only. Zostało to odwołane jawną zgodą użytkownika na implementację i testowanie; bieżący checkpoint P0/P1 zachowuje osobne dowody źródłowe, managed, browserowe i runtime. Każdy kolejny etap nadal wymaga właściwej bramki dla swojej warstwy, a brakujący dowód pozostaje `NOT VERIFIED`.
+Użytkownik autoryzował implementację i testowanie oraz pracę na `masterze`. Bieżące `AGENTS.md` ponownie wprowadza tymczasowy zakaz kompilowania testów jednostkowych i zadań służących ich kompilacji; obowiązuje do odwołania przez użytkownika. Lekkie kontrole skryptów, kompilacja źródeł produkcyjnych i odrębne bramki przeglądarkowe/runtime zachowują swoje zarządzane trasy. Źródła regresji bez wykonania pozostają `NOT RUN`. Każdy etap rozdziela dowody źródłowe, managed, browserowe, runtime i naukowe; brakujący wymagany dowód pozostaje `NOT VERIFIED`.
 
 Pełne buildy na hoście z Fullmag_build_runner idą przez istniejącą kolejkę, z jawnym źródłem i profilem. Build runner nie jest nowym schedulerem naukowych RunId. Nowy execution coordinator współpracuje z istniejącym zarządzaniem zasobami; nie zastępuje kolejki buildów. Brak zdrowej trasy lub profilu oznacza blokadę, nie ręczny ciężki fallback. Recepty i ich zależności sprawdzać przed uruchomieniem, również pod kątem zakazu testów.
 
@@ -100,7 +100,7 @@ Zależność: P2; identity plumbing można przygotować od P1. Właściciele: pl
 | Pakiet | Pliki/punkty wejścia | Zmiana | Odbiór |
 |---|---|---|---|
 | P3-A | `fullmag-authoring/src/builder.rs`, `fullmag-ir`, `fullmag-plan` | Typed steps/ports/config references; migracja primitive/macro/group; oddzielić study, solver preset i execution profile. | CAE-17/18/21/22/25; unsupported payload zachowany i blokowany, nie silently dropped. |
-| P3-B | `fullmag-application`, `fullmag-session` manifests; runner input boundary | Durable idempotent Submit, RunSpec, ResolvedTaskInput, minimalny run/artifact catalog i output publication. Wrapper starego wykonawcy z jawnym limitem współbieżności. | CAE-30/31/32/48; dwa runy i utrata ACK; powtórzenie payloadu nie tworzy nowych obliczeń. |
+| P3-B | `fullmag-application`, `fullmag-session` manifests; runner input boundary | Durable idempotent Submit, `RunSpec` z wersjonowanym minimalnym budżetem CPU/RAM/VRAM/storage, `StudyPlan v2` z przypiętym per-step `until_seconds`, typowany `study_execution_plan.v2` i `ResolvedTaskInput`, `study_output_manifest.v1`, CAS publication oraz completion barrier. Lowering blokuje TimeEvolution bez jawnego dodatniego czasu. Supervisor uruchamia accepted task w prywatnym katalogu attemptu z jawnym limitem współbieżności; żadnego skanowania katalogu wyników ani niejawnego fallbacku. Kontrakty: [ADR-0034](../../../../adr/0034-coordinator-watermark-recovery.md), [ADR-0035](../../../../adr/0035-typed-study-artifact-manifest-and-worker-boundary.md) i [ADR-0036](../../../../adr/0036-study-step-runtime-horizon.md). | CAE-30/31/32/48; dwa runy i utrata ACK nie tworzą drugiego obliczenia; zbyt mała oferta nie mutuje taska; output manifest dokładnie zgadza się z portami/CAS/lineage; stary epoch, brak codec i TimeEvolution bez przypiętego horyzontu są odrzucane; downstream otrzymuje dokładne zaakceptowane bytes. |
 | P3a-A | `fullmag-api/src/router_v2`, application ports; wywołania w CLI/runner | Wewnętrzny immutable request context przechodzi przez wszystkie awaits. Pilotaż: definition read/edit, compute, binary field read, persistence i events. | Zmiana current podczas każdego opóźnienia nie zmienia celu; write do cudzego ProjectId odrzucony. |
 | P3a-B | OpenAPI generated files, `apiPaths.ts`, facade, resources/realtime, scripts | Migrować po rodzinach: model/persistence/workspace → simulation/commands → meshing → data/visualization → analysis/diagnostics. Context identity w cache i decode, regenerated contract. | CAE-42/43/44/61/70; coverage endpointów z inventory, tests + browser. |
 | P3a-C | Compatibility alias, generated client consumers, skrypty smoke i CLI | `current` wiązany raz przy przyjęciu. Publiczny pośredni session-ID adapter tylko dla wykazanego konsumenta, bez pełnej kopii API. | Każda legacy trasa ma owner, client list, write policy i removal gate; jedna kolejka i jeden writer. |
@@ -113,13 +113,41 @@ Rollback P3/P3a: alias deleguje do tego samego use case i zachowuje pinned conte
 
 Zależność: P3/P3a; współpraca z B-FEM/B-FDM.
 
+Granica geometrii: dopóki kanoniczny owner-frame lowering nie obsłuży obrotu i
+skali, adaptery Python oraz Rust muszą je odrzucać. Translacja pozostaje
+obsługiwana. Nie wolno po cichu pomijać transformacji podczas tworzenia
+`ProblemIR`.
+
 | Pakiet | Pliki/punkty wejścia | Zmiana | Odbiór |
 |---|---|---|---|
 | P4-A | `fullmag-plan`, `simulation_preparation.rs`, Python meshing/problem cache | PreparationPlan i typowani producenci Geometry/Display/Grid/Mesh/Space. Opakować istniejące realizatory. | CAE-13/14/15; FDM bez wymuszania FEM policy/Gmsh; lokalne błędy tasków. |
-| P4-B | Mesh certificates, `region_revisions.rs`, native mesh/space adapters | Producer/version fingerprints, quality/marker/cell/space validation i selective reuse. Osobny transfer stanu. | CAE-09/11/16/27/68; niezgodny marker/space blokuje publikację; mesh reuse nie implikuje operator reuse. |
+| P4-B | Mesh certificates, `region_revisions.rs`, native mesh/space adapters | Producer/version fingerprints, quality/marker/cell/space validation i selective reuse. FEM receipt wiąże osobnym wersjonowanym fingerprintem kanoniczny mesh, topologię MFEM, build report oraz per-domain quality; Jacobian pozostaje osobnym dowodem. Osobny transfer stanu. | CAE-09/11/16/27/68; niezgodny marker/space albo niespójny source evidence blokuje publikację; brak reportu/quality jest jawny i nie oznacza acceptance; mesh reuse nie implikuje operator reuse. |
 | P4-C | Mesh Inspector, Explorer badges, Operations/Problems, viewport adapters | Jawne Build Geometry/Grid/Mesh/Compute, kontekstowe availability i zachowanie ostatniego dobrego artefaktu. | Błąd meshu nie niszczy edytora; UI pokazuje revision i pochodzenie, bez procentu zmyślonego z etapów. |
 
 Brama P4: preparation receipt jest przypięty do runu/receptury i nie może pochodzić z innego draftu. Rollback pozostawia ostatni poprawny artefakt z jego tożsamością; nie promuje niezweryfikowanego kandydata.
+
+Admission kosztownego przygotowania accepted runu opisuje
+[ADR-0037](../../../../adr/0037-accepted-preparation-resource-admission.md).
+Używa osobnego lease i supervisora zasobu `Meshing`; nie przeciąża claimu,
+ownership epoch ani lifecycle workera solvera.
+
+Granica integracji: przygotowanie aktywnej sesji Live jest związane z jej
+epoch, rewizją `SceneDocument` i aktywnym preparation ID. `ProjectRun` pozostaje
+runtime-free i przyjmuje immutable archive/RunIntent/study/catalog. Adapter
+Live nie może uzupełniać danych trwałego runu z bieżącego draftu. Publiczny
+kontrakt `POST /v2/sessions/current/simulation/preparation/materialization`
+przyjmuje wyłącznie `preparation_id` i `scene_revision`; backend wyprowadza
+requested execution i display projection z aktualnego, fenced kontekstu Live.
+Control Room udostępnia tę operację jako session-scoped `study.prepare-live`,
+wiąże ją z zasobem Preparation i invaliduje go identyfikatorem durable receipt.
+Endpoint publiczny i historyczny adapter wewnętrzny delegują do tego samego
+use case'u; żadna z tych ścieżek nie tworzy `ProjectRun`. Zarządzana bramka
+`just verify-api-preparation` wykonała **5 testów**, w tym żądanie przez router
+HTTP z publikacją receipt; `source_changed_during_run=false`. OpenAPI oraz
+generowane typy i klient Control Room zostały odświeżone, a typecheck i
+ukierunkowane testy UI przeszły. Browser, pełny Live runtime, automatyczny
+producer pipeline, FEM mesh/space i kwalifikacja fizyczna pozostają
+`NOT VERIFIED`.
 
 ## 9. Strumień B — modularizacja całego backendu
 
@@ -147,7 +175,7 @@ Zależność: P4, P3-B, właściwe pakiety B-STATE/B-ABI/B-OBS. Właściciele: r
 | Pakiet | Pliki/punkty wejścia | Zmiana | Odbiór |
 |---|---|---|---|
 | P5-A | `scratch_runtime.rs`, `orchestrator.rs`, runner workers | Własność przypiętego runu zamiast scene_revision. Wydobywać use cases etapami; dla typowanego authoringu usunąć zbędny roundtrip przez skrypt na dysku. | CAE-29/69; zgodna numeryka i source identity, pomiar zimnego startu vs reuse. Script-owned nadal może używać Pythona. |
-| P5-B | Coordinator journal/resource leases; worker protocol | Fencing, sequence/dedup, cancellation races, retry, orphan reconciliation, admission CPU/RAM/GPU/storage. | CAE-30–33/46/48/59/66; stary worker nie publikuje i nie zajmuje równolegle ponownie przydzielonego GPU. |
+| P5-B | Coordinator journal/resource leases; worker protocol | Fencing, sequence/dedup, cancellation races, retry, orphan reconciliation, admission względem minimów CPU/RAM/GPU/storage z immutable RunSpec. | CAE-30–33/46/48/59/66; zbyt mała oferta pozostawia task bez mutacji, a stary worker nie publikuje i nie zajmuje równolegle ponownie przydzielonego GPU. |
 | P5-C | ADR-0025 realization, checkpoint providers, live commands | Safe-point steering, segments, immutable accepted source; isolated observation i bounded demand. | CAE-34–36/54/56; rejected step i checkpoint spójne; no fallback. |
 | P5-D | Inspector, command availability, Operations/Problems, realtime | Odblokować edycję draftu dopiero po izolacji. Oddzielić „Edit” i „Apply live”; close/disconnect nie anuluje. | CAE-20/29/35/41/44; wszystkie powierzchnie komend przestrzegają tego samego scope. |
 
@@ -186,11 +214,19 @@ Rollback P7 ogranicza admission nowych kampanii/targetów; nie porzuca działaj�
 |---|---|---|
 | P8-A | Usunąć mutable current writers, globalny workspace gate, dual-truth authoring i zbędne adaptery. Zachować nazwane import/CLI compatibility readers. | Inventory tras/metod i symboli bez nieoznaczonych legacy consumers; kompletne namespace contexts, jeden writer/queue. |
 | P8-B | Zaktualizować backend masterplan, ADR/spec, canonical physics/source maps, Python examples i public docs. | Link/parser/source-map checks; odpowiednie przykłady i docs render; żadnej planned capability opisanej jako qualified. |
-| P8-C | Zbudować i sprawdzić pakiety Windows/desktop i wspierany managed Linux; version handshake Rust/Python/API/native. | Managed build receipts, source identity, nonempty artifacts; clean install/open/upgrade/rollback smoke. |
+| P8-C | Zbudować i sprawdzić niezależny natywny pakiet Windows/desktop oraz wspierany managed Linux; version handshake Rust/Python/API/native. Windows nie wymaga Docker Desktop, WSL ani Linuxa do uruchomienia produktu. | Receipts właściwego targetu, source identity, nonempty artifacts; clean install/open/upgrade/rollback smoke. Windows: UI, zapis/odtworzenie i deklarowane FDM/FEM CPU/GPU sprawdzone bez Docker/WSL; brak lane'u jest niezrealizowaną bramką, nie cichym fallbackiem. |
 | P8-D | Przeprowadzić macierz CAE i lane qualification; fault/recovery/performance/soak. | Raport 04 z wykonanymi required rows, bez „skip=pass”; jawne unsupported poza release scope. |
 | P8-E | Wymagane review/CI/PR/merge oraz lokalna weryfikacja i cleanup zadania. | Pełny wynikowy SHA, PR, status CI/review, registry i dokładny cleanup lub konkretny blocked. |
 
 Wydanie może promować wyłącznie zakres wskazany w macierzy kwalifikacji. Jeżeli refaktor zmienia wszystkie cztery lane’y, każda potrzebuje dowodu; sukces CPU lub frontend smoke nie zastępuje GPU/FEM. Zamknięcie planu nie następuje przez przemianowanie brakującego lane’u na „poza zakresem”.
+
+Doprecyzowanie operatora 02.10.2026: niezależność Windows obejmuje także
+magazyn sesji, checkpointy i odtwarzanie. Kontenery użyte przez zespół do
+buildów i testów Linux nie są zależnością instalacji Windows ani dowodem
+kwalifikacji Windows. Obecny `scripts/windows/run_fullmag.ps1` wspiera FDM;
+`run_fullmag_fem.ps1` nadal korzysta z Linux/Docker. Pełne natywne FEM oraz
+trwały zapis Windows pozostają NOT VERIFIED i wymagają implementacji oraz
+własnych bramek. Propozycja wolumenu Docker w P1/11 nie realizuje tego celu.
 
 ## 14. Rejestr decyzji empirycznych i reguły awarii
 

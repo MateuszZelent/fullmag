@@ -7,6 +7,7 @@ import pytest
 
 import fullmag as fm
 from fullmag.model import geometry as geometry_model
+from fullmag.model.selection import SelectionGeometry, evaluate_geometry_predicate
 
 
 def test_disk_lowers_to_finite_cylinder() -> None:
@@ -300,3 +301,64 @@ def test_top_level_exports_are_exact_builder_aliases() -> None:
 
     assert "SelectionGeometry" not in fm.__all__
     assert "AuthoredSelectionGeometry" not in fm.__all__
+
+
+def test_canonical_geometry_evaluator_matches_boundary_and_csg_semantics() -> None:
+    predicate = SelectionGeometry.from_ir(
+        {
+            "kind": "difference",
+            "base": {
+                "kind": "box",
+                "center_m": [0.0, 0.0, 0.0],
+                "size_m": [4.0, 4.0, 2.0],
+            },
+            "tool": {
+                "kind": "cylinder",
+                "center_m": [0.0, 0.0, 0.0],
+                "axis": [0.0, 0.0, 1.0],
+                "radius_m": 0.5,
+                "height_m": 2.0,
+            },
+        }
+    )
+
+    assert predicate.contains((1.0, 0.0, 0.0))
+    assert not predicate.contains((0.0, 0.0, 0.0))
+    assert predicate.contains((2.0, 0.0, 0.0), absolute_tolerance_m=0.0, relative_tolerance=0.0)
+    assert not predicate.contains(
+        (2.0, 0.0, 0.0),
+        boundary="exclusive",
+        absolute_tolerance_m=0.0,
+        relative_tolerance=0.0,
+    )
+
+    assert evaluate_geometry_predicate(predicate.to_ir(), (1.0, 0.0, 0.0))
+
+
+def test_canonical_geometry_evaluator_applies_inverse_affine_transform() -> None:
+    predicate = SelectionGeometry.from_ir(
+        {
+            "kind": "affine",
+            "geometry": {
+                "kind": "box",
+                "center_m": [0.0, 0.0, 0.0],
+                "size_m": [2.0, 4.0, 2.0],
+            },
+            "translation_m": [5.0, 0.0, 0.0],
+            "rotation_xyzw": [0.0, 0.0, 0.7071067811865475, 0.7071067811865475],
+            "scale": [1.0, 1.0, 1.0],
+            "pivot_m": [0.0, 0.0, 0.0],
+        }
+    )
+
+    assert predicate.contains((5.0, 0.5, 0.0))
+    assert not predicate.contains((5.0, 1.5, 0.0))
+
+
+def test_canonical_geometry_evaluator_rejects_unqualified_imported_solid() -> None:
+    predicate = SelectionGeometry.from_ir(
+        {"kind": "imported_solid", "asset_id": "asset:cad"}
+    )
+
+    with pytest.raises(ValueError, match="selection_imported_solid_unqualified"):
+        predicate.contains((0.0, 0.0, 0.0))

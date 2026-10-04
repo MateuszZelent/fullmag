@@ -136,13 +136,14 @@ def test_modal_dispersion_artifact_contract_names_tracking_and_mode_handoff() ->
     assert "`tracking_score_source`" in artifacts
     assert "`modal_overlap_available`" in artifacts
     assert "`modal_overlap_unavailable_reason`" in artifacts
-    assert "`mode_field_id` and `mode_field_resource_key`" in artifacts
+    assert "`mode_field_id` must match the selected mode payload" in artifacts
+    assert "optional legacy `mode_field_resource_key`" in artifacts
     assert (
         "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,"
         "kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,"
         "analytic_frequency_hz,relative_error,validation_geometry,"
         "line_width_hz,residual_norm,overlap_score,tracking_score_source,"
-        "mode_field_available,mode_field_id,mode_field_resource_key"
+        "mode_field_available,mode_field_id"
     ) in artifacts
 
 

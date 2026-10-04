@@ -52,7 +52,7 @@ function buildViewport3DTargetFieldBuffer(
     sessionIdentity:
       "sessionIdentity" in options
         ? options.sessionIdentity
-        : { sessionEpoch: "test-session@1000", sessionId: "test-session" },
+        : { sessionEpoch: "test-session@1000", sessionId: "test-session", requestScopeEpoch: "test-api:1" },
     resourceKey: serializeCanonicalFieldVectorResourceKey(
       canonicalFieldVectorQuery(options.fieldVector.quantityId, options.query),
     ),

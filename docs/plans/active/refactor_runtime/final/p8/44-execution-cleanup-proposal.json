@@ -1,0 +1,811 @@
+{
+  "schema": "fullmag.execution-cleanup-proposal.v1",
+  "audit_role": "manual_read_only_cleanup_audit",
+  "generated_at": "2026-10-03T09:23:31+02:00",
+  "status": "proposal_only_no_deletion",
+  "scope": {
+    "storage_root": "C:\\git\\fullmag\\storage",
+    "worktree_id": "fullmag-0950f4dca4ffe38f",
+    "execution_parent": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f",
+    "candidate_count": 7,
+    "excluded": [
+      "job 217 / 50298982d80f48d8a688af01a7c19304: blocked before worker because of the storage admission guard",
+      "job 218 / 5a2659ca616448fdacd75e16f004e2af: queued",
+      "jobs 214 and 215: terminal but approximately 0.275 GiB each and below the requested threshold",
+      "newer terminal roots, active browser mounts, queued source capsules, worktrees, and shared Cargo targets"
+    ]
+  },
+  "summary": {
+    "execution_logical_bytes": 18091011358,
+    "execution_logical_gib": 16.848567,
+    "logical_size_is_not_claimed_as_reclaimed_physical_space": true,
+    "receipt_states": {
+      "succeeded_exit_0": 6,
+      "failed_exit_2": 1
+    },
+    "owner": "Mateusz",
+    "profile": "fem-cpu-release",
+    "receipt_phase": "terminal",
+    "live_queue_observation": "218 queued; no queue or data mutation performed",
+    "host_c_free_bytes_observed": 8039727104,
+    "host_c_free_space_is_not_a_recovery_measurement": true
+  },
+  "retention_gate": {
+    "implementation": "scripts/local_runner/retention.py::_safe_execution_bytes",
+    "result_for_all_candidates": "unsafe_execution_tree",
+    "reason": "The existing retention scanner intentionally rejects every symlink or Windows reparse point before counting bytes.",
+    "candidate_eligibility": "not_eligible_for_existing_retention_route",
+    "manual_audit_does_not_override_gate": true
+  },
+  "reparse_validation": {
+    "method": "Read-only enumeration of st_file_attributes followed by Windows FSCTL_GET_REPARSE_POINT for every entry; relative targets were normalized and resolved through the complete in-tree link chain.",
+    "enumeration_root": "each exact execution directory",
+    "per_execution_count": 2666,
+    "per_execution_tag_counts": {
+      "0xa000001d": 1905,
+      "0xa000000c": 761
+    },
+    "per_execution_categories": {
+      "native_fem_links": 2,
+      "control_room_node_modules": 52,
+      "root_node_modules": 2612
+    },
+    "target_resolution": {
+      "resolved_records": "2666 of 2666 for each execution",
+      "max_chain_depth": 2,
+      "io_errors": 0,
+      "decode_errors": 0,
+      "external_targets": 0,
+      "missing_targets": 0,
+      "cycles": 0,
+      "targets_into_shared_mount_directories": 0,
+      "final_targets_outside_exact_execution": 0,
+      "mount_directories_checked": [
+        ".fullmag-build",
+        ".fullmag-cargo",
+        ".fullmag-rustup"
+      ]
+    },
+    "link_kind_interpretation": {
+      "0xa000000c": "Windows symbolic links used by the pnpm/node_modules tree; 709 are under node_modules and 52 under apps/control-room/node_modules.",
+      "0xa000001d": "WSL/LX symbolic links represented as reparse points; 1903 are node_modules links and 2 are native FEM library aliases.",
+      "native_fem_chain": [
+        ".fullmag\\local\\lib\\libfullmag_fem.so -> libfullmag_fem.so.0 -> libfullmag_fem.so.0.1.0",
+        ".fullmag\\local\\lib\\libfullmag_fem.so.0 -> libfullmag_fem.so.0.1.0"
+      ],
+      "native_fem_terminal_target": ".fullmag\\local\\lib\\libfullmag_fem.so.0.1.0"
+    },
+    "target_map_digest_definition": "SHA-256 of canonical UTF-8 JSON (sort_keys=true, separators=(',', ':')) over sorted records {path, tag, direct_target, resolved_final, status}; records were held in memory only and were not used to authorize deletion.",
+    "per_execution_target_map_digests": [
+      {
+        "job_id": "04112e6cb0fd42058b952f5e284d6fb6",
+        "record_count": 2666,
+        "record_bytes": 1379600,
+        "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900"
+      },
+      {
+        "job_id": "ffb5dd9294b24b6ab869266b99d95b49",
+        "record_count": 2666,
+        "record_bytes": 1379600,
+        "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900"
+      },
+      {
+        "job_id": "bdd65936cfcc45b58a07879dd2e7ae3a",
+        "record_count": 2666,
+        "record_bytes": 1379600,
+        "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900"
+      },
+      {
+        "job_id": "9eb85e72e82048f2b7e0558b86d66014",
+        "record_count": 2666,
+        "record_bytes": 1379600,
+        "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900"
+      },
+      {
+        "job_id": "7953ba4088a142c889c5ed9c12be7332",
+        "record_count": 2666,
+        "record_bytes": 1379600,
+        "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900"
+      },
+      {
+        "job_id": "1109693f411b4720b87690caa37cb880",
+        "record_count": 2666,
+        "record_bytes": 1379600,
+        "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900"
+      },
+      {
+        "job_id": "c53a4a51da2149a6a91ef7fb3796f88c",
+        "record_count": 2666,
+        "record_bytes": 1379600,
+        "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900"
+      }
+    ],
+    "full_record_maps": {
+      "status": "persisted_outside_repository",
+      "artifact_policy": "Emit a fresh full report to controlled storage with --output; never replace an existing evidence file.",
+      "record_schema": "Each record includes path, tag, kind, direct_target, chain, resolved_final, status and decoded metadata.",
+      "per_execution": [
+        {
+          "job_id": "04112e6cb0fd42058b952f5e284d6fb6",
+          "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\04112e6cb0fd42058b952f5e284d6fb6\\execution",
+          "reparse_count": 2666,
+          "status_counts": {
+            "safe": 2666
+          },
+          "target_record_count": 2666,
+          "target_map_record_bytes": 1379600,
+          "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900",
+          "all_targets_safe": true
+        },
+        {
+          "job_id": "ffb5dd9294b24b6ab869266b99d95b49",
+          "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\ffb5dd9294b24b6ab869266b99d95b49\\execution",
+          "reparse_count": 2666,
+          "status_counts": {
+            "safe": 2666
+          },
+          "target_record_count": 2666,
+          "target_map_record_bytes": 1379600,
+          "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900",
+          "all_targets_safe": true
+        },
+        {
+          "job_id": "bdd65936cfcc45b58a07879dd2e7ae3a",
+          "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\bdd65936cfcc45b58a07879dd2e7ae3a\\execution",
+          "reparse_count": 2666,
+          "status_counts": {
+            "safe": 2666
+          },
+          "target_record_count": 2666,
+          "target_map_record_bytes": 1379600,
+          "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900",
+          "all_targets_safe": true
+        },
+        {
+          "job_id": "9eb85e72e82048f2b7e0558b86d66014",
+          "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\9eb85e72e82048f2b7e0558b86d66014\\execution",
+          "reparse_count": 2666,
+          "status_counts": {
+            "safe": 2666
+          },
+          "target_record_count": 2666,
+          "target_map_record_bytes": 1379600,
+          "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900",
+          "all_targets_safe": true
+        },
+        {
+          "job_id": "7953ba4088a142c889c5ed9c12be7332",
+          "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\7953ba4088a142c889c5ed9c12be7332\\execution",
+          "reparse_count": 2666,
+          "status_counts": {
+            "safe": 2666
+          },
+          "target_record_count": 2666,
+          "target_map_record_bytes": 1379600,
+          "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900",
+          "all_targets_safe": true
+        },
+        {
+          "job_id": "1109693f411b4720b87690caa37cb880",
+          "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\1109693f411b4720b87690caa37cb880\\execution",
+          "reparse_count": 2666,
+          "status_counts": {
+            "safe": 2666
+          },
+          "target_record_count": 2666,
+          "target_map_record_bytes": 1379600,
+          "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900",
+          "all_targets_safe": true
+        },
+        {
+          "job_id": "c53a4a51da2149a6a91ef7fb3796f88c",
+          "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\c53a4a51da2149a6a91ef7fb3796f88c\\execution",
+          "reparse_count": 2666,
+          "status_counts": {
+            "safe": 2666
+          },
+          "target_record_count": 2666,
+          "target_map_record_bytes": 1379600,
+          "target_map_sha256": "b5f241cf8cfeaba07dbffb1956b74eb26ad416d4bfc9b8ebb0d3d320b4713900",
+          "all_targets_safe": true
+        }
+      ],
+      "record_count_total": 18662,
+      "canonical_record_bytes_total": 9657200,
+      "artifact_path": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\audit-reparse-full-20261003-0925-1e8611c2.json",
+      "artifact_sha256": "facae75be8cc13269ebfcaa5f6be49ca18c1628083b06b61b8ba5a2f3b1abf1b",
+      "artifact_bytes": 12523997,
+      "artifact_verified_at": "2026-10-03T09:23:31+02:00",
+      "tool_source_sha256": "1e8611c22e2ae9b10ab1da6552db91260ca2fe1d3c68a1431f588266eeb55682"
+    }
+  },
+  "docker_mount_evidence": {
+    "exact_leaf_volume_filters": "For the first five workers, exact filters for execution, artifacts, and trusted returned only that worker and Exited (0). For 1109693f411b4720b87690caa37cb880 and c53a4a51da2149a6a91ef7fb3796f88c, the receipt container object was missing and exact filters returned no match.",
+    "receipt_mount_contract": [
+      {
+        "host": "<candidate>\\execution",
+        "container": "/workspace",
+        "read_write": true
+      },
+      {
+        "host": "<candidate>\\artifacts",
+        "container": "/artifacts",
+        "read_write": true
+      },
+      {
+        "host": "<candidate>\\trusted",
+        "container": "/runner",
+        "read_write": false
+      },
+      {
+        "host": "<source capsule>\\source",
+        "container": "/source",
+        "read_write": false
+      },
+      {
+        "host": "C:\\git\\fullmag\\storage\\builds\\fullmag-0950f4dca4ffe38f\\runner-fem-cpu-release-e9b8ec88b9a9",
+        "container": "/workspace/.fullmag-build",
+        "read_write": true
+      },
+      {
+        "host": "C:\\git\\fullmag\\storage\\cache\\windows\\fem-cpu\\runner-uid-65532\\cargo",
+        "container": "/workspace/.fullmag-cargo",
+        "read_write": true
+      },
+      {
+        "host": "C:\\git\\fullmag\\storage\\cache\\windows\\fem-cpu\\rustup",
+        "container": "/workspace/.fullmag-rustup",
+        "read_write": true
+      },
+      {
+        "host": "C:\\git\\fullmag\\storage\\cache\\windows\\fem-cpu\\runner-uid-65532\\pnpm",
+        "container": "/pnpm/store",
+        "read_write": true
+      }
+    ],
+    "active_browser_or_current_coordinator_on_exact_candidate_paths": "none observed; current coordinator did not mount these candidate leaf paths",
+    "container_environment_and_secrets": "not read"
+  },
+  "candidates": [
+    {
+      "job_id": "04112e6cb0fd42058b952f5e284d6fb6",
+      "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\04112e6cb0fd42058b952f5e284d6fb6\\execution",
+      "artifacts": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\04112e6cb0fd42058b952f5e284d6fb6\\artifacts",
+      "trusted": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\04112e6cb0fd42058b952f5e284d6fb6\\trusted",
+      "logical_bytes": 2594122924,
+      "file_count": 60658,
+      "receipt_state": "succeeded",
+      "exit_code": 0,
+      "owner": "Mateusz",
+      "profile": "fem-cpu-release",
+      "receipt_phase": "terminal",
+      "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\36c80ad6b41e4db5837443ee61ab75f5\\source",
+      "source_digest": "17ad3d671d289309c7cd69afba0faa415472bf51dfa574f5586aaef9968fee76",
+      "source_manifest_sha256": "07b1b18c89f7be8a5a9f2e441785a28ffeb493b04a74099e269512e9a68900f8",
+      "docker": {
+        "receipt_container_id": "792c770b19c191b075696efc07fdec9b11b6d9cf38d8a220d6dcd68302265e16",
+        "object_state": "exited",
+        "object_exit_code": 0,
+        "finished_at": "2026-09-30T14:02:10.180091507Z"
+      }
+    },
+    {
+      "job_id": "ffb5dd9294b24b6ab869266b99d95b49",
+      "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\ffb5dd9294b24b6ab869266b99d95b49\\execution",
+      "artifacts": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\ffb5dd9294b24b6ab869266b99d95b49\\artifacts",
+      "trusted": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\ffb5dd9294b24b6ab869266b99d95b49\\trusted",
+      "logical_bytes": 2594158014,
+      "file_count": 60656,
+      "receipt_state": "succeeded",
+      "exit_code": 0,
+      "owner": "Mateusz",
+      "profile": "fem-cpu-release",
+      "receipt_phase": "terminal",
+      "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\5fd6b2318bbd4e05999878cea7c73091\\source",
+      "source_digest": "2da071ea51285731216842f033d6d79351da01f5fc31e0840be8cffc396c7604",
+      "source_manifest_sha256": "62e1830ffec62cdb0046f3b9fc2e7690811209e0c4aa1b978692cf797bc8c76a",
+      "docker": {
+        "receipt_container_id": "c4e971d550b4fd7eca36a75a6b7bf9ac1efcb7576e0f34dd98bad79e9e5be96a",
+        "object_state": "exited",
+        "object_exit_code": 0,
+        "finished_at": "2026-09-30T13:05:50.250648286Z"
+      }
+    },
+    {
+      "job_id": "bdd65936cfcc45b58a07879dd2e7ae3a",
+      "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\bdd65936cfcc45b58a07879dd2e7ae3a\\execution",
+      "artifacts": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\bdd65936cfcc45b58a07879dd2e7ae3a\\artifacts",
+      "trusted": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\bdd65936cfcc45b58a07879dd2e7ae3a\\trusted",
+      "logical_bytes": 2593823752,
+      "file_count": 60653,
+      "receipt_state": "succeeded",
+      "exit_code": 0,
+      "owner": "Mateusz",
+      "profile": "fem-cpu-release",
+      "receipt_phase": "terminal",
+      "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\e1a6bcdb379849fab3275573a61451cf\\source",
+      "source_digest": "c85581ae8b5037b5b7e8f254c888333ece5029862c67dbf55a114a6bc7dc1d7f",
+      "source_manifest_sha256": "f96a56dc8824feaaa6739b042720b37f76970128f65df2fa953e6ec463fa1077",
+      "docker": {
+        "receipt_container_id": "604f99ababa1a0a4dd4980ecd97b0ea10b79d6a67cb46ca4ff5edc85e6fa3340",
+        "object_state": "exited",
+        "object_exit_code": 0,
+        "finished_at": "2026-09-30T00:26:48.429011683Z"
+      }
+    },
+    {
+      "job_id": "9eb85e72e82048f2b7e0558b86d66014",
+      "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\9eb85e72e82048f2b7e0558b86d66014\\execution",
+      "artifacts": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f2b7e0558b86d66014\\artifacts",
+      "trusted": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\9eb85e72e82048f2b7e0558b86d66014\\trusted",
+      "logical_bytes": 2593793132,
+      "file_count": 60654,
+      "receipt_state": "succeeded",
+      "exit_code": 0,
+      "owner": "Mateusz",
+      "profile": "fem-cpu-release",
+      "receipt_phase": "terminal",
+      "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\d4cc673a43a54327a505d1f0f0e1f74d\\source",
+      "source_digest": "68964b72f39216f17e624dc674f9ab311dfddfc0cba5bfdcb80f046cd04e6286",
+      "source_manifest_sha256": "616121d92383a0439fb39b7c2ff393bf06a92da0e1145274cf7ce91d9a3fd885",
+      "docker": {
+        "receipt_container_id": "26459d238bbe5c56a4a91680fb093203a21940da444a6015c775349255b1b3c2",
+        "object_state": "exited",
+        "object_exit_code": 0,
+        "finished_at": "2026-09-30T10:19:36.510625024Z"
+      }
+    },
+    {
+      "job_id": "7953ba4088a142c889c5ed9c12be7332",
+      "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\7953ba4088a142c889c5ed9c12be7332\\execution",
+      "artifacts": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\7953ba4088a142c889c5ed9c12be7332\\artifacts",
+      "trusted": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\7953ba4088a142c889c5ed9c12be7332\\trusted",
+      "logical_bytes": 2593867747,
+      "file_count": 60656,
+      "receipt_state": "succeeded",
+      "exit_code": 0,
+      "owner": "Mateusz",
+      "profile": "fem-cpu-release",
+      "receipt_phase": "terminal",
+      "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\d1d10ec49cfa448184d36dd945f23013\\source",
+      "source_digest": "a7aba8c96b183250025a8bc44dacc7dcff45a7d4fb5b84039ecb26d8ad2d1417",
+      "source_manifest_sha256": "5a213b4e4dec3b176a23fb81065bcb0fdbb067776bf6b07a69c04feca2a9e4dc",
+      "docker": {
+        "receipt_container_id": "1a352bb7d822e36537ed1c006a8f59ba24e9300e2a32bbb6007454a8b894f7cd",
+        "object_state": "exited",
+        "object_exit_code": 0,
+        "finished_at": "2026-09-30T12:19:14.464423977Z"
+      }
+    },
+    {
+      "job_id": "1109693f411b4720b87690caa37cb880",
+      "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\1109693f411b4720b87690caa37cb880\\execution",
+      "artifacts": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\1109693f411b4720b87690caa37cb880\\artifacts",
+      "trusted": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\1109693f411b4720b87690caa37cb880\\trusted",
+      "logical_bytes": 2506590252,
+      "file_count": 61329,
+      "receipt_state": "succeeded",
+      "exit_code": 0,
+      "owner": "Mateusz",
+      "profile": "fem-cpu-release",
+      "receipt_phase": "terminal",
+      "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\ef883555dc7d4e42a30dca9d67225635\\source",
+      "source_digest": "c94f76352a051c62f618de8dd386d507418363ce8c9246e4947055bedd755859",
+      "source_manifest_sha256": "782316df46aadd321c647f46c7aa2eeb3e78f49031b56a9fa53cb6890183363e",
+      "docker": {
+        "receipt_container_id": "ddec83e293769aa42802d7191e3ec1fa45aaa9e9bc499786255455a340a6a30a",
+        "object_state": "missing",
+        "exact_leaf_volume_filters": "no_match",
+        "finished_at": null
+      }
+    },
+    {
+      "job_id": "c53a4a51da2149a6a91ef7fb3796f88c",
+      "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\c53a4a51da2149a6a91ef7fb3796f88c\\execution",
+      "artifacts": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\c53a4a51da2149a6a91ef7fb3796f88c\\artifacts",
+      "trusted": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\c53a4a51da2149a6a91ef7fb3796f88c\\trusted",
+      "logical_bytes": 2614655537,
+      "file_count": 61090,
+      "receipt_state": "failed",
+      "exit_code": 2,
+      "owner": "Mateusz",
+      "profile": "fem-cpu-release",
+      "receipt_phase": "terminal",
+      "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\f76c6e54118946f78a0c992880037cbb\\source",
+      "source_digest": "2cd5741a89440a45a79a3add119299b7369c4f02e3da1bd1a5248d47d6626221",
+      "source_manifest_sha256": "c617b0bb2129cd44ac39ee6256ff171766a4e97abef2a9cc0ead9dc93477c6bf",
+      "docker": {
+        "receipt_container_id": "b402d179a2ff053c9f206495749ae4629373a2441f55070c1a653d2c9dfe266f",
+        "object_state": "missing",
+        "exact_leaf_volume_filters": "no_match",
+        "finished_at": null
+      }
+    }
+  ],
+  "unsafe_exceptions": [
+    {
+      "class": "retention_gate",
+      "scope": "all seven execution directories",
+      "reason": "Each contains 2666 reparse points; existing retention must retain it as unsafe_execution_tree. This audit does not change that code or result."
+    },
+    {
+      "class": "docker_identity",
+      "scope": [
+        "1109693f411b4720b87690caa37cb880",
+        "c53a4a51da2149a6a91ef7fb3796f88c"
+      ],
+      "reason": "The receipt container IDs are retained in metadata, but Docker objects and exact leaf mount records are missing. No deletion decision may infer a detached worker solely from the missing object."
+    },
+    {
+      "class": "deletion_procedure",
+      "scope": "all seven execution directories",
+      "reason": "PowerShell 7.6.6 Remove-Item exposes -Recurse/-Force but no explicit no-follow-reparse switch; the repository has no approved Remove-Item cleanup procedure for these trees."
+    },
+    {
+      "class": "authorization",
+      "scope": "all seven execution directories",
+      "reason": "No user approval exists for these exact targets. Receipts and source capsules remain required evidence."
+    }
+  ],
+  "deletion_decision": {
+    "approved": false,
+    "performed": false,
+    "next_step": "If the user later authorizes exact targets, first reconcile and repeat the source identity guard for the five known-exited candidates, then repeat ownership, receipt, process, mount, path and reparse checks; use only a verified no-follow deletion procedure and preserve receipts, coordinator records, artifacts, trusted directories, source capsules and shared build/cache.",
+    "do_not_delete": [
+      "source capsules",
+      "receipts or coordinator records",
+      "artifacts or trusted directories",
+      "shared build/cache mounts",
+      "worktrees or Cargo targets",
+      "queued or blocked jobs"
+    ]
+  },
+  "audit_verifier": {
+    "path": "scripts/windows/audit_runner_execution_links.py",
+    "schema": "fullmag.runner-execution-reparse-audit.v1",
+    "version": "1",
+    "python_runtime": "3.12.2",
+    "read_only": true,
+    "docker_mutated": false,
+    "deletion_performed": false,
+    "verified_at": "2026-10-03T07:36:13.371224+00:00",
+    "invocation": "python scripts/windows/audit_runner_execution_links.py --execution <ABS_PATH> [--execution <ABS_PATH> ...] --source-capsule <ABS_SOURCE_CAPSULE> [--source-capsule ...] --output <NEW_ABS_JSON>",
+    "output_requires_new_path": true,
+    "output_forbidden_inside_execution_or_source_capsule": true,
+    "full_record_maps_location": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\audit-execution-full-d6dfba736d684181af2d2d0deba7033c.json",
+    "intermediate_component_resolution": "Each hop checks every lexical path component for a reparse point before existence checks; external, shared, malformed or cyclic intermediate targets fail closed.",
+    "source_guard": "Each source manifest is bounded to 64 MiB, typed-file-only, and every manifest file is compared by size and SHA-256 both to execution and to the preserved source/tree; unknown top-level or nested entries fail closed. Only explicit generated prefixes (.fullmag, .fullmag-build, .fullmag-cargo, .fullmag-rustup, node_modules, apps/control-room/.next, apps/control-room/node_modules, apps/control-room/out) are classified as generated extras. Every regular-file hash additionally checks ancestors and rejects a reparse leaf immediately before open.",
+    "verifier_sha256": "11ed2039837bb85ff4f9b0122ae0ed63131c39197166df02c756b277f04f7b4f",
+    "regression_test": {
+      "path": "scripts/test_runner_execution_links.py",
+      "command": "python scripts/test_runner_execution_links.py -v",
+      "result": "18 passed",
+      "test_sha256": "0d5902f2b34f17650dc44772b4f517cb46f7f17ed7b1193c5f1e0e98e42d206d"
+    },
+    "full_record_maps_artifact": {
+      "path": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\audit-execution-full-d6dfba736d684181af2d2d0deba7033c.json",
+      "sha256": "a54f00d328e311431ceef7c6c16cb25fe7a34675c16f777b0be38d9e855827d5",
+      "bytes": 61843324,
+      "verified_at": "2026-10-03T07:36:13.371224+00:00",
+      "scope": "seven exact execution reparse maps; five full source-capsule/execution guards including nested extras",
+      "read_only_generation": true,
+      "tool_source_sha256": "11ed2039837bb85ff4f9b0122ae0ed63131c39197166df02c756b277f04f7b4f"
+    },
+    "latest_invocation": "audit_executions(seven exact execution paths), compare_source_capsule for five known-exited candidates, then _write_report(new output); exact paths and selected guards retained in full artifact",
+    "independent_review": "PASS: no remaining P0/P1 in read-only verifier source scope"
+  },
+  "unique_worktree_guard": {
+    "schema": "fullmag.execution-source-identity-guard.v1",
+    "scope": "five known-exited workers with exact Docker mount evidence",
+    "status": "blocked_source_identity_mismatch",
+    "source_match_all": false,
+    "comparison": "Read-only comparison of every manifest file against preserved source/tree and execution, with ancestor/leaf checks before hashing and recursive generated/unknown extras accounting.",
+    "checked_files_total": 32827,
+    "checked_bytes_total": 1452839663,
+    "unresolved_mismatch_paths": [
+      "apps\\control-room\\next-env.d.ts",
+      "pnpm-lock.yaml"
+    ],
+    "extra_top_level_generated_only_all": true,
+    "per_execution": [
+      {
+        "checked_bytes": 290660512,
+        "checked_files": 6568,
+        "extra_top_level": [
+          ".fullmag",
+          ".fullmag-build",
+          ".fullmag-cargo",
+          ".fullmag-rustup",
+          "node_modules"
+        ],
+        "extra_top_level_generated_only": true,
+        "manifest_entries": 6568,
+        "manifest_sha256": "07b1b18c89f7be8a5a9f2e441785a28ffeb493b04a74099e269512e9a68900f8",
+        "manifest_source_digest": "17ad3d671d289309c7cd69afba0faa415472bf51dfa574f5586aaef9968fee76",
+        "mismatches": [
+          {
+            "actual_sha256": "4e4da12aa061aac172fb1bcb48e9b6e4b293080d2f494327925fdba8f39632ac",
+            "actual_size": 253,
+            "expected_sha256": "083e23c4c5e7761db151134ea1ef7896120c86c5888cdc8a861f534f7e86d6fd",
+            "expected_size": 257,
+            "path": "apps\\control-room\\next-env.d.ts",
+            "reason": "content_or_size_mismatch"
+          },
+          {
+            "actual_sha256": "10b6c7ea792e1df1d67a7f818adf8209cd4ca2f41b8d2b57fc726de3b3004e32",
+            "actual_size": 461543,
+            "expected_sha256": "d0596adb2847ca774e58f3e95f8af19669d0f37ddb0e6a4a4618b9f3cfcdfee0",
+            "expected_size": 473543,
+            "path": "pnpm-lock.yaml",
+            "reason": "content_or_size_mismatch"
+          }
+        ],
+        "missing": [],
+        "reparse_source_files": [],
+        "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\36c80ad6b41e4db5837443ee61ab75f5\\source",
+        "source_capsule_checked_bytes": 290672516,
+        "source_capsule_checked_files": 6568,
+        "source_capsule_extra_directories": [],
+        "source_capsule_extra_files": [],
+        "source_capsule_extra_top_level": [],
+        "source_capsule_match": true,
+        "source_capsule_mismatches": [],
+        "source_capsule_missing": [],
+        "source_capsule_missing_top_level": [],
+        "source_capsule_reparse_files": [],
+        "source_manifest": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\36c80ad6b41e4db5837443ee61ab75f5\\source\\manifest.json",
+        "source_match": false,
+        "unexpected_execution_extra_entries": [],
+        "unexpected_execution_reparse_entries": [],
+        "job_id": "04112e6cb0fd42058b952f5e284d6fb6",
+        "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\04112e6cb0fd42058b952f5e284d6fb6\\execution",
+        "execution_extra_entries_count": 62243,
+        "execution_extra_directories_count": 8153,
+        "execution_reparse_entries_count": 2666
+      },
+      {
+        "checked_bytes": 290627803,
+        "checked_files": 6566,
+        "extra_top_level": [
+          ".fullmag",
+          ".fullmag-build",
+          ".fullmag-cargo",
+          ".fullmag-rustup",
+          "node_modules"
+        ],
+        "extra_top_level_generated_only": true,
+        "manifest_entries": 6566,
+        "manifest_sha256": "62e1830ffec62cdb0046f3b9fc2e7690811209e0c4aa1b978692cf797bc8c76a",
+        "manifest_source_digest": "2da071ea51285731216842f033d6d79351da01f5fc31e0840be8cffc396c7604",
+        "mismatches": [
+          {
+            "actual_sha256": "4e4da12aa061aac172fb1bcb48e9b6e4b293080d2f494327925fdba8f39632ac",
+            "actual_size": 253,
+            "expected_sha256": "083e23c4c5e7761db151134ea1ef7896120c86c5888cdc8a861f534f7e86d6fd",
+            "expected_size": 257,
+            "path": "apps\\control-room\\next-env.d.ts",
+            "reason": "content_or_size_mismatch"
+          },
+          {
+            "actual_sha256": "10b6c7ea792e1df1d67a7f818adf8209cd4ca2f41b8d2b57fc726de3b3004e32",
+            "actual_size": 461543,
+            "expected_sha256": "d0596adb2847ca774e58f3e95f8af19669d0f37ddb0e6a4a4618b9f3cfcdfee0",
+            "expected_size": 473543,
+            "path": "pnpm-lock.yaml",
+            "reason": "content_or_size_mismatch"
+          }
+        ],
+        "missing": [],
+        "reparse_source_files": [],
+        "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\5fd6b2318bbd4e05999878cea7c73091\\source",
+        "source_capsule_checked_bytes": 290639807,
+        "source_capsule_checked_files": 6566,
+        "source_capsule_extra_directories": [],
+        "source_capsule_extra_files": [],
+        "source_capsule_extra_top_level": [],
+        "source_capsule_match": true,
+        "source_capsule_mismatches": [],
+        "source_capsule_missing": [],
+        "source_capsule_missing_top_level": [],
+        "source_capsule_reparse_files": [],
+        "source_manifest": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\5fd6b2318bbd4e05999878cea7c73091\\source\\manifest.json",
+        "source_match": false,
+        "unexpected_execution_extra_entries": [],
+        "unexpected_execution_reparse_entries": [],
+        "job_id": "ffb5dd9294b24b6ab869266b99d95b49",
+        "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\ffb5dd9294b24b6ab869266b99d95b49\\execution",
+        "execution_extra_entries_count": 62243,
+        "execution_extra_directories_count": 8153,
+        "execution_reparse_entries_count": 2666
+      },
+      {
+        "checked_bytes": 290496096,
+        "checked_files": 6563,
+        "extra_top_level": [
+          ".fullmag",
+          ".fullmag-build",
+          ".fullmag-cargo",
+          ".fullmag-rustup",
+          "node_modules"
+        ],
+        "extra_top_level_generated_only": true,
+        "manifest_entries": 6563,
+        "manifest_sha256": "f96a56dc8824feaaa6739b042720b37f76970128f65df2fa953e6ec463fa1077",
+        "manifest_source_digest": "c85581ae8b5037b5b7e8f254c888333ece5029862c67dbf55a114a6bc7dc1d7f",
+        "mismatches": [
+          {
+            "actual_sha256": "4e4da12aa061aac172fb1bcb48e9b6e4b293080d2f494327925fdba8f39632ac",
+            "actual_size": 253,
+            "expected_sha256": "083e23c4c5e7761db151134ea1ef7896120c86c5888cdc8a861f534f7e86d6fd",
+            "expected_size": 257,
+            "path": "apps\\control-room\\next-env.d.ts",
+            "reason": "content_or_size_mismatch"
+          },
+          {
+            "actual_sha256": "10b6c7ea792e1df1d67a7f818adf8209cd4ca2f41b8d2b57fc726de3b3004e32",
+            "actual_size": 461543,
+            "expected_sha256": "d0596adb2847ca774e58f3e95f8af19669d0f37ddb0e6a4a4618b9f3cfcdfee0",
+            "expected_size": 473543,
+            "path": "pnpm-lock.yaml",
+            "reason": "content_or_size_mismatch"
+          }
+        ],
+        "missing": [],
+        "reparse_source_files": [],
+        "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\e1a6bcdb379849fab3275573a61451cf\\source",
+        "source_capsule_checked_bytes": 290508100,
+        "source_capsule_checked_files": 6563,
+        "source_capsule_extra_directories": [],
+        "source_capsule_extra_files": [],
+        "source_capsule_extra_top_level": [],
+        "source_capsule_match": true,
+        "source_capsule_mismatches": [],
+        "source_capsule_missing": [],
+        "source_capsule_missing_top_level": [],
+        "source_capsule_reparse_files": [],
+        "source_manifest": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\e1a6bcdb379849fab3275573a61451cf\\source\\manifest.json",
+        "source_match": false,
+        "unexpected_execution_extra_entries": [],
+        "unexpected_execution_reparse_entries": [],
+        "job_id": "bdd65936cfcc45b58a07879dd2e7ae3a",
+        "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\bdd65936cfcc45b58a07879dd2e7ae3a\\execution",
+        "execution_extra_entries_count": 62243,
+        "execution_extra_directories_count": 8153,
+        "execution_reparse_entries_count": 2666
+      },
+      {
+        "checked_bytes": 290500857,
+        "checked_files": 6564,
+        "extra_top_level": [
+          ".fullmag",
+          ".fullmag-build",
+          ".fullmag-cargo",
+          ".fullmag-rustup",
+          "node_modules"
+        ],
+        "extra_top_level_generated_only": true,
+        "manifest_entries": 6564,
+        "manifest_sha256": "616121d92383a0439fb39b7c2ff393bf06a92da0e1145274cf7ce91d9a3fd885",
+        "manifest_source_digest": "68964b72f39216f17e624dc674f9ab311dfddfc0cba5bfdcb80f046cd04e6286",
+        "mismatches": [
+          {
+            "actual_sha256": "4e4da12aa061aac172fb1bcb48e9b6e4b293080d2f494327925fdba8f39632ac",
+            "actual_size": 253,
+            "expected_sha256": "083e23c4c5e7761db151134ea1ef7896120c86c5888cdc8a861f534f7e86d6fd",
+            "expected_size": 257,
+            "path": "apps\\control-room\\next-env.d.ts",
+            "reason": "content_or_size_mismatch"
+          },
+          {
+            "actual_sha256": "10b6c7ea792e1df1d67a7f818adf8209cd4ca2f41b8d2b57fc726de3b3004e32",
+            "actual_size": 461543,
+            "expected_sha256": "d0596adb2847ca774e58f3e95f8af19669d0f37ddb0e6a4a4618b9f3cfcdfee0",
+            "expected_size": 473543,
+            "path": "pnpm-lock.yaml",
+            "reason": "content_or_size_mismatch"
+          }
+        ],
+        "missing": [],
+        "reparse_source_files": [],
+        "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\d4cc673a43a54327a505d1f0f0e1f74d\\source",
+        "source_capsule_checked_bytes": 290512861,
+        "source_capsule_checked_files": 6564,
+        "source_capsule_extra_directories": [],
+        "source_capsule_extra_files": [],
+        "source_capsule_extra_top_level": [],
+        "source_capsule_match": true,
+        "source_capsule_mismatches": [],
+        "source_capsule_missing": [],
+        "source_capsule_missing_top_level": [],
+        "source_capsule_reparse_files": [],
+        "source_manifest": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\d4cc673a43a54327a505d1f0f0e1f74d\\source\\manifest.json",
+        "source_match": false,
+        "unexpected_execution_extra_entries": [],
+        "unexpected_execution_reparse_entries": [],
+        "job_id": "9eb85e72e82048f2b7e0558b86d66014",
+        "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\9eb85e72e82048f2b7e0558b86d66014\\execution",
+        "execution_extra_entries_count": 62243,
+        "execution_extra_directories_count": 8153,
+        "execution_reparse_entries_count": 2666
+      },
+      {
+        "checked_bytes": 290554395,
+        "checked_files": 6566,
+        "extra_top_level": [
+          ".fullmag",
+          ".fullmag-build",
+          ".fullmag-cargo",
+          ".fullmag-rustup",
+          "node_modules"
+        ],
+        "extra_top_level_generated_only": true,
+        "manifest_entries": 6566,
+        "manifest_sha256": "5a213b4e4dec3b176a23fb81065bcb0fdbb067776bf6b07a69c04feca2a9e4dc",
+        "manifest_source_digest": "a7aba8c96b183250025a8bc44dacc7dcff45a7d4fb5b84039ecb26d8ad2d1417",
+        "mismatches": [
+          {
+            "actual_sha256": "4e4da12aa061aac172fb1bcb48e9b6e4b293080d2f494327925fdba8f39632ac",
+            "actual_size": 253,
+            "expected_sha256": "083e23c4c5e7761db151134ea1ef7896120c86c5888cdc8a861f534f7e86d6fd",
+            "expected_size": 257,
+            "path": "apps\\control-room\\next-env.d.ts",
+            "reason": "content_or_size_mismatch"
+          },
+          {
+            "actual_sha256": "10b6c7ea792e1df1d67a7f818adf8209cd4ca2f41b8d2b57fc726de3b3004e32",
+            "actual_size": 461543,
+            "expected_sha256": "d0596adb2847ca774e58f3e95f8af19669d0f37ddb0e6a4a4618b9f3cfcdfee0",
+            "expected_size": 473543,
+            "path": "pnpm-lock.yaml",
+            "reason": "content_or_size_mismatch"
+          }
+        ],
+        "missing": [],
+        "reparse_source_files": [],
+        "source_capsule": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\d1d10ec49cfa448184d36dd945f23013\\source",
+        "source_capsule_checked_bytes": 290566399,
+        "source_capsule_checked_files": 6566,
+        "source_capsule_extra_directories": [],
+        "source_capsule_extra_files": [],
+        "source_capsule_extra_top_level": [],
+        "source_capsule_match": true,
+        "source_capsule_mismatches": [],
+        "source_capsule_missing": [],
+        "source_capsule_missing_top_level": [],
+        "source_capsule_reparse_files": [],
+        "source_manifest": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\d1d10ec49cfa448184d36dd945f23013\\source\\manifest.json",
+        "source_match": false,
+        "unexpected_execution_extra_entries": [],
+        "unexpected_execution_reparse_entries": [],
+        "job_id": "7953ba4088a142c889c5ed9c12be7332",
+        "execution": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\7953ba4088a142c889c5ed9c12be7332\\execution",
+        "execution_extra_entries_count": 62243,
+        "execution_extra_directories_count": 8153,
+        "execution_reparse_entries_count": 2666
+      }
+    ],
+    "future_cleanup_condition": "No candidate is source-identity eligible until every mismatch is reconciled or explicitly accounted for and the exact source guard is repeated immediately before any separately authorized cleanup.",
+    "source_capsule_match_all": true,
+    "source_capsule_checked_files_total": 32827,
+    "source_capsule_checked_bytes_total": 1452899683,
+    "source_capsule_mismatch_paths": [],
+    "execution_source_preservation_proof": {
+      "path": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\execution-source-preservation-e748d66bf7e54e3da22f644fd3d33bad\\proof.json",
+      "sha256": "8318d1315a1d17ebba660f4e6fbda52c32255a53b513d8bdc6eb7684c1056c25",
+      "bytes": 2308980,
+      "status": "verified",
+      "scope": "ten execution copies corresponding to the two unresolved paths across five known-exited candidates",
+      "read_only": true
+    },
+    "full_artifact": {
+      "path": "C:\\git\\fullmag\\storage\\runs\\fullmag-0950f4dca4ffe38f\\audit-execution-full-d6dfba736d684181af2d2d0deba7033c.json",
+      "sha256": "a54f00d328e311431ceef7c6c16cb25fe7a34675c16f777b0be38d9e855827d5",
+      "bytes": 61843324,
+      "verified_at": "2026-10-03T07:36:13.371224+00:00",
+      "scope": "seven exact execution reparse maps; five full source-capsule/execution guards including nested extras",
+      "read_only_generation": true,
+      "tool_source_sha256": "11ed2039837bb85ff4f9b0122ae0ed63131c39197166df02c756b277f04f7b4f"
+    },
+    "unexpected_nested_execution_entries_total": 0
+  }
+}

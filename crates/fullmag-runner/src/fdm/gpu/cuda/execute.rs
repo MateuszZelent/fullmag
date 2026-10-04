@@ -48,6 +48,10 @@ use crate::types::{
     ExecutionProvenance, FdmGpuEndpointCacheTelemetry, FdmGpuObservationPolicyProvenance,
     RunResult, RunStatus, StepAction, StepStats, StepUpdate,
 };
+#[cfg(feature = "cuda")]
+use crate::{
+    FdmGpuAcceptedStateSnapshotV1, ObservationClock, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE,
+};
 
 #[cfg(feature = "cuda")]
 fn frozen_spins_checkpoint_value(
@@ -801,6 +805,31 @@ pub(crate) fn execute_cuda_fdm(
         );
         apply_regional_drive_energy(plan, final_stats, &final_magnetization);
     }
+    let accepted_state_snapshot = if plan.spin_transport_plans.is_empty()
+        && plan.fdm_gpu_charge_transports.is_empty()
+        && plan.frozen_spins.is_none()
+        && plan.temperature.unwrap_or(0.0) <= 0.0
+        && plan.thermal_seed_config.is_none()
+    {
+        let stats = latest_stats.as_ref().ok_or_else(|| RunError {
+            message: "completed CUDA FDM run has no accepted terminal clock".to_string(),
+        })?;
+        Some(
+            FdmGpuAcceptedStateSnapshotV1::from_final_magnetization(
+                ObservationClock {
+                    accepted_step: stats.step,
+                    time_seconds: stats.time,
+                    dt_seconds: (stats.dt > 0.0).then_some(stats.dt),
+                },
+                &final_magnetization,
+            )
+            .map_err(|error| RunError {
+                message: format!("materializing FDM GPU accepted state snapshot: {error}"),
+            })?,
+        )
+    } else {
+        None
+    };
 
     record_cuda_final_outputs(
         &backend,
@@ -929,7 +958,7 @@ pub(crate) fn execute_cuda_fdm(
         },
     );
 
-    let auxiliary_artifacts = final_frozen_checkpoint
+    let mut auxiliary_artifacts: Vec<_> = final_frozen_checkpoint
         .map(|checkpoint| {
             serde_json::to_vec_pretty(&checkpoint)
                 .map(|bytes| crate::types::AuxiliaryArtifact {
@@ -940,7 +969,17 @@ pub(crate) fn execute_cuda_fdm(
                     message: format!("serializing CUDA Frozen Spins checkpoint artifact: {error}"),
                 })
         })
-        .transpose()?;
+        .transpose()?
+        .into_iter()
+        .collect();
+    if let Some(snapshot) = accepted_state_snapshot {
+        auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE.to_string(),
+            bytes: serde_json::to_vec_pretty(&snapshot).map_err(|error| RunError {
+                message: format!("serializing FDM GPU accepted state snapshot: {error}"),
+            })?,
+        });
+    }
 
     Ok(ExecutedRun {
         result: RunResult {
@@ -952,7 +991,7 @@ pub(crate) fn execute_cuda_fdm(
         initial_magnetization,
         field_snapshots,
         field_snapshot_count,
-        auxiliary_artifacts: auxiliary_artifacts.into_iter().collect(),
+        auxiliary_artifacts,
         provenance,
     })
 }

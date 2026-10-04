@@ -88,6 +88,17 @@ flowchart LR
 
 Draft state is local to the inspector panel. The canonical committed state remains the resource snapshot. If a commit fails, the draft remains visible with the error; the canonical resource is not silently overwritten.
 
+Workspace transitions use the kernel `PendingFormRegistry` to check every
+registered owner, including inactive forms. The registry stores callbacks and
+small validation/dirty flags; it does not own draft values. An explicit Apply
+choice may prepare a transition only after the panels publish clean state.
+Dirty, applying, invalid or locked changes refuse the transition. A generation
+guard must remain owned through the asynchronous operation and finalization;
+changed forms invalidate it. Cancel never clears forms or authoring history.
+An acknowledged session creation is distinguished from a finalization failure
+and is never submitted again implicitly. The development restart consumer must
+use this boundary together with the separate authoritative backend idle fence.
+
 ## 7. Derived Data
 
 Derived data must be computed in one of these places:

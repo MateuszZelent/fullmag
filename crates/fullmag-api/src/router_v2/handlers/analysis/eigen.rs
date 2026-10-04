@@ -1,5 +1,6 @@
 //! Eigen endpoints — spectrum, mode, dispersion, branches.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -10,10 +11,31 @@ use serde_json::Value;
 
 use crate::artifacts::{
     parse_eigen_dispersion_csv, read_json_artifact_value, read_text_artifact_value,
-    require_current_live_artifact_dir, try_resolve_artifact_path,
+    try_resolve_artifact_path,
 };
 use crate::error::ApiError;
-use crate::types::{AppState, EigenDispersionResponse, EigenModeQuery};
+use crate::session::current_artifact_dir;
+use crate::types::{AppState, CurrentLiveRequestContext, EigenDispersionResponse, EigenModeQuery};
+
+async fn current_artifact_dir_with_context(
+    state: &Arc<AppState>,
+) -> Result<(PathBuf, CurrentLiveRequestContext), ApiError> {
+    let request_context = crate::capture_current_live_request_context(state).await?;
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let artifact_dir = current_artifact_dir(snapshot)
+        .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    Ok((artifact_dir, request_context))
+}
 
 #[utoipa::path(
     get,
@@ -25,10 +47,12 @@ use crate::types::{AppState, EigenDispersionResponse, EigenModeQuery};
     tag = "analysis"
 )]
 pub async fn get_spectrum(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
     for candidate in ["eigen/spectrum.json", "eigen/metadata/eigen_summary.json"] {
         if try_resolve_artifact_path(&artifact_dir, candidate)?.is_some() {
-            return Ok(Json(read_json_artifact_value(&artifact_dir, candidate)?));
+            let value = read_json_artifact_value(&artifact_dir, candidate)?;
+            crate::validate_current_live_request_context(&state, &request_context).await?;
+            return Ok(Json(value));
         }
     }
     Err(ApiError::not_found(
@@ -46,11 +70,10 @@ pub async fn get_spectrum(State(state): State<Arc<AppState>>) -> Result<Json<Val
     tag = "analysis"
 )]
 pub async fn get_spectrum_v2(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    Ok(Json(read_json_artifact_value(
-        &artifact_dir,
-        "eigen/spectrum.v2.json",
-    )?))
+    let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
+    let value = read_json_artifact_value(&artifact_dir, "eigen/spectrum.v2.json")?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(value))
 }
 
 #[utoipa::path(
@@ -70,12 +93,10 @@ pub async fn get_mode(
     State(state): State<Arc<AppState>>,
     Query(query): Query<EigenModeQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    Ok(Json(read_selected_eigen_mode(
-        &artifact_dir,
-        query.sample_index,
-        query.index,
-    )?))
+    let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
+    let value = read_selected_eigen_mode(&artifact_dir, query.sample_index, query.index)?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(value))
 }
 
 #[utoipa::path(
@@ -95,12 +116,10 @@ pub async fn get_mode_v2(
     State(state): State<Arc<AppState>>,
     Path((sample_index, mode_index)): Path<(u32, u32)>,
 ) -> Result<Json<Value>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    Ok(Json(read_selected_eigen_mode(
-        &artifact_dir,
-        Some(sample_index),
-        mode_index,
-    )?))
+    let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
+    let value = read_selected_eigen_mode(&artifact_dir, Some(sample_index), mode_index)?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(value))
 }
 
 // An explicit sample is authoritative. Missing, unreadable or malformed
@@ -129,7 +148,7 @@ fn read_selected_eigen_mode(
 pub async fn get_dispersion(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<EigenDispersionResponse>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
     let csv_path = if try_resolve_artifact_path(&artifact_dir, "eigen/dispersion.csv")?.is_some() {
         "eigen/dispersion.csv"
     } else {
@@ -145,11 +164,13 @@ pub async fn get_dispersion(
         } else {
             None
         };
-    Ok(Json(EigenDispersionResponse {
+    let response = EigenDispersionResponse {
         csv_path: csv_path.to_string(),
         path_metadata,
         rows: parse_eigen_dispersion_csv(&csv_content)?,
-    }))
+    };
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -162,8 +183,9 @@ pub async fn get_dispersion(
     tag = "analysis"
 )]
 pub async fn get_dispersion_csv(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
     let csv = read_text_artifact_value(&artifact_dir, "eigen/dispersion.csv")?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(([(header::CONTENT_TYPE, "text/csv; charset=utf-8")], csv).into_response())
 }
 
@@ -177,12 +199,13 @@ pub async fn get_dispersion_csv(State(state): State<Arc<AppState>>) -> Result<Re
     tag = "analysis"
 )]
 pub async fn get_branches(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
     match try_resolve_artifact_path(&artifact_dir, "eigen/branches.json")? {
-        Some(_) => Ok(Json(read_json_artifact_value(
-            &artifact_dir,
-            "eigen/branches.json",
-        )?)),
+        Some(_) => {
+            let value = read_json_artifact_value(&artifact_dir, "eigen/branches.json")?;
+            crate::validate_current_live_request_context(&state, &request_context).await?;
+            Ok(Json(value))
+        }
         None => Err(ApiError::not_found(
             "no eigen/branches.json artifact found (single-k solve or legacy run)",
         )),
@@ -199,11 +222,10 @@ pub async fn get_branches(State(state): State<Arc<AppState>>) -> Result<Json<Val
     tag = "analysis"
 )]
 pub async fn get_branches_v2(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    Ok(Json(read_json_artifact_value(
-        &artifact_dir,
-        "eigen/branches.v2.json",
-    )?))
+    let (artifact_dir, request_context) = current_artifact_dir_with_context(&state).await?;
+    let value = read_json_artifact_value(&artifact_dir, "eigen/branches.v2.json")?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(value))
 }
 
 #[cfg(test)]

@@ -175,29 +175,148 @@ pub fn determine_restore_class(
     checkpoint: &CheckpointCompatibility,
     current: &CheckpointCompatibility,
 ) -> RestoreClass {
-    // Exact resume requires all fingerprints to match.
-    if checkpoint.restart_abi.is_some()
-        && checkpoint.restart_abi == current.restart_abi
-        && checkpoint.plan_hash.is_some()
-        && checkpoint.plan_hash == current.plan_hash
-        && checkpoint.discretization_signature == current.discretization_signature
-        && checkpoint.precision == current.precision
-        && checkpoint.field_layout_signature == current.field_layout_signature
+    fn same_present(left: &Option<String>, right: &Option<String>) -> bool {
+        matches!(
+            (left.as_deref(), right.as_deref()),
+            (Some(left), Some(right)) if !left.trim().is_empty() && left == right
+        )
+    }
+
+    let same_logical_state = same_present(&checkpoint.problem_hash, &current.problem_hash)
+        && same_present(&checkpoint.plan_hash, &current.plan_hash)
+        && same_present(
+            &checkpoint.state_schema_version,
+            &current.state_schema_version,
+        )
+        && same_present(&checkpoint.study_kind, &current.study_kind)
+        && same_present(
+            &checkpoint.discretization_signature,
+            &current.discretization_signature,
+        )
+        && same_present(
+            &checkpoint.field_layout_signature,
+            &current.field_layout_signature,
+        );
+
+    // Exact resume requires complete physical/state identity plus the same
+    // runtime realization. Missing fields never compare as compatible.
+    if same_logical_state
+        && same_present(&checkpoint.restart_abi, &current.restart_abi)
+        && same_present(&checkpoint.engine_id, &current.engine_id)
+        && same_present(&checkpoint.runtime_family, &current.runtime_family)
+        && same_present(&checkpoint.precision, &current.precision)
     {
         return RestoreClass::ExactResume;
     }
 
-    // Logical resume: same study kind and discretization, possibly different runtime.
-    if checkpoint.study_kind == current.study_kind
-        && checkpoint.discretization_signature == current.discretization_signature
-    {
+    // Logical resume retains the same physical problem, plan and state layout,
+    // while allowing a different runtime realization.
+    if same_logical_state {
         return RestoreClass::LogicalResume;
     }
 
-    // If there's magnetization, we can at least import it as initial condition.
-    if checkpoint.discretization_signature.is_some() {
+    // A typed discretization and field layout can still seed a new run. The
+    // caller must perform its own target-shape validation before importing.
+    if checkpoint
+        .discretization_signature
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        && checkpoint
+            .field_layout_signature
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
         return RestoreClass::InitialConditionImport;
     }
 
     RestoreClass::ConfigOnly
+}
+
+#[cfg(test)]
+mod tests {
+    use super::determine_restore_class;
+    use crate::{CheckpointCompatibility, RestoreClass};
+
+    fn complete_compatibility() -> CheckpointCompatibility {
+        CheckpointCompatibility {
+            restart_abi: Some("fullmag.fdm.cpu.coupled-m3.v1".into()),
+            problem_hash: Some(
+                "problem:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .into(),
+            ),
+            plan_hash: Some(
+                "plan:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .into(),
+            ),
+            state_schema_version: Some("fullmag.checkpoint.v1".into()),
+            engine_id: Some("fdm_cpu_reference".into()),
+            runtime_family: Some("fdm_cpu_reference".into()),
+            precision: Some("double".into()),
+            study_kind: Some("fdm_coupled_m3".into()),
+            discretization_signature: Some("mesh:7;vectors:2".into()),
+            field_layout_signature: Some("magnetization:2x3".into()),
+        }
+    }
+
+    #[test]
+    fn empty_compatibility_is_config_only() {
+        assert_eq!(
+            determine_restore_class(
+                &CheckpointCompatibility::default(),
+                &CheckpointCompatibility::default(),
+            ),
+            RestoreClass::ConfigOnly
+        );
+    }
+
+    #[test]
+    fn exact_resume_requires_every_compatibility_identity() {
+        let complete = complete_compatibility();
+        assert_eq!(
+            determine_restore_class(&complete, &complete),
+            RestoreClass::ExactResume
+        );
+
+        let mut missing_problem = complete.clone();
+        missing_problem.problem_hash = None;
+        assert_ne!(
+            determine_restore_class(&missing_problem, &missing_problem),
+            RestoreClass::ExactResume
+        );
+
+        let mut missing_state_schema = complete.clone();
+        missing_state_schema.state_schema_version = None;
+        assert_ne!(
+            determine_restore_class(&missing_state_schema, &missing_state_schema),
+            RestoreClass::ExactResume
+        );
+
+        let mut changed_engine = complete.clone();
+        changed_engine.engine_id = Some("other-engine".into());
+        assert_eq!(
+            determine_restore_class(&complete, &changed_engine),
+            RestoreClass::LogicalResume
+        );
+    }
+
+    #[test]
+    fn logical_resume_requires_matching_physics_plan_and_layout() {
+        let checkpoint = complete_compatibility();
+        let mut current = checkpoint.clone();
+        current.restart_abi = Some("fullmag.fdm.gpu.v1".into());
+        current.runtime_family = Some("fdm_cuda".into());
+        current.engine_id = Some("cuda_fdm".into());
+        assert_eq!(
+            determine_restore_class(&checkpoint, &current),
+            RestoreClass::LogicalResume
+        );
+
+        current.plan_hash = Some(
+            "plan:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into(),
+        );
+        assert_eq!(
+            determine_restore_class(&checkpoint, &current),
+            RestoreClass::InitialConditionImport
+        );
+    }
 }

@@ -25,9 +25,13 @@ use crate::{error::ApiError, schemas::authoring::PhysicsGraphResource, types::Ap
 pub async fn get_physics_graph(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<PhysicsGraphResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let graph = fullmag_authoring::normalize_physics_graph(&scene).map_err(|error| {
         ApiError::conflict(format!("physics_graph_normalization_failed: {error}"))
     })?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(PhysicsGraphResource::from_graph(graph)))
 }

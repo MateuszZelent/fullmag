@@ -358,8 +358,13 @@ mod tests {
     use super::*;
     use serde_json::{json, Map};
 
+    fn empty_scene_document() -> SceneDocument {
+        serde_json::from_value(json!({"version": "scene.v2"}))
+            .expect("empty scene document should use canonical serde defaults")
+    }
+
     fn scene_with_geometry(geometry: SceneGeometry) -> SceneDocument {
-        let mut scene = SceneDocument::default();
+        let mut scene = empty_scene_document();
         scene.objects.push(crate::SceneObject {
             id: "film".to_string(),
             name: "Film".to_string(),
@@ -416,7 +421,7 @@ mod tests {
 
     #[test]
     fn malformed_or_missing_objects_fail_closed_with_a_diagnostic() {
-        let scene = SceneDocument::default();
+        let scene = empty_scene_document();
         let missing = build_geometry_feature_sequence(&scene, "missing");
         assert!(missing.features.is_empty());
         assert_eq!(missing.diagnostics[0].code, "GEOMETRY_OBJECT_NOT_FOUND");

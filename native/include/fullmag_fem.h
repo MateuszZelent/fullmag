@@ -4,6 +4,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Export only the public C ABI when building the Windows shared library. */
+#if defined(_WIN32)
+#if defined(FULLMAG_FEM_BUILD_SHARED)
+#define FULLMAG_FEM_API __declspec(dllexport)
+#else
+#define FULLMAG_FEM_API __declspec(dllimport)
+#endif
+#else
+#define FULLMAG_FEM_API
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -465,6 +476,51 @@ typedef struct {
     uint64_t periodic_boundary_pair_markers_len;
 } fullmag_fem_mesh_desc;
 
+/*
+ * Stateless MFEM mesh/function-space preparation.
+ *
+ * The producer imports the canonical mesh, builds and validates an MFEM Mesh
+ * and H1 FiniteElementSpace, and returns versioned evidence. It must not
+ * initialize a solver Context or configure a runtime device.
+ */
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_ABI_VERSION 1u
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_ID "fullmag.mfem.mesh_space"
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_SCHEMA_VERSION "mfem_mesh_space_evidence.v1"
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_VERSION "1"
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY 65u
+
+#define FULLMAG_FEM_FE_FAMILY_H1 1u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    const fullmag_fem_mesh_desc *mesh;
+    uint32_t fe_order;
+    uint32_t reserved_flags;
+} fullmag_fem_mesh_space_preparation_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t mesh_dimension;
+    uint32_t fe_family;
+    uint32_t fe_order;
+    uint32_t mesh_matches_canonical_input;
+    uint64_t node_count;
+    uint64_t cell_count;
+    uint64_t boundary_element_count;
+    uint64_t local_dof_count;
+    uint64_t true_dof_count;
+    uint64_t quality_sample_count;
+    uint64_t invalid_cell_count;
+    double min_jacobian_determinant;
+    double max_jacobian_determinant;
+    char topology_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
+    char marker_map_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
+    char quality_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
+    char space_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
+} fullmag_fem_mesh_space_preparation_evidence_v1;
+
 #define FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION 1u
 #define FULLMAG_FEM_MESH_ABI_FIELD_COUNT 30u
 #define FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY 96u
@@ -493,7 +549,7 @@ typedef struct {
     fullmag_fem_mesh_abi_layout layout;
 } fullmag_fem_mesh_abi_record;
 
-extern const fullmag_fem_mesh_abi_record fullmag_fem_mesh_abi_record_v1;
+extern FULLMAG_FEM_API const fullmag_fem_mesh_abi_record fullmag_fem_mesh_abi_record_v1;
 
 typedef struct {
     double saturation_magnetisation;
@@ -1222,6 +1278,26 @@ typedef struct {
     uint64_t hot_loop_representation_copy_count;
     uint64_t hot_loop_gather_scatter_bytes;
 } fullmag_fem_representation_receipt_v1;
+
+/*
+ * Append-only native local-node index map.  The MFEM true-DOF extent is
+ * reported separately from the core periodic-class extent; this ABI does not
+ * claim that either numbering is the other one.  The map-copy entrypoint
+ * returns caller-owned u32 arrays with exact lengths declared by the receipt.
+ */
+#define FULLMAG_FEM_LOCAL_NODE_MAP_V1_ABI_VERSION 1u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t state_space;
+    uint32_t reserved0;
+    uint64_t local_node_count;
+    uint64_t mfem_local_dof_count;
+    uint64_t mfem_true_dof_count;
+    uint64_t core_periodic_class_count;
+    uint64_t core_periodic_map_revision;
+} fullmag_fem_local_node_map_v1;
 
 #define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u
 
@@ -3001,64 +3077,62 @@ typedef struct {
     fullmag_fem_snapshot_scalar_type scalar_type;
 } fullmag_fem_snapshot_desc;
 
-int fullmag_fem_is_available(void);
-int fullmag_fem_solve_steady_transport_v1(
+FULLMAG_FEM_API int fullmag_fem_is_available(void);
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_v1(
     const fullmag_fem_steady_transport_request_v1 *request,
     fullmag_fem_steady_transport_result_v1 *result
 );
-int fullmag_fem_solve_steady_transport_m2_v1(
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_m2_v1(
     const fullmag_fem_steady_transport_m2_request_v1 *request,
     fullmag_fem_steady_transport_result_v1 *result
 );
-int fullmag_fem_solve_steady_transport_rt0_v1(
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_v1(
     const fullmag_fem_steady_transport_rt0_request_v1 *request,
     fullmag_fem_steady_transport_rt0_result_v1 *result
 );
-int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
     const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
     fullmag_fem_steady_transport_rt0_oersted_result_v1 *result
 );
-int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
     const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,
     fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result
 );
-int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
-int fullmag_fem_get_frequency_domain_availability_info(
+FULLMAG_FEM_API int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
+FULLMAG_FEM_API int fullmag_fem_get_frequency_domain_availability_info(
     const fullmag_fem_frequency_domain_availability_request *request,
     fullmag_fem_frequency_domain_availability_info *out_info
 );
-int fullmag_fem_get_frequency_domain_dependency_info(
+FULLMAG_FEM_API int fullmag_fem_get_frequency_domain_dependency_info(
     fullmag_fem_frequency_domain_dependency_info *out_info
 );
-int fullmag_fem_get_frequency_domain_abi_layout(
+FULLMAG_FEM_API int fullmag_fem_get_frequency_domain_abi_layout(
     fullmag_fem_frequency_domain_abi_layout *out_layout
 );
-int fullmag_fem_get_frequency_domain_modal_abi_layout_v2(
+FULLMAG_FEM_API int fullmag_fem_get_frequency_domain_modal_abi_layout_v2(
     fullmag_fem_frequency_domain_modal_abi_layout_v2 *out_layout
 );
-int fullmag_fem_get_frequency_domain_modal_abi_layout_v3(
+FULLMAG_FEM_API int fullmag_fem_get_frequency_domain_modal_abi_layout_v3(
     fullmag_fem_frequency_domain_modal_abi_layout_v3 *out_layout
 );
-int fullmag_fem_get_frequency_domain_modal_abi_layout_v4(
+FULLMAG_FEM_API int fullmag_fem_get_frequency_domain_modal_abi_layout_v4(
     fullmag_fem_frequency_domain_modal_abi_layout_v4 *out_layout
 );
-int fullmag_fem_get_frequency_domain_modal_abi_layout_v5(
+FULLMAG_FEM_API int fullmag_fem_get_frequency_domain_modal_abi_layout_v5(
     fullmag_fem_frequency_domain_modal_abi_layout_v5 *out_layout
 );
-int fullmag_fem_get_mesh_abi_layout(fullmag_fem_mesh_abi_layout *out_layout);
-int fullmag_fem_frequency_domain_initial_sweep_progress(
+FULLMAG_FEM_API int fullmag_fem_get_mesh_abi_layout(fullmag_fem_mesh_abi_layout *out_layout);
+FULLMAG_FEM_API int fullmag_fem_prepare_mesh_space_v1(
+    const fullmag_fem_mesh_space_preparation_request_v1 *request,
+    fullmag_fem_mesh_space_preparation_evidence_v1 *out_evidence,
+    char *error_message,
+    uint64_t error_message_capacity
+);
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_initial_sweep_progress(
     uint64_t total_frequency_points,
     fullmag_fem_frequency_domain_sweep_progress *out_progress
 );
-int fullmag_fem_frequency_domain_interrupted_sweep_progress(
-    uint64_t total_frequency_points,
-    uint64_t completed_frequency_points,
-    uint64_t written_frequency_point_artifacts,
-    double current_frequency_hz,
-    const char *latest_artifact_manifest_path,
-    fullmag_fem_frequency_domain_sweep_progress *out_progress
-);
-int fullmag_fem_frequency_domain_cancelling_sweep_progress(
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_interrupted_sweep_progress(
     uint64_t total_frequency_points,
     uint64_t completed_frequency_points,
     uint64_t written_frequency_point_artifacts,
@@ -3066,7 +3140,7 @@ int fullmag_fem_frequency_domain_cancelling_sweep_progress(
     const char *latest_artifact_manifest_path,
     fullmag_fem_frequency_domain_sweep_progress *out_progress
 );
-int fullmag_fem_frequency_domain_completed_sweep_progress(
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_cancelling_sweep_progress(
     uint64_t total_frequency_points,
     uint64_t completed_frequency_points,
     uint64_t written_frequency_point_artifacts,
@@ -3074,115 +3148,147 @@ int fullmag_fem_frequency_domain_completed_sweep_progress(
     const char *latest_artifact_manifest_path,
     fullmag_fem_frequency_domain_sweep_progress *out_progress
 );
-int fullmag_fem_frequency_domain_solve_driven_response(
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_completed_sweep_progress(
+    uint64_t total_frequency_points,
+    uint64_t completed_frequency_points,
+    uint64_t written_frequency_point_artifacts,
+    double current_frequency_hz,
+    const char *latest_artifact_manifest_path,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+);
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ARTIFACT_IDENTITY_V1 1u
+/* Separate metadata ABI: existing driven-response request layouts stay intact.
+ * Strings are borrowed NUL-terminated UTF-8 and must remain valid during calls.
+ * Set abi_version to V1 and struct_size to sizeof(this structure).
+ */
+typedef struct FullmagFemFrequencyDomainArtifactIdentityV1 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    const char *session_id;
+    const char *run_id;
+    const char *stage_id;
+    const char *runtime_id;
+} FullmagFemFrequencyDomainArtifactIdentityV1;
+
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_validate_artifact_identity_v1(
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *identity
+);
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_solve_driven_response_with_identity_v1(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    const FullmagFemFrequencyDomainArtifactIdentityV1 *identity,
+    fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
+    fullmag_fem_frequency_domain_solve_result *out_result
+);
+
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_solve_driven_response(
     const fullmag_fem_frequency_domain_driven_response_request *request,
     fullmag_fem_frequency_domain_solve_result *out_result
 );
-int fullmag_fem_frequency_domain_solve_driven_response_v9(
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_solve_driven_response_v9(
     const fullmag_fem_frequency_domain_driven_response_request *request,
     fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
     fullmag_fem_frequency_domain_solve_result *out_result
 );
-int fullmag_fem_frequency_domain_solve_driven_response_v10(
+FULLMAG_FEM_API int fullmag_fem_frequency_domain_solve_driven_response_v10(
     const fullmag_fem_frequency_domain_driven_response_request *request,
     fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
     fullmag_fem_frequency_domain_solve_result *out_result
 );
-void fullmag_fem_frequency_domain_solve_result_release(
+FULLMAG_FEM_API void fullmag_fem_frequency_domain_solve_result_release(
     fullmag_fem_frequency_domain_solve_result *result
 );
-FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
+FULLMAG_FEM_API FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
     const FullmagFemModalEigenRequest *request
 );
-int fullmag_fem_modal_eigen_solve_v20(
+FULLMAG_FEM_API int fullmag_fem_modal_eigen_solve_v20(
     const FullmagFemModalEigenRequest *request,
     FullmagFemFrequencyDomainResultV20 *out_result
 );
-void fullmag_fem_frequency_domain_result_v20_destroy(
+FULLMAG_FEM_API void fullmag_fem_frequency_domain_result_v20_destroy(
     FullmagFemFrequencyDomainResultV20 *result
 );
-int fullmag_fem_modal_eigen_gpu_runtime_finalize(void);
-FullmagFemFrequencyDomainResult fullmag_fem_driven_response_solve(
+FULLMAG_FEM_API int fullmag_fem_modal_eigen_gpu_runtime_finalize(void);
+FULLMAG_FEM_API FullmagFemFrequencyDomainResult fullmag_fem_driven_response_solve(
     const FullmagFemDrivenResponseRequest *request
 );
-void fullmag_fem_frequency_domain_result_destroy(
+FULLMAG_FEM_API void fullmag_fem_frequency_domain_result_destroy(
     FullmagFemFrequencyDomainResult *result
 );
 
-fullmag_fem_backend *fullmag_fem_backend_create(
+FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create(
     const fullmag_fem_plan_desc *plan
 );
 
-fullmag_fem_backend *fullmag_fem_backend_create_v2(
+FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v2(
     const fullmag_fem_plan_desc *plan,
     const fullmag_fem_adaptive_config_v2 *adaptive_config
 );
 
-fullmag_fem_backend *fullmag_fem_backend_create_v3(
+FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v3(
     const fullmag_fem_plan_desc_v2 *plan,
     const fullmag_fem_adaptive_config_v2 *adaptive_config
 );
 
-int fullmag_fem_get_regional_field_drive_abi_layout(
+FULLMAG_FEM_API int fullmag_fem_get_regional_field_drive_abi_layout(
     fullmag_fem_regional_field_drive_abi_layout *out_layout
 );
 
-int fullmag_fem_backend_begin_stage(
+FULLMAG_FEM_API int fullmag_fem_backend_begin_stage(
     fullmag_fem_backend *handle,
     double stage_start_time_s
 );
 
-int fullmag_fem_backend_set_gpu_execution_request_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_set_gpu_execution_request_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_execution_request_v1 request
 );
 
-int fullmag_fem_backend_reconfigure_regional_field_drives(
+FULLMAG_FEM_API int fullmag_fem_backend_reconfigure_regional_field_drives(
     fullmag_fem_backend *handle,
     const fullmag_fem_regional_field_drive_desc *drives,
     uint64_t drive_count,
     double stage_start_time_s
 );
 
-int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle);
+FULLMAG_FEM_API int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle);
 
 /* Install or clear the append-only CPU stage Oersted callback. Passing NULL
  * clears the hook and invalidates FSAL. The callback is never used by the
  * GPU RK path. */
-int fullmag_fem_backend_set_stage_oersted_callback_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_set_stage_oersted_callback_v1(
     fullmag_fem_backend *handle,
     const fullmag_fem_stage_oersted_callback_v1 *callback);
 
 /* Install or clear the append-only CPU reciprocal transport torque callback.
  * Passing NULL clears the hook and invalidates FSAL. */
-int fullmag_fem_backend_set_stage_transport_callback_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_set_stage_transport_callback_v1(
     fullmag_fem_backend *handle,
     const fullmag_fem_stage_transport_callback_v1 *callback);
 
-int fullmag_fem_backend_step(
+FULLMAG_FEM_API int fullmag_fem_backend_step(
     fullmag_fem_backend *handle,
     double dt_seconds,
     fullmag_fem_step_stats *out_stats
 );
 
-int fullmag_fem_backend_relax_step(
+FULLMAG_FEM_API int fullmag_fem_backend_relax_step(
     fullmag_fem_backend *handle,
     fullmag_fem_relax_algorithm algorithm,
     fullmag_fem_step_stats *out_stats
 );
 
-int fullmag_fem_backend_set_interrupt_poll(
+FULLMAG_FEM_API int fullmag_fem_backend_set_interrupt_poll(
     fullmag_fem_backend *handle,
     fullmag_fem_interrupt_poll_fn poll_fn,
     void *user_data
 );
 
-int fullmag_fem_backend_set_step_profile(
+FULLMAG_FEM_API int fullmag_fem_backend_set_step_profile(
     fullmag_fem_backend *handle,
     int enabled
 );
 
-int fullmag_fem_backend_copy_field_f64(
+FULLMAG_FEM_API int fullmag_fem_backend_copy_field_f64(
     fullmag_fem_backend *handle,
     fullmag_fem_observable observable,
     double *out_xyz,
@@ -3191,14 +3297,14 @@ int fullmag_fem_backend_copy_field_f64(
 
 /* Internal scientific handoff: copy the magnetic-domain LLG field, never the
  * full-domain visualization field used by the public observable API. */
-int fullmag_fem_backend_copy_linearization_field_f64(
+FULLMAG_FEM_API int fullmag_fem_backend_copy_linearization_field_f64(
     fullmag_fem_backend *handle,
     fullmag_fem_observable observable,
     double *out_xyz,
     uint64_t out_len
 );
 
-int fullmag_fem_backend_average_m_for_nodes_f64(
+FULLMAG_FEM_API int fullmag_fem_backend_average_m_for_nodes_f64(
     fullmag_fem_backend *handle,
     const uint32_t *node_indices,
     uint64_t node_count,
@@ -3216,7 +3322,7 @@ int fullmag_fem_backend_average_m_for_nodes_f64(
  * CPU-only or host-only observables fall back to the synchronous host field
  * copy path while preserving the same payload layout.
  */
-fullmag_fem_field_snapshot *fullmag_fem_backend_begin_field_snapshot(
+FULLMAG_FEM_API fullmag_fem_field_snapshot *fullmag_fem_backend_begin_field_snapshot(
     fullmag_fem_backend *handle,
     fullmag_fem_observable observable
 );
@@ -3228,7 +3334,7 @@ fullmag_fem_field_snapshot *fullmag_fem_backend_begin_field_snapshot(
  * AoS f64 layout as field snapshots. GPU-backed observables use the same
  * private staging/pinned-host path as field snapshots.
  */
-fullmag_fem_preview_snapshot *fullmag_fem_backend_begin_preview_snapshot(
+FULLMAG_FEM_API fullmag_fem_preview_snapshot *fullmag_fem_backend_begin_preview_snapshot(
     fullmag_fem_backend *handle,
     fullmag_fem_observable observable
 );
@@ -3237,7 +3343,7 @@ fullmag_fem_preview_snapshot *fullmag_fem_backend_begin_preview_snapshot(
  * Wait for a native FEM field snapshot and expose the owned payload pointer.
  * The returned pointer remains valid until the snapshot handle is destroyed.
  */
-int fullmag_fem_field_snapshot_wait(
+FULLMAG_FEM_API int fullmag_fem_field_snapshot_wait(
     fullmag_fem_field_snapshot *snapshot,
     const void **out_data,
     uint64_t *out_len_bytes,
@@ -3248,7 +3354,7 @@ int fullmag_fem_field_snapshot_wait(
  * Wait for a native FEM preview snapshot and expose the owned payload pointer.
  * The returned pointer remains valid until the snapshot handle is destroyed.
  */
-int fullmag_fem_preview_snapshot_wait(
+FULLMAG_FEM_API int fullmag_fem_preview_snapshot_wait(
     fullmag_fem_preview_snapshot *snapshot,
     const void **out_data,
     uint64_t *out_len_bytes,
@@ -3259,18 +3365,18 @@ int fullmag_fem_preview_snapshot_wait(
  * Return nonzero when a native FEM preview snapshot can be consumed without
  * blocking in `fullmag_fem_preview_snapshot_wait`.
  */
-int fullmag_fem_preview_snapshot_ready(fullmag_fem_preview_snapshot *snapshot);
+FULLMAG_FEM_API int fullmag_fem_preview_snapshot_ready(fullmag_fem_preview_snapshot *snapshot);
 
 /*
  * Return nonzero when a native FEM field snapshot can be consumed without
  * blocking in `fullmag_fem_field_snapshot_wait`.
  */
-int fullmag_fem_field_snapshot_ready(fullmag_fem_field_snapshot *snapshot);
+FULLMAG_FEM_API int fullmag_fem_field_snapshot_ready(fullmag_fem_field_snapshot *snapshot);
 
-void fullmag_fem_field_snapshot_destroy(fullmag_fem_field_snapshot *snapshot);
-void fullmag_fem_preview_snapshot_destroy(fullmag_fem_preview_snapshot *snapshot);
+FULLMAG_FEM_API void fullmag_fem_field_snapshot_destroy(fullmag_fem_field_snapshot *snapshot);
+FULLMAG_FEM_API void fullmag_fem_preview_snapshot_destroy(fullmag_fem_preview_snapshot *snapshot);
 
-int fullmag_fem_backend_upload_magnetization_f64(
+FULLMAG_FEM_API int fullmag_fem_backend_upload_magnetization_f64(
     fullmag_fem_backend *handle,
     const double *m_xyz,
     uint64_t len
@@ -3287,7 +3393,7 @@ int fullmag_fem_backend_upload_magnetization_f64(
  * uses the backend's fresh demag solver path rather than frozen-field cache
  * reuse.
  */
-int fullmag_fem_backend_apply_demag_tangent_f64(
+FULLMAG_FEM_API int fullmag_fem_backend_apply_demag_tangent_f64(
     fullmag_fem_backend *handle,
     const double *delta_m_xyz,
     uint64_t delta_m_len,
@@ -3295,7 +3401,7 @@ int fullmag_fem_backend_apply_demag_tangent_f64(
     uint64_t out_len
 );
 
-int fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
+FULLMAG_FEM_API int fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
     fullmag_fem_backend *handle,
     const double *delta_m_xyz,
     uint64_t delta_m_len,
@@ -3305,73 +3411,140 @@ int fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
     uint64_t out_phi_len
 );
 
-int fullmag_fem_backend_snapshot_stats(
+FULLMAG_FEM_API int fullmag_fem_backend_snapshot_stats(
     fullmag_fem_backend *handle,
     fullmag_fem_step_stats *out_stats
 );
 
-int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_endpoint_cache_telemetry_v1 *out_telemetry
 );
 
-int fullmag_fem_backend_snapshot_representation_receipt_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_snapshot_representation_receipt_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_representation_receipt_v1 *out_receipt
 );
 
-int fullmag_fem_backend_solver_attempt_count_v1(
+/*
+ * Snapshot the complete native local-node index map metadata from one live
+ * backend handle.  The caller must initialize abi_version and struct_size;
+ * the function writes the output only after the MFEM and periodic maps have
+ * both passed their fail-closed validation.
+ */
+FULLMAG_FEM_API int fullmag_fem_backend_snapshot_local_node_map_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_local_node_map_v1 *out_map
+);
+
+/*
+ * Copy the complete native local-node index maps.  Every length must exactly
+ * match the metadata from the same handle and expected_revision must equal
+ * core_periodic_map_revision.  No output array is written when validation
+ * fails.  Arrays are respectively canonical-node -> MFEM local DOF,
+ * local-node -> core periodic class, and core class -> representative node;
+ * the caller must provide distinct non-overlapping output buffers.
+ */
+FULLMAG_FEM_API int fullmag_fem_backend_copy_local_node_map_v1(
+    fullmag_fem_backend *handle,
+    uint64_t expected_revision,
+    uint32_t *local_to_mfem_dof,
+    uint64_t local_to_mfem_dof_len,
+    uint32_t *local_to_core_class,
+    uint64_t local_to_core_class_len,
+    uint32_t *class_representatives,
+    uint64_t class_representatives_len
+);
+
+/*
+ * Copy a bounded chunk of the actual finalized MFEM vertex coordinates from
+ * one live backend handle.  The caller supplies the expected complete node
+ * and cell counts, a node range, and an output length in doubles (exactly
+ * node_count * 3).  The producer validates the live scalar H1/P1 space and
+ * the coordinates against the handle's canonical Context before writing.
+ * This is a cold terminal snapshot API: callers must exclude concurrent
+ * solver/context mutation and must consume every chunk before publishing a
+ * digest.  It exposes a projection, not a complete MeshIR/v3 artifact.
+ */
+FULLMAG_FEM_API int fullmag_fem_backend_copy_local_node_geometry_v1(
+    fullmag_fem_backend *handle,
+    uint64_t expected_total_nodes,
+    uint64_t expected_total_cells,
+    uint64_t first_node,
+    uint64_t node_count,
+    double *out_nodes_xyz,
+    uint64_t out_nodes_xyz_len
+);
+
+/*
+ * Copy a bounded chunk of actual MFEM cell geometry/connectivity.  Each cell
+ * occupies nine u32 values: the stable Fullmag cell type followed by eight
+ * vertex slots; unused slots are zero.  The output length is exactly
+ * cell_count * 9.  The same cold terminal and caller-owned snapshot rules as
+ * the node projection apply.
+ */
+FULLMAG_FEM_API int fullmag_fem_backend_copy_local_cell_geometry_v1(
+    fullmag_fem_backend *handle,
+    uint64_t expected_total_nodes,
+    uint64_t expected_total_cells,
+    uint64_t first_cell,
+    uint64_t cell_count,
+    uint32_t *out_cells,
+    uint64_t out_cells_len
+);
+
+FULLMAG_FEM_API int fullmag_fem_backend_solver_attempt_count_v1(
     fullmag_fem_backend *handle,
     uint64_t *out_count
 );
 
-int fullmag_fem_backend_copy_solver_attempts_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_copy_solver_attempts_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_solver_attempt_record_v1 *out_records,
     uint64_t capacity,
     uint64_t *out_count
 );
 
-int fullmag_fem_backend_copy_solver_attempts_v2(
+FULLMAG_FEM_API int fullmag_fem_backend_copy_solver_attempts_v2(
     fullmag_fem_backend *handle,
     fullmag_fem_solver_attempt_record_v2 *out_records,
     uint64_t capacity,
     uint64_t *out_count
 );
 
-int fullmag_fem_backend_take_accepted_energy_proof_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_take_accepted_energy_proof_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_accepted_energy_proof_v1 *out_proof
 );
 
-int fullmag_fem_backend_stage_completion(
+FULLMAG_FEM_API int fullmag_fem_backend_stage_completion(
     fullmag_fem_backend *handle,
     fullmag_fem_stage_completion *out_completion
 );
 
-int fullmag_fem_backend_get_device_info(
+FULLMAG_FEM_API int fullmag_fem_backend_get_device_info(
     fullmag_fem_backend *handle,
     fullmag_fem_device_info *out_info
 );
 
-int fullmag_fem_get_runtime_build_info(
+FULLMAG_FEM_API int fullmag_fem_get_runtime_build_info(
     fullmag_fem_runtime_build_info *out_info
 );
-int fullmag_fem_get_runtime_build_info_v2(
+FULLMAG_FEM_API int fullmag_fem_get_runtime_build_info_v2(
     fullmag_fem_runtime_build_info_v2 *out_info
 );
 
-int fullmag_fem_backend_get_transfer_audit(
+FULLMAG_FEM_API int fullmag_fem_backend_get_transfer_audit(
     fullmag_fem_backend *handle,
     fullmag_fem_transfer_audit *out_audit
 );
 
-int fullmag_fem_backend_get_gpu_state_info(
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_state_info(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_state_info *out_info
 );
 
-int fullmag_fem_backend_get_gpu_rk_plan_info(
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_rk_plan_info(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_rk_plan_info *out_info
 );
@@ -3381,35 +3554,35 @@ int fullmag_fem_backend_get_gpu_rk_plan_info(
  * This is intentionally separate from the descriptive plan-info query: strict
  * callers need the same mask-level validation used by the CUDA step preflight.
  */
-int fullmag_fem_backend_validate_strict_gpu_rk_plan(
+FULLMAG_FEM_API int fullmag_fem_backend_validate_strict_gpu_rk_plan(
     fullmag_fem_backend *handle
 );
 
-int fullmag_fem_backend_gpu_execution_receipt_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_gpu_execution_receipt_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_execution_receipt_v1 *out_receipt
 );
 
-int fullmag_fem_backend_demag_fem_bem_provenance_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_demag_fem_bem_provenance_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_demag_fem_bem_provenance_v1 *out_provenance
 );
 
-int fullmag_fem_backend_gpu_performance_snapshot_v1(
+FULLMAG_FEM_API int fullmag_fem_backend_gpu_performance_snapshot_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_performance_snapshot_v1 *out_snapshot
 );
 
-int fullmag_fem_backend_upload_strain(
+FULLMAG_FEM_API int fullmag_fem_backend_upload_strain(
     fullmag_fem_backend *handle,
     const double *strain_voigt,
     uint64_t len,
     int uniform
 );
 
-const char *fullmag_fem_backend_last_error(fullmag_fem_backend *handle);
+FULLMAG_FEM_API const char *fullmag_fem_backend_last_error(fullmag_fem_backend *handle);
 
-void fullmag_fem_backend_destroy(fullmag_fem_backend *handle);
+FULLMAG_FEM_API void fullmag_fem_backend_destroy(fullmag_fem_backend *handle);
 
 /* ── GPU Dense Generalized Eigenvalue Solver (Etap A4) ────────────────────
  *
@@ -3438,7 +3611,7 @@ typedef struct {
     uint32_t      reason_len;         /* capacity of out_reason buffer (including null) */
 } fullmag_fem_eigen_dense_desc;
 
-int fullmag_fem_eigen_dense(fullmag_fem_eigen_dense_desc *desc);
+FULLMAG_FEM_API int fullmag_fem_eigen_dense(fullmag_fem_eigen_dense_desc *desc);
 
 #ifdef __cplusplus
 }

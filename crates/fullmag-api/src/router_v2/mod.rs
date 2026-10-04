@@ -25,6 +25,23 @@ use crate::types::{AppState, EigenModeQuery};
 pub fn build_v2_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v2/platform/health", get(handlers::platform::get_health))
+        .route(
+            "/v2/platform/runtime-service",
+            get(handlers::platform::runtime_service::get_runtime_service),
+        )
+        .route(
+            "/v2/platform/development-backend",
+            get(handlers::platform::development_backend::get_development_backend),
+        )
+        .route(
+            "/v2/platform/development-restart-requests",
+            post(handlers::platform::development_restart_request::post_development_restart_request)
+                .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
+        .route(
+            "/v2/platform/development-restart-requests/:request_id",
+            get(handlers::platform::development_restart_request::get_development_restart_request),
+        )
         .route("/v2", get(get_v2_index))
         .route("/v2/", get(get_v2_index))
         .route("/v2/platform/openapi.json", get(get_openapi_json))
@@ -463,6 +480,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::simulation::get_simulation_preparation),
         )
         .route(
+            "/v2/sessions/current/simulation/preparation/materialization",
+            post(handlers::simulation::materialize_live_preparation),
+        )
+        .route(
             "/v2/sessions/current/simulation/runs/:run_id",
             get(handlers::simulation::get_run_by_id),
         )
@@ -522,6 +543,18 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/data/quantities",
             get(handlers::data::get_quantities_catalog),
+        )
+        .route(
+            "/v2/sessions/current/data/observation-frames",
+            get(handlers::data::list_observation_frames),
+        )
+        .route(
+            "/v2/sessions/current/data/observation-frames/:frame_id",
+            get(handlers::data::get_observation_frame),
+        )
+        .route(
+            "/v2/sessions/current/data/observation-frames/:frame_id/magnetization",
+            get(handlers::data::get_observation_frame_magnetization),
         )
         .route(
             "/v2/sessions/current/data/fields",
@@ -1023,8 +1056,8 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::persistence::import_field_state),
         )
         .route(
-            "/v2/sessions/current/persistence/imports/inspections",
-            post(handlers::persistence::inspect_session),
+            "/v2/persistence/imports/inspections",
+            post(handlers::persistence::inspect_project_archive),
         )
         .route(
             "/v2/sessions/current/persistence/imports",
@@ -1041,6 +1074,67 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/open",
             post(handlers::persistence::projects::open),
+        )
+        .route(
+            "/v2/persistence/projects/authoring",
+            post(handlers::persistence::projects::authoring_update),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs",
+            get(handlers::persistence::projects::list_runs)
+                .post(handlers::persistence::projects::submit_run),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id",
+            get(handlers::persistence::projects::get_run),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision",
+            get(handlers::persistence::solutions::get_solution_revision),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets",
+            get(handlers::persistence::solutions::get_solution_set_discovery),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members",
+            get(handlers::persistence::solutions::get_solution_members),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts",
+            get(handlers::persistence::solutions::get_solution_artifacts),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/scalar",
+            get(handlers::persistence::solutions::get_solution_scalar),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/materialized-dataset",
+            get(handlers::persistence::solutions::get_materialized_dataset),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/materialized-dataset/slice",
+            get(handlers::persistence::solutions::get_materialized_dataset_slice),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-field-geometry",
+            get(handlers::persistence::solutions::get_saved_field_geometry),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-field-geometry/topology",
+            get(handlers::persistence::solutions::get_saved_field_geometry_topology),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision/members/:member_id/artifacts/:artifact_id/saved-field-geometry/support",
+            get(handlers::persistence::solutions::get_saved_field_geometry_support),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/materialization",
+            post(handlers::persistence::projects::materialize_run),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/tasks/:task_id/cancellation",
+            post(handlers::persistence::projects::cancel_run_task),
         )
         .route(
             "/v2/sessions/current/persistence/recovery",
@@ -1063,6 +1157,9 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         ))
         .layer(axum::middleware::from_fn(
             middleware::version::contract_version_middleware,
+        ))
+        .layer(axum::middleware::from_fn(
+            middleware::session_scope::session_scope_middleware,
         ))
 }
 
@@ -1089,8 +1186,43 @@ async fn get_v2_index() -> Json<Value> {
     }))
 }
 
-async fn get_openapi_json() -> Json<Value> {
-    Json(crate::openapi_v2::openapi_json())
+async fn get_openapi_json(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let mut document = crate::openapi_v2::openapi_json();
+    document["x-fullmag-runtime-store-binding"] = json!({
+        "schema_version":"runtime_store_binding.v1",
+        "kind":"accepted_runs",
+        "binding":state.submit_store_root.as_deref().and_then(
+            fullmag_runtime_control::accepted_store::store_binding),
+    });
+    Json(document)
+}
+
+#[cfg(test)]
+mod runtime_binding_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn platform_document_binds_actual_accepted_store_without_initializing_it() {
+        let directory =
+            std::env::temp_dir().join(format!("runtime-binding-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let root = directory.join("accepted-store");
+        let mut state = crate::router_v2::tests::test_app_state();
+        Arc::get_mut(&mut state).unwrap().submit_store_root = Some(root.clone());
+        let Json(document) = get_openapi_json(State(state)).await;
+        let binding = &document["x-fullmag-runtime-store-binding"];
+        assert_eq!(binding["schema_version"], "runtime_store_binding.v1");
+        assert_eq!(
+            binding["binding"].as_str(),
+            fullmag_runtime_control::accepted_store::store_binding(&root).as_deref()
+        );
+        assert!(!root.exists());
+        assert!(!binding.to_string().contains(root.to_str().unwrap()));
+        let Json(document) =
+            get_openapi_json(State(crate::router_v2::tests::test_app_state())).await;
+        assert!(document["x-fullmag-runtime-store-binding"]["binding"].is_null());
+        std::fs::remove_dir(directory).unwrap();
+    }
 }
 
 async fn list_sessions(
@@ -1115,6 +1247,9 @@ async fn list_sessions(
 }
 
 async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()

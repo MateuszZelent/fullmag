@@ -13,6 +13,7 @@ import type {
   FrozenSpinsRuntimeApplication,
   FrozenSpinsSolverRuntimeStatus,
 } from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY,
@@ -20,10 +21,12 @@ import {
   frozenSpinsDefinitionResourceKey,
   useFrozenSpinsDefinitionResource,
 } from "@/kernel/resources/frozenSpinsResources";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import {
   useFieldMetaResource,
   useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -42,22 +45,29 @@ interface Feedback {
 export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "frozen-spins" ? selection.ref : null;
   const constraintId = ref?.constraintId ?? "";
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    frozenSpinsDefinitionResourceKey(constraintId),
+  );
+  const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const resource = useFrozenSpinsDefinitionResource(constraintId, {
     enabled: ref !== null,
   });
   const [lastGood, setLastGood] = useState<{
     constraintId: string;
+    resourceKey: string;
     resource: NonNullable<typeof resource.data>;
   } | null>(null);
   if (
     resource.data &&
-    (lastGood?.constraintId !== constraintId || lastGood.resource !== resource.data)
+    (lastGood?.constraintId !== constraintId ||
+      lastGood.resourceKey !== resourceKey ||
+      lastGood.resource !== resource.data)
   ) {
-    setLastGood({ constraintId, resource: resource.data });
+    setLastGood({ constraintId, resourceKey, resource: resource.data });
   }
   const retainedResource =
     resource.data ??
-    (lastGood?.constraintId === constraintId
+    (lastGood?.constraintId === constraintId && lastGood.resourceKey === resourceKey
       ? lastGood.resource
       : null);
 
@@ -83,11 +93,12 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
   const objectId = ref.objectId ?? selection.objectId;
   return (
     <FrozenSpinsEditor
-      key={constraintId}
+      key={resourceKey}
       definition={retainedResource.definition}
       objectId={objectId}
       regionId={ref.regionId ?? null}
       revision={retainedResource.revision}
+      sessionScopeKey={sessionScopeKey}
     />
   );
 }
@@ -97,15 +108,18 @@ export function FrozenSpinsEditor({
   objectId,
   regionId,
   revision: initialRevision,
+  sessionScopeKey,
 }: {
   definition: FrozenSpinsDefinition;
   objectId: string | null;
   regionId: string | null;
   revision: number;
+  sessionScopeKey?: string | null;
 }) {
   const kernel = useKernel();
   const [draft, setDraft] = useState(() => normalizeDefinition(initialDefinition));
   const draftRef = useRef(draft);
+  const mountedRef = useRef(true);
   const [revision, setRevision] = useState(initialRevision);
   const [pendingField, setPendingField] = useState<PendingField>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
@@ -124,16 +138,42 @@ export function FrozenSpinsEditor({
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   async function applyDraft(): Promise<void> {
     const submittedDraft = draft;
+    const requestOptions = scopedFrozenSpinsRequestOptions(sessionScopeKey);
     setPendingField("apply");
     setFeedback(null);
     try {
-      const response = await kernel.api.model.frozenSpins.patch(draft.id, {
-        definition: draft,
-        expected_revision: revision,
-      });
+      const response = await runAuthoringMutationWithHistory(
+        {
+          api: kernel.api,
+          authoringHistory: kernel.authoringHistory,
+          sessionScopeKey,
+        },
+        "Update Frozen Spins definition",
+        async ({ baseRevision }) =>
+          requestOptions
+            ? kernel.api.model.frozenSpins.patch(
+                draft.id,
+                {
+                  definition: draft,
+                  expected_revision: baseRevision ?? revision,
+                },
+                requestOptions,
+              )
+            : kernel.api.model.frozenSpins.patch(draft.id, {
+                definition: draft,
+                expected_revision: baseRevision ?? revision,
+          }),
+      );
+      if (!mountedRef.current) return;
       if (draftRef.current === submittedDraft) {
         const acknowledged = normalizeDefinition(response.definition);
         draftRef.current = acknowledged;
@@ -152,9 +192,10 @@ export function FrozenSpinsEditor({
           : "Frozen Spins definition updated.",
       });
     } catch (error) {
+      if (!mountedRef.current) return;
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
-      setPendingField(null);
+      if (mountedRef.current) setPendingField(null);
     }
   }
 
@@ -178,7 +219,7 @@ export function FrozenSpinsEditor({
     setPendingField("preview");
     setFeedback(null);
     try {
-      const response = await kernel.api.model.frozenSpins.createPreview({
+      const request = {
         expected_revision: revision,
         expected_source_state_revision: sourceStateRevision,
         expected_topology_fingerprint: topologyFingerprint,
@@ -188,7 +229,12 @@ export function FrozenSpinsEditor({
             ? draft.activation.stage_ids[0] ?? null
             : null,
         target_object_id: objectId,
-      });
+      };
+      const requestOptions = scopedFrozenSpinsRequestOptions(sessionScopeKey);
+      const response = requestOptions
+        ? await kernel.api.model.frozenSpins.createPreview(request, requestOptions)
+        : await kernel.api.model.frozenSpins.createPreview(request);
+      if (!mountedRef.current) return;
       setPreviewSelectorJson(JSON.stringify(draft.selector));
       setPreview(response);
       setActivationReceipt(null);
@@ -204,6 +250,7 @@ export function FrozenSpinsEditor({
           : "Preview was created but is stale against the current model state.",
       });
     } catch (error) {
+      if (!mountedRef.current) return;
       const message = errorMessage(error);
       if (message.includes("selection_stale_revision")) {
         await fieldMeta.refetch();
@@ -215,7 +262,7 @@ export function FrozenSpinsEditor({
         setFeedback({ kind: "error", message });
       }
     } finally {
-      setPendingField(null);
+      if (mountedRef.current) setPendingField(null);
     }
   }
 
@@ -228,17 +275,38 @@ export function FrozenSpinsEditor({
       return;
     }
     const submittedDraft = draft;
+    const requestOptions = scopedFrozenSpinsRequestOptions(sessionScopeKey);
     setPendingField("activate");
     setFeedback(null);
     try {
-      const response = await kernel.api.model.frozenSpins.activatePreview(
-        preview.preview_id,
+      const response = await runAuthoringMutationWithHistory(
         {
-          activation_candidate_token: preview.activation_candidate_token,
-          definition: submittedDraft,
-          expected_revision: revision,
+          api: kernel.api,
+          authoringHistory: kernel.authoringHistory,
+          sessionScopeKey,
         },
+        "Commit Frozen Spins preview",
+        async ({ baseRevision }) =>
+          requestOptions
+            ? kernel.api.model.frozenSpins.activatePreview(
+                preview.preview_id,
+                {
+                  activation_candidate_token: preview.activation_candidate_token,
+                  definition: submittedDraft,
+                  expected_revision: baseRevision ?? revision,
+                },
+                requestOptions,
+              )
+            : kernel.api.model.frozenSpins.activatePreview(
+                preview.preview_id,
+                {
+                  activation_candidate_token: preview.activation_candidate_token,
+                  definition: submittedDraft,
+                  expected_revision: baseRevision ?? revision,
+                },
+              ),
       );
+      if (!mountedRef.current) return;
       if (draftRef.current === submittedDraft) {
         const acknowledged = normalizeDefinition(response.definition);
         draftRef.current = acknowledged;
@@ -256,19 +324,37 @@ export function FrozenSpinsEditor({
         message: `${frozenSpinsRuntimeApplicationMessage(response.runtime_application)} The preview candidate was consumed; solver activation is still pending runtime confirmation and a matching solver-owned certificate.`,
       });
     } catch (error) {
+      if (!mountedRef.current) return;
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
-      setPendingField(null);
+      if (mountedRef.current) setPendingField(null);
     }
   }
 
   async function deleteDefinition(): Promise<void> {
+    const requestOptions = scopedFrozenSpinsRequestOptions(sessionScopeKey);
     setPendingField("delete");
     setFeedback(null);
     try {
-      const response = await kernel.api.model.frozenSpins.delete(draft.id, {
-        expected_revision: revision,
-      });
+      const response = await runAuthoringMutationWithHistory(
+        {
+          api: kernel.api,
+          authoringHistory: kernel.authoringHistory,
+          sessionScopeKey,
+        },
+        "Delete Frozen Spins definition",
+        async ({ baseRevision }) =>
+          requestOptions
+            ? kernel.api.model.frozenSpins.delete(
+                draft.id,
+                { expected_revision: baseRevision ?? revision },
+                requestOptions,
+              )
+            : kernel.api.model.frozenSpins.delete(draft.id, {
+                expected_revision: baseRevision ?? revision,
+              }),
+      );
+      if (!mountedRef.current) return;
       kernel.resources.invalidate(
         frozenSpinsCollectionResourceKey(),
         response.revision,
@@ -280,6 +366,7 @@ export function FrozenSpinsEditor({
       kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
       kernel.selection.clear("inspector");
     } catch (error) {
+      if (!mountedRef.current) return;
       setFeedback({ kind: "error", message: errorMessage(error) });
       setPendingField(null);
     }
@@ -764,6 +851,12 @@ function invalidateDefinitionResources(
 ): void {
   kernel.resources.invalidate(frozenSpinsCollectionResourceKey(), revision);
   kernel.resources.invalidate(frozenSpinsDefinitionResourceKey(constraintId), revision);
+}
+
+function scopedFrozenSpinsRequestOptions(
+  sessionScopeKey: string | null | undefined,
+): { sessionScopeKey: string } | undefined {
+  return sessionScopeKey ? { sessionScopeKey } : undefined;
 }
 
 function splitIds(value: string): string[] {

@@ -89,6 +89,21 @@ Odpowiedzialności wyglądają tak:
 | Sys bindings | `crates/fullmag-fdm-sys/*`, `crates/fullmag-fem-sys/*` | bez zmiany | bindy do C ABI kompilowanych backendów |
 | Rust reference | `crates/fullmag-engine/*` i wybrane moduły runnera | bez zmiany | walidacja, debug, jawne ścieżki referencyjne |
 
+W aktualnej realizacji Rust FDM CPU/reference moduł
+`crates/fullmag-engine/src/fdm/cpu/fields/demag.rs` jest właścicielem
+obliczania pola demagnetyzacji: wariantów allocating, workspace, add-into
+AoS i add-into SoA przez `FdmFftBackend`. Rozróżnienie maskowanego pola
+solvera i niemaskowanego pola obserwacyjnego pozostaje w tym module.
+FFT/workspace zachowuje dotychczasowego właściciela; energie i obserwable
+pozostają konsumentami tej realizacji. Ta ekstrakcja nie zmienia dispatchu
+`CpuReference` i nie kwalifikuje natywnego backendu CPU/GPU.
+
+`fields/direct_torques.rs` skupia realizacje Zhang–Li, Slonczewski i SOT,
+ich warianty allocating/add-into AoS/SoA oraz dispatcher momentów.
+`fields.rs` zachowuje orkiestrację RHS i reeksport dwóch helperów konfiguracji
+używanych przez FEM reference. Współdzielenie lokalnej algebry nie oznacza
+wspólnego stanu runtime ani zmiany właściciela produkcyjnego FEM.
+
 Profesjonalne kryteria organizacji:
 
 1. Top-level albo pseudo-top-level root backendów ma oznaczać kompilowany kod
@@ -214,6 +229,11 @@ Reguły dla tego drzewa:
   materiałów, field buffers, własność stanu i natywne kontrakty backend-neutral,
   żyją w `backends/fem/core` albo `backends/fem/include`.
 - Realizacja FEM CPU MFEM żyje pod `backends/fem/cpu/mfem`.
+- Zimny eksport actual MFEM node/cell projection należy do
+  `backends/fem/cpu/mfem/runtime/indexed_geometry.*`. Fasada C ABI waliduje
+  caller buffers i przekazuje błędy; runner haszuje bounded chunki,
+  porównuje accepted MeshIR i publikuje mały receipt. Nie przenosi to
+  własności numeryki do Rust ani nie kwalifikuje CPU/GPU przez sam digest.
 - Workflow steady charge/spin transportu FEM CPU należy do
   `backends/fem/cpu/mfem/transport`. Runner może walidować deskryptor,
   wywołać wersjonowane ABI oraz opublikować quantity/provenance, ale nie może

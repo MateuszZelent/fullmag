@@ -35,9 +35,12 @@ import {
   analysisResultFieldOverlayAdapter,
   createAnalysisResultFieldOverlayIntent,
 } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
+import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 import { ResultsNavigatorTree } from "./ResultsNavigatorTree";
 import { ResultDatasetBrowser } from "./ResultDatasetBrowser";
+import { SavedResultsBrowser } from "./SavedResultsBrowser";
+import { useWorkspaceContentScope } from "@/kernel/layout/WorkspaceContentScope";
 import {
   buildResultDatasetBrowserModel,
   buildResultDatasetItemPageQuery,
@@ -149,7 +152,7 @@ export function resultSelectionForAnalysis(
   });
 }
 
-export default function ResultsNavigatorModule({
+function CurrentResultsNavigator({
   kernel,
   moduleId,
 }: ModuleProps) {
@@ -809,5 +812,38 @@ export default function ResultsNavigatorModule({
         </>
       )}
     </section>
+  );
+}
+
+export default function ResultsNavigatorModule(props: ModuleProps) {
+  const [surface, setSurface] = useState<"current" | "saved">("current");
+  const projectOnly = useWorkspaceContentScope() === "project";
+
+  if (projectOnly) return (
+    <div className="fm-results-navigator-shell grid min-w-0 gap-2">
+      <SavedResultsBrowser kernel={props.kernel} moduleId={props.moduleId} />
+    </div>
+  );
+
+  return (
+    <div className="fm-results-navigator-shell grid min-w-0 gap-2">
+      <Tabs
+        className="fm-results-navigator__surface-tabs px-2 pt-2"
+        value={surface}
+        onValueChange={(value) => {
+          if (value === "current" || value === "saved") setSurface(value);
+        }}
+      >
+        <TabsList presentation="segmented" aria-label="Results source">
+          <TabsTrigger value="current">Current</TabsTrigger>
+          <TabsTrigger value="saved">Saved</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      {surface === "current" ? (
+        <CurrentResultsNavigator {...props} />
+      ) : (
+        <SavedResultsBrowser kernel={props.kernel} moduleId={props.moduleId} />
+      )}
+    </div>
   );
 }

@@ -14,6 +14,10 @@ fn main() {
 
     println!("cargo:rerun-if-changed=../../native/include/fullmag_fdm.h");
     println!("cargo:rerun-if-changed=../../native/CMakeLists.txt");
+    println!("cargo:rerun-if-changed=../../native/cmake/ImportFullmagFdm.cmake");
+    println!("cargo:rerun-if-changed=../../native/cmake/RequireFemGpu.cmake");
+    println!("cargo:rerun-if-changed=../../native/cmake/FindFullmagMfem.cmake");
+    println!("cargo:rerun-if-changed=../../native/cmake/FindFullmagWindowsModal.cmake");
     println!("cargo:rerun-if-changed=../../backends/fdm/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../backends/fdm/api");
     println!("cargo:rerun-if-changed=../../backends/fdm/core");

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
-import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+import { DATA_FIELD_VECTOR_PATH, DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH } from "@/kernel/api/apiPaths";
 import {
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
@@ -123,6 +123,7 @@ function readFileSync(
 const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.url);
 const planarPreviewSourceUrl = new URL("../../../kernel/workspace/planarMonitorFramePreview.ts", import.meta.url);
 const TEST_SESSION_IDENTITY = {
+  requestScopeEpoch: "test-api:1",
   sessionEpoch: "test-session@1000",
   sessionId: "test-session",
 } as const;
@@ -1637,6 +1638,51 @@ describe("useViewport3DSceneModel", () => {
     expect(stepB_GenMismatch.nextRetained).toBeNull();
     expect(tracker.getRetentionRejectionCounts()).toEqual({
       generation: 1,
+    });
+  });
+
+  it("does not retain a live field after switching to an observation frame source", () => {
+    const envelope: Viewport3DFieldVectorEnvelope = {
+      data: {
+        dtype: "float64",
+        grid: [1, 1, 1],
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "m",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: '"live-1"',
+      resourceKey: DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m"),
+      responseMetadata: null,
+    };
+    const request = {
+      quantityId: "m",
+      query: { component: "full", scope_kind: "full" },
+    };
+    const live = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: envelope,
+      preparedRevision: "live-1",
+      request,
+      retained: null,
+      sourceResourceKey: envelope.resourceKey,
+      status: "ready",
+    });
+
+    const historical = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: null,
+      preparedRevision: null,
+      request,
+      retained: live.nextRetained,
+      sourceResourceKey:
+        DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH.replace("{frame_id}", "frame-7"),
+      status: "loading",
+    });
+
+    expect(historical).toEqual({
+      displayedEnvelope: null,
+      displayedRevision: null,
+      nextRetained: null,
     });
   });
 

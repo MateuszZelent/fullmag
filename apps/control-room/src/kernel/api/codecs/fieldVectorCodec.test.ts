@@ -105,6 +105,62 @@ function makeFieldVectorV3Buffer({
   return buffer;
 }
 
+function makeFieldVectorV4Buffer(): ArrayBuffer {
+  const encoder = new TextEncoder();
+  const scopeKind = encoder.encode("full");
+  const domainGenerationId = encoder.encode("sha256:domain");
+  const sourceKind = encoder.encode("observation_frame");
+  const sourceId = encoder.encode("frame-123");
+  const fieldGenerationId = encoder.encode("field:frame-123:m:29");
+  const rawMetadataLength =
+    80 +
+    scopeKind.length +
+    domainGenerationId.length +
+    sourceKind.length +
+    sourceId.length +
+    fieldGenerationId.length;
+  const metadataLength = Math.ceil(rawMetadataLength / 8) * 8;
+  const values = [1, 0, 0];
+  const buffer = new ArrayBuffer(48 + metadataLength + values.length * 8);
+  const view = new DataView(buffer);
+  encoder.encodeInto("FMVP", new Uint8Array(buffer, 0, 4));
+  view.setUint8(4, 4);
+  view.setUint8(5, 1);
+  view.setUint8(6, 3);
+  view.setUint32(8, metadataLength, true);
+  view.setUint32(12, values.length, true);
+  view.setUint32(16, 1, true);
+  view.setUint32(20, 1, true);
+  view.setUint32(24, 1, true);
+  encoder.encodeInto("m", new Uint8Array(buffer, 28, 16));
+  encoder.encodeInto("FMMI", new Uint8Array(buffer, 48, 4));
+  view.setUint16(52, 3, true);
+  view.setUint16(56, domainGenerationId.length, true);
+  view.setUint16(58, sourceKind.length, true);
+  view.setUint16(60, sourceId.length, true);
+  view.setUint16(62, fieldGenerationId.length, true);
+  view.setBigUint64(64, BigInt(17), true);
+  new Uint8Array(buffer, 72, 32).fill(0xab);
+  view.setUint32(104, 0, true);
+  view.setUint32(108, 0, true);
+  view.setUint16(112, scopeKind.length, true);
+  view.setUint16(114, 0, true);
+  view.setBigUint64(116, BigInt(29), true);
+  let offset = 128;
+  for (const bytes of [
+    scopeKind,
+    domainGenerationId,
+    sourceKind,
+    sourceId,
+    fieldGenerationId,
+  ]) {
+    new Uint8Array(buffer, offset, bytes.length).set(bytes);
+    offset += bytes.length;
+  }
+  new Float64Array(buffer, 48 + metadataLength).set(values);
+  return buffer;
+}
+
 describe("decodeFieldVector", () => {
   it("decodes valid FMVP field vector buffers", () => {
     const decoded = decodeFieldVector(makeFieldVectorBuffer());
@@ -128,6 +184,20 @@ describe("decodeFieldVector", () => {
     expect(decoded.scopeId).toBeNull();
     expect(decoded.indexing).toBe("full_domain");
     expect(decoded.nodeIndices).toBeNull();
+  });
+
+  it("decodes source-qualified FMVP v4 metadata", () => {
+    const decoded = decodeFieldVector(makeFieldVectorV4Buffer());
+
+    expect(decoded).toMatchObject({
+      domainGenerationId: "sha256:domain",
+      fieldGenerationId: "field:frame-123:m:29",
+      formatVersion: 4,
+      meshTopologyRevision: "17",
+      sourceId: "frame-123",
+      sourceKind: "observation_frame",
+      sourceRevision: "29",
+    });
   });
 
   it("preserves arbitrary UTF-8 FMVP v3 domain generation identities", () => {

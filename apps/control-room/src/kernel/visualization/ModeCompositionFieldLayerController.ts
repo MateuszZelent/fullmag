@@ -98,6 +98,7 @@ export class ModeCompositionFieldLayerController {
   private readonly metadataInflight = new Map<string, Promise<ResolvedMetadata>>();
   private requestToken = 0;
   private readonly retained = new Map<string, RetainedField>();
+  private activeSessionScope: string | null = null;
   private snapshot: ModeCompositionFieldLayerSnapshotMap = new Map();
 
   constructor(
@@ -126,7 +127,17 @@ export class ModeCompositionFieldLayerController {
     resource: ModeCompositionResource | null | undefined,
     topologyByTarget: Readonly<Record<string, ModeCompositionFieldLayerTopologyIdentity | null | undefined>>,
     loaders: ModeCompositionFieldLayerLoaders,
+    sessionScope: string | null = null,
   ): Promise<"cancelled" | "completed"> {
+    if (this.activeSessionScope !== sessionScope) {
+      this.abortController?.abort();
+      this.fieldCache.clear();
+      this.fieldRevisions.clear();
+      this.metadataCache.clear();
+      this.metadataInflight.clear();
+      this.retained.clear();
+      this.activeSessionScope = sessionScope;
+    }
     const requestToken = ++this.requestToken;
     this.abortController?.abort();
     this.metadataInflight.clear();

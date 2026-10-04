@@ -236,8 +236,12 @@ pub(crate) fn resolve_legacy_spin_torque(
                 }) if realization_version == "slonczewski_interface_flux.v1"
             ) {
                 let reason = match lane {
-                    SpinTorqueExecutableLane::Fdm => "slonczewski_interface_flux.v1 is not executable on FDM; use the thin-layer homogenized realization",
-                    SpinTorqueExecutableLane::Fem => "slonczewski_interface_flux.v1 is fail_closed on FEM until a dedicated oriented surface functional is implemented; bulk 1/t lowering is prohibited",
+                    SpinTorqueExecutableLane::Fdm => {
+                        "slonczewski_interface_flux.v1 is not executable on FDM; use the thin-layer homogenized realization"
+                    }
+                    SpinTorqueExecutableLane::Fem => {
+                        "slonczewski_interface_flux.v1 is fail_closed on FEM until a dedicated oriented surface functional is implemented; bulk 1/t lowering is prohibited"
+                    }
                 };
                 return Err(PlanError {
                     reasons: vec![reason.to_string()],

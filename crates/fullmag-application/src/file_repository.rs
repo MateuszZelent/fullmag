@@ -133,7 +133,7 @@ impl ProjectRepository for FileProjectRepository {
                 return Err(FileRepositoryError(format!(
                     "reading project target {}: {error}",
                     target.display()
-                )))
+                )));
             }
         };
 
@@ -146,7 +146,7 @@ impl ProjectRepository for FileProjectRepository {
                 return Err(FileRepositoryError(format!(
                     "project target already exists: {}",
                     target.display()
-                )))
+                )));
             }
             (Some(expected_id), Some(expected_revision), Some(opened)) => {
                 if opened.envelope.definition.project_id != *expected_id {
@@ -175,12 +175,12 @@ impl ProjectRepository for FileProjectRepository {
                 return Err(FileRepositoryError(format!(
                     "expected existing project target is missing: {}",
                     target.display()
-                )))
+                )));
             }
             (Some(_), None, _) | (None, Some(_), _) => {
                 return Err(FileRepositoryError(
                     "expected project identity and revision must be supplied together".into(),
-                ))
+                ));
             }
             (None, None, None) => {}
         }

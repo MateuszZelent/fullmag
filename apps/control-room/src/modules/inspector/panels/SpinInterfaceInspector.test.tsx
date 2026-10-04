@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,7 +20,18 @@ vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
   ] }, status: "ready" }),
   useSpinTransportsResource: () => ({ data: { scene_revision: 4, items: [{ id: "spin", interfaces: [known, opaque] }] }, status: "ready" }),
 }));
-vi.mock("@/kernel/resources/useSessionStatus", () => ({ useSessionStatusSelector: (selector: (value: unknown) => unknown) => selector({ data: { capabilities: { transport_authoring: { m1_one_way_steady: { authoring_allowed: true, reason: "M1", status: "semantic_only" } } } } }) }));
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => ({ requestScopeEpoch: "1", sessionEpoch: "1", sessionId: "test-session" }),
+  useSessionStatusSelector: (selector: (value: unknown) => unknown) => selector({
+    data: {
+      capabilities: {
+        transport_authoring: {
+          m1_one_way_steady: { authoring_allowed: true, reason: "M1", status: "semantic_only" },
+        },
+      },
+    },
+  }),
+}));
 
 const validateTransport = vi.fn();
 const replaceSpinTransport = vi.fn();
@@ -30,6 +42,22 @@ const kernel = {
 function selection(index: number, id: string): Selection { return { kind: "physics.spin-interface", label: id, moduleSource: "explorer", nodeId: id, objectId: null, ref: { kind: "physics.spin-interface", nodeId: id, spinInterfaceId: id, spinInterfaceIndex: index, spinInterfaceOwnerId: "spin", type: "spin-interface" } }; }
 
 describe("SpinInterfaceInspectorPanel", () => {
+  it("records interface create and replace through the shared authoring history boundary", () => {
+    const source = readFileSync(
+      new URL("./SpinInterfaceInspector.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("const commit = action === \"delete\"");
+    expect(source).toContain("captureAuthoringMutationFence(");
+    expect(source).toContain("validateTransport(validationRequest(), { sessionScopeKey })");
+    expect(source).toContain("request, requestOptions");
+    expect(source).toContain("mutationContext.isCurrentSessionScope?.() !== true");
+    expect(source).toContain("${selected ? \"Replace\" : \"Create\"} spin interface");
+    expect(source).toContain("baseRevision ?? transports.data!.scene_revision");
+    expect(source).toContain("api.model.replaceSpinTransport(ownerId");
+  });
+
   it("keeps a new interface draft fail-closed until an owner is selected", () => {
     validateTransport.mockClear();
     replaceSpinTransport.mockClear();

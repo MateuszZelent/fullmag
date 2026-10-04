@@ -5,6 +5,8 @@
 
 #![allow(non_camel_case_types)]
 
+pub mod node_map;
+
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
@@ -410,6 +412,12 @@ pub struct fullmag_fem_stage_transport_callback_v1 {
 pub const FULLMAG_FEM_MESH_DESC_ABI_VERSION: u32 = 2;
 pub const FULLMAG_FEM_MESH_DESC_ABI_LAYOUT_FINGERPRINT: &str =
     "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals";
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_ID: &str = "fullmag.mfem.mesh_space";
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_SCHEMA_VERSION: &str = "mfem_mesh_space_evidence.v1";
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_VERSION: &str = "1";
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY: usize = 65;
+pub const FULLMAG_FEM_FE_FAMILY_H1: u32 = 1;
 pub const FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION: u32 = 1;
 pub const FULLMAG_FEM_MESH_ABI_FIELD_COUNT: usize = 30;
 pub const FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY: usize = 96;
@@ -458,6 +466,40 @@ pub struct fullmag_fem_mesh_desc {
     /// flat `[marker_a, marker_b] × count`.  Null/0 when not applicable.
     pub periodic_boundary_pair_markers: *const u32,
     pub periodic_boundary_pair_markers_len: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct fullmag_fem_mesh_space_preparation_request_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mesh: *const fullmag_fem_mesh_desc,
+    pub fe_order: u32,
+    pub reserved_flags: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct fullmag_fem_mesh_space_preparation_evidence_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mesh_dimension: u32,
+    pub fe_family: u32,
+    pub fe_order: u32,
+    pub mesh_matches_canonical_input: u32,
+    pub node_count: u64,
+    pub cell_count: u64,
+    pub boundary_element_count: u64,
+    pub local_dof_count: u64,
+    pub true_dof_count: u64,
+    pub quality_sample_count: u64,
+    pub invalid_cell_count: u64,
+    pub min_jacobian_determinant: f64,
+    pub max_jacobian_determinant: f64,
+    pub topology_fingerprint: [c_char; FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY],
+    pub marker_map_fingerprint: [c_char; FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY],
+    pub quality_fingerprint: [c_char; FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY],
+    pub space_fingerprint: [c_char; FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY],
 }
 
 #[repr(C)]
@@ -517,6 +559,43 @@ const _: () = {
     assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs_len) == 208);
     assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers) == 216);
     assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers_len) == 224);
+    assert!(std::mem::size_of::<fullmag_fem_mesh_space_preparation_request_v1>() == 24);
+    assert!(std::mem::align_of::<fullmag_fem_mesh_space_preparation_request_v1>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_request_v1, mesh) == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_request_v1, fe_order) == 16);
+    assert!(std::mem::size_of::<fullmag_fem_mesh_space_preparation_evidence_v1>() == 360);
+    assert!(std::mem::align_of::<fullmag_fem_mesh_space_preparation_evidence_v1>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, node_count) == 24);
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            min_jacobian_determinant
+        ) == 80
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            topology_fingerprint
+        ) == 96
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            marker_map_fingerprint
+        ) == 161
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            quality_fingerprint
+        ) == 226
+    );
+    assert!(
+        std::mem::offset_of!(
+            fullmag_fem_mesh_space_preparation_evidence_v1,
+            space_fingerprint
+        ) == 291
+    );
     assert!(std::mem::size_of::<fullmag_fem_mesh_abi_layout>() == 360);
     assert!(std::mem::align_of::<fullmag_fem_mesh_abi_layout>() == 8);
     assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, abi_version) == 0);
@@ -1645,6 +1724,30 @@ pub struct fullmag_fem_frequency_domain_dmi_element {
     pub normal: [f64; 3],
 }
 
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ARTIFACT_IDENTITY_V1: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemFrequencyDomainArtifactIdentityV1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub session_id: *const c_char,
+    pub run_id: *const c_char,
+    pub stage_id: *const c_char,
+    pub runtime_id: *const c_char,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<FullmagFemFrequencyDomainArtifactIdentityV1>() == 40);
+    assert!(std::mem::align_of::<FullmagFemFrequencyDomainArtifactIdentityV1>() == 8);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, abi_version) == 0);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, struct_size) == 4);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, session_id) == 8);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, run_id) == 16);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, stage_id) == 24);
+    assert!(std::mem::offset_of!(FullmagFemFrequencyDomainArtifactIdentityV1, runtime_id) == 32);
+};
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_frequency_domain_driven_response_request {
@@ -2745,6 +2848,12 @@ extern "C" {
         out_layout: *mut fullmag_fem_regional_field_drive_abi_layout,
     ) -> i32;
     pub fn fullmag_fem_get_mesh_abi_layout(out_layout: *mut fullmag_fem_mesh_abi_layout) -> i32;
+    pub fn fullmag_fem_prepare_mesh_space_v1(
+        request: *const fullmag_fem_mesh_space_preparation_request_v1,
+        out_evidence: *mut fullmag_fem_mesh_space_preparation_evidence_v1,
+        error_message: *mut c_char,
+        error_message_capacity: u64,
+    ) -> i32;
     pub fn fullmag_fem_solve_steady_transport_v1(
         request: *const fullmag_fem_steady_transport_request_v1,
         result: *mut fullmag_fem_steady_transport_result_v1,
@@ -2826,6 +2935,17 @@ extern "C" {
             fullmag_fem_frequency_domain_apply_with_potential_callback,
         out_result: *mut fullmag_fem_frequency_domain_solve_result,
     ) -> i32;
+    pub fn fullmag_fem_frequency_domain_solve_driven_response_with_identity_v1(
+        request: *const fullmag_fem_frequency_domain_driven_response_request,
+        identity: *const FullmagFemFrequencyDomainArtifactIdentityV1,
+        mfem_apply_demag_tangent_with_potential: fullmag_fem_frequency_domain_apply_with_potential_callback,
+        out_result: *mut fullmag_fem_frequency_domain_solve_result,
+    ) -> i32;
+
+    pub fn fullmag_fem_frequency_domain_validate_artifact_identity_v1(
+        identity: *const FullmagFemFrequencyDomainArtifactIdentityV1,
+    ) -> i32;
+
     pub fn fullmag_fem_frequency_domain_solve_driven_response_v10(
         request: *const fullmag_fem_frequency_domain_driven_response_request,
         mfem_apply_demag_tangent_with_potential:
@@ -3124,6 +3244,42 @@ extern "C" {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "build-native")]
+    #[test]
+    fn artifact_identity_v1_native_boundary_rejects_aliases_and_bad_layout() {
+        use std::ffi::CString;
+        let owner = CString::new("owner:exact").unwrap();
+        let mut identity = super::FullmagFemFrequencyDomainArtifactIdentityV1 {
+            abi_version: super::FULLMAG_FEM_FREQUENCY_DOMAIN_ARTIFACT_IDENTITY_V1,
+            struct_size: std::mem::size_of::<super::FullmagFemFrequencyDomainArtifactIdentityV1>() as u32,
+            session_id: owner.as_ptr(),
+            run_id: owner.as_ptr(),
+            stage_id: owner.as_ptr(),
+            runtime_id: owner.as_ptr(),
+        };
+        let validate = |value: &super::FullmagFemFrequencyDomainArtifactIdentityV1| unsafe {
+            super::fullmag_fem_frequency_domain_validate_artifact_identity_v1(value)
+        };
+        assert_eq!(validate(&identity), super::FULLMAG_FEM_OK);
+        for invalid in ["", "current", "Run:CURRENT", "scope:Current", "runtime:not_provided", "\u{a0}CURRENT\u{a0}", "run:\u{85}"] {
+            let candidate = CString::new(invalid).unwrap();
+            identity.run_id = candidate.as_ptr();
+            assert_eq!(validate(&identity), super::FULLMAG_FEM_ERR_INVALID, "{invalid:?}");
+        }
+        let malformed_utf8 = CString::new(vec![0xc0, 0xaf]).unwrap();
+        identity.run_id = malformed_utf8.as_ptr();
+        assert_eq!(validate(&identity), super::FULLMAG_FEM_ERR_INVALID);
+        identity.run_id = owner.as_ptr();
+        identity.abi_version = 99;
+        assert_eq!(validate(&identity), super::FULLMAG_FEM_ERR_INVALID);
+        identity.abi_version = super::FULLMAG_FEM_FREQUENCY_DOMAIN_ARTIFACT_IDENTITY_V1;
+        identity.struct_size = 0;
+        assert_eq!(validate(&identity), super::FULLMAG_FEM_ERR_INVALID);
+        assert_eq!(unsafe {
+            super::fullmag_fem_frequency_domain_validate_artifact_identity_v1(std::ptr::null())
+        }, super::FULLMAG_FEM_ERR_INVALID);
+    }
+
     use super::*;
 
     #[test]

@@ -96,6 +96,7 @@ describe("RegionalFieldDrivePanelModel", () => {
     const createFieldDrive = vi.fn().mockResolvedValue({ scene_revision: 12 });
     const replaceFieldDrive = vi.fn().mockResolvedValue({ scene_revision: 13 });
     const api = { createFieldDrive, replaceFieldDrive };
+    const requestOptions = { sessionScopeKey: "session=A&epoch=4" };
     const drive = {
       id: "field-drive-2",
       name: "Global field drive",
@@ -110,15 +111,18 @@ describe("RegionalFieldDrivePanelModel", () => {
       activation: { kind: "all_time_evolution" as const },
     };
 
-    await commitRegionalFieldDrive(api, "create", 11, drive);
-    expect(createFieldDrive).toHaveBeenCalledWith({ base_revision: 11, drive });
+    await commitRegionalFieldDrive(api, "create", 11, drive, requestOptions);
+    expect(createFieldDrive).toHaveBeenCalledWith(
+      { base_revision: 11, drive },
+      requestOptions,
+    );
     expect(replaceFieldDrive).not.toHaveBeenCalled();
 
-    await commitRegionalFieldDrive(api, "found", 12, drive);
+    await commitRegionalFieldDrive(api, "found", 12, drive, requestOptions);
     expect(replaceFieldDrive).toHaveBeenCalledWith("field-drive-2", {
       base_revision: 12,
       drive,
-    });
+    }, requestOptions);
   });
 
   it("derives t_sampling and active run duration from canonical scene study data", () => {

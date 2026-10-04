@@ -999,8 +999,12 @@ pub(crate) fn run_python_helper_with_progress(
         Vec::new()
     };
     let mut candidates = Vec::new();
+    let bundled_python = fullmag_runtime_control::python_runtime::packaged_windows_python(&root);
+    let uses_bundle = bundled_python.is_some();
 
-    if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
+    if let Some(bundled_python) = bundled_python {
+        candidates.push(bundled_python.display().to_string());
+    } else if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
         candidates.push(preferred);
     } else {
         for candidate in std::iter::once(local_python)
@@ -1014,7 +1018,7 @@ pub(crate) fn run_python_helper_with_progress(
     }
 
     for fallback in ["python3", "python"] {
-        if !candidates.iter().any(|candidate| candidate == fallback) {
+        if !uses_bundle && !candidates.iter().any(|candidate| candidate == fallback) {
             candidates.push(fallback.to_string());
         }
     }
@@ -1031,6 +1035,10 @@ pub(crate) fn run_python_helper_with_progress(
     let mut last_error = None;
     for candidate in candidates {
         let mut command = ProcessCommand::new(&candidate);
+        if uses_bundle {
+            fullmag_runtime_control::python_runtime::configure_packaged_python(&mut command, &root)
+                .context("bundled Python runtime is incomplete or invalid")?;
+        }
         command.args(args);
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -1054,7 +1062,7 @@ pub(crate) fn run_python_helper_with_progress(
                 python_paths.push(existing.clone());
             }
         }
-        if !python_paths.is_empty() {
+        if !uses_bundle && !python_paths.is_empty() {
             command.env(
                 "PYTHONPATH",
                 python_paths.join(if cfg!(windows) { ";" } else { ":" }),
