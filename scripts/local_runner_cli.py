@@ -170,7 +170,11 @@ def main(argv=None):
                 destination.mkdir(parents=True, exist_ok=False)
                 manifest = capture_source(Path(layout['repo_root']), destination,
                                           mode=args.source, ref=args.ref,
-                                          include_untracked=tuple(args.include_untracked))
+                                          include_untracked=tuple(args.include_untracked),
+                                          content_store=validate_path(
+                                              storage / 'cache' / 'source-content-v1',
+                                              storage,
+                                              'source content store'))
                 if args.operation == 'build':
                     final_native = native_identity(Path(layout['repo_root']), args.source, manifest['resolved_commit'])
                     if native is not None and native != final_native:

@@ -26,6 +26,8 @@ import subprocess
 import tempfile
 from typing import Iterable, Iterator, Mapping, Sequence
 
+from .source_store import SourceContentStore, SourceContentStoreError
+
 
 SCHEMA = "fullmag.source-capsule.v1"
 MANIFEST_FILENAME = "manifest.json"
@@ -283,10 +285,14 @@ def _ensure_no_reparse_ancestors(path: Path, label: str, *, allow_missing: bool)
         if current == Path(part) and current.exists():
             continue
         current = current / part if current != Path() else Path(part)
-        if not current.exists():
+        try:
+            current.lstat()
+        except FileNotFoundError:
             if allow_missing:
                 continue
             raise SourceError(f"{label} does not exist: {path}")
+        except OSError as error:
+            raise SourceError(f"cannot inspect {label}: {path}") from error
         if _is_reparse(current):
             raise SourceError(f"{label} traverses a symlink or reparse point: {path}")
 
@@ -353,6 +359,94 @@ def _validated_destination(destination: Path, repo: Path) -> Path:
     if children:
         raise SourceError("destination must be empty")
     return resolved_destination
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    resolved_left = left.resolve(strict=False)
+    resolved_right = right.resolve(strict=False)
+    return (
+        resolved_left == resolved_right
+        or resolved_left in resolved_right.parents
+        or resolved_right in resolved_left.parents
+    )
+
+
+def _validated_content_store(
+    content_store: Path,
+    repo: Path,
+    common: Path,
+    destination: Path,
+) -> Path:
+    candidate = Path(content_store).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    candidate = Path(os.path.abspath(candidate))
+    _ensure_no_reparse_ancestors(
+        candidate,
+        "source content store",
+        allow_missing=True,
+    )
+    resolved = candidate.resolve(strict=False)
+    for protected, label in (
+        (repo, "repository"),
+        (common, "Git common directory"),
+        (destination, "capsule destination"),
+    ):
+        if _paths_overlap(resolved, protected):
+            raise SourceError(f"source content store overlaps the {label}")
+    return resolved
+
+
+def _link_stage_to_content_store(
+    stage: Path,
+    entries: Sequence[Mapping[str, object]],
+    store: SourceContentStore,
+) -> None:
+    for entry in entries:
+        if entry.get("type") != "file":
+            continue
+        relative = str(entry["path"])
+        path = stage / Path(*relative.split("/"))
+        try:
+            store.link_file(
+                path,
+                path,
+                digest=str(entry["sha256"]),
+                mode=str(entry["mode"]),
+                size=int(entry["size"]),
+            )
+        except SourceContentStoreError as error:
+            raise SourceError(str(error)) from error
+
+
+def _cleanup_capture_stage(
+    stage: Path | None,
+    entries: Sequence[Mapping[str, object]],
+    store: SourceContentStore | None,
+) -> None:
+    if stage is None or not stage.exists():
+        return
+    tree = stage / "tree"
+    if store is not None and tree.is_dir():
+        for entry in entries:
+            if entry.get("type") != "file":
+                continue
+            relative = str(entry["path"])
+            path = tree / Path(*relative.split("/"))
+            if not os.path.lexists(path):
+                continue
+            try:
+                store.unlink_stage_link(
+                    path,
+                    digest=str(entry["sha256"]),
+                    mode=str(entry["mode"]),
+                    size=int(entry["size"]),
+                )
+            except SourceContentStoreError as error:
+                raise SourceError(
+                    f"cannot safely clean linked capture stage: {error}"
+                ) from error
+    shutil.rmtree(stage, ignore_errors=True)
 
 
 def _index_records(
@@ -1112,6 +1206,7 @@ def _capture_source_impl(
     mode: str = "snapshot",
     ref: str | None = None,
     include_untracked: Iterable[str | Path] = (),
+    content_store: Path | None = None,
 ) -> dict[str, object]:
     """Capture a source capsule and return its immutable manifest.
 
@@ -1126,6 +1221,15 @@ def _capture_source_impl(
         raise SourceError("snapshot mode does not accept ref; choose commit mode")
     repo_root, common = _validated_repo(Path(repo))
     output = _validated_destination(Path(destination), repo_root)
+    content_store_client: SourceContentStore | None = None
+    if content_store is not None:
+        content_store_path = _validated_content_store(
+            Path(content_store),
+            repo_root,
+            common,
+            output,
+        )
+        content_store_client = SourceContentStore(content_store_path)
     head = _git(repo_root, "rev-parse", "--verify", "HEAD").decode("ascii").strip()
     if not _SHA_RE.fullmatch(head):
         raise SourceError("Git HEAD is not a full commit SHA")
@@ -1234,6 +1338,9 @@ def _capture_source_impl(
                 excluded=before["excluded"],
             )
             _verify_stage(tree_stage, entries)
+            if content_store_client is not None:
+                _link_stage_to_content_store(tree_stage, entries, content_store_client)
+                _verify_stage(tree_stage, entries)
             _write_manifest(stage, manifest)
             # A caller-allocated empty destination is never replaced or
             # removed.  Move only the completed stage contents into it.
@@ -1242,8 +1349,7 @@ def _capture_source_impl(
             _make_read_only(output)
             return manifest
         finally:
-            if stage is not None and stage.exists():
-                shutil.rmtree(stage, ignore_errors=True)
+            _cleanup_capture_stage(stage, entries, content_store_client)
 
     # Commit mode reaches this path after the immutable object tree has been
     # fully validated.  It uses the same stage/move path as snapshots but does
@@ -1257,14 +1363,16 @@ def _capture_source_impl(
             relative = str(entry["path"])
             _copy_commit_entry(tree_stage, entry, content_by_path[relative])
         _verify_stage(tree_stage, entries)
+        if content_store_client is not None:
+            _link_stage_to_content_store(tree_stage, entries, content_store_client)
+            _verify_stage(tree_stage, entries)
         _write_manifest(stage, manifest)
         for child in tuple(stage.iterdir()):
             shutil.move(str(child), str(output / child.name))
         _make_read_only(output)
         return manifest
     finally:
-        if stage is not None and stage.exists():
-            shutil.rmtree(stage, ignore_errors=True)
+        _cleanup_capture_stage(stage, entries, content_store_client)
 
 
 def capture_source(
@@ -1273,8 +1381,14 @@ def capture_source(
     mode: str = "snapshot",
     ref: str | None = None,
     include_untracked: Iterable[str | Path] = (),
+    *,
+    content_store: Path | None = None,
 ) -> dict[str, object]:
-    """Capture a source capsule, normalising filesystem failures to SourceError."""
+    """Capture a source capsule, optionally linking files to a verified CAS.
+
+    Omitting content_store preserves the original independent-copy behavior.
+    Content-store capsules retain the same v1 manifest and tree.
+    """
 
     try:
         return _capture_source_impl(
@@ -1283,6 +1397,7 @@ def capture_source(
             mode=mode,
             ref=ref,
             include_untracked=include_untracked,
+            content_store=Path(content_store) if content_store is not None else None,
         )
     except SourceError:
         raise

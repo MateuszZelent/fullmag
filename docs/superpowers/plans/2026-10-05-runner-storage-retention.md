@@ -67,3 +67,18 @@ sprzątania produkcyjnego storage.
 - Wdrożenie, produkcyjny cleanup i kontrola przeglądarki: NOT VERIFIED.
   Trwający #232 pozostaje chroniony. R1/R4/R5 są nadal OPEN do uzyskania tych
   dowodów; nie uznajemy temp-dir tests za odzysk miejsca na rzeczywistym dysku.
+
+### Checkpoint R2 i przeglądarki — 2026-10-05
+
+- R1 commit: `d672c1e10ae57e1204532876a9eaf9f75d5a541f`, wypchnięty na branch zadania.
+- Nowe capture współdzielą treść przez CAS; manifest v1/digest i dirty snapshot
+  pozostają bez zmiany. Regresje źródeł: 15/15 PASS; CAS: 9/9 PASS, w tym
+  rzeczywista materializacja execution, concurrent capture i cleanup po
+  częściowej awarii. Niezależne R2 review: SOURCE PASS, brak otwartych P1/P2.
+- Test w prawdziwym Chromium na oddzielnym backendzie z tymczasowymi danymi:
+  preview → accepted → succeeded, usunięcie 5-bajtowego execution, ten sam
+  wynik i ID po reload, brak błędów strony; nieaktywne TTL źródeł/logów oraz
+  opcja automatyczna odpowiadają podpiętemu wykonawcy. To proof UI i integracji
+  na fixture, bez produkcyjnego Docker/delete. Zrzut zapisano w evidence wątku.
+- Produkcyjna migracja historycznych kapsuł i proof managed capture nadal
+  NOT VERIFIED. Nie dopisujemy oszczędności fizycznych na podstawie liczby hashy.

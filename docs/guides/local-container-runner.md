@@ -142,6 +142,23 @@ Stan wdrożenia i dowody:
 [ADR 0052](../adr/0052-runner-storage-retention.md). Obecność kodu nie dowodzi
 aktualizacji uruchomionego koordynatora.
 
+### Współdzielenie zawartości źródeł
+
+Klient capture korzysta z `storage/cache/source-content-v1`. Klucz obiektu
+obejmuje SHA-256 treści i tryb wykonywalny Git. Każda kapsuła nadal ma własny
+manifest v1 i drzewo `source/tree`, lecz identyczne regularne pliki wskazują
+na niezmienną zawartość przez hardlinki. Obiekt powstaje z prywatnego stagingu;
+repozytorium i zapisywalne execution nigdy nie są hardlinkowane do magazynu.
+Worker materializuje prywatne kopie i przywraca prawa do zapisu zgodnie z manifestem.
+
+Publikacja i cleanup własnego stagingu używają blokady obiektu. Na Windows
+atrybut readonly jest wspólny dla hardlinków; helper usuwający link stagingu
+ponownie pieczętuje obiekt w `finally`. Korupcja, nieznana blokada, inny wolumen
+lub niebezpieczna ścieżka kończą capture błędem. Zachowujemy dotychczasowe
+manifesty i digesty; CAS nie jest objęty automatycznym prune cache. Migracja
+historycznych kapsuł ma osobne zabezpieczenia i nie wynika z samego włączenia
+współdzielenia nowych capture.
+
 - `storage/runs/<worktree-id>/<capture-id>/source`: kapsuła readonly.
 - `storage/runs/<worktree-id>/<job-id>/execution`: prywatna kopia robocza.
 - `storage/runs/<worktree-id>/<job-id>/artifacts`: logi, receipt i wybrane wyniki.
