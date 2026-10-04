@@ -1,5 +1,10 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AI](53ai-owned-api-commit-exit-supervisor.md) integruje custody Child
+z launcherem oraz commit/wait/readback z produkcyjnym supervisorem.
+Build i 306 kontroli przeszły, wszystkie 104 procesy odebrano. Replacement
+spawn, hydration UI i fault-injection pozostają otwarte; restart nadal niedostępny.
+
 [P8-53AH](53ah-cross-build-next-idle.md) wiąże cold-idle proof ze zweryfikowaną
 tożsamością API po podmianie buildu. Natywny build i 300 kontroli przeszły;
 wszystkie 104 procesy odebrano. Następne przejęcie, reservation/recheck i jawny

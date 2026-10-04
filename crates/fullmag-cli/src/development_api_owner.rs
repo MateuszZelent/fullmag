@@ -381,6 +381,7 @@ impl OwnerLaunch {
         }
 
         Ok(OwnedDevelopmentApi {
+            child_pid: record.pid,
             api_build: fullmag_runtime_control::development_cold_idle::PinnedApiBuildIdentity::from_pinned_build(
                 &self.expected_build_commit, &self.expected_build_snapshot,
             )?,
@@ -401,6 +402,7 @@ impl OwnerLaunch {
 /// A confirmed owner endpoint. It carries credentials privately and has no
 /// public HTTP-control or process-management operations.
 pub(crate) struct OwnedDevelopmentApi {
+    child_pid: u32,
     api_build: fullmag_runtime_control::development_cold_idle::PinnedApiBuildIdentity,
     service_configured: bool,
     control_address: SocketAddrV4,
@@ -415,6 +417,9 @@ pub(crate) struct OwnedDevelopmentApi {
 }
 
 impl OwnedDevelopmentApi {
+    pub(crate) fn child_pid(&self) -> u32 {
+        self.child_pid
+    }
     /// Acquire the API's stable authoring snapshot over its private loopback
     /// channel. The returned value retains the connection until abort or drop.
     pub(crate) fn acquire(&self, nonce: &str) -> Result<AuthoringAcquisition> {
@@ -476,10 +481,12 @@ impl OwnedDevelopmentApi {
             .context("development API acquisition response is not UTF-8")?;
 
         Ok(AuthoringAcquisition {
+            child_pid: self.child_pid,
             api_build: self.api_build.clone(),
             service_configured: self.service_configured,
             stream: Some(stream),
             commit_attempted: false,
+            commit_may_have_been_sent: false,
             completion_attempted: false,
             owner_token: self.owner_token.clone(),
             api_port: self.api_port,
@@ -503,10 +510,12 @@ impl OwnedDevelopmentApi {
 /// Owns both the captured snapshot and the private connection that holds the
 /// API guard. Dropping this value disconnects and releases the guard.
 pub(crate) struct AuthoringAcquisition {
+    child_pid: u32,
     api_build: fullmag_runtime_control::development_cold_idle::PinnedApiBuildIdentity,
     service_configured: bool,
     stream: Option<TcpStream>,
     commit_attempted: bool,
+    commit_may_have_been_sent: bool,
     completion_attempted: bool,
     owner_token: String,
     api_port: u16,
@@ -526,6 +535,18 @@ pub(crate) struct AuthoringAcquisition {
 }
 
 impl AuthoringAcquisition {
+    pub(crate) fn is_owned_by(&self, owner: &OwnedDevelopmentApi) -> bool {
+        self.child_pid == owner.child_pid
+            && self.api_port == owner.api_port
+            && self.api_instance_id == owner.api_instance_id
+            && self.api_build == owner.api_build
+            && self.storage_root == owner.storage_root
+            && self.worktree == owner.worktree
+            && self.generation == owner.generation
+            && self.source == owner.source
+            && self.version == owner.version
+            && self.owner_token == owner.owner_token
+    }
     /// Hidden native verifier only: submit a deliberately invalid commit to
     /// exercise API validation, rather than the launcher's earlier preflight.
     pub(crate) fn probe_rejected_cold_commit(
@@ -773,6 +794,10 @@ impl AuthoringAcquisition {
         }
     }
 
+    pub(crate) fn commit_may_have_been_sent(&self) -> bool {
+        self.commit_may_have_been_sent
+    }
+
     fn submit_cold_handoff_commit(
         &mut self,
         repo_root: &Path,
@@ -820,6 +845,9 @@ impl AuthoringAcquisition {
             .stream
             .take()
             .context("development API acquisition is unavailable")?;
+        // Any write failure after this boundary may have delivered a prefix
+        // or the complete request. Local preflight failures never cross it.
+        self.commit_may_have_been_sent = true;
         write_all_until(
             &mut stream,
             &bytes,

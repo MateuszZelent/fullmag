@@ -13,6 +13,7 @@ mod communication_policy;
 mod control_room;
 mod dev_smoke;
 mod development_api_owner;
+mod development_api_supervisor;
 mod diagnostics;
 mod feature_flags;
 mod formatting;
@@ -676,7 +677,7 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     )?;
     let owns_api = ready.api_child.is_some();
     let owned_api_pid = ready.api_child.as_ref().map(std::process::Child::id);
-    let control_room_guard = crate::control_room::ControlRoomGuard::active(
+    let mut control_room_guard = crate::control_room::ControlRoomGuard::active(
         ready.web_port,
         ready.api_child.take(),
         ready.frontend_child.take(),
@@ -696,6 +697,9 @@ fn launch_ui(ui: UiCli) -> Result<()> {
         )?),
         None => None,
     };
+    if let Some(owner) = development_owner {
+        control_room_guard.adopt_development_owner(owner)?;
+    }
     if !owns_api {
         runtime_binding.disable_automatic_attach(
             fullmag_runtime_control::application_attach::ApplicationAttachBlockReason::ApiNotOwned,
@@ -725,7 +729,6 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     // Join the observer before shutting down the API it is pinned to.
     drop(runtime_attach);
     drop(scratch_runtime);
-    drop(development_owner);
     drop(control_room_guard);
     Ok(())
 }

@@ -299,39 +299,35 @@ fn emit_owner_probe_process_started(api_pid: u32, api_port: u16) -> Result<()> {
 
 /// Wait for the exact committed API child without allowing guard Drop to turn
 /// an unknown result into a force termination.
-fn wait_committed_api_exit(
-    mut child: BootstrapProcessGuard<ChildProcess>,
-    timeout: Duration,
-) -> Result<std::process::ExitStatus> {
-    let pid = child.process_mut().0.id();
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.process_mut().0.try_wait() {
-            Ok(Some(status)) => {
-                drop(child.release());
-                return Ok(status);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                drop(child.release());
-                bail!("owned API exit outcome is unknown for pid {pid}: {error}");
-            }
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            drop(child.release());
-            bail!("owned API exit outcome is unknown for pid {pid}; process handle retained without termination");
-        }
-        std::thread::sleep(remaining.min(Duration::from_millis(25)));
-    }
-}
-
 pub(crate) struct ControlRoomGuard {
     web_port: Option<u16>,
-    api_child: Option<Box<dyn GuardedProcess>>,
+    api_child: Option<GuardedApiProcess>,
     frontend_child: Option<Box<dyn GuardedProcess>>,
     terminal_failure_lifetime: Option<Box<dyn FnOnce()>>,
     stop_frontend_on_drop: bool,
+}
+
+enum GuardedApiProcess {
+    Native(ChildProcess),
+    Development(crate::development_api_supervisor::DevelopmentApiSupervisor),
+    #[cfg(test)]
+    Test(Box<dyn GuardedProcess>),
+}
+
+impl GuardedProcess for GuardedApiProcess {
+    fn terminate(&mut self) {
+        match self {
+            Self::Native(child) => child.terminate(),
+            Self::Development(supervisor) => {
+                if let Err(error) = supervisor.shutdown() {
+                    terminal_logger().emit(TerminalLogSource::Cli,
+                        format!("development API shutdown outcome is unknown; process retained: {error:#}"));
+                }
+            }
+            #[cfg(test)]
+            Self::Test(child) => child.terminate(),
+        }
+    }
 }
 
 impl ControlRoomGuard {
@@ -353,12 +349,37 @@ impl ControlRoomGuard {
         let stop_frontend_on_drop = frontend_child.is_some();
         Self {
             web_port: Some(web_port),
-            api_child: api_child
-                .map(|child| Box::new(ChildProcess(child)) as Box<dyn GuardedProcess>),
+            api_child: api_child.map(|child| GuardedApiProcess::Native(ChildProcess(child))),
             frontend_child: frontend_child
                 .map(|child| Box::new(ChildProcess(child)) as Box<dyn GuardedProcess>),
             terminal_failure_lifetime: None,
             stop_frontend_on_drop,
+        }
+    }
+
+    pub(crate) fn adopt_development_owner(
+        &mut self,
+        owner: crate::development_api_owner::OwnedDevelopmentApi,
+    ) -> Result<()> {
+        match self.api_child.as_ref() {
+            Some(GuardedApiProcess::Native(child)) if child.0.id() == owner.child_pid() => {}
+            _ => bail!("development supervisor requires the exact owned API child"),
+        }
+        let Some(GuardedApiProcess::Native(child)) = self.api_child.take() else {
+            bail!("owned development API changed before adoption");
+        };
+        let supervisor =
+            crate::development_api_supervisor::DevelopmentApiSupervisor::new(child.0, owner)?;
+        self.api_child = Some(GuardedApiProcess::Development(supervisor));
+        Ok(())
+    }
+
+    fn development_supervisor_mut(
+        &mut self,
+    ) -> Result<&mut crate::development_api_supervisor::DevelopmentApiSupervisor> {
+        match self.api_child.as_mut() {
+            Some(GuardedApiProcess::Development(supervisor)) => Ok(supervisor),
+            _ => bail!("development API supervisor is not adopted"),
         }
     }
 
@@ -376,7 +397,7 @@ impl ControlRoomGuard {
     ) -> Self {
         Self {
             web_port: None,
-            api_child,
+            api_child: api_child.map(GuardedApiProcess::Test),
             frontend_child,
             terminal_failure_lifetime: None,
             stop_frontend_on_drop: false,
@@ -2991,41 +3012,34 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
         }),
     )?;
     let final_idle = final_acquisition.acquire_cold_idle(&final_staged, &accepted_store)?;
-    let submission = if lose_commit_ack {
-        let lost =
-            final_acquisition.commit_cold_handoff_lost_ack_probe(&root, &final_staged, &final_idle);
-        lost.map(|value| (None, value.readback_helper_pid))
+    let mut guarded_api = ControlRoomGuard::active(api_port(), Some(child.release().0), None);
+    guarded_api.adopt_development_owner(owner)?;
+    let supervisor = guarded_api.development_supervisor_mut()?;
+    let outcome = if lose_commit_ack {
+        supervisor.commit_and_wait_lost_ack_probe(
+            &root,
+            &mut final_acquisition,
+            &final_staged,
+            &final_idle,
+            &accepted_store,
+            Duration::from_secs(20),
+        )?
     } else {
-        final_acquisition
-            .commit_cold_handoff(&root, &final_staged, &final_idle)
-            .map(|committed| {
-                (
-                    Some(committed.acknowledgement),
-                    committed.readback_helper_pid,
-                )
-            })
+        supervisor.commit_and_wait(
+            &root,
+            &mut final_acquisition,
+            &final_staged,
+            &final_idle,
+            &accepted_store,
+            Duration::from_secs(20),
+        )?
     };
-    let (commit_acknowledgement, readback_helper_pid) = match submission {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            let api_pid = child.process_mut().0.id();
-            drop(child.release());
-            bail!("cold commit outcome is unknown; owned API pid {api_pid} retained for reconciliation: {error}");
-        }
-    };
-    // Once the one-shot request may have reached the API, unknown wait results
-    // must retain both the durable fence and the still-owned child process.
-    let terminal = wait_committed_api_exit(child, Duration::from_secs(20))?;
-    if !terminal.success() {
-        bail!("committed owned API did not exit successfully");
-    }
-    let accepted = final_acquisition.reconcile_committed_handoff_after_exit(
-        &terminal,
-        &accepted_store,
-        &final_staged,
-        &final_idle,
-        commit_acknowledgement.as_ref(),
-    )?;
+    let terminal = outcome.terminal;
+    let accepted = outcome.accepted;
+    let commit_acknowledgement = outcome.acknowledgement;
+    let readback_helper_pid = outcome
+        .readback_helper_pid
+        .context("managed commit probe must observe the waited readback helper")?;
     drop(final_idle); // Kernel reservations release; durable fence remains closed.
     println!(
         "{}",
@@ -3059,7 +3073,8 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
                 {"pid":final_staged.helper_pid,"waited":true,"exit_code":0},
                 {"pid":readback_helper_pid,"waited":true,"exit_code":0}
             ],
-            "api_exit_code":terminal.code(), "checks":["owned-api-discovery",
+            "api_exit_code":terminal.code(), "checks":["production-supervisor-owned-api-custody",
+            "production-supervisor-commit-exit-reconciled", "owned-api-discovery",
             "static-script-owner-disabled", "unscoped-store-location-preserved",
             "invalid-scoped-store-no-fallback", "foreign-child-refused", "foreign-token-refused",
             "invalid-acquisition-nonce-refused", "empty-authoring-acquired", "http-admission-frozen",

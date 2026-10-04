@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AI, 04.10.2026: [właściciel procesu podczas commit i exit](p8/53ai-owned-api-commit-exit-supervisor.md).
+Launcher przejmuje Child do supervisora; diagnostic używa tej samej ścieżki.
+Build i 306 kontroli natywnych PASS, wszystkie 104 procesy odebrano.
+Replacement spawn, UI, fault-injection timeout i powtórny restart nadal otwarte;
+procenty całego planu bez awansu.
+
 Checkpoint P8-53AH, 04.10.2026: [kolejna rezerwacja po podmianie](p8/53ah-cross-build-next-idle.md).
 Natywny build i 300 kontroli runtime PASS, wszystkie 104 procesy odebrano.
 Zweryfikowany pin API zachowany w proof; kolejny acquire/staging/idle/abort
