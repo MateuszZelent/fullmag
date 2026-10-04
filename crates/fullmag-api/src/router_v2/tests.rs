@@ -122,6 +122,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         stages: Vec::new(),
         study_pipeline: None,
         table_autosave: None,
+        output_storage: None,
         initial_state: None,
         geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
             name: "body".to_string(),
@@ -1158,6 +1159,7 @@ async fn model_readiness_reports_all_empty_scene_blockers_in_stable_order() {
                     name: "Empty".into(),
                     precision: "double".into(),
                     replace_current: false,
+                    output_storage: None,
                 },
             )
             .expect("empty scratch scene"),
@@ -1676,6 +1678,7 @@ async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_s
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: false,
+                output_storage: None,
             }),
         )
         .await
@@ -1694,6 +1697,7 @@ async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_s
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: true,
+                output_storage: None,
             }),
         )
         .await

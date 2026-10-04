@@ -436,6 +436,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/platform/output-storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_output_storage"];
+        put: operations["platform_put_platform_output_storage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/platform/runtime-service": {
         parameters: {
             query?: never;
@@ -5379,6 +5395,7 @@ export interface components {
             backend: components["schemas"]["ScratchSessionBackend"];
             device: components["schemas"]["ScratchSessionDevice"];
             name: string;
+            output_storage?: null | components["schemas"]["OutputStorageSettingsSchema"];
             precision: components["schemas"]["ScratchSessionPrecision"];
             replace_current?: boolean;
         };
@@ -5735,6 +5752,8 @@ export interface components {
             revision: number;
             total: number;
         };
+        /** @enum {string} */
+        ExistingOutputSchema: "timestamp" | "error";
         FdmCommonTransformLayoutResource: {
             cell_size: number[];
             fft_shape: number[];
@@ -9705,6 +9724,37 @@ export interface components {
             resource: components["schemas"]["SceneOerstedField"];
         };
         /** @enum {string} */
+        OutputDataFormatSchema: "zarr" | "hdf5";
+        OutputStorageDefaultsRequest: {
+            cleanup?: components["schemas"]["TempCleanupSchema"];
+            data_format?: components["schemas"]["OutputDataFormatSchema"];
+            existing_output?: components["schemas"]["ExistingOutputSchema"];
+            output_parent: string;
+            temp_parent?: string | null;
+        };
+        OutputStorageDefaultsResource: {
+            cleanup: components["schemas"]["TempCleanupSchema"];
+            data_format: components["schemas"]["OutputDataFormatSchema"];
+            existing_output: components["schemas"]["ExistingOutputSchema"];
+            hdf5_unavailable_reason: string | null;
+            output_parent: string;
+            supported_formats: components["schemas"]["OutputDataFormatSchema"][];
+            temp_parent: string | null;
+        };
+        /** @description Per-session output storage overrides. Omitted fields retain safe defaults. */
+        OutputStorageSettingsSchema: {
+            /** @default on_success */
+            cleanup: components["schemas"]["TempCleanupSchema"];
+            /** @default zarr */
+            data_format: components["schemas"]["OutputDataFormatSchema"];
+            /** @default timestamp */
+            existing_output: components["schemas"]["ExistingOutputSchema"];
+            /** @default null */
+            output_dir: string | null;
+            /** @default null */
+            temp_dir: string | null;
+        };
+        /** @enum {string} */
         ParallelExecutionModeResource: "serial" | "adaptive";
         ParallelExecutionResource: {
             /** Format: double */
@@ -13296,6 +13346,8 @@ export interface components {
          * @enum {string}
          */
         TargetFieldAvailabilityState: "supported" | "materializing" | "ready" | "stale" | "unavailable";
+        /** @enum {string} */
+        TempCleanupSchema: "on_success" | "always" | "never";
         TimeDependenceResource: {
             /** @enum {string} */
             kind: "constant";
@@ -15280,6 +15332,71 @@ export interface operations {
         responses: {
             /** @description OpenAPI v2 document */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_output_storage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resolved output storage defaults and runtime format capabilities */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutputStorageDefaultsResource"];
+                };
+            };
+            /** @description Storage defaults could not be read */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_put_platform_output_storage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutputStorageDefaultsRequest"];
+            };
+        };
+        responses: {
+            /** @description Output storage defaults saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutputStorageDefaultsResource"];
+                };
+            };
+            /** @description Invalid output storage defaults */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Output storage defaults could not be saved */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

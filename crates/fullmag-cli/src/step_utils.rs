@@ -2,7 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use fullmag_ir::{BackendPlanIR, OutputIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR};
+use fullmag_ir::{
+    BackendPlanIR, OutputDataFormatIR, OutputIR, OutputStorageIR, ProblemIR,
+    RegionalFieldDriveIR, TableAutosaveIR,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -894,15 +897,25 @@ pub(crate) fn materialize_script_stages(
         ir.geometry_assets = shared_geometry_assets.clone();
     }
 
+    let output_storage = ir
+        .problem_meta
+        .runtime_metadata
+        .get("output_storage")
+        .cloned()
+        .map(|value| serde_json::from_value::<OutputStorageIR>(value).context("invalid output_storage metadata"))
+        .transpose()?;
     if stages.is_empty() {
         if let Some(document) = study_pipeline {
-            let materialized = annotate_stage_transitions(materialize_study_pipeline(
+            let mut materialized = materialize_study_pipeline(
                 &document,
                 &ir,
                 default_until_seconds,
-            )?);
+            )?;
             if !materialized.is_empty() {
-                return Ok(materialized);
+                for stage in &mut materialized {
+                    configure_stage_output_storage(stage, output_storage.as_ref())?;
+                }
+                return Ok(annotate_stage_transitions(materialized));
             }
         }
         let entrypoint_kind = ir.problem_meta.entrypoint_kind.clone();
@@ -917,6 +930,7 @@ pub(crate) fn materialize_script_stages(
             resolve_script_until_seconds(&ir, default_until_seconds)?
         };
         let mut stage = ResolvedScriptStage::solver(ir, until_seconds, entrypoint_kind);
+        configure_stage_output_storage(&mut stage, output_storage.as_ref())?;
         resolve_stage_auto_sampling(&mut stage)?;
         return Ok(vec![stage]);
     }
@@ -946,11 +960,30 @@ pub(crate) fn materialize_script_stages(
                 resolve_script_until_seconds(&stage.ir, stage.default_until_seconds)?;
             let mut resolved =
                 ResolvedScriptStage::solver(stage.ir, until_seconds, stage.entrypoint_kind);
+            configure_stage_output_storage(&mut resolved, output_storage.as_ref())?;
             resolve_stage_auto_sampling(&mut resolved)?;
             materialized.push(resolved);
         }
     }
     Ok(annotate_stage_transitions(materialized))
+}
+
+fn configure_stage_output_storage(
+    stage: &mut ResolvedScriptStage,
+    storage: Option<&OutputStorageIR>,
+) -> Result<()> {
+    let Some(storage) = storage else {
+        return Ok(());
+    };
+    if stage.action.is_some() || stage.entrypoint_kind == "flat_workspace" {
+        return Ok(());
+    }
+    fullmag_runner::project_storage::configure_project_autosave(
+        &mut stage.ir,
+        storage.data_format,
+        stage.until_seconds,
+    )
+    .map_err(|message| anyhow::anyhow!(message))
 }
 
 fn resolve_stage_auto_sampling(stage: &mut ResolvedScriptStage) -> Result<()> {

@@ -10,6 +10,7 @@ from typing import Sequence
 
 from fullmag._core import extract_fem_mesh_ir, resample_fem_to_fdm_grid, run_problem_json
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
+from fullmag.model.output_storage import OutputStorage
 from fullmag.model.study import Eigenmodes, FrequencyResponse, Relaxation
 from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.simulation import Simulation, result_from_run_payload
@@ -41,8 +42,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output-dir",
-        default="run_output",
-        help="Artifact output directory.",
+        help="Explicit result directory override; defaults to authored storage or a script-derived sibling.",
+    )
+    parser.add_argument("--temp-dir", help="Parent directory for private run scratch.")
+    parser.add_argument(
+        "--data-format",
+        choices=("zarr", "hdf5", "h5"),
+        help="Override the authored result format.",
+    )
+    parser.add_argument(
+        "--temp-cleanup",
+        choices=("on_success", "always", "never"),
+        help="Override the private-scratch cleanup policy.",
+    )
+    parser.add_argument(
+        "--existing-output",
+        choices=("timestamp", "error"),
+        help="Override behavior when the requested result path already exists.",
     )
     parser.add_argument(
         "--json",
@@ -64,7 +80,50 @@ def main(argv: Sequence[str] | None = None) -> int:
             mode=args.mode,
             precision=args.precision,
         )
+        authored_storage = loaded.problem.runtime_metadata.get("output_storage")
+        storage = (
+            OutputStorage.from_ir(authored_storage)
+            if isinstance(authored_storage, dict)
+            else OutputStorage()
+        )
+        effective_format = args.data_format or storage.data_format
+        if args.data_format is None and not isinstance(authored_storage, dict):
+            authored_formats = {
+                stage.autosave.format
+                for stage in loaded.stages
+                if stage.autosave is not None and stage.autosave.format in {"zarr", "hdf5"}
+            }
+            if len(authored_formats) > 1:
+                raise ValueError("script stages declare conflicting primary autosave formats")
+            if authored_formats:
+                effective_format = authored_formats.pop()
+        if args.output_dir is not None:
+            base_output_dir = Path(args.output_dir).expanduser().resolve()
+        elif storage.output_dir is not None:
+            authored_output_dir = Path(storage.output_dir).expanduser()
+            base_output_dir = (
+                authored_output_dir
+                if authored_output_dir.is_absolute()
+                else (loaded.source_path.parent / authored_output_dir)
+            ).resolve()
+        else:
+            base_output_dir = loaded.source_path.with_suffix(
+                ".zarr" if effective_format == "zarr" else ".results"
+            )
         if loaded.stages and loaded.auto_execute_stages:
+            if base_output_dir.exists():
+                raise FileExistsError(
+                    "multi-stage output directory already exists; refusing to write a sequence manifest into an existing project"
+                )
+            base_output_dir.mkdir(parents=True, exist_ok=False)
+            if effective_format == "zarr":
+                (base_output_dir / ".zgroup").write_text(
+                    json.dumps({"zarr_format": 2}), encoding="utf-8"
+                )
+                (base_output_dir / ".zattrs").write_text(
+                    json.dumps({"schema_version": "fullmag.project_results.v1"}),
+                    encoding="utf-8",
+                )
             aggregate_payload: dict[str, object] = {
                 "status": "completed",
                 "steps": [],
@@ -74,9 +133,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             previous_fem_mesh_ir: dict[str, object] | None = None
             step_offset = 0
             time_offset = 0.0
-            base_output_dir = Path(args.output_dir)
-            base_output_dir.mkdir(parents=True, exist_ok=True)
             stage_manifest: list[dict[str, object]] = []
+            stage_storage: list[dict[str, object]] = []
             study_pipeline = loaded.study_pipeline_document()
 
             for index, stage in enumerate(loaded.stages, start=1):
@@ -94,6 +152,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     execution_precision=simulation.precision,
                     script_source=loaded.script_source,
                     source_root=loaded.source_path.parent,
+                    source_stem=loaded.source_path.stem,
+                    until_seconds=until_seconds,
                     study_pipeline=study_pipeline,
                     stage_start_time_s=time_offset,
                 )
@@ -119,13 +179,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                             _apply_continuation_initial_state(ir, final_magnetization)
                     else:
                         _apply_continuation_initial_state(ir, final_magnetization)
-                stage_output_dir = _stage_output_dir(
-                    base_output_dir,
-                    stage_index=index,
-                    stage_total=len(loaded.stages),
-                    entrypoint_kind=stage.entrypoint_kind,
+                stage_output_dir = (
+                    base_output_dir
+                    if len(loaded.stages) == 1
+                    else _stage_output_dir(
+                        base_output_dir,
+                        stage_index=index,
+                        stage_total=len(loaded.stages),
+                        entrypoint_kind=stage.entrypoint_kind,
+                        data_format=effective_format,
+                    )
                 )
-                run_payload = run_problem_json(ir, until_seconds, str(stage_output_dir))
+                run_payload = run_problem_json(
+                    ir,
+                    until_seconds,
+                    str(stage_output_dir),
+                    temp_dir=args.temp_dir,
+                    data_format=args.data_format,
+                    temp_cleanup=args.temp_cleanup,
+                    existing_output=args.existing_output,
+                )
                 if run_payload is None:
                     print(
                         "Native runner (_fullmag_core) is not installed. "
@@ -142,6 +215,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 aggregate_payload["steps"].extend(offset_steps)
                 final_magnetization = run_payload.get("final_magnetization")
                 aggregate_payload["final_magnetization"] = final_magnetization
+                resolved_storage = run_payload.get("resolved_output_storage")
+                if isinstance(resolved_storage, dict):
+                    stage_storage.append(resolved_storage)
                 # Track FEM mesh for potential cross-backend transfer in next stage.
                 previous_fem_mesh_ir = extract_fem_mesh_ir(ir)
                 stage_manifest.append(
@@ -156,6 +232,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     step_offset = int(offset_steps[-1]["step"])
                     time_offset = float(offset_steps[-1]["time"])
             _write_stage_sequence_manifest(base_output_dir, stage_manifest)
+            aggregate_payload["output_dir"] = str(base_output_dir)
+            aggregate_payload["stage_output_storage"] = stage_storage
         else:
             until_seconds = _resolve_until_seconds(loaded.problem.study, loaded.default_until_seconds)
             if until_seconds is None:
@@ -177,7 +255,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 execution_mode=simulation.mode,
                 execution_precision=simulation.precision,
             )
-            aggregate_payload = run_problem_json(ir, until_seconds, args.output_dir)
+            aggregate_payload = run_problem_json(
+                ir,
+                until_seconds,
+                args.output_dir,
+                temp_dir=args.temp_dir,
+                data_format=args.data_format,
+                temp_cleanup=args.temp_cleanup,
+                existing_output=args.existing_output,
+            )
             if aggregate_payload is None:
                 print(
                     "Native runner (_fullmag_core) is not installed. "
@@ -191,7 +277,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             backend=simulation.backend,
             mode=simulation.mode,
             precision=simulation.precision,
-            output_dir=args.output_dir,
+            output_dir=(
+                aggregate_payload.get("output_dir")
+                if isinstance(aggregate_payload.get("output_dir"), str)
+                else (
+                    aggregate_payload.get("resolved_output_storage", {}).get("output_dir")
+                    if isinstance(aggregate_payload.get("resolved_output_storage"), dict)
+                    else args.output_dir
+                )
+            ),
         )
     except Exception as exc:
         print(f"fullmag run failed: {exc}", file=sys.stderr)
@@ -280,10 +374,12 @@ def _stage_output_dir(
     stage_index: int,
     stage_total: int,
     entrypoint_kind: str,
+    data_format: str,
 ) -> Path:
     width = max(2, len(str(stage_total)))
     safe_kind = re.sub(r"[^a-z0-9]+", "_", entrypoint_kind.lower()).strip("_") or "stage"
-    return base_output_dir / f"stage_{stage_index:0{width}d}_{safe_kind}"
+    suffix = ".zarr" if data_format == "zarr" else ".results"
+    return base_output_dir / f"stage_{stage_index:0{width}d}_{safe_kind}{suffix}"
 
 
 def _write_stage_sequence_manifest(
@@ -295,7 +391,8 @@ def _write_stage_sequence_manifest(
         "kind": "flat_sequence",
         "stages": stages,
     }
-    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    with manifest_path.open("x", encoding="utf-8") as manifest_file:
+        manifest_file.write(json.dumps(payload, indent=2))
 
 
 def build_summary(*, script_path: str, problem_name: str, result) -> dict[str, object]:

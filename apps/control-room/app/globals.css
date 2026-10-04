@@ -10,6 +10,7 @@
 @import "../src/design/styles/slots.css" layer(fm-base);
 @import "../src/design/styles/dropdown.css" layer(fm-primitives);
 @import "../src/design/styles/dialog.css" layer(fm-primitives);
+@import "../src/design/styles/dialog-new-problem.css" layer(fm-primitives);
 @import "../src/design/styles/dialog-mesh-build.css" layer(fm-primitives);
 @import "../src/design/styles/dialog-data-preview.css" layer(fm-primitives);
 @import "../src/design/styles/dialog-simulation-startup.css" layer(fm-primitives);

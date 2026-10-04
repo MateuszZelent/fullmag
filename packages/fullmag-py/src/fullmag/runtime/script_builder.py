@@ -70,6 +70,7 @@ from fullmag.model.geometry import (
     Translate,
     Union,
 )
+from fullmag.model.output_storage import OutputStorage
 from fullmag.model.outputs import (
     SaveDispersion,
     SaveEigenDiagnostics,
@@ -318,6 +319,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         ],
         "study_pipeline": export_study_pipeline_document(loaded),
         "table_autosave": _export_table_autosave(base_problem),
+        "output_storage": _export_output_storage(base_problem),
         "initial_state": _export_initial_state(base_problem),
         "geometries": [
             *[
@@ -718,6 +720,7 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
         lines.append(
             f"study.parallel_execution({_python_keyword_args(dict(parallel_policy))})"
         )
+    lines.extend(_render_output_storage(builder.get("output_storage"), surface="study"))
 
     solver = builder.get("solver")
     if isinstance(solver, Mapping):
@@ -2040,6 +2043,12 @@ def _render_runtime(
                 )
 
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
+    output_storage = (
+        overrides.get("output_storage")
+        if "output_storage" in overrides
+        else runtime_metadata.get("output_storage")
+    )
+    lines.extend(_render_output_storage(output_storage, surface=surface))
     if surface == "study":
         universe = _resolve_universe(problem, overrides=overrides)
         if universe is not None:
@@ -8387,6 +8396,9 @@ def _script_api_surface(
 ) -> str:
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     surface = runtime_metadata.get("script_api_surface")
+    overrides = overrides or {}
+    if runtime_metadata.get("output_storage") is not None or overrides.get("output_storage") is not None:
+        return "study"
     couplings_override = (overrides or {}).get("couplings")
     monitors_override = (overrides or {}).get("planar_monitors")
     rotated_dmi_override = (overrides or {}).get("rotated_interfacial_dmi")
@@ -8404,6 +8416,35 @@ def _script_api_surface(
     ) or has_rotated_dmi:
         return "study"
     return "study" if surface == "study" else "flat"
+
+
+def _render_output_storage(value: object, *, surface: str) -> list[str]:
+    if value is None:
+        return []
+    if surface != "study":
+        raise ValueError("output_storage requires the canonical study API surface")
+    if not isinstance(value, Mapping):
+        raise ValueError("output_storage must be an object")
+    storage = OutputStorage.from_ir(value)
+    wire = storage.to_ir()
+    defaults = {
+        "output_dir": None,
+        "temp_dir": None,
+        "data_format": "zarr",
+        "cleanup": "on_success",
+        "existing_output": "timestamp",
+    }
+    kwargs = [
+        f"{key}={_py_repr(value)}"
+        for key, default in defaults.items()
+        if (value := wire[key]) != default
+    ]
+    return [f"study.storage({', '.join(kwargs)})"]
+
+
+def _export_output_storage(problem: Problem) -> dict[str, object] | None:
+    raw = _normalize_mapping(problem.runtime_metadata).get("output_storage")
+    return OutputStorage.from_ir(raw).to_ir() if raw is not None else None
 
 
 def _render_study_binding(problem: Problem) -> list[str]:
@@ -9328,6 +9369,7 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
         else None,
         "discretization": problem.discretization.to_ir() if problem.discretization else None,
         "mesh_workflow": runtime_metadata.get("mesh_workflow"),
+        "output_storage": runtime_metadata.get("output_storage"),
         "interactive": runtime_metadata.get("interactive_session_requested"),
         "wait_for_solve": runtime_metadata.get("wait_for_solve"),
         "domain_frame": runtime_metadata.get("domain_frame"),

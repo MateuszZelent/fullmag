@@ -1938,6 +1938,7 @@ mod tests {
             stages: Vec::new(),
             study_pipeline: None,
             table_autosave: None,
+            output_storage: None,
             initial_state: None,
             geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
                 name: "body".to_string(),

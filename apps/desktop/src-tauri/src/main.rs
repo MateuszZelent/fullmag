@@ -69,6 +69,7 @@ fn main() {
             commands::open_file_dialog,
             commands::open_project_dialog,
             commands::open_project_archive_dialog,
+            commands::pick_output_directory,
             commands::open_project_path,
             commands::open_project_archive_path,
             commands::app_build_info,

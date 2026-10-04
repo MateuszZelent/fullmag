@@ -4440,6 +4440,16 @@
           "name": {
             "type": "string"
           },
+          "output_storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OutputStorageSettingsSchema"
+              }
+            ]
+          },
           "precision": {
             "$ref": "#/components/schemas/ScratchSessionPrecision"
           },
@@ -5918,6 +5928,13 @@
           "entries"
         ],
         "type": "object"
+      },
+      "ExistingOutputSchema": {
+        "enum": [
+          "timestamp",
+          "error"
+        ],
+        "type": "string"
       },
       "FdmCommonTransformLayoutResource": {
         "properties": {
@@ -21872,6 +21889,129 @@
         ],
         "type": "object"
       },
+      "OutputDataFormatSchema": {
+        "enum": [
+          "zarr",
+          "hdf5"
+        ],
+        "type": "string"
+      },
+      "OutputStorageDefaultsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cleanup": {
+            "$ref": "#/components/schemas/TempCleanupSchema"
+          },
+          "data_format": {
+            "$ref": "#/components/schemas/OutputDataFormatSchema"
+          },
+          "existing_output": {
+            "$ref": "#/components/schemas/ExistingOutputSchema"
+          },
+          "output_parent": {
+            "type": "string"
+          },
+          "temp_parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "output_parent"
+        ],
+        "type": "object"
+      },
+      "OutputStorageDefaultsResource": {
+        "properties": {
+          "cleanup": {
+            "$ref": "#/components/schemas/TempCleanupSchema"
+          },
+          "data_format": {
+            "$ref": "#/components/schemas/OutputDataFormatSchema"
+          },
+          "existing_output": {
+            "$ref": "#/components/schemas/ExistingOutputSchema"
+          },
+          "hdf5_unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output_parent": {
+            "type": "string"
+          },
+          "supported_formats": {
+            "items": {
+              "$ref": "#/components/schemas/OutputDataFormatSchema"
+            },
+            "type": "array"
+          },
+          "temp_parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "output_parent",
+          "temp_parent",
+          "data_format",
+          "cleanup",
+          "existing_output",
+          "supported_formats",
+          "hdf5_unavailable_reason"
+        ],
+        "type": "object"
+      },
+      "OutputStorageSettingsSchema": {
+        "additionalProperties": false,
+        "description": "Per-session output storage overrides. Omitted fields retain safe defaults.",
+        "properties": {
+          "cleanup": {
+            "default": "on_success",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TempCleanupSchema"
+              }
+            ]
+          },
+          "data_format": {
+            "default": "zarr",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OutputDataFormatSchema"
+              }
+            ]
+          },
+          "existing_output": {
+            "default": "timestamp",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExistingOutputSchema"
+              }
+            ]
+          },
+          "output_dir": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "temp_dir": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ParallelExecutionModeResource": {
         "enum": [
           "serial",
@@ -36152,6 +36292,14 @@
         ],
         "type": "string"
       },
+      "TempCleanupSchema": {
+        "enum": [
+          "on_success",
+          "always",
+          "never"
+        ],
+        "type": "string"
+      },
       "TimeDependenceResource": {
         "oneOf": [
           {
@@ -40891,6 +41039,63 @@
         "responses": {
           "200": {
             "description": "OpenAPI v2 document"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/output-storage": {
+      "get": {
+        "operationId": "platform_get_platform_output_storage",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputStorageDefaultsResource"
+                }
+              }
+            },
+            "description": "Resolved output storage defaults and runtime format capabilities"
+          },
+          "500": {
+            "description": "Storage defaults could not be read"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      },
+      "put": {
+        "operationId": "platform_put_platform_output_storage",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutputStorageDefaultsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputStorageDefaultsResource"
+                }
+              }
+            },
+            "description": "Output storage defaults saved"
+          },
+          "400": {
+            "description": "Invalid output storage defaults"
+          },
+          "500": {
+            "description": "Output storage defaults could not be saved"
           }
         },
         "tags": [

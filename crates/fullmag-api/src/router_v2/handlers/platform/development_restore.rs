@@ -201,6 +201,7 @@ mod tests {
             device: "cpu".to_string(),
             precision: "double".to_string(),
             replace_current: false,
+            output_storage: None,
         })
         .expect("fixture scene should be created");
         scene.revision = 19;

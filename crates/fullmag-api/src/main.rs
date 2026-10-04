@@ -37,6 +37,7 @@ mod accepted_fem_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
 mod accepted_study_worker;
+mod accepted_project_storage;
 mod analysis;
 mod artifacts;
 mod assets;
@@ -1602,6 +1603,7 @@ mod scratch_session_lifecycle_tests {
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: false,
+                output_storage: None,
             }),
         )
         .await
@@ -1614,6 +1616,7 @@ mod scratch_session_lifecycle_tests {
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: true,
+                output_storage: None,
             }),
         )
         .await
@@ -1674,6 +1677,7 @@ mod scratch_session_lifecycle_tests {
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: false,
+                output_storage: None,
             }),
         )
         .await
@@ -1740,6 +1744,7 @@ mod scratch_session_lifecycle_tests {
                     device: "cpu".to_string(),
                     precision: "double".to_string(),
                     replace_current: true,
+                    output_storage: None,
                 }),
             )
             .await

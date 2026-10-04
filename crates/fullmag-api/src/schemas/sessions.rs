@@ -1,4 +1,5 @@
 use crate::schemas::authoring::{SceneMetadataResource, SceneObjectResource};
+use crate::schemas::output_storage::OutputStorageSettingsSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -38,6 +39,8 @@ pub struct CreateSessionRequest {
     pub precision: String,
     #[serde(default)]
     pub replace_current: bool,
+    #[serde(default)]
+    pub output_storage: Option<OutputStorageSettingsSchema>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

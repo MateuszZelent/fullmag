@@ -26,6 +26,11 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v2/platform/health", get(handlers::platform::get_health))
         .route(
+            "/v2/platform/output-storage",
+            get(handlers::platform::output_storage::get_output_storage_defaults)
+                .put(handlers::platform::output_storage::put_output_storage_defaults),
+        )
+        .route(
             "/v2/platform/runtime-service",
             get(handlers::platform::runtime_service::get_runtime_service),
         )
