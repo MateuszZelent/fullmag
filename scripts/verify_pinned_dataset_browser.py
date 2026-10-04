@@ -62,12 +62,13 @@ def port_is_open(port: int):
 
 
 def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
-    if scenario not in {"pinned-dataset", "project-document-handoff"}:
+    if scenario not in {"pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff"}:
         raise storage.StorageError("Unknown fixed browser fixture scenario")
     layout = storage.resolve_layout(repo, PROFILE)
     storage.initialize(layout)
     app = repo / "apps/control-room"
-    smoke = app / "scripts" / ("smoke-project-document-handoff.mjs" if scenario == "project-document-handoff" else "smoke-pinned-materialized-dataset.mjs")
+    smoke_name = {"pinned-dataset": "smoke-pinned-materialized-dataset.mjs", "project-document-handoff": "smoke-project-document-handoff.mjs", "development-kernel-host": "smoke-development-kernel-host.mjs", "development-run-outcome-handoff": "smoke-development-run-outcome-handoff.mjs"}[scenario]
+    smoke = app / "scripts" / smoke_name
     node = shutil.which("node")
     next_cli = app / "node_modules/next/dist/bin/next"
     if not node or not next_cli.is_file() or not smoke.is_file():
@@ -88,7 +89,7 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
         before = fingerprint(repo, False)
         receipt_path = run_root / "receipt.json"
         receipt = {
-            "schema": "fullmag_pinned_dataset_browser_fixture_v1" if scenario == "pinned-dataset" else "fullmag_project_document_browser_fixture_v1", "state": "running",
+            "schema": {"pinned-dataset": "fullmag_pinned_dataset_browser_fixture_v1", "project-document-handoff": "fullmag_project_document_browser_fixture_v1", "development-kernel-host": "fullmag_development_kernel_host_browser_fixture_v1", "development-run-outcome-handoff": "fullmag_development_run_outcome_handoff_browser_fixture_v1"}[scenario], "state": "running",
             "scenario": scenario,
             "repo_root": str(repo), "worktree_id": layout["worktree_id"], "profile": PROFILE,
             "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
@@ -124,11 +125,11 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
                     shutil.copy2(repo / name, snapshot / name)
             if fingerprint(repo, False) != before:
                 raise storage.StorageError("Frontend sources changed while taking the fixture snapshot")
-            if scenario == "project-document-handoff":
-                fixture_page = fixture_app / "scripts/fixtures/project-document-handoff-page.tsx"
+            if scenario != "pinned-dataset":
+                fixture_page = fixture_app / f"scripts/fixtures/{scenario}-page.tsx"
                 if not fixture_page.is_file():
                     raise storage.StorageError("Project document browser fixture page is missing")
-                target_page = fixture_app / "app/project-document-handoff/page.tsx"
+                target_page = fixture_app / f"app/{scenario}/page.tsx"
                 if target_page.exists():
                     raise storage.StorageError("Project document fixture must not overwrite a product route")
                 target_page.parent.mkdir(parents=True, exist_ok=False)
@@ -162,11 +163,14 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
                    "FULLMAG_FRONTEND_SOURCE_RUN_ROOT": str(run_root)}
             if BROWSER_CHANNEL:
                 env["FULLMAG_PINNED_DATASET_BROWSER_CHANNEL"] = BROWSER_CHANNEL
-            if scenario == "project-document-handoff":
-                env["CONTROL_ROOM_URL"] = f"http://127.0.0.1:{port}/project-document-handoff"
-                env["FULLMAG_PROJECT_DOCUMENT_REPORT_DIR"] = str(run_root / "browser")
+            if scenario != "pinned-dataset":
+                env["CONTROL_ROOM_URL"] = f"http://127.0.0.1:{port}/{scenario}"
+                if scenario == "development-kernel-host":
+                    env["CONTROL_ROOM_URL"] += "?fullmag_api_instance=11111111-1111-4111-8111-111111111111"
+                report_prefix = "FULLMAG_DEVELOPMENT_RUN_OUTCOME" if scenario == "development-run-outcome-handoff" else "FULLMAG_PROJECT_DOCUMENT"
+                env[report_prefix + "_REPORT_DIR"] = str(run_root / "browser")
                 if BROWSER_CHANNEL:
-                    env["FULLMAG_PROJECT_DOCUMENT_BROWSER_CHANNEL"] = BROWSER_CHANNEL
+                    env[report_prefix + "_BROWSER_CHANNEL"] = BROWSER_CHANNEL
             receipt["source_view"] = str(fixture_app)
             receipt["dependency_root"] = str(real_dependencies)
             with (run_root / "next.log").open("w", encoding="utf-8") as next_log:
@@ -228,7 +232,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--port", type=int, default=3250)
-    parser.add_argument("--scenario", choices=("pinned-dataset", "project-document-handoff"), default="pinned-dataset")
+    parser.add_argument("--scenario", choices=("pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff"), default="pinned-dataset")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")

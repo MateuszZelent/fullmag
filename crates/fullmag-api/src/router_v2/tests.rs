@@ -118,6 +118,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         stages: Vec::new(),
         study_pipeline: None,
         table_autosave: None,
+        output_storage: None,
         initial_state: None,
         geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
             name: "body".to_string(),
@@ -1152,6 +1153,7 @@ async fn model_readiness_reports_all_empty_scene_blockers_in_stable_order() {
                     name: "Empty".into(),
                     precision: "double".into(),
                     replace_current: false,
+                    output_storage: None,
                 },
             )
             .expect("empty scratch scene"),
@@ -1670,6 +1672,7 @@ async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_s
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: false,
+                output_storage: None,
             }),
         )
         .await
@@ -1688,6 +1691,7 @@ async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_s
                 device: "cpu".to_string(),
                 precision: "double".to_string(),
                 replace_current: true,
+                output_storage: None,
             }),
         )
         .await
@@ -3058,15 +3062,27 @@ fn assert_hysteresis_points_resource<'a>(
         .expect("hysteresis points resource must expose points")
 }
 
-fn is_iso_calendar_date(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+/// Accepts the version stamped by `fullmag-build-info`
+/// (`scripts/rust/build_version_stamp.rs`): `<base>-dev.<YYYYMMDD>.<identity>`
+/// where identity is `g<12 hex>[.dirty.s<12 hex>]+<day>` or `unqualified`.
+fn is_stamped_development_version(value: &str) -> bool {
+    let Some((base, rest)) = value.split_once("-dev.") else {
+        return false;
+    };
+    let base_is_semver = {
+        let parts: Vec<&str> = base.split('.').collect();
+        parts.len() == 3
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    };
+    let Some((date, identity)) = rest.split_once('.') else {
+        return false;
+    };
+    base_is_semver
+        && date.len() == 8
+        && date.bytes().all(|byte| byte.is_ascii_digit())
+        && !identity.is_empty()
 }
 
 // ─── system endpoints ───────────────────────────────────────────────────────
@@ -3386,9 +3402,14 @@ async fn status_returns_200_with_live_session() {
     let runtime_bundle = json["runtime_bundle_version"]
         .as_str()
         .expect("runtime_bundle_version should be a string");
+    assert_eq!(
+        runtime_bundle,
+        fullmag_build_info::version(),
+        "runtime_bundle_version must be the stamped product version of this build"
+    );
     assert!(
-        is_iso_calendar_date(runtime_bundle),
-        "runtime_bundle_version should expose the backend build date as YYYY-MM-DD, got {runtime_bundle}"
+        is_stamped_development_version(runtime_bundle),
+        "runtime_bundle_version should expose the generated <base>-dev.<YYYYMMDD>.<identity> product version, got {runtime_bundle}"
     );
     assert!(json["session"].is_object());
     assert_eq!(json["session"]["session_id"], "test-session");
@@ -8827,8 +8848,24 @@ async fn table_rows_binary_marks_resync_when_cursor_exceeds_available_rows() {
 // ─── quantities endpoints ───────────────────────────────────────────────────
 
 #[tokio::test]
-async fn quantities_catalog_returns_json_without_session() {
+async fn quantities_catalog_returns_404_without_live_session() {
     let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/quantities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn quantities_catalog_returns_json_with_live_session() {
+    let app = test_router_with_session().await;
     let response = app
         .oneshot(
             Request::builder()
@@ -9172,8 +9209,25 @@ async fn fem_frozen_spins_object_scope_uses_true_mesh_node_carrier() {
 // ─── display endpoint ───────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn display_get_returns_current_selection() {
+async fn display_get_returns_404_without_live_session() {
     let app = test_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/display")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn display_get_returns_current_selection() {
+    let app = test_router_with_session().await;
 
     let response = app
         .oneshot(
@@ -9195,7 +9249,7 @@ async fn display_get_returns_current_selection() {
 
 #[tokio::test]
 async fn display_put_replaces_full_selection() {
-    let state = test_app_state();
+    let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
 
     let response = app
@@ -9244,7 +9298,9 @@ async fn display_put_replaces_full_selection() {
     assert_eq!(sel.selection.every_n, 25);
     assert_eq!(sel.selection.layer, 3);
     assert!(!sel.selection.auto_scale_enabled);
-    assert_eq!(sel.revision, 1);
+    // One revision for the mutation and one for the observation-demand change
+    // from the empty default (synchronize_observation_quantities).
+    assert_eq!(sel.revision, 2);
     assert_eq!(presentation.colormap, "plasma");
     assert_eq!(presentation.contrast_min, Some(-2.0));
     assert_eq!(presentation.contrast_max, Some(4.0));
@@ -9253,7 +9309,7 @@ async fn display_put_replaces_full_selection() {
 
 #[tokio::test]
 async fn display_patch_updates_view_mode_and_field_component() {
-    let state = test_app_state();
+    let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
 
     let response = app
@@ -9282,12 +9338,14 @@ async fn display_patch_updates_view_mode_and_field_component() {
 
     let sel = state.current_display_selection.read().await;
     assert_eq!(sel.selection.preview_component(), "z");
-    assert_eq!(sel.revision, 1);
+    // One revision for the mutation and one for the observation-demand change
+    // from the empty default (synchronize_observation_quantities).
+    assert_eq!(sel.revision, 2);
 }
 
 #[tokio::test]
 async fn display_patch_accepts_partial_update() {
-    let state = test_app_state();
+    let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
 
     let response = app
@@ -9320,14 +9378,16 @@ async fn display_patch_accepts_partial_update() {
     assert_eq!(sel.selection.max_points, 4096);
     assert_eq!(sel.selection.x_chosen_size, 32);
     assert_eq!(sel.selection.y_chosen_size, 16);
-    assert_eq!(sel.revision, 1);
+    // One revision for the mutation and one for the observation-demand change
+    // from the empty default (synchronize_observation_quantities).
+    assert_eq!(sel.revision, 2);
     assert_eq!(presentation.colormap, "viridis");
     assert!(!presentation.vector_glyphs);
 }
 
 #[tokio::test]
 async fn display_patch_returns_persisted_presentation_state() {
-    let state = test_app_state();
+    let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
 
     let first = app
@@ -9376,7 +9436,7 @@ async fn display_patch_returns_persisted_presentation_state() {
 
 #[tokio::test]
 async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state() {
-    let state = test_app_state();
+    let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
 
     let patched = app
@@ -9525,7 +9585,7 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
 
 #[tokio::test]
 async fn visualization_state_patch_persists_fdm_and_fem_target_overrides_for_a_second_client() {
-    let state = test_app_state();
+    let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state);
     let patch = serde_json::json!({
         "overrides": [
@@ -9605,7 +9665,7 @@ async fn visualization_state_patch_persists_fdm_and_fem_target_overrides_for_a_s
 
 #[tokio::test]
 async fn visualization_airbox_layer_patch_supersedes_initial_airbox_override() {
-    let state = test_app_state();
+    let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
 
     let seeded = app
@@ -14088,8 +14148,25 @@ async fn response_magnetic_sweep_v1_missing_artifact_returns_404() {
 }
 
 #[tokio::test]
-async fn frequency_domain_manifest_reports_solver_family_availability() {
+async fn frequency_domain_manifest_requires_live_session() {
     let app = test_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/frequency-domain/manifest.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn frequency_domain_manifest_reports_solver_family_availability() {
+    let app = test_router_with_session().await;
 
     let response = app
         .oneshot(
@@ -14207,7 +14284,13 @@ async fn frequency_domain_manifest_reports_solver_family_availability() {
         json["capabilities"]["visualization"]["mode_3d_overlay"]["status"],
         "reference_executable"
     );
-    assert_eq!(json["response_progress"], serde_json::Value::Null);
+    // Without a response sweep the manifest still reports why, instead of null.
+    assert_eq!(json["response_progress"]["complete"], false);
+    assert_eq!(json["response_progress"]["completed_frequency_points"], 0);
+    assert_eq!(
+        json["response_progress"]["missing_reason"],
+        "response sweep progress artifacts are not present"
+    );
 }
 
 #[tokio::test]
@@ -15993,10 +16076,13 @@ async fn authoring_scene_put_commits_scene_document() {
         .as_ref()
         .map(|snapshot| snapshot.region_realization_revisions)
         .expect("region revisions should be present");
+    // A geometry change alters the occupied domain, so the authoring
+    // classifier advances every realization lane (see
+    // `fullmag_authoring::classify_region_realization_impact`).
     assert!(revisions_after_topology.topology > 0);
-    assert_eq!(revisions_after_topology.membership, 0);
-    assert_eq!(revisions_after_topology.coefficients, 0);
-    assert_eq!(revisions_after_topology.initial_state, 0);
+    assert!(revisions_after_topology.membership > 0);
+    assert!(revisions_after_topology.coefficients > 0);
+    assert!(revisions_after_topology.initial_state > 0);
     drop(guard);
 
     let mut metadata_only = committed;
@@ -27059,6 +27145,40 @@ async fn session_import_resume_without_backend_restore_leaves_active_snapshot_un
     let _ = fs::remove_dir_all(&repo_root);
 }
 
+/// Archive preflight decodes into a private, self-cleaning `imports` directory
+/// below the configured store root (ADR 0038). A rejected archive must neither
+/// open/initialize the `SessionStore` (which creates `manifests`, `runs`,
+/// `objects`, ...) nor leave any decoded staging behind.
+fn assert_active_session_store_uninitialized(repo_root: &std::path::Path, context: &str) {
+    let store_root = repo_root.join(".fullmag/local-live/session-store");
+    if !store_root.exists() {
+        return;
+    }
+    let entry_names = |directory: &std::path::Path| {
+        fs::read_dir(directory)
+            .expect("directory should be readable")
+            .map(|entry| {
+                entry
+                    .expect("directory entry should be readable")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    let entries = entry_names(&store_root);
+    assert_eq!(
+        entries,
+        vec!["imports".to_string()],
+        "{context}: only the private archive decoding root may exist"
+    );
+    let leftovers = entry_names(&store_root.join("imports"));
+    assert!(
+        leftovers.is_empty(),
+        "{context}: archive decoding must clean up after itself, found {leftovers:?}"
+    );
+}
+
 #[tokio::test]
 async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store() {
     use std::io::Cursor;
@@ -27140,9 +27260,9 @@ async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store(
         .expect("active snapshot must serialize"),
         active_before
     );
-    assert!(
-        !repo_root.join(".fullmag/local-live/session-store").exists(),
-        "preflight failure must not initialize the active SessionStore"
+    assert_active_session_store_uninitialized(
+        &repo_root,
+        "preflight failure must not initialize the active SessionStore",
     );
 
     let mut corrupt_documents = documents;
@@ -27189,9 +27309,9 @@ async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store(
         .expect("active snapshot must serialize"),
         active_before
     );
-    assert!(
-        !repo_root.join(".fullmag/local-live/session-store").exists(),
-        "corrupt snapshot must not initialize the active SessionStore"
+    assert_active_session_store_uninitialized(
+        &repo_root,
+        "corrupt snapshot must not initialize the active SessionStore",
     );
 
     let _ = fs::remove_dir_all(&repo_root);
@@ -27950,6 +28070,11 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
         .await
         .unwrap();
     assert_eq!(create.status(), StatusCode::OK);
+    let created = body_json(create).await;
+    let checkpoint_id = created["checkpoint"]["checkpoint_id"]
+        .as_str()
+        .expect("checkpoint id should be present")
+        .to_string();
     state
         .current_live_state
         .write()
@@ -27963,7 +28088,9 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042/restore")
+                .uri(format!(
+                    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore"
+                ))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::json!({}).to_string()))
                 .unwrap(),
@@ -32455,8 +32582,23 @@ async fn asyncapi_docs_page_links_to_v2_document() {
 }
 
 #[tokio::test]
-async fn communication_policy_can_be_read_and_patched() {
+async fn communication_policy_requires_live_session() {
     let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/events/communication-policy")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn communication_policy_can_be_read_and_patched() {
+    let app = test_router_with_session().await;
     let response = app
         .clone()
         .oneshot(

@@ -1,5 +1,18 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AS](53as-run-outcome-handoff.md) rezerwuje opóźniony recorder wyniku
+przed trackerem i thumbnail. Capture/guard/restore nie omijają kolejki
+ani flushu; po pauzie obserwacja jest rozpatrywana dokładnie raz.
+Regresja 5 grup, browser 9/9, lint 6 plików i API hygiene PASS.
+Wspólne typowanie/pełny lint blokują niezależne zmiany Start/About.
+Komenda UI i pełny natywny restart pozostają otwarte; `restart_available=false`.
+
+[P8-53AR](53ar-mounted-kernel-handoff.md) podłącza pauzę i publikację do
+zamontowanego KernelProvider, chroni stare i nowe registry/transport/cache
+oraz potwierdza zmianę pinu dopiero po mount. Browser fixture 13/13 PASS;
+host 6 grup i transport 13 grup PASS. Komenda UI oraz pełny natywny restart
+z niepustym modelem i szkicami pozostają otwarte; `restart_available=false`.
+
 [P8-53AQ](53aq-workspace-owners-and-client-cache.md) dodaje dokładną tożsamość
 workspace, guard dokumentu, adapter właścicieli oraz odrębny cache klientów.
 Natywny build i 24 kontrole API PASS; frontend: 39 grup koordynatora,

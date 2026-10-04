@@ -34,7 +34,14 @@ def validate_mesh_ir(mesh_ir: dict[str, Any]) -> bool | None:
 
 
 def run_problem_json(
-    ir: dict[str, Any], until_seconds: float, output_dir: str | None = None
+    ir: dict[str, Any],
+    until_seconds: float,
+    output_dir: str | None = None,
+    *,
+    temp_dir: str | None = None,
+    data_format: str | None = None,
+    temp_cleanup: str | None = None,
+    existing_output: str | None = None,
 ) -> dict[str, Any] | None:
     """Run a ProblemIR through the Rust reference runner.
 
@@ -44,7 +51,13 @@ def run_problem_json(
     if _native_core is None:
         return None
     result_json = _native_core.run_problem_json(
-        json.dumps(ir), until_seconds, output_dir
+        json.dumps(ir),
+        until_seconds,
+        output_dir,
+        temp_dir,
+        data_format,
+        temp_cleanup,
+        existing_output,
     )
     return json.loads(result_json)
 

@@ -874,6 +874,8 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table_autosave: Option<fullmag_ir::TableAutosaveIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_storage: Option<fullmag_ir::OutputStorageIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<ScriptBuilderInitialState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub geometries: Vec<ScriptBuilderGeometryEntry>,

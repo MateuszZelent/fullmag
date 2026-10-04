@@ -4,6 +4,7 @@ mod accepted_fem_state;
 mod accepted_fem_study_worker;
 #[path = "accepted_study_worker.rs"]
 mod accepted_study_worker;
+mod accepted_project_storage;
 
 mod worker_startup_gate;
 

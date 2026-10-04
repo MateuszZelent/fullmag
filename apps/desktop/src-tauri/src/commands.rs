@@ -1,10 +1,10 @@
+use crate::{compute_probe, provenance, recent_index};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use fullmag_application::{
     DocumentMode, DurabilityGuarantee, FileProjectRepository, OpaqueDocument, ProjectApplication,
     ProjectSource, ProjectTarget, SaveProjectRequest,
 };
 use crate::workspace_commands::{self, WorkspaceHost};
-use crate::{compute_probe, provenance, recent_index};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
@@ -239,6 +239,19 @@ pub async fn open_project_dialog(
     let (summary, name) = open_project_file(file_path.clone())?;
     mirror_project_open(&app, workspace.inner(), &file_path, &summary, &name).await;
     Ok(Some(summary))
+}
+
+/// Select a results/temporary parent without creating or removing files.
+#[tauri::command]
+pub async fn pick_output_directory(app: AppHandle) -> Result<Option<String>, String> {
+    let selected = app.dialog().file().blocking_pick_folder();
+    selected
+        .map(|path| {
+            path.into_path()
+                .map(|path| path.display().to_string())
+                .map_err(|_| "selected directory is not a local filesystem path".to_string())
+        })
+        .transpose()
 }
 
 /// Open a project through the host file dialog and return the validated bytes
@@ -842,10 +855,10 @@ mod tests {
         record_project_outcome, save_project_archive_to_target, ProjectOutcomePreview,
         ProjectOutcomeRequest, ProjectSaveRequest,
     };
-    use fullmag_application::{ProjectApplication, ProjectRepository, ProjectSource};
-    use serde_json::json;
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     use fullmag_application::{FileProjectRepository, ProjectEnvelope, ProjectId};
+    use fullmag_application::{ProjectApplication, ProjectRepository, ProjectSource};
+    use serde_json::json;
     use tempfile::tempdir;
 
     fn request(archive_base64: String, target_path: String) -> ProjectSaveRequest {
@@ -954,10 +967,12 @@ mod tests {
         )
         .unwrap();
         // A new file records nothing: it has no earlier state to differ from.
-        assert!(crate::provenance::read_from_archive(&target).unwrap()["history"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            crate::provenance::read_from_archive(&target).unwrap()["history"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
 
         let mut second = ProjectEnvelope::blank(id(), "Second").unwrap();
         second.rewrite_known_fields().unwrap();
@@ -1065,8 +1080,10 @@ mod tests {
             .unwrap()
             .opaque_documents
             .iter()
-            .any(|document| document.path() == crate::recent_index::THUMBNAIL_PATH
-                && document.bytes() == tiny_png().as_slice()));
+            .any(
+                |document| document.path() == crate::recent_index::THUMBNAIL_PATH
+                    && document.bytes() == tiny_png().as_slice()
+            ));
 
         let provenance = crate::provenance::read_from_archive(&target).unwrap();
         assert_eq!(provenance["runs"][0]["run_id"], "run-1");
@@ -1128,7 +1145,9 @@ mod tests {
         let envelope =
             ProjectEnvelope::blank(ProjectId::parse("project-untouched").unwrap(), "Untouched")
                 .unwrap();
-        let archive = FileProjectRepository::new().encode_archive(&envelope).unwrap();
+        let archive = FileProjectRepository::new()
+            .encode_archive(&envelope)
+            .unwrap();
         save_project_archive_to_target(
             request(STANDARD.encode(archive), target.display().to_string()),
             target.clone(),

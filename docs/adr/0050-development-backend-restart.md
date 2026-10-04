@@ -8,6 +8,29 @@ NOT VERIFIED. Utrata ACK wymaga potwierdzonego exit własnego API i zgodnego
 trwałego rekordu; nie upoważnia do ponowienia commit ani zwolnienia fence.
 Data: 03.10.2026.
 
+### Wynik runu jako praca właściciela dokumentu — P8-53AS
+
+Okno oczekiwania na końcową klatkę i thumbnail również należy do pracy
+właściciela dokumentu. Connector rezerwuje je synchronicznie przed
+konsumowaniem obserwacji runu. Capture/guard/restore nie omijają rezerwacji,
+queued outcomes ani flushu. Pauza lub guard nie konsumują obserwacji;
+po zwolnieniu można ją rozpatrzyć ponownie. Ogólna operacja Save zachowuje
+możliwość opróżnienia kolejki. Nie rozszerza to payloadu handoff ani nie
+pozwala wyczyścić kolejki przy restore. Wykonanie i granice dowodów:
+[P8-53AS](../plans/active/refactor_runtime/final/p8/53as-run-outcome-handoff.md).
+
+### Zamontowany kernel — P8-53AR
+
+[Dowód P8-53AR](../plans/active/refactor_runtime/final/p8/53ar-mounted-kernel-handoff.md)
+obejmuje produkcyjny KernelProvider z odpowiedziami fixture. Pauza zachowuje
+zamontowane dzieci; nowa generacja otrzymuje świeżych właścicieli i scoped
+cache. Registry, API i zasoby nowej generacji są chronione do potwierdzenia
+mount i aktualizacji pinu URL. Stary transport pozostaje retired, także po
+zwolnieniu capture lease. Token-bound status może pominąć stary pin,
+ale musi potwierdzić wersję kontraktu. Browser 13/13 PASS nie kwalifikuje
+natywnego restartu, warm-service ani utraty zasilania. Komenda UI i pełny
+restart z niepustą sceną pozostają NOT VERIFIED; `restart_available=false`.
+
 ### Tożsamość i właściciele frontendu — P8-53AQ
 
 Zasób `development-backend` w zarządzanym trybie dev zawiera cienkie

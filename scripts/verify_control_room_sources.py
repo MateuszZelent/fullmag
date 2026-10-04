@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import fullmag_storage as storage
 
 PROFILE = "windows-control-room-source-check"
-ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check", "resource-client-cache-check")
+ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check", "resource-client-cache-check", "development-kernel-host-check", "development-transport-pause-check", "development-run-outcome-handoff-check", "development-run-outcome-handoff-lint")
 
 
 def timestamp():
@@ -98,10 +98,30 @@ def run(repo: Path, route: str):
                 commands = [[node, "--experimental-vm-modules", "scripts/check-resource-client-cache-scope.mjs"]]
                 receipt["interpreted_node_checks"] = True
                 receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
+            elif route in {"development-kernel-host-check", "development-transport-pause-check", "development-run-outcome-handoff-check"}:
+                check = {"development-kernel-host-check": "check-development-kernel-host.mjs", "development-transport-pause-check": "check-development-transport-pause.mjs", "development-run-outcome-handoff-check": "check-development-run-outcome-handoff.mjs"}[route]
+                commands = [[node, "--experimental-vm-modules", "scripts/" + check]]
+                receipt["interpreted_node_checks"] = True
+                receipt["unit_tests"] = "none_native_type_erasure_of_production_source_only"
+                if route == "development-run-outcome-handoff-check":
+                    receipt["unit_tests"] = "none_interpreted_js_driver_no_unit_build"
+                    receipt["production_source_transform"] = "in_memory_parameter_property_support"
             elif route == "api-hygiene":
                 commands = [[node, "scripts/check-api-hygiene.mjs"]]
             elif route == "lint":
                 commands = [cli("eslint", "bin/eslint.js") + [".", "--max-warnings=0"]]
+            elif route == "development-run-outcome-handoff-lint":
+                checked_files = [
+                    "src/kernel/KernelProvider.tsx",
+                    "src/kernel/persistence/ProjectDocumentController.ts",
+                    "src/kernel/persistence/RunOutcomeConnector.tsx",
+                    "scripts/check-development-run-outcome-handoff.mjs",
+                    "scripts/fixtures/development-run-outcome-handoff-page.tsx",
+                    "scripts/smoke-development-run-outcome-handoff.mjs",
+                ]
+                commands = [cli("eslint", "bin/eslint.js") + checked_files + ["--max-warnings=0"]]
+                receipt["lint_scope"] = "development_run_outcome_handoff_only"
+                receipt["checked_files"] = checked_files
             elif route == "react-doctor":
                 # Reuse the repository-pinned tool without installing or
                 # contacting the score/supply-chain services. Dumps and caches

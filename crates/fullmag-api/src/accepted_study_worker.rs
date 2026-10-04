@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
 const WORKER_EXECUTION_STARTED_RECEIPT: &str = "worker_execution_started.v1.json";
+const WORKER_PRELAUNCH_FAILED_RECEIPT: &str = "worker_prelaunch_failed.v1.json";
 const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.json";
 const WORKER_EXECUTION_RECEIPT_SCHEMA: &str = "fullmag.accepted_worker_execution.v1";
 
@@ -79,6 +80,13 @@ impl WorkerExecutionReceiptIdentity {
 #[serde(deny_unknown_fields)]
 struct WorkerExecutionStartedReceipt {
     identity: WorkerExecutionReceiptIdentity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerPrelaunchFailedReceipt {
+    identity: WorkerExecutionReceiptIdentity,
+    error: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1046,6 +1054,33 @@ pub(crate) fn execute_accepted_worker_start(
     let execution_plan = materialize_resolved_study_inputs(store, accepted_step)
         .context("materialize accepted CAS inputs for the runner")?;
     let receipt_identity = worker_execution_receipt_identity(start, accepted_step, case_id)?;
+    match existing_private_attempt_output_dir(store, &accepted_step.claim) {
+        Ok(existing_path) => {
+            return recover_accepted_fdm_worker_attempt(
+                store,
+                accepted_step,
+                &receipt_identity,
+                &study_step.outputs,
+                existing_path,
+            )
+        }
+        Err(error) if is_not_found_error(&error) => {}
+        Err(error) => return Err(error).context("inspect existing accepted FDM attempt"),
+    }
+    // RunSpec is the accepted source for requested device/precision. Project
+    // that explicit device request into the runner's runtime-selection metadata;
+    // the environment guard above prevents a managed override from changing it.
+    let mut problem = accepted_step.problem.clone();
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": request.device, "precision": "double"}),
+    );
+    crate::accepted_project_storage::AcceptedProjectStorage::preflight(
+        &problem,
+        store,
+        &accepted_step.claim,
+        &accepted_step.step_id,
+    )?;
     let attempt_output_dir = match retry_store_writer_busy(|| {
         create_private_attempt_output_dir(store, &accepted_step.claim)
     }) {
@@ -1067,47 +1102,42 @@ pub(crate) fn execute_accepted_worker_start(
                 return Err(reservation_error)
                     .context("reserve output directory for the accepted worker attempt");
             };
-            let current_claim = retry_store_writer_busy(|| {
-                fullmag_runtime_control::load_current_task_claim(
-                    store,
-                    &accepted_step.claim.run_id,
-                    accepted_step.claim.task_id.as_str(),
-                )
-            })
-            .context("reconcile accepted worker receipt under the current claim")?;
-            if !accepted_step.claim.is_same_or_renewed_by(&current_claim) {
-                bail!("accepted worker receipt belongs to a stale task claim");
-            }
-            let expected_accepted_state_ref =
-                accepted_state_ref_from_runner_snapshot(&existing_path, accepted_step, false)?;
-            return recover_completed_worker_execution(
+            return recover_accepted_fdm_worker_attempt(
                 store,
-                &existing_path,
+                accepted_step,
                 &receipt_identity,
                 &study_step.outputs,
-                accepted_step.claim.lease.budget.storage_bytes,
-                expected_accepted_state_ref.as_ref(),
-                fdm_cpu_observation_grid(accepted_step),
-            )
-            .context("recover completed accepted worker attempt without rerunning solver");
+                existing_path,
+            );
         }
     };
 
-    // RunSpec is the accepted source for requested device/precision. Project
-    // that explicit device request into the runner's runtime-selection metadata;
-    // the environment guard above prevents a managed override from changing it.
-    let mut problem = accepted_step.problem.clone();
-    problem.problem_meta.runtime_metadata.insert(
-        "runtime_selection".into(),
-        serde_json::json!({"device": request.device, "precision": "double"}),
-    );
-    let display_selection = fullmag_runner::DisplaySelectionState::default;
-    let result =
-        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+    // Reserve project storage only after the authoritative private attempt.
+    // A rejected reservation has a durable no-solver outcome, never a bare STARTED.
+    let mut storage = prepare_accepted_project_storage(
+        &problem,
+        store,
+        accepted_step,
+        &receipt_identity,
+        &attempt_output_dir,
+    )?;
+    if let Some(storage) = &storage {
+        problem.problem_meta.runtime_metadata.insert(
+            "resolved_output_storage".into(),
+            serde_json::to_value(storage.resolved())?,
+        );
+    }
+    let storage_attempt_dir = attempt_output_dir.clone();
+    let execution: Result<AcceptedRunnerExecution> = (|| {
+        let display_selection = fullmag_runner::DisplaySelectionState::default;
+        let result =
+        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
             &problem,
             &execution_plan,
+            None,
             until_seconds,
             &attempt_output_dir,
+            storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
             u64::MAX,
             &display_selection,
             interrupt_requested,
@@ -1116,61 +1146,72 @@ pub(crate) fn execute_accepted_worker_start(
         )
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("execute accepted FDM {} runner plan", request.device))?;
-    if result.status == RunStatus::Cancelled {
-        return Ok(AcceptedRunnerExecution {
+        if result.status == RunStatus::Cancelled {
+            return Ok(AcceptedRunnerExecution {
+                status: result.status,
+                completed_step_count: result.steps.len(),
+                outputs: Vec::new(),
+                attempt_output_dir,
+                recovered_from_receipt: false,
+                accepted_state_ref: None,
+                observation_source: None,
+            });
+        }
+        if result.status != RunStatus::Completed {
+            bail!(
+                "accepted FDM {} runner did not complete successfully",
+                request.device
+            );
+        }
+        let outputs = collect_runner_study_outputs(
+            &study_step.outputs,
+            case_id,
+            &result,
+            &attempt_output_dir,
+            accepted_step.claim.lease.budget.storage_bytes,
+        )
+        .context("collect explicit typed outputs from the accepted runner attempt")?;
+        let accepted_state_ref =
+            accepted_state_ref_from_runner_snapshot(&attempt_output_dir, accepted_step, true)?;
+        let observation_source = collect_fdm_cpu_observation_source(
+            &attempt_output_dir,
+            accepted_step,
+            accepted_state_ref.as_ref(),
+            accepted_step.claim.lease.budget.storage_bytes,
+        )?;
+        if let Some(storage) = &mut storage {
+            storage.finish(true, &attempt_output_dir)?;
+        }
+        persist_completed_worker_execution(
+            store,
+            &attempt_output_dir,
+            &receipt_identity,
+            &study_step.outputs,
+            result.status,
+            result.steps.len(),
+            &outputs,
+            accepted_state_ref.as_ref(),
+            observation_source.as_ref(),
+        )
+        .context("persist immutable completed worker output receipt")?;
+
+        Ok(AcceptedRunnerExecution {
             status: result.status,
             completed_step_count: result.steps.len(),
-            outputs: Vec::new(),
+            outputs,
             attempt_output_dir,
             recovered_from_receipt: false,
-            accepted_state_ref: None,
-            observation_source: None,
-        });
+            accepted_state_ref,
+            observation_source,
+        })
+    })();
+    if let Some(storage) = &mut storage {
+        let success = execution
+            .as_ref()
+            .is_ok_and(|result| result.status == RunStatus::Completed);
+        storage.finish(success, &storage_attempt_dir)?;
     }
-    if result.status != RunStatus::Completed {
-        bail!(
-            "accepted FDM {} runner did not complete successfully",
-            request.device
-        );
-    }
-    let outputs = collect_runner_study_outputs(
-        &study_step.outputs,
-        case_id,
-        &result,
-        &attempt_output_dir,
-        accepted_step.claim.lease.budget.storage_bytes,
-    )
-    .context("collect explicit typed outputs from the accepted runner attempt")?;
-    let accepted_state_ref =
-        accepted_state_ref_from_runner_snapshot(&attempt_output_dir, accepted_step, true)?;
-    let observation_source = collect_fdm_cpu_observation_source(
-        &attempt_output_dir,
-        accepted_step,
-        accepted_state_ref.as_ref(),
-        accepted_step.claim.lease.budget.storage_bytes,
-    )?;
-    persist_completed_worker_execution(
-        store,
-        &attempt_output_dir,
-        &receipt_identity,
-        &study_step.outputs,
-        result.status,
-        result.steps.len(),
-        &outputs,
-        accepted_state_ref.as_ref(),
-        observation_source.as_ref(),
-    )
-    .context("persist immutable completed worker output receipt")?;
-
-    Ok(AcceptedRunnerExecution {
-        status: result.status,
-        completed_step_count: result.steps.len(),
-        outputs,
-        attempt_output_dir,
-        recovered_from_receipt: false,
-        accepted_state_ref,
-        observation_source,
-    })
+    execution
 }
 
 fn execute_accepted_fem_worker_start(
@@ -1207,6 +1248,12 @@ fn execute_accepted_fem_worker_start(
         case_id,
     )
     .context("prepare accepted FEM CPU execution before attempt reservation")?;
+    crate::accepted_project_storage::AcceptedProjectStorage::preflight(
+        &prepared.problem,
+        store,
+        &accepted_step.claim,
+        &accepted_step.step_id,
+    )?;
     let attempt_output_dir = match retry_store_writer_busy(|| {
         create_private_attempt_output_dir(store, &accepted_step.claim)
     }) {
@@ -1242,50 +1289,162 @@ fn execute_accepted_fem_worker_start(
         }
     };
 
-    let outcome = crate::accepted_fem_study_worker::execute_accepted_fem_cpu_attempt(
+    let mut storage = prepare_accepted_project_storage(
+        &prepared.problem,
+        store,
         accepted_step,
-        &prepared,
+        &receipt_identity,
         &attempt_output_dir,
-        interrupt_requested,
-    )
-    .context("execute accepted FEM CPU worker attempt")?;
-    match outcome {
-        crate::accepted_fem_study_worker::AcceptedFemCpuExecutionOutcome::Cancelled {
-            completed_step_count,
-            attempt_output_dir,
-        } => Ok(AcceptedRunnerExecution {
-            status: RunStatus::Cancelled,
-            completed_step_count,
-            outputs: Vec::new(),
-            attempt_output_dir,
-            recovered_from_receipt: false,
-            accepted_state_ref: None,
-            observation_source: None,
-        }),
-        crate::accepted_fem_study_worker::AcceptedFemCpuExecutionOutcome::Completed(execution) => {
-            persist_completed_worker_execution(
-                store,
-                &execution.attempt_output_dir,
-                &receipt_identity,
-                &prepared.output_ports,
-                execution.status,
-                execution.completed_step_count,
-                &execution.outputs,
-                Some(&execution.accepted_state_ref),
-                None,
-            )
-            .context("persist immutable completed FEM worker output receipt")?;
-            Ok(AcceptedRunnerExecution {
-                status: execution.status,
-                completed_step_count: execution.completed_step_count,
-                outputs: execution.outputs,
-                attempt_output_dir: execution.attempt_output_dir,
+    )?;
+    let storage_attempt_dir = attempt_output_dir.clone();
+    let execution: Result<AcceptedRunnerExecution> = (|| {
+        let outcome = crate::accepted_fem_study_worker::execute_accepted_fem_cpu_attempt(
+            accepted_step,
+            &prepared,
+            &attempt_output_dir,
+            storage
+                .as_ref()
+                .map(|value| value.data_root())
+                .unwrap_or(&attempt_output_dir),
+            interrupt_requested,
+        )
+        .context("execute accepted FEM CPU worker attempt")?;
+        match outcome {
+            crate::accepted_fem_study_worker::AcceptedFemCpuExecutionOutcome::Cancelled {
+                completed_step_count,
+                attempt_output_dir,
+            } => Ok(AcceptedRunnerExecution {
+                status: RunStatus::Cancelled,
+                completed_step_count,
+                outputs: Vec::new(),
+                attempt_output_dir,
                 recovered_from_receipt: false,
-                accepted_state_ref: Some(execution.accepted_state_ref),
+                accepted_state_ref: None,
                 observation_source: None,
-            })
+            }),
+            crate::accepted_fem_study_worker::AcceptedFemCpuExecutionOutcome::Completed(
+                execution,
+            ) => {
+                if let Some(storage) = &mut storage {
+                    storage.finish(true, &execution.attempt_output_dir)?;
+                }
+                persist_completed_worker_execution(
+                    store,
+                    &execution.attempt_output_dir,
+                    &receipt_identity,
+                    &prepared.output_ports,
+                    execution.status,
+                    execution.completed_step_count,
+                    &execution.outputs,
+                    Some(&execution.accepted_state_ref),
+                    None,
+                )
+                .context("persist immutable completed FEM worker output receipt")?;
+                Ok(AcceptedRunnerExecution {
+                    status: execution.status,
+                    completed_step_count: execution.completed_step_count,
+                    outputs: execution.outputs,
+                    attempt_output_dir: execution.attempt_output_dir,
+                    recovered_from_receipt: false,
+                    accepted_state_ref: Some(execution.accepted_state_ref),
+                    observation_source: None,
+                })
+            }
+        }
+    })();
+    if let Some(storage) = &mut storage {
+        let success = execution
+            .as_ref()
+            .is_ok_and(|result| result.status == RunStatus::Completed);
+        storage.finish(success, &storage_attempt_dir)?;
+    }
+    execution
+}
+
+fn prepare_accepted_project_storage(
+    problem: &fullmag_ir::ProblemIR,
+    store: &SessionStore,
+    accepted_step: &AcceptedWorkerStep,
+    identity: &WorkerExecutionReceiptIdentity,
+    attempt: &Path,
+) -> Result<Option<crate::accepted_project_storage::AcceptedProjectStorage>> {
+    match crate::accepted_project_storage::AcceptedProjectStorage::prepare(
+        problem,
+        store,
+        &accepted_step.claim,
+        &accepted_step.step_id,
+    ) {
+        Ok(storage) => Ok(storage),
+        Err(error) => {
+            write_immutable_attempt_receipt(
+                attempt,
+                WORKER_PRELAUNCH_FAILED_RECEIPT,
+                &WorkerPrelaunchFailedReceipt {
+                    identity: identity.clone(),
+                    error: error.to_string(),
+                },
+            )
+            .context("persist known storage preparation failure before any solver side effect")?;
+            Err(error).context("project storage preparation failed; no solver was launched")
         }
     }
+}
+
+fn refuse_known_prelaunch_failure(
+    attempt: &Path,
+    identity: &WorkerExecutionReceiptIdentity,
+) -> Result<()> {
+    if let Some(failure) = read_attempt_receipt::<WorkerPrelaunchFailedReceipt>(
+        attempt,
+        WORKER_PRELAUNCH_FAILED_RECEIPT,
+    )? {
+        let started: WorkerExecutionStartedReceipt =
+            read_attempt_receipt(attempt, WORKER_EXECUTION_STARTED_RECEIPT)?
+                .context("prelaunch failure has no matching durable worker start")?;
+        if !started.identity.matches_same_attempt(identity)
+            || !failure.identity.matches_same_attempt(identity)
+        {
+            bail!("prelaunch failure receipt belongs to another accepted Start");
+        }
+        bail!(
+            "accepted worker failed before solver launch: {}",
+            failure.error
+        );
+    }
+    Ok(())
+}
+
+fn recover_accepted_fdm_worker_attempt(
+    store: &SessionStore,
+    accepted_step: &AcceptedWorkerStep,
+    identity: &WorkerExecutionReceiptIdentity,
+    declared_outputs: &[StudyOutputPort],
+    existing_path: PathBuf,
+) -> Result<AcceptedRunnerExecution> {
+    let current_claim = retry_store_writer_busy(|| {
+        fullmag_runtime_control::load_current_task_claim(
+            store,
+            &accepted_step.claim.run_id,
+            accepted_step.claim.task_id.as_str(),
+        )
+    })
+    .context("reconcile accepted worker receipt under the current claim")?;
+    if !accepted_step.claim.is_same_or_renewed_by(&current_claim) {
+        bail!("accepted worker receipt belongs to a stale task claim");
+    }
+    refuse_known_prelaunch_failure(&existing_path, identity)?;
+    let expected_accepted_state_ref =
+        accepted_state_ref_from_runner_snapshot(&existing_path, accepted_step, false)?;
+    recover_completed_worker_execution(
+        store,
+        &existing_path,
+        identity,
+        declared_outputs,
+        accepted_step.claim.lease.budget.storage_bytes,
+        expected_accepted_state_ref.as_ref(),
+        fdm_cpu_observation_grid(accepted_step),
+    )
+    .context("recover completed accepted worker attempt without rerunning solver")
 }
 
 fn recover_accepted_fem_worker_attempt(
@@ -1306,6 +1465,7 @@ fn recover_accepted_fem_worker_attempt(
     if !accepted_step.claim.is_same_or_renewed_by(&current_claim) {
         bail!("accepted FEM worker receipt belongs to a stale task claim");
     }
+    refuse_known_prelaunch_failure(&existing_path, receipt_identity)?;
     let expected_accepted_state_ref =
         crate::accepted_fem_study_worker::accepted_state_ref_from_attempt_snapshot(
             &existing_path,
