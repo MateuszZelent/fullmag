@@ -152,3 +152,18 @@ roundtrip z geometrią/regionami/materiałami, warm-service, fault injection,
 power-loss i release qualification nadal wymagają odrębnych dowodów.
 Browser fixture nie jest wykonaniem solvera ani natywnym restartem API.
 Procentów całego planu nie podnosimy na podstawie źródłowego hosta.
+
+## Checkpoint lokalny
+
+Fragment zapisano w commicie
+`902811bf1c4e8f63d0aff6d831f7f2e79fa03582` na `master`.
+Obejmuje 22 pliki: host i jego granice, transport, rzeczywiste sprawdziany
+oraz dokumentację. Cudze zmiany CAS/FMS, submodule i rootowy
+`StageInspectors.test.tsx` pozostawiono poza commitem.
+
+Commit hook React Doctor zgłosił dwa ostrzeżenia `await inside a loop`
+w `loadTopologySectionsByRange`/`loadTopologySectionByRange`. Te metody
+pozostały bez zmian względem rodzica `01e1b113f5a1f17aef0e506e3c9dbf965401e300`;
+przesunęły się numery linii. Nie zmieniono polityki pobierania zakresów
+ani nie wyłączono diagnostyki. Hook zakończył commit; produkcyjny lint PASS.
+Ten checkpoint nie zamyka Required P2 kolejki wyników runu ani całego P8.
