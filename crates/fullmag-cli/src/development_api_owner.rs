@@ -300,6 +300,12 @@ impl OwnerLaunch {
         &self.owner_token
     }
 
+    pub(crate) fn expects_launcher_build(&self) -> bool {
+        let local = fullmag_build_info::identity();
+        self.expected_build_commit == local.git_commit
+            && self.expected_build_snapshot == local.source_snapshot_sha256
+    }
+
     /// Confirm the record published by the exact child and HTTP listener.
     /// Missing records are retried briefly because the API binds HTTP before
     /// publishing its private control listener; every other error is final.
@@ -375,6 +381,9 @@ impl OwnerLaunch {
         }
 
         Ok(OwnedDevelopmentApi {
+            api_build: fullmag_runtime_control::development_cold_idle::PinnedApiBuildIdentity::from_pinned_build(
+                &self.expected_build_commit, &self.expected_build_snapshot,
+            )?,
             service_configured: self.service_configured,
             control_address: address,
             api_port,
@@ -392,6 +401,7 @@ impl OwnerLaunch {
 /// A confirmed owner endpoint. It carries credentials privately and has no
 /// public HTTP-control or process-management operations.
 pub(crate) struct OwnedDevelopmentApi {
+    api_build: fullmag_runtime_control::development_cold_idle::PinnedApiBuildIdentity,
     service_configured: bool,
     control_address: SocketAddrV4,
     api_port: u16,
@@ -466,6 +476,7 @@ impl OwnedDevelopmentApi {
             .context("development API acquisition response is not UTF-8")?;
 
         Ok(AuthoringAcquisition {
+            api_build: self.api_build.clone(),
             service_configured: self.service_configured,
             stream: Some(stream),
             commit_attempted: false,
@@ -492,6 +503,7 @@ impl OwnedDevelopmentApi {
 /// Owns both the captured snapshot and the private connection that holds the
 /// API guard. Dropping this value disconnects and releases the guard.
 pub(crate) struct AuthoringAcquisition {
+    api_build: fullmag_runtime_control::development_cold_idle::PinnedApiBuildIdentity,
     service_configured: bool,
     stream: Option<TcpStream>,
     commit_attempted: bool,
@@ -1234,13 +1246,15 @@ impl AuthoringAcquisition {
             }
             self.confirm_held()
                 .context("development API acquisition could not be confirmed before cold idle")?;
-            let proof = fullmag_runtime_control::development_cold_idle::cold_idle_for_api(
-                self.api_port,
-                &self.api_instance_id,
-                store_root,
-                &self.owner_token,
-                &self.nonce,
-            )?;
+            let proof =
+                fullmag_runtime_control::development_cold_idle::cold_idle_for_api_with_build(
+                    self.api_port,
+                    &self.api_instance_id,
+                    store_root,
+                    &self.owner_token,
+                    &self.nonce,
+                    &self.api_build,
+                )?;
             self.confirm_held()
                 .context("development API acquisition could not be confirmed after cold idle")?;
             proof.verify_current()?;

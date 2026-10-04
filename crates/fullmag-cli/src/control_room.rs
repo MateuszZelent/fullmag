@@ -2497,9 +2497,10 @@ pub(crate) fn verify_development_completion_owner() -> Result<()> {
             "helper_pid":helper_pid, "helper_waited":true, "helper_exit_code":0
         })
     );
+    let launcher_build_matches_api = launch.expects_launcher_build();
     let owner = launch.confirm(input.api_pid, input.api_port, &input.api_instance_id)?;
     let mut acquired = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
-    let workspace = acquired.workspace();
+    let workspace = acquired.workspace().clone();
     let (session_id, epoch, digest) = if workspace["state"] == "no_session" {
         (
             None,
@@ -2549,12 +2550,93 @@ pub(crate) fn verify_development_completion_owner() -> Result<()> {
         &input.candidate_bundle_id,
         &input.candidate_manifest_sha256,
     )?;
+    let mut next = owner.acquire(&uuid::Uuid::new_v4().to_string())?;
+    if next.workspace() != &workspace {
+        bail!("next acquisition did not preserve the completed authoring scene");
+    }
+    let candidate = PathBuf::from(
+        std::env::var_os("FULLMAG_PROJECT_STORAGE_ROOT")
+            .context("next idle probe requires managed storage")?,
+    )
+    .join("runtimes")
+    .join(std::env::var("FULLMAG_WORKTREE_ID")?)
+    .join("native-bundles")
+    .join(&input.candidate_bundle_id);
+    let staged = next.stage_handoff(
+        &root,
+        &candidate,
+        &serde_json::json!({
+            "api_instance_id":input.api_instance_id, "session_id":input.expected_session_id,
+            "session_epoch":input.expected_session_epoch, "editor":{"probe":"next-cold-idle"},
+            "workspace":{}, "project_document":{}
+        }),
+    )?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema":"fullmag.development-cli-next-idle-progress.v1",
+            "helper_pid":staged.helper_pid, "helper_waited":true, "helper_exit_code":0
+        })
+    );
+    let nonce = staged.acknowledgement["acquisition_nonce"]
+        .as_str()
+        .context("next acquisition staging has no nonce")?;
+    let wrong =
+        fullmag_runtime_control::development_cold_idle::PinnedApiBuildIdentity::from_pinned_build(
+            &"0".repeat(40),
+            &"0".repeat(64),
+        )?;
+    if fullmag_runtime_control::development_cold_idle::cold_idle_for_api_with_build(
+        input.api_port,
+        &input.api_instance_id,
+        &store_root,
+        launch.token(),
+        nonce,
+        &wrong,
+    )
+    .is_ok()
+    {
+        bail!("next cold idle accepted a mismatched build identity");
+    }
+    if !launcher_build_matches_api
+        && fullmag_runtime_control::development_cold_idle::cold_idle_for_api(
+            input.api_port,
+            &input.api_instance_id,
+            &store_root,
+            launch.token(),
+            nonce,
+        )
+        .is_ok()
+    {
+        bail!("default cold idle accepted an API from another launcher build");
+    }
+    let store = fullmag_session::SessionStore::open_existing(store_root.clone())?;
+    if store.read_development_idle_fence()?.is_some() {
+        bail!("mismatched build reservation published an admission fence");
+    }
+    let idle = next.acquire_cold_idle(&staged, &store_root)?;
+    if idle.verify_for_api(input.api_port, &input.api_instance_id)?
+        != acknowledgement["accepted_store_binding"]
+            .as_str()
+            .unwrap_or_default()
+    {
+        bail!("next cold idle proof changed accepted-store binding");
+    }
+    idle.release_fence()?; // Explicit abort of this next reservation; no new commit.
+    next.abort()?;
+    if store.read_development_idle_fence()?.is_some() {
+        bail!("explicit next idle abort retained admission fence");
+    }
     println!(
         "{}",
         serde_json::json!({
             "schema":"fullmag.development-cli-completion-check.v1", "api_pid":input.api_pid,
             "api_instance_id":input.api_instance_id, "acknowledgement":acknowledgement,
-            "checks":["native-completion-owner-confirmed", "native-completion-held-restore-pinned", "native-completion-acknowledgement-validated"]
+            "launcher_build_matches_api":launcher_build_matches_api,
+            "checks":["native-completion-owner-confirmed", "native-completion-held-restore-pinned", "native-completion-acknowledgement-validated",
+                "native-next-acquisition-scene-preserved", "native-next-wrong-build-refused-before-fencing",
+                "native-next-staged-cold-idle-reservation", "native-next-idle-proof-rechecked-api-binding",
+                "native-next-idle-explicit-abort"]
         })
     );
     Ok(())

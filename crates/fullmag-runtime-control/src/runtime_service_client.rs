@@ -83,9 +83,24 @@ pub(crate) fn verify_api_identity(port: u16) -> Result<String> {
 }
 
 pub(crate) fn verify_api_store(port: u16, expected: &Path) -> Result<String> {
+    verify_api_store_for_build(
+        port,
+        expected,
+        &crate::development_cold_idle::PinnedApiBuildIdentity::compiled()?,
+    )
+}
+
+pub(crate) fn verify_api_store_for_build(
+    port: u16,
+    expected: &Path,
+    expected_build: &crate::development_cold_idle::PinnedApiBuildIdentity,
+) -> Result<String> {
     let (document, instance) = read_api_document(port)?;
-    let local = fullmag_build_info::identity();
-    require_api_identity(&document, local.git_commit, local.source_snapshot_sha256)?;
+    require_api_identity(
+        &document,
+        expected_build.git_commit(),
+        expected_build.source_snapshot_sha256(),
+    )?;
     require_api_store_binding(&document, expected)?;
     Ok(instance)
 }

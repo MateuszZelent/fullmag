@@ -302,6 +302,13 @@ def complete_live_restore(host, control_port, owner_token, pin, http_port,
                 or progress["helper_waited"] is not True or progress["helper_exit_code"] != 0):
             raise capsule.HandoffError("Native candidate owner validator confirmation is invalid")
         receipt["processes"].append({"label": "native-candidate-owner-validator", "pid": progress["helper_pid"], "waited": True, "exit_code": 0})
+        if frames and frames[0].get("schema") == "fullmag.development-cli-next-idle-progress.v1":
+            stage_progress = frames.pop(0)
+            if (set(stage_progress) != {"schema", "helper_pid", "helper_waited", "helper_exit_code"}
+                    or type(stage_progress["helper_pid"]) is not int or stage_progress["helper_pid"] <= 0
+                    or stage_progress["helper_waited"] is not True or stage_progress["helper_exit_code"] != 0):
+                raise capsule.HandoffError("Next idle staging helper confirmation is invalid")
+            receipt["processes"].append({"label": "native-next-idle-staging", "pid": stage_progress["helper_pid"], "waited": True, "exit_code": 0})
         if len(frames) > 1 or (helper.returncode == 0 and len(frames) != 1):
             raise capsule.HandoffError("Native completion has an unexpected frame count")
         return helper.returncode, b"" if not frames else capsule._canonical_json(frames[0], "native completion result", 4096)
@@ -382,8 +389,18 @@ def complete_live_restore(host, control_port, owner_token, pin, http_port,
     native_result = capsule._strict_json(output, "native completion result")
     if (native_result.get("schema") != "fullmag.development-cli-completion-check.v1"
             or native_result.get("api_pid") != api_pid or native_result.get("api_instance_id") != pin
-            or native_result.get("checks") != ["native-completion-owner-confirmed", "native-completion-held-restore-pinned", "native-completion-acknowledgement-validated"]):
+            or native_result.get("checks") != ["native-completion-owner-confirmed", "native-completion-held-restore-pinned", "native-completion-acknowledgement-validated",
+                "native-next-acquisition-scene-preserved", "native-next-wrong-build-refused-before-fencing",
+                "native-next-staged-cold-idle-reservation", "native-next-idle-proof-rechecked-api-binding", "native-next-idle-explicit-abort"]):
         raise capsule.HandoffError("Native completion result differs from owned replacement")
+    candidate_manifest, _ = runtime_bundle.validate_bundle(prepared["candidate"]["bundle_root"],
+        capsule._STORAGE.resolve_layout(repo, "windows-native-fdm-cpu-dev")["runtime_root"], "dev")
+    expected_same_build = (candidate_manifest["source"]["git_commit"] == receipt["build_commit"]
+                           and candidate_manifest["source"]["source_snapshot_sha256"] == receipt["build_snapshot_sha256"])
+    if native_result.get("launcher_build_matches_api") is not expected_same_build:
+        raise capsule.HandoffError("Next idle proof has a different launcher/API build relationship")
+    if not expected_same_build:
+        receipt["checks"].append("native-next-default-launcher-build-refused-before-fencing")
     receipt["checks"].extend(native_result["checks"])
     response = native_result["acknowledgement"]
     if (response.get("schema") != "fullmag.development-api-completion.v1"

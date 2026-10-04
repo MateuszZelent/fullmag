@@ -1,5 +1,11 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AH, 04.10.2026: [kolejna rezerwacja po podmianie](p8/53ah-cross-build-next-idle.md).
+Natywny build i 300 kontroli runtime PASS, wszystkie 104 procesy odebrano.
+Zweryfikowany pin API zachowany w proof; kolejny acquire/staging/idle/abort
+działa po completion, również między buildami. Drugi restart, supervisor,
+Compute i hydration UI nadal otwarte; procenty całego planu bez awansu.
+
 Checkpoint P8-53AG, 04.10.2026: [owner API z innego buildu](p8/53ag-cross-build-candidate-owner.md).
 Zweryfikowany kandydat wyznacza oczekiwaną tożsamość replacement API;
 początkowe API pozostaje przypięte do kompilacji launchera. Build Windows,

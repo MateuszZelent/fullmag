@@ -12,12 +12,54 @@ use fullmag_session::{
     SessionStore,
 };
 
+/// Exact source identity for an API build already verified by its owner.
+/// Constructing this pin does not itself prove that a bundle or API is trusted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PinnedApiBuildIdentity {
+    git_commit: String,
+    source_snapshot_sha256: String,
+}
+
+impl PinnedApiBuildIdentity {
+    pub fn from_pinned_build(git_commit: &str, source_snapshot_sha256: &str) -> Result<Self> {
+        if !lower_hex(git_commit, 40) || !lower_hex(source_snapshot_sha256, 64) {
+            bail!("pinned API build identity must use lowercase commit and snapshot hashes");
+        }
+        Ok(Self {
+            git_commit: git_commit.to_owned(),
+            source_snapshot_sha256: source_snapshot_sha256.to_owned(),
+        })
+    }
+
+    pub fn compiled() -> Result<Self> {
+        let identity = fullmag_build_info::identity();
+        Self::from_pinned_build(identity.git_commit, identity.source_snapshot_sha256)
+            .context("compiled API build identity is unavailable or invalid")
+    }
+
+    pub(crate) fn git_commit(&self) -> &str {
+        &self.git_commit
+    }
+
+    pub(crate) fn source_snapshot_sha256(&self) -> &str {
+        &self.source_snapshot_sha256
+    }
+}
+
+fn lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 /// Startup locks remain held through the protected handoff boundary. Dropping
 /// this proof releases only kernel locks: the durable fence is never removed
 /// implicitly, and subsequent service ownership refuses that closed fence.
 pub struct ColdIdleProof {
     store: SessionStore,
     pub admission_fence: DevelopmentAdmissionFence,
+    expected_api_build: Option<PinnedApiBuildIdentity>,
     _startup: RuntimeServiceStartupGuard,
     _launch: RuntimeServiceLaunchGuard,
 }
@@ -25,7 +67,14 @@ pub struct ColdIdleProof {
 impl ColdIdleProof {
     pub fn verify_for_api(&self, port: u16, instance: &str) -> Result<String> {
         self.verify_current()?;
-        let observed = crate::runtime_service_client::verify_api_store(port, self.store.root())?;
+        let observed = match &self.expected_api_build {
+            Some(build) => crate::runtime_service_client::verify_api_store_for_build(
+                port,
+                self.store.root(),
+                build,
+            )?,
+            None => crate::runtime_service_client::verify_api_store(port, self.store.root())?,
+        };
         if observed != instance {
             bail!("cold idle proof is bound to another API instance");
         }
@@ -97,6 +146,7 @@ pub fn acquire_cold_idle_fence(
     let proof = ColdIdleProof {
         store,
         admission_fence,
+        expected_api_build: None,
         _startup: startup,
         _launch: launch,
     };
@@ -113,19 +163,44 @@ pub fn cold_idle_for_api(
     owner_token: &str,
     nonce: &str,
 ) -> Result<ColdIdleProof> {
+    cold_idle_for_api_with_build(
+        api_port,
+        api_instance_id,
+        store_root,
+        owner_token,
+        nonce,
+        &PinnedApiBuildIdentity::compiled()?,
+    )
+}
+
+/// Require the explicitly pinned API build, UUID and accepted-store binding
+/// before reserving the store. Recheck after fencing; uncertainty keeps it fenced.
+pub fn cold_idle_for_api_with_build(
+    api_port: u16,
+    api_instance_id: &str,
+    store_root: &Path,
+    owner_token: &str,
+    nonce: &str,
+    expected_build: &PinnedApiBuildIdentity,
+) -> Result<ColdIdleProof> {
     let pin = uuid::Uuid::parse_str(api_instance_id).context("invalid cold idle API pin")?;
     if api_port == 0 || pin.is_nil() || pin.to_string() != api_instance_id {
         bail!("invalid cold idle API identity");
     }
     let verify_api = || -> Result<()> {
-        let observed = crate::runtime_service_client::verify_api_store(api_port, store_root)?;
+        let observed = crate::runtime_service_client::verify_api_store_for_build(
+            api_port,
+            store_root,
+            expected_build,
+        )?;
         if observed != api_instance_id {
             bail!("API instance changed during cold idle handoff");
         }
         Ok(())
     };
     verify_api()?;
-    let proof = acquire_cold_idle_fence(store_root, owner_token, nonce)?;
+    let mut proof = acquire_cold_idle_fence(store_root, owner_token, nonce)?;
+    proof.expected_api_build = Some(expected_build.clone());
     verify_api()?;
     proof.verify_current()?;
     Ok(proof)

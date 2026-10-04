@@ -1,5 +1,11 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AH](53ah-cross-build-next-idle.md) wiąże cold-idle proof ze zweryfikowaną
+tożsamością API po podmianie buildu. Natywny build i 300 kontroli przeszły;
+wszystkie 104 procesy odebrano. Następne przejęcie, reservation/recheck i jawny
+abort działają także między buildami. To nie jest drugi restart ani supervisor
+produkcyjny; Compute i hydration UI nadal otwarte, procent planu bez awansu.
+
 [P8-53AG](53ag-cross-build-candidate-owner.md) oddziela oczekiwaną tożsamość
 replacement API od kompilacji launchera przez pełną weryfikację kandydata.
 284 natywne kontrole potwierdzają również rzeczywisty przebieg z dwoma różnymi
