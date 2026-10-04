@@ -122,7 +122,7 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
     elif path.endswith(".rs"):
         pattern = re.compile(
             rf"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:"
-            rf"(?:unsafe\s+)?fn\s+{escaped}(?:<[^>\n]+>)?\s*\("
+            rf"(?:async\s+)?(?:unsafe\s+)?fn\s+{escaped}(?:<[^>\n]+>)?\s*\("
             rf"|(?:struct|enum|type|trait|const|static)\s+{escaped}\b)",
             re.MULTILINE,
         )
