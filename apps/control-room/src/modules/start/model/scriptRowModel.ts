@@ -6,9 +6,6 @@
 import type { ProjectStatus } from "./types";
 import type { WorkspaceItem, WorkspaceLastRun } from "./workspaceItems";
 
-/** Shown on the disabled Run button until a later phase wires execution. */
-export const RUN_SCRIPT_UNAVAILABLE = "Running scripts from the start screen is not available yet";
-
 /** `\\?\C:\x` is a Windows verbatim path; the prefix means nothing to a person. */
 const stripVerbatim = (path: string): string =>
   path.startsWith("\\\\?\\UNC\\")

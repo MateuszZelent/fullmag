@@ -272,6 +272,7 @@ export function StartScreen({ kernel }: ModuleProps) {
           onOpen: scripts.open,
           onReveal: scripts.reveal,
           onReadText: scripts.readText,
+          onRunFinished: () => void scripts.refresh(),
           onTogglePin: scripts.pin,
           onForget: (id) => {
             startScreenStore.setSelectedScript(null);

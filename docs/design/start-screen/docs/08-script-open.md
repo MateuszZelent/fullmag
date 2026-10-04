@@ -12,7 +12,17 @@ rejected, `-X utf8` for helper children) and `fullmag script inspect <path>
 `inspect-script`. Deviations from 6.5: an explicit `FULLMAG_PYTHON`/`--python`
 that fails the probe is an error, never a fallthrough; discovered interpreters
 that lack numpy/zarr/h5py are rejected with that reason; the probe timeout is
-5 s. Phase 0b, Phase 1 and everything else here are not implemented. Every claim about
+5 s. **Phase 1 (architecture A) is implemented** (2026-10-05): the script-mode
+flags and exit codes of 6.2 (`crates/fullmag-cli/src/script_launch.rs`), the host
+commands of 6.1 (`apps/desktop/src-tauri/src/script_run*.rs`) and the inspector
+flow in `apps/control-room/src/modules/start`. Deviations: `--ui desktop` with
+`--launched-by desktop` makes the host (not the CLI) open the window, pinned to
+the API instance; the CLI also writes `progress.json` next to the receipt and
+stops when `stop-request` appears there; the host adds the `consent` block and
+the literal request to the receipt; extra refusal codes `ticket`, `busy`,
+`confirm_required`, `storage`; exit code 14 is chosen from the error text when
+the runtime reports no code. Not verified on a packaged install or through the
+UI. Phase 0b and everything else here are not implemented. Every claim about
 current behaviour was read in the source of this worktree (commit `688f1f23c`);
 what was *not* executed is marked **unverified**. Unit-test compilation is
 suspended (`AGENTS.md`), so no existing test was run for this document.

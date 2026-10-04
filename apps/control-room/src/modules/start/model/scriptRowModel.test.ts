@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { script } from "./__fixtures__/workspaceScripts";
 import {
-  RUN_SCRIPT_UNAVAILABLE,
   copyText,
   displayPath,
   folderOf,
@@ -104,8 +103,8 @@ describe("copyText", () => {
   });
 });
 
-describe("the disabled run action", () => {
-  it("carries the agreed reason", () => {
-    expect(RUN_SCRIPT_UNAVAILABLE).toBe("Running scripts from the start screen is not available yet");
+describe("a run that the desktop host recorded", () => {
+  it("shows a cancelled run as stopped, never as failed or running", () => {
+    expect(runChip({ status: "cancelled", at: "2026-10-05T10:00:00.000Z" })?.label).toBe("Run stopped");
   });
 });

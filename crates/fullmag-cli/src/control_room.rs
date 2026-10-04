@@ -1904,14 +1904,34 @@ pub(crate) fn spawn_control_room(
     dev_mode: bool,
     requested_port: Option<u16>,
     live_workspace: &LocalLiveWorkspace,
+    ui_plan: crate::script_launch::UiPlan,
 ) -> Result<(
     u16,
     Option<std::process::Child>,
     Option<std::process::Child>,
 )> {
+    use crate::script_launch::UiPlan;
     let ready =
         bootstrap_control_plane(session_id, dev_mode, requested_port, Some(live_workspace))?;
-    open_in_browser(&ready);
+    match ui_plan {
+        UiPlan::Browser | UiPlan::None => open_in_browser(&ready),
+        // The launching host opens its own window for this API.
+        UiPlan::DesktopHost => {}
+        UiPlan::DesktopSelf => {
+            let root = repo_root();
+            let opened = fullmag_runtime_control::application_attach::prepare_for_authoring(
+                &root,
+                &runtime_state_root(&root),
+                ready.api_port,
+            )
+            .map_err(anyhow::Error::from)
+            .and_then(|binding| open_in_tauri(&ready, "workspace", binding.api_instance_id()));
+            if let Err(error) = opened {
+                eprintln!("[fullmag] could not open the desktop window ({error:#}); opening the browser");
+                open_in_browser(&ready);
+            }
+        }
+    }
     Ok((ready.web_port, ready.api_child, ready.frontend_child))
 }
 

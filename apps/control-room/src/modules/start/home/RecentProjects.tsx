@@ -74,8 +74,7 @@ const PLACEHOLDER: Readonly<Record<KindFilter, string>> = {
   script: "Filter by name or path",
 };
 
-const SCRIPT_RUN_NOTE =
-  "Fullmag cannot run scripts from the start screen yet; run it with the fullmag command line.";
+const SCRIPT_RUN_NOTE = "Use Run in new window in the details panel to run it.";
 
 type Notice = { readonly tone: "warning" | "info"; readonly text: string };
 
