@@ -68,6 +68,19 @@ describe("parseRecentIndex", () => {
     expect(state.index.entries[1]).toMatchObject({ solver: "FDM", status: "ready" });
   });
 
+  it("carries a recorded thumbnail data URI through to the entry", () => {
+    const thumbnail = "data:image/png;base64,iVBORw0KGgo=";
+    const state = parseRecentIndex(
+      raw([
+        { project_id: "a", name: "A", path: "/a.fms", thumbnail },
+        { project_id: "b", name: "B", path: "/b.fms" },
+      ]),
+    );
+    if (state.kind !== "ready") throw new Error(`expected ready, got ${state.kind}`);
+    expect(state.index.entries[0].thumbnail).toBe(thumbnail);
+    expect(state.index.entries[1].thumbnail).toBeUndefined();
+  });
+
   it("clamps continue progress and never trusts a missing resumable flag as false", () => {
     const state = parseRecentIndex(
       raw([{ project_id: "a", name: "A" }], {

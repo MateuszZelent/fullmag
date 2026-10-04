@@ -75,6 +75,7 @@ fn main() {
             commands::author_identity,
             commands::compute_probe,
             commands::project_provenance_read,
+            commands::project_record_outcome,
             commands::recent_index_read,
             commands::recent_index_rebuild,
             commands::recent_index_pin,

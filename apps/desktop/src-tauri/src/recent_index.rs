@@ -29,8 +29,8 @@ pub const INDEX_FILE_NAME: &str = "recent-index.json";
 pub const THUMBNAIL_PATH: &str = "project/preview/thumb.png";
 /// The index inlines previews as data URIs, so the cap is the design's target
 /// size, not its hard limit: a larger preview is left out, never truncated.
-const MAX_INLINE_THUMBNAIL_BYTES: usize = 256 * 1024;
-const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+pub const MAX_INLINE_THUMBNAIL_BYTES: usize = 256 * 1024;
+pub const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
 /// The status strings the renderer understands.
 const STATUS_READY: &str = "ready";
@@ -148,6 +148,25 @@ pub fn touch_opened(file: &Path, path: &Path, now: SystemTime) -> Result<(), Str
         }
     }
     if touched {
+        write_atomic(file, &index)?;
+    }
+    Ok(())
+}
+
+/// Rebuild the entry of one file in place, so a fresh thumbnail appears without
+/// a rescan. A file the index does not list is left out. Best effort for the
+/// caller: a stale index must never fail the operation that triggered this.
+pub fn refresh_entry(file: &Path, path: &Path) -> Result<(), String> {
+    let mut index = read_index(file)?;
+    let target = path.display().to_string();
+    let mut refreshed = false;
+    for entry in entries_mut(&mut index)? {
+        if entry.get("path").and_then(Value::as_str) == Some(target.as_str()) {
+            *entry = entry_from_file(path, Some(&*entry));
+            refreshed = true;
+        }
+    }
+    if refreshed {
         write_atomic(file, &index)?;
     }
     Ok(())
@@ -749,6 +768,32 @@ mod tests {
         assert_eq!(entry["status"], STATUS_MISSING);
         assert_eq!(entry["pinned"], true);
         assert_eq!(rebuilt["scanned_locations"][0]["reachable"], true);
+    }
+
+    #[test]
+    fn refreshing_one_entry_keeps_its_pin_and_leaves_unlisted_files_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(INDEX_FILE_NAME);
+        let listed = dir.path().join("listed.fms");
+        let unlisted = dir.path().join("unlisted.fms");
+        fs::write(&listed, b"not an archive").unwrap();
+        let index = json!({
+            "format_version": 1,
+            "generated_at": "x",
+            "entries": [{
+                "project_id": "l", "name": "Listed", "path": listed.display().to_string(),
+                "solver": "FDM", "status": "ready", "pinned": true,
+                "last_opened_at": "2026-01-01T00:00:00Z"
+            }],
+        });
+        write_atomic(&file, &index).unwrap();
+        refresh_entry(&file, &listed).unwrap();
+        refresh_entry(&file, &unlisted).unwrap();
+        let after = read_index(&file).unwrap();
+        assert_eq!(after["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(after["entries"][0]["pinned"], true);
+        assert_eq!(after["entries"][0]["status"], STATUS_FAILED);
+        assert_eq!(after["entries"][0]["last_opened_at"], "2026-01-01T00:00:00Z");
     }
 
     #[test]

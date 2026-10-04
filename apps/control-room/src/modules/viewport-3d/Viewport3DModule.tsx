@@ -208,6 +208,12 @@ import {
 } from "./viewport3dFieldUpdateHold";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";
+import {
+  captureViewport3DThumbnail,
+  resolveViewport3DThumbnailColouring,
+  type Viewport3DThumbnailColouring,
+} from "./viewport3dThumbnail";
+import { registerViewport3DThumbnailCapture } from "./viewport3dThumbnailRegistry";
 
 export function resolveViewport3DVisualizationAckDataIdentity({
   adoptionRegistry,
@@ -2794,6 +2800,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           onPointerMissed={handleCanvasPointerMissed}
         >
           <Viewport3DRendererProfile visualProfile={visualProfile} />
+          <Viewport3DThumbnailBridge
+            colouring={resolveViewport3DThumbnailColouring(sceneProps.fdmSettings)}
+            slotId={slotId}
+          />
           <Viewport3DScene
             {...sceneProps}
             adoptionRegistry={visualizationDebugAdoptionRegistry}
@@ -2996,6 +3006,40 @@ export const Viewport3DFdmSelectionAnnouncement = memo(
     );
   },
 );
+
+/**
+ * Registers this canvas with the thumbnail registry. The renderer does not
+ * keep its drawing buffer, so a capture renders the scene and copies it in one
+ * synchronous step instead of enabling preserveDrawingBuffer.
+ */
+function Viewport3DThumbnailBridge({
+  colouring,
+  slotId,
+}: {
+  colouring: Viewport3DThumbnailColouring;
+  slotId: string;
+}) {
+  const getState = useThree((state) => state.get);
+  const colouringRef = useRef(colouring);
+  useEffect(() => {
+    colouringRef.current = colouring;
+  }, [colouring]);
+  useEffect(
+    () =>
+      registerViewport3DThumbnailCapture(slotId, () =>
+        captureViewport3DThumbnail({
+          canvas: getState().gl.domElement,
+          colouring: colouringRef.current,
+          render: () => {
+            const { camera, gl, scene } = getState();
+            gl.render(scene, camera);
+          },
+        }),
+      ),
+    [getState, slotId],
+  );
+  return null;
+}
 
 function Viewport3DRendererProfile({
   visualProfile,

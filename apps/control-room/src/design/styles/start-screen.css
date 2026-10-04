@@ -1392,6 +1392,43 @@
   white-space: nowrap;
 }
 
+/* The import report: what mapped and, above all, what did not. */
+.fm-start-report {
+  display: grid;
+  gap: var(--fm-space-3);
+  margin-bottom: var(--fm-space-4);
+}
+
+.fm-start-report__title {
+  margin: 0;
+  font-size: var(--fm-font-size-md);
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-start-report__unsupported .fm-start-formats__ext {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.fm-start-report__translated summary {
+  color: var(--fm-start-meta);
+  cursor: pointer;
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-start-report__list {
+  margin: var(--fm-space-2) 0 0;
+  padding-left: var(--fm-space-4);
+  font-size: var(--fm-font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.fm-start-report__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+}
+
 .fm-start-keys {
   margin-bottom: var(--fm-space-4);
 }

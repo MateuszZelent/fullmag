@@ -6,8 +6,9 @@
 //! Opaque documents under `project/` survive load and save unchanged, so no
 //! archive-format change is needed and a project without the document is
 //! simply one that predates provenance tracking, which is reported as such.
-//! Nothing writes the document yet; this module only reads and normalises it.
+//! Host Save and run recording append to it (`record_save`, `record_run`).
 
+use crate::recent_index::{MAX_INLINE_THUMBNAIL_BYTES, PNG_SIGNATURE, THUMBNAIL_PATH};
 use fullmag_application::{
     FileProjectRepository, OpaqueDocument, ProjectEnvelope, ProjectRepository, ProjectSource,
 };
@@ -20,6 +21,10 @@ pub const PROVENANCE_PATH: &str = "project/provenance.json";
 const HISTORY_KINDS: [&str; 5] = ["edit", "run", "migrate", "import", "restore"];
 const RUN_STATUSES: [&str; 5] = ["queued", "running", "ready", "failed", "cancelled"];
 const ROLES: [&str; 3] = ["creator", "contributor", "maintainer"];
+
+/// Colour mappings a stored preview may declare, so a thumbnail is never read
+/// under the wrong convention.
+pub const PREVIEW_COLOURINGS: [&str; 4] = ["hsl-sphere", "mz-diverging", "scalar-viridis", "none"];
 
 fn string_field(map: &Map<String, Value>, key: &str) -> Option<Value> {
     map.get(key)
@@ -124,13 +129,26 @@ pub fn parse_provenance(bytes: &[u8]) -> Result<Value, String> {
     if let Some(map) = root.get("citation").and_then(Value::as_object) {
         copy_strings(map, &mut citation, &["doi", "url", "preferred_bibtex", "license"]);
     }
-    Ok(json!({
+    let mut parsed = json!({
         "recorded": true,
         "authors": normalise_list(&root, "authors", normalise_author),
         "citation": Value::Object(citation),
         "history": normalise_list(&root, "history", normalise_history),
         "runs": normalise_list(&root, "runs", normalise_run),
-    }))
+    });
+    if let Some(preview) = root.get("preview").and_then(normalise_preview) {
+        parsed["preview"] = preview;
+    }
+    Ok(parsed)
+}
+
+fn normalise_preview(value: &Value) -> Option<Value> {
+    let map = value.as_object()?;
+    let colouring = map.get("colouring")?.as_str().filter(|c| !c.is_empty())?;
+    let mut preview = Map::new();
+    preview.insert("colouring".into(), Value::String(colouring.to_string()));
+    copy_strings(map, &mut preview, &["run_id", "at"]);
+    Some(Value::Object(preview))
 }
 
 /// What a project with no provenance document reports: empty, and flagged as
@@ -161,6 +179,22 @@ pub fn read_from_archive(path: &Path) -> Result<Value, String> {
     }
 }
 
+/// The stored document as a JSON object, or an empty one when there is none. A
+/// document that cannot be extended is an error so callers leave it untouched.
+fn parse_previous(previous: Option<&[u8]>) -> Result<Value, String> {
+    match previous {
+        Some(bytes) => {
+            let parsed: Value = serde_json::from_slice(bytes)
+                .map_err(|error| format!("existing provenance is not valid JSON ({error})"))?;
+            if !parsed.is_object() {
+                return Err("existing provenance is not a JSON object".into());
+            }
+            Ok(parsed)
+        }
+        None => Ok(json!({})),
+    }
+}
+
 /// Append one save to a provenance document and return the new bytes.
 ///
 /// `previous` is the document already stored in the target file, which is the
@@ -177,17 +211,7 @@ pub fn record_save(
     at: &str,
     revision: u64,
 ) -> Result<Vec<u8>, String> {
-    let mut root: Value = match previous {
-        Some(bytes) => {
-            let parsed: Value = serde_json::from_slice(bytes)
-                .map_err(|error| format!("existing provenance is not valid JSON ({error})"))?;
-            if !parsed.is_object() {
-                return Err("existing provenance is not a JSON object".into());
-            }
-            parsed
-        }
-        None => json!({}),
-    };
+    let mut root = parse_previous(previous)?;
     let object = root
         .as_object_mut()
         .ok_or_else(|| "provenance root is not an object".to_string())?;
@@ -243,6 +267,135 @@ pub fn record_save(
     list.push(Value::Object(entry));
 
     serde_json::to_vec_pretty(&root).map_err(|error| error.to_string())
+}
+
+/// Upsert one run record and append the matching history entry; return the new
+/// bytes. `run` is normalised through the run schema and rejected when it does
+/// not fit. A run with the same `run_id` is replaced, any other is appended;
+/// other runs and unknown fields of the existing document are preserved. A
+/// damaged `previous` is an error, so the caller leaves it byte for byte.
+pub fn record_run(
+    previous: Option<&[u8]>,
+    run: &Value,
+    identity: &Value,
+    at: &str,
+    revision: u64,
+) -> Result<Vec<u8>, String> {
+    let run = normalise_run(run).ok_or_else(|| {
+        format!(
+            "run record is invalid: it needs run_id, started_at and a status of {}",
+            RUN_STATUSES.join("|")
+        )
+    })?;
+    let run_id = run["run_id"].as_str().unwrap_or_default().to_string();
+    if run_id.is_empty() {
+        return Err("run record is invalid: run_id must not be empty".into());
+    }
+    let status = run["status"].as_str().unwrap_or_default().to_string();
+    let mut root = parse_previous(previous)?;
+    let object = root
+        .as_object_mut()
+        .ok_or_else(|| "provenance root is not an object".to_string())?;
+
+    let runs = object
+        .entry("runs")
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| "existing provenance runs is not an array".to_string())?;
+    match runs
+        .iter_mut()
+        .find(|existing| existing.get("run_id").and_then(Value::as_str) == Some(run_id.as_str()))
+    {
+        Some(existing) => *existing = run,
+        None => runs.push(run),
+    }
+
+    let history = object
+        .entry("history")
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| "existing provenance history is not an array".to_string())?;
+    let mut entry = Map::new();
+    entry.insert("revision".into(), json!(revision));
+    entry.insert("at".into(), Value::String(at.to_string()));
+    entry.insert("kind".into(), Value::String("run".into()));
+    entry.insert(
+        "summary".into(),
+        Value::String(format!("Run {run_id} finished: {status}")),
+    );
+    if let Some(name) = identity
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty())
+    {
+        entry.insert("by".into(), Value::String(name.to_string()));
+    }
+    entry.insert("run_id".into(), Value::String(run_id));
+    history.push(Value::Object(entry));
+
+    serde_json::to_vec_pretty(&root).map_err(|error| error.to_string())
+}
+
+/// Record how the stored preview was coloured, and which run produced it.
+/// Unknown fields of the document are preserved.
+pub fn record_preview(
+    previous: &[u8],
+    colouring: &str,
+    run_id: &str,
+    at: &str,
+) -> Result<Vec<u8>, String> {
+    let mut root = parse_previous(Some(previous))?;
+    root["preview"] = json!({"colouring": colouring, "run_id": run_id, "at": at});
+    serde_json::to_vec_pretty(&root).map_err(|error| error.to_string())
+}
+
+/// Check a preview before it is stored: a PNG small enough for the index to
+/// inline, under a known colour mapping.
+pub fn validate_preview(png: &[u8], colouring: &str) -> Result<(), String> {
+    if !PREVIEW_COLOURINGS.contains(&colouring) {
+        return Err(format!(
+            "unknown preview colouring `{colouring}`; expected one of {}",
+            PREVIEW_COLOURINGS.join(", ")
+        ));
+    }
+    if !png.starts_with(&PNG_SIGNATURE) {
+        return Err("preview is not a PNG image".into());
+    }
+    if png.len() > MAX_INLINE_THUMBNAIL_BYTES {
+        return Err(format!(
+            "preview is {} bytes; the limit is {MAX_INLINE_THUMBNAIL_BYTES}",
+            png.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Set an opaque document of a candidate, replacing any with the same path.
+pub fn set_document(
+    candidate: &mut ProjectEnvelope,
+    path: &str,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    let document = OpaqueDocument::new(path, bytes).map_err(|error| error.to_string())?;
+    candidate
+        .opaque_documents
+        .retain(|existing| existing.path() != path);
+    candidate.opaque_documents.push(document);
+    Ok(())
+}
+
+/// Keep the stored thumbnail when the candidate archive lacks one, so an
+/// ordinary Save never deletes it. Only the host writes the thumbnail.
+pub fn carry_thumbnail(candidate: &mut ProjectEnvelope, stored: Option<&OpaqueDocument>) {
+    let Some(stored) = stored else { return };
+    if candidate
+        .opaque_documents
+        .iter()
+        .any(|existing| existing.path() == THUMBNAIL_PATH)
+    {
+        return;
+    }
+    candidate.opaque_documents.push(stored.clone());
 }
 
 /// Stamp a candidate envelope with the provenance of the save that is about to
@@ -410,5 +563,88 @@ mod tests {
         let value = unrecorded();
         assert_eq!(value["recorded"], false);
         assert_eq!(value["runs"], json!([]));
+    }
+
+    fn run(id: &str, status: &str) -> Value {
+        json!({"run_id": id, "started_at": "t0", "status": status, "frames": 3})
+    }
+
+    #[test]
+    fn a_run_is_appended_with_a_history_entry_and_replaced_by_id() {
+        let first = record_run(None, &run("r-1", "running"), &json!({"name": "Anna"}), "t1", 1).unwrap();
+        let second = record_run(Some(&first), &run("r-2", "ready"), &json!({}), "t2", 2).unwrap();
+        let third = record_run(Some(&second), &run("r-1", "failed"), &json!({}), "t3", 3).unwrap();
+        let parsed = parse_provenance(&third).unwrap();
+        let runs = parsed["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0]["run_id"], "r-1");
+        assert_eq!(runs[0]["status"], "failed");
+        assert_eq!(runs[1]["status"], "ready");
+        let history = parsed["history"].as_array().unwrap();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0]["kind"], "run");
+        assert_eq!(history[0]["run_id"], "r-1");
+        assert_eq!(history[0]["revision"], 1);
+        assert_eq!(history[0]["by"], "Anna");
+        assert_eq!(history[0]["summary"], "Run r-1 finished: running");
+        assert!(history[1].get("by").is_none());
+    }
+
+    #[test]
+    fn recording_a_run_preserves_unknown_fields_and_other_content() {
+        let before = json!({
+            "citation": {"doi": "10.1/x"},
+            "note": "kept",
+            "history": [{"revision": 1, "at": "t", "kind": "edit", "summary": "s", "extra": 1}],
+            "runs": [{"run_id": "r-0", "started_at": "t", "status": "ready"}]
+        });
+        let bytes = record_run(Some(before.to_string().as_bytes()), &run("r-1", "ready"), &json!({}), "t", 2).unwrap();
+        let raw: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(raw["note"], "kept");
+        assert_eq!(raw["citation"]["doi"], "10.1/x");
+        assert_eq!(raw["history"][0]["extra"], 1);
+        assert_eq!(raw["runs"].as_array().unwrap().len(), 2);
+        assert_eq!(raw["runs"][0]["run_id"], "r-0");
+    }
+
+    #[test]
+    fn a_damaged_previous_record_or_an_invalid_run_is_an_error() {
+        let ok = run("r-1", "ready");
+        assert!(record_run(Some(b"{ nope"), &ok, &json!({}), "t", 1).is_err());
+        assert!(record_run(Some(b"[1]"), &ok, &json!({}), "t", 1).is_err());
+        assert!(record_run(Some(br#"{"runs": 5}"#), &ok, &json!({}), "t", 1).is_err());
+        assert!(record_run(Some(br#"{"history": 5}"#), &ok, &json!({}), "t", 1).is_err());
+        assert!(record_run(None, &run("r-1", "melted"), &json!({}), "t", 1).is_err());
+        assert!(record_run(None, &json!({"run_id": "r", "status": "ready"}), &json!({}), "t", 1).is_err());
+        assert!(record_run(None, &run("", "ready"), &json!({}), "t", 1).is_err());
+        assert!(record_run(None, &json!("run"), &json!({}), "t", 1).is_err());
+    }
+
+    #[test]
+    fn a_preview_is_recorded_and_exposed_with_unknown_fields_kept() {
+        let doc = record_run(Some(br#"{"note": "kept"}"#), &run("r-1", "ready"), &json!({}), "t", 1).unwrap();
+        let bytes = record_preview(&doc, "mz-diverging", "r-1", "t9").unwrap();
+        let parsed = parse_provenance(&bytes).unwrap();
+        assert_eq!(parsed["preview"], json!({"colouring": "mz-diverging", "run_id": "r-1", "at": "t9"}));
+        let raw: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(raw["note"], "kept");
+        assert!(parse_provenance(b"{}").unwrap().get("preview").is_none());
+    }
+
+    #[test]
+    fn previews_must_be_small_pngs_under_a_known_colouring() {
+        let mut png = PNG_SIGNATURE.to_vec();
+        png.extend_from_slice(b"data");
+        assert!(validate_preview(&png, "hsl-sphere").is_ok());
+        assert!(validate_preview(&png, "none").is_ok());
+        assert!(validate_preview(b"GIF89a....", "hsl-sphere").is_err());
+        assert!(validate_preview(&[], "hsl-sphere").is_err());
+        assert!(validate_preview(&png, "rainbow").is_err());
+        assert!(validate_preview(&png, "").is_err());
+        let mut huge = PNG_SIGNATURE.to_vec();
+        huge.resize(MAX_INLINE_THUMBNAIL_BYTES + 1, 0);
+        assert!(validate_preview(&huge, "hsl-sphere").is_err());
+        huge.truncate(MAX_INLINE_THUMBNAIL_BYTES);
+        assert!(validate_preview(&huge, "hsl-sphere").is_ok());
     }
 }

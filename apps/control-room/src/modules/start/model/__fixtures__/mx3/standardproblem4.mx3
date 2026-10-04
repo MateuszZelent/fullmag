@@ -1,0 +1,20 @@
+// Standard Problem 4: field-driven switching of a 500 x 125 x 3 nm strip.
+/*
+   Relax to the S-state first, then apply field 1 for one nanosecond.
+*/
+d := 500e-9
+setgridsize(128, 32, 1)
+setcellsize(d/128, 125e-9/32, 3e-9)
+
+Msat  = 800e3
+Aex   = 13e-12
+alpha = 0.02
+m = uniform(1, .1, 0)
+
+relax()
+save(m)                         // relaxed S-state snapshot
+
+TableAutosave(10e-12)
+AutoSave(m, 100e-12)
+B_ext = vector(-24.6e-3, 4.3e-3, 0)
+run(1e-9)

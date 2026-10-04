@@ -8,12 +8,23 @@ describe("classifyImportFile", () => {
     expect(classifyImportFile("a.b.fms").kind).toBe("supported");
   });
 
+  it("accepts a mumax3 script as a partial import", () => {
+    const result = classifyImportFile("sp4.MX3");
+    expect(result.kind).toBe("supported");
+    if (result.kind === "supported") {
+      expect(result.format.id).toBe("mx3");
+      expect(result.format.partial).toBe(true);
+    }
+  });
+
   it("refuses a known format without an importer, naming it and the reason", () => {
-    const result = classifyImportFile("sp4.mx3");
-    expect(result.kind).toBe("unsupported");
-    if (result.kind === "unsupported") {
-      expect(result.reason).toContain("mumax³");
-      expect(result.reason).toContain("cannot be imported yet");
+    for (const [file, label] of [["sim.mif", "OOMMF"], ["model.mph", "COMSOL"], ["geom.stl", "Mesh"]] as const) {
+      const result = classifyImportFile(file);
+      expect(result.kind, file).toBe("unsupported");
+      if (result.kind === "unsupported") {
+        expect(result.reason).toContain(label);
+        expect(result.reason).toContain("cannot be imported yet");
+      }
     }
   });
 

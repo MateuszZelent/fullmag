@@ -1,0 +1,16 @@
+// Perpendicular film with interfacial DMI and an out-of-plane field.
+SetGridSize(128, 128, 1)
+SetCellSize(2e-9, 2e-9, 1e-9)
+
+Msat = 580e3
+Aex = 15e-12
+alpha = 0.3
+Ku1 = 0.8e6
+AnisU = vector(0, 0, 1)
+Dind = 3e-3
+EnableDemag = true
+
+m = Uniform(0, 0, 1)
+B_ext = vector(0, 0, 0.02)
+Relax()
+Run(2e-9)
