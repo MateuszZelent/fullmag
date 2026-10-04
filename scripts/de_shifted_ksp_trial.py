@@ -120,6 +120,126 @@ def _validate_sample_vector(sample_diagnostics, sample_index, expected_k, sampli
     return actual
 
 
+def _validate_shifted_solve_diagnostics(payload, name, configuration):
+    """Validate cached pre-EPS and true-residual telemetry for one solve."""
+    before_eps = _required_object(
+        payload.get("shifted_ksp_configuration_before_eps"),
+        f"{name}.shifted_ksp_configuration_before_eps",
+    )
+    if before_eps.get("phase") != "before_eps_solve":
+        raise ValueError(f"{name} is missing pre-EPS shifted-KSP configuration")
+    before_pc_side = _required_integer(before_eps.get("pc_side"), f"{name}.pre-EPS pc_side")
+    before_norm_type = _required_integer(before_eps.get("norm_type"), f"{name}.pre-EPS norm_type")
+    if before_pc_side != 1 or before_norm_type != 2:
+        raise ValueError(f"{name} does not use PC_RIGHT and KSP_NORM_UNPRECONDITIONED")
+
+    if payload.get("ksp_diagnostics_available") is not True:
+        raise ValueError(f"{name} KSP diagnostics are unavailable")
+    if payload.get("ksp_last_true_residual_available") is not True:
+        raise ValueError(f"{name} last true residual is unavailable")
+    converged_reason = _required_integer(
+        payload.get("ksp_converged_reason"), f"{name}.ksp_converged_reason"
+    )
+    eps_reason = _required_integer(
+        payload.get("eps_converged_reason"), f"{name}.eps_converged_reason"
+    )
+    if converged_reason <= 0 or eps_reason <= 0:
+        raise ValueError(f"{name} EPS/KSP did not report positive convergence")
+
+    pc_side = _required_integer(payload.get("ksp_pc_side"), f"{name}.ksp_pc_side")
+    norm_type = _required_integer(payload.get("ksp_norm_type"), f"{name}.ksp_norm_type")
+    if pc_side != 1 or norm_type != 2:
+        raise ValueError(f"{name} did not retain PC_RIGHT and KSP_NORM_UNPRECONDITIONED")
+
+    measurement_failures = _required_integer(
+        payload.get("ksp_true_residual_measurement_failure_count"),
+        f"{name}.ksp_true_residual_measurement_failure_count",
+        minimum=0,
+    )
+    if measurement_failures != 0:
+        raise ValueError(f"{name} has shifted-solve true-residual diagnostic failures")
+
+    criterion = _required_object(
+        payload.get("ksp_true_residual_criterion"),
+        f"{name}.ksp_true_residual_criterion",
+    )
+    if criterion.get("schema_version") != _CRITERION_SCHEMA:
+        raise ValueError(f"{name} has an unsupported true-residual criterion schema")
+    if criterion.get("reference_norm") != _CRITERION_REFERENCE:
+        raise ValueError(f"{name} true-residual criterion lacks the zero-initial-guess RHS reference")
+
+    solve_count = _required_integer(
+        criterion.get("solve_count"), f"{name}.criterion.solve_count", minimum=1
+    )
+    measured_count = _required_integer(
+        criterion.get("measured_count"), f"{name}.criterion.measured_count", minimum=0
+    )
+    violation_count = _required_integer(
+        criterion.get("violation_count"), f"{name}.criterion.violation_count", minimum=0
+    )
+    unavailable_count = _required_integer(
+        criterion.get("unavailable_count"), f"{name}.criterion.unavailable_count", minimum=0
+    )
+    maximum_ratio = _required_number(
+        criterion.get("maximum_tolerance_ratio"),
+        f"{name}.criterion.maximum_tolerance_ratio",
+        nonnegative=True,
+    )
+    if measured_count != solve_count:
+        raise ValueError(f"{name} true-residual criterion has inconsistent solve counts")
+    if violation_count != 0 or unavailable_count != 0:
+        raise ValueError(f"{name} true-residual criterion reports a violation or unavailable solve")
+    if maximum_ratio > 1.0:
+        raise ValueError(f"{name} true-residual criterion exceeds its requested tolerance")
+
+    sample_count = _required_integer(
+        payload.get("ksp_true_residual_sample_count"),
+        f"{name}.ksp_true_residual_sample_count",
+        minimum=0,
+    )
+    if sample_count != measured_count:
+        raise ValueError(f"{name} true-residual criterion disagrees with its measured count")
+
+    true_residual_norm = _required_number(
+        payload.get("ksp_last_true_residual_norm"),
+        f"{name}.ksp_last_true_residual_norm",
+        nonnegative=True,
+    )
+    rhs_norm = _required_number(
+        payload.get("ksp_last_rhs_norm"), f"{name}.ksp_last_rhs_norm", nonnegative=True
+    )
+    relative_limit = configuration["ksp_rtol"] * rhs_norm
+    if not math.isfinite(relative_limit):
+        raise ValueError(f"{name} last shifted-solve tolerance is non-finite")
+    absolute_limit = max(configuration["ksp_atol"], relative_limit)
+    if true_residual_norm > absolute_limit:
+        raise ValueError(f"{name} last true residual exceeds its absolute/relative KSP criterion")
+    last_tolerance_ratio = (
+        true_residual_norm / absolute_limit if absolute_limit > 0.0
+        else (0.0 if true_residual_norm == 0.0 else math.inf)
+    )
+    if maximum_ratio + 1e-12 < last_tolerance_ratio:
+        raise ValueError(f"{name} aggregate criterion ratio is inconsistent with its last solve")
+
+    return {
+        "ksp_type": configuration["ksp_type"],
+        "ksp_rtol": configuration["ksp_rtol"],
+        "ksp_atol": configuration["ksp_atol"],
+        "pc_side": pc_side,
+        "norm_type": norm_type,
+        "eps_converged_reason": eps_reason,
+        "ksp_converged_reason": converged_reason,
+        "true_residual_criterion": {
+            "solve_count": solve_count,
+            "measured_count": measured_count,
+            "violation_count": violation_count,
+            "unavailable_count": unavailable_count,
+            "maximum_tolerance_ratio": maximum_ratio,
+        },
+        "last_tolerance_ratio": last_tolerance_ratio,
+    }
+
+
 def _validate_window(window, sample_index, window_position, requested_type,
                      rtol_limit, global_rtol, global_atol):
     name = f"sample {sample_index} subwindow {window_position}"
@@ -154,122 +274,143 @@ def _validate_window(window, sample_index, window_position, requested_type,
     elif not isinstance(unsupported, str) or unsupported:
         raise ValueError(f"{name} reports a native diagnostic failure")
 
-    before_eps = _required_object(
-        window.get("shifted_ksp_configuration_before_eps"),
-        f"{name}.shifted_ksp_configuration_before_eps",
-    )
-    if before_eps.get("phase") != "before_eps_solve":
-        raise ValueError(f"{name} is missing pre-EPS shifted-KSP configuration")
-    before_pc_side = _required_integer(before_eps.get("pc_side"), f"{name}.pre-EPS pc_side")
-    before_norm_type = _required_integer(before_eps.get("norm_type"), f"{name}.pre-EPS norm_type")
-    if before_pc_side != 1 or before_norm_type != 2:
-        raise ValueError(f"{name} does not use PC_RIGHT and KSP_NORM_UNPRECONDITIONED")
-
-    if window.get("ksp_diagnostics_available") is not True:
-        raise ValueError(f"{name} KSP diagnostics are unavailable")
-    if window.get("ksp_last_true_residual_available") is not True:
-        raise ValueError(f"{name} last true residual is unavailable")
-    converged_reason = _required_integer(
-        window.get("ksp_converged_reason"), f"{name}.ksp_converged_reason"
-    )
-    eps_reason = _required_integer(
-        window.get("eps_converged_reason"), f"{name}.eps_converged_reason"
-    )
-    if converged_reason <= 0 or eps_reason <= 0:
-        raise ValueError(f"{name} EPS/KSP did not report positive convergence")
-
-    pc_side = _required_integer(window.get("ksp_pc_side"), f"{name}.ksp_pc_side")
-    norm_type = _required_integer(window.get("ksp_norm_type"), f"{name}.ksp_norm_type")
-    if pc_side != 1 or norm_type != 2:
-        raise ValueError(f"{name} did not retain PC_RIGHT and KSP_NORM_UNPRECONDITIONED")
-
-    measurement_failures = _required_integer(
-        window.get("ksp_true_residual_measurement_failure_count"),
-        f"{name}.ksp_true_residual_measurement_failure_count",
-        minimum=0,
-    )
-    if measurement_failures != 0:
-        raise ValueError(f"{name} has shifted-solve true-residual diagnostic failures")
-
-    criterion = _required_object(
-        window.get("ksp_true_residual_criterion"),
-        f"{name}.ksp_true_residual_criterion",
-    )
-    if criterion.get("schema_version") != _CRITERION_SCHEMA:
-        raise ValueError(f"{name} has an unsupported true-residual criterion schema")
-    if criterion.get("reference_norm") != _CRITERION_REFERENCE:
-        raise ValueError(f"{name} true-residual criterion lacks the zero-initial-guess RHS reference")
-
-    solve_count = _required_integer(
-        criterion.get("solve_count"), f"{name}.criterion.solve_count", minimum=1
-    )
-    measured_count = _required_integer(
-        criterion.get("measured_count"), f"{name}.criterion.measured_count", minimum=0
-    )
-    violation_count = _required_integer(
-        criterion.get("violation_count"), f"{name}.criterion.violation_count", minimum=0
-    )
-    unavailable_count = _required_integer(
-        criterion.get("unavailable_count"), f"{name}.criterion.unavailable_count", minimum=0
-    )
-    maximum_ratio = _required_number(
-        criterion.get("maximum_tolerance_ratio"),
-        f"{name}.criterion.maximum_tolerance_ratio",
-        nonnegative=True,
-    )
-    if measured_count != solve_count:
-        raise ValueError(f"{name} true-residual criterion has inconsistent solve counts")
-    if violation_count != 0 or unavailable_count != 0:
-        raise ValueError(f"{name} true-residual criterion reports a violation or unavailable solve")
-    if maximum_ratio > 1.0:
-        raise ValueError(f"{name} true-residual criterion exceeds its requested tolerance")
-
-    sample_count = _required_integer(
-        window.get("ksp_true_residual_sample_count"),
-        f"{name}.ksp_true_residual_sample_count",
-        minimum=0,
-    )
-    if sample_count != measured_count:
-        raise ValueError(f"{name} true-residual criterion disagrees with its measured count")
-
-    true_residual_norm = _required_number(
-        window.get("ksp_last_true_residual_norm"),
-        f"{name}.ksp_last_true_residual_norm",
-        nonnegative=True,
-    )
-    rhs_norm = _required_number(
-        window.get("ksp_last_rhs_norm"), f"{name}.ksp_last_rhs_norm", nonnegative=True
-    )
-    relative_limit = configuration["ksp_rtol"] * rhs_norm
-    if not math.isfinite(relative_limit):
-        raise ValueError(f"{name} last shifted-solve tolerance is non-finite")
-    absolute_limit = max(configuration["ksp_atol"], relative_limit)
-    if true_residual_norm > absolute_limit:
-        raise ValueError(f"{name} last true residual exceeds its absolute/relative KSP criterion")
-    last_tolerance_ratio = (
-        true_residual_norm / absolute_limit if absolute_limit > 0.0
-        else (0.0 if true_residual_norm == 0.0 else math.inf)
-    )
-    if maximum_ratio + 1e-12 < last_tolerance_ratio:
-        raise ValueError(f"{name} aggregate criterion ratio is inconsistent with its last solve")
-
     return {
         "index": index,
-        "ksp_type": configuration["ksp_type"],
-        "ksp_rtol": configuration["ksp_rtol"],
-        "ksp_atol": configuration["ksp_atol"],
-        "pc_side": pc_side,
-        "norm_type": norm_type,
-        "eps_converged_reason": eps_reason,
-        "ksp_converged_reason": converged_reason,
-        "true_residual_criterion": {
-            "solve_count": solve_count,
-            "measured_count": measured_count,
-            "violation_count": violation_count,
-            "unavailable_count": unavailable_count,
-            "maximum_tolerance_ratio": maximum_ratio,
-        },
-        "last_tolerance_ratio": last_tolerance_ratio,
+        **_validate_shifted_solve_diagnostics(window, name, configuration),
+    }
+
+
+def _validate_nearest_sample(
+    diagnostics, sampling, requested_type, requested_rtol_value,
+    target_frequency_hz, gmres_restart, expected_wavevectors, global_rtol,
+    global_atol, global_breakdown,
+):
+    if len(expected_wavevectors) != 1 or expected_wavevectors[0] == 0.0:
+        raise ValueError("nearest shifted KSP trial requires exactly one nonzero DE/BV sample")
+
+    target = _required_number(
+        target_frequency_hz, "target_frequency_hz", positive=True
+    )
+    if gmres_restart is not None:
+        gmres_restart = _required_integer(
+            gmres_restart, "gmres_restart", minimum=1
+        )
+
+    records = diagnostics.get("sample_solver_diagnostics")
+    if not isinstance(records, list):
+        raise ValueError("nearest shifted KSP trial requires indexed per-sample diagnostics")
+    by_sample = diagnostics_by_sample(
+        diagnostics, [0], "ksp_true_residual_criterion"
+    )
+    invalid_indices = sorted(index for index in by_sample if index != 0)
+    if invalid_indices:
+        raise ValueError(
+            f"native solver diagnostics contain invalid sample indices: {invalid_indices}"
+        )
+    if 0 not in by_sample:
+        raise ValueError("missing native solver diagnostics for nearest sample 0")
+
+    sample = _required_object(by_sample[0], "sample 0.diagnostics")
+    if "subwindows" in sample:
+        raise ValueError("nearest shifted KSP trial cannot use frequency-window subwindows")
+    if sample.get("stop_reason") == "window_exhausted":
+        raise ValueError("nearest sample cannot report the frequency-window exhausted stop reason")
+    unsupported = sample.get("unsupported_reason")
+    if unsupported is not None and unsupported != "":
+        raise ValueError("nearest sample reports a native diagnostic failure")
+
+    adapter = _required_string(sample.get("solver_adapter"), "sample 0.solver_adapter")
+    if adapter != "floquet_airbox_cpu_schur_slepc":
+        raise ValueError("nearest sample was not produced by the Floquet CPU Schur/SLEPc adapter")
+    if sample.get("status") != "ok":
+        raise ValueError("nearest sample status is not ok")
+    if sample.get("solve_complete") is not True:
+        raise ValueError("nearest sample solve is incomplete")
+    if sample.get("target_kind") != "nearest_frequency":
+        raise ValueError("nearest sample target kind is not nearest_frequency")
+    resolved_target = _required_number(
+        sample.get("target_frequency_hz"),
+        "sample 0.target_frequency_hz",
+        positive=True,
+    )
+    if not _matching_number(resolved_target, target):
+        raise ValueError("nearest sample target_frequency_hz disagrees with the request")
+    if sample.get("spectrum_completeness") != "selected_only":
+        raise ValueError("nearest sample must retain selected_only spectrum scope")
+    if sample.get("window_complete") is not False:
+        raise ValueError("nearest sample must report window_complete=false")
+
+    vector = _validate_sample_vector(sample, 0, expected_wavevectors[0], sampling)
+    configuration = _validate_ksp_configuration(
+        sample,
+        "sample 0",
+        requested_type,
+        requested_rtol_value if requested_rtol_value is not None else global_rtol,
+        expected_rtol=global_rtol,
+        expected_atol=global_atol,
+        expected_breakdown=global_breakdown,
+    )
+
+    global_restart = _required_integer(
+        diagnostics.get("ksp_restart"), "global.ksp_restart", minimum=1
+    )
+    sample_restart = _required_integer(
+        sample.get("ksp_restart"), "sample 0.ksp_restart", minimum=1
+    )
+    if sample_restart != global_restart:
+        raise ValueError("sample 0 KSP restart disagrees with the global native configuration")
+    if gmres_restart is not None and global_restart != gmres_restart:
+        raise ValueError("global native KSP restart disagrees with the requested restart")
+
+    if sample.get("eps_dimensions_available") is not True:
+        raise ValueError("sample 0 EPS dimensions are unavailable")
+    nev = _required_integer(sample.get("eps_nev"), "sample 0.eps_nev", minimum=1)
+    ncv = _required_integer(sample.get("eps_ncv"), "sample 0.eps_ncv", minimum=1)
+    mpd = _required_integer(sample.get("eps_mpd"), "sample 0.eps_mpd", minimum=1)
+    if ncv < nev or mpd > ncv:
+        raise ValueError("sample 0 EPS dimensions are inconsistent")
+
+    solve_report = _validate_shifted_solve_diagnostics(
+        sample, "sample 0 nearest solve", configuration
+    )
+    solve_report.update({
+        "solver_adapter": adapter,
+        "status": "ok",
+        "solve_complete": True,
+        "target_kind": "nearest_frequency",
+        "target_frequency_hz": resolved_target,
+        "spectrum_completeness": "selected_only",
+        "window_complete": False,
+        "ksp_restart": sample_restart,
+        "gmres_restart": sample_restart,
+        "eps_dimensions_available": True,
+        "eps_dimensions": {"nev": nev, "ncv": ncv, "mpd": mpd},
+    })
+    accepted = {
+        "sample_index": 0,
+        "k_vector_rad_m": vector,
+        "breakdown_tolerance": configuration["ksp_breakdown_tolerance"],
+        "target_frequency_hz": resolved_target,
+        "gmres_restart": sample_restart,
+        "single_solve": solve_report,
+    }
+    return {
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "spectral_target": "nearest",
+        "selection_scope": "selected_only",
+        "window_complete": False,
+        "sampling": sampling,
+        "target_frequency_hz": resolved_target,
+        "requested_target_frequency_hz": target,
+        "resolved_target_frequency_hz": resolved_target,
+        "requested_type": requested_type,
+        "requested_rtol": requested_rtol_value,
+        "configured_rtol": global_rtol,
+        "configured_atol": global_atol,
+        "requested_gmres_restart": gmres_restart,
+        "sample_count": 1,
+        "by_sample": {0: accepted},
     }
 
 
@@ -278,12 +419,24 @@ def validate_shifted_ksp_trial(
     sampling: str,
     requested_type: str,
     requested_rtol: str | None,
+    *,
+    spectral_target: str = "frequency_window",
+    target_frequency_hz=None,
+    gmres_restart=None,
 ):
-    """Validate every native shifted-KSP window for required nonzero-k samples.
+    """Validate native shifted-KSP telemetry for a window or one nearest solve.
 
     This is a solver-trial receipt check only.  It does not certify eigenmodes,
     physical residuals, convergence of the dispersion, or scientific validity.
     """
+    if not isinstance(spectral_target, str) or spectral_target not in {
+        "frequency_window", "nearest"
+    }:
+        raise ValueError("shifted KSP trial spectral_target must be frequency_window or nearest")
+    if spectral_target == "frequency_window" and (
+        target_frequency_hz is not None or gmres_restart is not None
+    ):
+        raise ValueError("nearest-only target/restart values require spectral_target='nearest'")
     if not isinstance(sampling, str) or sampling not in SAMPLING:
         raise ValueError("shifted KSP trial has an unknown sampling name")
     if not isinstance(requested_type, str) or requested_type not in _KSP_TYPES:
@@ -335,6 +488,20 @@ def validate_shifted_ksp_trial(
     global_breakdown = _configured_breakdown_tolerance(
         diagnostics, "global", requested_type
     )
+
+    if spectral_target == "nearest":
+        return _validate_nearest_sample(
+            diagnostics,
+            sampling,
+            requested_type,
+            requested_rtol_value,
+            target_frequency_hz,
+            gmres_restart,
+            expected_wavevectors,
+            global_rtol,
+            global_atol,
+            global_breakdown,
+        )
 
     records = diagnostics.get("sample_solver_diagnostics")
     if not isinstance(records, list):

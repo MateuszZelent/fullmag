@@ -1,3 +1,28 @@
+<!-- nearest-floquet-telemetry-consumer-20261004 -->
+(nearest-floquet-telemetry-consumer)=
+## Konsument pojedynczego świadectwa shifted KSP dla nearest
+
+Nota poprzedza rozszerzenie interpretowanego konsumenta `de_shifted_ksp_trial.py` i diagnostycznego drivera DE/BV. Producent opisany w `nearest-floquet-telemetry-producer` już zapisuje istniejące pomiary; ich konsument ma odrzucać brakujące lub sprzeczne dane. Samo przyjęcie przez konsumenta nie dowodzi poprawności modów, zbieżności przestrzennej, pełnego widma ani zgodności COMSOL.
+
+Nowa ścieżka dotyczy tylko jawnego trialu GMRES/FGMRES dla jednego niezerowego wektora i native adaptera `floquet_airbox_cpu_schur_slepc`. Świadectwo pochodzi z `sample_solver_diagnostics` o jednoznacznym indeksie. Globalny ostatni wynik, pomiar dla innego wektora, dane podokien oraz wyjątek `window_exhausted` nie mogą zastąpić tego świadectwa. Window zachowuje istniejący domyślny interfejs i odrębną ocenę podokien; obie ścieżki używają tej samej kontroli rzeczywistego residualu bez kopiowania kryterium lub tworzenia fikcyjnego podokna.
+
+Konsument wymaga dodatnich kodów zakończenia EPS/KSP, rzeczywistej konfiguracji przed EPSSolve i po ostatnim solve (PC_RIGHT / NORM_UNPRECONDITIONED), dostępnych próbek, zgodnych liczników solve/measured/sample oraz zerowych liczników violation/unavailable/measurement failure. Sprawdza istniejące maksimum tolerance ratio i kryterium ostatniego solve'a względem RHS oraz zadanego rtol/atol. Nie zastępuje tego residualem rekurencyjnym. Konfiguracja requested/global/sample musi być zgodna, a wymiary EPS muszą pochodzić z dostępnego query. Brak telemetry w starszym runtime oznacza odrzucenie, nie dopisanie danych.
+
+| Sterowanie lub pole | Typ / jednostka SI | Znaczenie i walidacja |
+| --- | --- | --- |
+| `spectral_target` | string, domyślnie `frequency_window`; $1$ | `nearest` wymaga dokładnie jednego niezerowego sample; inne wartości odrzucane |
+| `target_frequency_hz` | finite positive number, dla nearest wymagane; $\mathrm{Hz}$ | zgodne z native target_frequency_hz; bool i brak odrzucane |
+| `gmres_restart` | opcjonalny dodatni int; $1$ | rzeczywisty restart sample/global zgodny z jawnie żądanym; CLI używa istniejącej listy stringów |
+| `eps_nev/ncv/mpd` | dodatnie int; $1$ | wymagane available query, ncv nie mniejsze od nev i mpd nie większe od ncv |
+| `sample_index`, `k_vector_rad_m` | int i trzy finite numbers; $1$ i $\mathrm{m^{-1}}$ | binding konkretnego indeksu, znaku i osi DE/BV, bez global fallbacku |
+
+Native status musi być `ok` i `solve_complete=true`, ale `spectrum_completeness=selected_only` oraz `window_complete=false` pozostają obowiązkowe. Nie nadajemy certyfikatu pełnego widma. Odrębne istniejące bramki CSV/spectrum, projected magnetic/potential/seam residualu, mesh, equilibrium i linearization pozostają aktywne. K0 nearest z jawnym trialem typu KSP pozostaje poza tym rozszerzeniem Floquet; dotychczasowy K0 window consumer zachowuje swoją trasę.
+
+Publiczny stage-first Python DSL, ProblemIR, schematy ABI, fizyka i domyślne tolerancje nie zmieniają się. To internal FEM CPU trial admission i postsolve validation. FEM GPU: NOT VERIFIED; FDM CPU/GPU nie dotyczy tego producenta. Kryterium walidacji: interpretowane positive i negative fixtures dla wszystkich bindingów, typed/availability/failure/criterion przypadków, zachowanie dotychczasowych window testów i integracja drivera. Wykonanie native nowego producenta/konsumenta i kontrolowane nearest GMRES/FGMRES A/B pozostają NOT VERIFIED do nowego managed runtime oraz rzeczywistych artefaktów.
+
+Zmiana drivera unieważnia przypięte hashe przygotowanego kontrolera air1,075. Przed kolejnym solve zachowujemy historyczne preparation/owner, oznaczamy poprzedni niewysłany plan jako superseded i przygotowujemy nową wersję z nowymi hashami/dry-run. Nie zmieniamy modelu air1,075, żadnego istniejącego wyniku ani receiptów; nowe obliczenia nadal wymagają admission storage.
+
+
 <!-- nearest-floquet-telemetry-producer-20261004 -->
 (nearest-floquet-telemetry-producer)=
 ## Diagnostyka rzeczywistego residualu pojedynczego solve'a Floqueta
@@ -1376,6 +1401,12 @@ managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| source-nearest-ksp-shared-consumer | FEM CPU | `scripts/de_shifted_ksp_trial.py` + `_validate_shifted_solve_diagnostics` | Shared strict true-residual configuration/count/criterion validation for nearest and window; no synthetic window or recursive residual substitution. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-selection-consumer | FEM CPU | `scripts/de_shifted_ksp_trial.py` + `validate_shifted_ksp_trial` | Single nonzero indexed Floquet nearest metadata, target, restart and EPS-dimensions binding; selected-only result, no spectrum completeness. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-driver-admission | FEM CPU | `scripts/run_de_100nm_pilot.py` + `_validate_shifted_ksp_trial_request` | Admit explicit native single-nonzero DE/BV nearest trial; reject dense/Gamma/grouped selection. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-driver-receipt | FEM CPU | `scripts/run_de_100nm_pilot.py` + `_validate_krylov_trials` | Forward resolved selection, target Hz and integer restart to nearest consumer while retaining separate Gamma/window routes. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-consumer-tests | FEM CPU | `scripts/test_de_shifted_ksp_trial.py` + `test_nearest_accepts_single_de_bv_positive_negative_gmres_and_fgmres` | Interpreted synthetic positive/negative telemetry regression; not native runtime or physical qualification. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-driver-tests | FEM CPU | `scripts/test_run_de_100nm_pilot.py` + `test_nearest_krylov_receipt_receives_target_and_integer_restart` | Interpreted driver admission/forwarding/rejection regression; no solver execution. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
 | source-nearest-floquet-ksp-telemetry | FEM CPU | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` + `floquet_shifted_ksp_diagnostics_json_fields` | Shared cached telemetry for actual Floquet nearest success/error and window; unavailable measurements preserved. | prepared native production-path regression | source expression preservation PASS; native compilation/runtime NOT VERIFIED | new task checkpoint required; runtime228 predates producer |
 | source-nearest-floquet-ksp-regression | FEM CPU | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` + `main` | Invokes actual shared-domain nearest producer and generic/K0 absence checks; algebraic fixture, no physical qualification. | modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics; modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator | prepared only; native compilation/execution NOT RUN; failure fixture OPEN | new task checkpoint required |
 | source-de-air-layer-planner / eq-de-air-grading-controlled-sequence | FEM CPU | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` + `_box_airbox_layer_levels` | Exact film planes and capped exterior growth recurrence; no convergence claim. | controlled input and actual-mesh comparison | source inspected; controlled runtime pending | immutable runtime source 57182911c6e8e721b8ee9705aa7f70491c70fe94 |

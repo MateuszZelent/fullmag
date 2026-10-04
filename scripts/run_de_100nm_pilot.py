@@ -1162,14 +1162,27 @@ def _validate_shifted_ksp_trial_request(pilot, requested_type, nearest_frequency
     if requested_type not in SHIFTED_KSP_TYPE_CHOICES or not pilot.startswith("de-smoke-"):
         raise managed.BenchmarkError("shifted KSP type diagnostic requires DE-SMOKE and gmres/fgmres")
     modal_target, _ = _modal_selection(pilot, nearest_frequency, spectral_target)
-    if modal_target != "frequency_window" or dense_oracle:
-        raise managed.BenchmarkError("shifted KSP type diagnostic requires a native frequency_window pilot")
+    if dense_oracle:
+        raise managed.BenchmarkError("shifted KSP type diagnostic requires a native pilot")
+    if modal_target == "nearest":
+        sampling = PILOTS.get(pilot, (None, None))[1]
+        wavevectors = SAMPLING.get(sampling, ())
+        if len(wavevectors) != 1 or wavevectors[0] == 0.0:
+            raise managed.BenchmarkError(
+                "nearest shifted KSP trial requires exactly one nonzero DE/BV sample")
 
 
 def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
-                            eps_prefilter, gmres_restart):
+                            eps_prefilter, gmres_restart, *,
+                            spectral_target="frequency_window", target_frequency_hz=None):
     """Run the separate K0 query and nonzero Floquet residual receipt gates."""
     wavevectors = SAMPLING.get(sampling, ())
+    if spectral_target not in ("frequency_window", "nearest"):
+        raise managed.BenchmarkError("shifted KSP trial spectral target is unsupported")
+    if spectral_target == "nearest" and (len(wavevectors) != 1 or wavevectors[0] == 0.0):
+        raise managed.BenchmarkError("nearest shifted KSP trial requires one nonzero sample")
+    if gmres_restart is not None and gmres_restart not in GMRES_RESTART_CHOICES:
+        raise managed.BenchmarkError("shifted KSP trial restart request is unsupported")
     artifacts = {}
     if any(value == 0.0 for value in wavevectors):
         artifacts["gamma_krylov_trial"] = validate_gamma_krylov_trial(
@@ -1181,8 +1194,13 @@ def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
             gmres_restart=gmres_restart,
         )
     if any(value != 0.0 for value in wavevectors):
+        selection = (
+            {"spectral_target": "nearest", "target_frequency_hz": target_frequency_hz,
+             "gmres_restart": int(gmres_restart) if gmres_restart is not None else None}
+            if spectral_target == "nearest" else {}
+        )
         artifacts["shifted_ksp_trial"] = validate_shifted_ksp_trial(
-            case_dir, sampling, requested_type, requested_rtol
+            case_dir, sampling, requested_type, requested_rtol, **selection
         )
     return artifacts
 
@@ -2061,6 +2079,8 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                         shifted_ksp_rtol,
                         eps_prefilter,
                         gmres_restart,
+                        spectral_target=modal_target,
+                        target_frequency_hz=target_frequency_hz,
                     ))
                 artifacts["potential_reconstruction"] = validate_smoke_potential_fields(
                     output / pilot, artifacts["row_preflight"]["sample_count"])

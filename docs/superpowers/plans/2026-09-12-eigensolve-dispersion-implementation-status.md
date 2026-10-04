@@ -1,3 +1,19 @@
+<!-- nearest-floquet-consumer-source-checkpoint-20261004 -->
+## S05 — konsument nearest i jawny trial GMRES/FGMRES
+
+Zaimplementowano osobną walidację pojedynczego niezerowego DE/BV nearest oraz dopuszczenie jawnego typu KSP w driverze. Wspólny helper nearest/window wymaga istniejącego kryterium rzeczywistego residualu względem RHS, konfiguracji queried, dodatnich kodów zakończenia i pełnych liczników bez violation/unavailable. Nearest wiąże konkretny indexed sample, znak/oś k, targetHz, actual restart i wymiary EPS; odrzuca global fallback, subwindows, window_exhausted, K0 i grupowe próby. Nie zmienia tolerancji, fizyki ani domyślnego solvera. Pozostałe bramki physical/seam/potential/mesh/equilibrium nadal obowiązują; accepted trial pozostaje selected_only/window_complete=false i NOT VERIFIED naukowo.
+
+Kontrole interpretowane: **29 consumer +58 driver PASS**, **32 scientific-documentation +3 skill-contract PASS**. Review czterech Python plików nie ma otwartych P1/P2 po poprawce sprzecznego stop_reason; regresja mutuje wyłącznie to pole. Na rzeczywistych niezmienionych raw window artefaktach air1,15 dla +10/+25 wykonano rewalidację wspólnego helpera, oba PASS z zachowaniem hashy. Nie jest to nowe wykonanie ani dowód nearest. Dokładnie staged własną notę/mapę i fragment planu waliduje źródłowa bramka przed commitem; cudze WIP pozostają poza przyrostem.
+
+Native producent pochodzi z wcześniejszego commita f0eb4a6446cd5f5d9ee744c36492105e6b73325a. Obecny runtime228/source57182911c6e8e721b8ee9705aa7f70491c70fe94 go nie zawiera, więc **managed nearest GMRES/FGMRES A/B NOT VERIFIED** i wymaga nowego buildu runtime-v2. Nie wolno dopisywać brakującej telemetry do starych wyników. Kompilowane unit testy NOT RUN zgodnie z zakazem użytkownika.
+
+Zmiana drivera unieważnia hashe niewysłanych przygotowań air1,075. Zachować dotychczasowy controller/owner/history, oznaczyć niewysłany plan superseded i przygotować v2 z nowymi pinami oraz ponownymi dry-run. Model3aac3ddfdeb795476db04b5487f96ac1d41a5963 i runtime228 dla air trialu pozostają oddzielnie przypięte; wejścia/case outputs v2 muszą być nowe. Dispatch dopiero po bieżącym admission storage8GiB. Ostatni odczyt przy audycie storage wskazywał2,70GiB na C:, pusta kolejka; nie obniżamy progu i nie kasujemy cache bez zgody/koordynacji.
+
+Całe **S00–S12 OPEN**: dalsza convergence airbox/body/thickness/modów, Γ full window, native shared signed15 i serial/adaptive parity/zasoby, GUI, A1/COMSOL, pozostałe S09/S10/GPU i PR97/integracja. Zachowano 15 rzeczywistych punktów DE i dwa air1,15 refinements oraz ich wykres; niniejsza zmiana nie tworzy nowych częstotliwości.
+
+Nota: `docs/physics/0830-fem-poisson-airbox-modal-eigen.md` — `nearest-floquet-telemetry-consumer`. Dowody: nearest-consumer-review.md oraz nearest-consumer-real-window-revalidation.json w preview-state-checkpoint wątku. Historyczne checkpointy zachowano.
+
+
 <!-- nearest-floquet-producer-source-checkpoint-20261004 -->
 ## S05 — wspólna publikacja telemetry Floquet nearest/window
 

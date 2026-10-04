@@ -1330,6 +1330,67 @@ class PilotTests(unittest.TestCase):
                     pilot._validate_shifted_ksp_trial_request(
                         pilot_name, "fgmres", nearest, target, dense_oracle=dense)
 
+    def test_nearest_shifted_ksp_trial_admission_is_single_nonzero_native_only(self):
+        for name in ("de-smoke-k10", "de-smoke-k-10", "de-smoke-bv-k25", pilot.NEAREST_PILOT):
+            for method in ("gmres", "fgmres"):
+                with self.subTest(pilot=name, method=method):
+                    pilot._validate_shifted_ksp_trial_request(name, method, "11.2", "nearest")
+        for name in ("de-smoke-k0", "de-smoke-bv-k0", "de-smoke-two", "de-smoke-positive-six"):
+            with self.subTest(pilot=name), self.assertRaises(pilot.managed.BenchmarkError):
+                pilot._validate_shifted_ksp_trial_request(name, "fgmres", "11.2", "nearest")
+        with self.assertRaises(pilot.managed.BenchmarkError):
+            pilot._validate_shifted_ksp_trial_request(
+                "de-smoke-k10", "fgmres", "11.2", "nearest", dense_oracle=True)
+
+    def test_nearest_krylov_receipt_receives_target_and_integer_restart(self):
+        with patch.object(pilot, "validate_gamma_krylov_trial") as gamma, \
+                patch.object(pilot, "validate_shifted_ksp_trial", return_value={"scope": "selected_only"}) as floquet:
+            artifacts = pilot._validate_krylov_trials(
+                Path("case"), "k-10", "fgmres", "1e-9", "1e-9", "8",
+                spectral_target="nearest", target_frequency_hz=11.2e9)
+            gamma.assert_not_called()
+            floquet.assert_called_once_with(
+                Path("case"), "k-10", "fgmres", "1e-9", spectral_target="nearest",
+                target_frequency_hz=11.2e9, gmres_restart=8)
+            self.assertEqual(set(artifacts), {"shifted_ksp_trial"})
+
+    def test_nearest_krylov_receipt_rejects_gamma_grouped_and_unknown_selection(self):
+        for sampling, selection in (("k0", "nearest"), ("two", "nearest"),
+                                    ("k2", "invalid")):
+            with self.subTest(sampling=sampling, selection=selection), \
+                    patch.object(pilot, "validate_shifted_ksp_trial") as floquet, \
+                    self.assertRaises(pilot.managed.BenchmarkError):
+                pilot._validate_krylov_trials(
+                    Path("case"), sampling, "fgmres", "1e-9", "1e-9", "8",
+                    spectral_target=selection, target_frequency_hz=11.2e9)
+            floquet.assert_not_called()
+
+    def test_nearest_krylov_receipt_propagates_unavailable_measurement(self):
+        with patch.object(pilot, "validate_shifted_ksp_trial",
+                          side_effect=ValueError("KSP diagnostics unavailable")), \
+                self.assertRaisesRegex(ValueError, "unavailable"):
+            pilot._validate_krylov_trials(
+                Path("case"), "k10", "fgmres", "1e-9", "1e-9", None,
+                spectral_target="nearest", target_frequency_hz=11.2e9)
+
+    def test_nearest_fgmres_compose_preserves_explicit_selection_and_controls(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v2"})
+        with patch.object(pilot.managed, "_compose_command",
+                          return_value=["docker", "run", "placeholder"]):
+            shell = pilot.compose_command(
+                context, Path("/outputs"), pilot="de-smoke-k-10", external_model=True,
+                spectral_target="nearest", nearest_target_frequency_ghz="11.2",
+                shifted_ksp_type="fgmres", shifted_ksp_rtol="1e-9", gmres_restart="8")[-1]
+        self.assertIn("export FULLMAG_DE_SMOKE_MODAL_TARGET=nearest", shell)
+        self.assertIn("export FULLMAG_DE_SMOKE_SAMPLING=k-10", shell)
+        self.assertIn("export FULLMAG_MODAL_SHIFTED_KSP_TYPE=fgmres", shell)
+        self.assertIn("export FULLMAG_MODAL_GMRES_RESTART=8", shell)
+        target_export = next(line for line in shell.splitlines()
+                             if line.startswith("export FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ="))
+        self.assertAlmostEqual(float(target_export.split("=", 1)[1]), 11.2)
+
     def test_gamma_and_nonzero_krylov_receipt_gates_are_separate(self):
         cases = (
             ("k0", {"gamma_krylov_trial"}),
