@@ -11,7 +11,7 @@ owner: fullmag-public-docs
 
 The **FullMag Control Room** (`apps/control-room`) is built as a modular, resource-first web application designed for interactive micromagnetic problem authoring, high-throughput WebGL visualization, and live runtime observation.
 
-It bridges browser interaction with FullMag's underlying Rust/C++ solvers through OpenAPI v2 contracts, canonical `ProblemIR` representations, and real-time binary transport streams.
+It bridges browser interaction with FullMag's underlying Rust/C++ solvers through OpenAPI v2 contracts, canonical `ProblemIR` representations, and HTTP binary resources and WebSocket invalidation events.
 
 ---
 
@@ -20,8 +20,8 @@ It bridges browser interaction with FullMag's underlying Rust/C++ solvers throug
 ```text
 graph TD
     A["User Interactions (Ribbon / Explorer / Viewport / Inspector)"] --> B["Module Kernel & Registry"]
-    B --> C["Zustand State Stores & Draft Isolation"]
-    C --> D["OpenAPI v2 Client & SSE/WS Event Pipeline"]
+    B --> C["Resource Controllers & Draft Isolation"]
+    C --> D["OpenAPI v2 HTTP Client & WebSocket Invalidation"]
     D --> E["FullMag Rust/C++ Backend Session Engine"]
     E --> F["Canonical ProblemIR Lowering & Validation"]
     F --> G["FDM & FEM CPU/GPU Solvers"]
@@ -39,14 +39,16 @@ graph TD
 
 ## Module Kernel & Layout Slots
 
-The Control Room shell layout is partitioned into flexible **Layout Slots** managed by `src/kernel/modules`:
+The Control Room shell layout is partitioned into flexible **Layout Slots** managed by `src/kernel/module`:
 
 ```
 apps/control-room/src/
 ├── kernel/              # Core shell runtime, layout manager, API client, event bus
 │   ├── api/             # OpenAPI v2 client, generated types, binary codecs
-│   ├── modules/         # Module registry, manifest resolver, slot contracts
-│   └── state/           # Central session stores, selection, layout persistence
+│   ├── module/          # Module registry, manifest resolver, slot contracts
+│   ├── resources/       # Revision-aware resource hooks and invalidation
+│   ├── selection/       # Selection controller
+│   └── layout/          # Layout controller and persistence
 └── modules/             # Self-contained UI feature modules
     ├── ribbon/          # Header strip tabs & command groups
     ├── explorer/        # Semantic tree model browser
@@ -62,25 +64,20 @@ apps/control-room/src/
 Every UI module exports a standardized `manifest.ts` defining its identity, contributed layout slots, menu actions, and ribbon buttons:
 
 ```typescript
-export const inspectorModuleManifest: ModuleManifest = {
+import type { ModuleManifest } from "@/kernel/types";
+
+export const inspectorManifest: ModuleManifest = {
   id: "inspector",
-  name: "Inspector Panel",
-  slots: [
-    {
-      slotId: "shell.right",
-      component: InspectorShell,
-      priority: 10,
-    },
-  ],
-  commands: [
-    {
-      id: "inspector.apply-draft",
-      label: "Apply Draft Changes",
-      shortcut: "Ctrl+Enter",
-    },
-  ],
+  title: "Inspector",
+  version: "0.1.0",
+  slots: ["panel-right"],
+  component: () => import("./InspectorModule"),
 };
 ```
+
+This is the minimal shape from `inspectorManifest`; command contributions belong under
+`contributes.commands`, with a `run` handler. Slot identifiers are the `SlotId` union;
+`"shell.right"` is not a supported slot.
 
 ---
 
@@ -91,7 +88,7 @@ The 3D Viewport (`src/modules/viewport-3d`) renders geometric domains and 3D vec
 ### Performance & Memory Safeguards
 
 - **Instanced Mesh Glyphs**: Vector field arrows and cones are rendered using `THREE.InstancedMesh` with GPU instancing to reduce draw-call overhead for large vector datasets.
-- **Binary ArrayBuffer Codecs**: Field samples stream directly from the backend over WebSocket/HTTP as unboxed `Float32Array` buffers, bypassing JSON parsing overhead.
+- **Binary ArrayBuffer Codecs**: Field samples are fetched as scoped HTTP binary resources. `decodeFieldVector` validates the FMVP header, component count, revisions, indexing and an FP64 payload, then exposes a `Float64Array`. Renderer-side GPU buffers are a separate representation. WebSocket events invalidate resources; they do not carry the field arrays.
 - **Context Loss Recovery**: WebGL canvas lifecycle events (`webglcontextlost`, `webglcontextrestored`) are monitored so rendering resources can be reconstructed after context restoration.
 - **Topology Caching**: FEM mesh element topologies and node coordinates are cached separately from per-step vector field data, avoiding redundant GPU geometry re-uploads during time integration.
 
@@ -103,10 +100,10 @@ Workspace state is maintained across three distinct tiers:
 
 1. **Selection & Layout Store**: Tracks selected tree node IDs, panel visibility, ribbon tab index, and visual profile settings.
 2. **Draft Property Store**: Holds transient uncommitted user edits in the Inspector before explicit application.
-3. **Session & Runtime Store**: Synchronizes with the active backend session (`/v2/sessions/current/*`), listening to real-time SSE event channels for stage completions, metric updates, and field invalidations.
+3. **Session & Runtime Store**: Synchronizes with the active backend session (`/v2/sessions/current/*`), listening to WebSocket revision/invalidation events for stage completions, metric updates, and field invalidations.
 
 ```
-User Input ──> Draft Store ──(Apply Draft)──> Session API ──> SSE Event ──> Viewport Invalidated ──> GPU Redraw
+User Input ──> Draft Store ──(Apply Draft)──> Session API ──> WebSocket Event ──> Viewport Invalidated ──> GPU Redraw
 ```
 
 ---
@@ -118,8 +115,8 @@ User Input ──> Draft Store ──(Apply Draft)──> Session API ──> SS
 | Framework | Next.js 16 (React 19) | `apps/control-room/package.json` |
 | 3D Graphics | Three.js / @react-three/fiber | `apps/control-room/src/modules/viewport-3d/` |
 | 2D Charting | ECharts / Recharts | `apps/control-room/src/modules/live-charts/` |
-| State | Zustand / `useSyncExternalStore` | `apps/control-room/src/kernel/state/` |
-| Transport | OpenAPI v2 (`openapi-fetch`), WebSocket, SSE | `apps/control-room/src/kernel/api/` |
+| State | Controllers / resource hooks / `useSyncExternalStore` | `apps/control-room/src/kernel/resources/`, `selection/`, `layout/` |
+| Transport | OpenAPI v2 (`openapi-fetch`), HTTP resources and WebSocket events | `apps/control-room/src/kernel/api/` |
 | Styling | CSS Custom Properties (`--fm-*`), Tailwind | `apps/control-room/src/design/styles/` |
 ## Control Room crosswalk
 
@@ -134,5 +131,15 @@ This page documents architecture rather than a standalone Python callable. Exact
 No independent physical model is introduced here. Scientific equations are owned by the applicable physics or numerical-methods page. Bibliography: not applicable to this architecture overview; implementation ownership is recorded in the source-code references on the terminal page.
 ## Source-code index
 
-- No standalone Python callable is introduced by this architecture page. Use the exact source symbol named by the linked API or implementation page; architecture terms alone are not public functions.
+| Claim | Repository path | Stable symbol |
+|---|---|---|
+| Module and slot contracts | `apps/control-room/src/kernel/types.ts` | `ModuleManifest`, `SlotId` |
+| Actual Inspector manifest | `apps/control-room/src/modules/inspector/manifest.ts` | `inspectorManifest` |
+| HTTP resource facade | `apps/control-room/src/kernel/api/ControlRoomApi.ts` | `ControlRoomApi` |
+| WebSocket transport | `apps/control-room/src/kernel/realtime/RealtimeClient.ts` | `RealtimeClient` |
+| Event-to-resource invalidation | `apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.ts` | `RealtimeInvalidationBridge` |
+| Resource revision ownership | `apps/control-room/src/kernel/resources/ResourceInvalidationController.ts` | `ResourceInvalidationController` |
+| FP64 field decoding | `apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts` | `decodeFieldVector` |
 
+These are source-level implementation references. This documentation review does not establish
+browser/WebGL execution or solver qualification.

@@ -40,12 +40,14 @@ This page is the Control Room surface itself. The status is `partial` unless eve
 
 ## Python/API crosswalk
 
-Python remains the authoritative authoring contract. Use the linked `{doc}``/python-api/index` pages for exact constructors, functions, arguments, units, and failure semantics; this page must not invent a Python signature.
+Python remains the authoritative authoring contract. Use the linked {doc}`/python-api/index` pages for exact constructors, functions, arguments, units, and failure semantics; this page must not invent a Python signature.
 
 ## Physics and bibliography scope
 
 This UI page introduces no independent physical model. It presents controls for an existing backend contract. Bibliography: not applicable unless a terminal page below introduces a scientific model; implementation references are the cited frontend component and linked API page.
 ## Source-code index
 
-- Frontend implementation owners: `apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx`, `ObjectMaterialPanel.tsx`, `PhysicsInteractionPanel.tsx`, `ObjectMagneticTexturePanel.tsx`, `ObjectMeshPolicyPanel.tsx`, and `StudyStageDraftEditor.tsx`, as applicable to the route above.
-
+| Repository path | Stable symbol | Responsibility |
+|---|---|---|
+| `apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx` | `AirboxMeshParametersPanel` | Controls and explicit Apply/build transaction |
+| `apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts` | `buildAirboxMeshPolicyReplaceRequest` | Typed/JSON policy merge and FDM filtering |

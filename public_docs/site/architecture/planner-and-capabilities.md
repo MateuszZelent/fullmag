@@ -31,8 +31,8 @@ Unsupported and planned lanes are reported explicitly rather than overclaimed.
 
 ## Where the policy is enforced
 
-- Python `Problem` validation and lowering: `packages/fullmag-py/src/fullmag/model/problem.py`.
-- Capability and routing decisions: the Rust planner behind the native runner.
+- Python `Problem` validation and lowering: `packages/fullmag-py/src/fullmag/model/problem.py` — `Problem.to_ir`.
+- Capability and routing decisions: `crates/fullmag-plan/src/lib.rs` — `plan`.
 - Public capability statuses: {doc}`../validation/qualification-status`.
 
 The planner is a product boundary: a supported identifier does not prove executability, and an

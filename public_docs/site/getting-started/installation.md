@@ -88,7 +88,7 @@ Use the authoring path stated in this guide, normally `Model Explorer -> Objects
 
 ## Python/API crosswalk
 
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked `{doc}``/python-api/index` page rather than duplicating an unverified signature.
+The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
 
 ## Physics, limitations, and bibliography
 
