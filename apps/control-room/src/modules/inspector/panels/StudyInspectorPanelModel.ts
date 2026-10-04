@@ -8,6 +8,7 @@ import type {
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import {
   apmFromTesla,
   formatScientific,
@@ -53,6 +54,89 @@ interface StudyStageTransitionModel {
   uiPresentation: string | null;
 }
 
+export type StudyStageParallelExecutionModel = NonNullable<
+  StageExecutionResource["stages"][number]["parallel_execution"]
+>;
+
+export interface StageExecutionScope {
+  expectedRunId?: string | null;
+  expectedSessionEpoch?: string | null;
+  expectedSessionId?: string | null;
+  resourceStatus?: ResourceStatus;
+  scopeReady?: boolean;
+}
+
+/**
+ * Prevent a retained resource snapshot from crossing a resource lifecycle
+ * boundary. Calls without a scope remain compatible with model-only callers;
+ * a ready scoped resource must carry and match the complete identity tuple.
+ */
+export function stageExecutionForCurrentScope(
+  stageExecution: StageExecutionResource | null,
+  scope: StageExecutionScope = {},
+): StageExecutionResource | null {
+  if (!stageExecution) return null;
+  if (scope.resourceStatus !== undefined && scope.resourceStatus !== "ready") {
+    return null;
+  }
+  if (scope.scopeReady === false) return null;
+
+  const hasNoScope =
+    scope.scopeReady === undefined &&
+    scope.resourceStatus === undefined &&
+    scope.expectedRunId === undefined &&
+    scope.expectedSessionId === undefined &&
+    scope.expectedSessionEpoch === undefined;
+  if (hasNoScope) return stageExecution;
+
+  const scoped = stageExecution;
+  if (scope.scopeReady === true) {
+    const hasRunId = Object.prototype.hasOwnProperty.call(scoped, "run_id");
+    const expectedSessionId = scope.expectedSessionId;
+    const expectedSessionEpoch = scope.expectedSessionEpoch;
+    const expectedRunId = scope.expectedRunId;
+    if (
+      !isNonEmptyIdentity(expectedSessionId) ||
+      !isNonEmptyIdentity(expectedSessionEpoch) ||
+      expectedRunId === undefined ||
+      !isNonEmptyIdentity(scoped.session_id) ||
+      !isNonEmptyIdentity(scoped.session_epoch) ||
+      !hasRunId ||
+      (scoped.run_id !== null && !isNonEmptyIdentity(scoped.run_id)) ||
+      scoped.session_id !== expectedSessionId ||
+      scoped.session_epoch !== expectedSessionEpoch ||
+      scoped.run_id !== (expectedRunId ?? null)
+    ) {
+      return null;
+    }
+    return stageExecution;
+  }
+
+  if (
+    typeof scoped.session_id === "string" &&
+    scoped.session_id !== (scope.expectedSessionId ?? null)
+  ) {
+    return null;
+  }
+  if (
+    typeof scoped.session_epoch === "string" &&
+    scoped.session_epoch !== (scope.expectedSessionEpoch ?? null)
+  ) {
+    return null;
+  }
+  if (
+    typeof scoped.run_id === "string" &&
+    scoped.run_id !== (scope.expectedRunId ?? null)
+  ) {
+    return null;
+  }
+  return stageExecution;
+}
+
+function isNonEmptyIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 export type StudyStageModel = StudyStageSnapshot & {
   artifactRefs: readonly string[];
   checkpointRef: string | null;
@@ -69,6 +153,7 @@ export type StudyStageModel = StudyStageSnapshot & {
   progressDetail?: string | null;
   progressLabel?: string | null;
   progressPercent: number;
+  parallelExecution?: StudyStageParallelExecutionModel | null;
   runtimeMetric: StudyStageRuntimeMetricModel | null;
   stopReason: string | null;
   transition: StudyStageTransitionModel | null;
@@ -238,11 +323,14 @@ export function resolveStudyInspectorModel({
     selectedStage: activeStageSnapshot,
   });
 
-  const runtimeStageByIndex = new Map(
+  const runtimeStageByIndex = new Map<
+    number,
+    StageExecutionResource["stages"][number]
+  >(
     (stageExecution?.stages ?? []).map((stage, index) => [
       typeof stage.index === "number" ? stage.index : index,
       stage,
-    ]),
+    ] as const),
   );
 
   const stages = snapshot.stages.map((stage) => {
@@ -284,6 +372,7 @@ export function resolveStudyInspectorModel({
         : stage.index === activeStageIndex
           ? (stageProgressPercent ?? progressPercent)
           : 0,
+      parallelExecution: runtimeRecord?.parallel_execution ?? null,
       runtimeMetric: runtimeMetricModel(runtimeRecord),
       stageId: runtimeRecord?.stage_id ?? stage.stageId,
       status,

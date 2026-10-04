@@ -113,6 +113,7 @@ import {
 } from "./StudyStageAuthoringModel";
 import {
   resolveStudyInspectorModel,
+  stageExecutionForCurrentScope,
   studySnapshotFromScene,
   type StudyInspectorModel,
   type StudyInspectorSnapshot,
@@ -578,6 +579,7 @@ type StudyInspectorRuntimeStatus = {
     | "scene_revision"
     | "stages_revision"
   >;
+  session: Pick<LiveStatusResource["session"], "session_epoch" | "session_id">;
   run: LiveStatusResource["run"];
 };
 
@@ -602,6 +604,10 @@ function selectStudyInspectorRuntimeStatus(status: {
       scalars_revision: status.data.resources.scalars_revision,
       scene_revision: status.data.resources.scene_revision,
       stages_revision: status.data.resources.stages_revision,
+    },
+    session: {
+      session_epoch: status.data.session.session_epoch,
+      session_id: status.data.session.session_id,
     },
     run: status.data.run,
   };
@@ -635,6 +641,12 @@ export function studyInspectorRuntimeStatusEquals(
   if (
     previousAlgorithms.length !== nextAlgorithms.length ||
     previousAlgorithms.some((algorithm, index) => algorithm !== nextAlgorithms[index])
+  ) {
+    return false;
+  }
+  if (
+    previous.session.session_id !== next.session.session_id ||
+    previous.session.session_epoch !== next.session.session_epoch
   ) {
     return false;
   }
@@ -674,6 +686,20 @@ export function useStudyInspectorPanelController(
   const stageExecution = useStageExecutionResource({
     enabled: shouldLoadRuntimeStageExecution(true, runtimeStatus),
   });
+  const scopedStageExecutionData = stageExecutionForCurrentScope(
+    stageExecution.data,
+    {
+      expectedRunId: runtimeStatus?.run?.run_id ?? null,
+      expectedSessionEpoch: runtimeStatus?.session.session_epoch ?? null,
+      expectedSessionId: runtimeStatus?.session.session_id ?? null,
+      resourceStatus: stageExecution.status,
+      scopeReady: runtimeStatus !== null,
+    },
+  );
+  const scopedStageExecution =
+    scopedStageExecutionData === stageExecution.data
+      ? stageExecution
+      : { ...stageExecution, data: scopedStageExecutionData };
   const solverStatus = useSolverStatusResource();
   const commandQueue = useCommandQueueResource({
     enabled: shouldLoadRuntimeCommandQueue(true, runtimeStatus),
@@ -736,7 +762,7 @@ export function useStudyInspectorPanelController(
     selectedStageRef,
     snapshot,
     solverStatus: solverStatus.data,
-    stageExecution: stageExecution.data,
+    stageExecution: scopedStageExecutionData,
   });
   const selectedStageIndex = model.selectedStage?.index ?? 0;
   const k0ModalReadinessFor = (draft: StudyStageDraft) =>
@@ -748,7 +774,7 @@ export function useStudyInspectorPanelController(
       meshManifest: meshManifest.data,
       periodicPairs: periodicPairs.data,
       solverStatus: solverStatus.data,
-      stageExecution: stageExecution.data,
+      stageExecution: scopedStageExecutionData,
     });
   const sceneRevision = sceneRevisionValue(scene.data);
   const sceneHasPayload = sceneHasAuthoringPayload(scene.data);
@@ -790,7 +816,7 @@ export function useStudyInspectorPanelController(
     state.stageDrafts,
     studySignature,
   ]);
-  const activeStageIndex = stageExecution.data?.active_stage_index ?? null;
+  const activeStageIndex = scopedStageExecutionData?.active_stage_index ?? null;
   const commandContext = createCommandContext("inspector", kernel, {
     resourceData: {
       ...buildRuntimeCommandControlResourceData({
@@ -802,7 +828,7 @@ export function useStudyInspectorPanelController(
         modelReadinessStatus: modelReadiness.status,
         sessionStatus: runtimeStatus,
         solverStatus: solverStatus.data,
-        stageExecution: stageExecution.data,
+        stageExecution: scopedStageExecutionData,
       }),
       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
       [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
@@ -1117,7 +1143,7 @@ export function useStudyInspectorPanelController(
     selectedRestoreCheckpoint,
     snapshot,
     solverStatus,
-    stageExecution,
+    stageExecution: scopedStageExecution,
     state,
   };
 }
@@ -1822,6 +1848,16 @@ export function StudyBoundarySection({
         }
       />
       <FieldRow label="Current CPU threads" value={model.requested.cpuThreads} />
+      <FieldRow
+        label="Parallel execution"
+        value={
+          draft.parallelExecution.mode === "serial"
+            ? "serial (adaptive targets unused)"
+            : draft.parallelExecution.mode === "adaptive"
+              ? `adaptive, CPU ${draft.parallelExecution.maxCpuPercent}%`
+              : `invalid mode: ${draft.parallelExecution.mode}`
+        }
+      />
       <FormField
         label="Backend"
         type="select"
@@ -1872,6 +1908,94 @@ export function StudyBoundarySection({
         value={draft.requestedCpuThreads}
         onChange={(event) =>
           onUpdate({ requestedCpuThreads: event.target.value })
+        }
+      />
+      <FormField
+        label="Independent k points"
+        hint="Adaptive schedules independent k points for FEM CPU with soft CPU and memory targets; serial mode ignores these targets. Settings apply on the next run."
+        type="select"
+        value={draft.parallelExecution.mode}
+        onChange={(event) =>
+          onUpdate({
+            parallelExecution: {
+              ...draft.parallelExecution,
+              mode: event.target.value,
+            },
+          })
+        }
+      >
+        {draft.parallelExecution.mode !== "serial" &&
+        draft.parallelExecution.mode !== "adaptive" ? (
+          <option value={draft.parallelExecution.mode}>
+            Invalid imported mode: {draft.parallelExecution.mode}
+          </option>
+        ) : null}
+        <option value="serial">Serial</option>
+        <option value="adaptive">Adaptive</option>
+      </FormField>
+      <FormField
+        label="Maximum CPU target (%)"
+        hint="Adaptive only: target within the CPU allocation; brief peaks can exceed it. Serial mode ignores this field."
+        value={draft.parallelExecution.maxCpuPercent}
+        onChange={(event) =>
+          onUpdate({
+            parallelExecution: {
+              ...draft.parallelExecution,
+              maxCpuPercent: event.target.value,
+            },
+          })
+        }
+      />
+      <FormField
+        label="Maximum memory target (%)"
+        hint="Adaptive only: target within allocated memory; the reserve is kept in addition. Serial mode ignores this field."
+        value={draft.parallelExecution.maxMemoryPercent}
+        onChange={(event) =>
+          onUpdate({
+            parallelExecution: {
+              ...draft.parallelExecution,
+              maxMemoryPercent: event.target.value,
+            },
+          })
+        }
+      />
+      <FormField
+        label="Memory reserve (MiB)"
+        hint="Adaptive only: the reserve is kept in addition to the memory target. Values must convert exactly to safe API bytes; serial mode ignores this field."
+        value={draft.parallelExecution.memoryReserveMiB}
+        onChange={(event) =>
+          onUpdate({
+            parallelExecution: {
+              ...draft.parallelExecution,
+              memoryReserveMiB: event.target.value,
+            },
+          })
+        }
+      />
+      <FormField
+        label="Maximum workers"
+        hint="Adaptive only: blank lets the scheduler choose from available capacity. Serial mode ignores this field."
+        value={draft.parallelExecution.maxWorkers}
+        onChange={(event) =>
+          onUpdate({
+            parallelExecution: {
+              ...draft.parallelExecution,
+              maxWorkers: event.target.value,
+            },
+          })
+        }
+      />
+      <FormField
+        label="Threads per worker"
+        hint="Adaptive only: applies to each independent k worker. Serial mode ignores this field."
+        value={draft.parallelExecution.threadsPerWorker}
+        onChange={(event) =>
+          onUpdate({
+            parallelExecution: {
+              ...draft.parallelExecution,
+              threadsPerWorker: event.target.value,
+            },
+          })
         }
       />
       <FormField

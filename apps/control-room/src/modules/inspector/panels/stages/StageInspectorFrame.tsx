@@ -190,31 +190,73 @@ export function StageInspectorFrame({
         title="Telemetry & Results"
         badge={stage?.runtimeMetric?.name ?? "stage"}
       >
-        {eigenmodeSolving ? (
+        {eigenmodeSolving || stage?.parallelExecution ? (
           <>
+            {eigenmodeSolving ? (
+              <>
+                <FieldRow
+                  label="Eigenmode solve progress"
+                  value={stageProgressLabel}
+                />
+                <FieldRow
+                  label="Solver activity"
+                  value={eigenmodeActivity?.activity ?? "not available"}
+                />
+                <FieldRow
+                  label="Progress source"
+                  value={eigenmodeActivity?.source ?? "not available"}
+                />
+                <FieldRow
+                  label="Stage started"
+                  value={formatUnixMs(stage?.startedAtUnixMs)}
+                />
+                <FieldRow
+                  label="Last solver update"
+                  value={formatUnixMs(stage?.lastProgressUnixMs)}
+                />
+                <FieldRow
+                  label="Command ID"
+                  value={stage?.commandId ?? "not available"}
+                />
+              </>
+            ) : null}
             <FieldRow
-              label="Eigenmode solve progress"
-              value={stageProgressLabel}
+              label="Adaptive pool telemetry"
+              value={
+                stage?.parallelExecution
+                  ? stage.parallelExecution.terminal
+                    ? "terminal sample"
+                    : "live sample"
+                  : "unavailable"
+              }
             />
             <FieldRow
-              label="Solver activity"
-              value={eigenmodeActivity?.activity ?? "not available"}
+              label="Workers"
+              value={formatWorkerAdmission(stage?.parallelExecution)}
             />
             <FieldRow
-              label="Progress source"
-              value={eigenmodeActivity?.source ?? "not available"}
+              label="Resolved workers"
+              value={formatResolvedWorkers(stage?.parallelExecution)}
             />
             <FieldRow
-              label="Stage started"
-              value={formatUnixMs(stage?.startedAtUnixMs)}
+              label="Resource target"
+              value={formatResourceTarget(stage?.parallelExecution)}
             />
             <FieldRow
-              label="Last solver update"
-              value={formatUnixMs(stage?.lastProgressUnixMs)}
+              label="Sampled at"
+              value={formatUnixMs(stage?.parallelExecution?.sampled_at_unix_ms)}
             />
             <FieldRow
-              label="Command ID"
-              value={stage?.commandId ?? "not available"}
+              label="Measured CPU / memory"
+              value={formatMeasuredResources(stage?.parallelExecution)}
+            />
+            <FieldRow
+              label="Available CPU capacity"
+              value={formatAvailableCpuCores(stage?.parallelExecution)}
+            />
+            <FieldRow
+              label="Admission reason"
+              value={formatAdmissionReason(stage?.parallelExecution)}
             />
           </>
         ) : null}
@@ -339,4 +381,90 @@ function summarizeFrequencyResponseActivity({
 function formatUnixMs(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "not published";
   return new Date(value).toISOString();
+}
+
+function formatWorkerAdmission(
+  telemetry: StudyStageModel["parallelExecution"],
+): string {
+  if (!telemetry) return "unavailable";
+  const limit =
+    typeof telemetry.admission_worker_limit === "number"
+      ? `; limit ${telemetry.admission_worker_limit}`
+      : "";
+  return `${telemetry.active_workers} active; admission ${telemetry.admission_desired_workers}${limit}`;
+}
+
+function formatResolvedWorkers(
+  telemetry: StudyStageModel["parallelExecution"],
+): string {
+  if (!telemetry || telemetry.resolved_workers == null) return "not resolved yet";
+  return String(telemetry.resolved_workers);
+}
+
+function formatResourceTarget(
+  telemetry: StudyStageModel["parallelExecution"],
+): string {
+  if (!telemetry) return "unavailable";
+  return `CPU ${telemetry.cpu_target_percent.toFixed(1)}%; memory ${telemetry.memory_target_percent.toFixed(1)}%; reserve ${formatBytesMiB(telemetry.memory_reserve_bytes)}; ${formatCpuTargetKind(telemetry.cpu_target_kind)}`;
+}
+
+function formatMeasuredResources(
+  telemetry: StudyStageModel["parallelExecution"],
+): string {
+  if (!telemetry) return "unavailable";
+  const cpu =
+    typeof telemetry.cpu_busy_percent === "number" &&
+    Number.isFinite(telemetry.cpu_busy_percent)
+      ? `${telemetry.cpu_busy_percent.toFixed(1)}% CPU busy (leaf allocation)`
+      : "CPU unavailable";
+  const memory =
+    typeof telemetry.memory_available_bytes === "number" &&
+    typeof telemetry.memory_limit_bytes === "number"
+      ? `${formatBytesMiB(telemetry.memory_available_bytes)} available / ${formatBytesMiB(telemetry.memory_limit_bytes)} limit`
+      : "memory unavailable";
+  return `${cpu}; ${memory}`;
+}
+
+function formatAvailableCpuCores(
+  telemetry: StudyStageModel["parallelExecution"],
+): string {
+  if (
+    !telemetry ||
+    typeof telemetry.cpu_available_cores !== "number" ||
+    !Number.isFinite(telemetry.cpu_available_cores) ||
+    telemetry.cpu_available_cores < 0
+  ) {
+    return "unavailable";
+  }
+  return `${telemetry.cpu_available_cores.toFixed(2)} cores available for admission`;
+}
+
+function formatAdmissionReason(
+  telemetry: StudyStageModel["parallelExecution"],
+): string {
+  if (!telemetry) return "unavailable";
+  const labels: Record<string, string> = {
+    calibrating_first_sample: "Calibrating first sample",
+    cpu_target_exhausted: "Waiting for CPU capacity",
+    insufficient_memory_for_probe: "Waiting for memory capacity",
+    insufficient_memory_for_worker: "Waiting for memory capacity",
+    telemetry_unavailable: "Waiting for resource telemetry",
+    telemetry_invalid: "Telemetry invalid; admission paused",
+    telemetry_stale: "Telemetry stale; admission paused",
+    telemetry_unavailable_no_new_admission: "Waiting for resource telemetry",
+    waiting_cpu_headroom_for_probe: "Waiting for CPU capacity",
+    waiting_memory_headroom_for_probe: "Waiting for memory capacity",
+  };
+  return labels[telemetry.admission_reason] ?? "Admission state reported";
+}
+
+function formatCpuTargetKind(kind: string): string {
+  return kind === "soft_admission_target"
+    ? "Soft CPU admission target"
+    : "CPU target reported";
+}
+
+function formatBytesMiB(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "unavailable";
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }

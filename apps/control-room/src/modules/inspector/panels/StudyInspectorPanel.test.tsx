@@ -74,6 +74,7 @@ describe("StudyInspectorPanel", () => {
         scene_revision: 1,
         stages_revision: 1,
       },
+      session: { session_epoch: "session-1@1", session_id: "session-1" },
       run: null,
     } as NonNullable<Parameters<typeof studyInspectorRuntimeStatusEquals>[0]>;
     const next = {
@@ -88,6 +89,12 @@ describe("StudyInspectorPanel", () => {
     };
 
     expect(studyInspectorRuntimeStatusEquals(previous, next)).toBe(false);
+    expect(
+      studyInspectorRuntimeStatusEquals(previous, {
+        ...previous,
+        session: { session_epoch: "session-1@2", session_id: "session-1" },
+      }),
+    ).toBe(false);
   });
 
   it("derives K0 production readiness by selected equilibrium provenance", () => {
@@ -1327,6 +1334,14 @@ describe("StudyInspectorPanel", () => {
             requestedDevice: "gpu",
             requestedMode: "strict",
             requestedPrecision: "single",
+            parallelExecution: {
+              mode: "adaptive",
+              maxCpuPercent: "90",
+              maxMemoryPercent: "80",
+              memoryReserveMiB: "1024",
+              maxWorkers: "",
+              threadsPerWorker: "1",
+            },
             solver: {
               adaptiveTimestep: null,
               demagInterval: "",
@@ -1409,6 +1424,7 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain("Study solver override JSON object");
     expect(html).toContain("FEM demag policy");
     expect(html).toContain("Current CPU threads");
+    expect(html).toContain("serial mode ignores these targets");
     expect(html).toContain("LLG is not advertised by the active session.");
     expect(html).toContain(
       "Adaptive execution is qualified only for double precision.",
@@ -1433,6 +1449,14 @@ describe("StudyInspectorPanel", () => {
           requestedDevice: "auto",
           requestedMode: "strict",
           requestedPrecision: "double",
+          parallelExecution: {
+            mode: "adaptive",
+            maxCpuPercent: "90",
+            maxMemoryPercent: "80",
+            memoryReserveMiB: "1024",
+            maxWorkers: "",
+            threadsPerWorker: "1",
+          },
           solver: {
             adaptiveTimestep: null,
             demagInterval: "",

@@ -4,6 +4,7 @@ import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabi
 import {
   resolveCommandSummary,
   resolveStudyInspectorModel,
+  stageExecutionForCurrentScope,
   studyRuntimeProvenanceFromCurrentRun,
   studySnapshotFromScene,
 } from "./StudyInspectorPanelModel";
@@ -220,6 +221,71 @@ describe("StudyInspectorPanelModel", () => {
     expect(model.runtime.maxTorque).toBe("unavailable");
     expect(model.runtime.torqueDiagnostic).toContain("max_torque_Apm");
   });
+
+  it("does not project retained stage telemetry across refresh or scope changes", () => {
+    const stageExecution = {
+      revision: 5,
+      runtime_state: "running",
+      total_stages: 1,
+      completed_stage_indexes: [],
+      stage_statuses: ["running"],
+      stages: [{ stage_id: "stage-1", status: "running" }],
+      run_id: "run-1",
+      session_id: "session-1",
+      session_epoch: "session-1@1",
+    } as never;
+
+    expect(stageExecutionForCurrentScope(stageExecution)).toBe(stageExecution);
+    expect(
+      stageExecutionForCurrentScope(stageExecution, {
+        expectedRunId: "run-1",
+        expectedSessionId: "session-1",
+        expectedSessionEpoch: "session-1@1",
+        resourceStatus: "stale",
+        scopeReady: true,
+      }),
+    ).toBeNull();
+    const missingIdentity = { ...stageExecution } as Record<string, unknown>;
+    delete missingIdentity.run_id;
+    expect(
+      stageExecutionForCurrentScope(missingIdentity as never, {
+        expectedRunId: "run-1",
+        expectedSessionId: "session-1",
+        expectedSessionEpoch: "session-1@1",
+        resourceStatus: "ready",
+        scopeReady: true,
+      }),
+    ).toBeNull();
+    const noCurrentRun = { ...stageExecution, run_id: null };
+    expect(
+      stageExecutionForCurrentScope(noCurrentRun as never, {
+        expectedRunId: null,
+        expectedSessionId: "session-1",
+        expectedSessionEpoch: "session-1@1",
+        resourceStatus: "ready",
+        scopeReady: true,
+      }),
+    ).toBe(noCurrentRun);
+    expect(
+      stageExecutionForCurrentScope(stageExecution, {
+        expectedRunId: "run-2",
+        expectedSessionId: "session-1",
+        expectedSessionEpoch: "session-1@1",
+        resourceStatus: "ready",
+        scopeReady: true,
+      }),
+    ).toBeNull();
+    expect(
+      stageExecutionForCurrentScope(stageExecution, {
+        expectedRunId: "run-1",
+        expectedSessionId: "session-1",
+        expectedSessionEpoch: "session-1@1",
+        resourceStatus: "ready",
+        scopeReady: true,
+      }),
+    ).toBe(stageExecution);
+  });
+
   it("projects stage authoring, boundary policy, runtime progress, and max torque", () => {
     const snapshot = studySnapshotFromScene({
       study: {
