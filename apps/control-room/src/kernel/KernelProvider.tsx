@@ -56,6 +56,7 @@ import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridg
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import { sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
+import { resourceRuntimeKeyForClientScope } from "./resources/resourceClientScope";
 import {
   acquireViewport3DWorkerRuntime,
   getViewport3DWorkerRuntimeSnapshot,
@@ -65,7 +66,7 @@ import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
-import { confirmedSessionResourceIdentity, sessionRequestScopeKey, type SessionResourceIdentity } from "./resources/sessionResourceIdentity";
+import { confirmedSessionResourceIdentity, sessionRequestScopeKey, sessionScopedResourceKey, type SessionResourceIdentity } from "./resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "./resources/useSessionStatus";
 import { useSessionCollection } from "./resources/useSessionCollection";
 import { isProjectWorkspaceCommand } from "./commands/projectWorkspaceCommandPolicy";
@@ -89,6 +90,7 @@ import { ObjectMoveToolController } from "./authoring/ObjectMoveToolController";
 import { AuthoringHistoryController } from "./authoring/AuthoringHistoryController";
 import { PendingFormRegistry } from "./authoring/PendingFormRegistry";
 import { ProjectDocumentController } from "./persistence/ProjectDocumentController";
+import { RunOutcomeConnector } from "./persistence/RunOutcomeConnector";
 import { resolveControlRoomModules } from "@/modules";
 
 installPerformanceMeasureGuard();
@@ -123,7 +125,12 @@ function createKernel(): KernelApi {
   });
   const projectDocument = new ProjectDocumentController(api);
   const commands = new CommandRegistry();
-  commands.attachSessionScopeSource(createCommandSessionScopeSource());
+  commands.attachSessionScopeSource(
+    createCommandSessionScopeSource(
+      sharedResourceRuntimeStore,
+      api.resourceCacheScope,
+    ),
+  );
   commands.attach(bus);
   commands.attachDiagnostics(commandDiagnostics);
 
@@ -161,6 +168,7 @@ function createKernel(): KernelApi {
   const visualizationDebug = new VisualizationDebugController();
   const visualizationSync = new VisualizationRegistrySyncController({
     api: api.visualization,
+    resourceCacheScope: api.resourceCacheScope,
     resources,
     onAcknowledgedTargetPatches: (state, _targetIds, transactionIds) =>
       visualization.acknowledgePendingTargetPatches(state, transactionIds),
@@ -454,6 +462,7 @@ function AvailableSessionRuntimeConnectors({ kernel, collection }: {
       <CommandShortcutConnector kernel={kernel} />
       <VisualizationRegistrySyncConnector kernel={kernel} />
       <CameraRegistrySyncConnector kernel={kernel} sessionScopeKey={scopeKey!} />
+      <RunOutcomeConnector kernel={kernel} sessionIdentity={confirmedIdentity} />
     </>
   );
 }
@@ -478,11 +487,24 @@ function CameraRegistrySyncConnector({ kernel, sessionScopeKey }: { kernel: Kern
 }
 
 function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionIdentityRef = useRef(sessionIdentity);
+  useEffect(() => {
+    sessionIdentityRef.current = sessionIdentity;
+  }, [sessionIdentity]);
   useEffect(() => {
     // The browser driver is compiled only into the explicitly named audit
     // artifact. Ordinary production bundles never install this mutable hook.
     const auditBuild = process.env.NEXT_PUBLIC_AUDIT_BUILD === "1";
     if (process.env.NODE_ENV === "production" && !auditBuild) return;
+    // Audit drivers address resources by their canonical path; the store keys
+    // them by the confirmed session scope.
+    const auditScopedResourceKey = (resourceKey: string) => {
+      const identity = sessionIdentityRef.current;
+      return identity && !resourceKey.includes("|")
+        ? sessionScopedResourceKey(identity, resourceKey)
+        : resourceKey;
+    };
     const auditWindow = window as Window & {
       __FULLMAG_CONFIG__?: {
         allowMissingSessionSmoke?: boolean;
@@ -647,20 +669,37 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
       readActiveViewportModule: () =>
         kernel.layout.get().activeViewportMainModuleId,
       publishVisualizationState: (state: VisualizationStateResource) => {
+        // Runtime resources are keyed by the confirmed session scope; an
+        // unscoped publication would never reach the mounted viewport.
+        const identity = sessionIdentityRef.current;
+        if (!identity) {
+          throw new Error("Browser audit publication requires a confirmed session identity.");
+        }
         sharedResourceRuntimeStore.updateData(
-          VISUALIZATION_STATE_PATH,
+          resourceRuntimeKeyForClientScope(
+            sessionScopedResourceKey(identity, VISUALIZATION_STATE_PATH),
+            kernel.api.resourceCacheScope,
+          ),
           state,
           state.revision,
         );
       },
-      readViewportAuditRuntime: () => ({
-        listenerCounts: sharedResourceRuntimeStore.listenerCounts(),
-        resources: sharedResourceRuntimeStore.stats(),
-        visualizationRevision: sharedResourceRuntimeStore.getSnapshot(
-          VISUALIZATION_STATE_PATH,
-        ).revision,
-        workers: getViewport3DWorkerRuntimeSnapshot(),
-      }),
+      readViewportAuditRuntime: () => {
+        const identity = sessionIdentityRef.current;
+        return {
+          listenerCounts: sharedResourceRuntimeStore.listenerCounts(),
+          resources: sharedResourceRuntimeStore.stats(),
+          visualizationRevision: identity
+            ? sharedResourceRuntimeStore.getSnapshot(
+                resourceRuntimeKeyForClientScope(
+                  sessionScopedResourceKey(identity, VISUALIZATION_STATE_PATH),
+                  kernel.api.resourceCacheScope,
+                ),
+              ).revision
+            : null,
+          workers: getViewport3DWorkerRuntimeSnapshot(),
+        };
+      },
       setPlanarMonitorFrameVisible: (visible: boolean) => {
         planarMonitorFramePreviewStore.setVisible(visible);
       },
@@ -678,7 +717,12 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         });
       },
       readViewportAuditResource: (resourceKey: string) => {
-        const snapshot = sharedResourceRuntimeStore.getSnapshot(resourceKey);
+        const snapshot = sharedResourceRuntimeStore.getSnapshot(
+          resourceRuntimeKeyForClientScope(
+            auditScopedResourceKey(resourceKey),
+            kernel.api.resourceCacheScope,
+          ),
+        );
         return {
           data: snapshot.data,
           error: snapshot.error?.message ?? null,
@@ -687,11 +731,17 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         };
       },
       invalidateResource: (resourceKey: string, revision: ResourceRevision) => {
-        kernel.resources.invalidate(resourceKey, revision);
+        kernel.resources.invalidate(auditScopedResourceKey(resourceKey), revision);
       },
       injectViewportAuditListenerLeak: () => {
         // Deliberately retained only when an audit asks for a negative control.
-        sharedResourceRuntimeStore.subscribe(VISUALIZATION_STATE_PATH, () => {});
+        sharedResourceRuntimeStore.subscribe(
+          resourceRuntimeKeyForClientScope(
+            VISUALIZATION_STATE_PATH,
+            kernel.api.resourceCacheScope,
+          ),
+          () => {},
+        );
       },
       injectViewportAuditWorkerLeak: () => {
         // Deliberately retained only when an audit asks for a negative control.

@@ -457,6 +457,7 @@ function makeKernel(): KernelApi {
         scene: () => new Promise(() => undefined),
       },
       sessions: {
+        list: async () => ({ schema_version: "2.0.0", sessions: [] }),
         current: {
           status: async () => ({
             capabilities: { explicit_topology: false },
@@ -497,6 +498,7 @@ function makeKernel(): KernelApi {
       applyOptimisticState: (value: unknown) => value,
       getSnapshot: () => visualizationSyncSnapshot,
       observeRemoteState: vi.fn(),
+      setSessionScopeKey: vi.fn(),
       subscribe: () => () => undefined,
     },
     visualizationDebug: new VisualizationDebugController(),

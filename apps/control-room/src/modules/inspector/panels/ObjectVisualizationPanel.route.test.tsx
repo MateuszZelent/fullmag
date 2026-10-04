@@ -21,6 +21,7 @@ function resourceCall(name: string, enabled: boolean): void {
 vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
+    api: {},
     resources: {
       getRevision: () => null,
       subscribe: () => () => undefined,
@@ -47,6 +48,7 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
   SESSION_STATUS_RESOURCE_KEY: "session:status",
+  useSessionResourceIdentity: () => null,
   useSessionStatusSelector: (selector: (status: unknown) => unknown) =>
     selector({
       data: {

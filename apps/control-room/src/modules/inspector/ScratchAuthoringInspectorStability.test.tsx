@@ -37,6 +37,9 @@ const SESSION_STATUS = {
   session: { session_id: "scratch-session", session_epoch: "scratch-session@1", request_scope_epoch: "test-api:1" },
 } as never;
 
+const SESSION_SCOPE_KEY =
+  "session=scratch-session&epoch=scratch-session%401&request_scope_epoch=test-api%3A1";
+
 interface Fixture {
   createMaterial: ReturnType<typeof vi.fn>;
   interactionLoad: ReturnType<typeof vi.fn>;
@@ -88,6 +91,10 @@ describe("scratch material Inspector stability", () => {
     try {
       expect(mounted.consoleError.mock.calls.flat().join(" ")).not.toContain("hydration");
       await waitForText(mounted.container, "object-a");
+      // Session identity is read by several mounted hooks (sessions list +
+      // status); the bound below is relative to the mounted baseline so it
+      // still catches listeners leaking across the two ACKs.
+      const mountedListenerCount = sharedResourceRuntimeStore.stats().listenerCount;
 
       const panelRoot = mounted.container.querySelector(".fm-inspector-panel");
       if (!panelRoot) throw new Error("Object Inspector root missing");
@@ -116,7 +123,7 @@ describe("scratch material Inspector stability", () => {
       expect(fixture.patchObject).toHaveBeenCalledWith("object-a", {
         base_revision: 22,
         material_ref: "mat:cofeb",
-      });
+      }, { sessionScopeKey: SESSION_SCOPE_KEY });
       expect(mounted.container.querySelector(".fm-inspector-panel") === panelRoot).toBe(true);
       expect(mounted.document.activeElement === nameInput).toBe(true);
       expect(panelRoot.scrollTop).toBe(73);
@@ -141,7 +148,8 @@ describe("scratch material Inspector stability", () => {
       expect(Math.max(...invalidationCounts.values())).toBeLessThanOrEqual(2);
       expect([...invalidationCounts.keys()].join(" ")).not.toContain("topology");
       expect(resolveMaterialResourceKey("mat:cofeb")).toBeDefined();
-      expect(sharedResourceRuntimeStore.stats().listenerCount).toBeLessThanOrEqual(8);
+      expect(sharedResourceRuntimeStore.stats().listenerCount)
+        .toBeLessThanOrEqual(mountedListenerCount + 1);
       expect(findElements(mounted.container, (element) => {
         const className = element.getAttribute("class") ?? "";
         return className.includes("animate-opacity") ||
@@ -243,7 +251,7 @@ describe("scratch material Inspector stability", () => {
       expect(fixture.patchObject).toHaveBeenLastCalledWith("object-a", {
         base_revision: 24,
         material_ref: "mat:free-layer",
-      });
+      }, { sessionScopeKey: SESSION_SCOPE_KEY });
     } finally {
       await mounted.cleanup();
     }
@@ -280,7 +288,15 @@ function createFixture(): Fixture {
         patchObjectInteraction,
         scene: sceneLoad,
       },
-      sessions: { current: { status: statusLoad } },
+      sessions: {
+        current: { status: statusLoad },
+        list: vi.fn().mockResolvedValue({
+          schema_version: "2.0.0",
+          sessions: [
+            { current: true, name: "scratch", session_id: "scratch-session", status: "active" },
+          ],
+        }),
+      },
     },
     bus,
     diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
@@ -321,6 +337,9 @@ async function mountFixture(fixture: Fixture, selection: Selection) {
     await Promise.resolve();
   });
   await flushResource();
+  // Session-scoped resources only load after the confirmed session identity
+  // (session list + status) resolves; edits before that would be re-scoped.
+  await waitForText(container, "Scene revision21");
   return {
     container,
     consoleError,

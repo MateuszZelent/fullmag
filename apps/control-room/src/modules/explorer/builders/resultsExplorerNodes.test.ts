@@ -252,8 +252,18 @@ describe("buildPhysicsFirstResultsTree", () => {
       }),
     );
 
+    // Dynamics always owns the "State snapshots" observation-frame root, so
+    // the family itself is a container; its only child carries the empty state.
+    const snapshots = nodes.find((candidate) => candidate.label === "State snapshots");
+    expect(snapshots).toMatchObject({
+      availability: "unavailable",
+      executionState: "not_started",
+      status: "unavailable",
+    });
+    expect(nodes.find((candidate) => candidate.label === "Dynamics")?.children)
+      .toEqual([expect.objectContaining({ id: snapshots?.id })]);
+
     for (const label of [
-      "Dynamics",
       "Resonance & FMR",
       "Dispersion & k-resolved response",
       "Hysteresis",

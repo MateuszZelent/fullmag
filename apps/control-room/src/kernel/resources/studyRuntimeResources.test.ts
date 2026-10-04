@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync as readSourceFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
@@ -170,6 +170,11 @@ const FREQUENCY_DOMAIN_MANIFEST = {
 } as const;
 
 const studyRuntimeResourcesUrl = new URL("./studyRuntimeResources.ts", import.meta.url);
+
+// Source-contract assertions use "\n" fragments; normalize CRLF checkouts.
+function readFileSync(url: URL, encoding: "utf8"): string {
+  return readSourceFileSync(url, encoding).replace(/\r\n/g, "\n");
+}
 
 const baseResources: LiveStatusResource["resources"] = {
   artifact_revision: 0,
@@ -653,7 +658,12 @@ describe("study runtime command resource bundles", () => {
     expect(dataHooks).toContain("enabled: enabled && sessionIdentity !== null");
     expect(dataHooks).toContain("#binary");
     expect(dataHooks).toContain("DATA_FIELDS_PATH");
-    expect(dataHooks).toContain("DATA_TABLE_ROWS_PATH");
+    // Row hooks derive their unscoped key through the shared helper, which
+    // is the single place that expands DATA_TABLE_ROWS_PATH.
+    expect(dataHooks).toContain("tableRowsResourceKey(");
+    expect(source).toContain(
+      "DATA_TABLE_ROWS_PATH.replace(\"{table_id}\", tableId)",
+    );
   });
 
   it("uses one session-scoped wrapper for analysis and diagnostics families", () => {
@@ -826,8 +836,9 @@ describe("study runtime command resource bundles", () => {
       "ignoreMissingResource<MeshPeriodicPairsResource>",
     );
     expect(hookSource).toContain(
-      "resourceKey: MESHING_PERIODIC_PAIRS_PATH",
+      "useSessionScopedResourceKey(\n    MESHING_PERIODIC_PAIRS_PATH",
     );
+    expect(hookSource).toContain("resourceKey,");
     expect(hookSource).toContain(
       "resolveRevision: (data) => data?.revision ?? null",
     );

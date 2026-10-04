@@ -335,6 +335,17 @@ export class ResourceRuntimeStore<TData = unknown> {
     return entry?.snapshot ?? createInitialSnapshot<TSnapshotData>();
   }
 
+  updateObservedData<TUpdateData = TData>(
+    resourceKey: ResourceKey,
+    data: TUpdateData,
+    revision: ResourceRevision,
+  ): boolean {
+    const entry = this.entries.get(resourceKey);
+    if (!entry || entry.listeners.size === 0) return false;
+    this.updateData(resourceKey, data, revision);
+    return true;
+  }
+
   updateData<TUpdateData = TData>(
     resourceKey: ResourceKey,
     data: TUpdateData,

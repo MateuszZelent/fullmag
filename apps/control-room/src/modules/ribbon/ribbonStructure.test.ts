@@ -4738,7 +4738,7 @@ describe("ribbon structure", () => {
         resourceData: {
           [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
           [MODEL_READINESS_PATH]: READY_MODEL_READINESS,
-          [SIMULATION_PREPARATION_PATH]: { preparation_id: "prep-1" },
+          [SIMULATION_PREPARATION_PATH]: { preparation_id: "prep-1", status: "ready" },
           [SESSION_STATUS_RESOURCE_KEY]: {
             capabilities: {
               binary_fields: true,

@@ -1,24 +1,53 @@
-import { BookOpen } from "lucide-react";
+"use client";
+
+import { BookOpen, Copy, Download } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
 
+import { copyScript, saveScriptFile } from "../model/scriptExport";
+import {
+  createProjectFromTemplate,
+  templateCreateState,
+  type ScriptOpener,
+} from "../model/scriptOpen";
 import { startScreenStore } from "../model/startScreenState";
-import { estimateFor, type StudyTemplate } from "../model/templates";
+import { estimateFor, templateScript, templateScriptFileName, type StudyTemplate } from "../model/templates";
 import type { ComputeProbeState } from "../model/types";
 import { SolverBadge } from "../ui/SolverBadge";
-
-/** Until the host can instantiate a template, opening is honest about it. */
-const OPEN_UNAVAILABLE =
-  "Template projects ship with the desktop host and are not available in this build yet.";
 
 export function TemplateDetails({
   template,
   compute,
+  scriptOpener = null,
 }: {
   readonly template: StudyTemplate;
   readonly compute: ComputeProbeState;
+  /** Opens the template script as a project; null when this build has no such operation. */
+  readonly scriptOpener?: ScriptOpener | null;
 }) {
   const estimate = estimateFor(template, compute);
+  const create = templateCreateState(template, scriptOpener);
+  const script = templateScript(template);
+  const fileName = templateScriptFileName(template);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const createProject = async () => {
+    setBusy(true);
+    setMessage(null);
+    setMessage(await createProjectFromTemplate(template, scriptOpener));
+    setBusy(false);
+  };
+  const save = () => {
+    if (script === null) return;
+    setMessage(saveScriptFile(fileName, script) ? null : "Saving a file is not available here.");
+  };
+  const copy = async () => {
+    if (script === null) return;
+    setMessage((await copyScript(script)) ? null : "The clipboard is not available here.");
+  };
+
   return (
     <aside aria-label="Template details" className="fm-start__inspector fm-start-inspector">
       <header className="fm-start-inspector__head">
@@ -54,20 +83,42 @@ export function TemplateDetails({
             <BookOpen aria-hidden="true" size={12} /> Read the documentation
           </button>
         </section>
+        {script !== null ? (
+          <section className="fm-start-kv">
+            <h3 className="fm-start-kv__title">Python script</h3>
+            <p className="fm-start-inspector__note">
+              Canonical Fullmag Python, SI units. Run it with <code>{`fullmag ${fileName}`}</code>.
+            </p>
+            <div className="fm-start-report__actions">
+              <Button onClick={save} size="sm" type="button" variant="secondary">
+                <Download aria-hidden="true" size={12} /> {`Save ${fileName}`}
+              </Button>
+              <Button onClick={() => void copy()} size="sm" type="button" variant="secondary">
+                <Copy aria-hidden="true" size={12} /> Copy script
+              </Button>
+            </div>
+          </section>
+        ) : null}
         <p className="fm-start-inspector__note">{estimate.note}</p>
+        <div aria-live="polite" role="status">
+          {message ? <p className="fm-start-notice fm-start-notice--warning">{message}</p> : null}
+        </div>
       </div>
       <footer className="fm-start-inspector__foot">
         <Button
           className="fm-start-inspector__open"
-          disabled
-          title={OPEN_UNAVAILABLE}
+          disabled={!create.available || busy}
+          onClick={() => void createProject()}
+          title={create.reason ?? undefined}
           type="button"
           variant="primary"
         >
-          Create project from template
+          {busy ? "Creating…" : "Create project from template"}
         </Button>
       </footer>
-      <p className="fm-start-inspector__note fm-start-inspector__footnote">{OPEN_UNAVAILABLE}</p>
+      {create.reason ? (
+        <p className="fm-start-inspector__note fm-start-inspector__footnote">{create.reason}</p>
+      ) : null}
     </aside>
   );
 }

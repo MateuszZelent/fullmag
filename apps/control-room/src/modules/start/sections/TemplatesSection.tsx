@@ -48,8 +48,8 @@ export function TemplatesSection({ compute }: { readonly compute: ComputeProbeSt
         <div className="fm-start-page-head__copy">
           <h1>Templates</h1>
           <p>
-            Ready-made studies. Each one opens as a new project with geometry, materials and a
-            configured solver.
+            Ready-made studies, each a canonical Fullmag Python script with geometry, materials and
+            a configured solver. Select one to create a project from it or to save the script.
           </p>
         </div>
       </div>

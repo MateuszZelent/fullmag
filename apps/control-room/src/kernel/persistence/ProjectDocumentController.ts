@@ -14,6 +14,7 @@ import {
   type CaptureProjectDocumentDevelopmentHandoffOptions,
   type ProjectDocumentDevelopmentHandoff,
 } from "./ProjectDocumentDevelopmentHandoff";
+import type { RunOutcomePreview, RunOutcomeRecord } from "./runOutcome";
 
 const DEFAULT_PROJECT_NAME = "Untitled project";
 const DEFAULT_PROJECT_FILE_NAME = "fullmag-project.fms";
@@ -34,6 +35,22 @@ interface TauriProjectOpenArchive {
   readonly file_name: string;
   readonly archive_base64: string;
 }
+
+interface PendingRunOutcome {
+  readonly projectId: string;
+  readonly preview?: RunOutcomePreview;
+  readonly run: RunOutcomeRecord;
+}
+
+export type RecordRunOutcomeResult = "recorded" | "queued" | "skipped" | "failed";
+
+type ProjectDocumentOperation =
+  | "create"
+  | "open"
+  | "save"
+  | "restore"
+  | "authoring"
+  | "outcome";
 
 interface TauriProjectSaveSummary {
   readonly path: string;
@@ -104,16 +121,20 @@ export const EMPTY_PROJECT_DOCUMENT_SNAPSHOT: ProjectDocumentSnapshot = {
   hostPath: null,
 };
 
+export interface ProjectDocumentDevelopmentGuard {
+  readonly handoff: ProjectDocumentDevelopmentHandoff;
+  assertCurrent(): void;
+  release(): void;
+}
+
 export class ProjectDocumentController {
   private snapshot: ProjectDocumentSnapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
   private readonly listeners = new Set<() => void>();
-  private activeOperation:
-    | "create"
-    | "open"
-    | "save"
-    | "restore"
-    | "authoring"
-    | null = null;
+  private developmentGuard: symbol | null = null;
+  private activeOperation: ProjectDocumentOperation | null = null;
+  private pendingOutcomes: PendingRunOutcome[] = [];
+  private flushingOutcomes = false;
+  private outcomeErrorSnapshot: ProjectDocumentSnapshot | null = null;
 
   constructor(private readonly api: ProjectDocumentApi | ControlRoomApi) {}
 
@@ -125,10 +146,12 @@ export class ProjectDocumentController {
   };
 
   canSave(): boolean {
+    const document = this.documentView();
     return (
-      this.snapshot.state === "ready" &&
-      this.snapshot.resource.mode.kind === "read_write" &&
-      this.snapshot.resource.archive_base64.length > 0
+      this.developmentGuard === null &&
+      document !== null &&
+      document.resource.mode.kind === "read_write" &&
+      document.resource.archive_base64.length > 0
     );
   }
 
@@ -139,7 +162,7 @@ export class ProjectDocumentController {
    */
   close(discardChanges = false): boolean {
     const snapshot = this.snapshot;
-    if (this.activeOperation !== null || snapshot.state === "loading") return false;
+    if (this.developmentGuard !== null || this.activeOperation !== null || snapshot.state === "loading") return false;
     if (
       (snapshot.state === "ready" || snapshot.state === "error") &&
       snapshot.resource?.dirty &&
@@ -151,6 +174,7 @@ export class ProjectDocumentController {
           : false;
       if (!confirm) return false;
     }
+    this.pendingOutcomes = [];
     if (snapshot.state === "empty") return true;
     this.snapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
     this.notify();
@@ -169,6 +193,7 @@ export class ProjectDocumentController {
       const resource = await this.api.persistence.projects.create({
         name: trimmedName,
       });
+      this.pendingOutcomes = [];
       this.setReady(resource, projectFileName(resource.name));
       return resource;
     } catch (error) {
@@ -192,6 +217,7 @@ export class ProjectDocumentController {
         display_name: source.fileName,
       };
       const resource = await this.api.persistence.projects.open(request);
+      this.pendingOutcomes = [];
       this.setReady(
         resource,
         projectFileName(source.fileName || resource.name),
@@ -211,6 +237,48 @@ export class ProjectDocumentController {
   ): ProjectDocumentDevelopmentHandoff {
     this.assertOperationAvailable();
     return captureProjectDocumentDevelopmentHandoff(this.snapshot, options);
+  }
+
+  /** Freeze this document owner until a confirmed restart outcome releases its guard. */
+  beginDevelopmentHandoff(
+    options: CaptureProjectDocumentDevelopmentHandoffOptions = {},
+  ): ProjectDocumentDevelopmentGuard {
+    this.assertOperationAvailable();
+    const handoff = captureProjectDocumentDevelopmentHandoff(this.snapshot, options);
+    const capturedJson = JSON.stringify(handoff);
+    const original = this.snapshot;
+    const token = Symbol("project-document-development-handoff");
+    this.developmentGuard = token;
+    // The immutable snapshot identity also notifies consumers of command availability.
+    this.snapshot = { ...original };
+    const captured = this.snapshot;
+    try {
+      this.notify();
+    } catch (error) {
+      this.developmentGuard = null;
+      this.snapshot = original;
+      try { this.notify(); } catch { /* The failed guard is not retained. */ }
+      throw error;
+    }
+    let released = false;
+    return {
+      handoff,
+      assertCurrent: () => {
+        if (released || this.developmentGuard !== token || this.snapshot !== captured
+          || JSON.stringify(captureProjectDocumentDevelopmentHandoff(this.snapshot, { carryUnsaved: true })) !== capturedJson) {
+          throw new Error("The captured project document is no longer guarded.");
+        }
+      },
+      release: () => {
+        if (released) return;
+        released = true;
+        if (this.developmentGuard === token) {
+          this.developmentGuard = null;
+          this.snapshot = { ...this.snapshot };
+          this.notify();
+        }
+      },
+    };
   }
 
   /**
@@ -239,6 +307,7 @@ export class ProjectDocumentController {
       // The API reopen proves the archive is still byte-identical and
       // compatible. Keep the captured metadata as source provenance; no host
       // filesystem save or durability claim is made by this operation.
+      this.pendingOutcomes = [];
       this.setReady(captured.resource, captured.fileName, captured.hostPath);
     } finally {
       this.finishOperation("restore");
@@ -254,8 +323,8 @@ export class ProjectDocumentController {
     sceneDocument: Record<string, unknown>,
   ): Promise<ProjectDocumentResource> {
     this.assertOperationAvailable();
-    const currentSnapshot = this.snapshot;
-    if (currentSnapshot.state !== "ready") {
+    const currentSnapshot = this.documentView();
+    if (!currentSnapshot) {
       throw new Error("No project document is open.");
     }
 
@@ -355,19 +424,21 @@ export class ProjectDocumentController {
 
   async save(): Promise<void> {
     this.assertOperationAvailable();
-    if (this.snapshot.state !== "ready") {
+    const document = this.documentView();
+    if (!document) {
       throw new Error("No project document is open.");
     }
-    if (this.snapshot.resource.mode.kind !== "read_write") {
+    if (document.resource.mode.kind !== "read_write") {
       throw new Error(
-        this.snapshot.resource.mode.reason ||
+        document.resource.mode.reason ||
           "This project is read-only and cannot be saved.",
       );
     }
     this.beginOperation("save");
+    let savedToHost = false;
     try {
-      const snapshot = this.snapshot;
-      if (snapshot.state !== "ready") {
+      const snapshot = this.documentView();
+      if (!snapshot) {
         throw new Error("No project document is open.");
       }
       const bytes = base64ToBytes(snapshot.resource.archive_base64);
@@ -394,6 +465,7 @@ export class ProjectDocumentController {
         this.snapshot = {
           ...snapshot,
           error: null,
+          state: "ready",
           hostPath: result.path,
           resource: {
             ...snapshot.resource,
@@ -408,30 +480,171 @@ export class ProjectDocumentController {
           },
         };
         this.notify();
+        savedToHost = true;
         return;
       }
       downloadProjectArchive(bytes, snapshot.fileName);
     } finally {
       this.finishOperation("save");
+      if (savedToHost) await this.flushPendingOutcomes();
     }
   }
 
+  /**
+   * Record a finished run (and an optional thumbnail) in the open project file
+   * through the desktop host, then adopt the archive the host rewrote. Edits
+   * not yet saved cannot be merged into the host's rewrite, so while the
+   * document is dirty or another operation is running the outcome is queued
+   * and flushed after the next successful save. Never throws: without a host
+   * path or outside the desktop app it does nothing, and a host failure is
+   * published through the snapshot error while the outcome stays queued.
+   */
+  async recordRunOutcome(
+    run: RunOutcomeRecord,
+    preview?: RunOutcomePreview,
+  ): Promise<RecordRunOutcomeResult> {
+    const snapshot = this.documentView();
+    if (
+      !tauriInvoke() ||
+      !snapshot ||
+      !snapshot.hostPath ||
+      snapshot.resource.mode.kind !== "read_write" ||
+      !snapshot.resource.migration.can_write
+    ) {
+      return "skipped";
+    }
+
+    const projectId = snapshot.resource.project_id;
+    const entry: PendingRunOutcome = { projectId, preview, run };
+    const existing = this.pendingOutcomes.findIndex(
+      (item) => item.projectId === projectId && item.run.run_id === run.run_id,
+    );
+    if (existing >= 0) this.pendingOutcomes[existing] = entry;
+    else this.pendingOutcomes.push(entry);
+
+    if (
+      snapshot.resource.dirty ||
+      this.developmentGuard !== null ||
+      this.activeOperation !== null ||
+      this.flushingOutcomes
+    ) {
+      return "queued";
+    }
+    await this.flushPendingOutcomes();
+    if (!this.pendingOutcomes.includes(entry)) return "recorded";
+    return this.snapshot === this.outcomeErrorSnapshot ? "failed" : "queued";
+  }
+
+  private async flushPendingOutcomes(): Promise<void> {
+    if (this.flushingOutcomes) return;
+    this.flushingOutcomes = true;
+    try {
+      while (this.pendingOutcomes.length > 0) {
+        const snapshot = this.documentView();
+        if (
+          this.developmentGuard !== null ||
+          this.activeOperation !== null ||
+          !snapshot ||
+          snapshot.resource.dirty ||
+          !snapshot.hostPath
+        ) {
+          return;
+        }
+        const next = this.pendingOutcomes[0];
+        if (next.projectId !== snapshot.resource.project_id) {
+          this.pendingOutcomes.shift();
+          continue;
+        }
+        if (!(await this.applyRunOutcome(next))) return;
+        this.pendingOutcomes.shift();
+      }
+    } finally {
+      this.flushingOutcomes = false;
+    }
+  }
+
+  private async applyRunOutcome(outcome: PendingRunOutcome): Promise<boolean> {
+    const invoke = tauriInvoke();
+    const snapshot = this.documentView();
+    if (!invoke || !snapshot || !snapshot.hostPath) return false;
+    this.beginOperation("outcome");
+    try {
+      const archive = await invoke<TauriProjectOpenArchive>("project_record_outcome", {
+        request: {
+          path: snapshot.hostPath,
+          preview: outcome.preview,
+          run: outcome.run,
+        },
+      });
+      const reopened = validateProjectDocumentResource(
+        await this.api.persistence.projects.open({
+          archive_base64: archive.archive_base64,
+          display_name: archive.file_name,
+        }),
+      );
+      if (
+        reopened.project_id !== snapshot.resource.project_id ||
+        reopened.revision !== snapshot.resource.revision + 1
+      ) {
+        throw new Error(
+          "Recording the run outcome returned a different project or an unexpected revision.",
+        );
+      }
+      this.setReady(
+        reopened,
+        projectFileName(archive.file_name || reopened.name),
+        archive.path,
+      );
+      return true;
+    } catch (error) {
+      this.setError(error, snapshot.fileName);
+      this.outcomeErrorSnapshot = this.snapshot;
+      return false;
+    } finally {
+      this.finishOperation("outcome");
+    }
+  }
+
+  /**
+   * The document as a ready snapshot. A failed outcome recording publishes an
+   * error but leaves the document itself intact, so that one error state stays
+   * saveable; any other error state does not.
+   */
+  private documentView(): Extract<ProjectDocumentSnapshot, { state: "ready" }> | null {
+    const snapshot = this.snapshot;
+    if (snapshot.state === "ready") return snapshot;
+    if (
+      snapshot === this.outcomeErrorSnapshot &&
+      snapshot.state === "error" &&
+      snapshot.resource &&
+      snapshot.fileName
+    ) {
+      return {
+        error: null,
+        fileName: snapshot.fileName,
+        hostPath: snapshot.hostPath,
+        resource: snapshot.resource,
+        state: "ready",
+      };
+    }
+    return null;
+  }
+
   private assertOperationAvailable(): void {
+    if (this.developmentGuard !== null) {
+      throw new Error("The project document is protected during development restart.");
+    }
     if (this.activeOperation !== null || this.snapshot.state === "loading") {
       throw new Error("A project document operation is already in progress.");
     }
   }
 
-  private beginOperation(
-    operation: "create" | "open" | "save" | "restore" | "authoring",
-  ): void {
+  private beginOperation(operation: ProjectDocumentOperation): void {
     this.assertOperationAvailable();
     this.activeOperation = operation;
   }
 
-  private finishOperation(
-    operation: "create" | "open" | "save" | "restore" | "authoring",
-  ): void {
+  private finishOperation(operation: ProjectDocumentOperation): void {
     if (this.activeOperation === operation) this.activeOperation = null;
   }
 

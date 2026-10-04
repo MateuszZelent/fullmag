@@ -2,6 +2,7 @@ import { act, useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+import { AUTHORING_MUTATION_DEPENDENTS } from "@/kernel/authoring/authoringMutationInvalidation";
 import {
   installSimulationPreparationTestDom,
   TestElement,
@@ -165,7 +166,7 @@ describe("GeometryObjectPanel primitive transaction", () => {
         label: "Create New box",
       });
       expect(mocks.select).toHaveBeenCalledOnce();
-      expect(mocks.invalidate).toHaveBeenCalledTimes(7);
+      expect(mocks.invalidate).toHaveBeenCalledTimes(AUTHORING_MUTATION_DEPENDENTS.geometry.length);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -275,8 +276,9 @@ describe("GeometryObjectPanel primitive transaction", () => {
         undefined,
         false,
         "session=A&epoch=1",
+        undefined,
       );
-      expect(mocks.invalidate).toHaveBeenCalledTimes(7);
+      expect(mocks.invalidate).toHaveBeenCalledTimes(AUTHORING_MUTATION_DEPENDENTS.geometry.length);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

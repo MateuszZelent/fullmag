@@ -76,6 +76,7 @@ export function publishRegionAuthoringScene(
   revision: number,
   runtimeStore?: ResourceRuntimeStore<SceneResource>,
   sessionScopeKey?: string | null,
+  resourceCacheScope?: string | null,
 ): void {
   publishCommittedSceneResource(
     resources,
@@ -84,6 +85,7 @@ export function publishRegionAuthoringScene(
     runtimeStore,
     true,
     sessionScopeKey,
+    resourceCacheScope,
   );
   for (const key of [
     ...regionAuthoringInvalidationKeys(),

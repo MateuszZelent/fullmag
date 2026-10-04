@@ -48,9 +48,29 @@ function statusAt(sceneRevision: number) {
     domain: { discretization: "fdm" },
     resources: { scene_revision: sceneRevision },
     run: null,
-    session: { session_id: "scratch-session" },
+    session: {
+      request_scope_epoch: "api-instance:scratch",
+      session_epoch: "scratch-session@1700000000000",
+      session_id: "scratch-session",
+    },
   };
 }
+
+// Session identity is confirmed against the session collection before any
+// session-scoped resource hook is enabled.
+const sessionsApi = {
+  list: async () => ({
+    schema_version: "2.0.0",
+    sessions: [
+      {
+        current: true,
+        name: "scratch",
+        session_id: "scratch-session",
+        status: "running",
+      },
+    ],
+  }),
+};
 
 function readinessAt(sceneRevision: number) {
   return {
@@ -93,7 +113,10 @@ describe("production runtime command resource provider", () => {
           },
           readiness: readinessLoad,
         },
-        sessions: { current: { status: async () => null } },
+        sessions: {
+          ...sessionsApi,
+          current: { status: async () => statusAt(7) },
+        },
         simulation: { solver: { status: async () => null } },
       },
       bus,
@@ -221,7 +244,7 @@ describe("production runtime command resource provider", () => {
         patchRegion,
         readiness: readinessLoad,
       },
-      sessions: { current: { status: statusLoad } },
+      sessions: { ...sessionsApi, current: { status: statusLoad } },
     };
     const kernel = {
       api,

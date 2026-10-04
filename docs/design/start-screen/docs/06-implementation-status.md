@@ -22,8 +22,8 @@ desktop application against real project archives.
 | 5 | Authors, History, Runs, BibTeX | Done: read side and writer | browser (three tabs, mocked host); `cargo check`. Writer records edit saves only, see §3 |
 | 6 | Continue card | Done in the renderer | browser (resumable / not / host error). `resume_run`, `discard_checkpoint` do not exist |
 | 7 | Compute environment | Done, front + host | `cargo check`, typecheck; **not** against a real GPU |
-| 8 | Templates gallery | Done as a gallery | browser. Creating a project from a template is disabled with its reason |
-| 9 | Import | `.fms` only | browser (a refused `.mx3`). No other importer |
+| 8 | Templates gallery | Gallery plus a validated canonical Python script per template (save, copy) | each script loads to ProblemIR with the repository Python package (loader only, no solver). **Create project from template stays disabled with its reason**: the API has no operation that turns script text into a project |
+| 9 | Import | `.fms`; `.mx3` as a reported subset translator | translator tests and a Python load of every generated fixture script. Opening the translated script as a project is disabled for the same reason as templates; save/copy work. No other importer |
 | 10 | Learn, Settings, About | Done | browser |
 | 11 | Sphinx documentation (this folder, `05-…`) | Done, not bundled by builds | browser against the real built site; `sphinx-build -W -n` of the site with the embed assets succeeds locally (exit 0) |
 
@@ -72,7 +72,7 @@ Host (needs work outside the renderer):
   application**. It touches the revision-checked save path and deserves review.
 - **Index solver** is inferred from the scene's `study` keys, defaulting to FDM.
 - **Rebuild** opens whole archives rather than reading only a manifest head.
-- **Importers** other than `.fms`; **template instantiation**.
+- **Importers** other than `.fms` and the `.mx3` subset; **opening a script as a project** (templates and `.mx3`), which needs an API operation that accepts script text.
 
 Packaging and process:
 

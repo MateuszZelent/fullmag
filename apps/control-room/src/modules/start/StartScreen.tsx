@@ -11,17 +11,14 @@ import type { ModuleProps } from "@/kernel/types";
 import { HomeSection } from "./home/HomeSection";
 import { LAUNCH_TILES } from "./home/LaunchTiles";
 import { ProjectInspector } from "./inspector/ProjectInspector";
-import {
-  discardCheckpoint,
-  readProjectArchiveAtPath,
-  resumeRun,
-} from "./model/recentIndexHost";
+import { readProjectArchiveAtPath } from "./model/recentIndexHost";
+import { resolveScriptOpener, type ScriptOpener } from "./model/scriptOpen";
 import { useAuthorName } from "./model/useAuthorName";
 import { useComputeProbe } from "./model/useComputeProbe";
 import { useRecentIndex } from "./model/useRecentIndex";
 import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
-import type { ContinueSession, RecentEntry } from "./model/types";
+import type { RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
 import { StartStatusBar } from "./ui/StartStatusBar";
 import { AboutSection } from "./sections/AboutSection";
@@ -120,15 +117,34 @@ export function StartScreen({ kernel }: ModuleProps) {
     return openArchive(archive, `Could not open ${entry.name}`);
   };
 
-  const resumeContinue = async (session: ContinueSession, entry: RecentEntry) =>
-    openArchive(await resumeRun(session.projectId, session.runId), `Could not resume ${entry.name}`);
-
-  const discardContinue = async (session: ContinueSession): Promise<string | null> => {
-    const result = await discardCheckpoint(session.projectId, session.runId);
-    if (!result.ok) return `Could not discard the checkpoint: ${result.reason}`;
-    await recent.refresh();
-    return null;
+  // The runtime restores a checkpoint into the open session that owns the run
+  // (study.restore-checkpoint -> POST .../persistence/checkpoints/{id}/restore),
+  // leaving it paused; the workspace behind Home takes over from there.
+  const resumeContinue = async (checkpointId: string, entry: RecentEntry): Promise<string | null> => {
+    const result = await kernel.commands.execute(
+      "study.restore-checkpoint",
+      createCommandContext("menu", kernel, {
+        input: { checkpointId },
+        sourceDetail: "start-screen",
+      }),
+    );
+    if (result.status === "completed") {
+      homeView.close();
+      return null;
+    }
+    return result.message ?? `Could not restore the checkpoint of ${entry.name}.`;
   };
+
+  // A script opens as a project only where the API has such an operation; the
+  // closure leaves Home on success, exactly like opening an archive.
+  const baseOpener = resolveScriptOpener();
+  const scriptOpener: ScriptOpener | null = baseOpener
+    ? async (request) => {
+        const failure = await baseOpener(request);
+        if (failure === null) homeView.close();
+        return failure;
+      }
+    : null;
 
   const selectedEntry =
     recent.state.kind === "ready"
@@ -166,7 +182,7 @@ export function StartScreen({ kernel }: ModuleProps) {
               initialFocusRef={initialFocusRef}
               name={authorName}
               recent={recent}
-              onDiscardContinue={discardContinue}
+              compute={compute}
               onOpenRecent={openRecent}
               onResumeContinue={resumeContinue}
               onRunCommand={runCommand}
@@ -174,7 +190,11 @@ export function StartScreen({ kernel }: ModuleProps) {
           ) : section === "templates" ? (
             <TemplatesSection compute={compute} />
           ) : section === "import" ? (
-            <ImportSection onOpenFile={openFile} openDisabledReason={browseDisabledReason} />
+            <ImportSection
+              onOpenFile={openFile}
+              onOpenScript={scriptOpener}
+              openDisabledReason={browseDisabledReason}
+            />
           ) : section === "docs" ? (
             <DocsSection />
           ) : section === "learn" ? (
@@ -196,6 +216,7 @@ export function StartScreen({ kernel }: ModuleProps) {
         onOpen={openRecent}
         onTogglePin={(projectId, pinned) => void recent.pin(projectId, pinned)}
         openDisabledReason={browseDisabledReason}
+        scriptOpener={scriptOpener}
         section={section}
         templateId={selectedTemplateId}
         session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}

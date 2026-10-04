@@ -332,6 +332,15 @@ describe("useVisualizationDebugPanelModel", () => {
       );
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
+    // The session list and status resolve in sequence; wait until the model
+    // stops changing so only the diagnostics under test can cause rerenders.
+    for (let stable = 0, last = -1; stable < 3; ) {
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      stable = observations.length === last ? stable + 1 : 0;
+      last = observations.length;
+    }
 
     const beforeUnrelated = observations.length;
     await act(async () => {
@@ -718,6 +727,12 @@ function makeMountedKernel({
     api: {
       data: { fields: { meta } },
       sessions: {
+        list: async () => ({
+          schema_version: "2.0.0",
+          sessions: [
+            { current: true, name: "debug-session", session_id: "session-17", status: "active" },
+          ],
+        }),
         current: {
           status: async () => ({
             lifecycle: {

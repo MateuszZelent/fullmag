@@ -342,9 +342,9 @@
         "type": "ParameterLibrary | None",
         "default": "None",
         "si_unit": "mixed",
-        "validation": "versioned SI-normalized authoring parameters; references and cycles resolved at construction",
-        "meaning": "versioned SI-normalized authoring parameters; references and cycles resolved at construction",
-        "backend_support": "versioned SI-normalized authoring parameters; references and cycles resolved at construction",
+        "validation": "optional versioned SI-normalized authoring parameter library; resolved at construction (unknown references, cycles, dimension conflicts rejected), lowered as authoring metadata only",
+        "meaning": "optional versioned SI-normalized authoring parameter library; resolved at construction (unknown references, cycles, dimension conflicts rejected), lowered as authoring metadata only",
+        "backend_support": "optional versioned SI-normalized authoring parameter library; resolved at construction (unknown references, cycles, dimension conflicts rejected), lowered as authoring metadata only",
         "problem_ir": "parameters"
       },
       {

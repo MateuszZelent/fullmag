@@ -18,6 +18,20 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
   }),
 }));
 
+// useResource is mocked below, so the session collection/status hooks behind
+// the real scoped-key hook would read the visualization payload as their data.
+// Pin a confirmed session identity instead.
+vi.mock("@/kernel/resources/useSessionScopedResourceKey", () => ({
+  useSessionScopedResourceKey: (unscopedResourceKey: string) => ({
+    resourceKey: `session=visualization-test|${unscopedResourceKey}`,
+    sessionIdentity: {
+      requestScopeEpoch: "api-instance:visualization-test",
+      sessionEpoch: "session-visualization-test@1",
+      sessionId: "visualization-test",
+    },
+  }),
+}));
+
 vi.mock("@/kernel/resources/useResource", () => ({
   useResource: () => ({
     data: mocks.remote,

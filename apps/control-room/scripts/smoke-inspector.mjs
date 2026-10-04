@@ -14,6 +14,8 @@ const outputDir = resolve(
 );
 const INSPECTOR_REQUEST_QUIET_MS = 500;
 const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
+// Per-path request budget of one page lifecycle: counts restart at every
+// load so the budget detects request storms, not the number of loads in a run.
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
 const INSPECTOR_SCENE_TRACE_LIMIT = 20;
 const INSPECTOR_REQUEST_LIMITS = new Map([
@@ -1830,6 +1832,17 @@ async function installInspectorFixtureApi(page, fixture) {
       );
     }
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
+    // No managed development backend is attached to the fixture session.
+    if (path === "/v2/platform/development-backend" && request.method() === "GET") {
+      return fulfillEmpty(route, 204);
+    }
+    // The fixture run has no durable observation frames.
+    if (path === "/v2/sessions/current/data/observation-frames" && request.method() === "GET") {
+      return fulfillJson(route, {
+        frames: [],
+        run_id: url.searchParams.get("run_id") ?? "inspector-run",
+      });
+    }
     if (path === "/v2/sessions" && request.method() === "GET") {
       return fulfillJson(route, {
         schema_version: "2.0.0",

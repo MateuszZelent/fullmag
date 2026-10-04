@@ -187,7 +187,7 @@ fn make_fixture(
     let payload_bytes: u64 = left_parts.iter().map(|bytes| bytes.len() as u64).sum();
     assert_eq!(
         payload_bytes,
-        right_parts.iter().map(|bytes| bytes.len() as u64).sum()
+        right_parts.iter().map(|bytes| bytes.len() as u64).sum::<u64>()
     );
     let dataset = MaterializedDatasetRef {
         dataset_id: "dataset:global-m".to_string(),

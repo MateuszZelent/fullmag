@@ -1,3 +1,20 @@
+<!-- master125-integration-checkpoint-20261004 -->
+## Kolejny merge aktualnego mastera — 2026-10-04
+
+Po poprzednich 40 rozwiązanych konfliktach remote master przesunął się
+do `01e1b113f5a1f17aef0e506e3c9dbf965401e300` (PR125/126).
+Rozwiązano i przejrzano pięć kolejnych konfliktów frontendu i dokumentacji API.
+Produkcyjny TypeScript 997 plików/0 unit inputs/0 błędów, API hygiene,
+porównanie generowanych typów oraz mapa dokumentacji i 35 kontroli
+jej narzędzi przeszły. Szczegóły i końcowy wynik merge w raporcie
+`docs/raports/2026-10-04-dispersion-master-merge-checkpoint.md`.
+
+Parser startup stamp zapisano i wysłano jako
+`569947856713b622d52aacd0044556d68a82e28b`. Nie zaktualizowano jeszcze
+zaufanego koordynatora ani nie wykonano nowej attestacji. #229 pozostaje
+failed; nowych solve'ów w tym przyroście nie wykonano. Konflikty integracji
+nie zastępują bramek S00–S12, runtime, nauki ani GUI.
+
 <!-- integration-checkpoint-20261004 -->
 ## Integracja zmian do mastera — checkpoint 2026-10-04
 

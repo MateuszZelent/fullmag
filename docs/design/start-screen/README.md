@@ -23,6 +23,7 @@ command registry. No new colour system, no new control geometry.
 | **Hand it over** | `docs/04-implementation-prompt.md` — the task brief for whoever implements it |
 | **Docs in the app** | `docs/05-sphinx-integration.md` — the Sphinx documentation inside the app, with search |
 | **Status** | `docs/06-implementation-status.md` — what is built, how it was verified, what is left |
+| **Store it** | `docs/07-workspace-database.md` — the per-user SQLite database behind the recent list (projects and scripts) |
 
 The mockup has a control bar at the bottom (hover to reveal) for switching
 theme, screen state and section. Rendered stills of every combination are in
@@ -41,6 +42,7 @@ docs/
   04-implementation-prompt.md        executable brief: verified repo facts, constraints, 11 steps, gates
   05-sphinx-integration.md           the public Sphinx docs inside the app: contract, search, bundling
   06-implementation-status.md        what is built, evidence, known gaps
+  07-workspace-database.md           per-user workspace database: schema, identity, concurrency, migration
 mockups/
   start-screen.html                  interactive mockup (single file, 231 kB)
   start-screen.template.html         source; thumbnails injected by scripts/build_mockup.py

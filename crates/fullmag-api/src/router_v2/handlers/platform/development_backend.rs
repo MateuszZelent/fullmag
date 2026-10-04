@@ -1,6 +1,10 @@
 //! Read-only, generation-bound observation of the native development watcher.
 
-use std::{path::PathBuf, sync::Arc, time::SystemTime};
+use std::{
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+    time::SystemTime,
+};
 
 use axum::{extract::State, http::HeaderMap, response::Response};
 use serde::Deserialize;
@@ -11,7 +15,8 @@ use crate::{
     router_v2::handlers::shared::{conditional_json_response, stable_strong_etag},
     schemas::development_backend::{
         DevelopmentBackendReason as Reason, DevelopmentBackendResource,
-        DevelopmentBackendState as BuildState, DevelopmentBuildIdentity,
+        DevelopmentBackendState as BuildState, DevelopmentBackendWorkspaceIdentity,
+        DevelopmentBuildIdentity,
     },
     types::AppState,
 };
@@ -138,6 +143,7 @@ impl DevelopmentBackendConfig {
             state: BuildState::Unknown,
             current_build: None,
             ready_build: None,
+            workspace_identity: None,
             restart_available: false,
             reason: Reason::ConfigurationInvalid,
         };
@@ -264,7 +270,20 @@ pub async fn get_development_backend(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let config = state.development_backend.clone();
-    let body = tokio::task::spawn_blocking(move || {
+    let workspace_identity = if matches!(&config, DevelopmentBackendConfig::Managed { .. }) {
+        let _transition = state.current_live_session_transition.lock().await;
+        let current = state.current_live_state.read().await;
+        Some(DevelopmentBackendWorkspaceIdentity {
+            api_instance_id: state.request_scope_instance_id.clone(),
+            session_id: current
+                .as_ref()
+                .map(|snapshot| snapshot.session.session_id.clone()),
+            session_epoch: state.current_live_session_epoch.load(Ordering::Acquire),
+        })
+    } else {
+        None
+    };
+    let mut body = tokio::task::spawn_blocking(move || {
         let now_ms = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|value| value.as_millis().min(u64::MAX as u128) as u64)
@@ -273,6 +292,7 @@ pub async fn get_development_backend(
     })
     .await
     .map_err(|_| ApiError::internal("development observer task failed"))?;
+    body.workspace_identity = workspace_identity;
     let bytes = serde_json::to_vec(&body)
         .map_err(|_| ApiError::internal("development observer serialization failed"))?;
     let etag = stable_strong_etag(&format!("development-backend:{:x}", Sha256::digest(bytes)));

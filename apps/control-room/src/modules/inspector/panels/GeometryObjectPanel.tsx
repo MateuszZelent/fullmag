@@ -124,6 +124,7 @@ function invalidateAuthoringResources(
   revision: number,
   committedScene?: SceneResource,
   sessionScopeKey?: string | null,
+  resourceCacheScope?: string | null,
 ): void {
   if (committedScene) {
     publishCommittedSceneResource(
@@ -133,6 +134,7 @@ function invalidateAuthoringResources(
       undefined,
       false,
       sessionScopeKey,
+      resourceCacheScope,
     );
   }
   invalidateAuthoringMutationDependents(resources, "geometry", revision);
@@ -437,6 +439,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         revision,
         response.committed_scene,
         historyContext.sessionScopeKey,
+        api.resourceCacheScope,
       );
       setFeedback({ kind: "success", message: "Object draft committed." });
       return true;
@@ -505,6 +508,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         response.scene_revision,
         response.committed_scene,
         historyContext.sessionScopeKey,
+        api.resourceCacheScope,
       );
       setFeedback({ kind: "success", message: "Geometry patch committed." });
       return true;

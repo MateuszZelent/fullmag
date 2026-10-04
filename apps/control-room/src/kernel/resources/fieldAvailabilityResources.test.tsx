@@ -14,6 +14,7 @@ import {
   resolveFieldAvailabilityRevision,
   useFieldAvailabilityResource,
 } from "./fieldAvailabilityResources";
+import { sessionScopedResourceKey } from "./sessionResourceIdentity";
 
 const mocks = vi.hoisted(() => ({
   availability: vi.fn(),
@@ -36,6 +37,29 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
 vi.mock("./useResource", () => ({
   useResource: mocks.useResource,
 }));
+
+// The availability hook is session-scoped; pin a confirmed identity so the
+// test observes the scoped key and the scope forwarded to the data facade.
+vi.mock("./useSessionScopedResourceKey", async () => {
+  const { sessionScopedResourceKey } = await import("./sessionResourceIdentity");
+  return {
+    useSessionScopedResourceKey: (unscopedResourceKey: string) => ({
+      resourceKey: sessionScopedResourceKey(
+        {
+          requestScopeEpoch: "api-instance:availability",
+          sessionEpoch: "session-availability@1",
+          sessionId: "session-availability",
+        },
+        unscopedResourceKey,
+      ),
+      sessionIdentity: {
+        requestScopeEpoch: "api-instance:availability",
+        sessionEpoch: "session-availability@1",
+        sessionId: "session-availability",
+      },
+    }),
+  };
+});
 
 const availabilityResource = (
   overrides: Partial<FieldAvailabilityResource> = {},
@@ -175,7 +199,10 @@ describe("fieldAvailabilityResources", () => {
 
     const options = mocks.useResource.mock.calls[0]?.[0] as {
       enabled: boolean;
-      load: (context: { signal: AbortSignal }) => Promise<FieldAvailabilityResource | null>;
+      load: (context: {
+        sessionScopeKey?: string;
+        signal: AbortSignal;
+      }) => Promise<FieldAvailabilityResource | null>;
       resolveRevision: (value: FieldAvailabilityResource | null) => ResourceRevision | null;
       resourceKey: string;
     };
@@ -183,14 +210,23 @@ describe("fieldAvailabilityResources", () => {
 
     expect(options.enabled).toBe(false);
     expect(options.resourceKey).toBe(
-      resolveFieldAvailabilityResourceKey("H_demag", {
-        owner_object_id: "object:1",
-        scope_id: "layer 1",
-        scope_kind: "airbox",
-        target_id: "target/one",
-      }),
+      sessionScopedResourceKey(
+        {
+          requestScopeEpoch: "api-instance:availability",
+          sessionEpoch: "session-availability@1",
+          sessionId: "session-availability",
+        },
+        resolveFieldAvailabilityResourceKey("H_demag", {
+          owner_object_id: "object:1",
+          scope_id: "layer 1",
+          scope_kind: "airbox",
+          target_id: "target/one",
+        }),
+      ),
     );
-    await expect(options.load({ signal: controller.signal })).resolves.toBe(data);
+    await expect(
+      options.load({ sessionScopeKey: "scope-key", signal: controller.signal }),
+    ).resolves.toBe(data);
     expect(mocks.availability).toHaveBeenCalledWith(
       "H_demag",
       {
@@ -199,7 +235,7 @@ describe("fieldAvailabilityResources", () => {
         scope_kind: "airbox",
         target_id: "target/one",
       },
-      { signal: controller.signal },
+      { sessionScopeKey: "scope-key", signal: controller.signal },
     );
     expect(options.resolveRevision(data)).toBe(9);
   });

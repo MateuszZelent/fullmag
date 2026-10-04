@@ -5485,9 +5485,19 @@ export interface components {
             revision: number;
             schema_version: string;
             state: components["schemas"]["DevelopmentBackendState"];
+            workspace_identity?: null | components["schemas"]["DevelopmentBackendWorkspaceIdentity"];
         };
         /** @enum {string} */
         DevelopmentBackendState: "disabled" | "waiting" | "building" | "ready" | "failed" | "superseded" | "stopped" | "unknown";
+        DevelopmentBackendWorkspaceIdentity: {
+            api_instance_id: string;
+            /**
+             * Format: int64
+             * @description Exact transition counter, including when there is no current session.
+             */
+            session_epoch: number;
+            session_id?: string | null;
+        };
         DevelopmentBuildIdentity: {
             /** @description Opaque identity: running product version or verified candidate manifest digest. */
             id: string;

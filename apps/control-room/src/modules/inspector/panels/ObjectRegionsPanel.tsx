@@ -454,6 +454,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
         revision,
         undefined,
         operationSessionScopeKey,
+        api.resourceCacheScope,
       );
       const syncWarning = await syncAuthoringScriptBestEffort(
         api,
@@ -584,6 +585,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
         revision,
         undefined,
         operationSessionScopeKey,
+        api.resourceCacheScope,
       );
       const duplicated = findLastRegionSelection(
         response,
@@ -655,6 +657,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
         revision,
         undefined,
         operationSessionScopeKey,
+        api.resourceCacheScope,
       );
       const fallback = findLastRegionSelection(
         response,

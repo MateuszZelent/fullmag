@@ -239,6 +239,212 @@ describe("ProjectDocumentController", () => {
     expect(controller.getSnapshot().state).toBe("empty");
   });
 
+  describe("recordRunOutcome", () => {
+    const run = {
+      run_id: "run-1",
+      started_at: "2026-10-04T10:00:00.000Z",
+      status: "ready" as const,
+      finished_at: "2026-10-04T10:05:00.000Z",
+      duration_seconds: 300,
+    };
+    const preview = { png_base64: "iVBORw0KGgo=", colouring: "hsl-sphere" };
+    const hostPath = "C:\\projects\\demo.fms";
+
+    async function openedController(
+      initial: ProjectDocumentResource,
+      adopted: ProjectDocumentResource,
+      invoke: ReturnType<typeof vi.fn>,
+    ) {
+      vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+      const api = apiFor();
+      api.persistence.projects.open
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValueOnce(adopted);
+      const controller = new ProjectDocumentController(api);
+      await controller.open({ bytes: new Uint8Array([1, 2]), fileName: "demo.fms", hostPath });
+      return { api, controller };
+    }
+
+    const hostArchive = {
+      archive_base64: "AQIDBA==",
+      file_name: "demo.fms",
+      path: hostPath,
+    };
+
+    it("adopts the archive the host rewrote when the document is clean", async () => {
+      const invoke = vi.fn(async (_command: string, _args?: unknown) => hostArchive);
+      const adopted = resource({ revision: 4, persisted_revision: 4, source_hash: "sha256:after" });
+      const { api, controller } = await openedController(
+        resource({ revision: 3, persisted_revision: 3 }),
+        adopted,
+        invoke,
+      );
+
+      await expect(controller.recordRunOutcome(run, preview)).resolves.toBe("recorded");
+
+      expect(invoke).toHaveBeenCalledWith("project_record_outcome", {
+        request: { path: hostPath, preview, run },
+      });
+      expect(api.persistence.projects.open).toHaveBeenLastCalledWith({
+        archive_base64: "AQIDBA==",
+        display_name: "demo.fms",
+      });
+      expect(controller.getSnapshot()).toMatchObject({
+        error: null,
+        fileName: "demo.fms",
+        hostPath,
+        resource: { revision: 4, source_hash: "sha256:after" },
+        state: "ready",
+      });
+    });
+
+    it("queues while the document has unsaved edits and flushes after the next save", async () => {
+      const invoke = vi.fn(async (command: string, _args?: unknown) =>
+        command === "save_project_archive"
+          ? { path: hostPath, project_id: "project-1", revision: 5 }
+          : hostArchive,
+      );
+      const { controller } = await openedController(
+        resource({ dirty: true, revision: 5, persisted_revision: 4 }),
+        resource({ revision: 6, persisted_revision: 6 }),
+        invoke,
+      );
+
+      await expect(controller.recordRunOutcome(run, preview)).resolves.toBe("queued");
+      expect(invoke).not.toHaveBeenCalled();
+      expect(controller.getSnapshot().resource?.revision).toBe(5);
+
+      await controller.save();
+
+      expect(invoke.mock.calls.map(([command]) => command)).toEqual([
+        "save_project_archive",
+        "project_record_outcome",
+      ]);
+      expect(controller.getSnapshot()).toMatchObject({
+        resource: { dirty: false, revision: 6 },
+        state: "ready",
+      });
+    });
+
+    it("keeps one queued entry per run and sends the newest", async () => {
+      const invoke = vi.fn(async (command: string, _args?: unknown) =>
+        command === "save_project_archive"
+          ? { path: hostPath, project_id: "project-1", revision: 5 }
+          : hostArchive,
+      );
+      const { controller } = await openedController(
+        resource({ dirty: true, revision: 5, persisted_revision: 4 }),
+        resource({ revision: 6, persisted_revision: 6 }),
+        invoke,
+      );
+
+      await controller.recordRunOutcome({ ...run, status: "failed" });
+      await controller.recordRunOutcome(run, preview);
+      await controller.save();
+
+      const outcomeCalls = invoke.mock.calls.filter(
+        ([command]) => command === "project_record_outcome",
+      );
+      expect(outcomeCalls).toHaveLength(1);
+      expect(outcomeCalls[0][1]).toEqual({ request: { path: hostPath, preview, run } });
+    });
+
+    it("does nothing outside the desktop host or without a host path", async () => {
+      const api = apiFor(undefined, resource());
+      const controller = new ProjectDocumentController(api);
+      await controller.open({ bytes: new Uint8Array([1]), fileName: "demo.fms", hostPath });
+      const before = controller.getSnapshot();
+
+      await expect(controller.recordRunOutcome(run, preview)).resolves.toBe("skipped");
+      expect(controller.getSnapshot()).toBe(before);
+
+      const invoke = vi.fn(async (_command: string, _args?: unknown) => hostArchive);
+      vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+      const unsaved = new ProjectDocumentController(apiFor(resource()));
+      await unsaved.create("Unsaved");
+      await expect(unsaved.recordRunOutcome(run)).resolves.toBe("skipped");
+      await expect(
+        new ProjectDocumentController(apiFor()).recordRunOutcome(run),
+      ).resolves.toBe("skipped");
+      expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a host failure without losing the project or the queued outcome", async () => {
+      let failing = true;
+      const invoke = vi.fn(async (command: string, _args?: unknown) => {
+        if (command === "save_project_archive") {
+          return { path: hostPath, project_id: "project-1", revision: 5 };
+        }
+        if (failing) throw new Error("disk full");
+        return hostArchive;
+      });
+      const { api, controller } = await openedController(
+        resource({ revision: 3, persisted_revision: 3 }),
+        resource({ revision: 6, persisted_revision: 6 }),
+        invoke,
+      );
+
+      await expect(controller.recordRunOutcome(run, preview)).resolves.toBe("failed");
+
+      expect(controller.getSnapshot()).toMatchObject({
+        error: "disk full",
+        hostPath,
+        resource: { revision: 3 },
+        state: "error",
+      });
+      expect(api.persistence.projects.open).toHaveBeenCalledTimes(1);
+
+      expect(controller.canSave()).toBe(true);
+
+      failing = false;
+      await controller.save();
+
+      const outcomeCalls = invoke.mock.calls.filter(
+        ([command]) => command === "project_record_outcome",
+      );
+      expect(outcomeCalls).toHaveLength(2);
+      expect(controller.getSnapshot()).toMatchObject({
+        error: null,
+        resource: { revision: 6 },
+        state: "ready",
+      });
+    });
+
+    it("rejects an adopted archive that is a different project or revision", async () => {
+      const invoke = vi.fn(async (_command: string, _args?: unknown) => hostArchive);
+      const { controller } = await openedController(
+        resource({ revision: 3, persisted_revision: 3 }),
+        resource({ project_id: "other", revision: 4 }),
+        invoke,
+      );
+
+      await expect(controller.recordRunOutcome(run)).resolves.toBe("failed");
+
+      expect(controller.getSnapshot()).toMatchObject({
+        resource: { project_id: "project-1", revision: 3 },
+        state: "error",
+      });
+    });
+
+    it("drops queued outcomes when the project is closed", async () => {
+      const invoke = vi.fn(async (_command: string, _args?: unknown) => hostArchive);
+      const { controller } = await openedController(
+        resource({ dirty: true, revision: 5 }),
+        resource({ revision: 6 }),
+        invoke,
+      );
+      await controller.recordRunOutcome(run);
+
+      expect(controller.close(true)).toBe(true);
+      await controller.open({ bytes: new Uint8Array([1]), fileName: "demo.fms", hostPath });
+      await controller.save();
+
+      expect(invoke.mock.calls.map(([command]) => command)).not.toContain(
+        "project_record_outcome",
+      );
+    });
+  });
+
   it("normalizes project file names for browser downloads", () => {
     expect(projectFileName("My Study")).toBe("my-study.fms");
     expect(projectFileName("already.FMS")).toBe("already.fms");

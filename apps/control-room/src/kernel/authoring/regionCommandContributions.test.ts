@@ -131,9 +131,15 @@ describe("REGION_COMMANDS", () => {
       {},
       { baseRevision: 4 },
     );
+    // The selection is part of the captured workspace state so undo/redo can
+    // restore it alongside the scene revision.
+    const workspaceState = { selection: selection.get() };
+    expect(workspaceState.selection).not.toBeNull();
     expect(record).toHaveBeenCalledWith({
       after,
+      afterWorkspaceState: workspaceState,
       before,
+      beforeWorkspaceState: workspaceState,
       committedRevision: 5,
       label: "Duplicate region core",
     });
@@ -270,9 +276,13 @@ describe("REGION_COMMANDS", () => {
       { enabled: false },
       { baseRevision: 8 },
     );
+    const workspaceState = { selection: selection.get() };
+    expect(workspaceState.selection).not.toBeNull();
     expect(record).toHaveBeenCalledWith({
       after,
+      afterWorkspaceState: workspaceState,
       before,
+      beforeWorkspaceState: workspaceState,
       committedRevision: 9,
       label: "Disable coupling exchange-core",
     });

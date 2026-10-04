@@ -140,3 +140,48 @@ receiptów. Żadnych testów Rust/C++/React nie skompilowano.
 Zakres jest źródłowy. Aktualny obraz koordynatora nadal wymaga tej poprawki,
 a następny managed build musi potwierdzić pełną attestację i pakiet. Failed
 #229 pozostaje failed; nie promujemy samego kompilowanego workspace do runtime.
+
+
+## Kolejne przesunięcie mastera — PR125/126
+
+Po push poprawki parsera `569947856713b622d52aacd0044556d68a82e28b`
+GitHub ponownie zgłosił konflikty, ponieważ master przesunął się do
+`01e1b113f5a1f17aef0e506e3c9dbf965401e300`. Nowy merge ma pięć
+konfliktujących plików; wcześniejsze 40 rozwiązań pozostaje zachowane.
+
+Dokumentacja `Problem.parameters` i jej mapa zachowują normalizację SI
+oraz dokładniejsze reguły mastera: odrzucanie nieznanych referencji, cykli
+i konfliktów wymiarów przy konstrukcji; lowering przenosi metadane authoringu.
+To odpowiada `Problem.__post_init__`, `Problem.to_ir` i `ParameterLibrary`.
+
+Kontrola produkcyjnego TypeScript: 997 plików, zero wejść jednostkowych,
+zero błędów, noEmit. API hygiene PASS. Wygenerowane przez openapi-typescript
+typy są identyczne po normalizacji końców linii z auto-merged typami;
+SHA-256 znormalizowanego tekstu:
+`a1810784d0b51635d5bfbfeed7ef7a54e08b26dfb7340f8d0c31e73ec43331d7`.
+Walidator mapy dokumentacji PASS i 35 interpretowanych kontroli narzędzi PASS.
+
+Managed generate-client zatrzymał się przed generacją: link node_modules
+tego worktree wskazuje niedostępne zależności. Kontrolę porównawczą wykonano
+przez odczyt istniejących zależności głównego checkoutu, z wynikiem zapisanym
+poza źródłami. Nie instalowano pakietów ani nie kompilowano testów; nie jest
+to managed runtime lub browser qualification. Bramka builda pozostaje otwarta.
+
+Rozwiązanie smoke Inspectora zachowuje helper `reloadInspectorDocument`: resetuje
+wyłącznie budżet GET nowego dokumentu, zachowując kumulacyjne liczniki i limity
+mutacji całego scenariusza. Masterowe `requestCounts.clear()` usuwałoby telemetry
+z kumulacyjnej mapy aliasowanej przez requestBudget; nie przeniesiono go.
+Mocki zachowują eksporty oryginalnego KernelContext i wymagane API mastera;
+mock jakości siatki dostarcza także własny kontekst z tym samym kernel fixture.
+
+Wszystkie kontrole źródłowe pozostają odrębne od wykonania testów React,
+przeglądarki, nowego native builda i kwalifikacji fizyki.
+
+Końcowa kontrola wszystkich 111 scalonych plików TypeScript: zero błędów
+parsera; kontrola node --check smoke Inspectora PASS. Brak unresolved entries
+i markerów w pięciu konfliktujących plikach. Whitespace check z istniejącym
+CRLF traktowanym jako koniec linii PASS; nie wykonano szerokiej zmiany formatów.
+Ograniczony przegląd dziewięciu plików backendu/infrastruktury nie znalazł
+otwartego błędu specyficznego dla merge: zachowano ukrytego workera eigensolve,
+kontrakty parallel execution, modalne recepty i integrację workspace DB mastera.
+To review źródłowe; nowy native typecheck, runtime i fizyka pozostają NOT VERIFIED.

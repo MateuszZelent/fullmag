@@ -9,6 +9,7 @@ import {
   sessionResourceIdentityFromStatus,
   confirmedSessionResourceIdentity,
 } from "../resources/sessionResourceIdentity";
+import { resourceRuntimeKeyForClientScope } from "../resources/resourceClientScope";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import type { CommandSessionScopeSource } from "./CommandRegistry";
 
@@ -24,19 +25,30 @@ type CommandSessionScopeRuntimeStore = Pick<
  */
 export function createCommandSessionScopeSource(
   runtimeStore: CommandSessionScopeRuntimeStore = sharedResourceRuntimeStore,
+  resourceCacheScope?: string | null,
 ): CommandSessionScopeSource {
+  const runtimeKey = (resourceKey: string) =>
+    resourceRuntimeKeyForClientScope(resourceKey, resourceCacheScope);
   return {
     getScopeKey: () => {
-      const collection = runtimeStore.getSnapshot<SessionListResource>(SESSIONS_PATH).data;
+      const collection = runtimeStore.getSnapshot<SessionListResource>(
+        runtimeKey(SESSIONS_PATH),
+      ).data;
       if (!collection || collection.sessions.length === 0) return null;
       const status = runtimeStore.getSnapshot<LiveStatusResource>(
-        SESSION_STATUS_RESOURCE_KEY,
+        runtimeKey(SESSION_STATUS_RESOURCE_KEY),
       ).data;
       return sessionRequestScopeKey(confirmedSessionResourceIdentity(sessionResourceIdentityFromStatus(status), collection));
     },
     subscribe: (listener) => {
-      const unsubscribeStatus = runtimeStore.subscribe(SESSION_STATUS_RESOURCE_KEY, listener);
-      const unsubscribeCollection = runtimeStore.subscribe(SESSIONS_PATH, listener);
+      const unsubscribeStatus = runtimeStore.subscribe(
+        runtimeKey(SESSION_STATUS_RESOURCE_KEY),
+        listener,
+      );
+      const unsubscribeCollection = runtimeStore.subscribe(
+        runtimeKey(SESSIONS_PATH),
+        listener,
+      );
       return () => { unsubscribeStatus(); unsubscribeCollection(); };
     },
   };

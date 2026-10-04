@@ -16,7 +16,7 @@ describe("KernelProvider performance contracts", () => {
       "resourceData: runtimeResourceDataRef.current",
     );
     expect(kernelProviderSource).toContain(
-      "}, [kernel, startupVisible]);",
+      "}, [kernel, sessionScopeKey, startupVisible]);",
     );
     expect(kernelProviderSource).not.toContain(
       "}, [kernel, runtimeResourceData, startupVisible]);",
@@ -52,7 +52,10 @@ describe("KernelProvider performance contracts", () => {
       "const expectedRequestScopeEpoch = sessionIdentity?.requestScopeEpoch ?? null;",
     );
     expect(kernelProviderSource).toContain(
-      "}, [kernel, sessionScopeKey, expectedRequestScopeEpoch]);",
+      "const expectedSessionId = sessionIdentity?.sessionId ?? null;",
+    );
+    expect(kernelProviderSource).toContain(
+      "}, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId]);",
     );
   });
 
@@ -136,7 +139,7 @@ describe("KernelProvider performance contracts", () => {
       "controlRoomRealtimeDisabledFromBrowser()",
     );
     expect(kernelProviderSource).toContain(
-      "if (controlRoomRealtimeDisabledFromBrowser())",
+      "!expectedSessionId || !expectedRequestScopeEpoch || controlRoomRealtimeDisabledFromBrowser()",
     );
   });
 

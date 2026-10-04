@@ -168,7 +168,7 @@ mod tests {
 
     fn fixture(bytes: &[u8]) -> fullmag_quantities::SolutionArtifactRef {
         fullmag_quantities::SolutionArtifactRef {
-            artifact_id: "artifact:energy".to_string(),
+            artifact_id: "artifact-energy".to_string(),
             kind: fullmag_quantities::SolutionArtifactKind::Table,
             schema_id: fullmag_session::solution_scalar_source::SOLUTION_SCALAR_SCHEMA.to_string(),
             object_ref: fullmag_application::study_artifact_content_sha256(bytes),
