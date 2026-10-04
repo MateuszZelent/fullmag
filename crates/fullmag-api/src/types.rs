@@ -22,7 +22,7 @@ use fullmag_runner::{
     BackendCapabilities, DisplaySelectionState, FemMeshPayload, LivePreviewField,
     LivePreviewRequest, RuntimeStatus,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
@@ -944,11 +944,40 @@ impl CachedPreviewFields {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum PreviewState {
     Spatial(SpatialPreviewState),
     GlobalScalar(GlobalScalarPreviewState),
+}
+
+impl<'de> Deserialize<'de> for PreviewState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct PreviewKind {
+            kind: String,
+        }
+
+        // Keep raw JSON until the typed reader runs: Value would discard
+        // duplicate fields. Reading each variant directly also preserves
+        // serde_json's numeric map-key adapter for FEM domain quality.
+        let raw = Box::<serde_json::value::RawValue>::deserialize(deserializer)?;
+        let tag: PreviewKind = serde_json::from_str(raw.get()).map_err(de::Error::custom)?;
+        match tag.kind.as_str() {
+            "spatial" => serde_json::from_str::<SpatialPreviewState>(raw.get())
+                .map(Self::Spatial)
+                .map_err(de::Error::custom),
+            "global_scalar" => serde_json::from_str::<GlobalScalarPreviewState>(raw.get())
+                .map(Self::GlobalScalar)
+                .map_err(de::Error::custom),
+            other => Err(de::Error::custom(format!(
+                "unknown preview state kind '{other}'"
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1570,6 +1599,202 @@ mod tests {
         }))
         .expect("legacy scalar row should remain readable");
         assert_eq!(row.e_rotated_dmi, None);
+    }
+
+    fn spatial_preview_with_domain_quality() -> Value {
+        serde_json::json!({
+            "kind": "spatial",
+            "display_kind": "m",
+            "config_revision": 4,
+            "source_step": 12,
+            "source_time": 0.25,
+            "spatial_kind": "mesh",
+            "quantity": "m",
+            "unit": "1",
+            "quantity_domain": "magnetic_only",
+            "component": "3D",
+            "layer": 0,
+            "all_layers": true,
+            "type": "3D",
+            "scalar_field": [[1.0, 0.0, 0.0]],
+            "min": 0.0,
+            "max": 1.0,
+            "n_comp": 3,
+            "max_points": 1,
+            "data_points_count": 1,
+            "x_possible_sizes": [1],
+            "y_possible_sizes": [1],
+            "x_chosen_size": 1,
+            "y_chosen_size": 1,
+            "applied_x_chosen_size": 1,
+            "applied_y_chosen_size": 1,
+            "applied_layer_stride": 1,
+            "auto_scale_enabled": true,
+            "auto_downscaled": false,
+            "preview_grid": [1, 1, 1],
+            "fem_mesh": {
+                "mesh_name": "preview",
+                "mesh_id": "mesh-1",
+                "nodes": [[0.0, 0.0, 0.0]],
+                "cells": {
+                    "types": [],
+                    "offsets": [],
+                    "nodes": [],
+                    "global_ordinals": [],
+                    "mesh_parts": []
+                },
+                "facets": {
+                    "types": [],
+                    "roles": [],
+                    "offsets": [],
+                    "nodes": [],
+                    "global_ordinals": []
+                },
+                "per_domain_quality": {
+                    "1": {
+                        "n_elements": 1,
+                        "sicn_min": 0.1,
+                        "sicn_max": 0.9,
+                        "sicn_mean": 0.5,
+                        "sicn_p5": 0.2,
+                        "gamma_min": 0.3,
+                        "gamma_mean": 0.6,
+                        "volume_min": 1.0,
+                        "volume_max": 1.0,
+                        "volume_mean": 1.0,
+                        "volume_std": 0.0,
+                        "avg_quality": 0.5
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn preview_state_spatial_round_trips_numeric_domain_quality_keys() {
+        let value = spatial_preview_with_domain_quality();
+        let parsed: PreviewState = serde_json::from_value(value.clone())
+            .expect("spatial preview with numeric domain keys should deserialize");
+        let PreviewState::Spatial(spatial) = &parsed else {
+            panic!("expected spatial preview state");
+        };
+        assert!(spatial
+            .fem_mesh
+            .as_ref()
+            .expect("spatial preview mesh")
+            .per_domain_quality
+            .contains_key(&1));
+
+        let encoded = serde_json::to_value(&parsed).expect("spatial preview should serialize");
+        assert_eq!(encoded["kind"], "spatial");
+        assert!(encoded["fem_mesh"]["per_domain_quality"]["1"].is_object());
+        let round_tripped: PreviewState = serde_json::from_value(encoded)
+            .expect("serialized spatial preview should deserialize again");
+        let PreviewState::Spatial(round_tripped) = round_tripped else {
+            panic!("expected spatial preview state after round trip");
+        };
+        assert!(round_tripped
+            .fem_mesh
+            .expect("round-tripped spatial preview mesh")
+            .per_domain_quality
+            .contains_key(&1));
+    }
+
+    #[test]
+    fn preview_state_global_scalar_deserializes_through_explicit_kind_dispatch() {
+        let parsed: PreviewState = serde_json::from_value(serde_json::json!({
+            "kind": "global_scalar",
+            "display_kind": "total_energy",
+            "config_revision": 5,
+            "source_step": 13,
+            "source_time": 0.5,
+            "quantity": "e_total",
+            "unit": "J",
+            "value": -2.5
+        }))
+        .expect("global scalar preview should deserialize");
+        let PreviewState::GlobalScalar(scalar) = parsed else {
+            panic!("expected global scalar preview state");
+        };
+        assert_eq!(scalar.quantity, "e_total");
+        assert_eq!(scalar.value, -2.5);
+    }
+
+    #[test]
+    fn preview_state_rejects_malformed_kind_and_view_type_without_coercion() {
+        for malformed in [
+            serde_json::json!({"kind": "unknown"}),
+            serde_json::json!({"kind": 1}),
+            serde_json::json!({}),
+        ] {
+            assert!(
+                serde_json::from_value::<PreviewState>(malformed).is_err(),
+                "malformed preview kind must be rejected"
+            );
+        }
+
+        let mut malformed_type = spatial_preview_with_domain_quality();
+        malformed_type["type"] = serde_json::json!(3);
+        assert!(
+            serde_json::from_value::<PreviewState>(malformed_type).is_err(),
+            "spatial preview type must remain a string"
+        );
+    }
+
+    #[test]
+    fn preview_state_raw_json_rejects_duplicate_fields_and_kind() {
+        let scalar = r#"{"kind":"global_scalar","display_kind":"total_energy",
+            "config_revision":5,"source_step":13,"source_time":0.5,
+            "quantity":"e_total","unit":"J","value":-2.5}"#;
+        for (raw, field) in [
+            (
+                scalar.replace("\"value\":-2.5", "\"value\":-2.5,\"value\":5.0"),
+                "value",
+            ),
+            (
+                scalar.replace(
+                    "\"kind\":\"global_scalar\"",
+                    "\"kind\":\"spatial\",\"kind\":\"global_scalar\"",
+                ),
+                "kind",
+            ),
+        ] {
+            let error = serde_json::from_slice::<PreviewState>(raw.as_bytes())
+                .expect_err("duplicate known preview fields must be rejected");
+            assert!(error
+                .to_string()
+                .contains(&format!("duplicate field `{field}`")));
+        }
+
+        let spatial = serde_json::to_string(&spatial_preview_with_domain_quality()).unwrap();
+        let duplicate_nested = spatial.replace(
+            "\"mesh_name\":\"preview\"",
+            "\"mesh_name\":\"preview\",\"mesh_name\":\"other\"",
+        );
+        assert_ne!(spatial, duplicate_nested);
+        let error = serde_json::from_slice::<PreviewState>(duplicate_nested.as_bytes())
+            .expect_err("duplicate known mesh fields must be rejected");
+        assert!(error.to_string().contains("duplicate field `mesh_name`"));
+    }
+
+    #[test]
+    fn preview_state_raw_json_preserves_numeric_domain_keys_and_unknown_fields() {
+        let spatial = serde_json::to_string(&spatial_preview_with_domain_quality()).unwrap();
+        let with_unknown = spatial.replacen(
+            "{",
+            "{\"future_preview_field\":1,\"future_preview_field\":2,",
+            1,
+        );
+        let parsed: PreviewState = serde_json::from_slice(with_unknown.as_bytes())
+            .expect("unknown fields remain ignored and numeric map keys remain valid");
+        let PreviewState::Spatial(spatial) = parsed else {
+            panic!("expected spatial preview state");
+        };
+        assert!(spatial
+            .fem_mesh
+            .unwrap()
+            .per_domain_quality
+            .contains_key(&1));
     }
 
     fn sample_builder() -> ScriptBuilderState {
