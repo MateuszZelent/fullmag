@@ -56,6 +56,7 @@ import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridg
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import { sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
+import { resourceRuntimeKeyForClientScope } from "./resources/resourceClientScope";
 import {
   acquireViewport3DWorkerRuntime,
   getViewport3DWorkerRuntimeSnapshot,
@@ -123,7 +124,12 @@ function createKernel(): KernelApi {
   });
   const projectDocument = new ProjectDocumentController(api);
   const commands = new CommandRegistry();
-  commands.attachSessionScopeSource(createCommandSessionScopeSource());
+  commands.attachSessionScopeSource(
+    createCommandSessionScopeSource(
+      sharedResourceRuntimeStore,
+      api.resourceCacheScope,
+    ),
+  );
   commands.attach(bus);
   commands.attachDiagnostics(commandDiagnostics);
 
@@ -161,6 +167,7 @@ function createKernel(): KernelApi {
   const visualizationDebug = new VisualizationDebugController();
   const visualizationSync = new VisualizationRegistrySyncController({
     api: api.visualization,
+    resourceCacheScope: api.resourceCacheScope,
     resources,
     onAcknowledgedTargetPatches: (state, _targetIds, transactionIds) =>
       visualization.acknowledgePendingTargetPatches(state, transactionIds),
@@ -648,7 +655,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         kernel.layout.get().activeViewportMainModuleId,
       publishVisualizationState: (state: VisualizationStateResource) => {
         sharedResourceRuntimeStore.updateData(
-          VISUALIZATION_STATE_PATH,
+          resourceRuntimeKeyForClientScope(
+            VISUALIZATION_STATE_PATH,
+            kernel.api.resourceCacheScope,
+          ),
           state,
           state.revision,
         );
@@ -657,7 +667,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         listenerCounts: sharedResourceRuntimeStore.listenerCounts(),
         resources: sharedResourceRuntimeStore.stats(),
         visualizationRevision: sharedResourceRuntimeStore.getSnapshot(
-          VISUALIZATION_STATE_PATH,
+          resourceRuntimeKeyForClientScope(
+            VISUALIZATION_STATE_PATH,
+            kernel.api.resourceCacheScope,
+          ),
         ).revision,
         workers: getViewport3DWorkerRuntimeSnapshot(),
       }),
@@ -678,7 +691,9 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         });
       },
       readViewportAuditResource: (resourceKey: string) => {
-        const snapshot = sharedResourceRuntimeStore.getSnapshot(resourceKey);
+        const snapshot = sharedResourceRuntimeStore.getSnapshot(
+          resourceRuntimeKeyForClientScope(resourceKey, kernel.api.resourceCacheScope),
+        );
         return {
           data: snapshot.data,
           error: snapshot.error?.message ?? null,
@@ -691,7 +706,13 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
       },
       injectViewportAuditListenerLeak: () => {
         // Deliberately retained only when an audit asks for a negative control.
-        sharedResourceRuntimeStore.subscribe(VISUALIZATION_STATE_PATH, () => {});
+        sharedResourceRuntimeStore.subscribe(
+          resourceRuntimeKeyForClientScope(
+            VISUALIZATION_STATE_PATH,
+            kernel.api.resourceCacheScope,
+          ),
+          () => {},
+        );
       },
       injectViewportAuditWorkerLeak: () => {
         // Deliberately retained only when an audit asks for a negative control.

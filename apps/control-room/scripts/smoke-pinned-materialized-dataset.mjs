@@ -387,7 +387,9 @@ async function main() {
     // Establish the live camera and transport baseline before selecting a
     // pinned artifact.  Saved camera gestures must stay local to the
     // immutable selection and must not patch the live visualization registry.
-    const liveBootstrapProof = await assertLiveViewportRendered(page, state);
+    // addInitScript resets the draw audit on the preceding reload. Measure
+    // this fresh document's lifetime, including draws before its tab is clicked.
+    const liveBootstrapProof = await assertLiveViewportRendered(page, state, { drawCalls: 0 });
     const liveCameraBeforeSaved = await readViewportCameraSnapshot(page);
     const cameraMutationsBeforeSaved = state.cameraMutationRequests.length;
     const liveBeforeSaved = liveResourceRequestCount(state);
@@ -469,10 +471,11 @@ async function main() {
     const savedCanvasHandle = await page.locator(".fm-viewport-3d canvas").first().elementHandle();
     assert.ok(savedViewportHandle && savedCanvasHandle, "Saved viewport DOM is missing before direct return.");
     const savedRequestCountsBeforeDirectLive = savedBinaryRequestCounts(state);
+    const directLiveAuditBefore = await readWebglAuditCounters(page);
     state.viewportPhase = "live-direct-return";
     await page.getByRole("button", { name: "Return to current view", exact: true }).click();
     await page.locator('.fm-viewport-3d[data-view-source="current"]').waitFor({ state: "visible", timeout: timeoutMs });
-    const directLiveProof = await assertLiveViewportRendered(page, state);
+    const directLiveProof = await assertLiveViewportRendered(page, state, directLiveAuditBefore);
     assert.equal(await savedViewportHandle.evaluate((node) => node === document.querySelector(".fm-viewport-3d")), true, "Direct return replaced the mounted viewport.");
     assert.equal(await savedCanvasHandle.evaluate((node) => node === document.querySelector(".fm-viewport-3d canvas")), true, "Direct return replaced the WebGL canvas.");
     const liveCameraAfterDirectReturn = await readViewportCameraSnapshot(page);
@@ -494,7 +497,7 @@ async function main() {
     const savedRequestCountsBeforeLive = savedBinaryRequestCounts(state);
     await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await page.getByRole("tab", { name: "3D Viewport", exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
-    const liveProof = await assertLiveViewportRendered(page, state);
+    const liveProof = await assertLiveViewportRendered(page, state, { drawCalls: 0 });
     const liveCameraAfterSaved = await readViewportCameraSnapshot(page);
     assert.deepEqual(liveCameraAfterSaved, liveCameraBeforeSaved, "Returning to live view inherited a saved selection camera.");
     assert.equal(state.cameraMutationRequests.length, cameraMutationsBeforeSaved, "Saved camera interactions emitted a live visualization mutation.");
@@ -1020,8 +1023,7 @@ async function reloadSavedViewport(page, state, artifactId, projectId) {
   };
 }
 
-async function assertLiveViewportRendered(page, state) {
-  const auditBefore = await readWebglAuditCounters(page);
+async function assertLiveViewportRendered(page, state, auditBefore) {
   await page.getByRole("tab", { name: "3D Viewport", exact: true }).click({ force: true });
   const canvas = page.locator(".fm-viewport-3d canvas").first();
   await canvas.waitFor({ state: "visible", timeout: timeoutMs });
@@ -1029,7 +1031,13 @@ async function assertLiveViewportRendered(page, state) {
     () => liveResourceRequestCount(state) > 0 && (state.liveTopologyRequests ?? 0) > 0 && (state.liveFieldRequests ?? 0) > 0,
     "Active live viewport did not request its own topology and field resources.",
   );
-  await page.waitForTimeout(250);
+  // Demand rendering need not redraw when its selected tab is clicked again.
+  // The caller captures the baseline before changing source, or uses zero
+  // immediately after a navigation that resets the document's audit counters.
+  await waitForCondition(
+    async () => (await readWebglAuditCounters(page)).drawCalls > (auditBefore.drawCalls ?? 0),
+    "Live viewport did not produce a WebGL draw after its document/source transition.",
+  );
   const proof = await readViewportWebglProof(page, "live", null, auditBefore);
   assert.ok(proof.draw_calls > 0, "Live viewport did not issue a WebGL draw call.");
   return proof;

@@ -8,6 +8,7 @@ import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { sharedResourceRuntimeStore } from "../resources/ResourceRuntimeStore";
+import { resourceRuntimeKeyForClientScope } from "../resources/resourceClientScope";
 import {
   mergeVisualizationStateTargetOverrides,
   visualizationStateScopeIdForTarget,
@@ -82,6 +83,7 @@ export interface VisualizationPatchReceipt {
 
 interface VisualizationRegistrySyncControllerOptions {
   api: VisualizationRegistrySyncApi;
+  resourceCacheScope?: string | null;
   maxLatencyMs?: number;
   now?: () => number;
   quietMs?: number;
@@ -126,6 +128,7 @@ const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
 
 export class VisualizationRegistrySyncController {
   private readonly api: VisualizationRegistrySyncApi;
+  private readonly resourceCacheScope: string | null;
   private readonly listeners = new Set<VisualizationRegistrySyncListener>();
   private readonly maxLatencyMs: number;
   private readonly now: () => number;
@@ -158,6 +161,7 @@ export class VisualizationRegistrySyncController {
 
   constructor({
     api,
+    resourceCacheScope = null,
     maxLatencyMs = DEFAULT_MAX_LATENCY_MS,
     now = Date.now,
     quietMs = DEFAULT_QUIET_MS,
@@ -168,6 +172,7 @@ export class VisualizationRegistrySyncController {
     onRejectedTargetPatches,
   }: VisualizationRegistrySyncControllerOptions) {
     this.api = api;
+    this.resourceCacheScope = resourceCacheScope;
     this.maxLatencyMs = maxLatencyMs;
     this.now = now;
     this.quietMs = quietMs;
@@ -339,8 +344,11 @@ export class VisualizationRegistrySyncController {
         const scopedResourceKey = scopedVisualizationStateResourceKey(
           sessionScopeKey,
         );
-        sharedResourceRuntimeStore.updateData(
-          scopedResourceKey,
+        sharedResourceRuntimeStore.updateObservedData(
+          resourceRuntimeKeyForClientScope(
+            scopedResourceKey,
+            this.resourceCacheScope,
+          ),
           state,
           state.revision,
         );

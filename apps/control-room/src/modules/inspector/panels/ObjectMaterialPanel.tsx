@@ -665,6 +665,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
             undefined,
             false,
             operationSessionScopeKey,
+            api.resourceCacheScope,
           );
           resources.invalidate(
             resolveMaterialResourceKey(validation.value.materialId),
@@ -690,6 +691,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         undefined,
         false,
         operationSessionScopeKey,
+        api.resourceCacheScope,
       );
       invalidateMagneticParameterResources(assignmentRevision);
       mergeDraftPatch({ materialRef: result.materialId }, expectedDraftRevisions, operationScope);
@@ -796,6 +798,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         undefined,
         false,
         operationSessionScopeKey,
+        api.resourceCacheScope,
       );
       invalidateMagneticParameterResources(assignmentRevision);
       mergeDraftPatch({ materialRef: failure.error.materialId }, expectedDraftRevisions, operationScope);

@@ -102,6 +102,7 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
         undefined,
         true,
         operationSessionScopeKey,
+        api.resourceCacheScope,
       );
       resources.invalidate(
         MODEL_COUPLINGS_RESOURCE_KEY,
