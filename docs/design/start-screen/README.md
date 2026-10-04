@@ -21,6 +21,8 @@ command registry. No new colour system, no new control geometry.
 | **Read it** | `docs/01-design-spec.md` — the full specification |
 | **Build it** | `docs/02-implementation-guide.md` — file map, host API gaps, shipping sequence |
 | **Hand it over** | `docs/04-implementation-prompt.md` — the task brief for whoever implements it |
+| **Docs in the app** | `docs/05-sphinx-integration.md` — the Sphinx documentation inside the app, with search |
+| **Status** | `docs/06-implementation-status.md` — what is built, how it was verified, what is left |
 
 The mockup has a control bar at the bottom (hover to reveal) for switching
 theme, screen state and section. Rendered stills of every combination are in
@@ -36,7 +38,9 @@ docs/
   01-design-spec.md                  the design, A to Z — layout, components, states, rules
   02-implementation-guide.md         where the code goes, what the host must provide, in what order
   03-interaction-and-accessibility.md keyboard map, focus, ARIA, contrast, motion, copy rules, i18n
-  04-implementation-prompt.md        executable brief: verified repo facts, constraints, 10 steps, gates
+  04-implementation-prompt.md        executable brief: verified repo facts, constraints, 11 steps, gates
+  05-sphinx-integration.md           the public Sphinx docs inside the app: contract, search, bundling
+  06-implementation-status.md        what is built, evidence, known gaps
 mockups/
   start-screen.html                  interactive mockup (single file, 231 kB)
   start-screen.template.html         source; thumbnails injected by scripts/build_mockup.py

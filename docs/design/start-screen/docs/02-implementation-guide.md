@@ -77,6 +77,17 @@ workspace will want them too:
 
 ---
 
+### 2.1 Sphinx documentation
+
+| File | Role |
+|---|---|
+| `sections/DocsSection.tsx` | query box, frame, **Contents**, **Open online**, unavailable state |
+| `model/docs.ts` | URLs, availability probe, message parsing, online link (pure, tested) |
+| `scripts/bundle-docs.mjs` | copies the built site into `public/docs/` |
+| `public_docs/site/_static/fullmag-embed.{js,css}` | embedded mode on the Sphinx side |
+
+Contract and rationale: `05-sphinx-integration.md`.
+
 ## 3. Tokens
 
 `tokens/start-screen.tokens.css` is additive: it defines nothing that already

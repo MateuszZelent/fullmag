@@ -38,3 +38,56 @@ export async function probeDocs(fetcher: typeof fetch = fetch): Promise<DocsAvai
     return "missing";
   }
 }
+
+/* ── Messages between the app and the framed documentation ─────────────── */
+
+export type DocsTheme = "dark" | "light";
+
+export type DocsMessage =
+  | { readonly type: "ready" }
+  | { readonly type: "navigated"; readonly path: string; readonly title: string };
+
+/**
+ * What the framed docs may tell the app. Only the two documented messages are
+ * accepted and every field is re-validated: a page the docs link to must not be
+ * able to steer the app by posting something shaped almost right.
+ */
+export function parseDocsMessage(data: unknown): DocsMessage | null {
+  if (data === null || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  if (record.source !== "fullmag-docs") return null;
+  if (record.type === "ready") return { type: "ready" };
+  if (record.type === "navigated" && typeof record.path === "string") {
+    return {
+      type: "navigated",
+      path: record.path,
+      title: typeof record.title === "string" ? record.title : "",
+    };
+  }
+  return null;
+}
+
+/** The message that makes the framed docs follow the app's light or dark theme. */
+export function themeMessage(theme: DocsTheme): {
+  readonly source: "fullmag-app";
+  readonly type: "theme";
+  readonly theme: DocsTheme;
+} {
+  return { source: "fullmag-app", type: "theme", theme };
+}
+
+/**
+ * The online page matching a bundled page, so "Open online" lands where the
+ * reader is. A path that could escape the site falls back to its home page.
+ */
+export function onlineDocsUrl(path: string): string {
+  const clean = path.replace(/^\/+/, "");
+  if (
+    !clean ||
+    clean.split("/").some((part) => part === "..") ||
+    /^[a-z][a-z0-9+.-]*:/i.test(clean)
+  ) {
+    return ONLINE_DOCS_URL;
+  }
+  return `${ONLINE_DOCS_URL}${clean}`;
+}

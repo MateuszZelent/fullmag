@@ -60,8 +60,9 @@ html_css_files = [
     "fullmag-docs.css",
     "page-last-modified.css",
     "documentation-changelog.css",
+    "fullmag-embed.css",
 ]
-html_js_files = ["status-navigation.js"]
+html_js_files = ["status-navigation.js", "fullmag-embed.js"]
 
 page_last_modified_label = "Last changes:"
 page_last_modified_format = "%H:%M %d.%m.%Y"
