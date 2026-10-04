@@ -1,5 +1,18 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+<!-- adaptive-authoring-and-build225-compile-fix -->
+## Aktualny checkpoint — authoring na remote, naprawiony błąd kompilacji #225
+
+Odczyt 2026-10-04T00:58:04.183153+00:00. Ten wpis zastępuje wcześniejszy status running joba225; źródła i runtime pozostają oddzielnymi bramkami.
+
+- Job225 `02e8a9cc4a8f487ea0c8a1a1afc1cf62` zakończył się failed/exit2. Native-build wykazał E0317 w `eigen_progress.rs`: gałąź if zwracająca Option nie miała else. Nie jest to awaria Dockera ani dowód błędu fizycznego. Poprawka zwraca None dla nietagowanych zdarzeń, zachowując rozdzielenie KSP normy i residualu fizycznego; istniejąca regresja sprawdza brak linear_solve dla zdarzenia fizycznego. Parser i scoped diff PASS; kompilacja poprawki wymaga nowego buildu.
+- Commit `2ce67b768fff581c9105739e22deaa2fa3fb4455` zapisuje17 plików kontraktu IR/authoring/Python i ADR0034. Review wykryło i poprawiono utratę requested backend/device/precision w adapterze oraz różne znaczenie null polityki sceny. Historyczne brakujące pola zachowują backend/auto/double; nie wyprowadza się CPU z adaptive. Null przywraca serial zgodnie z Pythonem i metadata. Dokładnie wybrany kandydat:8 interpretowanych testów Python PASS, AST i parser Rust PASS, review bez otwartych P1/P2. Przygotowane regresje Rust niekompilowane zgodnie z zakazem. To source checkpoint authoringu, bez deklaracji działającego schedulera.
+- Commit `744f4c9ffad0238b615e2adc8e893a4a0e40b92f` zawiera osobną trzywierszową poprawkę E0317. Oba commity potwierdzono na remote branchu zadania. Pozostały WIP pool/API/UI/S09 zachowano; cały worktree nie jest jeszcze na remote. Kapsuła225 powstała przed tymi zmianami i nie może ich kwalifikować.
+- Dalej: jeden świeży snapshot fem-cpu-slepc-runtime-v2 przez istniejącą FIFO, z wymaganymi jawnymi untracked wejściami; po terminalnym sukcesie weryfikacja receipt/hash closure i standalone Γ na modelu71ba0d18/L2/t3/oknie8.5–16GHz, commonEPS/KSP1e-9 iFGMRESrestart8. Dopiero po pełnym residual/demag/window/query signed15 oraz serial/adaptive parity. Nowych zaakceptowanych punktów0; historyczne cztery ±10/±25 pozostają jedynym zaakceptowanym zbiorem. S00–S12, UI/WebGL/FMS/Inspector, COMSOL A1, zbieżność, S09/S10/GPU i PR97/integracja nadal OPEN.
+
+Dowody: `adaptive-authoring-checkpoint/source-review.md`, `verification.json`, `candidate.patch`, `runner-before-next-build.json` oraz `modal-progress-compile-fix/verification.json` w katalogu wizualizacji tego wątku; terminalny stan225 i jego logi w canonical storage.
+
+
 <!-- gamma-hard-error-query-runtime225-checkpoint -->
 ## Aktualny checkpoint — poprawki Γ/K0 na remote; build225 running
 
