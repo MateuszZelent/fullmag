@@ -43,9 +43,12 @@ Sześć przygotowanych prób air growth 1,3/1,15/1,075 dla +10/+25 będzie używ
 tego samego pakietu. Stan wykonania zapisuje `air-matrix231-controller-state.json`;
 prepared lub dry-run nie jest wynikiem numerycznym.
 
-Korekty S05 do domknięcia: uzasadnić politykę GMRES/FGMRES wobec operatora/PC;
-zachować prawdziwy residual i tożsamości również przy błędzie solve;
-sprawdzić semantykę summary certyfikatów i `floquet_geometric_bc_certified=false`.
+Review S05: PC jest stałym LU, actual FGMRES użył magnetic-only dla 656 DOF;
+brak podstaw do uznania PC za zmienny lub zmiany defaultu po jednej parze.
+Null/false w solver-level summary jest zamierzonym brakiem metryk, a UI czyta
+certyfikat konkretnego modu — ten punkt review zamknięto bez poprawki kodu.
+Do naprawy/diagnozy pozostają snapshot telemetry przed unwindem hard-error,
+głębsza przyczyna luki residualu i `floquet_geometric_bc_certified=false`.
 Nie obniżono tolerancji ani nie zastosowano cichego fallbacku.
 
 Audyt storage: około 87% datowanego rozmiaru logicznego to execution/source.
@@ -3844,7 +3847,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja i bounded sparse operator są w źródłach; geometry-aware tet/prism oraz ich rzeczywista kwadratura mają review. Wymagane są bieżący managed assembly/runtime i pełne certyfikaty deskryptora. |
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
-| S05 — natywny solver spektralny | W TRAKCIE | #231 succeeded; managed eksport OpenAPI PASS. Nearest +10: GMRES solve_error, FGMRES 11,205285324453773 GHz, pełny residual modu 1,82158e-13, true KSP 32/32 bez naruszeń. Selected-only nie jest pełnym oknem. Otwarta polityka KSP, diagnostyka błędów i summary certyfikatów, Γ/window/resume oraz zbieżność. |
+| S05 — natywny solver spektralny | W TRAKCIE | #231 succeeded; managed eksport OpenAPI PASS. Nearest +10: GMRES solve_error, FGMRES 11,205285324453773 GHz, pełny residual modu 1,82158e-13, true KSP 32/32 bez naruszeń. Selected-only nie jest pełnym oknem. Otwarta diagnoza KSP i snapshot błędów, Γ/window/resume oraz zbieżność; null solver-summary ma zamierzoną semantykę, certyfikat jest przypisany do modu. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Źródła mają Hungarian/gaps, spójną masę P1, kąty główne i transport Procrustesa podprzestrzeni; pozostają wykonanie/regresje runtime, fizyczny crossing/split/merge, stabilność kroku k i zgodność publikacji |
 | S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano. Nowe refs diagnostyki mają odrębny writer/consumer i coverage, 44 regresje przyrostu oraz 213 głównego verifiera PASS; historyczne 56 regresji nonshared pozostają osobnym dowodem. P1 oznaczania nonzero-k jako K0 naprawiony w źródłach bf25. Nadal potrzebne pełne native matrix/physical replay, managed publikacja nowych refs, aktualne binary fields/selektory i managed evidence. |
 | S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |

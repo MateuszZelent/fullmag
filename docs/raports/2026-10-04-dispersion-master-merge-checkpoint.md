@@ -310,3 +310,37 @@ automatic_mode_available=false. Planer zachowuje drzewa z linkami jako unsafe;
 107 takich rekordów jest historycznym wynikiem podglądu, nie pomiarem aktualnego
 odzysku. Wykonawca GC, link-safe retention i deduplikacja CAS są propozycjami;
 w tym audycie ich nie wdrożono ani nie usuwano danych. S00–S12 pozostają OPEN.
+
+
+## Ograniczony review polityki shifted KSP i certyfikatów
+
+Niezależny agent przeczytał właściwe ścieżki źródeł bez edycji/testów/buildów.
+Zewnętrzny PC i solve Poissona używają stałego LU; nie potwierdzono zmienności PC.
+Actual FGMRES diagnostics: 656 tangent DOF, magnetic-only shifted LU. Nie ma
+podstaw do globalnej zmiany defaultu GMRES na podstawie pojedynczego A/B.
+Konfiguracja residual replacement threshold 2 wyjaśnia bezpośredni trigger
+GMRES przy computed residual około 366 razy większym niż początek cyklu;
+głębsza przyczyna luki rekurencyjnego residualu nadal nie jest ustalona.
+
+KSPSetPostSolve nie musi zdążyć przed błędem EPSSolve. Failed path celowo nie
+odpytuje końcowych uchwytów KSP, bo SLEPc może zachować pożyczony widok macierzy.
+Proponowana poprawka to bezpieczny snapshot z monitora przed unwindem:
+ostatnia iteracja/reason/residual, serializacja bez KSPGet po hard-error.
+Implementacja i managed regresja tej poprawki pozostają do wykonania.
+
+Summary block_residuals null/false jest zamierzonym brakiem solver-level danych;
+mode certificate powstaje i jest konsumowany osobno. UI korzysta z wybranego
+modu, więc nie potwierdzono błędu konsumenta. Ten podpunkt review zamknięto
+bez zmiany semantyki lub wypełniania summary certyfikatem dowolnego modu.
+Geometric BC, pełne okno i zbieżność pozostają osobnymi bramkami.
+
+Referencje: backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp
+(PC 1189/3321/3637, GMRES 891/3511, snapshot 946/3723),
+backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp:124,
+crates/fullmag-runner/src/fem/eigen_native_window.rs:2580,
+crates/fullmag-runner/src/fem/eigen_native_artifacts.rs:34,
+apps/control-room/src/shared/domain/analysis/eigenResidualSummary.ts:19.
+Pełny bounded raport: preview-state-checkpoint/review-shifted-ksp-policy231.md.
+Aktualna macierz air: wszystkie sześć managed dry-run PASS, dwie pierwsze
+próby zakończyły się completed_unqualified; dalsze wykonanie jest w osobnym
+controller state. Nie uznano tego za actual isolation/convergence PASS.
