@@ -698,3 +698,94 @@ planned/runtime NOT VERIFIED, FEM GPU unsupported; FDM not-applicable.
 | source-0833-mesh-elements | crates/fullmag-ir/src/waveguide_mesh_elements.rs + validate_waveguide_mesh_elements | Lokalna geometria i representability; embedding/runtime NOT VERIFIED |
 | source-0833-mesh-incidence | crates/fullmag-ir/src/waveguide_mesh_incidence.rs + validate_waveguide_mesh_incidence | Incidence/fan/closed contours; nie pełny mesh certificate |
 | source-0833-fp-guard | crates/fullmag-ir/src/floating_point_guard.rs + require_ieee_gradual_underflow | Wspólny sprawdzany FP guard, bez zmiany środowiska |
+
+
+## Globalna konformność geometryczna przekroju — przyrost źródłowy S09
+
+Zapisany przed implementacją kontrakt `validate_waveguide_mesh_embedding`
+ma teraz realizację źródłową o następującym zakresie:
+po istniejących kontrolach elements/incidence sprawdza cały scalar mesh,
+nie tylko region magnetic. Odrzuca przecięcia i nakładające się odcinki,
+kontakt niezgodny z tożsamością wspólnego węzła (w tym T-junction) oraz
+trójkąt całkowicie zawarty we wnętrzu innego trójkąta. Wspólne krawędzie
+i węzły zgodne z incidence są dozwolone. Raport nadal nie jest całym
+validated mesh, invariance/boundary certificate ani admission.
+
+### Dokładny znak orientacji zapisanych współrzędnych binary64
+
+Nie wprowadzamy tolerancji odległości ani absolute area floor. Dla finite
+binary64 odczyt bitów daje dokładną liczbę całkowitą w jednostce najmniejszej
+subnormalnej współrzędnej. Dla bitu znaku, kodu wykładnika i frakcji:
+
+```{math}
+:label: eq-0833-mesh-exact-binary64-coordinate
+\begin{aligned}
+h_{64}&=2^{-1074}\,\mathrm m,\qquad x=h_{64}J(x),\\
+J(x)&=(-1)^{\sigma_{64}}
+\begin{cases}F_{64}&E_{64}=0,\\ (2^{52}+F_{64})2^{E_{64}-1}&1\le E_{64}\le2046.\end{cases}
+\end{aligned}
+```
+
+Całkowite dodawanie, odejmowanie i mnożenie używają BigInt; nie zamieniamy
+ich z powrotem na f64. Orientację określa znak:
+
+```{math}
+:label: eq-0833-mesh-exact-orientation
+O(a,b,c)=[J(b_u)-J(a_u)][J(c_v)-J(a_v)]
+       -[J(b_v)-J(a_v)][J(c_u)-J(a_u)].
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $h_{64}$ | kwant dokładnego kodowania współrzędnej binary64 | $\mathrm m$ |
+| $J(x)$ | dokładny całkowity kod współrzędnej w jednostce h64 | $1$ |
+| $\sigma_{64}$ | bit znaku współrzędnej | $1$ |
+| $E_{64}$ | zapisany kod wykładnika finite binary64 | $1$ |
+| $F_{64}$ | zapisane 52 bity frakcji binary64 | $1$ |
+| $a,b,c$ | punkty lokalnego przekroju użyte w predykacie orientacji | $\mathrm m$ |
+| $O(a,b,c)$ | dokładny wyznacznik całkowity trzech punktów; u,v oznaczają składowe | $1$ |
+
+Signed zero koduje ten sam punkt; NaN/Inf odrzuca wcześniejsza kontrola.
+Predykat jest dokładny dla zapisanych wartości, nie dla geometrii przed
+jej zaokrągleniem przez generator. Nie usuwa zatem wymagań mesher accuracy,
+orientacji/quality i reprezentowalności fizycznych area/mass/gradients.
+Nie potrzebuje materializacji h64 jako f64 ani iloczynu fizycznych długości.
+
+Segmenty testujemy przez znaki czterech orientacji i dokładne inclusive
+przedziały końców. Kontakt w jednym punkcie jest legalny wyłącznie przy
+wspólnym indeksie końcowego węzła obu krawędzi. Kollinearny odcinek o
+niezerowej wspólnej długości jest błędem także przy wspólnym końcu.
+Po kontroli wszystkich krawędzi nadal sprawdzamy strict containment
+wierzchołka w dodatnio zorientowanym obcym trójkącie; sam brak przecięć
+krawędzi nie wyklucza całkowitego nakładania zagnieżdżonych komórek.
+
+Broad phase ma używać sortowania po min-u i aktywnego indeksu przedziałów v,
+z usuwaniem odcinków/komórek, których max-u leży przed aktualnym min-u.
+Nie stosujemy bezwarunkowego porównania każdej pary elementów. Inclusive
+AABB nie zaokrągla współrzędnych i nie pomija kontaktów granicznych.
+Liczba kandydatów i exact orientation tests są metrykami rzeczywistego
+wykonania. W najgorszym przypadku liczba kandydatów nadal może być kwadratowa;
+nie deklarujemy ogólnego liniowego skalowania lub kwalifikacji HPC.
+
+Źródłowa zależność `num-bigint` ma użyć istniejącej w Cargo.lock wersji
+0.4.6, bez aktualizacji pozostałych pakietów. To pomocnicza walidacja IR
+przed przyszłym native MFEM providerem, nie własny backend FEM.
+Prepared regresje mają obejmować legalny shared edge/vertex, crossing,
+collinear overlap, T-junction, containment i disjoint components; osobno
+bitowe zera, subnormale i duże finite wartości predykatu.
+Rust tests i kompilacja pozostają nieuruchomione zgodnie z zakazem;
+parser/input oracle nie zastępują managed wykonania tego kodu.
+
+Outer/hole area/nesting, frame/world/fingerprint, object/material registry,
+structural fields/interactions/BC i equilibrium/invariance pozostają osobnymi
+bramkami S09. Python/ProblemIR/planner/ABI nie uzyskują nowej legalności.
+FEM CPU planned/runtime NOT VERIFIED, FEM GPU unsupported, FDM not-applicable.
+
+Referencje: [Rust binary64/to_bits](https://doc.rust-lang.org/std/primitive.f64.html#method.to_bits),
+[num-bigint release history](https://github.com/rust-num/num-bigint/blob/main/RELEASES.md).
+
+| Source ID | Path + symbol | Zakres |
+|---|---|---|
+| source-0833-mesh-exact-coordinate | crates/fullmag-ir/src/waveguide_mesh_embedding.rs + exact_binary64_integer | Dokładne kodowanie zapisanej finite współrzędnej; runtime NOT VERIFIED |
+| source-0833-mesh-exact-orientation | crates/fullmag-ir/src/waveguide_mesh_embedding.rs + orient2d_exact | Znak całkowitego wyznacznika; runtime NOT VERIFIED |
+| source-0833-mesh-embedding | crates/fullmag-ir/src/waveguide_mesh_embedding.rs + validate_waveguide_mesh_embedding | Globalna konformność; nie contour nesting/certificate/runtime proof |

@@ -20,7 +20,9 @@
     {"id": "eq-0833-p1-geometric-mass", "symbols": ["N_i", "N_j", "T_i", "T_j", "G_ij"], "sources": ["source-0833-p1-mass"]},
     {"id": "eq-0833-discrete-common-scale", "symbols": ["s_L2", "q_L2", "s_max", "q_max", "T_j", "q_j"], "sources": ["source-0833-discrete"]},
     {"id": "eq-0833-mesh-element-quality", "symbols": ["x_i", "s_T", "r_i", "d_T", "a_T", "A_T", "q_T", "epsilon_f64"], "sources": ["source-0833-mesh-elements"]},
-    {"id": "eq-0833-mesh-p1-geometry", "symbols": ["g_i_2d", "M_scalar_ij", "K_scalar_ij", "A_T", "a_T", "s_T", "r_i", "d_T", "N_i", "N_j"], "sources": ["source-0833-mesh-elements"]}
+    {"id": "eq-0833-mesh-p1-geometry", "symbols": ["g_i_2d", "M_scalar_ij", "K_scalar_ij", "A_T", "a_T", "s_T", "r_i", "d_T", "N_i", "N_j"], "sources": ["source-0833-mesh-elements"]},
+    {"id": "eq-0833-mesh-exact-binary64-coordinate", "symbols": ["h64", "Jx", "sigma_bits", "E_bits", "F_bits"], "sources": ["source-0833-mesh-exact-coordinate"]},
+    {"id": "eq-0833-mesh-exact-orientation", "symbols": ["orient_exact", "Jx", "orient_points"], "sources": ["source-0833-mesh-exact-orientation"]}
   ],
   "symbols": [
     {"id": "Sigma_m", "latex": "\\Sigma_m", "meaning": "magnetyczny przekrój waveguide", "si_unit": "\\mathrm{m^2}"},
@@ -72,7 +74,14 @@
     {"id": "epsilon_f64", "latex": "\\epsilon_{\\mathrm{f64}}", "meaning": "epsilon maszynowy binary64", "si_unit": "1"},
     {"id": "g_i_2d", "latex": "g_i", "meaning": "fizyczny gradient skalarnej funkcji P1", "si_unit": "\\mathrm{m^{-1}}"},
     {"id": "M_scalar_ij", "latex": "M^\\Sigma_{ij}", "meaning": "skalarna geometryczna consistent mass", "si_unit": "\\mathrm{m^2}"},
-    {"id": "K_scalar_ij", "latex": "K^\\Sigma_{ij}", "meaning": "skalarna geometryczna stiffness", "si_unit": "1"}
+    {"id": "K_scalar_ij", "latex": "K^\\Sigma_{ij}", "meaning": "skalarna geometryczna stiffness", "si_unit": "1"},
+    {"id": "h64", "latex": "h_{64}", "meaning": "kwant dokładnego kodowania współrzędnej binary64", "si_unit": "\\mathrm m"},
+    {"id": "Jx", "latex": "J(x)", "meaning": "dokładny całkowity kod współrzędnej w jednostce h64", "si_unit": "1"},
+    {"id": "sigma_bits", "latex": "\\sigma_{64}", "meaning": "bit znaku współrzędnej", "si_unit": "1"},
+    {"id": "E_bits", "latex": "E_{64}", "meaning": "zapisany kod wykładnika finite binary64", "si_unit": "1"},
+    {"id": "F_bits", "latex": "F_{64}", "meaning": "zapisane 52 bity frakcji binary64", "si_unit": "1"},
+    {"id": "orient_exact", "latex": "O(a,b,c)", "meaning": "dokładny wyznacznik całkowity trzech punktów; u,v oznaczają składowe", "si_unit": "1"},
+    {"id": "orient_points", "latex": "a,b,c", "meaning": "punkty lokalnego przekroju użyte w predykacie orientacji", "si_unit": "\\mathrm m"}
   ],
   "sources": [
     {"id": "source-0833-raw", "path": "docs/physics/0833-fem-waveguide-25d-normalization.md", "symbol": "DOC-ANCHOR:eq-0833-raw-shape-area-norm", "responsibility": "Surowy shape, lokalna tangencja do m0 i norma pola.", "evidence_status": "planned_contract"},
@@ -101,7 +110,10 @@
     {"id": "source-0833-mesh-wire", "path": "crates/fullmag-ir/src/waveguide_mesh.rs", "symbol": "WaveguideCrossSectionMeshIR", "responsibility": "Surowy typed mesh przekroju i closed wire; nie geometry/admission certificate.", "evidence_status": "source_prepared_runtime_not_verified"},
     {"id": "source-0833-mesh-elements", "path": "crates/fullmag-ir/src/waveguide_mesh_elements.rs", "symbol": "validate_waveguide_mesh_elements", "responsibility": "Lokalna geometria P1, scaled quality i representability.", "evidence_status": "source_prepared_runtime_not_verified"},
     {"id": "source-0833-mesh-incidence", "path": "crates/fullmag-ir/src/waveguide_mesh_incidence.rs", "symbol": "validate_waveguide_mesh_incidence", "responsibility": "Kompletne incidence i kombinatoryczne kontury/fans.", "evidence_status": "source_prepared_runtime_not_verified"},
-    {"id": "source-0833-fp-guard", "path": "crates/fullmag-ir/src/floating_point_guard.rs", "symbol": "require_ieee_gradual_underflow", "responsibility": "Wspólny crate-private guard gradual underflow.", "evidence_status": "source_prepared_runtime_not_verified"}
+    {"id": "source-0833-fp-guard", "path": "crates/fullmag-ir/src/floating_point_guard.rs", "symbol": "require_ieee_gradual_underflow", "responsibility": "Wspólny crate-private guard gradual underflow.", "evidence_status": "source_prepared_runtime_not_verified"},
+    {"id": "source-0833-mesh-exact-coordinate", "path": "crates/fullmag-ir/src/waveguide_mesh_embedding.rs", "symbol": "exact_binary64_integer", "responsibility": "Dokładny kod finite binary64 jako liczba całkowita.", "evidence_status": "source_implemented_runtime_not_verified"},
+    {"id": "source-0833-mesh-exact-orientation", "path": "crates/fullmag-ir/src/waveguide_mesh_embedding.rs", "symbol": "orient2d_exact", "responsibility": "Dokładny znak orientacji zapisanych współrzędnych.", "evidence_status": "source_implemented_runtime_not_verified"},
+    {"id": "source-0833-mesh-embedding", "path": "crates/fullmag-ir/src/waveguide_mesh_embedding.rs", "symbol": "validate_waveguide_mesh_embedding", "responsibility": "Globalna konformność scalar mesha bez pełnego certificate/admission.", "evidence_status": "source_implemented_runtime_not_verified"}
   ],
   "public_api": {
     "parameters": [
