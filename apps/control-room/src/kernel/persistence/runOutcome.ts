@@ -152,7 +152,7 @@ export function runOutcomeFromStatusTransition(
 /**
  * Folds one status observation into the tracker. The tracker remembers the
  * last active observation so a terminal state is attributed to its run even if
- * the poll missed the intermediate states; it is reset on a session change and
+ * a status refresh skipped the intermediate states; it is reset on a session change and
  * after an outcome, so a repeated terminal status never records twice.
  */
 export function advanceRunOutcomeTracker(
