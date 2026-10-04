@@ -1,3 +1,25 @@
+<!-- nearest-floquet-telemetry-producer-20261004 -->
+(nearest-floquet-telemetry-producer)=
+## Diagnostyka rzeczywistego residualu pojedynczego solve'a Floqueta
+
+Ta nota poprzedza zmianę producenta diagnostyki FEM CPU w S05. Solver shared-domain już mierzy rzeczywisty residual shifted KSP oraz jego kryterium względem normy RHS. Dotychczas pełny zapis tej obserwacji jest dostępny w podoknach `frequency_window`, ale nie w samodzielnym `nearest`. Bez niego nie można przeprowadzić kontrolowanego porównania nearest GMRES/FGMRES. Uzupełnienie publikacji nie zmienia równania Schura, normy, tolerancji, liczby modów ani kryterium akceptacji.
+
+Prywatny formatter `floquet_shifted_ksp_diagnostics_json_fields` w `production_cpu_modal_eigen.cpp` serializuje wyłącznie istniejące pola `SLEPcTinyGyrotropicModalEigenResult`. Użycie wymaga rzeczywistego `solver_adapter=floquet_airbox_cpu_schur_slepc`. `production_window_diagnostics_json` i `solve_sparse_production_modal_payload` współdzielą ten formatter; single-k publikuje go zarówno po sukcesie, jak po błędzie. Nie wykonuje dodatkowych zapytań PETSc, zwłaszcza po twardym błędzie EPSSolve, gdy zasoby solvera mogą być nieważne. Brak obserwacji pozostaje jawny poprzez availability oraz `null`; nie odtwarzamy metryk z tolerancji żądania ani residualu rekurencyjnego.
+
+| Obserwacja | Semantyka | SI / dostępność |
+| --- | --- | --- |
+| `shifted_ksp_configuration_before_eps` | rzeczywiste odczytane PC side i norm type przed EPSSolve, oddzielne od ostatniego solve'a | enumy $1$; obiekt albo `null` |
+| `ksp_true_residual_criterion` | istniejące liczniki solve/measured/violation/unavailable i maksimum stosunku normy rzeczywistego residualu do wymaganej tolerancji | liczniki i ratio $1$; niefinitywne maksimum jako `null` |
+| `ksp_last_true_residual_*`, `ksp_last_rhs_norm` | ostatnia rzeczywiście zmierzona norma residualu/RHS oraz względny residual z tego solve'a | normy mają jednostkę znormalizowanego algebraicznego RHS; względny residual $1$; availability zachowana |
+| `ksp_final_residual` | norma skonfigurowana przez PETSc, nie zamiennik ponownie obliczonej normy rzeczywistej | jednostka zależy od skonfigurowanej normy; semantics zachowana |
+| `ksp_*reason`, `eps_converged_reason` | odczytane kody zakończenia, nie domniemanie na podstawie statusu całego żądania | $1$; niedostępny kod jako `null` |
+| `eps_dimensions_available`, `eps_nev/ncv/mpd` | odczytane wymiary EPS, nie wartości odtworzone z żądania | $1$; niedostępne jako `null` |
+
+Normy i istniejące kryterium true-residual opisuje kanoniczny rozdział solvera poniżej; ta nota dodaje wyłącznie realizację publikacji. Publiczny stage-first Python DSL, ProblemIR, planner, ABI i domyślne ustawienia nie zmieniają się. Zapis `nearest` nadal oznacza `selected_only`, a `window_complete=false`: nie tworzymy podokna, certyfikatu pokrycia ani dowodu kompletności widma. Generic/K0 nearest nie otrzymuje telemetry Floqueta. FEM GPU pozostaje NOT VERIFIED dla tego rozszerzenia CPU; FDM CPU/GPU nie dotyczy tego producenta.
+
+Kontrola wyrażeń źródłowych potwierdza zachowanie pomiarów wcześniejszego window, guard rzeczywistego adaptera i brak nowych zapytań PETSc. Przygotowana regresja ćwiczy poprawną production ścieżkę shared-domain oraz brak telemetry Floqueta w generic/K0. Nie przygotowano deterministycznej regresji EPSSolve failure: bezpieczny trigger wymaga osobnej pracy, nie testowego hooka w solverze. Publikacja failure/null została oceniona źródłowo; jej wykonanie pozostaje NOT VERIFIED. Kompilacja i wykonanie testów natywnych pozostają NOT RUN zgodnie z zakazem użytkownika. Managed runtime nowego producenta, osobny consumer nearest i jego admission FGMRES pozostają NOT VERIFIED/OPEN. Dotychczasowa blokada trialu nearest FGMRES w Pythonie pozostaje aktywna do wspólnej weryfikacji producenta i konsumenta. Nie wolno zakwalifikować solvera na podstawie samej publikacji diagnostyki.
+
+
 <!-- de-air-refinement-levels-20261004 -->
 (de-air-refinement-levels)=
 ## Dalsze poziomy kontrolowanego zagęszczania powietrza DE
@@ -1354,6 +1376,8 @@ managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| source-nearest-floquet-ksp-telemetry | FEM CPU | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` + `floquet_shifted_ksp_diagnostics_json_fields` | Shared cached telemetry for actual Floquet nearest success/error and window; unavailable measurements preserved. | prepared native production-path regression | source expression preservation PASS; native compilation/runtime NOT VERIFIED | new task checkpoint required; runtime228 predates producer |
+| source-nearest-floquet-ksp-regression | FEM CPU | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` + `main` | Invokes actual shared-domain nearest producer and generic/K0 absence checks; algebraic fixture, no physical qualification. | modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics; modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator | prepared only; native compilation/execution NOT RUN; failure fixture OPEN | new task checkpoint required |
 | source-de-air-layer-planner / eq-de-air-grading-controlled-sequence | FEM CPU | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` + `_box_airbox_layer_levels` | Exact film planes and capped exterior growth recurrence; no convergence claim. | controlled input and actual-mesh comparison | source inspected; controlled runtime pending | immutable runtime source 57182911c6e8e721b8ee9705aa7f70491c70fe94 |
 | source-de-air-request-admission | FEM CPU diagnostic input | `scripts/run_de_100nm_pilot.py` + `_validate_air_growth_rate_request` | Reject ambiguous/builtin/parallel requests; require standalone single-k DE and explicit versioned input. | focused interpreted input/metadata regressions | source under review; runtime pending | task source commit will bind input; native capsule remains57182911c6e8e721b8ee9705aa7f70491c70fe94 |
 | source-de-air-resolved-metadata | FEM CPU diagnostic input | `scripts/run_de_100nm_pilot.py` + `validate_air_growth_rate_metadata` | Require matched requested, declared and effective mesh growth; reject ignored controls and nonfinite/bool/missing metadata. | focused interpreted input/metadata regressions | source under review; runtime pending | task source commit will bind input; native capsule remains57182911c6e8e721b8ee9705aa7f70491c70fe94 |

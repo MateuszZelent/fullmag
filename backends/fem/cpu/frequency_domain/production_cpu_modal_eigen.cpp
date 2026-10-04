@@ -119,6 +119,89 @@ std::string floquet_shifted_ksp_configuration_json_field(
         std::to_string(result.shifted_ksp_norm_type_before_eps) + "}";
 }
 
+// Serialize cached measurements only: a hard EPSSolve error can invalidate
+// the PETSc object graph, so publication must never query solver handles.
+std::string floquet_shifted_ksp_diagnostics_json_fields(
+    const SLEPcTinyGyrotropicModalEigenResult &result,
+    bool include_basic_fields)
+{
+    if (result.solver_adapter == nullptr ||
+        std::strcmp(result.solver_adapter, "floquet_airbox_cpu_schur_slepc") != 0) {
+        return "";
+    }
+    std::string json =
+        "\"ksp_diagnostics_available\":" +
+        std::string(result.ksp_diagnostics_available ? "true" : "false") +
+        "," + floquet_shifted_ksp_configuration_json_field(result) +
+        ",\"ksp_true_residual_criterion\":{"
+        "\"schema_version\":\"floquet_shifted_ksp_true_residual_criterion.v1\","
+        "\"reference_norm\":\"rhs_norm_zero_initial_guess\","
+        "\"solve_count\":" + std::to_string(result.ksp_true_criterion_solve_count) +
+        ",\"measured_count\":" + std::to_string(result.ksp_true_criterion_measured_count) +
+        ",\"violation_count\":" + std::to_string(result.ksp_true_criterion_violation_count) +
+        ",\"unavailable_count\":" + std::to_string(result.ksp_true_criterion_unavailable_count) +
+        ",\"maximum_tolerance_ratio\":" + format_double(result.ksp_true_criterion_maximum_tolerance_ratio) +
+        "},\"ksp_last_iterations\":" +
+        std::to_string(result.ksp_last_iterations) +
+        ",\"ksp_last_true_residual_available\":" +
+        std::string(result.ksp_last_true_residual_available
+            ? "true" : "false") +
+        ",\"ksp_last_true_residual_norm\":" +
+        format_double(result.ksp_last_true_residual_norm) +
+        ",\"ksp_last_rhs_norm\":" +
+        format_double(result.ksp_last_rhs_norm) +
+        ",\"ksp_last_true_relative_residual\":" +
+        format_double(result.ksp_last_true_relative_residual) +
+        ",\"ksp_true_residual_sample_count\":" +
+        std::to_string(result.ksp_true_residual_sample_count) +
+        ",\"ksp_true_residual_measurement_failure_count\":" +
+        std::to_string(result.ksp_true_residual_measurement_failure_count) +
+        ",\"ksp_max_true_relative_residual\":" +
+        format_double(result.ksp_max_true_relative_residual) +
+        ",\"ksp_pc_side\":" +
+        (result.ksp_last_true_residual_available
+            ? std::to_string(result.ksp_pc_side)
+            : std::string("null")) +
+        ",\"ksp_norm_type\":" +
+        (result.ksp_last_true_residual_available
+            ? std::to_string(result.ksp_norm_type)
+            : std::string("null")) +
+        ",\"ksp_converged_reason\":" +
+        (result.ksp_converged_reason_available
+            ? std::to_string(result.ksp_converged_reason)
+            : std::string("null")) +
+        ",\"ksp_residual_norm_semantics\":\"petsc_configured_norm_from_last_shift_invert_solve\"" +
+        ",\"eps_converged_reason\":" +
+        (result.eps_converged_reason_available
+            ? std::to_string(result.eps_converged_reason)
+            : std::string("null")) +
+        ",\"eps_dimensions_available\":" +
+        std::string(result.eps_dimensions_available ? "true" : "false") +
+        ",\"eps_nev\":" +
+        (result.eps_dimensions_available
+            ? std::to_string(result.eps_nev)
+            : std::string("null")) +
+        ",\"eps_ncv\":" +
+        (result.eps_dimensions_available
+            ? std::to_string(result.eps_ncv)
+            : std::string("null")) +
+        ",\"eps_mpd\":" +
+        (result.eps_dimensions_available && result.eps_mpd > 0
+            ? std::to_string(result.eps_mpd)
+            : std::string("null"));
+    // Sparse nearest success already publishes these configuration fields.
+    // Window and nearest failure need them here; emit each key exactly once.
+    if (include_basic_fields) {
+        json +=
+            ",\"ksp_type\":\"" + std::string(result.ksp_type) +
+            "\",\"ksp_rtol\":" + format_double(result.ksp_rtol) +
+            ",\"ksp_atol\":" + format_double(result.ksp_atol) +
+            ",\"ksp_final_residual\":" +
+            format_double(result.ksp_final_residual);
+    }
+    return json;
+}
+
 std::string floquet_demag_operator_probe_json_field(
     const FloquetDemagOperatorProbeResult &probe)
 {
@@ -1507,70 +1590,7 @@ std::string production_window_diagnostics_json(
                 ",\"residual_evaluation_candidates\":" +
                 std::to_string(
                     solve.result.residual_evaluation_candidate_count) +
-                ",\"ksp_diagnostics_available\":" +
-                std::string(solve.result.ksp_diagnostics_available ? "true" : "false") +
-                "," + floquet_shifted_ksp_configuration_json_field(solve.result) +
-                ",\"ksp_type\":\"" + std::string(solve.result.ksp_type) +
-                "\",\"ksp_rtol\":" + format_double(solve.result.ksp_rtol) +
-                ",\"ksp_atol\":" + format_double(solve.result.ksp_atol) +
-                ",\"ksp_true_residual_criterion\":{"
-                "\"schema_version\":\"floquet_shifted_ksp_true_residual_criterion.v1\","
-                "\"reference_norm\":\"rhs_norm_zero_initial_guess\","
-                "\"solve_count\":" + std::to_string(solve.result.ksp_true_criterion_solve_count) +
-                ",\"measured_count\":" + std::to_string(solve.result.ksp_true_criterion_measured_count) +
-                ",\"violation_count\":" + std::to_string(solve.result.ksp_true_criterion_violation_count) +
-                ",\"unavailable_count\":" + std::to_string(solve.result.ksp_true_criterion_unavailable_count) +
-                ",\"maximum_tolerance_ratio\":" + format_double(solve.result.ksp_true_criterion_maximum_tolerance_ratio) +
-                "},\"ksp_last_iterations\":" +
-                std::to_string(solve.result.ksp_last_iterations) +
-                ",\"ksp_final_residual\":" +
-                format_double(solve.result.ksp_final_residual) +
-                ",\"ksp_last_true_residual_available\":" +
-                std::string(solve.result.ksp_last_true_residual_available
-                    ? "true" : "false") +
-                ",\"ksp_last_true_residual_norm\":" +
-                format_double(solve.result.ksp_last_true_residual_norm) +
-                ",\"ksp_last_rhs_norm\":" +
-                format_double(solve.result.ksp_last_rhs_norm) +
-                ",\"ksp_last_true_relative_residual\":" +
-                format_double(solve.result.ksp_last_true_relative_residual) +
-                ",\"ksp_true_residual_sample_count\":" +
-                std::to_string(solve.result.ksp_true_residual_sample_count) +
-                ",\"ksp_true_residual_measurement_failure_count\":" +
-                std::to_string(solve.result.ksp_true_residual_measurement_failure_count) +
-                ",\"ksp_max_true_relative_residual\":" +
-                format_double(solve.result.ksp_max_true_relative_residual) +
-                ",\"ksp_pc_side\":" +
-                (solve.result.ksp_last_true_residual_available
-                    ? std::to_string(solve.result.ksp_pc_side)
-                    : std::string("null")) +
-                ",\"ksp_norm_type\":" +
-                (solve.result.ksp_last_true_residual_available
-                    ? std::to_string(solve.result.ksp_norm_type)
-                    : std::string("null")) +
-                ",\"ksp_converged_reason\":" +
-                (solve.result.ksp_converged_reason_available
-                    ? std::to_string(solve.result.ksp_converged_reason)
-                    : std::string("null")) +
-                ",\"ksp_residual_norm_semantics\":\"petsc_configured_norm_from_last_shift_invert_solve\"" +
-                ",\"eps_converged_reason\":" +
-                (solve.result.eps_converged_reason_available
-                    ? std::to_string(solve.result.eps_converged_reason)
-                    : std::string("null")) +
-                ",\"eps_dimensions_available\":" +
-                std::string(solve.result.eps_dimensions_available ? "true" : "false") +
-                ",\"eps_nev\":" +
-                (solve.result.eps_dimensions_available
-                    ? std::to_string(solve.result.eps_nev)
-                    : std::string("null")) +
-                ",\"eps_ncv\":" +
-                (solve.result.eps_dimensions_available
-                    ? std::to_string(solve.result.eps_ncv)
-                    : std::string("null")) +
-                ",\"eps_mpd\":" +
-                (solve.result.eps_dimensions_available && solve.result.eps_mpd > 0
-                    ? std::to_string(solve.result.eps_mpd)
-                    : std::string("null")) +
+                "," + floquet_shifted_ksp_diagnostics_json_fields(solve.result, true) +
                 ",\"eps_monitor_iteration\":" +
                 std::to_string(solve.result.eps_monitor_iteration) +
                 ",\"eps_first_unconverged_error_estimate\":" +
@@ -2731,6 +2751,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     const std::string schur_action_diagnostic_json_field =
         floquet_schur_action_diagnostic_json_field(
             slepc_result.floquet_schur_action_diagnostic);
+    const std::string shifted_ksp_diagnostics_json_fields = floquet_shifted_ksp_diagnostics_json_fields(
+        slepc_result, !slepc_result.ok);
     if (!slepc_result.ok) {
         const char *stop_reason = stop_reason_or_default(slepc_result);
         result.status = FrequencyDomainStatus::solve_error;
@@ -2783,6 +2805,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             format_double(shift.shift_omega_rad_s) +
             "}";
         append_nearest_frequency_metadata(result.result_json, request, result.status);
+        append_optional_json_field(
+            result.diagnostics_json, shifted_ksp_diagnostics_json_fields);
         append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
         append_optional_json_field(result.result_json, demag_probe_json_field);
         append_optional_json_field(
@@ -2926,6 +2950,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         ",\"modes\":" +
         format_slepc_modes_json(slepc_result) + "}";
     append_nearest_frequency_metadata(result.result_json, request, result.status);
+    append_optional_json_field(
+        result.diagnostics_json, shifted_ksp_diagnostics_json_fields);
     append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
     append_optional_json_field(result.result_json, demag_probe_json_field);
     append_optional_json_field(

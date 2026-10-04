@@ -54,6 +54,21 @@ bool contains(const char *haystack, const char *needle)
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
 }
 
+std::size_t count_occurrences(const char *haystack, const char *needle)
+{
+    if (haystack == nullptr || needle == nullptr || needle[0] == '\0') {
+        return 0u;
+    }
+    std::size_t count = 0u;
+    const std::size_t needle_size = std::strlen(needle);
+    for (const char *match = std::strstr(haystack, needle);
+         match != nullptr;
+         match = std::strstr(match + needle_size, needle)) {
+        ++count;
+    }
+    return count;
+}
+
 std::string read_text(const std::filesystem::path &path)
 {
     std::ifstream input(path);
@@ -3130,6 +3145,29 @@ void modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator()
     check(!contains(result.diagnostics_json, "\"mfem_operator_payload\":\"dense_gyrotropic_matrix\""),
           "MFEM-assembled sparse modal payload must not fall back to the dense MFEM payload lane");
     fullmag_fem_frequency_domain_result_destroy(&result);
+
+#if FULLMAG_FEM_WITH_SLEPC
+    request.target_kind = "nearest_frequency";
+    request.frequency_min_hz = 0.0;
+    request.frequency_max_hz = 0.0;
+    request.target_frequency_hz = 0.16;
+    FullmagFemFrequencyDomainResult nearest_result =
+        fullmag_fem_modal_eigen_solve(&request);
+    check(nearest_result.status == FULLMAG_FEM_FD_OK,
+          "ordinary k=0 sparse nearest-frequency solve should remain available");
+    check(contains(nearest_result.diagnostics_json,
+                   "\"solver_adapter\":\"slepc_modal_eigen\""),
+          "ordinary k=0 sparse nearest-frequency solve keeps the generic adapter");
+    check(!contains(nearest_result.diagnostics_json, "\"ksp_diagnostics_available\":"),
+          "generic k=0 nearest-frequency diagnostics omit Floquet-only KSP telemetry");
+    check(!contains(nearest_result.diagnostics_json,
+                    "\"shifted_ksp_configuration_before_eps\":"),
+          "generic k=0 nearest-frequency diagnostics omit Floquet pre-EPS telemetry");
+    check(!contains(nearest_result.diagnostics_json,
+                    "\"ksp_true_residual_criterion\":"),
+          "generic k=0 nearest-frequency diagnostics omit Floquet true-residual telemetry");
+    fullmag_fem_frequency_domain_result_destroy(&nearest_result);
+#endif
 }
 
 void modal_without_validation_problem_stays_unavailable()
@@ -3605,6 +3643,119 @@ void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
     fullmag_fem_frequency_domain_result_destroy(&nearest_result);
 }
 
+void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics()
+{
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+    FloquetContourSharedDomainFixture fixture{};
+    fixture.initialize();
+
+    // The shared-domain production path consumes the full magnetic A_qq
+    // block from the immutable payload and does not materialize K/G through
+    // the legacy dense request fields.  Give the minimal fixture a positive
+    // diagonal stiffness so its reduced Floquet pencil has a nonzero spectrum.
+    CsrOwned magnetic_stiffness{};
+    magnetic_stiffness.rows = 10u;
+    magnetic_stiffness.columns = 10u;
+    magnetic_stiffness.row_offsets.push_back(0u);
+    for (std::uint32_t row = 0u; row < 10u; ++row) {
+        magnetic_stiffness.column_indices.push_back(row);
+        magnetic_stiffness.values.push_back(1.0);
+        magnetic_stiffness.row_offsets.push_back(
+            static_cast<std::uint32_t>(magnetic_stiffness.values.size()));
+    }
+    fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
+
+    FullmagFemModalEigenRequest request =
+        make_floquet_contour_request(fixture, nullptr, nullptr);
+    request.target_kind = "nearest_frequency";
+    request.target_frequency_hz = 0.16;
+    request.frequency_min_hz = 0.0;
+    request.frequency_max_hz = 0.0;
+    request.eigensolver_family = 1;
+    request.mfem_operator_enabled = 0;
+    request.mfem_tangent_dof_count = 0u;
+    request.mfem_stiffness_matrix_row_major = nullptr;
+    request.mfem_gyrotropic_matrix_row_major = nullptr;
+    request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"certified_shared_domain\"}";
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "shared-domain Floquet nearest-frequency fixture should reach production SLEPc");
+    check(contains(result.resolved_engine_id, "floquet_airbox_cpu_schur_slepc"),
+          "shared-domain nearest-frequency fixture resolves the Floquet CPU engine");
+    check(contains(result.diagnostics_json,
+                   "\"solver_adapter\":\"floquet_airbox_cpu_schur_slepc\""),
+          "shared-domain nearest-frequency diagnostics publish the resolved Floquet adapter");
+    check(contains(result.diagnostics_json,
+                   "\"mfem_operator_payload\":\"floquet_shared_domain_sparse_matshell\""),
+          "nearest regression exercises the shared-domain production MatShell payload");
+    check(contains(result.diagnostics_json,
+                   "\"target_kind\":\"nearest_frequency\""),
+          "shared-domain nearest diagnostics preserve the requested target kind");
+    check(contains(result.diagnostics_json,
+                   "\"spectrum_completeness\":\"selected_only\""),
+          "shared-domain nearest diagnostics remain selected-only");
+    check(contains(result.diagnostics_json, "\"window_complete\":false"),
+          "shared-domain nearest diagnostics do not claim a complete window");
+    check(contains(result.diagnostics_json, "\"ksp_diagnostics_available\":"),
+          "shared-domain nearest diagnostics publish cached shifted-KSP availability");
+    check(contains(result.diagnostics_json,
+                   "\"shifted_ksp_configuration_before_eps\":"),
+          "shared-domain nearest diagnostics publish the pre-EPS KSP configuration field");
+    check(contains(result.diagnostics_json,
+                   "\"ksp_true_residual_criterion\":{\"schema_version\":"),
+          "shared-domain nearest diagnostics publish true-residual criterion aggregates");
+    check(contains(result.diagnostics_json,
+                   "\"ksp_last_true_residual_available\":"),
+          "shared-domain nearest diagnostics publish true-residual sample availability");
+    check(contains(result.diagnostics_json, "\"ksp_last_true_residual_norm\":"),
+          "shared-domain nearest diagnostics publish the cached true-residual norm");
+    check(contains(result.diagnostics_json, "\"ksp_last_rhs_norm\":"),
+          "shared-domain nearest diagnostics publish the cached true-residual RHS norm");
+    check(contains(result.diagnostics_json, "\"ksp_last_true_relative_residual\":"),
+          "shared-domain nearest diagnostics publish the cached true-relative residual");
+    check(contains(result.diagnostics_json, "\"ksp_true_residual_sample_count\":"),
+          "shared-domain nearest diagnostics publish the cached residual sample count");
+    check(contains(result.diagnostics_json,
+                   "\"ksp_true_residual_measurement_failure_count\":"),
+          "shared-domain nearest diagnostics publish residual measurement failures");
+    check(contains(result.diagnostics_json, "\"ksp_pc_side\":"),
+          "shared-domain nearest diagnostics publish the available PC side or null");
+    check(contains(result.diagnostics_json, "\"ksp_norm_type\":"),
+          "shared-domain nearest diagnostics publish the available norm type or null");
+    check(contains(result.diagnostics_json, "\"ksp_converged_reason\":"),
+          "shared-domain nearest diagnostics publish the available KSP reason or null");
+    check(contains(result.diagnostics_json, "\"eps_converged_reason\":"),
+          "shared-domain nearest diagnostics publish the available EPS reason or null");
+    check(contains(result.diagnostics_json, "\"eps_dimensions_available\":"),
+          "shared-domain nearest diagnostics publish EPS dimensions availability");
+    check(contains(result.diagnostics_json, "\"eps_nev\":"),
+          "shared-domain nearest diagnostics publish the resolved EPS dimensions or null");
+    check(contains(result.diagnostics_json, "\"eps_ncv\":"),
+          "shared-domain nearest diagnostics publish the resolved EPS subspace or null");
+    check(contains(result.diagnostics_json, "\"eps_mpd\":"),
+          "shared-domain nearest diagnostics publish the resolved EPS maximum projected dimension or null");
+    const char *basic_ksp_keys[] = {
+        "\"ksp_type\":", "\"ksp_rtol\":", "\"ksp_atol\":",
+        "\"ksp_final_residual\":"};
+    for (const char *key : basic_ksp_keys) {
+        check(count_occurrences(result.diagnostics_json, key) == 1u,
+              "nearest Floquet diagnostics must serialize each basic KSP field exactly once");
+    }
+    check(!contains(result.result_json, "\"ksp_diagnostics_available\":"),
+          "nearest result JSON keeps shifted-KSP telemetry in diagnostics only");
+    check(contains(result.result_json, "\"solve_complete\":true"),
+          "nearest result preserves solve completion independently of window coverage");
+    check(contains(result.result_json, "\"spectrum_completeness\":\"selected_only\""),
+          "nearest result remains selected-only");
+    check(contains(result.result_json, "\"window_complete\":false"),
+          "nearest result does not claim a complete window");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+#endif
+}
+
 void modal_nonzero_k_floquet_dynamic_demag_k_rejects_malformed_payload()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
@@ -3991,6 +4142,7 @@ int main()
     modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms();
     modal_nonzero_k_floquet_bloch_payload_with_demag_is_unavailable();
     modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted();
+    modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics();
     modal_nonzero_k_floquet_dynamic_demag_k_rejects_malformed_payload();
     modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver();
     modal_poisson_airbox_tail_shift_invert_action_writes_artifact();

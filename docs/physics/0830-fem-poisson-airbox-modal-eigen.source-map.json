@@ -1370,6 +1370,22 @@
       "path": "examples/fem_de_smoke_numeric.py",
       "symbol": "AIR_GROWTH_RATE",
       "responsibility": "Read validated diagnostic growth setting with historical default1.3; author existing universe mesh intent and declare runtime provenance."
+    },
+    {
+      "id": "source-nearest-floquet-ksp-telemetry",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "floquet_shifted_ksp_diagnostics_json_fields",
+      "responsibility": "Shared cached true-residual/pre-EPS/termination and EPS-dimensions serialization for actual Floquet nearest and window; no PETSc query or selection change.",
+      "lane": "FEM CPU",
+      "evidence_status": "source expression preservation PASS; native compilation/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-nearest-floquet-ksp-regression",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "main",
+      "responsibility": "Invokes shared-domain nearest producer regression and generic/K0 absence checks; synthetic algebraic operator fixture, no scientific qualification.",
+      "lane": "FEM CPU",
+      "evidence_status": "native regression source prepared; not compiled or run; EPSSolve failure fixture OPEN"
     }
   ],
   "public_api": {

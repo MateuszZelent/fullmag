@@ -1,3 +1,17 @@
+<!-- nearest-floquet-producer-source-checkpoint-20261004 -->
+## S05 — wspólna publikacja telemetry Floquet nearest/window
+
+Uzupełniamy pierwszy wymagany podpunkt `Nearest + FGMRES`: producent istniejących pomiarów true KSP residual, konfiguracji queried przed EPSSolve, kodów zakończenia i wymiarów EPS. Prywatny formatter w natywnym FEM CPU jest współdzielony z oknem częstotliwości; samodzielny nearest publikuje dane także przy porażce, wyłącznie dla actual Floquet adapter. Nie ma nowych zapytań PETSc, zmiany progów, selection, ABI ani domyślnego solvera. `selected_only/window_complete=false` zachowane. Generic/K0 pozostaje poza Floquet telemetry.
+
+Stan: **producent zaimplementowany źródłowo; kontrola zachowania wyrażeń window i mapa naukowa PASS; kompilacja i native runtime NOT VERIFIED**. Przygotowana regresja production nearest oraz generic/K0 wymaga wykonania po odwołaniu zakazu kompilowania testów; interpretowane kontrole dokumentacji35 PASS. Source review CPP bezP1/P2; exact staged review całego przyrostu stanowi bramkę przed commitem. Nie przygotowano deterministycznej regresji EPSSolve failure; wykonanie failure/null pozostaje odrębną otwartą bramką. Osobny consumer nearest, dopuszczenie FGMRES, izolowane GMRES/FGMRES A/B i managed wykonanie pozostają OPEN. Guard nearest FGMRES w Pythonie nie został usunięty.
+
+Przygotowane wejścia air growth1,075 +10/+25 pozostają przypięte do modelu3aac3ddfdeb795476db04b5487f96ac1d41a5963; pliki drivera nie zostały zmienione. Runtime228 nie zawiera nowego producenta. Obliczenia pozostają niewysłane: odczyt runnera/Windows wskazał około6,9GiB na C: przy admission8GiB. Nie obniżamy progu i nie usuwamy katalogów bez odrębnej zgody.
+
+Całe S00–S12 pozostają **OPEN**: convergence mesh/airbox/modów, Γ full window, native shared signed15 i serial/adaptive parity/zasoby, GUI, A1/COMSOL, reszta S09/S10/GPU oraz PR97/integracja. Piętnaście zakończonych punktów DE i dwa refinements air1,15 zachowują swoje wcześniejsze tożsamości i wyniki. Ta zmiana nie tworzy nowych częstotliwości.
+
+Nota: `docs/physics/0830-fem-poisson-airbox-modal-eigen.md` — `nearest-floquet-telemetry-producer`. Poprzednie checkpointy zachowano.
+
+
 <!-- de-air-refinement-levels-source-20261004 -->
 ## Aktualny checkpoint — dalsze poziomy air mesh i kontrola wersji wejścia
 
