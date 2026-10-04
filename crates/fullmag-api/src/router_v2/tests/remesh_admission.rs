@@ -49,10 +49,18 @@ async fn readiness(app: &axum::Router, kind: &str) -> serde_json::Value {
 }
 
 fn tracked_command(kind: &str, status: CommandLifecycleState) -> TrackedCommandRecord {
+    tracked_command_at(kind, status, 1)
+}
+
+/// The live command journal rejects non-increasing sequences and duplicate
+/// command ids, so a ledger that is followed by a successful admission must be
+/// seeded with unique, strictly increasing records and a matching
+/// `current_control_next_seq`.
+fn tracked_command_at(kind: &str, status: CommandLifecycleState, seq: u64) -> TrackedCommandRecord {
     TrackedCommandRecord {
         command: serde_json::from_value(serde_json::json!({
-            "seq": 1,
-            "command_id": "existing-command",
+            "seq": seq,
+            "command_id": format!("existing-command-{seq}"),
             "kind": kind,
             "created_at_unix_ms": 1
         }))
@@ -167,6 +175,7 @@ async fn remesh_accepts_after_mesh_or_compute_terminal_outcomes() {
                 .lock()
                 .await
                 .push_back(tracked_command(kind, lifecycle));
+            *state.current_control_next_seq.lock().await = 1;
             let app = build_v2_router().with_state(state.clone());
             assert_eq!(readiness(&app, "mesh_build").await["enabled"], true);
             assert_eq!(
@@ -292,14 +301,20 @@ async fn remesh_active_record_survives_command_history_pruning() {
         }
         {
             let mut ledger = state.current_command_ledger.lock().await;
-            ledger.push_back(tracked_command("remesh", CommandLifecycleState::Dispatched));
-            for _ in 1..256 {
-                ledger.push_back(tracked_command(
+            ledger.push_back(tracked_command_at(
+                "remesh",
+                CommandLifecycleState::Dispatched,
+                1,
+            ));
+            for seq in 2..=256 {
+                ledger.push_back(tracked_command_at(
                     "save_vtk",
                     CommandLifecycleState::Completed,
+                    seq,
                 ));
             }
         }
+        *state.current_control_next_seq.lock().await = 256;
         let app = build_v2_router().with_state(state.clone());
         let expected_status = if appended_kind == "fdm_grid_refresh" {
             StatusCode::CONFLICT

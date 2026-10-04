@@ -3285,7 +3285,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 .as_ref()
                 .expect("simple accepted FDM CPU worker retains its observation source");
             assert_eq!(observation_source.accepted_state_ref, *accepted_state_ref);
-            assert_eq!(observation_source.grid_cells, [1, 1, 1]);
+            // ProblemIR::bootstrap_example(): 200 x 20 x 6 nm strip on a 2 nm FDM grid.
+            assert_eq!(observation_source.grid_cells, [100, 10, 3]);
             observation_source.validate().unwrap();
 
             let mut recovered_inbox = fullmag_runtime_control::DurableWorkerInbox::recover(
@@ -3459,7 +3460,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .as_ref()
         .expect("simple FDM CPU manifest pins its observation source");
     assert_eq!(observation_source.accepted_state_ref, *accepted_state_ref);
-    assert_eq!(observation_source.grid_cells, [1, 1, 1]);
+    assert_eq!(observation_source.grid_cells, [100, 10, 3]);
     assert_eq!(observation_source.quantity_ids, vec!["m".to_string()]);
     for (artifact_id, artifact_type, object_ref) in [
         (
@@ -3623,7 +3624,28 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     else {
         panic!("historical m must remain a vector field");
     };
-    assert_eq!(values, &[1.0, 0.0, 0.0]);
+    let observed_cells = observation_source
+        .grid_cells
+        .iter()
+        .map(|cells| usize::try_from(*cells).unwrap())
+        .product::<usize>();
+    assert_eq!(observed_cells, 100 * 10 * 3);
+    assert_eq!(
+        values.len(),
+        3 * observed_cells,
+        "historical m must carry one vector per accepted FDM cell"
+    );
+    assert!(
+        values.chunks_exact(3).all(|vector| {
+            let norm = vector
+                .iter()
+                .map(|component| component * component)
+                .sum::<f64>()
+                .sqrt();
+            (norm - 1.0).abs() < 1.0e-6
+        }),
+        "historical m must remain unit-normalized in every cell"
+    );
     let mut stale_observation_source = accepted_state_ref.clone();
     stale_observation_source.generation.runtime_epoch += 1;
     assert!(fullmag_runtime_control::load_study_observation_runtime(

@@ -23,6 +23,24 @@ export class CommandRegistry {
   private bus: EventBus<KernelEventMap> | null = null;
   private diagnostics: CommandDiagnosticsController | null = null;
   private sessionScopeSource: CommandSessionScopeSource | null = null;
+  private handoffPauseCount = 0;
+  private activeExecutions = 0;
+
+  beginDevelopmentHandoffPause(): () => void {
+    if (this.activeExecutions > 0) throw new Error("Wait for active workspace commands before restarting.");
+    this.handoffPauseCount += 1;
+    try { this.notify(); } catch (error) {
+      this.handoffPauseCount -= 1;
+      throw error;
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.handoffPauseCount -= 1;
+      this.notify();
+    };
+  }
 
   attachSessionScopeSource(source: CommandSessionScopeSource): void {
     this.sessionScopeSource = source;
@@ -84,6 +102,7 @@ export class CommandRegistry {
 
   /** Check if a command is enabled in the given context. */
   isEnabled(id: CommandId, context: CommandContext): boolean {
+    if (this.handoffPauseCount > 0) return false;
     const cmd = this.commands.get(id);
     if (!cmd) return false;
     if (!cmd.isEnabled) return true;
@@ -99,6 +118,19 @@ export class CommandRegistry {
 
   /** Execute a command by id. Emits command:submitted and command:completed events. */
   async execute(
+    id: CommandId,
+    context: CommandContext,
+    input?: unknown,
+  ): Promise<CommandResult> {
+    if (this.handoffPauseCount > 0) {
+      return { status: "failed", message: "Workspace input is protected during backend handoff." };
+    }
+    this.activeExecutions += 1;
+    try { return await this.executeAdmitted(id, context, input); }
+    finally { this.activeExecutions -= 1; }
+  }
+
+  private async executeAdmitted(
     id: CommandId,
     context: CommandContext,
     input?: unknown,
