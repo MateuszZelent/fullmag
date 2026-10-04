@@ -1,3 +1,17 @@
+<!-- signed15-scatter-verified-checkpoint-20261004 -->
+## Aktualny checkpoint — policzone 15 pozycji DE od −25 do +25 rad/µm
+
+Odczyt 2026-10-04T11:09:28.814828+00:00. **Cel wykresu kilku/kilkunastu rzeczywistych punktów osiągnięto: 14 zaakceptowanych nonzero-k oraz wcześniejszy Γ227.** Cały zakres S00–S12 pozostaje otwarty; to nie kwalifikacja naukowa ani jedno wspólne zadanie signed15.
+
+- Zakres k_y: −25,−20,−15,−10,−7,−5,−2,0,2,5,7,10,15,20,25 rad/µm. Jednolity film DE 10 nm, M₀=x/k=y, B₀=0,1 T, PBC x/y, finite Dirichlet padding2µm, L2/trzy warstwy i demag. Wszystkie 14 nonzero z managed #228/source57182911c6e8e721b8ee9705aa7f70491c70fe94; Γ227 selected_only z osobną tożsamością. Nie użyto archiwalnych ±25, mirroringu ani interpolacji FEM.
+- Artefakty i pełne physical/periodic-seam residuale PASS; max nonzero full relative residual1,956e−11 przy niezmienionym progu1e−8. Actual complex profiles: identyczna uporządkowana topologia, minimum adjacent consistent-mass overlap²0,999030114. Różnica niezależnych par ±k do około958,5Hz przy25. Te dane nie zamykają completeness/parity/convergence.
+- Pierwszy +15 restart8 odrzucono przez FGMRES DIVERGED_ITS i true-residual violation. Fresh retry zmienił tylko restart8→30; +15=12,035727543GHz/fullres4,717e−12, queried restart30. Zachowano wcześniejszą nieudaną próbę. Pozostałe punkty restart8; automatyczny recovery i domyślne ustawienia produktu nadal wymagają odrębnej poprawki/kwalifikacji.
+- Wykres PNG/PDF sprawdzono wizualnie i przez hashe/receipt. Ciągłe krzywe są referencjami n=0, scatter jest FEM; osobne punkty open-air 1D basis16 są referencją diagnostyczną. Różnica FEM wobec1D wynosi około0,205% przy10 i0,617% przy25; przyΓ różnica open-air wynika z innych BC. Nie uznano solvera za zweryfikowany na podstawie wyglądu wykresu.
+- Oba refinementy +10 zaakceptowano: L2/6 = 11,207794879GHz/fullres1,974e−11; L3/3 = 11,208735289GHz/fullres3,103e−11. Actual mesh ma odpowiednio 6435/10496 węzłów, 2952/2538 tet filmu oraz 7/4 płaszczyzny z; objętość 1,6e−23m³ zachowana. Baseline L2/3 = 11,205285324GHz. To zależność od siatki, nie pełna zbieżność. L2→L3 zmienia także air seed/lateral; nie jest air-only. Następna izolacja air growth1,3→1,15 wymaga versioned input i actual body identity check. Siatka/airbox/mode-count convergence pozostają OPEN.
+- Γ pełnego okna #228 nadal failed43/50, siedem własnych EPS reason−1/2000iter; selected-only Γ227 tego nie zastępuje. Wspólny signed15 manifest i serial/adaptive resource/parity/GUI, A1/COMSOL, reszta S09/S10/GPU oraz PR97/integracja pozostają OPEN.
+
+Raport z tabelą/CSV i obrazami: [DE signed15 runtime](../../raports/2026-10-04-de-signed15-runtime.md). [Scan dyskretyzacji i actual mesh](../../raports/2026-10-04-de-nonzero-discrepancy-source-scan.md). Historyczne checkpointy poniżej zachowano wraz z ich momentem odczytu.
+
 <!-- waveguide-contours-and-signed10-terminal-checkpoint-20261004 -->
 ## Aktualny checkpoint — dwa zaakceptowane punkty ±10 oraz diagnostyka Γ
 
