@@ -1,15 +1,19 @@
 "use client";
 
 import { ExternalLink, Search } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
+import { useTheme } from "@/design/theme/ThemeProvider";
 import { Button } from "@/shared/ui/Button";
 
 import {
   ONLINE_DOCS_URL,
   docsPageUrl,
   docsSearchUrl,
+  onlineDocsUrl,
+  parseDocsMessage,
   probeDocs,
+  themeMessage,
   type DocsAvailability,
 } from "../model/docs";
 
@@ -22,7 +26,34 @@ export function DocsSection() {
   const [availability, setAvailability] = useState<DocsAvailability>("checking");
   const [query, setQuery] = useState("");
   const [src, setSrc] = useState(docsPageUrl());
+  const [pagePath, setPagePath] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const { theme } = useTheme();
+
+  // The framed site is same-origin; address it explicitly rather than with "*".
+  const sendTheme = useCallback(() => {
+    frameRef.current?.contentWindow?.postMessage(themeMessage(theme), window.location.origin);
+  }, [theme]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      // Only the frame this component owns, on this origin, is listened to.
+      if (event.origin !== window.location.origin) return;
+      if (event.source !== frameRef.current?.contentWindow) return;
+      const message = parseDocsMessage(event.data);
+      if (!message) return;
+      if (message.type === "ready") sendTheme();
+      else setPagePath(message.path);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [sendTheme]);
+
+  // A theme change after the page is up reaches it without a reload.
+  useEffect(() => {
+    sendTheme();
+  }, [sendTheme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,7 +103,7 @@ export function DocsSection() {
         </Button>
         <a
           className="fm-start-link fm-start-docs__online"
-          href={ONLINE_DOCS_URL}
+          href={pagePath ? onlineDocsUrl(pagePath) : ONLINE_DOCS_URL}
           rel="noreferrer"
           target="_blank"
         >
@@ -81,7 +112,14 @@ export function DocsSection() {
       </div>
 
       {availability === "available" ? (
-        <iframe className="fm-start-docs__frame" referrerPolicy="no-referrer" src={src} title="Fullmag documentation" />
+        <iframe
+          className="fm-start-docs__frame"
+          onLoad={sendTheme}
+          ref={frameRef}
+          referrerPolicy="no-referrer"
+          src={src}
+          title="Fullmag documentation"
+        />
       ) : availability === "checking" ? (
         <p className="fm-start-inspector__note" role="status">
           Opening the documentation…

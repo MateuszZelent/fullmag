@@ -1607,6 +1607,45 @@
   background: var(--fm-bg-surface);
 }
 
+/* ── About ────────────────────────────────────────────────────────────── */
+
+.fm-start-about__text {
+  max-width: 72ch;
+  margin: 0 0 var(--fm-space-3);
+  font-size: var(--fm-font-size-sm);
+  line-height: 1.6;
+}
+
+/* Engine descriptions are sentences, not field values. */
+.fm-start-about__plain {
+  font-family: var(--fm-font-ui);
+}
+
+.fm-start-about__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-4);
+  margin: var(--fm-space-3) 0 0;
+}
+
+.fm-start-about__links > * {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+}
+
+/* The count sits beside the label; the shortcut hint, when shown, follows it. */
+.fm-start-rail__count {
+  margin-left: auto;
+  color: var(--fm-start-meta);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-start-rail__count + .fm-start-kbd {
+  margin-left: var(--fm-space-2);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fm-start *,
   .fm-start *::before,
