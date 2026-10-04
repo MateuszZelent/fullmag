@@ -163,3 +163,15 @@ w `aboutFullmag.ts`; nie modyfikowano go w tym zadaniu.
 Akcja UI nie upoważnia do samodzielnego podniesienia capability w API.
 Procenty P0–P8 nie awansują na podstawie izolowanego flow. Pełny plan pozostaje
 aktywnym celem; zakres P8-53 nie oznacza zakończenia całej refaktoryzacji.
+
+## Lokalny checkpoint
+
+Commit implementacji na `master`:
+`6fac7904d27da16aaec382ea0c1fc519293d8e27`
+(`feat: connect guarded development restart action`). Obejmuje 18 plików:
+serwis/Host/właścicieli/kontroler/baner, fokusowane drivery i fixture,
+zamknięte recepty oraz dokumentację. Osobno sprawdzony staged scope był zgodny
+z tym przyrostem; staged diff i lokalne linki dokumentacji PASS, commit exit 0.
+Nie dołączono równoległego Start/About, zmian Python/storage ani submodułu.
+Commit jest lokalny; publikacja źródeł na publicznym remote nadal jest
+zablokowana przez wcześniejszą odmowę automatycznej kontroli uprawnień.
