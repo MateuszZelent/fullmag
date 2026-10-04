@@ -76,7 +76,7 @@ Host (needs work outside the renderer):
 
 Packaging and process:
 
-- `docs:bundle` is not part of the Windows, desktop or CI build routes.
+- `docs:bundle --if-present` runs inside `pnpm --dir apps/control-room build`, so every build route bundles the documentation when the Sphinx site has been built first; no route builds Sphinx itself.
 - The browser check is not part of CI (needs Chrome on the runner).
 - The status strip lacks the mockup's update notice and telemetry switch
   (not exposed by the host).
