@@ -222,10 +222,16 @@ export function sortEntries(entries: readonly RecentEntry[], sort: RecentSort): 
 
 export type RecentGroupId = "pinned" | "today" | "yesterday" | "week" | "older";
 
-export interface RecentGroup {
+/** Anything the recent list groups by recency: projects and scripts alike. */
+export interface Recency {
+  readonly pinned?: boolean;
+  readonly lastOpenedAt: string;
+}
+
+export interface RecentGroup<T extends Recency = RecentEntry> {
   readonly id: RecentGroupId;
   readonly label: string;
-  readonly entries: readonly RecentEntry[];
+  readonly entries: readonly T[];
 }
 
 const GROUP_LABELS: Readonly<Record<RecentGroupId, string>> = {
@@ -255,15 +261,15 @@ function addDays(d: Date, days: number): Date {
  * day-start timestamps stays correct across a DST change. Pinned entries are
  * hoisted out of their date group. Input order is preserved inside a group.
  */
-export function groupByRecency(
-  entries: readonly RecentEntry[],
+export function groupByRecency<T extends Recency = RecentEntry>(
+  entries: readonly T[],
   now: Date = new Date(),
-): RecentGroup[] {
+): RecentGroup<T>[] {
   const startOfToday = startOfDay(now);
   const startOfYesterday = addDays(startOfToday, -1);
   const startOfWeek = addDays(startOfToday, -6);
 
-  const buckets: Record<RecentGroupId, RecentEntry[]> = {
+  const buckets: Record<RecentGroupId, T[]> = {
     pinned: [],
     today: [],
     yesterday: [],

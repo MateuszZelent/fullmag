@@ -16,6 +16,8 @@ export type StartSection =
  */
 export interface StartScreenHost {
   readonly createProblemDisabledReason: string | null;
+  /** Why the native script picker cannot run (no desktop shell); null when it can. */
+  readonly openScriptDisabledReason?: string | null;
   readonly disabledReason: (commandId: string, context: CommandContext) => string | null;
   readonly execute: (commandId: string, context: CommandContext) => Promise<CommandResult>;
   readonly isEnabled: (commandId: string, context: CommandContext) => boolean;
@@ -26,6 +28,10 @@ export interface StartScreenSnapshot {
   readonly section: StartSection;
   /** Shared with the inspector, which describes the selection without opening it. */
   readonly selectedProjectId: string | null;
+  /** A script selected in the list (workspace item id); exclusive with a project. */
+  readonly selectedScriptId: number | null;
+  /** Palette or tile request to run the native script picker; each one is distinct. */
+  readonly openScriptNonce: number;
   /** The gallery card shown in the inspector while on Templates. */
   readonly selectedTemplateId: string | null;
   /** Bumped by palette commands so the mounted list can react without props. */
@@ -47,6 +53,8 @@ const INITIAL_SNAPSHOT: StartScreenSnapshot = {
   host: null,
   section: "home",
   selectedProjectId: null,
+  selectedScriptId: null,
+  openScriptNonce: 0,
   selectedTemplateId: null,
   searchFocusNonce: 0,
   rebuildNonce: 0,
@@ -101,9 +109,38 @@ class StartScreenStore {
     this.publish({ ...this.snapshot, selectedTemplateId });
   }
 
+  /** Selecting a project clears a script selection: the inspector shows one item. */
   setSelectedProject(selectedProjectId: string | null): void {
-    if (this.snapshot.selectedProjectId === selectedProjectId) return;
-    this.publish({ ...this.snapshot, selectedProjectId });
+    if (
+      this.snapshot.selectedProjectId === selectedProjectId &&
+      (selectedProjectId === null || this.snapshot.selectedScriptId === null)
+    ) {
+      return;
+    }
+    this.publish({
+      ...this.snapshot,
+      selectedProjectId,
+      selectedScriptId: selectedProjectId === null ? this.snapshot.selectedScriptId : null,
+    });
+  }
+
+  /** Selecting a script clears a project selection. */
+  setSelectedScript(selectedScriptId: number | null): void {
+    if (
+      this.snapshot.selectedScriptId === selectedScriptId &&
+      (selectedScriptId === null || this.snapshot.selectedProjectId === null)
+    ) {
+      return;
+    }
+    this.publish({
+      ...this.snapshot,
+      selectedScriptId,
+      selectedProjectId: selectedScriptId === null ? this.snapshot.selectedProjectId : null,
+    });
+  }
+
+  requestOpenScript(): void {
+    this.publish({ ...this.snapshot, openScriptNonce: this.snapshot.openScriptNonce + 1 });
   }
 
   /**
