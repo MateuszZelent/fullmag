@@ -497,15 +497,28 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
     if (force_inner_failure) {
         check(!result.ok && result.modes.empty(),
               "inner KSP failure must remain fail-closed");
-        check(result.ksp_diagnostics_available &&
-                  result.ksp_converged_reason_available &&
-                  result.ksp_converged_reason <= 0 &&
-                  result.ksp_last_iterations > 0,
-              "failed EPS retains the nonconverged inner KSP diagnostics");
+        check(!result.ksp_diagnostics_available &&
+                  !result.ksp_converged_reason_available &&
+                  !result.ksp_last_true_residual_available,
+              "hard EPS error leaves final KSP queries and postsolve true residual unavailable");
+        check(result.ksp_monitor_registered &&
+                  result.ksp_monitor_observation_count > 0 &&
+                  result.ksp_monitor_last_iteration_available &&
+                  result.ksp_monitor_last_iteration > 0 &&
+                  result.ksp_monitor_recursive_residual_available &&
+                  std::isfinite(result.ksp_monitor_recursive_residual_norm) &&
+                  result.ksp_monitor_last_reason_available,
+              "hard EPS error retains the in-solve recursive residual and observed reason without promoting them to final diagnostics");
         check(std::strcmp(result.floquet_schur_action_diagnostic.status, "disabled") != 0,
               "pre-EPS action diagnostic remains observable on the hard EPS failure path");
         return;
     }
+    check(result.ksp_monitor_registered &&
+              result.ksp_monitor_observation_count > 0 &&
+              result.ksp_monitor_last_iteration_available &&
+              result.ksp_monitor_recursive_residual_available &&
+              result.ksp_monitor_last_reason_available,
+          "successful solve retains the distinct shifted-KSP monitor observation");
     check(result.floquet_schur_action_diagnostic.available &&
               std::strcmp(result.floquet_schur_action_diagnostic.status, "measured") == 0 &&
               result.floquet_schur_action_diagnostic.action_count == 9 &&

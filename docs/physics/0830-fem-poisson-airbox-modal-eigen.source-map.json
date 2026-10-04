@@ -1051,7 +1051,7 @@
     {
       "id": "source-api-eigen-diagnostics",
       "path": "crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs",
-      "symbol": "frequency_domain_artifact_content_digest",
+      "symbol": "json_artifact_resource_first_existing_with_context",
       "handler": "get_frequency_domain_eigen_diagnostics_v2",
       "responsibility": "Serve typed session-scoped eigen diagnostics without changing scientific qualification state."
     },
@@ -1375,9 +1375,34 @@
       "id": "source-nearest-floquet-ksp-telemetry",
       "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
       "symbol": "floquet_shifted_ksp_diagnostics_json_fields",
-      "responsibility": "Shared cached true-residual/pre-EPS/termination and EPS-dimensions serialization for actual Floquet nearest and window; no PETSc query or selection change.",
+      "responsibility": "Serializes cached true-residual and monitor progress for actual Floquet nearest success/error and window; preserves unavailable values and separates recursive residual.",
       "lane": "FEM CPU",
       "evidence_status": "source expression preservation PASS; native compilation/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-nearest-floquet-ksp-monitor-capture",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "capture_floquet_shifted_ksp_progress",
+      "responsibility": "Copies monitor callback values to a plain snapshot before hard-error unwind; callback reason is observation only, never final reason.",
+      "lane": "FEM CPU",
+      "evidence_status": "source review PASS; native compilation/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-nearest-floquet-ksp-failure-regression",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "main",
+      "entrypoint": "executes_native_sparse_matshell_above_dense_bound",
+      "responsibility": "Prepared hard EPSSolve failure fixture checks cached progress survives while final-query diagnostics remain unavailable; source only.",
+      "lane": "FEM CPU",
+      "evidence_status": "native regression source prepared; not compiled or run"
+    },
+    {
+      "id": "source-nearest-floquet-ksp-failed-consumer",
+      "path": "scripts/de_failed_modal_diagnostic.py",
+      "symbol": "_validate_ksp_monitor_progress",
+      "responsibility": "Preserves terminal failure monitor telemetry and rejects inconsistent availability/final-query claims.",
+      "lane": "FEM CPU",
+      "evidence_status": "interpreted failed-log regressions PASS; native runtime NOT VERIFIED"
     },
     {
       "id": "source-nearest-floquet-ksp-regression",
@@ -1385,7 +1410,7 @@
       "symbol": "main",
       "responsibility": "Invokes shared-domain nearest producer regression and generic/K0 absence checks; synthetic algebraic operator fixture, no scientific qualification.",
       "lane": "FEM CPU",
-      "evidence_status": "native regression source prepared; not compiled or run; EPSSolve failure fixture OPEN"
+      "evidence_status": "native regression source prepared; not compiled or run; hard-error fixture source prepared"
     },
     {
       "id": "source-nearest-ksp-shared-consumer",

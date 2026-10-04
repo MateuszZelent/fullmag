@@ -334,7 +334,7 @@ def test_t1_k0_production_scope_is_scalable_future_only_and_source_mapped() -> N
         ),
         (
             "crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs",
-            "frequency_domain_artifact_content_digest",
+            "json_artifact_resource_first_existing_with_context",
         ),
         (
             "crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs",

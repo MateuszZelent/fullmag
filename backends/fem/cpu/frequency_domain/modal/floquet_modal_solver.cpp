@@ -949,6 +949,15 @@ struct LastFloquetShiftedSolveSnapshot {
     Vec solution = nullptr;
     Vec true_residual = nullptr;
     bool available = false;
+    bool monitor_registered = false;
+    std::uint64_t monitor_observation_count = 0;
+    bool monitor_last_iteration_available = false;
+    std::int64_t monitor_last_iteration = 0;
+    bool monitor_recursive_residual_available = false;
+    double monitor_recursive_residual_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    bool monitor_last_reason_available = false;
+    int monitor_last_observed_reason = 0;
     int true_residual_sample_count = 0;
     int true_residual_measurement_failure_count = 0;
     double maximum_true_relative_residual = 0.0;
@@ -1059,6 +1068,38 @@ PetscErrorCode capture_last_floquet_shifted_solve(
                                : std::numeric_limits<double>::infinity());
     snapshot->criterion_maximum_tolerance_ratio = std::max(
         snapshot->criterion_maximum_tolerance_ratio, ratio);
+    return 0;
+}
+
+PetscErrorCode capture_floquet_shifted_ksp_progress(
+    KSP ksp, PetscInt iteration, PetscReal recursive_residual_norm,
+    void *raw_snapshot)
+{
+    auto *snapshot = static_cast<LastFloquetShiftedSolveSnapshot *>(raw_snapshot);
+    if (snapshot == nullptr) {
+        return 0; // A diagnostic callback must never alter KSP behavior.
+    }
+
+    ++snapshot->monitor_observation_count;
+    snapshot->monitor_last_iteration_available = iteration >= 0;
+    snapshot->monitor_last_iteration = snapshot->monitor_last_iteration_available
+        ? static_cast<std::int64_t>(iteration)
+        : 0;
+    snapshot->monitor_recursive_residual_available =
+        std::isfinite(static_cast<double>(recursive_residual_norm)) &&
+        recursive_residual_norm >= 0.0;
+    snapshot->monitor_recursive_residual_norm =
+        snapshot->monitor_recursive_residual_available
+            ? static_cast<double>(recursive_residual_norm)
+            : std::numeric_limits<double>::quiet_NaN();
+
+    KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
+    snapshot->monitor_last_reason_available =
+        ksp != nullptr && KSPGetConvergedReason(ksp, &reason) == 0;
+    snapshot->monitor_last_observed_reason =
+        snapshot->monitor_last_reason_available
+            ? static_cast<int>(reason)
+            : 0;
     return 0;
 }
 
@@ -3720,6 +3761,14 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.preconditioner_normalization_scale,
         &result.floquet_schur_action_diagnostic);
 
+    // Monitor data is copied during KSP iterations, before a hard EPSSolve
+    // error can unwind through PETSc. Registration failure is diagnostic-only.
+    last_shifted_solve.monitor_registered =
+        KSPMonitorSet(
+            shifted_ksp,
+            capture_floquet_shifted_ksp_progress,
+            &last_shifted_solve,
+            nullptr) == 0;
     const PetscErrorCode eps_solve_error = EPSSolve(eps);
     // A KSP error can unwind through Krylov--Schur while SLEPc owns a
     // DSGetMat() view.  SLEPc 3.24 then cannot safely destroy that EPS because
@@ -3727,6 +3776,23 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     // first error authoritative and leave this one process-bounded EPS object
     // for OS reclamation; the runtime fails closed immediately afterwards.
     eps_cleanup_is_safe = eps_solve_error == 0;
+    // Copy only ordinary cached values here. In particular, a hard error
+    // below must not query any PETSc handle to recover this progress.
+    result.ksp_monitor_registered = last_shifted_solve.monitor_registered;
+    result.ksp_monitor_observation_count =
+        last_shifted_solve.monitor_observation_count;
+    result.ksp_monitor_last_iteration_available =
+        last_shifted_solve.monitor_last_iteration_available;
+    result.ksp_monitor_last_iteration =
+        last_shifted_solve.monitor_last_iteration;
+    result.ksp_monitor_recursive_residual_available =
+        last_shifted_solve.monitor_recursive_residual_available;
+    result.ksp_monitor_recursive_residual_norm =
+        last_shifted_solve.monitor_recursive_residual_norm;
+    result.ksp_monitor_last_reason_available =
+        last_shifted_solve.monitor_last_reason_available;
+    result.ksp_monitor_last_observed_reason =
+        last_shifted_solve.monitor_last_observed_reason;
     result.ksp_true_residual_sample_count =
         last_shifted_solve.true_residual_sample_count;
     result.ksp_true_residual_measurement_failure_count =

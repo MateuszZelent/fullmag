@@ -250,6 +250,17 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     int linear_iterations_total = 0;
     int ksp_last_iterations = 0;
     bool ksp_diagnostics_available = false;
+    // Iteration-time observations copied by the shifted-KSP monitor. These
+    // remain distinct from post-solve true residuals and final KSP queries.
+    bool ksp_monitor_registered = false;
+    std::uint64_t ksp_monitor_observation_count = 0;
+    bool ksp_monitor_last_iteration_available = false;
+    std::int64_t ksp_monitor_last_iteration = 0;
+    bool ksp_monitor_recursive_residual_available = false;
+    double ksp_monitor_recursive_residual_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    bool ksp_monitor_last_reason_available = false;
+    int ksp_monitor_last_observed_reason = 0;
     // Observed before EPSSolve; distinct from last-solve residual telemetry.
     bool shifted_ksp_configuration_before_eps_available = false;
     int shifted_ksp_pc_side_before_eps = -1;

@@ -3166,6 +3166,9 @@ void modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator()
     check(!contains(nearest_result.diagnostics_json,
                     "\"ksp_true_residual_criterion\":"),
           "generic k=0 nearest-frequency diagnostics omit Floquet true-residual telemetry");
+    check(!contains(nearest_result.diagnostics_json,
+                    "\"ksp_monitor_progress\":"),
+          "generic k=0 nearest-frequency diagnostics omit Floquet-only monitor telemetry");
     fullmag_fem_frequency_domain_result_destroy(&nearest_result);
 #endif
 }
@@ -3707,6 +3710,18 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     check(contains(result.diagnostics_json,
                    "\"ksp_true_residual_criterion\":{\"schema_version\":"),
           "shared-domain nearest diagnostics publish true-residual criterion aggregates");
+    check(contains(result.diagnostics_json,
+                   "\"ksp_monitor_progress\":{\"schema_version\":\"floquet_shifted_ksp_monitor_progress.v1\""),
+          "shared-domain nearest diagnostics publish a separately versioned monitor snapshot");
+    check(contains(result.diagnostics_json,
+                   "\"source\":\"petsc_ksp_monitor\""),
+          "shared-domain nearest diagnostics identify the monitor source");
+    check(contains(result.diagnostics_json,
+                   "\"recursive_residual_semantics\":\"petsc_monitor_recursive_norm_not_true_residual\""),
+          "shared-domain nearest diagnostics do not label the monitor norm as a true residual");
+    check(contains(result.diagnostics_json,
+                   "\"last_observed_reason_is_final\":false"),
+          "shared-domain nearest diagnostics never promote a monitor reason to the final reason");
     check(contains(result.diagnostics_json,
                    "\"ksp_last_true_residual_available\":"),
           "shared-domain nearest diagnostics publish true-residual sample availability");

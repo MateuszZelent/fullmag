@@ -133,6 +133,38 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
         "\"ksp_diagnostics_available\":" +
         std::string(result.ksp_diagnostics_available ? "true" : "false") +
         "," + floquet_shifted_ksp_configuration_json_field(result) +
+        ",\"ksp_monitor_progress\":{"
+        "\"schema_version\":\"floquet_shifted_ksp_monitor_progress.v1\","
+        "\"phase\":\"during_eps_solve\","
+        "\"source\":\"petsc_ksp_monitor\","
+        "\"monitor_registered\":" +
+        std::string(result.ksp_monitor_registered ? "true" : "false") +
+        ",\"available\":" +
+        std::string(result.ksp_monitor_observation_count > 0 ? "true" : "false") +
+        ",\"observation_count\":" +
+        std::to_string(result.ksp_monitor_observation_count) +
+        ",\"observation_count_scope\":\"all_shifted_ksp_monitor_callbacks_during_one_epsolve\""
+        ",\"last_iteration_available\":" +
+        std::string(result.ksp_monitor_last_iteration_available ? "true" : "false") +
+        ",\"last_iteration\":" +
+        (result.ksp_monitor_last_iteration_available
+            ? std::to_string(result.ksp_monitor_last_iteration)
+            : std::string("null")) +
+        ",\"recursive_residual_available\":" +
+        std::string(result.ksp_monitor_recursive_residual_available
+            ? "true" : "false") +
+        ",\"recursive_residual_norm\":" +
+        (result.ksp_monitor_recursive_residual_available
+            ? format_double(result.ksp_monitor_recursive_residual_norm)
+            : std::string("null")) +
+        ",\"recursive_residual_semantics\":\"petsc_monitor_recursive_norm_not_true_residual\""
+        ",\"last_observed_reason_available\":" +
+        std::string(result.ksp_monitor_last_reason_available ? "true" : "false") +
+        ",\"last_observed_reason\":" +
+        (result.ksp_monitor_last_reason_available
+            ? std::to_string(result.ksp_monitor_last_observed_reason)
+            : std::string("null")) +
+        ",\"last_observed_reason_is_final\":false}" +
         ",\"ksp_true_residual_criterion\":{"
         "\"schema_version\":\"floquet_shifted_ksp_true_residual_criterion.v1\","
         "\"reference_norm\":\"rhs_norm_zero_initial_guess\","

@@ -39,6 +39,74 @@ def _require_finite(value):
             _require_finite(child)
 
 
+def _validate_ksp_monitor_progress(window):
+    """Validate cached monitor progress without promoting it to a solve result."""
+    if "ksp_monitor_progress" not in window:
+        return None
+    progress = window.get("ksp_monitor_progress")
+    if not isinstance(progress, dict):
+        raise ValueError("failed subwindow KSP monitor progress is not an object")
+    if (progress.get("schema_version") != "floquet_shifted_ksp_monitor_progress.v1" or
+            progress.get("phase") != "during_eps_solve" or
+            progress.get("source") != "petsc_ksp_monitor" or
+            progress.get("observation_count_scope") !=
+            "all_shifted_ksp_monitor_callbacks_during_one_epsolve" or
+            progress.get("recursive_residual_semantics") !=
+            "petsc_monitor_recursive_norm_not_true_residual"):
+        raise ValueError("failed subwindow KSP monitor progress identity is invalid")
+
+    for name in ("monitor_registered", "available", "last_iteration_available",
+                 "recursive_residual_available", "last_observed_reason_available"):
+        if type(progress.get(name)) is not bool:
+            raise ValueError("failed subwindow KSP monitor availability is invalid")
+    count = progress.get("observation_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError("failed subwindow KSP monitor observation count is invalid")
+    if progress["available"] is not (count > 0):
+        raise ValueError("failed subwindow KSP monitor count availability disagrees")
+    if count > 0 and not progress["monitor_registered"]:
+        raise ValueError("KSP monitor observations lack successful registration")
+    if progress.get("last_observed_reason_is_final") is not False:
+        raise ValueError("monitor reason cannot be asserted as the final KSP reason")
+
+    iteration = progress.get("last_iteration")
+    if progress["last_iteration_available"]:
+        if isinstance(iteration, bool) or not isinstance(iteration, int) or iteration < 0:
+            raise ValueError("failed subwindow KSP monitor iteration is invalid")
+    elif iteration is not None:
+        raise ValueError("unavailable KSP monitor iteration must be null")
+
+    recursive_residual = progress.get("recursive_residual_norm")
+    if progress["recursive_residual_available"]:
+        if (isinstance(recursive_residual, bool) or
+                not isinstance(recursive_residual, (int, float)) or
+                not math.isfinite(recursive_residual) or recursive_residual < 0.0):
+            raise ValueError("failed subwindow recursive residual is invalid")
+    elif recursive_residual is not None:
+        raise ValueError("unavailable recursive residual must be null")
+
+    observed_reason = progress.get("last_observed_reason")
+    if progress["last_observed_reason_available"]:
+        if isinstance(observed_reason, bool) or not isinstance(observed_reason, int):
+            raise ValueError("failed subwindow observed KSP reason is invalid")
+    elif observed_reason is not None:
+        raise ValueError("unavailable observed KSP reason must be null")
+    if (not progress["available"] and
+            (progress["last_iteration_available"] or
+             progress["recursive_residual_available"] or
+             progress["last_observed_reason_available"])):
+        raise ValueError("zero monitor observations cannot have sampled values")
+
+    # These fields describe post-solve/final queries and stay unavailable after
+    # EPSSolve unwinds. In particular, observed reason 0 is monitor progress only.
+    if (window.get("ksp_diagnostics_available") is not False or
+            window.get("ksp_converged_reason") is not None or
+            window.get("eps_converged_reason") is not None or
+            window.get("ksp_final_residual") is not None):
+        raise ValueError("failed subwindow exposes unavailable final KSP diagnostics")
+    return progress
+
+
 def read_failed_schur_action(case_dir):
     """Return a file-hash-bound failed-window observation, or raise ValueError.
 
@@ -82,15 +150,26 @@ def read_failed_schur_action(case_dir):
         raise ValueError("unsupported native terminal failure")
     if windows[-1].get("stop_reason") != failure_reason:
         raise ValueError("terminal subwindow does not match the native failure")
-    native = windows[-1].get("floquet_schur_action_diagnostic")
+    terminal_window = windows[-1]
+    monitor_progress = _validate_ksp_monitor_progress(terminal_window)
+    native = terminal_window.get("floquet_schur_action_diagnostic")
     if not isinstance(native, dict):
         raise ValueError("failed subwindow has no Schur observation")
-    return {"floquet_schur_action_diagnostic": native}, {
+    terminal_observations = [
+        {"index": window.get("index"), "stop_reason": window.get("stop_reason"),
+         "schur_action": window.get("floquet_schur_action_diagnostic")}
+        for window in windows]
+    if monitor_progress is not None:
+        terminal_observations[-1]["ksp_monitor_progress"] = monitor_progress
+    payload = {"floquet_schur_action_diagnostic": native}
+    if monitor_progress is not None:
+        payload["ksp_monitor_progress"] = monitor_progress
+    evidence = {
         "source": "runtime.log", "source_sha256": hashlib.sha256(raw).hexdigest(),
         "source_bytes": len(raw), "source_kind": "terminal_failure_log",
         "native_failure_reason": failure_reason,
-        "native_subwindow_observations": [
-            {"index": window.get("index"), "stop_reason": window.get("stop_reason"),
-             "schur_action": window.get("floquet_schur_action_diagnostic")}
-            for window in windows],
+        "native_subwindow_observations": terminal_observations,
     }
+    if monitor_progress is not None:
+        evidence["ksp_monitor_progress"] = monitor_progress
+    return payload, evidence
