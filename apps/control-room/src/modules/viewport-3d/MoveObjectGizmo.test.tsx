@@ -6,6 +6,7 @@ import {
   installMoveGestureTerminalListeners,
   moveAxisPointerHandlers,
 } from "./MoveObjectGizmo";
+import { SIMULATION_PREPARATION_PATH } from "@/kernel/api/apiPaths";
 import { commitObjectTranslation } from "@/kernel/authoring/objectTranslationMutation";
 
 describe("MoveObjectGizmo", () => {
@@ -203,9 +204,15 @@ describe("MoveObjectGizmo", () => {
       object_id: "magnet-z",
       transform: { translation: [4e-9, 5e-9, 6e-9] },
     });
-    expect(invalidate).toHaveBeenCalledTimes(7);
-    expect(new Set(invalidate.mock.calls.map(([resourceKey]) => resourceKey)).size).toBe(7);
-    expect(invalidate.mock.calls.every(([, revision]) => revision === 22)).toBe(true);
+    expect(invalidate).toHaveBeenCalledTimes(8);
+    expect(new Set(invalidate.mock.calls.map(([resourceKey]) => resourceKey)).size).toBe(8);
+    // Simulation preparation is keyed by a scene-scoped revision token; every
+    // other dependent receives the numeric scene revision.
+    expect(
+      invalidate.mock.calls.every(([resourceKey, revision]) =>
+        revision === (resourceKey === SIMULATION_PREPARATION_PATH ? "scene:22" : 22),
+      ),
+    ).toBe(true);
   });
 
   it("pins the translation request and drops stale-session ACK invalidations", async () => {

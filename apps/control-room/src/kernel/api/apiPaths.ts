@@ -27,6 +27,10 @@ export const PLATFORM_DEVELOPMENT_BACKEND_PATH = openApiV2Path(
   "/v2/platform/development-backend",
 );
 
+export const PLATFORM_RUNTIME_SERVICE_PATH = openApiV2Path(
+  "/v2/platform/runtime-service",
+);
+
 export const PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH = openApiV2Path(
   "/v2/platform/development-restart-requests",
 );

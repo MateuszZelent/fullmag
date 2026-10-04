@@ -18,7 +18,8 @@ function resourceCall(name: string, enabled: boolean): void {
   testState.resourceCalls.push({ enabled, name });
 }
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async () => ({
+  KernelContext: (await import("react")).createContext(null),
   useKernel: () => ({
     resources: {
       getRevision: () => null,
@@ -46,6 +47,7 @@ vi.mock("@/kernel/KernelContext", () => ({
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
   SESSION_STATUS_RESOURCE_KEY: "session:status",
+  useSessionResourceIdentity: () => null,
   useSessionStatusSelector: (selector: (status: unknown) => unknown) =>
     selector({
       data: {

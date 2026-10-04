@@ -82,7 +82,7 @@ function kernel(): KernelApi {
     },
     commands: { getSessionScopeKey: () => mocks.scopeKey },
     resources: { invalidate: mocks.invalidate },
-    selection: { set: mocks.setSelection },
+    selection: { get: () => null, set: mocks.setSelection },
   } as unknown as KernelApi;
 }
 

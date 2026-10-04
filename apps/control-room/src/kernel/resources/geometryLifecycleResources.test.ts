@@ -119,7 +119,10 @@ describe("geometry lifecycle resources", () => {
 
     expect(membershipHooks).toContain("useSessionScopedResourceKey");
     expect(binaryHook).toContain("useSessionScopedResourceKey");
-    expect(binaryHook).toContain("sessionScopedResourceKey(sessionIdentity");
+    // The scoped key comes from the shared hook; the loader forwards the
+    // session scope to the binary facade instead of rebuilding the key.
+    expect(binaryHook).toContain("const { resourceKey, sessionIdentity }");
+    expect(binaryHook).toContain("sessionScopeKey,");
     expect(binaryHook).toContain("fdmRegionMembershipBinaryCache.peek(resourceKey)");
     expect(binaryHook).toContain("sessionIdentity !== null");
   });

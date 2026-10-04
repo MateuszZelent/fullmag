@@ -2,7 +2,7 @@ import { act } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Accordion } from "@/shared/ui/Accordion";
 import { KernelContext } from "@/kernel/KernelContext";
@@ -55,10 +55,39 @@ import {
   resetSharedResourceRuntimeStoreForTests,
   sharedResourceRuntimeStore,
 } from "@/kernel/resources/ResourceRuntimeStore";
+import {
+  sessionScopedResourceKey,
+  type SessionResourceIdentity,
+} from "@/kernel/resources/sessionResourceIdentity";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+
+const TEST_SESSION_IDENTITY: SessionResourceIdentity = {
+  requestScopeEpoch: "api-instance:stage-inspectors-test",
+  sessionEpoch: "session-stage-inspectors-test@1700000000000",
+  sessionId: "session-stage-inspectors-test",
+};
+
+// Runtime resources are cached under a session-scoped key once the session
+// identity is confirmed, so seeded fixtures must use the same scoped key.
+vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/resources/useSessionStatus")>()),
+  useSessionResourceIdentity: () => TEST_SESSION_IDENTITY,
+}));
+
+function updateScopedResourceData(
+  resourceKey: string,
+  data: unknown,
+  revision: number,
+): void {
+  sharedResourceRuntimeStore.updateData(
+    sessionScopedResourceKey(TEST_SESSION_IDENTITY, resourceKey),
+    data,
+    revision,
+  );
+}
 
 const selection = new SelectionController(new EventBus<KernelEventMap>());
 
@@ -1711,7 +1740,7 @@ describe("Study stage inspectors", () => {
       "{stage_id}",
       "hysteresis-1",
     );
-    sharedResourceRuntimeStore.updateData(
+    updateScopedResourceData(
       orientationKey,
       {
         direction: [0, 1, 0],
@@ -1762,7 +1791,7 @@ describe("Study stage inspectors", () => {
         points: [],
       },
     ];
-    sharedResourceRuntimeStore.updateData(
+    updateScopedResourceData(
       branchesKey,
       hysteresisBranchesResource(branches),
       0,
@@ -1834,7 +1863,7 @@ describe("Study stage inspectors", () => {
         points: [],
       },
     ];
-    sharedResourceRuntimeStore.updateData(
+    updateScopedResourceData(
       branchesKey,
       hysteresisBranchesResource(branches),
       0,
@@ -1894,7 +1923,7 @@ describe("Study stage inspectors", () => {
         points: [],
       },
     ];
-    sharedResourceRuntimeStore.updateData(
+    updateScopedResourceData(
       minorLoopsKey,
       hysteresisMinorLoopsResource(minorLoops),
       0,
@@ -1955,7 +1984,7 @@ describe("Study stage inspectors", () => {
       total_points: 81,
     };
 
-    sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
+    updateScopedResourceData(progressKey, progress, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,
@@ -1991,7 +2020,7 @@ describe("Study stage inspectors", () => {
       stage_id: "hysteresis-1",
       stage_index: 0,
     };
-    sharedResourceRuntimeStore.updateData(metricsKey, metricsResource, 0);
+    updateScopedResourceData(metricsKey, metricsResource, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="saturation" />,
@@ -2025,7 +2054,7 @@ describe("Study stage inspectors", () => {
       status: "running",
       total_points: 81,
     };
-    sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
+    updateScopedResourceData(progressKey, progress, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
@@ -2068,7 +2097,7 @@ describe("Study stage inspectors", () => {
         warning_count: 1,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
+    updateScopedResourceData(pointsKey, hysteresisPointsResource(points), 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
@@ -2113,7 +2142,7 @@ describe("Study stage inspectors", () => {
         warning_count: 0,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
+    updateScopedResourceData(pointsKey, hysteresisPointsResource(points), 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
@@ -2151,8 +2180,8 @@ describe("Study stage inspectors", () => {
       status: "running",
       total_points: 81,
     };
-    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource([]), 0);
-    sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
+    updateScopedResourceData(pointsKey, hysteresisPointsResource([]), 0);
+    updateScopedResourceData(progressKey, progress, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
@@ -2223,8 +2252,8 @@ describe("Study stage inspectors", () => {
       status: "running",
       total_points: 80,
     };
-    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
-    sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
+    updateScopedResourceData(pointsKey, hysteresisPointsResource(points), 0);
+    updateScopedResourceData(progressKey, progress, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points-completed" />,
@@ -2280,7 +2309,7 @@ describe("Study stage inspectors", () => {
       status: "running",
       total_points: 81,
     };
-    sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
+    updateScopedResourceData(progressKey, progress, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points-queued" />,
@@ -2315,7 +2344,7 @@ describe("Study stage inspectors", () => {
       status: "running",
       total_points: 81,
     };
-    sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
+    updateScopedResourceData(progressKey, progress, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points-planned" />,
@@ -2409,8 +2438,8 @@ describe("Study stage inspectors", () => {
       stage_id: "hysteresis-1",
       stage_index: 0,
     };
-    sharedResourceRuntimeStore.updateData(bookmarksKey, bookmarks, 0);
-    sharedResourceRuntimeStore.updateData(executionTreeKey, executionTree, 0);
+    updateScopedResourceData(bookmarksKey, bookmarks, 0);
+    updateScopedResourceData(executionTreeKey, executionTree, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points-bookmarks" />,
@@ -2472,7 +2501,7 @@ describe("Study stage inspectors", () => {
       total_points: 21,
       window: "active",
     };
-    sharedResourceRuntimeStore.updateData(executionTreeKey, executionTree, 0);
+    updateScopedResourceData(executionTreeKey, executionTree, 0);
     selection.set(
       {
         kind: "study.stage.action",
@@ -2608,8 +2637,8 @@ describe("Study stage inspectors", () => {
       status: "completed",
       total_points: 5,
     };
-    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
-    sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
+    updateScopedResourceData(pointsKey, hysteresisPointsResource(points), 0);
+    updateScopedResourceData(progressKey, progress, 0);
     selection.set(
       {
         kind: "analysis.chart-point",
@@ -2692,7 +2721,7 @@ describe("Study stage inspectors", () => {
         recoil_start_point_id: null,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
+    updateScopedResourceData(pointsKey, hysteresisPointsResource(points), 0);
     selection.set(
       {
         kind: "analysis.chart-point",
@@ -2783,8 +2812,8 @@ describe("Study stage inspectors", () => {
       m_parallel: 0.91,
       terminal_settle_reason: "resource_detail",
     };
-    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
-    sharedResourceRuntimeStore.updateData(pointKey, pointDetail, 3);
+    updateScopedResourceData(pointsKey, hysteresisPointsResource(points), 0);
+    updateScopedResourceData(pointKey, pointDetail, 3);
     selection.set(
       {
         kind: "study.stage.action",
@@ -2860,7 +2889,7 @@ describe("Study stage inspectors", () => {
         recoil_start_point_id: null,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
+    updateScopedResourceData(pointsKey, hysteresisPointsResource(points), 0);
     selection.set(
       {
         kind: "study.stage.action",
@@ -2943,7 +2972,7 @@ describe("Study stage inspectors", () => {
         recoil_start_point_id: null,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
+    updateScopedResourceData(pointsKey, hysteresisPointsResource(points), 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
@@ -3016,7 +3045,7 @@ describe("Study stage inspectors", () => {
         torque: 5.1e-2,
       },
     ];
-    sharedResourceRuntimeStore.updateData(settleTraceKey, settleTrace, 0);
+    updateScopedResourceData(settleTraceKey, settleTrace, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,
@@ -3077,7 +3106,7 @@ describe("Study stage inspectors", () => {
       stage_id: "hysteresis-1",
       stage_index: 0,
     };
-    sharedResourceRuntimeStore.updateData(
+    updateScopedResourceData(
       stageSettleTraceKey,
       stageSettleTrace,
       4,
@@ -3132,7 +3161,7 @@ describe("Study stage inspectors", () => {
         torque: 2.6e-2,
       },
     ];
-    sharedResourceRuntimeStore.updateData(settleTraceKey, settleTrace, 0);
+    updateScopedResourceData(settleTraceKey, settleTrace, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="settle-trace" />,
@@ -3189,7 +3218,7 @@ describe("Study stage inspectors", () => {
         torque: 1.4e-2,
       },
     ];
-    sharedResourceRuntimeStore.updateData(settleTraceKey, settleTrace, 0);
+    updateScopedResourceData(settleTraceKey, settleTrace, 0);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="settle-trace" />,
@@ -3290,8 +3319,8 @@ describe("Study stage inspectors", () => {
       stage_id: "hysteresis-1",
       stage_index: 0,
     };
-    sharedResourceRuntimeStore.updateData(metricsKey, metricsResource, 0);
-    sharedResourceRuntimeStore.updateData(
+    updateScopedResourceData(metricsKey, metricsResource, 0);
+    updateScopedResourceData(
       reversalFieldsKey,
       hysteresisReversalFieldsResource(reversalFields),
       0,
@@ -3400,8 +3429,8 @@ describe("Study stage inspectors", () => {
       source_point_count: 3,
       status: "computed",
     };
-    sharedResourceRuntimeStore.updateData(planKey, plan, 22);
-    sharedResourceRuntimeStore.updateData(
+    updateScopedResourceData(planKey, plan, 22);
+    updateScopedResourceData(
       adaptiveRefinementKey,
       hysteresisAdaptiveRefinementResource(adaptiveRefinement),
       22,
@@ -3479,7 +3508,7 @@ describe("Study stage inspectors", () => {
       source_point_count: 6,
       status: "computed",
     };
-    sharedResourceRuntimeStore.updateData(
+    updateScopedResourceData(
       adaptiveRefinementKey,
       hysteresisAdaptiveRefinementResource(adaptiveRefinement),
       22,
@@ -3567,7 +3596,7 @@ describe("Study stage inspectors", () => {
       stage_id: "hysteresis-1",
       stage_index: 0,
     };
-    sharedResourceRuntimeStore.updateData(familyKey, family, 31);
+    updateScopedResourceData(familyKey, family, 31);
 
     const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="angular-family" />,
@@ -3622,14 +3651,14 @@ describe("Study stage inspectors", () => {
       stage_id: "hysteresis-1",
       stage_index: 0,
     };
-    sharedResourceRuntimeStore.updateData(protocolKey, protocol, 23);
-    sharedResourceRuntimeStore.updateData(settlePipelineKey, settlePipeline, 23);
+    updateScopedResourceData(protocolKey, protocol, 23);
+    updateScopedResourceData(settlePipelineKey, settlePipeline, 23);
 
     const protocolMarkup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="protocol" />,
       ["hysteresis-protocol"],
     );
-    sharedResourceRuntimeStore.updateData(settlePipelineKey, settlePipeline, 23);
+    updateScopedResourceData(settlePipelineKey, settlePipeline, 23);
     const settleMarkup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,
       ["hysteresis-settle"],
@@ -3647,7 +3676,7 @@ describe("Study stage inspectors", () => {
       "{stage_id}",
       "hysteresis-1",
     );
-    sharedResourceRuntimeStore.updateData(
+    updateScopedResourceData(
       executionTreeKey,
       {
         revision: 31,
@@ -3700,7 +3729,7 @@ describe("Study stage inspectors", () => {
       stage_id: "hysteresis-1",
       stage_index: 0,
     };
-    sharedResourceRuntimeStore.updateData(settlePipelineKey, settlePipeline, 24);
+    updateScopedResourceData(settlePipelineKey, settlePipeline, 24);
 
     const settleMarkup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,

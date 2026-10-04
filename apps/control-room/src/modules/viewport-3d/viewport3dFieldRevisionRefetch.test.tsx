@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import {
   DATA_FIELDS_PATH,
+  SESSIONS_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMANDS_PATH,
 } from "@/kernel/api/apiPaths";
@@ -51,6 +52,9 @@ describe("viewport 3D field revision refetch", () => {
       baseUrl: "http://127.0.0.1:8765",
       fetchImpl: async (url) => {
         const requestUrl = String(url);
+        if (new URL(requestUrl).pathname === SESSIONS_PATH) {
+          return sessionListResponse();
+        }
         if (new URL(requestUrl).pathname === SESSION_STATUS_PATH) {
           return jsonResponse({
             resources: {},
@@ -116,6 +120,9 @@ describe("viewport 3D field revision refetch", () => {
       fetchImpl: async (url, init) => {
         const requestUrl = String(url);
         calls.push({ method: init?.method ?? "GET", url: requestUrl });
+        if (new URL(requestUrl).pathname === SESSIONS_PATH) {
+          return sessionListResponse();
+        }
         if (new URL(requestUrl).pathname === SESSION_STATUS_PATH) {
           return jsonResponse({
             resources: {},
@@ -210,6 +217,19 @@ describe("viewport 3D field revision refetch", () => {
       baseUrl: "http://127.0.0.1:8765",
       fetchImpl: async (url) => {
         const requestUrl = String(url);
+        if (new URL(requestUrl).pathname === SESSIONS_PATH) {
+          return sessionListResponse();
+        }
+        if (new URL(requestUrl).pathname === SESSION_STATUS_PATH) {
+          return jsonResponse({
+            resources: {},
+            session: {
+              request_scope_epoch: "test-api:1",
+              session_epoch: "session-1@1700000000000",
+              session_id: "session-1",
+            },
+          });
+        }
         const quantityId = ["H_demag", "eden_demag"].find((candidate) =>
           requestUrl.includes(`/data/fields/${candidate}/meta`),
         );
@@ -338,6 +358,21 @@ async function waitFor(predicate: () => boolean, message: string): Promise<void>
     });
   }
   throw new Error(message);
+}
+
+/** Session identity is confirmed against the session collection. */
+function sessionListResponse(): Response {
+  return jsonResponse({
+    schema_version: "2.0.0",
+    sessions: [
+      {
+        current: true,
+        name: "session-1",
+        session_id: "session-1",
+        status: "running",
+      },
+    ],
+  });
 }
 
 function jsonResponse(body: unknown): Response {
