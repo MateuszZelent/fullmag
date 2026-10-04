@@ -33,7 +33,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import fullmag_storage as storage  # noqa: E402
-from local_runner.build_entrypoint import required_outputs_for_profile  # noqa: E402
+from local_runner.build_entrypoint import PROFILES, required_outputs_for_profile  # noqa: E402
 from local_runner.build_executor import (  # noqa: E402
     capsule_path,
     trusted_identity,
@@ -587,6 +587,14 @@ def docker_run_argv(build: ManagedBuild, export_id: str) -> list[str]:
     _require(re.fullmatch(r"[a-f0-9]{32}", export_id) is not None, "Invalid managed export ID")
     container_name = f"fullmag-openapi-{export_id}"
     package = str(build.package.resolve())
+    profile = PROFILES.get(build.job["profile"])
+    if profile is None:
+        _fail("Managed build profile is not recognized by the trusted registry")
+    # Use the declared image-owned ABI paths of the validated profile.
+    # Runtime-v2 MFEM/PETSc/SLEPc live outside the legacy dependency prefix.
+    library_paths = ["/package/lib"]
+    library_paths.extend(path for path in profile.environment.get("LD_LIBRARY_PATH", "").split(":") if path)
+    library_paths.append("/opt/fullmag-deps/lib")
     return [
         *_docker_base(), "run", "--rm", "--pull=never",
         "--name", container_name,
@@ -601,7 +609,7 @@ def docker_run_argv(build: ManagedBuild, export_id: str) -> list[str]:
         "--env", "FULLMAG_WEB_STATIC_DIR=/package/web",
         "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
         "--env", "PATH=/package/bin:/usr/local/bin:/usr/bin:/bin",
-        "--env", "LD_LIBRARY_PATH=/package/lib:/opt/fullmag-deps/lib",
+        "--env", f"LD_LIBRARY_PATH={':'.join(library_paths)}",
         "--entrypoint", "/package/bin/fullmag-api", image, "--print-openapi-v2",
     ]
 

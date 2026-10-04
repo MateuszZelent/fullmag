@@ -251,6 +251,16 @@ class ExportRunnerOpenApiTests(unittest.TestCase):
         self.assertTrue(proof)
         self.assertIn("--network=none", self.command)
         self.assertIn("--read-only", self.command)
+        library_path = next(value.split("=", 1)[1] for value in self.command
+                            if value.startswith("LD_LIBRARY_PATH="))
+        self.assertEqual(library_path.split(":")[0], "/package/lib")
+        self.assertIn("/opt/fullmag-mfem-cpu/lib", library_path.split(":"))
+
+    def test_unknown_profile_cannot_choose_library_environment(self) -> None:
+        build = exporter._validate_managed_build(self.fixture.layout, JOB_ID, COMMIT)
+        with patch.object(exporter, "PROFILES", {}, create=True):
+            with self.assertRaisesRegex(exporter.ExportError, "profile is not recognized"):
+                exporter.docker_run_argv(build, "1" * 32)
 
     def test_invalid_runtime_receipt_is_rejected_before_capture(self) -> None:
         self.fixture.close()
