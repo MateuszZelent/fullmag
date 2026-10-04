@@ -145,6 +145,8 @@ pub(super) fn native_modal_progress_event(
             }
             _ => None,
         }
+    } else {
+        None
     };
     let warning = (phase == "cancelling_native_shift_invert").then_some("cancel_requested");
     let subwindow_position = as_u32("current_subwindow")
@@ -219,6 +221,7 @@ mod tests {
         assert_eq!(event.iteration, Some(23));
         assert_eq!(event.max_iterations, Some(300));
         assert_eq!(event.residual, Some(2.0e-9));
+        assert!(event.linear_solve.is_none());
     }
 
     #[test]
