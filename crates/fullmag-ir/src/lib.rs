@@ -287,13 +287,34 @@ fn migrate_v0_2_to_v0_3(value: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject future spatial intent before the legacy typed study can discard it.
+/// Missing fields retain historical 3D semantics; null is explicit presence.
+fn reject_unversioned_spatial_representation(value: &Value) -> Result<(), String> {
+    if value
+        .get("study")
+        .and_then(Value::as_object)
+        .is_some_and(|study| study.contains_key("spatial_representation"))
+    {
+        return Err(
+            concat!(
+                "/study/spatial_representation requires the typed ProblemIRV04 study contract; ",
+                "the legacy StudyIR wire cannot represent this intent"
+            )
+            .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn migrate_problem_ir_json_value_for_direct_read(value: &mut Value) -> Result<bool, String> {
     match problem_ir_version(value)? {
         CURRENT_IR_VERSION => {
+            reject_unversioned_spatial_representation(value)?;
             validate_public_metadata_versions(value, CURRENT_IR_VERSION)?;
             Ok(false)
         }
         PREVIOUS_PUBLIC_IR_VERSION => {
+            reject_unversioned_spatial_representation(value)?;
             migrate_v0_2_to_v0_3(value)?;
             Ok(true)
         }
@@ -308,6 +329,13 @@ fn migrate_problem_ir_json_value_for_direct_read(value: &mut Value) -> Result<bo
 /// migrations in order.
 pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> {
     let version = problem_ir_version(value)?.to_string();
+    if matches!(
+        version.as_str(),
+        CURRENT_IR_VERSION | PREVIOUS_PUBLIC_IR_VERSION | LEGACY_PUBLIC_IR_VERSION
+    ) {
+        // Reject before the explicit chain can mutate historical data.
+        reject_unversioned_spatial_representation(value)?;
+    }
     if version == CURRENT_IR_VERSION {
         return Ok(false);
     }

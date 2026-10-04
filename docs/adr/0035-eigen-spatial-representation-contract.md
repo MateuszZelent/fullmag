@@ -43,13 +43,11 @@ Normy przekroju są liczone na jednostkę długości. Nie zmieniać po cichu ist
 | Control Room | wspólny workspace i jawnie pokazana reprezentacja/dostępność | script round-trip, rzeczywisty browser/WebGL, poprawne jednostki |
 | Nauka | przekrój, exterior/k→0, TetraX oraz extruded 3D | serie zbieżności; bez zastępowania tych bramek testem oracle |
 
-## Nierozstrzygnięte szczegóły przed kodem publicznym
+## Uszczegółowione decyzje przed kodem publicznym
 
-1. Format importu/obiektów przekroju musi współdzielić istniejące semantyki mesh asset i object_id; brak automatycznej redukcji 3D w pierwszym providerze.
-2. Konkretny format ramy oraz numeryczne tolerancje jednostkowości/ortogonalności/collinearity wymagają jednej implementacji i regresji; nie ustalać trzech prywatnych epsilonów w Python/Rust/UI.
-3. Polityka brzegu przekroju jest jawna: pierwszy wariant finite air cross-section wymaga osobnej zbieżności. Nie obiecywać dokładnego open exterior przez stały Robin beta ani używać providera Fredkin–Koehler 3D jako 2D.
+[Specyfikacja v1](../specs/fem-waveguide-spatial-representation-v1.md) definiuje nowy triangle/edge descriptor 2D ze stabilnym object_id, stabilnymi region_id/boundary_component_id, kompletną incidence krawędzi i ramą; nie reinterpretować 3D FemConnectivityIR. Wspólna dimensionless geometry tolerance wynosi 1e-12 i jest publikowana w resolved provenance. Jawne skalowanie długości osi nie zmienia kierunku ani nie wprowadza Gram–Schmidta. Pierwszy provider używa finite-air cross-section z Dirichlet phi=0 na outer boundary i osobną zbieżnością; nie jest dokładnym infinite exterior.
 
-Szczegóły te nie zmieniają zatwierdzonej fizyki dwóch reprezentacji, ale muszą być domknięte przed wystawieniem działającego API. Dokument stanowi konkretny przedmiot review S01/S02, nie zamknięcie S09 ani dowód wyników.
+Normy, jednostki normalized shape/amplitude/energii i mapowanie dotychczasowych unit_l2/unit_max_amplitude opisuje proponowana [nota 0833](../physics/0833-fem-waveguide-25d-normalization.md); jej wdrożenie wymaga typed kontraktu i osobnych bramek. Kontrakt pozostaje proposed: publiczna implementacja, certyfikaty i provider nie istnieją. Zatwierdzenie tekstu nie będzie dowodem runtime ani ukończeniem S09.
 
 ## Migracja, rollback i wskazane źródła
 
@@ -69,6 +67,61 @@ Dokładne punkty wdrożenia do review:
 - Wspólny Study Inspector, study resource hooks i viewport field adapters: representation-aware units/projection, bez osobnego transportu dla 2D.
 
 Status rollback/ryzyka: obecnie tylko dokument proposed; nie zmienia IR/ABI, legalności, runtime ani artefaktów. Publiczny kontrakt i owner nie są zaimplementowane. Źródłowe wprowadzenie selektora może nastąpić dopiero razem z walidacją i prawdziwym guardem unavailable; promocja do supported wymaga produkcyjnego providera i opisanych bramek. Bounded oracle nigdy nie zastępuje tej promocji.
+
+## Uszczegółowienie po review
+
+[Specyfikacja v1](../specs/fem-waveguide-spatial-representation-v1.md) wybiera pierwszy finite-air Dirichlet provider, oddziela spin_wave_bc i interfejsy, zamraża migrację trzech przypadków Γ oraz opisuje structural_2d certificate, nowy descriptor trójkątnego mesha i serializację axis/k/frame. Sam kontrakt pozostaje proposed; schema/provider/normalizacja nie zostały jeszcze zaimplementowane. Osobna [nota normalizacji 0833](../physics/0833-fem-waveguide-25d-normalization.md) i niezależne kontrole algebraiczne są przygotowane; nie dowodzą providera 2D.
+
+
+## Wersjonowanie: istniejący V04, bez konkurencyjnego wire
+
+Przegląd aktualnych źródeł wykazał, że `crates/fullmag-ir/src/physics_object.rs`
+już zawiera osobny `ProblemIRV04`, `ProblemIRV04Wire` oraz atomowy migrator
+`migrate_v0_3_problem_ir_to_v0_4`. Oba warianty V04 nadal używają starego `StudyIR`.
+Nie wprowadzać konkurencyjnej wersji 0.4/0.5 dla falowodu. Proponowane
+`waveguide_2p5d` należy do istniejącego przyszłego cutoveru V04; obecny writer
+Python i publiczny `ProblemIR` pozostają 0.3 do pełnej migracji wszystkich konsumentów.
+
+Nie wolno publikować reprezentacji w ignorowanym polu wire 0.3. Guard obecności
+`/study/spatial_representation` jest przygotowany w źródłach publicznego readera
+0.3/0.2, jawnego łańcucha historycznego oraz staging V04 i jego migratora; obejmuje
+również null. Wskazuje wymagany typed StudyIRV04 przed możliwym zgubieniem intencji.
+Odmowa migracji następuje przed zmianą danych. Brak pola zachowuje historyczne
+pełne 3D. Source review i parser PASS; kompilacja/regresje/runtime pozostają OPEN.
+Nie oznacza to wdrożonej odmowy w starszych działających instancjach API.
+
+Jawny łańcuch historyczny `0.1→0.2→0.3` pozostaje zachowany. Oddzielne
+`0.3→0.4` wykorzystuje istniejący migrator V04, wstawiając dla historycznego
+braku tylko `full_3d` i provenance migracji. Nie tworzy periodyczności,
+invariance ani certyfikatu waveguide. Publiczne wersje root `ir_version`,
+`problem_meta.script_api_version` i `serializer_version` przełączają się razem
+przy atomowym cutoverze; obecna bezpośrednia polityka odczytu 0.3/0.2 nie zmienia
+się w tym dokumencie. Przyszły cutover wymaga osobnej jawnej macierzy readerów.
+
+V04 wymaga typed study i typed wariantów reprezentacji z lokalnym
+`deny_unknown_fields`. Nie stosować globalnego zakazu na cały `ProblemIRV04`,
+ponieważ jego `legacy_extensions` są celowym kontraktem. Spatial representation
+ani jej BC nie mogą być schowane w tych rozszerzeniach. Migracja historyczna
+musi zbadać obecność BC przed deserializacją starego `StudyIR`, którego
+`serde(default)` zamienia brak w open.
+
+| Przypadek | Wymagana interpretacja |
+|---|---|
+| Legacy 0.3 bez reprezentacji i bez BC | full_3d, historyczny default open, odnotowany w provenance |
+| Legacy BC jawne null | błąd typu; null nie jest brakiem |
+| V04 full_3d | jawne BC pełnej domeny; nie otrzymuje certyfikatu waveguide |
+| V04 waveguide_2p5d | wymagane nie-null tagged BC wewnątrz wariantu; legacy top-level BC całkowicie nieobecne, również jako null |
+
+Wymagane źródłowe bramki: test odrzucenia reprezentacji w 0.3, zachowanie
+historycznych testów migracji, V04 round-trip i missing/null matrix oraz
+unavailable gate przed wyborem 3D/Bloch. Guard ma source review/parser PASS i sześć przygotowanych regresji Rust; ich wykonanie pozostaje OPEN zgodnie z zakazem kompilacji unit tests. Pozostałe nowe bramki są OPEN.
+Ta sekcja jest proposed i nie zmienia publicznego writer/reader/ABI.
+
+### Admission przyszłego V04 i zakres pierwszego cutoveru
+
+Istniejący V04 jest staging wire, a nie wejściem obecnego produkcyjnego planera. Samo `serde_json::from_value::<ProblemIRV04>` nie uruchamia pełnego `validate()` i nie stanowi admission. Przyszły wspólny admission path ma przed planowaniem sprawdzić root `ir_version`, `problem_meta.script_api_version` oraz `serializer_version`, wykonać pełne `validate()`, a następnie przekazać typed study do właściwego planera. Ten path nie jest jeszcze zaimplementowany.
+
+Pierwszy cutover reprezentacji falowodu obejmuje tylko Eigenmodes. FrequencyResponse i pozostałe study kinds mają jawnie odrzucać `waveguide_2p5d` jako unsupported do własnej implementacji i kwalifikacji; nie dziedziczą legalności Eigenmodes. Provenance historycznego brakującego BC ma zawierać `defaulted_from_missing`; jawne null pozostaje błędem. Te reguły są częścią proposed contract, bez zmiany obecnej ścieżki 0.3.
 
 ## Rozstrzygnięcia review przed typed descriptor S09
 

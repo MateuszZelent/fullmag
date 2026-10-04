@@ -417,6 +417,9 @@ impl<'de> Deserialize<'de> for ProblemIRV04 {
         D: Deserializer<'de>,
     {
         let mut value = Value::deserialize(deserializer)?;
+        // Staging V04 still embeds legacy StudyIR until the typed cutover.
+        crate::reject_unversioned_spatial_representation(&value)
+            .map_err(serde::de::Error::custom)?;
         crate::normalize_frozen_membership_defaults_in_problem_value(&mut value)
             .map_err(serde::de::Error::custom)?;
         if let Some(policy_value) = value.pointer("/mesh_semantics/requested_policy") {
@@ -515,6 +518,9 @@ fn insert_legacy_object_alias(
 /// It is deliberately opt-in: direct `ProblemIR` deserialization still reads 0.3.
 /// Failed migrations are atomic and leave the caller-owned document unchanged.
 pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> {
+    if value.get("ir_version").and_then(Value::as_str) == Some("0.3.0") {
+        crate::reject_unversioned_spatial_representation(value)?;
+    }
     let mut candidate = value.clone();
     migrate_v0_3_problem_ir_to_v0_4_in_place(&mut candidate)?;
     *value = candidate;
