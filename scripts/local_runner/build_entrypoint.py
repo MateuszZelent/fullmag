@@ -1429,6 +1429,68 @@ def _loaded_mfem_version(library: Any, c_text: Any) -> str:
     return value
 
 
+_LEGACY_RUNTIME_STARTUP_STAMP_RE = re.compile(
+    r"^\[fullmag\] build: (?P<build>\S(?:[^|\r\n]*\S)?) \| "
+    r"source snapshot: (?P<snapshot>[a-f0-9]{64})$"
+)
+_LEGACY_IDENTITY_RUNTIME_STARTUP_STAMP_RE = re.compile(
+    r"^\[fullmag\] build: "
+    r"(?P<build_timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) \| "
+    r"commit: (?P<commit>[a-f0-9]{40}) \| (?P<state>clean|dirty|unknown) \| "
+    r"source snapshot: (?P<snapshot>[a-f0-9]{64})$"
+)
+_VERSION_RUNTIME_STARTUP_STAMP_RE = re.compile(
+    r"^\[fullmag\] version: (?P<version>[^|\s\r\n]+) \| "
+    r"build: (?P<build>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) \| "
+    r"commit: (?P<commit>[a-f0-9]{40}) \| (?P<state>clean|dirty|unknown) \| "
+    r"source snapshot: (?P<snapshot>[a-f0-9]{64})$"
+)
+
+
+def _validate_runtime_startup_stamp(stderr: object, expected_snapshot: object) -> str:
+    """Require one producer-shaped runtime stamp bound to the requested source."""
+
+    if not isinstance(stderr, str):
+        raise BuildEntryPointError("runtime probe startup stamp is malformed")
+    candidates = [
+        line
+        for line in stderr.splitlines()
+        if line.startswith(("[fullmag] build:", "[fullmag] version:"))
+    ]
+    if not candidates:
+        raise BuildEntryPointError("runtime probe startup stamp lacks source snapshot identity")
+    if len(candidates) != 1:
+        raise BuildEntryPointError("runtime probe startup stamp is ambiguous")
+
+    startup_stamp = candidates[0]
+    match = _LEGACY_RUNTIME_STARTUP_STAMP_RE.fullmatch(startup_stamp)
+    if match is None:
+        match = _LEGACY_IDENTITY_RUNTIME_STARTUP_STAMP_RE.fullmatch(startup_stamp)
+    if match is None:
+        match = _VERSION_RUNTIME_STARTUP_STAMP_RE.fullmatch(startup_stamp)
+    if match is None:
+        raise BuildEntryPointError("runtime probe startup stamp is malformed")
+    timestamp = match.groupdict().get("build_timestamp")
+    if "version" in match.groupdict():
+        timestamp = match.group("build")
+    if timestamp is not None:
+        try:
+            datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError as error:
+            raise BuildEntryPointError("runtime probe startup stamp is malformed") from error
+
+    stamped_snapshot = match.group("snapshot")
+    if (
+        not isinstance(expected_snapshot, str)
+        or not SHA256_RE.fullmatch(expected_snapshot)
+        or stamped_snapshot != expected_snapshot
+    ):
+        raise BuildEntryPointError(
+            "runtime probe startup stamp source snapshot does not match the native source identity"
+        )
+    return startup_stamp
+
+
 def _attest_slepc_runtime(
     workspace: Path,
     artifacts: Path,
@@ -1694,28 +1756,9 @@ def _attest_slepc_runtime_in_process(
         raise BuildEntryPointError("SLEPc runtime availability probe returned invalid JSON") from error
     if not isinstance(availability, dict) or availability.get("native_fem_cpu_available") is not True:
         raise BuildEntryPointError("runtime probe did not attest native FEM CPU availability")
-    startup_stamp = next(
-        (
-            line.strip()
-            for line in (probe.stderr or "").splitlines()
-            if line.startswith("[fullmag] build:")
-        ),
-        "",
+    startup_stamp = _validate_runtime_startup_stamp(
+        probe.stderr or "", native_identity.get("source_snapshot_sha256")
     )
-    source_snapshot_marker = "source snapshot:"
-    if not startup_stamp or source_snapshot_marker not in startup_stamp:
-        raise BuildEntryPointError("runtime probe startup stamp lacks source snapshot identity")
-    snapshot_suffix = startup_stamp.split(source_snapshot_marker, 1)[1].strip()
-    stamped_snapshot = snapshot_suffix.split(maxsplit=1)[0] if snapshot_suffix else ""
-    expected_snapshot = native_identity.get("source_snapshot_sha256")
-    if (
-        not isinstance(expected_snapshot, str)
-        or not SHA256_RE.fullmatch(stamped_snapshot)
-        or stamped_snapshot != expected_snapshot
-    ):
-        raise BuildEntryPointError(
-            "runtime probe startup stamp source snapshot does not match the native source identity"
-        )
 
     class DependencyInfo(ctypes.Structure):
         _fields_ = [

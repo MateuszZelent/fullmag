@@ -17,8 +17,19 @@ Rust/TS parser, API hygiene i source-map PASS. Capture CSS: 15 testów PASS.
 Testów kompilowanych nie uruchomiono. Pełne szczegóły decyzji, warningów hooka
 i ograniczeń: `docs/raports/2026-10-04-dispersion-master-merge-checkpoint.md`.
 
-Managed build #229 (`b0fbe5759e5940ceb41c0bc283cef8ff`) jest running,
-z rzeczywistą kompilacją Rust/FEM. Profil `fem-cpu-slepc-runtime-v2`, źródło
+Managed build #229 (`b0fbe5759e5940ceb41c0bc283cef8ff`) zakończył się
+terminalnym failed/exit2. Native-build przeszedł exit0 w 2503003,827 ms
+(około41m43s); availability probe przeszedł exit0 i FEM CPU=true.
+Attestacja zatrzymała pakiet: consumer rozpoznawał wyłącznie `[fullmag] build:`,
+natomiast nowy producent wypisuje `[fullmag] version:`. Rzeczywisty stamp zawiera
+dokładny oczekiwany hash snapshotu; nie jest to błąd solvera ani brakujący hash.
+Kontroler nearest zatrzymał się przed eksportem/solve; nowych częstotliwości zero.
+Poprawka parsera jest zaimplementowana i zreviewowana: 60 interpretowanych
+testów PASS oraz odczyt rzeczywistych stampów #228/#229 przez nowy helper PASS.
+Pozostają aktualizacja trusted koordynatora przy pustej kolejce i nowy managed
+job; sam parser nie jest ponowną attestacją runtime. Failed receipt #229,
+logi, kapsuła i skompilowane dane pozostają zachowane. Profil
+`fem-cpu-slepc-runtime-v2`, źródło
 `bdb927fd2400cb2372d1fbeeff57e8c62f99016a`, digest
 `c3fc343bbd56bac5555ad1f7c52c8235ea3efb404600002926f5dabfe2fc0156`.
 Aktualny klient pochodzi z worktree; stary klient głównego checkoutu ma inną
@@ -39,7 +50,10 @@ i receipt-y zachowano. Zbieżność, Gamma full window, wspólny signed15,
 serial/adaptive parity, GUI, A1-COMSOL, GPU i S09 nadal wymagają osobnych dowodów.
 Dokładną parę nearest k=10 GMRES/FGMRES przygotowano dla #229: identyczny model,
 siatka, target 11,2 GHz i tolerancje; różni się tylko KSP kind. Nie wykonano jej.
-Air1,075 wymaga ponownego przygotowania po zmianie drivera. S00–S12 nadal OPEN.
+Dry-run air1,075 na historycznym #228 został odrzucony przez aktualną bramkę
+receipt przed solve: dawny runtime-v2 deklaruje FEM_GPU=ON, a bieżący CPU-only
+kontrakt wymaga OFF. Nie obchodzono sprawdzenia i nie zmieniono historycznych
+receiptów. Dalsze triale wymagają nowego zgodnego pakietu. S00–S12 nadal OPEN.
 
 Integracja remote PR97 pozostaje niezakończona. Główny checkout master miał
 24 dirty ścieżki i dwa unikalne lokalne commity (688f1f23… oraz ddfd6bc1…);

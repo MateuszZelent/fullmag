@@ -86,3 +86,57 @@ Regresje sprawdzają capture commit/snapshot oraz odrzucanie podobnych ścieżek
 Build wymaga nowego, pełnego SHA poprawki; master merge i kwalifikacja pozostają otwarte.
 
 Weryfikacja poprawki capture: scripts/test_local_runner_source.py — 15 testów OK, exit 0 (60,4 s); bez kompilacji testów jednostkowych.
+
+
+## Terminalny wynik #229 — zgodność startup stamp
+
+Job `b0fbe5759e5940ceb41c0bc283cef8ff` zakończył się failed/exit2 po native-build
+exit0 (2503003,827 ms, około41m43s). Availability subprocess zakończył się exit0
+i `native_fem_cpu_available=true`; `native_fem_gpu_available=false`. Attestacja
+odrzuciła nowy stamp `[fullmag] version: … | build: … | commit: … | clean | source snapshot: …`,
+ponieważ `scripts/local_runner/build_entrypoint.py` wybierał tylko wiersz zaczynający
+się `[fullmag] build:`. Producentem jest `crates/fullmag-build-info/src/lib.rs::print_startup_stamp`.
+Actual snapshot `2a932af34c40391797e1f9804e1d77b5b8c25c3fb454ce3459001d14c6d01b0c`
+jest dokładnie zgodny z przypiętymi źródłami. To błąd parsera attestacji,
+nie dowód awarii numerycznej. Runtime ani pakiet nie otrzymują PASS tylko dlatego,
+że kompilacja i availability probe się powiodły.
+
+Kontroler nearest zatrzymał się przed OpenAPI/dry-run/solve. Nie uruchamiał ani nie
+ponawiał nowego buildu, nie zmieniał failed receipt i nie usuwał danych. Wymagana
+poprawka zachowuje ścisły SHA match i odrzuca niejednoznaczne/malformed stampy.
+Następnie potrzebne są aktualny trusted runner i nowy managed job z poprawką.
+
+Niezależny managed dry-run rafinacji air1,075 na starszym #228 zakończył się
+`managed build receipt verification failed` przed wykonaniem solvera. Jego
+historyczny runtime-v2 ma FEM_GPU=ON, podczas gdy aktualny kontrakt CPU-only
+po integracji wymaga OFF. Stare wyniki pozostają historycznym dowodem dokładnie
+tych kapsuł; nie zmieniono receiptów ani bramki dopuszczenia nowego runu.
+
+S09: read-only trace wskazuje brak kanonicznego wiązania mesh→V04 registries,
+odrębnego od geometrii/incidence. Nie aktywowano providera ani nie wprowadzono
+niejawnego dziedziczenia przypisań. GUI: runtime-v2 nie buduje frontendu; domyślny
+tsconfig Next obejmuje także test inputs, a production-source check ma odrębną
+konfigurację. Przed buildem GUI potrzebna jest jawna produkcyjna trasa bez unit
+inputs oraz późniejszy dowód browser/WebGL i zgodności frontend/runtime.
+
+
+### Poprawka parsera — dowód źródłowy
+
+`scripts/local_runner/build_entrypoint.py::_validate_runtime_startup_stamp`
+rozpoznaje pełny historyczny format build/commit/state/snapshot oraz bieżący
+version/build/commit/state/snapshot; zachowuje wcześniejszy skrócony legacy
+fixture. Wymaga jednego stampu, pełnej poprawnej struktury, poprawnego czasu
+pełnych formatów i dokładnego SHA-256 snapshotu; nie wybiera pierwszego z wielu
+stampów i nie akceptuje dowolnego wiersza zawierającego marker.
+
+`scripts/test_local_runner_build_entrypoint.py`: 60 interpretowanych testów PASS
+(2,55s), w tym rzeczywisty fixture #229 i pełny legacy #228, mismatch, brak pola,
+niepoprawny/uppercase/krótki digest, błędny timestamp i duplikaty. Root review
+poprawiło początkowy wariant legacy rozpoznający jedynie skrócony fixture.
+Scoped diff check PASS. Niezależny odczyt zachowanych stderr #228/#229 przez
+helper również PASS z hashami wejść; nie wykonał runtime'u ani nie zmienił
+receiptów. Żadnych testów Rust/C++/React nie skompilowano.
+
+Zakres jest źródłowy. Aktualny obraz koordynatora nadal wymaga tej poprawki,
+a następny managed build musi potwierdzić pełną attestację i pakiet. Failed
+#229 pozostaje failed; nie promujemy samego kompilowanego workspace do runtime.

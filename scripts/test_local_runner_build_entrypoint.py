@@ -17,6 +17,108 @@ from local_runner import build_entrypoint as entrypoint
 
 
 class BuildEntryPointTests(unittest.TestCase):
+    def test_runtime_startup_stamp_accepts_reported_current_and_legacy_formats(self) -> None:
+        actual_snapshot = "2a932af34c40391797e1f9804e1d77b5b8c25c3fb454ce3459001d14c6d01b0c"
+        actual_stamp = (
+            "[fullmag] version: 0.1.0-dev.20261004.gbdb927fd2400+9773 | "
+            "build: 2026-10-04T16:55:06Z | "
+            "commit: bdb927fd2400cb2372d1fbeeff57e8c62f99016a | clean | "
+            f"source snapshot: {actual_snapshot}"
+        )
+        self.assertEqual(
+            entrypoint._validate_runtime_startup_stamp(actual_stamp + "\n", actual_snapshot),
+            actual_stamp,
+        )
+
+        reported_legacy_snapshot = "2facba51b671a586a129d6271a41fd3281d66e0d8a66fde827ab516e1830da2f"
+        reported_legacy_stamp = (
+            "[fullmag] build: 2026-10-04T08:05:40Z | "
+            "commit: 57182911c6e8e721b8ee9705aa7f70491c70fe94 | clean | "
+            f"source snapshot: {reported_legacy_snapshot}"
+        )
+        self.assertEqual(
+            entrypoint._validate_runtime_startup_stamp(
+                reported_legacy_stamp, reported_legacy_snapshot
+            ),
+            reported_legacy_stamp,
+        )
+
+        legacy_snapshot = "a" * 64
+        legacy_stamp = f"[fullmag] build: test | source snapshot: {legacy_snapshot}"
+        self.assertEqual(
+            entrypoint._validate_runtime_startup_stamp(legacy_stamp, legacy_snapshot),
+            legacy_stamp,
+        )
+
+    def test_runtime_startup_stamp_rejects_missing_malformed_mismatched_and_ambiguous(self) -> None:
+        expected_snapshot = "a" * 64
+        valid_stamp = f"[fullmag] build: test | source snapshot: {expected_snapshot}"
+        cases = (
+            ("no marker", "", "lacks source snapshot identity"),
+            (
+                "unrelated marker",
+                f"[fullmag] warning: source snapshot: {expected_snapshot}\n",
+                "lacks source snapshot identity",
+            ),
+            (
+                "malformed current stamp",
+                "[fullmag] version: 0.1.0-dev | build: invalid | commit: nope | clean | "
+                + "source snapshot: "
+                + "g" * 64,
+                "is malformed",
+            ),
+            (
+                "known prefix missing source marker",
+                "[fullmag] version: 0.1.0-dev | build: 2026-10-04T16:55:06Z | commit: "
+                + "a" * 40
+                + " | clean",
+                "is malformed",
+            ),
+            (
+                "short snapshot digest",
+                f"[fullmag] build: test | source snapshot: {expected_snapshot[:-1]}",
+                "is malformed",
+            ),
+            (
+                "uppercase snapshot digest",
+                f"[fullmag] build: test | source snapshot: {'A' * 64}",
+                "is malformed",
+            ),
+            (
+                "invalid current build timestamp",
+                "[fullmag] version: 0.1.0-dev | build: 2026-99-99T16:55:06Z | "
+                + "commit: "
+                + "a" * 40
+                + " | clean | source snapshot: "
+                + expected_snapshot,
+                "is malformed",
+            ),
+            (
+                "mismatched snapshot",
+                f"[fullmag] build: test | source snapshot: {'b' * 64}",
+                "does not match the native source identity",
+            ),
+            (
+                "current-format mismatched snapshot",
+                "[fullmag] version: 0.1.0-dev.20261004.ga | "
+                "build: 2026-10-04T16:55:06Z | "
+                + "commit: "
+                + "a" * 40
+                + " | clean | source snapshot: "
+                + "b" * 64,
+                "does not match the native source identity",
+            ),
+            (
+                "ambiguous stamps",
+                valid_stamp + "\n" + valid_stamp,
+                "is ambiguous",
+            ),
+        )
+        for label, stderr, error in cases:
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(entrypoint.BuildEntryPointError, error):
+                    entrypoint._validate_runtime_startup_stamp(stderr, expected_snapshot)
+
     def test_specialized_profile_keeps_baseline_outputs_without_release_runtime(self) -> None:
         output = self.root / "specialized-output"
         output.mkdir()
@@ -518,7 +620,8 @@ class BuildEntryPointTests(unittest.TestCase):
         native_library.parent.mkdir(parents=True)
         native_library.write_bytes(b"library")
 
-        expected_snapshot = str(self._identity()["source_snapshot_sha256"])
+        identity = self._identity()
+        expected_snapshot = str(identity["source_snapshot_sha256"])
 
         class FakeQuery:
             argtypes = None
@@ -544,13 +647,17 @@ class BuildEntryPointTests(unittest.TestCase):
             cdll_calls.append((path, mode))
             return FakeLibrary()
 
+        startup_stamp = (
+            f"[fullmag] version: 0.1.0-dev.20261004.g{str(identity['head_commit_full'])[:12]}+1 | "
+            "build: 2026-10-04T16:55:06Z | "
+            f"commit: {identity['head_commit_full']} | clean | "
+            f"source snapshot: {expected_snapshot}\n"
+        )
         probe = entrypoint.subprocess.CompletedProcess(
             [str(runtime_bin)],
             0,
             '{"native_fem_cpu_available": true}',
-            "[fullmag] build: test | source snapshot: "
-            + str(self._identity()["source_snapshot_sha256"])
-            + "\n",
+            startup_stamp,
         )
         probe_environment: dict[str, str] = {}
         probe_options: dict[str, object] = {}
@@ -560,7 +667,6 @@ class BuildEntryPointTests(unittest.TestCase):
             probe_options.update({"timeout": kwargs["timeout"], "text": kwargs["text"]})
             return probe
 
-        identity = self._identity()
         stale_artifacts = self.root / "stale-artifacts"
         stale_artifacts.mkdir()
         with patch.object(
@@ -636,9 +742,7 @@ class BuildEntryPointTests(unittest.TestCase):
             (self.artifacts / "logs" / "slepc-runtime-availability.stderr.log").read_text(
                 encoding="utf-8"
             ),
-            "[fullmag] build: test | source snapshot: "
-            + str(self._identity()["source_snapshot_sha256"])
-            + "\n",
+            startup_stamp,
         )
         self.assertNotIn("environment", probe_state)
         self.assertEqual(
