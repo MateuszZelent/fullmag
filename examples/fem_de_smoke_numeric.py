@@ -19,6 +19,14 @@ import os
 import fullmag as fm
 
 SAMPLING = os.environ.get("FULLMAG_DE_SMOKE_SAMPLING", "two")
+_AIR_GROWTH_RATE_VALUES = {"1.3": 1.3, "1.15": 1.15}
+_AIR_GROWTH_RATE_TEXT = os.environ.get("FULLMAG_DE_SMOKE_AIR_GROWTH_RATE", "1.3")
+if _AIR_GROWTH_RATE_TEXT not in _AIR_GROWTH_RATE_VALUES:
+    raise ValueError(
+        "FULLMAG_DE_SMOKE_AIR_GROWTH_RATE must be '1.3' or '1.15', "
+        f"got {_AIR_GROWTH_RATE_TEXT!r}"
+    )
+AIR_GROWTH_RATE = _AIR_GROWTH_RATE_VALUES[_AIR_GROWTH_RATE_TEXT]
 _SINGLE_K_NAMES = {f"{prefix}k{k}" for prefix in ("", "bv-") for k in range(-25, 26)}
 _PATH_NAMES = {
     "two", "five", "positive-six", "bv-positive-six", "positive-26",
@@ -158,7 +166,7 @@ study.wait_for_solve(True)
 study.universe(mode="manual", size=(CELL_PERIOD_M, CELL_PERIOD_M, DOMAIN_HEIGHT_M),
                center=(0.0, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
 study.universe.mesh(maximum_element_size=100e-9,
-                    maximum_element_growth_rate=1.3, grading="geometric")
+                    maximum_element_growth_rate=AIR_GROWTH_RATE, grading="geometric")
 study.pbc(x=True, y=True, demag="periodic_airbox_k0")
 study.objects.mesh.defaults(periodic_pair_ids=["x_faces", "y_faces"])
 body = study.geometry(fm.Box(size=(CELL_PERIOD_M, CELL_PERIOD_M, FILM_THICKNESS_M), name="film"), name="film")
@@ -195,6 +203,7 @@ study.runtime_metadata("de_smoke", {
     "film_thickness_m": FILM_THICKNESS_M,
     "mesh_level": MESH_LEVEL,
     "magnetic_element_size_m": MAGNETIC_ELEMENT_SIZE_M,
+    "air_growth_rate": AIR_GROWTH_RATE,
     "through_thickness_elements": THICKNESS_LAYERS,
     "cell_period_m": CELL_PERIOD_M,
     "air_padding_each_side_m": AIR_PADDING_EACH_SIDE_M,

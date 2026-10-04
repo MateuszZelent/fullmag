@@ -1,5 +1,11 @@
 """Regression checks for the immutable DE pilot execution route."""
+import contextlib
 import hashlib
+import io
+import os
+import runpy
+import sys
+import types
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -18,6 +24,32 @@ class _ComposeOverrideLoader(yaml.SafeLoader):
 _ComposeOverrideLoader.add_constructor(
     "!reset", lambda loader, node: loader.construct_sequence(node, deep=True)
 )
+
+
+class _FixtureDslRecorder:
+    def __init__(self):
+        self.mesh_calls = []
+        self.runtime_metadata = []
+
+
+class _FixtureDslNode:
+    def __init__(self, recorder, path):
+        object.__setattr__(self, "_recorder", recorder)
+        object.__setattr__(self, "_path", path)
+
+    def __getattr__(self, name):
+        return _FixtureDslNode(self._recorder, f"{self._path}.{name}")
+
+    def __setattr__(self, name, value):
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+
+    def __call__(self, *args, **kwargs):
+        if self._path == "study().universe.mesh":
+            self._recorder.mesh_calls.append(kwargs)
+        elif self._path == "study().runtime_metadata":
+            self._recorder.runtime_metadata.append(args[1])
+        return _FixtureDslNode(self._recorder, self._path + "()")
 
 
 def _write_fms_fixture(
@@ -996,6 +1028,185 @@ class PilotTests(unittest.TestCase):
         with self.assertRaises(pilot.managed.BenchmarkError):
             pilot.compose_command(context, Path("/outputs"),
                                   pilot="de-smoke-signed-eleven", solver_rtol="1e-7")
+
+    def test_air_growth_rate_is_single_k_versioned_non_parallel_de_smoke_only(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"})
+        shell = pilot.compose_command(
+            context, Path("/outputs"), pilot="de-smoke-k10", external_model=True,
+            air_growth_rate="1.15",
+        )[-1]
+        self.assertIn("export FULLMAG_DE_SMOKE_AIR_GROWTH_RATE=1.15", shell)
+        default_shell = pilot.compose_command(
+            context, Path("/outputs"), pilot="de-smoke-k10", external_model=True,
+        )[-1]
+        self.assertNotIn("FULLMAG_DE_SMOKE_AIR_GROWTH_RATE", default_shell)
+
+        rejected = (
+            ("de100", True, None),
+            ("de-smoke-two", True, None),
+            ("de-smoke-signed-eleven", True, None),
+            (pilot.SIGNED_FIFTEEN_PILOT, True, "serial"),
+            (pilot.PARALLEL_PROBE_PILOT, True, "serial"),
+            ("de-smoke-bv-k10", True, None),
+            ("de-smoke-k10", False, None),
+            ("de-smoke-k10", True, "adaptive"),
+        )
+        for pilot_name, external_model, parallel_mode in rejected:
+            with self.subTest(pilot=pilot_name, external_model=external_model,
+                              parallel_mode=parallel_mode), self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.compose_command(
+                    context, Path("/outputs"), pilot=pilot_name,
+                    external_model=external_model, parallel_mode=parallel_mode,
+                    air_growth_rate="1.15",
+                )
+        for unsupported in ("1.2", 1.15, True):
+            with self.subTest(unsupported=unsupported), self.assertRaises(pilot.managed.BenchmarkError):
+                pilot.compose_command(
+                    context, Path("/outputs"), pilot="de-smoke-k10", external_model=True,
+                    air_growth_rate=unsupported,
+                )
+
+    def test_air_growth_rate_input_support_and_preview_are_version_bound(self):
+        fixture_path = Path(__file__).resolve().parents[1] / "examples" / "fem_de_smoke_numeric.py"
+        source = fixture_path.read_bytes()
+        pilot._validate_air_growth_rate_model_input(source)
+        old_source = source.replace(
+            b"FULLMAG_DE_SMOKE_AIR_GROWTH_RATE",
+            b"FULLMAG_DE_SMOKE_AIR_GROWTH_RATE_UNSUPPORTED",
+        )
+        with self.assertRaisesRegex(pilot.managed.BenchmarkError, "applies"):
+            pilot._validate_air_growth_rate_model_input(old_source)
+
+        layout = {"storage_root": Path("C:/storage"), "worktree_id": "worktree"}
+        identity = {"kind": "versioned_standalone_input", "sha256": "a" * 64}
+        preview = pilot._dry_run_output_dir(layout, "b" * 32, "de-smoke-k10", identity)
+        self.assertEqual(
+            preview,
+            Path("C:/storage/runs/worktree") / ("b" * 32) / ("de-smoke-k10-preview-" + "a" * 64),
+        )
+        self.assertNotEqual(
+            preview,
+            pilot._dry_run_output_dir(layout, "b" * 32, "de-smoke-k10", None),
+        )
+
+    def test_air_growth_rate_metadata_requires_matching_declaration_and_mesh_receipt(self):
+        def metadata_for(rate):
+            return {
+                "problem_meta": {"runtime_metadata": {
+                    "de_smoke": {"air_growth_rate": rate},
+                    "study_universe": {"airbox_growth_rate": rate},
+                    "domain_frame": {"declared_universe": {"airbox_growth_rate": rate}},
+                }},
+                "mesh": {"mesh_build_report": {
+                    "effective_airbox_target": {"growth_rate": rate},
+                }},
+            }
+
+        def set_path(payload, path, value):
+            target = payload
+            for part in path[:-1]:
+                target = target[part]
+            target[path[-1]] = value
+
+        paths = (
+            ("problem_meta", "runtime_metadata", "de_smoke", "air_growth_rate"),
+            ("problem_meta", "runtime_metadata", "study_universe", "airbox_growth_rate"),
+            ("problem_meta", "runtime_metadata", "domain_frame", "declared_universe", "airbox_growth_rate"),
+            ("mesh", "mesh_build_report", "effective_airbox_target", "growth_rate"),
+        )
+        with TemporaryDirectory() as temporary:
+            case = Path(temporary)
+            metadata_path = case / "metadata.json"
+            metadata_path.write_text(json.dumps(metadata_for(1.15)), encoding="utf-8")
+            record = pilot.validate_air_growth_rate_metadata(case, "1.15")
+            self.assertEqual(record["requested"], "1.15")
+            self.assertEqual(record["resolved"], 1.15)
+            self.assertEqual(
+                record["resolved_metadata_path"],
+                "mesh.mesh_build_report.effective_airbox_target.growth_rate",
+            )
+            for path in paths:
+                with self.subTest(path=path):
+                    payload = metadata_for(1.15)
+                    set_path(payload, path, 1.3)
+                    metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(pilot.managed.BenchmarkError, "ignored or changed"):
+                        pilot.validate_air_growth_rate_metadata(case, "1.15")
+            for invalid in (True, "1.15", float("nan")):
+                payload = metadata_for(1.15)
+                set_path(payload, paths[-1], invalid)
+                metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.subTest(invalid=invalid), self.assertRaises(pilot.managed.BenchmarkError):
+                    pilot.validate_air_growth_rate_metadata(case, "1.15")
+
+    def test_air_growth_rate_is_recorded_in_the_run_request(self):
+        with TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            model_bytes = b"versioned standalone test input"
+            identity = {
+                "kind": "versioned_standalone_input",
+                "commit": "c" * 40,
+                "sha256": hashlib.sha256(model_bytes).hexdigest(),
+            }
+            pilot.model_input.stage_model(output, model_bytes)
+            context = SimpleNamespace(
+                layout={"repo_root": Path(__file__).resolve().parents[1]},
+                image_digest="sha256:test",
+            )
+            request = {"job": {}, "source": {}, "runtime": {}}
+            command = ["docker", "compose", "run", "placeholder",
+                       "export FULLMAG_DE_SMOKE_AIR_GROWTH_RATE=1.15"]
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "dispatch environment"):
+                pilot.execute(
+                    context, output, ["docker", "compose", "run", "placeholder"],
+                    identity["sha256"], pilot="de-smoke-k10", model_identity=identity,
+                    air_growth_rate="1.15",
+                )
+            with patch.object(pilot.managed, "_run_request", return_value=request), \
+                    patch.object(pilot.managed, "_compose_environment", return_value={}), \
+                    patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=1)), \
+                    patch.object(pilot, "_cleanup_extra_mounts", return_value=[]), \
+                    patch.object(pilot.managed, "_cleanup_benchmark_container",
+                                 return_value={"status": "not_running"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                status = pilot.execute(
+                    context, output, command, identity["sha256"],
+                    pilot="de-smoke-k10", model_identity=identity,
+                    air_growth_rate="1.15",
+                )
+            stored_request = json.loads((output / "run-request.json").read_text(encoding="utf-8"))
+            self.assertEqual(status, 1)
+            self.assertEqual(stored_request["air_growth_rate_requested"], "1.15")
+            self.assertEqual(stored_request["model_source"]["sha256"], identity["sha256"])
+
+    def test_de_smoke_fixture_air_growth_rate_is_interpreted_and_fail_closed(self):
+        fixture_path = Path(__file__).resolve().parents[1] / "examples" / "fem_de_smoke_numeric.py"
+
+        def run_fixture(environment):
+            recorder = _FixtureDslRecorder()
+            fullmag = types.ModuleType("fullmag")
+            for name in ("study", "ParallelExecutionPolicy", "Box", "KPoint", "KPath",
+                         "PeriodicBC", "FloquetBC"):
+                setattr(fullmag, name, _FixtureDslNode(recorder, name))
+            fullmag.init = _FixtureDslNode(recorder, "init")
+            with patch.dict(os.environ, environment, clear=True), \
+                    patch.dict(sys.modules, {"fullmag": fullmag}):
+                runpy.run_path(str(fixture_path), run_name="__main__")
+            return recorder
+
+        for environment, expected in (({}, 1.3),
+                                      ({"FULLMAG_DE_SMOKE_AIR_GROWTH_RATE": "1.15"}, 1.15)):
+            with self.subTest(environment=environment):
+                recorder = run_fixture(environment)
+                self.assertEqual(len(recorder.mesh_calls), 1)
+                self.assertEqual(recorder.mesh_calls[0]["maximum_element_size"], 100e-9)
+                self.assertEqual(recorder.mesh_calls[0]["maximum_element_growth_rate"], expected)
+                self.assertEqual(recorder.mesh_calls[0]["grading"], "geometric")
+                self.assertEqual(recorder.runtime_metadata[0]["air_growth_rate"], expected)
+        with self.assertRaisesRegex(ValueError, "FULLMAG_DE_SMOKE_AIR_GROWTH_RATE"):
+            run_fixture({"FULLMAG_DE_SMOKE_AIR_GROWTH_RATE": "1.2"})
 
     def test_mesh_level_is_recorded_and_ignored_setting_is_rejected(self):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),

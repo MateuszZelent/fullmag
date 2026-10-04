@@ -357,6 +357,20 @@
         "source-shared-domain-mu0-regression",
         "source-shared-domain-mu0-gate"
       ]
+    },
+    {
+      "id": "eq-de-air-grading-controlled-sequence",
+      "symbols": [
+        "air_step_zero",
+        "air_step_j",
+        "air_h_inner",
+        "air_h_outer",
+        "air_growth_r",
+        "air_layer_j"
+      ],
+      "sources": [
+        "source-de-air-layer-planner"
+      ]
     }
   ],
   "symbols": [
@@ -839,6 +853,42 @@
       "latex": "$\\delta_{\\mathrm{fp}}$",
       "meaning": "`std::numeric_limits<double>::min()` po normalizacji; wyłącznie numeryczny floor mianownika",
       "si_unit": "$1$"
+    },
+    {
+      "id": "air_step_zero",
+      "latex": "$h_0$",
+      "meaning": "pierwszy krok od interfejsu",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "air_step_j",
+      "latex": "$h_j$",
+      "meaning": "planowany krok warstwy powietrza o indeksie $j$",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "air_h_inner",
+      "latex": "$h_{\\mathrm{inner}}$",
+      "meaning": "zadany rozmiar początkowy, tu 5 nm",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "air_h_outer",
+      "latex": "$h_{\\mathrm{outer}}$",
+      "meaning": "ograniczenie kroku, tu 100 nm",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "air_growth_r",
+      "latex": "$r$",
+      "meaning": "współczynnik wzrostu, 1,3 lub 1,15",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "air_layer_j",
+      "latex": "$j$",
+      "meaning": "indeks zewnętrznej warstwy, nie indeks materiału",
+      "si_unit": "$1$"
     }
   ],
   "sources": [
@@ -1273,6 +1323,30 @@
       "responsibility": "Format actual signed nullable EPS dimensions without changing solver configuration.",
       "lane": "FEM CPU",
       "evidence_status": "source prepared; getter runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-de-air-layer-planner",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_box_airbox_layer_levels",
+      "responsibility": "Plan independently graded air layers with capped growth and preserve authored film planes; no modal convergence claim."
+    },
+    {
+      "id": "source-de-air-request-admission",
+      "path": "scripts/run_de_100nm_pilot.py",
+      "symbol": "_validate_air_growth_rate_request",
+      "responsibility": "Reject ambiguous/builtin/parallel requests; require standalone single-k DE and explicit versioned input."
+    },
+    {
+      "id": "source-de-air-resolved-metadata",
+      "path": "scripts/run_de_100nm_pilot.py",
+      "symbol": "validate_air_growth_rate_metadata",
+      "responsibility": "Require matched requested, declared and effective mesh growth; reject ignored controls and nonfinite/bool/missing metadata."
+    },
+    {
+      "id": "source-de-air-input-growth",
+      "path": "examples/fem_de_smoke_numeric.py",
+      "symbol": "AIR_GROWTH_RATE",
+      "responsibility": "Read validated diagnostic growth setting with historical default1.3; author existing universe mesh intent and declare runtime provenance."
     }
   ],
   "public_api": {

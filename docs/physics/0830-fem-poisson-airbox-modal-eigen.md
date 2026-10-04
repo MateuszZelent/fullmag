@@ -1,3 +1,48 @@
+<!-- de-air-grading-controlled-input-20261004 -->
+(de-air-grading-controlled-input)=
+## Kontrolowany eksperyment siatki powietrza DE — 4 października 2026
+
+Ta nota poprzedza dodanie jawnego przełącznika **wejścia diagnostycznego**, bez zmiany równań LLG/Poissona, operatorów, publicznego DSL, schematu ProblemIR ani domyślnego buildu. Przykład `examples/fem_de_smoke_numeric.py` zachowuje domyślny wzrost 1,3. Nowa próba ma zmienić go na 1,15 przy +10 rad/µm. Model fizyczny i interpretacja Schura pozostają opisane w rozdziałach poniżej; odwołujemy się do ich równań zamiast tworzyć drugi właścicielski opis demagu.
+
+### Parametr i realizacja
+
+Istniejące publiczne `study.universe.mesh(maximum_element_growth_rate=...)` wyraża bezwymiarowy współczynnik wzrostu; `StudyUniverseHandle.mesh` i `_validate_mesh_control_values` odrzucają wartości niefinitywne i ≤1. Kontrola diagnostycznego fixture'u ogranicza wybór do stringów `"1.3"` i `"1.15"`, domyślnie `"1.3"`. CLI `--air-growth-rate` ma domyślnie brak override; jawne użycie wymaga nieparalelnego DE-SMOKE oraz wersjonowanego `--model-ref`. Nie jest to nowy parametr produkcyjnego solvera ani planner capability.
+
+| Parametr | Typ / domyślnie | SI | Walidacja i znaczenie | Python → IR → realizacja |
+| --- | --- | --- | --- | --- |
+| `FULLMAG_DE_SMOKE_AIR_GROWTH_RATE` | string, `"1.3"` | $1$ | tylko `"1.3"`/`"1.15"`; błędne wejście odrzucane przed obliczeniem | fixture → istniejące `study.universe.mesh(maximum_element_growth_rate=...)` |
+| `--air-growth-rate` | opcjonalny string, brak | $1$ | ten sam zakres; bez niejawnego override dla historycznego buildu/inputu lub grouped sweep | Compose environment → fixture; requested w run-request, resolved z bound mesh metadata |
+| `study.universe.mesh(maximum_element_growth_rate=...)` | opcjonalny float, `None` | $1$ | finite >1; istniejący publiczny DSL, bez zmiany domeny | `StudyUniverseHandle.mesh` → `StudyUniverseConfig.to_dict()` → `meta.runtime_metadata.study_universe.airbox_growth_rate` → `_study_universe_airbox_options` → `AirboxOptions.grading_ratio` |
+
+W trasie layered Box rzeczywisty planer `_box_airbox_layer_levels` zachowuje płaszczyzny filmu i buduje na zewnątrz sekwencję:
+
+```{math}
+:label: eq-de-air-grading-controlled-sequence
+h_0=h_{\mathrm{inner}},\qquad
+h_{j+1}=\min(r h_j,h_{\mathrm{outer}}).
+```
+
+| Symbol | Znaczenie | SI |
+| --- | --- | --- |
+| $h_0$ | pierwszy krok od interfejsu | $\mathrm{m}$ |
+| $h_j$ | planowany krok warstwy powietrza o indeksie $j$ | $\mathrm{m}$ |
+| $h_{\mathrm{inner}}$ | zadany rozmiar początkowy, tu 5 nm | $\mathrm{m}$ |
+| $h_{\mathrm{outer}}$ | ograniczenie kroku, tu 100 nm | $\mathrm{m}$ |
+| $r$ | współczynnik wzrostu, 1,3 lub 1,15 | $1$ |
+| $j$ | indeks zewnętrznej warstwy, nie indeks materiału | $1$ |
+
+Ostatni segment jest przycinany do fizycznej granicy airboxu. Równanie opisuje sekwencję z planera, a nie gwarancję rozmiaru każdej krawędzi tetra ani błędu modalnego. Publiczny punkt wejścia DSL pozostaje `fm.study(...)`; kompletny stage-first model znajduje się w istniejącym przykładzie DE-SMOKE. To zmiana istniejącego parametru wejścia, bez nowego konstruktora, eksportu ani migracji IR.
+
+### Weryfikacja i granice
+
+FEM CPU: eksperyment źródłowy jest przygotowywany; wykonanie i izolacja **NOT VERIFIED** do odczytu końcowych artefaktów. FEM GPU: ta kontrola CPU nie kwalifikuje GPU. FDM CPU/GPU: nie dotyczy layered FEM Poisson airboxu; ich demag ma odrębny właścicielski opis. Nie dodajemy fallbacku ani capability. Runtime/Python pochodzą z attested build228, natomiast samodzielny skrypt z pełnego SHA wejścia; obie tożsamości mają oddzielne hashe i pozostają w receiptach.
+
+Warunki porównania: +10 rad/µm, film 40×40×10 nm, Ms800000 A/m, Aex1,3e−11 J/m, B0,1 T, M₀=x, k=y, PBC x/y, finite Dirichlet air padding2µm, L2/3; EPS/KSP1e−9, FGMRES restart8 i pełny residual1e−8. Zmieniamy wyłącznie $r$. Przed akceptacją sprawdzamy bound metadata dla rzeczywistego growth oraz zgodność źródeł, siatki, stanu, pełnego projected weak-form residualu, periodic seams i true KSP residual.
+
+Po solve trzeba porównać rzeczywistą magnetyczną geometrię/connectivity (nie whole-mesh hash), 4 płaszczyzny filmu, magnetic equilibrium i profile, oraz zmierzyć zmianę air schedule. Jeżeli film lub stan również zmieni się, wynik nie izoluje powietrza. Nawet zaakceptowany residual nie oznacza zbieżności przestrzennej; zmniejszenie różnicy częstotliwości wspiera jedynie hipotezę zależności od air mesh dla tej próby. Pełna zbieżność airboxu, siatki, liczby modów, Γ pełnego okna, adaptive parity, GUI i A1 pozostają odroczone.
+
+Mapa źródeł: `world.py:StudyUniverseHandle.mesh`, `world.py:StudyUniverseConfig.to_dict`, `asset_pipeline.py:_study_universe_airbox_options`, `_gmsh_swept.py:_box_airbox_layer_levels`; diagnostyczne wejście i driver są mapowane osobno w source-map. Raport źródłowy i hipotezy: [kontrola rozbieżności DE](../raports/2026-10-04-de-nonzero-discrepancy-source-scan.md). Te źródła dowodzą realizacji kontrolki; nie zastępują bramek fizycznych opisanych poniżej.
+
 # FEM Poisson-Airbox Modal Eigenproblem
 
 - Status: FEM CPU and FEM GPU `source_visible / unvalidated`; public physical
@@ -1274,6 +1319,10 @@ managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| source-de-air-layer-planner / eq-de-air-grading-controlled-sequence | FEM CPU | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` + `_box_airbox_layer_levels` | Exact film planes and capped exterior growth recurrence; no convergence claim. | controlled input and actual-mesh comparison | source inspected; controlled runtime pending | immutable runtime source 57182911c6e8e721b8ee9705aa7f70491c70fe94 |
+| source-de-air-request-admission | FEM CPU diagnostic input | `scripts/run_de_100nm_pilot.py` + `_validate_air_growth_rate_request` | Reject ambiguous/builtin/parallel requests; require standalone single-k DE and explicit versioned input. | focused interpreted input/metadata regressions | source under review; runtime pending | task source commit will bind input; native capsule remains57182911c6e8e721b8ee9705aa7f70491c70fe94 |
+| source-de-air-resolved-metadata | FEM CPU diagnostic input | `scripts/run_de_100nm_pilot.py` + `validate_air_growth_rate_metadata` | Require matched requested, declared and effective mesh growth; reject ignored controls and nonfinite/bool/missing metadata. | focused interpreted input/metadata regressions | source under review; runtime pending | task source commit will bind input; native capsule remains57182911c6e8e721b8ee9705aa7f70491c70fe94 |
+| source-de-air-input-growth | FEM CPU diagnostic input | `examples/fem_de_smoke_numeric.py` + `AIR_GROWTH_RATE` | Read validated diagnostic growth setting with historical default1.3; author existing universe mesh intent and declare runtime provenance. | focused interpreted input/metadata regressions | source under review; runtime pending | task source commit will bind input; native capsule remains57182911c6e8e721b8ee9705aa7f70491c70fe94 |
 | source-k0-request-vector | FEM CPU | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` + `modal_request_k_vector_json_field` | Publish declared request-derived wavevector provenance on the direct K0 result and diagnostics path without inventing an undeclared zero vector. | prepared native actual-entry regression; strict consumer cases | source WIP; managed runtime NOT VERIFIED | current source; checkpoint pending |
 | source-k0-eps-hard-error | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Quarantine the heap-owned borrowed solver graph after a hard EPS error, preserve the original code and stop further K0 reuse. | source lifetime review; isolated failure-path gate pending | source WIP; managed runtime NOT VERIFIED | current source; checkpoint pending |
 | source-gamma-query-trial | FEM CPU | `scripts/de_gamma_krylov_trial.py` + `validate_gamma_krylov_trial` | Verify actual per-Gamma and per-pass EPS/ST configuration against requested tuning, independently of physical residual qualification. | scoped source regression; interpreted query cases | source WIP; managed runtime NOT VERIFIED | current source; checkpoint pending |

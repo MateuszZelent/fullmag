@@ -7,6 +7,7 @@ airbox convergence are separate scientific gates. No analytic solver is invoked.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import math
@@ -113,6 +114,7 @@ SHIFTED_KSP_RTOL_CHOICES = ("1e-8", "1e-9", "1e-10", "1e-11", "1e-12")
 GMRES_RESTART_CHOICES = ("8", "10", "12", "16", "30")
 MESH_LEVEL_CHOICES = ("L0", "L1", "L2", "L3")
 THICKNESS_LAYERS_CHOICES = ("3", "6", "9")
+AIR_GROWTH_RATE_CHOICES = ("1.3", "1.15")
 MESH_LEVEL_ELEMENT_SIZES_M = {"L0": 10e-9, "L1": 7.5e-9, "L2": 5e-9, "L3": 3.75e-9}
 UI_API_PORT = 8081
 UI_WORKSPACE_ROOT = "/workspace/fullmag-ui-workspace"
@@ -124,6 +126,67 @@ OPENAPI_CONTRACT_PATHS = (
     "apps/control-room/src/kernel/api/generated/openapi-v2-client.ts",
     "apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts",
 )
+
+
+def _validate_air_growth_rate_request(pilot, requested, *, external_model, parallel_mode=None):
+    if requested is None:
+        return
+    if type(requested) is not str or requested not in AIR_GROWTH_RATE_CHOICES:
+        raise managed.BenchmarkError("air growth rate must be exactly '1.3' or '1.15'")
+    if pilot not in PILOTS or not pilot.startswith("de-smoke-"):
+        raise managed.BenchmarkError("air growth rate requires a standalone DE-SMOKE pilot")
+    if not external_model:
+        raise managed.BenchmarkError("air growth rate requires a versioned standalone --model-ref")
+    if pilot == SIGNED_FIFTEEN_PILOT or _is_parallel_probe(pilot) or parallel_mode is not None:
+        raise managed.BenchmarkError(
+            "air growth rate requires a non-parallel single-k DE-SMOKE pilot"
+        )
+    sampling = PILOTS[pilot][1]
+    if not isinstance(sampling, str) or re.fullmatch(r"k-?\d+", sampling) is None:
+        raise managed.BenchmarkError(
+            "air growth rate is restricted to single-k Damon-Eshbach DE-SMOKE pilots"
+        )
+
+
+def _validate_air_growth_rate_model_input(data):
+    """Reject versioned inputs that cannot consume the explicit mesh control."""
+    try:
+        tree = ast.parse(data.decode("utf-8"), filename="fem_de_smoke_numeric.py")
+    except (AttributeError, UnicodeDecodeError, SyntaxError) as error:
+        raise managed.BenchmarkError("air growth rate requires a valid UTF-8 standalone model") from error
+    has_environment_key = any(
+        isinstance(node, ast.Constant)
+        and node.value == "FULLMAG_DE_SMOKE_AIR_GROWTH_RATE"
+        for node in ast.walk(tree)
+    )
+    has_universe_mesh_control = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        is_universe_mesh = (
+            isinstance(function, ast.Attribute)
+            and function.attr == "mesh"
+            and isinstance(function.value, ast.Attribute)
+            and function.value.attr == "universe"
+            and isinstance(function.value.value, ast.Name)
+            and function.value.value.id == "study"
+        )
+        if not is_universe_mesh:
+            continue
+        has_universe_mesh_control = any(
+            keyword.arg == "maximum_element_growth_rate"
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == "AIR_GROWTH_RATE"
+            for keyword in node.keywords
+        )
+        if has_universe_mesh_control:
+            break
+    if not has_environment_key or not has_universe_mesh_control:
+        raise managed.BenchmarkError(
+            "air growth rate requires a versioned standalone model that applies "
+            "FULLMAG_DE_SMOKE_AIR_GROWTH_RATE to study.universe.mesh"
+        )
 
 
 def _unwrap_live_status(value, label="status"):
@@ -1063,10 +1126,13 @@ def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
     return artifacts
 
 
-def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT, capture_session=False, probe_input_dir=None, probe_manifest_sha256=None, parallel_mode=None, schur_action_diagnostic=False, shifted_ksp_type=None):
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_web_root=None, ui_host_port=UI_API_PORT, capture_session=False, probe_input_dir=None, probe_manifest_sha256=None, parallel_mode=None, schur_action_diagnostic=False, shifted_ksp_type=None, air_growth_rate=None):
     model = pilot_model(pilot)
     parallel_probe = _is_parallel_probe(pilot)
     signed_fifteen = pilot == SIGNED_FIFTEEN_PILOT
+    _validate_air_growth_rate_request(
+        pilot, air_growth_rate, external_model=external_model, parallel_mode=parallel_mode
+    )
     if signed_fifteen:
         if not external_model or parallel_mode not in {"serial", "adaptive"}:
             raise managed.BenchmarkError("signed-fifteen requires a versioned model and explicit serial/adaptive policy")
@@ -1212,6 +1278,8 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         *(["export FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC=1"]
            if schur_action_diagnostic else []),
         *(["export FULLMAG_DE_SMOKE_MESH_LEVEL=" + mesh_level] if mesh_level else []),
+        *(["export FULLMAG_DE_SMOKE_AIR_GROWTH_RATE=" + air_growth_rate]
+          if air_growth_rate is not None else []),
         *(["export FULLMAG_DE_SMOKE_THICKNESS_LAYERS=" + thickness_layers] if thickness_layers else []),
         *(["export FULLMAG_DE_SMOKE_PARALLEL_MODE=" + parallel_mode,
            "export FULLMAG_CPU_THREADS=1",
@@ -1668,6 +1736,56 @@ def validate_mesh_level_metadata(case_dir, requested):
             "qualification": "NOT VERIFIED"}
 
 
+def validate_air_growth_rate_metadata(case_dir, requested):
+    """Bind the requested air growth rate to declared and resolved metadata."""
+    if type(requested) is not str or requested not in AIR_GROWTH_RATE_CHOICES:
+        raise managed.BenchmarkError("unsupported air growth rate")
+    expected = float(requested)
+    try:
+        metadata = json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))
+        runtime = metadata["problem_meta"]["runtime_metadata"]
+        model_value = runtime["de_smoke"]["air_growth_rate"]
+        study_value = runtime["study_universe"]["airbox_growth_rate"]
+        domain_value = runtime["domain_frame"]["declared_universe"]["airbox_growth_rate"]
+        resolved = metadata["mesh"]["mesh_build_report"]["effective_airbox_target"]["growth_rate"]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        raise managed.BenchmarkError(
+            "missing or malformed declared or resolved air growth metadata"
+        ) from error
+    values = (
+        ("problem_meta.runtime_metadata.de_smoke.air_growth_rate", model_value),
+        ("problem_meta.runtime_metadata.study_universe.airbox_growth_rate", study_value),
+        ("problem_meta.runtime_metadata.domain_frame.declared_universe.airbox_growth_rate", domain_value),
+        ("mesh.mesh_build_report.effective_airbox_target.growth_rate", resolved),
+    )
+    for label, value in values:
+        if type(value) not in (int, float) or not math.isfinite(value) or value != expected:
+            raise managed.BenchmarkError(
+                f"model ignored or changed air growth rate at {label}: "
+                f"requested {requested}, received {value!r}"
+            )
+    return {
+        "requested": requested,
+        "declared_model_input": model_value,
+        "declared_study_universe": study_value,
+        "declared_domain_frame": domain_value,
+        "resolved": resolved,
+        "resolved_metadata_path": "mesh.mesh_build_report.effective_airbox_target.growth_rate",
+        "qualification": "NOT VERIFIED",
+    }
+
+
+def _dry_run_output_dir(layout, job_id, pilot, model_identity):
+    """Keep versioned standalone-input previews in full-SHA namespaces."""
+    preview_name = pilot + "-preview"
+    if model_identity and model_identity.get("kind") == "versioned_standalone_input":
+        digest = model_identity.get("sha256")
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise managed.BenchmarkError("standalone preview requires a lowercase model SHA256")
+        preview_name = f"{pilot}-preview-{digest}"
+    return Path(layout["storage_root"]) / "runs" / layout["worktree_id"] / job_id / preview_name
+
+
 
 def validate_thickness_layers_metadata(case, requested):
     """Reject a model that ignored an explicit through-thickness request."""
@@ -1730,7 +1848,23 @@ def _modal_krylov_environment(command):
     return values
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False, shifted_ksp_type=None):
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False, shifted_ksp_type=None, air_growth_rate=None):
+    _validate_air_growth_rate_request(
+        pilot, air_growth_rate, external_model=model_identity is not None,
+        parallel_mode=parallel_mode,
+    )
+    if air_growth_rate is not None:
+        try:
+            growth_exports = [
+                line for line in command[-1].splitlines()
+                if line.startswith("export FULLMAG_DE_SMOKE_AIR_GROWTH_RATE=")
+            ]
+        except (IndexError, AttributeError, TypeError):
+            growth_exports = []
+        if growth_exports != [f"export FULLMAG_DE_SMOKE_AIR_GROWTH_RATE={air_growth_rate}"]:
+            raise managed.BenchmarkError(
+                "air growth rate request does not match the actual dispatch environment"
+            )
     _validate_shifted_ksp_trial_request(pilot, shifted_ksp_type,
                                       nearest_target_frequency_ghz, spectral_target,
                                       dense_oracle=dense_oracle)
@@ -1756,6 +1890,8 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     request["shifted_ksp_type_diagnostic_requested"] = shifted_ksp_type
     request["gmres_restart_diagnostic_requested"] = gmres_restart
     request["schur_action_diagnostic_requested"] = bool(schur_action_diagnostic)
+    if air_growth_rate is not None:
+        request["air_growth_rate_requested"] = air_growth_rate
     request["mesh_level_requested"] = mesh_level
     request["thickness_layers_requested"] = thickness_layers
     request["modal_target"] = modal_target
@@ -1815,6 +1951,8 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
               "container_cleanup": {"status": "not_requested"}, "ui": ui_metadata}
     result["shifted_ksp_type_diagnostic_requested"] = shifted_ksp_type
     result["schur_action_diagnostic_requested"] = bool(schur_action_diagnostic)
+    if air_growth_rate is not None:
+        result["air_growth_rate_requested"] = air_growth_rate
     if "parallel_probe" in request:
         result["parallel_probe"] = request["parallel_probe"]
     if "parallel_campaign" in request:
@@ -1837,6 +1975,12 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
             # This reuses the artifact contract only, not C1 scientific parameters.
             artifacts = managed._validate_case_artifacts(output / pilot, "c1")
             artifacts["case"] = pilot
+            if air_growth_rate is not None:
+                growth_resolution = validate_air_growth_rate_metadata(
+                    output / pilot, air_growth_rate
+                )
+                artifacts["air_growth_rate_resolution"] = growth_resolution
+                result["air_growth_rate_resolution"] = growth_resolution
             if PILOTS[pilot][1] is not None:
                 row_args = (
                     output / pilot / "eigen/dispersion.csv",
@@ -2164,6 +2308,8 @@ def main(argv=None):
                         help="explicit magnetic/interface mesh level for a standalone DE-SMOKE input")
     parser.add_argument("--thickness-layers", choices=THICKNESS_LAYERS_CHOICES,
                         help="explicit number of elements through the film thickness")
+    parser.add_argument("--air-growth-rate", choices=AIR_GROWTH_RATE_CHOICES,
+                        help="diagnostic air mesh growth rate for a versioned single-k DE-SMOKE input")
     parser.add_argument("--model-ref", help="full commit of standalone DE-SMOKE input; runtime remains build-bound")
     parser.add_argument(
         "--probe-root",
@@ -2225,6 +2371,10 @@ def main(argv=None):
             raise ValueError("live API capture cannot be combined with --dry-run")
         parallel_probe = _is_parallel_probe(args.pilot)
         signed_fifteen = args.pilot == SIGNED_FIFTEEN_PILOT
+        _validate_air_growth_rate_request(
+            args.pilot, args.air_growth_rate, external_model=bool(args.model_ref),
+            parallel_mode=args.parallel_mode,
+        )
         if signed_fifteen:
             if not args.model_ref or args.parallel_mode not in {"serial", "adaptive"}:
                 raise ValueError("signed-fifteen requires --model-ref and --parallel-mode")
@@ -2277,6 +2427,8 @@ def main(argv=None):
             if args.pilot == "de100":
                 raise ValueError("--model-ref requires a DE-SMOKE pilot")
             input_data, input_identity = model_input.load_model(Path(layout["repo_root"]), args.model_ref)
+        if args.air_growth_rate is not None:
+            _validate_air_growth_rate_model_input(input_data)
         if not args.dry_run:
             managed.fullmag_storage.initialize(layout)
         if args.dry_run:
@@ -2290,7 +2442,7 @@ def main(argv=None):
             _frequency_window_bounds(
                 args.pilot, modal_target, args.frequency_min_ghz, args.frequency_max_ghz
             )
-            output = Path(layout["storage_root"]) / "runs" / layout["worktree_id"] / args.job_id / (args.pilot + "-preview")
+            output = _dry_run_output_dir(layout, args.job_id, args.pilot, input_identity)
             output.mkdir(parents=True, exist_ok=True)
             if input_data is not None:
                 model_path = output / "model-input.py"
@@ -2299,6 +2451,7 @@ def main(argv=None):
                 model_input.verify_model(output, input_identity)
             print(json.dumps({"status": "dry_run", "qualification": "NOT VERIFIED",
                               "model_sha256": model_sha, "model_source": input_identity,
+                              "air_growth_rate_requested": args.air_growth_rate,
                               "shifted_ksp_type_diagnostic_requested": args.shifted_ksp_type,
                               "schur_action_diagnostic_requested": args.schur_action_diagnostic,
                               "command": compose_command(
@@ -2318,6 +2471,7 @@ def main(argv=None):
                                   probe_input_dir=probe_input_dir,
                                   probe_manifest_sha256=(input_identity or {}).get("manifest_sha256"),
                                   parallel_mode=args.parallel_mode,
+                                  air_growth_rate=args.air_growth_rate,
                               )}, indent=2))
             return 0
         with managed.fullmag_storage.build_lock(layout):
@@ -2353,6 +2507,7 @@ def main(argv=None):
                 probe_input_dir=probe_input_dir,
                 probe_manifest_sha256=(input_identity or {}).get("manifest_sha256"),
                 parallel_mode=args.parallel_mode,
+                air_growth_rate=args.air_growth_rate,
                 ui_web_root=ui_web_root, ui_host_port=args.ui_port,
                 capture_session=args.capture_session,
             )
@@ -2373,6 +2528,7 @@ def main(argv=None):
                 ui_frontend=ui_frontend, ui_web_root=ui_web_root,
                 ui_host_port=args.ui_port,
                 probe_input_dir=probe_input_dir,
+                air_growth_rate=args.air_growth_rate,
             )
             return execute(context, output, command, model_sha, **execute_kwargs)
     except (managed.BenchmarkError, managed.fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, SyntaxError) as error:
