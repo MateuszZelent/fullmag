@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <vector>
 
 #ifndef FULLMAG_FEM_WITH_SLEPC
@@ -29,6 +30,24 @@ void check(bool condition, const char *message)
         std::fprintf(stderr, "FAIL: %s\n", message);
         std::exit(1);
     }
+}
+
+int set_action_diagnostic_environment(const char *value)
+{
+#if defined(_WIN32)
+    return _putenv_s("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC", value);
+#else
+    return setenv("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC", value, 1);
+#endif
+}
+
+int clear_action_diagnostic_environment()
+{
+#if defined(_WIN32)
+    return _putenv_s("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC", "");
+#else
+    return unsetenv("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
+#endif
 }
 
 fd::ModalEigenRequest valid_request()
@@ -341,6 +360,49 @@ void admits_certified_shared_domain_sparse_operator()
           "shared-domain marker without its operator payload is rejected");
 }
 
+void reports_opt_in_action_diagnostic_unavailable_before_setup()
+{
+    const char *previous_action_diagnostic =
+        std::getenv("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
+    const bool had_previous_action_diagnostic = previous_action_diagnostic != nullptr;
+    const std::string previous_action_diagnostic_value =
+        had_previous_action_diagnostic ? previous_action_diagnostic : "";
+    check(set_action_diagnostic_environment("1") == 0,
+          "action-only diagnostic opt-in can be enabled for early failure regression");
+
+    // The invalid shared-domain view returns before PETSc/SLEPc setup. The
+    // result must still report an active but unavailable probe so the
+    // production serializer cannot confuse this path with disabled=null.
+    fd::FloquetSharedDomainSparseModalOperator invalid_operator{};
+    const auto result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        invalid_operator, sparse_spectral_request());
+
+    if (had_previous_action_diagnostic) {
+        check(set_action_diagnostic_environment(
+                  previous_action_diagnostic_value.c_str()) == 0,
+              "action-only diagnostic environment is restored after early failure regression");
+    } else {
+        check(clear_action_diagnostic_environment() == 0,
+              "action-only diagnostic environment is cleared after early failure regression");
+    }
+
+    const auto &diagnostic = result.floquet_schur_action_diagnostic;
+    check(diagnostic.requested && !diagnostic.available &&
+              std::strcmp(diagnostic.status, "unavailable") == 0 &&
+              std::strcmp(
+                  diagnostic.reason,
+                  "diagnostic_not_reached_before_solver_setup_failure") == 0,
+          "opt-in action diagnostic reports unavailable before shared-domain setup");
+    check(diagnostic.action_count == 0 &&
+              std::isnan(diagnostic.operator_normalization_scale) &&
+              std::isnan(diagnostic.preconditioner_normalization_scale) &&
+              std::isnan(diagnostic.max_potential_relative_residual) &&
+              std::isnan(diagnostic.max_repeatability_relative_defect) &&
+              std::isnan(diagnostic.additivity_relative_defect) &&
+              std::isnan(diagnostic.mat_shell_reconstruction_relative_defect),
+          "unavailable action diagnostic keeps all measurement scalars unset for JSON null");
+}
+
 void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure = false)
 {
     constexpr std::size_t q_dimension = 514u;
@@ -404,9 +466,34 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
     spectral.max_outer_iterations = 160;
     spectral.max_linear_iterations = force_inner_failure ? 1 : 96;
 
+    const char *previous_action_diagnostic =
+        std::getenv("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
+    const bool had_previous_action_diagnostic = previous_action_diagnostic != nullptr;
+    const std::string previous_action_diagnostic_value =
+        had_previous_action_diagnostic ? previous_action_diagnostic : "";
+    check(set_action_diagnostic_environment("1") == 0,
+          "action-only diagnostic opt-in can be enabled for the prepared native regression");
     const auto result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
         operator_view, spectral);
+    if (had_previous_action_diagnostic) {
+        check(set_action_diagnostic_environment(
+                  previous_action_diagnostic_value.c_str()) == 0,
+              "action-only diagnostic environment is restored after the prepared regression");
+    } else {
+        check(clear_action_diagnostic_environment() == 0,
+              "action-only diagnostic environment is cleared after the prepared regression");
+    }
 #if FULLMAG_FEM_WITH_SLEPC
+    check(result.floquet_schur_action_diagnostic.requested,
+          "native regression records that the action-only diagnostic was requested");
+    check(result.floquet_schur_action_diagnostic.pre_eps_only &&
+              !result.floquet_schur_action_diagnostic.dense_materialization &&
+              std::strcmp(
+                  result.floquet_schur_action_diagnostic.workspace_scope,
+                  "isolated_clone_of_production_context") == 0 &&
+              result.floquet_schur_action_diagnostic.expected_action_count == 9 &&
+              result.floquet_schur_action_diagnostic.action_count <= 9,
+          "action-only diagnostic is bounded, pre-EPS, and does not materialize a dense operator");
     if (force_inner_failure) {
         check(!result.ok && result.modes.empty(),
               "inner KSP failure must remain fail-closed");
@@ -415,8 +502,18 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
                   result.ksp_converged_reason <= 0 &&
                   result.ksp_last_iterations > 0,
               "failed EPS retains the nonconverged inner KSP diagnostics");
+        check(std::strcmp(result.floquet_schur_action_diagnostic.status, "disabled") != 0,
+              "pre-EPS action diagnostic remains observable on the hard EPS failure path");
         return;
     }
+    check(result.floquet_schur_action_diagnostic.available &&
+              std::strcmp(result.floquet_schur_action_diagnostic.status, "measured") == 0 &&
+              result.floquet_schur_action_diagnostic.action_count == 9 &&
+              std::isfinite(
+                  result.floquet_schur_action_diagnostic.homogeneity_tiny_relative_defect) &&
+              std::isfinite(
+                  result.floquet_schur_action_diagnostic.mat_shell_reconstruction_relative_defect),
+          "native regression measures the bounded action-only probe and MatShell callback before EPS");
 #endif
     check(result.execution_policy != nullptr &&
               std::strcmp(result.execution_policy, "petsc_sequential_cpu") == 0,
@@ -590,6 +687,11 @@ void normalizes_si_scale_floquet_pencil()
               result.ksp_last_iterations > 0 &&
               std::isfinite(result.ksp_final_residual),
           "Floquet diagnostics report the inner shift-invert KSP work and stop reason");
+    check(result.shifted_ksp_configuration_before_eps_available &&
+              result.shifted_ksp_pc_side_before_eps == static_cast<int>(PC_RIGHT) &&
+              result.shifted_ksp_norm_type_before_eps ==
+                  static_cast<int>(KSP_NORM_UNPRECONDITIONED),
+          "Floquet diagnostics capture configured KSP settings before EPS independently of last-solve telemetry");
     check(result.ksp_last_true_residual_available &&
               std::isfinite(result.ksp_last_rhs_norm) &&
               result.ksp_last_rhs_norm > 0.0 &&
@@ -642,6 +744,7 @@ int main()
     rejects_invalid_frequency_windows();
     admits_sparse_bloch_operator_without_demag();
     admits_certified_shared_domain_sparse_operator();
+    reports_opt_in_action_diagnostic_unavailable_before_setup();
     executes_native_sparse_matshell_above_dense_bound();
     normalizes_si_scale_floquet_pencil();
     executes_native_sparse_matshell_above_dense_bound(true);

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -26,6 +27,33 @@ namespace {
 
 // Shared by always-available diagnostics and the optional PETSc implementation.
 constexpr double kFloquetShiftedGmresBreakdownTolerance = 2.0;
+
+bool floquet_schur_action_diagnostic_requested() noexcept
+{
+    const char *value = std::getenv("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
+void initialize_floquet_schur_action_diagnostic(
+    SLEPcTinyGyrotropicModalEigenResult *result) noexcept
+{
+    if (result == nullptr || !floquet_schur_action_diagnostic_requested()) {
+        return;
+    }
+    auto &diagnostic = result->floquet_schur_action_diagnostic;
+    diagnostic.requested = true;
+    diagnostic.available = false;
+    diagnostic.status = "unavailable";
+    diagnostic.reason = "diagnostic_not_reached_before_solver_setup_failure";
+    // These scales are not known until the production pencil and shifted
+    // preconditioner have been built. Keep them non-finite so the JSON
+    // serializer emits null instead of a fabricated default scale on an
+    // early validation/setup return.
+    diagnostic.operator_normalization_scale =
+        std::numeric_limits<double>::quiet_NaN();
+    diagnostic.preconditioner_normalization_scale =
+        std::numeric_limits<double>::quiet_NaN();
+}
 
 bool finite_nonzero_k(const ModalEigenRequest &request) noexcept
 {
@@ -1299,6 +1327,75 @@ bool normalize_native_floquet_pencil(
     return true;
 }
 
+PetscErrorCode apply_native_floquet_schur_components(
+    NativeFloquetMatShellContext *context,
+    Vec x,
+    Vec magnetic_output,
+    Vec feedback_output,
+    Vec phi_rhs,
+    Vec phi_solution,
+    Vec potential_rhs)
+{
+    if (context == nullptr || x == nullptr || magnetic_output == nullptr ||
+        feedback_output == nullptr || phi_rhs == nullptr || phi_solution == nullptr) {
+        return PETSC_ERR_ARG_NULL;
+    }
+    PetscInt size = 0;
+    if (VecGetSize(x, &size) != 0 || size != context->q_split_count ||
+        VecGetSize(magnetic_output, &size) != 0 || size != context->q_split_count ||
+        VecGetSize(feedback_output, &size) != 0 || size != context->q_split_count ||
+        VecGetSize(phi_rhs, &size) != 0 || size != context->phi_split_count ||
+        VecGetSize(phi_solution, &size) != 0 || size != context->phi_split_count ||
+        (potential_rhs != nullptr &&
+         (VecGetSize(potential_rhs, &size) != 0 || size != context->phi_split_count))) {
+        return PETSC_ERR_ARG_SIZ;
+    }
+    Vec positive_potential_rhs = potential_rhs != nullptr ? potential_rhs : phi_rhs;
+    if (MatMult(context->a_phiq, x, positive_potential_rhs) != 0 ||
+        (potential_rhs != nullptr && VecCopy(positive_potential_rhs, phi_rhs) != 0) ||
+        VecScale(phi_rhs, static_cast<PetscScalar>(-1.0)) != 0 ||
+        KSPSolve(context->p_ksp, phi_rhs, phi_solution) != 0) {
+        return PETSC_ERR_NOT_CONVERGED;
+    }
+    KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
+    if (KSPGetConvergedReason(context->p_ksp, &reason) != 0 || reason < 0) {
+        return PETSC_ERR_NOT_CONVERGED;
+    }
+    if (MatMult(context->a_qq, x, magnetic_output) != 0 ||
+        MatMult(context->a_qphi, phi_solution, feedback_output) != 0) {
+        return PETSC_ERR_LIB;
+    }
+    return 0;
+}
+
+PetscErrorCode rotate_native_floquet_vector_in_place(
+    const NativeFloquetMatShellContext *context,
+    Vec values)
+{
+    if (context == nullptr || values == nullptr || context->q_complex_count <= 0 ||
+        context->q_split_count != 2 * context->q_complex_count) {
+        return PETSC_ERR_ARG_SIZ;
+    }
+    PetscInt size = 0;
+    if (VecGetSize(values, &size) != 0 || size != context->q_split_count) {
+        return PETSC_ERR_ARG_SIZ;
+    }
+    PetscScalar *raw_values = nullptr;
+    if (VecGetArray(values, &raw_values) != 0 || raw_values == nullptr) {
+        return PETSC_ERR_LIB;
+    }
+    for (PetscInt index = 0; index < context->q_complex_count; ++index) {
+        const PetscScalar real_part = raw_values[index];
+        const PetscScalar imaginary_part =
+            raw_values[context->q_complex_count + index];
+        raw_values[index] = static_cast<PetscScalar>(context->phase_sign) *
+            imaginary_part;
+        raw_values[context->q_complex_count + index] =
+            -static_cast<PetscScalar>(context->phase_sign) * real_part;
+    }
+    return VecRestoreArray(values, &raw_values);
+}
+
 PetscErrorCode native_floquet_matmult(Mat matrix, Vec x, Vec y)
 {
     void *raw_context = nullptr;
@@ -1311,49 +1408,398 @@ PetscErrorCode native_floquet_matmult(Mat matrix, Vec x, Vec y)
         copy_native_floquet_error(context, "Floquet MatShell q dimensions do not match");
         return PETSC_ERR_ARG_SIZ;
     }
-    if (MatMult(context->a_phiq, x, context->phi_rhs) != 0 ||
-        VecScale(context->phi_rhs, static_cast<PetscScalar>(-1.0)) != 0 ||
-        KSPSolve(context->p_ksp, context->phi_rhs, context->phi_solution) != 0) {
+    const PetscErrorCode component_error = apply_native_floquet_schur_components(
+        context,
+        x,
+        y,
+        context->feedback,
+        context->phi_rhs,
+        context->phi_solution,
+        nullptr);
+    if (component_error == PETSC_ERR_NOT_CONVERGED) {
         copy_native_floquet_error(context, "Floquet MatShell scalar Schur solve failed");
-        return PETSC_ERR_NOT_CONVERGED;
+        return component_error;
     }
-    KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
-    if (KSPGetConvergedReason(context->p_ksp, &reason) != 0 || reason < 0) {
-        copy_native_floquet_error(context, "Floquet MatShell scalar Schur solve did not converge");
-        return PETSC_ERR_NOT_CONVERGED;
-    }
-    if (MatMult(context->a_qq, x, y) != 0 ||
-        MatMult(context->a_qphi, context->phi_solution, context->feedback) != 0 ||
+    if (component_error != 0 ||
         VecAXPY(y, static_cast<PetscScalar>(1.0), context->feedback) != 0 ||
         VecCopy(y, context->feedback) != 0) {
         copy_native_floquet_error(context, "Floquet MatShell magnetic Schur action failed");
         return PETSC_ERR_LIB;
     }
-    const PetscScalar *sum_values = nullptr;
-    PetscScalar *rotated_values = nullptr;
-    if (VecGetArrayRead(context->feedback, &sum_values) != 0 ||
-        VecGetArray(y, &rotated_values) != 0) {
-        if (sum_values != nullptr) {
-            VecRestoreArrayRead(context->feedback, &sum_values);
-        }
-        if (rotated_values != nullptr) {
-            VecRestoreArray(y, &rotated_values);
-        }
+    if (rotate_native_floquet_vector_in_place(context, y) != 0) {
         copy_native_floquet_error(context, "Floquet MatShell rotation workspace failed");
         return PETSC_ERR_LIB;
     }
-    for (PetscInt index = 0; index < context->q_complex_count; ++index) {
-        const PetscScalar real_part = sum_values[index];
-        const PetscScalar imaginary_part =
-            sum_values[context->q_complex_count + index];
-        rotated_values[index] = static_cast<PetscScalar>(context->phase_sign) *
-            imaginary_part;
-        rotated_values[context->q_complex_count + index] =
-            -static_cast<PetscScalar>(context->phase_sign) * real_part;
-    }
-    VecRestoreArrayRead(context->feedback, &sum_values);
-    VecRestoreArray(y, &rotated_values);
     return 0;
+}
+
+bool run_floquet_schur_action_diagnostic(
+    NativeFloquetMatShellContext *context,
+    double operator_normalization_scale,
+    double preconditioner_normalization_scale,
+    FloquetSchurActionDiagnostic *out)
+{
+    if (out == nullptr) {
+        return false;
+    }
+    *out = FloquetSchurActionDiagnostic{};
+    out->requested = floquet_schur_action_diagnostic_requested();
+    if (!out->requested) {
+        return true;
+    }
+    out->status = "unavailable";
+    out->reason = "diagnostic_not_started";
+    out->operator_normalization_scale = operator_normalization_scale;
+    out->preconditioner_normalization_scale = preconditioner_normalization_scale;
+    if (context == nullptr || context->q_complex_count <= 0 ||
+        context->q_split_count <= 0 || context->phi_split_count <= 0 ||
+        context->q_complex_count > std::numeric_limits<PetscInt>::max() / 2 ||
+        context->q_split_count != 2 * context->q_complex_count ||
+        (context->phase_sign != -1 && context->phase_sign != 1) ||
+        context->q_complex_count > static_cast<PetscInt>(std::numeric_limits<int>::max()) ||
+        context->q_split_count > static_cast<PetscInt>(std::numeric_limits<int>::max()) ||
+        !std::isfinite(operator_normalization_scale) ||
+        !std::isfinite(preconditioner_normalization_scale)) {
+        out->reason = "invalid_action_context";
+        return false;
+    }
+    out->q_complex_dof_count = static_cast<int>(context->q_complex_count);
+    out->real_split_dimension = static_cast<int>(context->q_split_count);
+    out->context_phase_sign = context->phase_sign;
+
+    Vec x0 = nullptr;
+    Vec x1 = nullptr;
+    Vec xsum = nullptr;
+    Vec xhalf = nullptr;
+    Vec xdouble = nullptr;
+    Vec xtiny = nullptr;
+    Vec output0 = nullptr;
+    Vec output_repeat = nullptr;
+    Vec output_third = nullptr;
+    Vec output_half = nullptr;
+    Vec output_double = nullptr;
+    Vec output_tiny = nullptr;
+    Vec output1 = nullptr;
+    Vec output_sum = nullptr;
+    Vec magnetic = nullptr;
+    Vec feedback = nullptr;
+    Vec combined = nullptr;
+    Vec rotated_magnetic = nullptr;
+    Vec rotated_feedback = nullptr;
+    Vec rotated_combined = nullptr;
+    Vec phi_rhs = nullptr;
+    Vec phi_solution = nullptr;
+    Vec potential_rhs = nullptr;
+    Vec potential_residual = nullptr;
+    Vec defect = nullptr;
+    const PetscInt q_size = context->q_split_count;
+    const PetscInt phi_size = context->phi_split_count;
+    auto destroy_vectors = [&]() noexcept {
+        VecDestroy(&defect);
+        VecDestroy(&potential_residual);
+        VecDestroy(&potential_rhs);
+        VecDestroy(&phi_solution);
+        VecDestroy(&phi_rhs);
+        VecDestroy(&rotated_combined);
+        VecDestroy(&rotated_feedback);
+        VecDestroy(&rotated_magnetic);
+        VecDestroy(&combined);
+        VecDestroy(&feedback);
+        VecDestroy(&magnetic);
+        VecDestroy(&output_sum);
+        VecDestroy(&output1);
+        VecDestroy(&output_tiny);
+        VecDestroy(&output_double);
+        VecDestroy(&output_half);
+        VecDestroy(&output_third);
+        VecDestroy(&output_repeat);
+        VecDestroy(&output0);
+        VecDestroy(&xtiny);
+        VecDestroy(&xdouble);
+        VecDestroy(&xhalf);
+        VecDestroy(&xsum);
+        VecDestroy(&x1);
+        VecDestroy(&x0);
+    };
+    auto fail = [&](const char *reason) {
+        out->status = "failed";
+        out->reason = reason;
+        destroy_vectors();
+        return false;
+    };
+    auto create_vector = [](PetscInt size, Vec *vector) {
+        return vector != nullptr && VecCreateSeq(PETSC_COMM_SELF, size, vector) == 0;
+    };
+    if (!create_vector(q_size, &x0) || !create_vector(q_size, &x1) ||
+        !create_vector(q_size, &xsum) || !create_vector(q_size, &xhalf) ||
+        !create_vector(q_size, &xdouble) || !create_vector(q_size, &xtiny) ||
+        !create_vector(q_size, &output0) || !create_vector(q_size, &output_repeat) ||
+        !create_vector(q_size, &output_third) || !create_vector(q_size, &output_half) ||
+        !create_vector(q_size, &output_double) || !create_vector(q_size, &output_tiny) ||
+        !create_vector(q_size, &output1) || !create_vector(q_size, &output_sum) ||
+        !create_vector(q_size, &magnetic) || !create_vector(q_size, &feedback) ||
+        !create_vector(q_size, &combined) || !create_vector(q_size, &rotated_magnetic) ||
+        !create_vector(q_size, &rotated_feedback) || !create_vector(q_size, &rotated_combined) ||
+        !create_vector(phi_size, &phi_rhs) || !create_vector(phi_size, &phi_solution) ||
+        !create_vector(phi_size, &potential_rhs) ||
+        !create_vector(phi_size, &potential_residual) || !create_vector(q_size, &defect)) {
+        return fail("workspace_allocation_failed");
+    }
+    PetscScalar *x0_values = nullptr;
+    PetscScalar *x1_values = nullptr;
+    if (VecGetArray(x0, &x0_values) != 0 || VecGetArray(x1, &x1_values) != 0 ||
+        x0_values == nullptr || x1_values == nullptr) {
+        if (x0_values != nullptr) {
+            VecRestoreArray(x0, &x0_values);
+        }
+        if (x1_values != nullptr) {
+            VecRestoreArray(x1, &x1_values);
+        }
+        return fail("input_workspace_access_failed");
+    }
+    for (PetscInt index = 0; index < q_size; ++index) {
+        const std::uint64_t stable_index = static_cast<std::uint64_t>(index);
+        const int first = static_cast<int>((stable_index * 17u + 3u) % 31u) - 15;
+        const int second = static_cast<int>((stable_index * 29u + 11u) % 37u) - 18;
+        x0_values[index] = static_cast<PetscScalar>(first) / 15.0;
+        x1_values[index] = static_cast<PetscScalar>(second) / 18.0;
+    }
+    const PetscErrorCode restore_x0_error = VecRestoreArray(x0, &x0_values);
+    const PetscErrorCode restore_x1_error = VecRestoreArray(x1, &x1_values);
+    if (restore_x0_error != 0 || restore_x1_error != 0 ||
+        VecCopy(x0, xsum) != 0 || VecAXPY(xsum, static_cast<PetscScalar>(1.0), x1) != 0 ||
+        VecCopy(x0, xhalf) != 0 || VecScale(xhalf, static_cast<PetscScalar>(0.5)) != 0 ||
+        VecCopy(x0, xdouble) != 0 || VecScale(xdouble, static_cast<PetscScalar>(2.0)) != 0 ||
+        VecCopy(x0, xtiny) != 0 || VecScale(xtiny, static_cast<PetscScalar>(1.0e-12)) != 0) {
+        return fail("input_workspace_initialization_failed");
+    }
+
+    auto update_max = [](double *target, double value) {
+        if (target == nullptr || !std::isfinite(value)) {
+            return false;
+        }
+        if (!std::isfinite(*target)) {
+            *target = value;
+        } else {
+            *target = std::max(*target, value);
+        }
+        return true;
+    };
+    auto update_min = [](double *target, double value) {
+        if (target == nullptr || !std::isfinite(value)) {
+            return false;
+        }
+        if (!std::isfinite(*target)) {
+            *target = value;
+        } else {
+            *target = std::min(*target, value);
+        }
+        return true;
+    };
+    auto relative_vector_defect = [&](Vec lhs, Vec rhs, double rhs_scale) {
+        PetscReal lhs_norm = 0.0;
+        PetscReal rhs_norm = 0.0;
+        PetscReal defect_norm = 0.0;
+        if (VecCopy(lhs, defect) != 0 ||
+            VecAXPY(defect, static_cast<PetscScalar>(-rhs_scale), rhs) != 0 ||
+            VecNorm(lhs, NORM_2, &lhs_norm) != 0 ||
+            VecNorm(rhs, NORM_2, &rhs_norm) != 0 ||
+            VecNorm(defect, NORM_2, &defect_norm) != 0) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        const double denominator = std::max(
+            std::max(static_cast<double>(lhs_norm),
+                     std::abs(rhs_scale) * static_cast<double>(rhs_norm)),
+            std::numeric_limits<double>::min());
+        return static_cast<double>(defect_norm) / denominator;
+    };
+    auto measure_action = [&](Vec input, Vec output) {
+        const PetscErrorCode component_error = apply_native_floquet_schur_components(
+            context,
+            input,
+            magnetic,
+            feedback,
+            phi_rhs,
+            phi_solution,
+            potential_rhs);
+        if (component_error != 0) {
+            return false;
+        }
+        if (MatMult(context->p, phi_solution, potential_residual) != 0 ||
+            VecAXPY(potential_residual, static_cast<PetscScalar>(1.0), potential_rhs) != 0) {
+            return false;
+        }
+        PetscReal rhs_norm = 0.0;
+        PetscReal potential_residual_norm = 0.0;
+        PetscReal magnetic_norm = 0.0;
+        PetscReal feedback_norm = 0.0;
+        PetscReal combined_norm = 0.0;
+        if (VecNorm(potential_rhs, NORM_2, &rhs_norm) != 0 ||
+            VecNorm(potential_residual, NORM_2, &potential_residual_norm) != 0 ||
+            VecNorm(magnetic, NORM_2, &magnetic_norm) != 0 ||
+            VecNorm(feedback, NORM_2, &feedback_norm) != 0 ||
+            VecCopy(magnetic, combined) != 0 ||
+            VecAXPY(combined, static_cast<PetscScalar>(1.0), feedback) != 0 ||
+            VecNorm(combined, NORM_2, &combined_norm) != 0 ||
+            VecCopy(magnetic, rotated_magnetic) != 0 ||
+            VecCopy(feedback, rotated_feedback) != 0 ||
+            VecCopy(combined, rotated_combined) != 0 ||
+            rotate_native_floquet_vector_in_place(context, rotated_magnetic) != 0 ||
+            rotate_native_floquet_vector_in_place(context, rotated_feedback) != 0 ||
+            rotate_native_floquet_vector_in_place(context, rotated_combined) != 0 ||
+            VecCopy(rotated_combined, output) != 0) {
+            return false;
+        }
+        const double rhs_norm_double = static_cast<double>(rhs_norm);
+        const double potential_denominator = std::max(
+            rhs_norm_double, std::numeric_limits<double>::min());
+        const double potential_relative_residual =
+            static_cast<double>(potential_residual_norm) / potential_denominator;
+        const double cancellation_ratio = static_cast<double>(combined_norm) /
+            std::max(static_cast<double>(magnetic_norm) +
+                         static_cast<double>(feedback_norm),
+                     std::numeric_limits<double>::min());
+        if (!std::isfinite(rhs_norm_double) ||
+            !std::isfinite(potential_relative_residual) ||
+            !std::isfinite(cancellation_ratio) ||
+            !update_max(&out->max_potential_relative_residual,
+                        potential_relative_residual) ||
+            !update_max(&out->max_magnetic_l2_norm,
+                        static_cast<double>(magnetic_norm)) ||
+            !update_max(&out->max_feedback_l2_norm,
+                        static_cast<double>(feedback_norm)) ||
+            !update_max(&out->max_combined_l2_norm,
+                        static_cast<double>(combined_norm)) ||
+            !update_min(&out->min_rhs_l2_norm, rhs_norm_double) ||
+            !update_max(&out->max_rhs_l2_norm, rhs_norm_double) ||
+            !update_min(&out->min_cancellation_ratio, cancellation_ratio)) {
+            return false;
+        }
+        if (static_cast<double>(combined_norm) > std::numeric_limits<double>::min()) {
+            ++out->nonzero_signal_count;
+        }
+        ++out->action_count;
+        return true;
+    };
+    if (!measure_action(x0, output0) || !measure_action(x0, output_repeat) ||
+        !measure_action(x0, output_third) || !measure_action(xhalf, output_half) ||
+        !measure_action(xdouble, output_double) || !measure_action(xtiny, output_tiny) ||
+        !measure_action(x1, output1) || !measure_action(xsum, output_sum)) {
+        return fail("schur_action_measurement_failed");
+    }
+    const double repeatability_first =
+        relative_vector_defect(output_repeat, output0, 1.0);
+    const double repeatability_second =
+        relative_vector_defect(output_third, output0, 1.0);
+    const double homogeneity_half =
+        relative_vector_defect(output_half, output0, 0.5);
+    const double homogeneity_double =
+        relative_vector_defect(output_double, output0, 2.0);
+    const double homogeneity_tiny =
+        relative_vector_defect(output_tiny, output0, 1.0e-12);
+    if (!std::isfinite(repeatability_first) ||
+        !std::isfinite(repeatability_second) ||
+        !std::isfinite(homogeneity_half) ||
+        !std::isfinite(homogeneity_double) ||
+        !std::isfinite(homogeneity_tiny)) {
+        return fail("nonfinite_action_defect");
+    }
+    out->repeatability_first_relative_defect = repeatability_first;
+    out->repeatability_second_relative_defect = repeatability_second;
+    out->max_repeatability_relative_defect = std::max(
+        repeatability_first, repeatability_second);
+    out->homogeneity_half_relative_defect = homogeneity_half;
+    out->homogeneity_double_relative_defect = homogeneity_double;
+    out->homogeneity_tiny_relative_defect = homogeneity_tiny;
+    out->max_homogeneity_relative_defect = std::max({
+        homogeneity_half, homogeneity_double, homogeneity_tiny});
+    PetscReal additivity_norm = 0.0;
+    PetscReal sum_norm = 0.0;
+    PetscReal first_norm = 0.0;
+    PetscReal second_norm = 0.0;
+    if (VecCopy(output_sum, defect) != 0 ||
+        VecAXPY(defect, static_cast<PetscScalar>(-1.0), output0) != 0 ||
+        VecAXPY(defect, static_cast<PetscScalar>(-1.0), output1) != 0 ||
+        VecNorm(defect, NORM_2, &additivity_norm) != 0 ||
+        VecNorm(output_sum, NORM_2, &sum_norm) != 0 ||
+        VecNorm(output0, NORM_2, &first_norm) != 0 ||
+        VecNorm(output1, NORM_2, &second_norm) != 0) {
+        return fail("additivity_measurement_failed");
+    }
+    out->additivity_relative_defect = static_cast<double>(additivity_norm) /
+        std::max({static_cast<double>(sum_norm),
+                  static_cast<double>(first_norm) + static_cast<double>(second_norm),
+                  std::numeric_limits<double>::min()});
+    if (!std::isfinite(out->max_repeatability_relative_defect) ||
+        !std::isfinite(out->max_homogeneity_relative_defect) ||
+        !std::isfinite(out->additivity_relative_defect)) {
+        return fail("nonfinite_action_defect");
+    }
+
+    // Reapply the same callback used by the production MatShell once, but
+    // through an isolated context copy.  Only the scalar KSP and immutable
+    // block matrices are shared; all callback scratch vectors and the error
+    // buffer belong to the clone and are destroyed before this workspace.
+    NativeFloquetMatShellContext callback_context = *context;
+    callback_context.error_message[0] = '\0';
+    callback_context.phi_rhs = nullptr;
+    callback_context.phi_solution = nullptr;
+    callback_context.feedback = nullptr;
+    Mat callback_shell = nullptr;
+    Vec callback_phi_rhs = nullptr;
+    Vec callback_phi_solution = nullptr;
+    Vec callback_feedback = nullptr;
+    auto destroy_callback_clone = [&]() noexcept {
+        if (callback_shell != nullptr) {
+            MatDestroy(&callback_shell);
+        }
+        VecDestroy(&callback_feedback);
+        VecDestroy(&callback_phi_solution);
+        VecDestroy(&callback_phi_rhs);
+    };
+    if (VecDuplicate(context->phi_rhs, &callback_phi_rhs) != 0 ||
+        VecDuplicate(context->phi_solution, &callback_phi_solution) != 0 ||
+        VecDuplicate(context->feedback, &callback_feedback) != 0) {
+        destroy_callback_clone();
+        return fail("mat_shell_clone_workspace_allocation_failed");
+    }
+    callback_context.phi_rhs = callback_phi_rhs;
+    callback_context.phi_solution = callback_phi_solution;
+    callback_context.feedback = callback_feedback;
+    if (MatCreateShell(
+            PETSC_COMM_SELF,
+            q_size,
+            q_size,
+            q_size,
+            q_size,
+            &callback_context,
+            &callback_shell) != 0 ||
+        MatShellSetOperation(
+            callback_shell,
+            MATOP_MULT,
+            reinterpret_cast<void (*)(void)>(native_floquet_matmult)) != 0) {
+        destroy_callback_clone();
+        return fail("mat_shell_clone_creation_failed");
+    }
+    const PetscErrorCode callback_error =
+        native_floquet_matmult(callback_shell, x0, output_repeat);
+    if (callback_error != 0) {
+        destroy_callback_clone();
+        return fail("mat_shell_callback_measurement_failed");
+    }
+    ++out->action_count;
+    out->mat_shell_reconstruction_relative_defect =
+        relative_vector_defect(output_repeat, output0, 1.0);
+    if (!std::isfinite(out->mat_shell_reconstruction_relative_defect)) {
+        destroy_callback_clone();
+        return fail("nonfinite_mat_shell_reconstruction_defect");
+    }
+    destroy_callback_clone();
+    out->available = true;
+    out->status = "measured";
+    out->reason = "bounded_action_and_matshell_observation";
+    destroy_vectors();
+    return true;
 }
 
 void destroy_native_floquet_context(NativeFloquetMatShellContext *context) noexcept
@@ -2677,6 +3123,10 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     FloquetSharedDomainSparseModalSolveContext *reuse_context) noexcept
 {
     SLEPcTinyGyrotropicModalEigenResult result{};
+    // Seed the opt-in diagnostic before any shared-operator validation or
+    // PETSc/SLEPc setup. Every early return must distinguish an enabled but
+    // unreachable probe from the environment-disabled null field.
+    initialize_floquet_schur_action_diagnostic(&result);
     result.solver_adapter = "floquet_airbox_cpu_schur_slepc";
     result.eps_type = "krylovschur";
     result.problem_type = "gnhep";
@@ -3247,6 +3697,28 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.ksp_max_iterations = shifted_actual_max_iterations > 0
         ? static_cast<int>(shifted_actual_max_iterations)
         : 0;
+
+    // Copy configuration while ST/KSP are safe to inspect. A hard EPS error
+    // can leave borrowed DS views alive, so failure reporting must not query
+    // those objects. This is pre-setup configuration, not convergence proof.
+    PCSide configured_pc_side = PC_SIDE_DEFAULT;
+    KSPNormType configured_norm_type = KSP_NORM_DEFAULT;
+    if (KSPGetPCSide(shifted_ksp, &configured_pc_side) == 0 &&
+        KSPGetNormType(shifted_ksp, &configured_norm_type) == 0) {
+        result.shifted_ksp_configuration_before_eps_available = true;
+        result.shifted_ksp_pc_side_before_eps = static_cast<int>(configured_pc_side);
+        result.shifted_ksp_norm_type_before_eps = static_cast<int>(configured_norm_type);
+    }
+
+    // Optional action-only observation is completed before EPSSolve. It owns
+    // bounded scratch vectors and never writes the production MatShell error
+    // buffer, demag certificate, or solver tolerances. Its status is
+    // diagnostic evidence only; it cannot qualify the physical operator.
+    (void)run_floquet_schur_action_diagnostic(
+        &context,
+        result.operator_normalization_scale,
+        result.preconditioner_normalization_scale,
+        &result.floquet_schur_action_diagnostic);
 
     const PetscErrorCode eps_solve_error = EPSSolve(eps);
     // A KSP error can unwind through Krylov--Schur while SLEPc owns a

@@ -29,81 +29,273 @@
   "equations": [
     {
       "id": "eq-poisson-airbox-modal-ansatz",
-      "symbols": ["position", "time", "magnetization", "tangent_map", "q", "demag_field", "potential", "omega", "complex_operators"],
-      "sources": ["source-native-aqq", "source-shared-assembly"]
+      "symbols": [
+        "position",
+        "time",
+        "magnetization",
+        "tangent_map",
+        "q",
+        "demag_field",
+        "potential",
+        "omega",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-native-aqq",
+        "source-shared-assembly"
+      ]
     },
     {
       "id": "eq-poisson-airbox-strong-form",
-      "symbols": ["dynamic_magnetization", "Ms", "potential", "domains", "gradient", "calculus_set_operators"],
-      "sources": ["source-shared-assembly"]
+      "symbols": [
+        "dynamic_magnetization",
+        "Ms",
+        "potential",
+        "domains",
+        "gradient",
+        "calculus_set_operators"
+      ],
+      "sources": [
+        "source-shared-assembly"
+      ]
     },
     {
       "id": "eq-poisson-airbox-weak-form",
-      "symbols": ["potential", "test_function", "domains", "open_boundary", "measures", "gradient", "beta", "Ms", "calculus_set_operators", "tensor_operators"],
-      "sources": ["source-shared-payload", "source-shared-assembly"]
+      "symbols": [
+        "potential",
+        "test_function",
+        "domains",
+        "open_boundary",
+        "measures",
+        "gradient",
+        "beta",
+        "Ms",
+        "calculus_set_operators",
+        "tensor_operators"
+      ],
+      "sources": [
+        "source-shared-payload",
+        "source-shared-assembly"
+      ]
     },
     {
       "id": "eq-poisson-airbox-modal-block",
-      "symbols": ["q", "potential", "P", "magnetic_to_potential", "potential_to_magnetic", "Aqq", "mass_blocks", "operators", "lambda"],
-      "sources": ["source-native-aqq", "source-shared-assembly", "source-cpu-schur", "source-gpu-petsc"]
+      "symbols": [
+        "q",
+        "potential",
+        "P",
+        "magnetic_to_potential",
+        "potential_to_magnetic",
+        "Aqq",
+        "mass_blocks",
+        "operators",
+        "lambda"
+      ],
+      "sources": [
+        "source-native-aqq",
+        "source-shared-assembly",
+        "source-cpu-schur",
+        "source-gpu-petsc"
+      ]
     },
     {
       "id": "eq-poisson-airbox-coupling-signs",
-      "symbols": ["q", "tangent_map", "test_function", "Ms", "mu0", "magnetic_to_potential", "potential_to_magnetic", "calculus_set_operators", "tensor_operators"],
-      "sources": ["source-shared-assembly"]
+      "symbols": [
+        "q",
+        "tangent_map",
+        "test_function",
+        "Ms",
+        "mu0",
+        "magnetic_to_potential",
+        "potential_to_magnetic",
+        "calculus_set_operators",
+        "tensor_operators"
+      ],
+      "sources": [
+        "source-shared-assembly"
+      ]
     },
     {
       "id": "eq-poisson-airbox-full-residuals",
-      "symbols": ["q", "potential", "P", "magnetic_to_potential", "potential_to_magnetic", "Aqq", "mass_blocks", "lambda", "gauge", "residuals", "normalized_residuals", "residual_floors", "norm_operators"],
-      "sources": ["source-cpu-schur", "source-gpu-petsc"]
+      "symbols": [
+        "q",
+        "potential",
+        "P",
+        "magnetic_to_potential",
+        "potential_to_magnetic",
+        "Aqq",
+        "mass_blocks",
+        "lambda",
+        "gauge",
+        "residuals",
+        "normalized_residuals",
+        "residual_floors",
+        "norm_operators"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-gpu-petsc"
+      ]
     },
     {
       "id": "eq-poisson-airbox-rotated-pencil",
-      "symbols": ["operators", "mass_blocks", "lambda", "omega", "real_split", "complex_operators"],
-      "sources": ["source-cpu-schur", "source-gpu-petsc"]
+      "symbols": [
+        "operators",
+        "mass_blocks",
+        "lambda",
+        "omega",
+        "real_split",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-gpu-petsc"
+      ]
     },
     {
       "id": "eq-poisson-airbox-kittel-oracle",
-      "symbols": ["bias_and_effective_field", "gamma0", "kittel_frequency", "pi_constant"],
-      "sources": ["source-oracle-guard"]
+      "symbols": [
+        "bias_and_effective_field",
+        "gamma0",
+        "kittel_frequency",
+        "pi_constant"
+      ],
+      "sources": [
+        "source-oracle-guard"
+      ]
     },
     {
       "id": "eq-poisson-airbox-relative-torque-diagnostic",
-      "symbols": ["magnetization", "equilibrium_effective_field", "relative_torque_diagnostic", "norm_operators", "schedule_operators"],
-      "sources": ["source-relax-handoff", "source-equilibrium-materialization"]
+      "symbols": [
+        "magnetization",
+        "equilibrium_effective_field",
+        "relative_torque_diagnostic",
+        "norm_operators",
+        "schedule_operators"
+      ],
+      "sources": [
+        "source-relax-handoff",
+        "source-equilibrium-materialization"
+      ]
     },
     {
       "id": "eq-poisson-airbox-accepted-torque-threshold",
-      "symbols": ["magnetization", "equilibrium_effective_field", "accepted_torque_residual", "accepted_torque_threshold", "norm_operators", "schedule_operators"],
-      "sources": ["source-relax-handoff", "source-native-aqq", "source-shared-payload"]
+      "symbols": [
+        "magnetization",
+        "equilibrium_effective_field",
+        "accepted_torque_residual",
+        "accepted_torque_threshold",
+        "norm_operators",
+        "schedule_operators"
+      ],
+      "sources": [
+        "source-relax-handoff",
+        "source-native-aqq",
+        "source-shared-payload"
+      ]
     },
     {
       "id": "eq-poisson-airbox-window-refinement-schedule",
-      "symbols": ["window_frequencies", "schedule_operators"],
-      "sources": ["source-cpu-schur", "source-gpu-petsc"]
+      "symbols": [
+        "window_frequencies",
+        "schedule_operators"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-gpu-petsc"
+      ]
     },
     {
       "id": "eq-poisson-airbox-window-subspace-overlap",
-      "symbols": ["cluster_bases", "cluster_indices", "cluster_overlap", "complex_operators", "norm_operators"],
-      "sources": ["source-cpu-schur", "source-gpu-petsc"]
+      "symbols": [
+        "cluster_bases",
+        "cluster_indices",
+        "cluster_overlap",
+        "complex_operators",
+        "norm_operators"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-gpu-petsc"
+      ]
     },
     {
       "id": "eq-poisson-airbox-component-consistent-mass",
-      "symbols": ["modal_object_set", "p1_basis_and_tet_volume", "object_consistent_mass"],
-      "sources": ["source-native-aqq", "source-runner-component-participation", "source-runner-eigen-v2-writer", "source-component-participation-doc-test"]
+      "symbols": [
+        "modal_object_set",
+        "p1_basis_and_tet_volume",
+        "object_consistent_mass"
+      ],
+      "sources": [
+        "source-native-aqq",
+        "source-runner-component-participation",
+        "source-runner-eigen-v2-writer",
+        "source-component-participation-doc-test"
+      ]
     },
     {
       "id": "eq-poisson-airbox-component-participation",
-      "symbols": ["modal_object_set", "modal_component", "modal_component_coefficients", "object_consistent_mass", "component_quadratic_measure", "component_total_measure", "component_participation_fraction"],
-      "sources": ["source-runner-component-participation", "source-runner-eigen-v2-writer", "source-component-participation-doc-test"]
+      "symbols": [
+        "modal_object_set",
+        "modal_component",
+        "modal_component_coefficients",
+        "object_consistent_mass",
+        "component_quadratic_measure",
+        "component_total_measure",
+        "component_participation_fraction"
+      ],
+      "sources": [
+        "source-runner-component-participation",
+        "source-runner-eigen-v2-writer",
+        "source-component-participation-doc-test"
+      ]
     },
     {
       "id": "eq-poisson-airbox-p1-gradient-roundoff",
-      "symbols": ["potential", "gradient", "demag_field", "forward_error_bound", "machine_epsilon", "gamma_n"],
-      "sources": ["source-de-physical-potential-gamma", "source-de-physical-potential-reconstruction", "source-de-physical-potential-validation", "source-de-physical-potential-regression"]
+      "symbols": [
+        "potential",
+        "gradient",
+        "demag_field",
+        "forward_error_bound",
+        "machine_epsilon",
+        "gamma_n"
+      ],
+      "sources": [
+        "source-de-physical-potential-gamma",
+        "source-de-physical-potential-reconstruction",
+        "source-de-physical-potential-validation",
+        "source-de-physical-potential-regression"
+      ]
     },
-    {"id": "eq-modal-mass-norm-interval", "symbols": ["q", "modal_geometry_mass", "modal_norm_intervals", "modal_volume_l2_scale", "modal_norm_indices", "modal_norm_ranges", "modal_norm_bounds", "complex_operators"], "sources": ["source-modal-interval-norm", "source-modal-interval-metric"]},
-    {"id": "eq-modal-outward-interval-operations", "symbols": ["modal_interval_endpoints", "modal_interval_operations", "modal_interval_neighbors"], "sources": ["source-modal-interval-norm", "source-modal-interval-oracle"]},
+    {
+      "id": "eq-modal-mass-norm-interval",
+      "symbols": [
+        "q",
+        "modal_geometry_mass",
+        "modal_norm_intervals",
+        "modal_volume_l2_scale",
+        "modal_norm_indices",
+        "modal_norm_ranges",
+        "modal_norm_bounds",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-modal-interval-norm",
+        "source-modal-interval-metric"
+      ]
+    },
+    {
+      "id": "eq-modal-outward-interval-operations",
+      "symbols": [
+        "modal_interval_endpoints",
+        "modal_interval_operations",
+        "modal_interval_neighbors"
+      ],
+      "sources": [
+        "source-modal-interval-norm",
+        "source-modal-interval-oracle"
+      ]
+    },
     {
       "sources": [
         "source-modal-field-replay-scope",
@@ -119,76 +311,444 @@
         "magnetic_replay_error",
         "magnetic_replay_indices"
       ]
+    },
+    {
+      "id": "eq-floquet-schur-action-diagnostic",
+      "symbols": [
+        "floquet_normalized_schur_action",
+        "floquet_operator_normalization_scale",
+        "floquet_phase_rotation",
+        "q",
+        "Aqq",
+        "potential_to_magnetic",
+        "magnetic_to_potential",
+        "P"
+      ],
+      "sources": [
+        "source-floquet-operator-normalization",
+        "source-floquet-schur-components",
+        "source-floquet-action-probe"
+      ]
+    },
+    {
+      "id": "eq-floquet-cancellation-ratio",
+      "symbols": [
+        "floquet_cancellation_ratio",
+        "floquet_magnetic_component",
+        "floquet_feedback_component",
+        "floquet_float_minimum_normal",
+        "norm_operators",
+        "schedule_operators"
+      ],
+      "sources": [
+        "source-floquet-schur-components",
+        "source-floquet-action-probe"
+      ]
     }
   ],
   "symbols": [
-    {"id": "position", "latex": "$\\mathbf r$", "meaning": "spatial position", "si_unit": "$\\mathrm{m}$"},
-    {"id": "time", "latex": "$t$", "meaning": "time", "si_unit": "$\\mathrm{s}$"},
-    {"id": "magnetization", "latex": "$\\mathbf m$, $\\mathbf m_0$, $\\delta\\mathbf m$", "meaning": "normalized magnetization, accepted equilibrium and tangent perturbation", "si_unit": "$1$"},
-    {"id": "tangent_map", "latex": "$T$", "meaning": "tangent-frame map from modal coefficients to $\\delta\\mathbf m$", "si_unit": "$1$"},
-    {"id": "q", "latex": "$q$", "meaning": "tangent-plane modal coefficients", "si_unit": "$1$"},
-    {"id": "dynamic_magnetization", "latex": "$\\delta\\mathbf M$", "meaning": "dynamic magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "demag_field", "latex": "$\\delta\\mathbf H_{\\mathrm{demag}}$", "meaning": "dynamic demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "potential", "latex": "$\\delta\\phi$, $\\phi$", "meaning": "dynamic scalar magnetic potential and its coefficient vector", "si_unit": "$\\mathrm{A}$"},
-    {"id": "test_function", "latex": "$\\psi$", "meaning": "scalar-potential test function", "si_unit": "$1$"},
-    {"id": "domains", "latex": "$D$, $\\Omega_m$, $\\Omega_{\\mathrm{air}}$", "meaning": "shared, magnetic and airbox domains", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "open_boundary", "latex": "$\\Gamma_{\\mathrm{open}}$", "meaning": "open exterior boundary", "si_unit": "$\\mathrm{m^2}$"},
-    {"id": "measures", "latex": "$\\mathrm{d}V$, $\\mathrm{d}S$", "meaning": "volume and surface measures", "si_unit": "$\\mathrm{m^3}$, $\\mathrm{m^2}$"},
-    {"id": "gradient", "latex": "$\\nabla$", "meaning": "spatial gradient", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "complex_operators", "latex": "$\\operatorname{Re}$, $\\exp$, $\\mathrm{i}$, $(\\cdot)^\\ast$", "meaning": "real-part map, exponential, imaginary unit and complex conjugation; the operators/constants are dimensionless and preserve or combine operand units as written", "si_unit": "$1$"},
-    {"id": "norm_operators", "latex": "$\\lVert\\cdot\\rVert_2$, $|\\cdot|$", "meaning": "Euclidean norm and absolute value; each result inherits the operand unit", "si_unit": "$1$"},
-    {"id": "tensor_operators", "latex": "$(\\cdot)^{\\mathsf T}$, $\\cdot$", "meaning": "transpose and Euclidean contraction; the operators are dimensionless", "si_unit": "$1$"},
-    {"id": "calculus_set_operators", "latex": "$\\int$, $\\cup$, $\\nabla\\cdot$", "meaning": "integration, set union and divergence operators; dimensional changes come from the measure or derivative shown in the equation", "si_unit": "$1$"},
-    {"id": "pi_constant", "latex": "$\\pi$", "meaning": "circle constant", "si_unit": "$1$"},
-    {"id": "schedule_operators", "latex": "$\\min$, $\\max$, $\\lfloor\\cdot\\rfloor$, $\\lceil\\cdot\\rceil$", "meaning": "selection and integer-rounding operators used by the deterministic window schedule", "si_unit": "$1$"},
-    {"id": "beta", "latex": "$\\beta$", "meaning": "Robin coefficient", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{T\\,m\\,A^{-1}}$"},
-    {"id": "P", "latex": "$P$", "meaning": "scalar Poisson stiffness block", "si_unit": "$\\mathrm{m}$"},
-    {"id": "magnetic_to_potential", "latex": "$C_{\\phi q}$, $A_{\\phi q}$", "meaning": "magnetic-to-potential coupling blocks", "si_unit": "$\\mathrm{A\\,m}$"},
-    {"id": "potential_to_magnetic", "latex": "$A_{q\\phi}$", "meaning": "potential-to-magnetic coupling block", "si_unit": "$\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$"},
-    {"id": "Aqq", "latex": "$A_{qq}$", "meaning": "magnetic restoring block", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
-    {"id": "mass_blocks", "latex": "$B_{qq}$, $B_\\alpha$", "meaning": "tangent mass and damped gyrotropic mass blocks", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "operators", "latex": "$L_{\\mathrm{eff}}$, $L$", "meaning": "Schur-reduced and full magnetic operators", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
-    {"id": "lambda", "latex": "$\\lambda$", "meaning": "modal eigenvalue", "si_unit": "$\\mathrm{s^{-1}}$"},
-    {"id": "omega", "latex": "$\\omega$, $\\omega_{\\mathrm{target}}$, $\\tau$", "meaning": "angular frequency, requested angular target and rotated-pencil target", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
-    {"id": "real_split", "latex": "$\\mathcal R(\\cdot)$, $y$", "meaning": "real-split operator and real-split state", "si_unit": "$1$"},
-    {"id": "gauge", "latex": "$c$, $\\eta$", "meaning": "mean-zero gauge vector and Lagrange multiplier", "si_unit": "$\\mathrm{m^3}$, $\\mathrm{A\\,m^{-2}}$"},
-    {"id": "residuals", "latex": "$r_q$, $r_\\phi$, $r_g$", "meaning": "magnetic, scalar and gauge residuals", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"},
-    {"id": "normalized_residuals", "latex": "$\\epsilon_q$, $\\epsilon_\\phi$, $\\epsilon_g$", "meaning": "normalized magnetic, scalar and gauge residuals", "si_unit": "$1$"},
-    {"id": "residual_floors", "latex": "$\\delta_q$, $\\delta_\\phi$, $\\delta_g$", "meaning": "positive magnetic, scalar and gauge denominator floors", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"},
-    {"id": "bias_and_effective_field", "latex": "$H_b$, $M_{\\mathrm{eff}}$", "meaning": "physical bias-field magnitude and effective magnetization used only by the Kittel oracle", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "gamma0", "latex": "$\\gamma_0$", "meaning": "$\\mu_0|\\gamma|$ gyromagnetic factor in the A/m convention", "si_unit": "$\\mathrm{rad\\,s^{-1}\\,(A\\,m^{-1})^{-1}}$"},
-    {"id": "kittel_frequency", "latex": "$f_{\\mathrm{Kittel}}$", "meaning": "Kittel oracle frequency", "si_unit": "$\\mathrm{Hz}$"},
-    {"id": "window_frequencies", "latex": "$\\Delta f$, $f_{\\min}$, $f_{\\max}$, $f_a$, $f_b$", "meaning": "window width, bounds and candidate frequencies", "si_unit": "$\\mathrm{Hz}$"},
-    {"id": "cluster_bases", "latex": "$U$, $V$, $u_i$, $v_j$", "meaning": "orthonormal cluster bases and vectors", "si_unit": "$1$"},
-    {"id": "cluster_indices", "latex": "$i$, $j$, $r$", "meaning": "cluster-basis indices and paired cluster rank", "si_unit": "$1$"},
-    {"id": "cluster_overlap", "latex": "$u_i^\\ast v_j$, $s(U,V)$", "meaning": "Hermitian overlap and normalized invariant-subspace overlap", "si_unit": "$1$"},
-    {"id": "equilibrium_effective_field", "latex": "$\\mathbf H_{\\mathrm{eff},0}$", "meaning": "effective field evaluated at the accepted equilibrium", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "relative_torque_diagnostic", "latex": "$\\rho_\\tau$", "meaning": "relative torque diagnostic, never an eigensolve acceptance threshold", "si_unit": "$1$"},
-    {"id": "accepted_torque_residual", "latex": "$\\tau_{\\max}$", "meaning": "maximum accepted absolute equilibrium torque-field residual", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "accepted_torque_threshold", "latex": "$\\tau_{\\mathrm{user}}$", "meaning": "user-authored relaxation torque threshold carried by the immutable acceptance certificate", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "modal_object_set", "latex": "$\\mathcal O$, $o$", "meaning": "complete set of covered magnetic objects and one object identity", "si_unit": "$1$"},
-    {"id": "modal_component", "latex": "$c$", "meaning": "global Cartesian modal component in $\\{x,y,z\\}$", "si_unit": "$1$"},
-    {"id": "p1_basis_and_tet_volume", "latex": "$N_i$, $V_e$", "meaning": "P1 basis function and tet4 element volume", "si_unit": "$1$, $\\mathrm{m^3}$"},
-    {"id": "modal_component_coefficients", "latex": "$\\mathbf d^o_c$", "meaning": "complex P1 coefficient vector of $\\delta m_c$ restricted to object $o$", "si_unit": "$1$"},
-    {"id": "object_consistent_mass", "latex": "$M_o$, $M_e$", "meaning": "object consistent mass matrix and local P1/tet4 consistent mass matrix", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "component_quadratic_measure", "latex": "$E[o,c]$", "meaning": "component quadratic mass measure", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "component_total_measure", "latex": "$E_{\\mathrm{total}}$", "meaning": "summed modal measure", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "component_participation_fraction", "latex": "$p[o,c]$, $p_{\\mathrm{object}}[o]$, $p_{\\mathrm{global}}[c]$", "meaning": "object-component, object-total and global-component participation fractions", "si_unit": "$1$"},
-    {"id": "component_participation_tolerance", "latex": "$\\varepsilon_{\\mathrm{sum}}$, $\\varepsilon_{\\mathrm{mach}}$", "meaning": "participation-sum tolerance and float64 machine epsilon", "si_unit": "$1$"},
-    {"id": "machine_epsilon", "latex": "$u=2^{-53}$", "meaning": "IEEE-754 binary64 unit roundoff", "si_unit": "$1$"},
-    {"id": "gamma_n", "latex": "$\\gamma_n=nu/(1-nu)$", "meaning": "standard finite-operation forward-error factor", "si_unit": "$1$"},
-    {"id": "forward_error_bound", "latex": "$B_{e,a}$", "meaning": "local P1 gradient reconstruction roundoff bound", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "modal_geometry_mass", "latex": "$M_g$", "meaning": "geometryczna metryka masy pełnego 3D", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "modal_norm_intervals", "latex": "$Q$, $Q_{\\mathrm{fl}}$", "meaning": "dokładna i obliczona norma kwadratowa raw shape", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "modal_volume_l2_scale", "latex": "$s_{L2}$", "meaning": "wspólna skala raw shape full3D", "si_unit": "$\\mathrm{m^{3/2}}$"},
-    {"id": "modal_interval_endpoints", "latex": "$a$, $b$, $c$, $d$", "meaning": "końce lokalnych przedziałów; wymiar zależy od operandu", "si_unit": "$1\\ \\text{lub}\\ \\mathrm{m^3}$"},
-    {"id": "modal_interval_operations", "latex": "$\\oplus$, $\\ominus$, $\\otimes$", "meaning": "outward-rounded operacje przedziałowe", "si_unit": "$1$"},
-    {"id": "modal_norm_indices", "latex": "$i$, $j$", "meaning": "indeksy współczynników", "si_unit": "$1$"},
-    {"id": "modal_norm_ranges", "latex": "$I_R$, $I_I$", "meaning": "przedziały części rzeczywistej i urojonej Q", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "modal_norm_bounds", "latex": "$r_-$, $r_+$, $s_-$, $s_+$", "meaning": "granice przedziałów normy", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "modal_interval_neighbors", "latex": "$\\operatorname{nextDown}$, $\\operatorname{nextUp}$", "meaning": "sąsiednie binary64; jednostka wyniku zgodna z argumentem", "si_unit": "$1$"},
+    {
+      "id": "position",
+      "latex": "$\\mathbf r$",
+      "meaning": "spatial position",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "time",
+      "latex": "$t$",
+      "meaning": "time",
+      "si_unit": "$\\mathrm{s}$"
+    },
+    {
+      "id": "magnetization",
+      "latex": "$\\mathbf m$, $\\mathbf m_0$, $\\delta\\mathbf m$",
+      "meaning": "normalized magnetization, accepted equilibrium and tangent perturbation",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tangent_map",
+      "latex": "$T$",
+      "meaning": "tangent-frame map from modal coefficients to $\\delta\\mathbf m$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "q",
+      "latex": "$q$",
+      "meaning": "tangent-plane modal coefficients",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "dynamic_magnetization",
+      "latex": "$\\delta\\mathbf M$",
+      "meaning": "dynamic magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Ms",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "demag_field",
+      "latex": "$\\delta\\mathbf H_{\\mathrm{demag}}$",
+      "meaning": "dynamic demagnetizing field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "potential",
+      "latex": "$\\delta\\phi$, $\\phi$",
+      "meaning": "dynamic scalar magnetic potential and its coefficient vector",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "test_function",
+      "latex": "$\\psi$",
+      "meaning": "scalar-potential test function",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "domains",
+      "latex": "$D$, $\\Omega_m$, $\\Omega_{\\mathrm{air}}$",
+      "meaning": "shared, magnetic and airbox domains",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "open_boundary",
+      "latex": "$\\Gamma_{\\mathrm{open}}$",
+      "meaning": "open exterior boundary",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "measures",
+      "latex": "$\\mathrm{d}V$, $\\mathrm{d}S$",
+      "meaning": "volume and surface measures",
+      "si_unit": "$\\mathrm{m^3}$, $\\mathrm{m^2}$"
+    },
+    {
+      "id": "gradient",
+      "latex": "$\\nabla$",
+      "meaning": "spatial gradient",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "complex_operators",
+      "latex": "$\\operatorname{Re}$, $\\exp$, $\\mathrm{i}$, $(\\cdot)^\\ast$",
+      "meaning": "real-part map, exponential, imaginary unit and complex conjugation; the operators/constants are dimensionless and preserve or combine operand units as written",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "norm_operators",
+      "latex": "$\\lVert\\cdot\\rVert_2$, $|\\cdot|$",
+      "meaning": "Euclidean norm and absolute value; each result inherits the operand unit",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tensor_operators",
+      "latex": "$(\\cdot)^{\\mathsf T}$, $\\cdot$",
+      "meaning": "transpose and Euclidean contraction; the operators are dimensionless",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "calculus_set_operators",
+      "latex": "$\\int$, $\\cup$, $\\nabla\\cdot$",
+      "meaning": "integration, set union and divergence operators; dimensional changes come from the measure or derivative shown in the equation",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "pi_constant",
+      "latex": "$\\pi$",
+      "meaning": "circle constant",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "schedule_operators",
+      "latex": "$\\min$, $\\max$, $\\lfloor\\cdot\\rfloor$, $\\lceil\\cdot\\rceil$",
+      "meaning": "selection and integer-rounding operators used by the deterministic window schedule",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "beta",
+      "latex": "$\\beta$",
+      "meaning": "Robin coefficient",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "vacuum permeability",
+      "si_unit": "$\\mathrm{T\\,m\\,A^{-1}}$"
+    },
+    {
+      "id": "P",
+      "latex": "$P$",
+      "meaning": "scalar Poisson stiffness block",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "magnetic_to_potential",
+      "latex": "$C_{\\phi q}$, $A_{\\phi q}$",
+      "meaning": "magnetic-to-potential coupling blocks",
+      "si_unit": "$\\mathrm{A\\,m}$"
+    },
+    {
+      "id": "potential_to_magnetic",
+      "latex": "$A_{q\\phi}$",
+      "meaning": "potential-to-magnetic coupling block",
+      "si_unit": "$\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$"
+    },
+    {
+      "id": "Aqq",
+      "latex": "$A_{qq}$",
+      "meaning": "magnetic restoring block",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+    },
+    {
+      "id": "mass_blocks",
+      "latex": "$B_{qq}$, $B_\\alpha$",
+      "meaning": "tangent mass and damped gyrotropic mass blocks",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "operators",
+      "latex": "$L_{\\mathrm{eff}}$, $L$",
+      "meaning": "Schur-reduced and full magnetic operators",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+    },
+    {
+      "id": "lambda",
+      "latex": "$\\lambda$",
+      "meaning": "modal eigenvalue",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "omega",
+      "latex": "$\\omega$, $\\omega_{\\mathrm{target}}$, $\\tau$",
+      "meaning": "angular frequency, requested angular target and rotated-pencil target",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}}$"
+    },
+    {
+      "id": "real_split",
+      "latex": "$\\mathcal R(\\cdot)$, $y$",
+      "meaning": "real-split operator and real-split state",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gauge",
+      "latex": "$c$, $\\eta$",
+      "meaning": "mean-zero gauge vector and Lagrange multiplier",
+      "si_unit": "$\\mathrm{m^3}$, $\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "residuals",
+      "latex": "$r_q$, $r_\\phi$, $r_g$",
+      "meaning": "magnetic, scalar and gauge residuals",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"
+    },
+    {
+      "id": "normalized_residuals",
+      "latex": "$\\epsilon_q$, $\\epsilon_\\phi$, $\\epsilon_g$",
+      "meaning": "normalized magnetic, scalar and gauge residuals",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "residual_floors",
+      "latex": "$\\delta_q$, $\\delta_\\phi$, $\\delta_g$",
+      "meaning": "positive magnetic, scalar and gauge denominator floors",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"
+    },
+    {
+      "id": "bias_and_effective_field",
+      "latex": "$H_b$, $M_{\\mathrm{eff}}$",
+      "meaning": "physical bias-field magnitude and effective magnetization used only by the Kittel oracle",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gamma0",
+      "latex": "$\\gamma_0$",
+      "meaning": "$\\mu_0|\\gamma|$ gyromagnetic factor in the A/m convention",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}\\,(A\\,m^{-1})^{-1}}$"
+    },
+    {
+      "id": "kittel_frequency",
+      "latex": "$f_{\\mathrm{Kittel}}$",
+      "meaning": "Kittel oracle frequency",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "window_frequencies",
+      "latex": "$\\Delta f$, $f_{\\min}$, $f_{\\max}$, $f_a$, $f_b$",
+      "meaning": "window width, bounds and candidate frequencies",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "cluster_bases",
+      "latex": "$U$, $V$, $u_i$, $v_j$",
+      "meaning": "orthonormal cluster bases and vectors",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "cluster_indices",
+      "latex": "$i$, $j$, $r$",
+      "meaning": "cluster-basis indices and paired cluster rank",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "cluster_overlap",
+      "latex": "$u_i^\\ast v_j$, $s(U,V)$",
+      "meaning": "Hermitian overlap and normalized invariant-subspace overlap",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "equilibrium_effective_field",
+      "latex": "$\\mathbf H_{\\mathrm{eff},0}$",
+      "meaning": "effective field evaluated at the accepted equilibrium",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "relative_torque_diagnostic",
+      "latex": "$\\rho_\\tau$",
+      "meaning": "relative torque diagnostic, never an eigensolve acceptance threshold",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "accepted_torque_residual",
+      "latex": "$\\tau_{\\max}$",
+      "meaning": "maximum accepted absolute equilibrium torque-field residual",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "accepted_torque_threshold",
+      "latex": "$\\tau_{\\mathrm{user}}$",
+      "meaning": "user-authored relaxation torque threshold carried by the immutable acceptance certificate",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "modal_object_set",
+      "latex": "$\\mathcal O$, $o$",
+      "meaning": "complete set of covered magnetic objects and one object identity",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "modal_component",
+      "latex": "$c$",
+      "meaning": "global Cartesian modal component in $\\{x,y,z\\}$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "p1_basis_and_tet_volume",
+      "latex": "$N_i$, $V_e$",
+      "meaning": "P1 basis function and tet4 element volume",
+      "si_unit": "$1$, $\\mathrm{m^3}$"
+    },
+    {
+      "id": "modal_component_coefficients",
+      "latex": "$\\mathbf d^o_c$",
+      "meaning": "complex P1 coefficient vector of $\\delta m_c$ restricted to object $o$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "object_consistent_mass",
+      "latex": "$M_o$, $M_e$",
+      "meaning": "object consistent mass matrix and local P1/tet4 consistent mass matrix",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "component_quadratic_measure",
+      "latex": "$E[o,c]$",
+      "meaning": "component quadratic mass measure",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "component_total_measure",
+      "latex": "$E_{\\mathrm{total}}$",
+      "meaning": "summed modal measure",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "component_participation_fraction",
+      "latex": "$p[o,c]$, $p_{\\mathrm{object}}[o]$, $p_{\\mathrm{global}}[c]$",
+      "meaning": "object-component, object-total and global-component participation fractions",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "component_participation_tolerance",
+      "latex": "$\\varepsilon_{\\mathrm{sum}}$, $\\varepsilon_{\\mathrm{mach}}$",
+      "meaning": "participation-sum tolerance and float64 machine epsilon",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "machine_epsilon",
+      "latex": "$u=2^{-53}$",
+      "meaning": "IEEE-754 binary64 unit roundoff",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gamma_n",
+      "latex": "$\\gamma_n=nu/(1-nu)$",
+      "meaning": "standard finite-operation forward-error factor",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "forward_error_bound",
+      "latex": "$B_{e,a}$",
+      "meaning": "local P1 gradient reconstruction roundoff bound",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "modal_geometry_mass",
+      "latex": "$M_g$",
+      "meaning": "geometryczna metryka masy pełnego 3D",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "modal_norm_intervals",
+      "latex": "$Q$, $Q_{\\mathrm{fl}}$",
+      "meaning": "dokładna i obliczona norma kwadratowa raw shape",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "modal_volume_l2_scale",
+      "latex": "$s_{L2}$",
+      "meaning": "wspólna skala raw shape full3D",
+      "si_unit": "$\\mathrm{m^{3/2}}$"
+    },
+    {
+      "id": "modal_interval_endpoints",
+      "latex": "$a$, $b$, $c$, $d$",
+      "meaning": "końce lokalnych przedziałów; wymiar zależy od operandu",
+      "si_unit": "$1\\ \\text{lub}\\ \\mathrm{m^3}$"
+    },
+    {
+      "id": "modal_interval_operations",
+      "latex": "$\\oplus$, $\\ominus$, $\\otimes$",
+      "meaning": "outward-rounded operacje przedziałowe",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "modal_norm_indices",
+      "latex": "$i$, $j$",
+      "meaning": "indeksy współczynników",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "modal_norm_ranges",
+      "latex": "$I_R$, $I_I$",
+      "meaning": "przedziały części rzeczywistej i urojonej Q",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "modal_norm_bounds",
+      "latex": "$r_-$, $r_+$, $s_-$, $s_+$",
+      "meaning": "granice przedziałów normy",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "modal_interval_neighbors",
+      "latex": "$\\operatorname{nextDown}$, $\\operatorname{nextUp}$",
+      "meaning": "sąsiednie binary64; jednostka wyniku zgodna z argumentem",
+      "si_unit": "$1$"
+    },
     {
       "id": "magnetic_replay_volume",
       "latex": "$w_i^{(m)}$",
@@ -223,6 +783,48 @@
       "id": "magnetic_replay_indices",
       "latex": "$i,\\alpha$",
       "meaning": "indeks węzła i składowa kartezjańska x, y albo z",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "floquet_operator_normalization_scale",
+      "latex": "$\\kappa_{\\mathrm{op}}$",
+      "meaning": "akumulowany czynnik `operator_normalization_scale` wspólny dla bloków operatora Schura",
+      "si_unit": "$\\mathrm{s\\,m^{-3}}$"
+    },
+    {
+      "id": "floquet_normalized_schur_action",
+      "latex": "$\\widehat{\\mathcal S}_{\\sigma}$",
+      "meaning": "znormalizowane, obrócone działanie operatora Schura obserwowane przez MatShell",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "floquet_phase_rotation",
+      "latex": "$\\mathcal R_{\\sigma}$",
+      "meaning": "normozachowująca rotacja real-split zależna od znaku fazy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "floquet_cancellation_ratio",
+      "latex": "$\\rho_{\\mathrm{cancel}}$",
+      "meaning": "współczynnik kasowania dla jednego wejścia diagnostycznego; nie jest testem akceptacji",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "floquet_magnetic_component",
+      "latex": "$\\mathbf y_{\\mathrm{mag}}$",
+      "meaning": "znormalizowane składowe magnetyczna i sprzężenia zwrotnego przed rotacją",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "floquet_feedback_component",
+      "latex": "$\\mathbf y_{\\mathrm{feedback}}$",
+      "meaning": "znormalizowane składowe magnetyczna i sprzężenia zwrotnego przed rotacją",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "floquet_float_minimum_normal",
+      "latex": "$\\delta_{\\mathrm{fp}}$",
+      "meaning": "`std::numeric_limits<double>::min()` po normalizacji; wyłącznie numeryczny floor mianownika",
       "si_unit": "$1$"
     }
   ],
@@ -423,11 +1025,36 @@
       "symbol": "test_near_zero_p1_component_uses_forward_roundoff_bound",
       "responsibility": "Check an analytically known affine potential on a cancellation-prone Tet4 and reject a field perturbation outside the local roundoff envelope."
     },
-    {"id": "source-modal-common-normalization", "path": "crates/fullmag-runner/src/fem/eigen_solve.rs", "symbol": "normalize_complex_mode_and_scale", "responsibility": "Compute one checked physical mass scale for magnetic coefficients and potential certificate; reject invalid normalization."},
-    {"id": "source-modal-block-normalization", "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs", "symbol": "normalize_complex_block_mode", "responsibility": "Apply the same checked scalar to all magnetic coefficients and return it for coupled potential normalization."},
-    {"id": "source-modal-interval-norm", "path": "crates/fullmag-runner/src/fem/eigen_normalization_metric.rs", "symbol": "checked_mass_quadratic", "responsibility": "Compute finite outward-rounded real/imaginary enclosure for actual quadratic-form contributions."},
-    {"id": "source-modal-interval-metric", "path": "crates/fullmag-runner/src/fem/eigen_mass_metric.rs", "symbol": "ModalMassMetric", "responsibility": "Keep dense and sparse observation iterators separate and avoid sparse dense materialization."},
-    {"id": "source-modal-interval-oracle", "path": "scripts/test_modal_norm_interval_source.py", "symbol": "class ModalNormIntervalOracleTests", "responsibility": "Compare proposed binary64 enclosures with independent exact Fraction arithmetic; not native runtime."},
+    {
+      "id": "source-modal-common-normalization",
+      "path": "crates/fullmag-runner/src/fem/eigen_solve.rs",
+      "symbol": "normalize_complex_mode_and_scale",
+      "responsibility": "Compute one checked physical mass scale for magnetic coefficients and potential certificate; reject invalid normalization."
+    },
+    {
+      "id": "source-modal-block-normalization",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs",
+      "symbol": "normalize_complex_block_mode",
+      "responsibility": "Apply the same checked scalar to all magnetic coefficients and return it for coupled potential normalization."
+    },
+    {
+      "id": "source-modal-interval-norm",
+      "path": "crates/fullmag-runner/src/fem/eigen_normalization_metric.rs",
+      "symbol": "checked_mass_quadratic",
+      "responsibility": "Compute finite outward-rounded real/imaginary enclosure for actual quadratic-form contributions."
+    },
+    {
+      "id": "source-modal-interval-metric",
+      "path": "crates/fullmag-runner/src/fem/eigen_mass_metric.rs",
+      "symbol": "ModalMassMetric",
+      "responsibility": "Keep dense and sparse observation iterators separate and avoid sparse dense materialization."
+    },
+    {
+      "id": "source-modal-interval-oracle",
+      "path": "scripts/test_modal_norm_interval_source.py",
+      "symbol": "class ModalNormIntervalOracleTests",
+      "responsibility": "Compare proposed binary64 enclosures with independent exact Fraction arithmetic; not native runtime."
+    },
     {
       "id": "source-modal-field-replay-scope",
       "path": "crates/fullmag-runner/src/fem/eigen_equilibrium.rs",
@@ -446,44 +1073,383 @@
       "symbol": "finite_air_extension_does_not_change_magnetic_comparison",
       "responsibility": "Six regression cases for support-only comparison and malformed data rejection; unit-test compilation currently prohibited."
     },
-    {"id": "source-static-demag-replay-preimage", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs", "symbol": "shared_domain_static_demag_signature", "responsibility": "Exact persisted static-field subdigest with requested realization; independent numerical replay comparisons remain mandatory."},
-    {"id": "source-modal-krylov-tuning", "path": "backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp", "symbol": "resolve_modal_krylov_tuning", "responsibility": "Validate common diagnostic EPS/ST tuning while preserving adapter defaults and full residual acceptance."},
-    {"id": "source-k0-linear-progress", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp", "symbol": "production_modal_ksp_convergence_test", "responsibility": "Emit actual KSP norm and explicit Poisson/ST role, independently of physical modal residual."},
-    {"id": "source-modal-progress-json", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp", "symbol": "poisson_airbox_modal_emit_progress", "responsibility": "Publish nullable physical residual and distinct tagged linear-solver diagnostics without invalid nonfinite JSON."},
-    {"id": "source-modal-progress-decoder", "path": "crates/fullmag-runner/src/fem/eigen_progress.rs", "symbol": "native_modal_progress_event", "responsibility": "Keep outer iteration, subwindow index and tagged linear norm distinct."},
-    {"id": "source-modal-progress-runtime", "path": "crates/fullmag-runner/src/lib.rs", "symbol": "fem_eigen_progress_update", "responsibility": "Preserve typed solver diagnostics in the existing progress scalar envelope."},
-    {"id": "source-modal-progress-cli", "path": "crates/fullmag-cli/src/orchestrator.rs", "symbol": "append_fem_eigen_step_progress", "responsibility": "Label KSP norm/iteration independently of modal relative residual and window progress."},
-    {"id": "source-k0-eps-hard-error", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp", "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur", "responsibility": "Quarantine the heap-owned borrowed solver graph after a hard EPS error, preserve the original code and stop further K0 reuse."},
-    {"id": "source-gamma-query-trial", "path": "scripts/de_gamma_krylov_trial.py", "symbol": "validate_gamma_krylov_trial", "responsibility": "Verify actual per-Gamma and per-pass EPS/ST configuration against requested tuning, independently of physical residual qualification."},
-    {"id": "source-k0-request-vector", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "modal_request_k_vector_json_field", "responsibility": "Publish declared request-derived wavevector provenance on the direct K0 result and diagnostics path without inventing an undeclared zero vector."}
+    {
+      "id": "source-static-demag-replay-preimage",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs",
+      "symbol": "shared_domain_static_demag_signature",
+      "responsibility": "Exact persisted static-field subdigest with requested realization; independent numerical replay comparisons remain mandatory."
+    },
+    {
+      "id": "source-modal-krylov-tuning",
+      "path": "backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp",
+      "symbol": "resolve_modal_krylov_tuning",
+      "responsibility": "Validate common diagnostic EPS/ST tuning while preserving adapter defaults and full residual acceptance."
+    },
+    {
+      "id": "source-k0-linear-progress",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "production_modal_ksp_convergence_test",
+      "responsibility": "Emit actual KSP norm and explicit Poisson/ST role, independently of physical modal residual."
+    },
+    {
+      "id": "source-modal-progress-json",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp",
+      "symbol": "poisson_airbox_modal_emit_progress",
+      "responsibility": "Publish nullable physical residual and distinct tagged linear-solver diagnostics without invalid nonfinite JSON."
+    },
+    {
+      "id": "source-modal-progress-decoder",
+      "path": "crates/fullmag-runner/src/fem/eigen_progress.rs",
+      "symbol": "native_modal_progress_event",
+      "responsibility": "Keep outer iteration, subwindow index and tagged linear norm distinct."
+    },
+    {
+      "id": "source-modal-progress-runtime",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "fem_eigen_progress_update",
+      "responsibility": "Preserve typed solver diagnostics in the existing progress scalar envelope."
+    },
+    {
+      "id": "source-modal-progress-cli",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "append_fem_eigen_step_progress",
+      "responsibility": "Label KSP norm/iteration independently of modal relative residual and window progress."
+    },
+    {
+      "id": "source-k0-eps-hard-error",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
+      "responsibility": "Quarantine the heap-owned borrowed solver graph after a hard EPS error, preserve the original code and stop further K0 reuse."
+    },
+    {
+      "id": "source-gamma-query-trial",
+      "path": "scripts/de_gamma_krylov_trial.py",
+      "symbol": "validate_gamma_krylov_trial",
+      "responsibility": "Verify actual per-Gamma and per-pass EPS/ST configuration against requested tuning, independently of physical residual qualification."
+    },
+    {
+      "id": "source-k0-request-vector",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "modal_request_k_vector_json_field",
+      "responsibility": "Publish declared request-derived wavevector provenance on the direct K0 result and diagnostics path without inventing an undeclared zero vector."
+    },
+    {
+      "id": "source-floquet-operator-normalization",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "normalize_native_floquet_pencil",
+      "responsibility": "Skaluje wspólnie bloki magnetyczne Schura i gyrotropiczną prawą stronę; zapisuje akumulowany czynnik operatora.",
+      "lane": "FEM CPU",
+      "evidence_status": "review źródłowy; kompilacja/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-floquet-schur-components",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "apply_native_floquet_schur_components",
+      "responsibility": "Oblicza znormalizowaną składową magnetyczną i sprzężenie zwrotne przez scalar Poisson KSP.",
+      "lane": "FEM CPU",
+      "evidence_status": "review źródłowy; kompilacja/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-floquet-action-probe",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "run_floquet_schur_action_diagnostic",
+      "responsibility": "Wykonuje ograniczoną sondę przed EPSSolve na prywatnych wektorach; wynik w typie FloquetSchurActionDiagnostic zadeklarowanym w backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp.",
+      "lane": "FEM CPU",
+      "evidence_status": "review źródłowy; kompilacja/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-floquet-diagnostic-initialization",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context",
+      "responsibility": "Przed setupem wywołuje initialize_floquet_schur_action_diagnostic i zachowuje requested/unavailable także przy wcześniejszych return.",
+      "lane": "FEM CPU",
+      "evidence_status": "review źródłowy; kompilacja/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-floquet-diagnostic-serialization",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "solve_sparse_production_modal_payload",
+      "responsibility": "Wynik diagnostyczny jest serializowany przez floquet_schur_action_diagnostic_json_field i dołączany do success/error JSON.",
+      "lane": "FEM CPU",
+      "evidence_status": "review źródłowy; kompilacja/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-floquet-pre-eps-query",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum",
+      "responsibility": "Odczytuje rzeczywiste PC side i KSP norm type tuż przed EPSSolve, osobno od telemetry ostatniego solve.",
+      "lane": "FEM CPU",
+      "evidence_status": "review źródłowy; kompilacja/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-floquet-pre-eps-query-json",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "floquet_shifted_ksp_configuration_json_field",
+      "responsibility": "Publikuje oba skopiowane enumy tylko przy udanym odczycie; null zachowuje brak obserwacji.",
+      "lane": "FEM CPU",
+      "evidence_status": "review źródłowy; kompilacja/runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-floquet-native-regressions",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "main",
+      "responsibility": "Native test harness invokes reports_opt_in_action_diagnostic_unavailable_before_setup, executes_native_sparse_matshell_above_dense_bound, and normalizes_si_scale_floquet_pencil. Tests remain prepared only.",
+      "lane": "FEM CPU",
+      "evidence_status": "test source prepared; not compiled or run"
+    }
   ],
   "public_api": {
     "parameters": [
-      {"python": "study.device(spec, precision=...)", "type": "str", "default": "required, optional", "si_unit": "$1$", "validation": "requires explicit", "meaning": "requested execution intent", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "backend_policy"},
-      {"python": "study.mode(\"strict\")", "type": "str", "default": "required by this scope", "si_unit": "$1$", "validation": "rejects non-strict", "meaning": "fail-closed capability policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "validation_profile.execution_mode"},
-      {"python": "study.pbc(x, y, z, demag)", "type": "bool, bool, bool, str", "default": "False, False, False, \"open\"", "si_unit": "$1$", "validation": "requires x/y", "meaning": "problem periodicity and static demag policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "pbc.axes"},
-      {"python": "relax.tolA", "type": "float or None", "default": "public relaxation default when omitted", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite and positive; mutually exclusive with tolT", "meaning": "authored torque stop threshold", "backend_support": "FEM CPU/GPU relaxation contract", "problem_ir": "StudyIR::Relaxation.stop.torque_tolerance_apm"},
-      {"python": "relax.tolT", "type": "float or None", "default": "public relaxation default when omitted", "si_unit": "$\\mathrm{T}$", "validation": "finite and positive; mutually exclusive with tolA", "meaning": "authored torque stop threshold normalized through mu0", "backend_support": "FEM CPU/GPU relaxation contract", "problem_ir": "StudyIR::Relaxation.stop.torque_tolerance_apm"},
-      {"python": "relax.energy_tolerance", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{J}$", "validation": "finite and non-negative", "meaning": "authored energy stop threshold that can independently certify relaxation", "backend_support": "FEM CPU/GPU relaxation contract", "problem_ir": "StudyIR::Relaxation.stop.energy_tolerance_j"},
-      {"python": "eigenmodes.count", "type": "int", "default": "10", "si_unit": "$1$", "validation": "count > 0", "meaning": "selected mode count", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.count"},
-      {"python": "eigenmodes.target", "type": "str", "default": "\"lowest\"", "si_unit": "$1$", "validation": "lowest", "meaning": "spectral selection strategy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target"},
-      {"python": "eigenmodes.target_frequency", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "finite and positive", "meaning": "nearest target frequency", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target.frequency_hz"},
-      {"python": "eigenmodes.frequency_min", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "finite, positive and strictly ordered", "meaning": "requested interval", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target.frequency_min_hz"},
-      {"python": "eigenmodes.frequency_max", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "finite, positive and strictly ordered", "meaning": "requested interval", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target.frequency_max_hz"},
-      {"python": "eigenmodes.operator", "type": "str", "default": "\"linearized_llg\"", "si_unit": "$1$", "validation": "C1 scope requires", "meaning": "linearized dynamics operator", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.operator.kind"},
-      {"python": "eigenmodes.include_demag", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "requires", "meaning": "dynamic demagnetizing feedback", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.operator.include_demag"},
-      {"python": "eigenmodes.equilibrium_source", "type": "str", "default": "\"relax\"", "si_unit": "$1$", "validation": "relax", "meaning": "source of accepted equilibrium", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.equilibrium"},
-      {"python": "eigenmodes.equilibrium_artifact", "type": "str or None", "default": "None", "si_unit": "$1$", "validation": "required for", "meaning": "accepted equilibrium path", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.equilibrium.path"},
-      {"python": "eigenmodes.normalization", "type": "str", "default": "\"unit_l2\"", "si_unit": "$1$", "validation": "unit_l2", "meaning": "mode normalization", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.normalization"},
-      {"python": "eigenmodes.damping_policy", "type": "str", "default": "\"ignore\"", "si_unit": "$1$", "validation": "requires", "meaning": "damping treatment", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.damping_policy"},
-      {"python": "eigenmodes.k_vector", "type": "3-vector / object", "default": "None", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "requires one exact Gamma sample", "meaning": "wave-vector request", "backend_support": "FEM CPU/GPU source contract at K0", "problem_ir": "study.k_sampling"},
-      {"python": "eigenmodes.k_sampling", "type": "3-vector / object", "default": "None", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "requires one exact Gamma sample", "meaning": "wave-vector request", "backend_support": "FEM CPU/GPU source contract at K0", "problem_ir": "study.k_sampling"},
-      {"python": "eigenmodes.bc", "type": "str or dict", "default": "\"free\"", "si_unit": "$1$", "validation": "requires periodic", "meaning": "exchange/spin-wave boundary policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.spin_wave_bc"},
-      {"python": "eigenmodes.magnetostatic_bc", "type": "str", "default": "\"open\"", "si_unit": "$1$", "validation": "requires", "meaning": "scalar-potential boundary policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.magnetostatic_bc"},
-      {"python": "BiasFieldSweep.samples_a_per_m", "type": "sequence of 3-vectors", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "non-empty", "meaning": "authored physical bias field per sample", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.bias_field_sweep.samples_a_per_m"},
-      {"python": "BiasFieldSweep.equilibrium_policy", "type": "str", "default": "\"relax_each\"", "si_unit": "$1$", "validation": "relax_each", "meaning": "equilibrium policy per physical sample", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.bias_field_sweep.equilibrium_policy"},
-      {"python": "BiasFieldSweep.continuation_seed", "type": "str", "default": "\"initial_state\"", "si_unit": "$1$", "validation": "previous_accepted_equilibrium", "meaning": "continuation seed provenance", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.bias_field_sweep.continuation_seed"},
-      {"python": "generated sweep ordering", "type": "str", "default": "\"declared\"", "si_unit": "$1$", "validation": "any other value rejects", "meaning": "preserves authored sample order", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.bias_field_sweep.ordering"}
+      {
+        "python": "study.device(spec, precision=...)",
+        "type": "str",
+        "default": "required, optional",
+        "si_unit": "$1$",
+        "validation": "requires explicit",
+        "meaning": "requested execution intent",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "backend_policy"
+      },
+      {
+        "python": "study.mode(\"strict\")",
+        "type": "str",
+        "default": "required by this scope",
+        "si_unit": "$1$",
+        "validation": "rejects non-strict",
+        "meaning": "fail-closed capability policy",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "validation_profile.execution_mode"
+      },
+      {
+        "python": "study.pbc(x, y, z, demag)",
+        "type": "bool, bool, bool, str",
+        "default": "False, False, False, \"open\"",
+        "si_unit": "$1$",
+        "validation": "requires x/y",
+        "meaning": "problem periodicity and static demag policy",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "pbc.axes"
+      },
+      {
+        "python": "relax.tolA",
+        "type": "float or None",
+        "default": "public relaxation default when omitted",
+        "si_unit": "$\\mathrm{A\\,m^{-1}}$",
+        "validation": "finite and positive; mutually exclusive with tolT",
+        "meaning": "authored torque stop threshold",
+        "backend_support": "FEM CPU/GPU relaxation contract",
+        "problem_ir": "StudyIR::Relaxation.stop.torque_tolerance_apm"
+      },
+      {
+        "python": "relax.tolT",
+        "type": "float or None",
+        "default": "public relaxation default when omitted",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "finite and positive; mutually exclusive with tolA",
+        "meaning": "authored torque stop threshold normalized through mu0",
+        "backend_support": "FEM CPU/GPU relaxation contract",
+        "problem_ir": "StudyIR::Relaxation.stop.torque_tolerance_apm"
+      },
+      {
+        "python": "relax.energy_tolerance",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{J}$",
+        "validation": "finite and non-negative",
+        "meaning": "authored energy stop threshold that can independently certify relaxation",
+        "backend_support": "FEM CPU/GPU relaxation contract",
+        "problem_ir": "StudyIR::Relaxation.stop.energy_tolerance_j"
+      },
+      {
+        "python": "eigenmodes.count",
+        "type": "int",
+        "default": "10",
+        "si_unit": "$1$",
+        "validation": "count > 0",
+        "meaning": "selected mode count",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.count"
+      },
+      {
+        "python": "eigenmodes.target",
+        "type": "str",
+        "default": "\"lowest\"",
+        "si_unit": "$1$",
+        "validation": "lowest",
+        "meaning": "spectral selection strategy",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.target"
+      },
+      {
+        "python": "eigenmodes.target_frequency",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "finite and positive",
+        "meaning": "nearest target frequency",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.target.frequency_hz"
+      },
+      {
+        "python": "eigenmodes.frequency_min",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "finite, positive and strictly ordered",
+        "meaning": "requested interval",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.target.frequency_min_hz"
+      },
+      {
+        "python": "eigenmodes.frequency_max",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "finite, positive and strictly ordered",
+        "meaning": "requested interval",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.target.frequency_max_hz"
+      },
+      {
+        "python": "eigenmodes.operator",
+        "type": "str",
+        "default": "\"linearized_llg\"",
+        "si_unit": "$1$",
+        "validation": "C1 scope requires",
+        "meaning": "linearized dynamics operator",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.operator.kind"
+      },
+      {
+        "python": "eigenmodes.include_demag",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "requires",
+        "meaning": "dynamic demagnetizing feedback",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.operator.include_demag"
+      },
+      {
+        "python": "eigenmodes.equilibrium_source",
+        "type": "str",
+        "default": "\"relax\"",
+        "si_unit": "$1$",
+        "validation": "relax",
+        "meaning": "source of accepted equilibrium",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.equilibrium"
+      },
+      {
+        "python": "eigenmodes.equilibrium_artifact",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "required for",
+        "meaning": "accepted equilibrium path",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.equilibrium.path"
+      },
+      {
+        "python": "eigenmodes.normalization",
+        "type": "str",
+        "default": "\"unit_l2\"",
+        "si_unit": "$1$",
+        "validation": "unit_l2",
+        "meaning": "mode normalization",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.normalization"
+      },
+      {
+        "python": "eigenmodes.damping_policy",
+        "type": "str",
+        "default": "\"ignore\"",
+        "si_unit": "$1$",
+        "validation": "requires",
+        "meaning": "damping treatment",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.damping_policy"
+      },
+      {
+        "python": "eigenmodes.k_vector",
+        "type": "3-vector / object",
+        "default": "None",
+        "si_unit": "$\\mathrm{m^{-1}}$",
+        "validation": "requires one exact Gamma sample",
+        "meaning": "wave-vector request",
+        "backend_support": "FEM CPU/GPU source contract at K0",
+        "problem_ir": "study.k_sampling"
+      },
+      {
+        "python": "eigenmodes.k_sampling",
+        "type": "3-vector / object",
+        "default": "None",
+        "si_unit": "$\\mathrm{m^{-1}}$",
+        "validation": "requires one exact Gamma sample",
+        "meaning": "wave-vector request",
+        "backend_support": "FEM CPU/GPU source contract at K0",
+        "problem_ir": "study.k_sampling"
+      },
+      {
+        "python": "eigenmodes.bc",
+        "type": "str or dict",
+        "default": "\"free\"",
+        "si_unit": "$1$",
+        "validation": "requires periodic",
+        "meaning": "exchange/spin-wave boundary policy",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.spin_wave_bc"
+      },
+      {
+        "python": "eigenmodes.magnetostatic_bc",
+        "type": "str",
+        "default": "\"open\"",
+        "si_unit": "$1$",
+        "validation": "requires",
+        "meaning": "scalar-potential boundary policy",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.magnetostatic_bc"
+      },
+      {
+        "python": "BiasFieldSweep.samples_a_per_m",
+        "type": "sequence of 3-vectors",
+        "default": "required",
+        "si_unit": "$\\mathrm{A\\,m^{-1}}$",
+        "validation": "non-empty",
+        "meaning": "authored physical bias field per sample",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.bias_field_sweep.samples_a_per_m"
+      },
+      {
+        "python": "BiasFieldSweep.equilibrium_policy",
+        "type": "str",
+        "default": "\"relax_each\"",
+        "si_unit": "$1$",
+        "validation": "relax_each",
+        "meaning": "equilibrium policy per physical sample",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.bias_field_sweep.equilibrium_policy"
+      },
+      {
+        "python": "BiasFieldSweep.continuation_seed",
+        "type": "str",
+        "default": "\"initial_state\"",
+        "si_unit": "$1$",
+        "validation": "previous_accepted_equilibrium",
+        "meaning": "continuation seed provenance",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.bias_field_sweep.continuation_seed"
+      },
+      {
+        "python": "generated sweep ordering",
+        "type": "str",
+        "default": "\"declared\"",
+        "si_unit": "$1$",
+        "validation": "any other value rejects",
+        "meaning": "preserves authored sample order",
+        "backend_support": "FEM CPU/GPU source contract",
+        "problem_ir": "study.bias_field_sweep.ordering"
+      }
     ]
   }
 }

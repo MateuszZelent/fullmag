@@ -106,6 +106,19 @@ std::string format_double(double value) noexcept
     return buffer;
 }
 
+std::string floquet_shifted_ksp_configuration_json_field(
+    const SLEPcTinyGyrotropicModalEigenResult &result)
+{
+    if (!result.shifted_ksp_configuration_before_eps_available) {
+        return "\"shifted_ksp_configuration_before_eps\":null";
+    }
+    return std::string("\"shifted_ksp_configuration_before_eps\":{") +
+        "\"phase\":\"before_eps_solve\",\"pc_side\":" +
+        std::to_string(result.shifted_ksp_pc_side_before_eps) +
+        ",\"norm_type\":" +
+        std::to_string(result.shifted_ksp_norm_type_before_eps) + "}";
+}
+
 std::string floquet_demag_operator_probe_json_field(
     const FloquetDemagOperatorProbeResult &probe)
 {
@@ -204,6 +217,81 @@ std::string floquet_dense_oracle_json_field(
         format_double(oracle.potential_residual) +
         ",\"q_projection_ratio\":" +
         format_double(oracle.q_projection_ratio) + "}";
+}
+
+std::string floquet_schur_action_diagnostic_json_field(
+    const FloquetSchurActionDiagnostic &diagnostic)
+{
+    if (!diagnostic.requested) {
+        return "\"floquet_schur_action_diagnostic\":null";
+    }
+    return std::string("\"floquet_schur_action_diagnostic\":{") +
+        "\"schema_version\":\"floquet_schur_action_diagnostic.v1\","
+        "\"status\":\"" +
+        escape_json_string(diagnostic.status != nullptr ? diagnostic.status : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(diagnostic.reason != nullptr ? diagnostic.reason : "") +
+        "\",\"available\":" +
+        std::string(diagnostic.available ? "true" : "false") +
+        ",\"pre_eps_only\":" +
+        std::string(diagnostic.pre_eps_only ? "true" : "false") +
+        ",\"dense_materialization\":" +
+        std::string(diagnostic.dense_materialization ? "true" : "false") +
+        ",\"measurement_phase\":\"" +
+        escape_json_string(
+            diagnostic.measurement_phase != nullptr
+                ? diagnostic.measurement_phase : "unknown") +
+        "\",\"workspace_scope\":\"" +
+        escape_json_string(
+            diagnostic.workspace_scope != nullptr
+                ? diagnostic.workspace_scope : "unknown") +
+        "\",\"q_complex_dof_count\":" +
+        std::to_string(diagnostic.q_complex_dof_count) +
+        ",\"real_split_dimension\":" +
+        std::to_string(diagnostic.real_split_dimension) +
+        ",\"context_phase_sign\":" +
+        std::to_string(diagnostic.context_phase_sign) +
+        ",\"action_count\":" + std::to_string(diagnostic.action_count) +
+        ",\"expected_action_count\":" +
+        std::to_string(diagnostic.expected_action_count) +
+        ",\"nonzero_signal_count\":" +
+        std::to_string(diagnostic.nonzero_signal_count) +
+        ",\"operator_normalization_scale\":" +
+        format_double(diagnostic.operator_normalization_scale) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(diagnostic.preconditioner_normalization_scale) +
+        ",\"max_potential_relative_residual\":" +
+        format_double(diagnostic.max_potential_relative_residual) +
+        ",\"max_repeatability_relative_defect\":" +
+        format_double(diagnostic.max_repeatability_relative_defect) +
+        ",\"repeatability_first_relative_defect\":" +
+        format_double(diagnostic.repeatability_first_relative_defect) +
+        ",\"repeatability_second_relative_defect\":" +
+        format_double(diagnostic.repeatability_second_relative_defect) +
+        ",\"max_homogeneity_relative_defect\":" +
+        format_double(diagnostic.max_homogeneity_relative_defect) +
+        ",\"homogeneity_half_relative_defect\":" +
+        format_double(diagnostic.homogeneity_half_relative_defect) +
+        ",\"homogeneity_double_relative_defect\":" +
+        format_double(diagnostic.homogeneity_double_relative_defect) +
+        ",\"homogeneity_tiny_relative_defect\":" +
+        format_double(diagnostic.homogeneity_tiny_relative_defect) +
+        ",\"additivity_relative_defect\":" +
+        format_double(diagnostic.additivity_relative_defect) +
+        ",\"mat_shell_reconstruction_relative_defect\":" +
+        format_double(diagnostic.mat_shell_reconstruction_relative_defect) +
+        ",\"min_cancellation_ratio\":" +
+        format_double(diagnostic.min_cancellation_ratio) +
+        ",\"max_magnetic_l2_norm\":" +
+        format_double(diagnostic.max_magnetic_l2_norm) +
+        ",\"max_feedback_l2_norm\":" +
+        format_double(diagnostic.max_feedback_l2_norm) +
+        ",\"max_combined_l2_norm\":" +
+        format_double(diagnostic.max_combined_l2_norm) +
+        ",\"min_rhs_l2_norm\":" +
+        format_double(diagnostic.min_rhs_l2_norm) +
+        ",\"max_rhs_l2_norm\":" +
+        format_double(diagnostic.max_rhs_l2_norm) + "}";
 }
 
 void append_optional_json_field(std::string &json, const std::string &field)
@@ -1421,6 +1509,7 @@ std::string production_window_diagnostics_json(
                     solve.result.residual_evaluation_candidate_count) +
                 ",\"ksp_diagnostics_available\":" +
                 std::string(solve.result.ksp_diagnostics_available ? "true" : "false") +
+                "," + floquet_shifted_ksp_configuration_json_field(solve.result) +
                 ",\"ksp_type\":\"" + std::string(solve.result.ksp_type) +
                 "\",\"ksp_rtol\":" + format_double(solve.result.ksp_rtol) +
                 ",\"ksp_atol\":" + format_double(solve.result.ksp_atol) +
@@ -1527,7 +1616,10 @@ std::string production_window_diagnostics_json(
                 std::to_string(
                     solve.result.potential_reconstruction_failure_count) +
                 "," +
-                floquet_dense_oracle_json_field(solve.result.floquet_dense_oracle);
+                floquet_dense_oracle_json_field(solve.result.floquet_dense_oracle) +
+                "," +
+                floquet_schur_action_diagnostic_json_field(
+                    solve.result.floquet_schur_action_diagnostic);
         }
         const std::string demag_probe_json_field =
             floquet_demag_operator_probe_json_field(
@@ -2636,6 +2728,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     const std::string demag_probe_json_field =
         floquet_demag_operator_probe_json_field(
             slepc_result.dynamic_demag_operator_probe);
+    const std::string schur_action_diagnostic_json_field =
+        floquet_schur_action_diagnostic_json_field(
+            slepc_result.floquet_schur_action_diagnostic);
     if (!slepc_result.ok) {
         const char *stop_reason = stop_reason_or_default(slepc_result);
         result.status = FrequencyDomainStatus::solve_error;
@@ -2690,6 +2785,10 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         append_nearest_frequency_metadata(result.result_json, request, result.status);
         append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
         append_optional_json_field(result.result_json, demag_probe_json_field);
+        append_optional_json_field(
+            result.diagnostics_json, schur_action_diagnostic_json_field);
+        append_optional_json_field(
+            result.result_json, schur_action_diagnostic_json_field);
         return result;
     }
 
@@ -2829,6 +2928,10 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     append_nearest_frequency_metadata(result.result_json, request, result.status);
     append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
     append_optional_json_field(result.result_json, demag_probe_json_field);
+    append_optional_json_field(
+        result.diagnostics_json, schur_action_diagnostic_json_field);
+    append_optional_json_field(
+        result.result_json, schur_action_diagnostic_json_field);
     result.artifact_manifest_path.clear();
     return result;
 }

@@ -1404,6 +1404,154 @@ kwalifikuje solvera, demagnetyzacji ani zgodności dyspersji z analityką.
 | `scripts/validate_de_physical_potential.py` | `validate_physical_potential` |
 | `scripts/test_de_physical_potential.py` | `test_near_zero_p1_component_uses_forward_roundoff_bound` |
 
+## Konfiguracja shifted KSP przed EPSSolve — diagnostyka addytywna
+
+Pole `shifted_ksp_configuration_before_eps` w diagnostyce podokna Floqueta
+zapisuje wartości odczytane przez KSPGetPCSide/KSPGetNormType bezpośrednio
+przed EPSSolve. Przy poprawnym odczycie obiekt ma `phase=before_eps_solve`,
+`pc_side` i `norm_type` jako liczby enum PETSc. Przy braku obserwacji ma null;
+wartości nie są zastępowane stałą oczekiwaną z konfiguracji.
+
+To konfiguracja przed lazy setup EPS/ST, nie dowód końcowego rozstrzygnięcia
+ani zbieżności. Dotychczasowe `ksp_pc_side`/`ksp_norm_type` i dostępność true
+residual pozostają osobnym pomiarem z wykonanego shifted solve. Po twardym
+EPSSolve failure nie odpytujemy obiektów EPS/ST/KSP z możliwym borrowed view;
+zachowana wcześniejsza kopia nie wymaga dotykania ich podczas unwind.
+
+Zapis nie zmienia operatora Schura, faktoryzacji, fazy Floqueta, tolerancji
+KSP/EPS ani fizycznej bramki residualu 1e-8. Właściciele:
+`floquet_modal_solver.cpp` (bezpieczny moment obserwacji),
+`slepc_modal_eigen.hpp` (wartości i jawna dostępność),
+`production_cpu_modal_eigen.cpp` (diagnostyka podokien). Bramki: regresja
+kontraktu natywnego, produkcyjny managed build i rzeczywisty pilot z kontrolą
+raportu także przy błędzie. Przed ich wykonaniem runtime pozostaje NOT VERIFIED.
+
+## Opt-in action-only probe Schura przed EPSSolve
+
+Dodano odrębną, domyślnie wyłączoną sondę diagnostyczną. Włącza ją wyłącznie
+zmienna środowiskowa:
+
+```text
+FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC=1
+```
+
+Wynik jest publikowany pod kluczem `floquet_schur_action_diagnostic` ze schematem
+`floquet_schur_action_diagnostic.v1`. Sonda wykonuje dziewięć ograniczonych
+zastosowań produkcyjnego działania Schura na własnych wektorach roboczych:
+trzy powtórzenia tego samego wejścia, skale $0.5$, $2$ i $10^{-12}$ oraz dwa
+niezależne wejścia potrzebne do kontroli addytywności. `action_count` ma więc
+górne ograniczenie $9\le 10$ dla wywołań działania Schura; osiem pomiarów
+blokowych korzysta z własnych wektorów, a dziewiąty dodatkowo wywołuje ten sam
+callback `native_floquet_matmult` przez klon `MatShell`. Sonda nie wykonuje
+`MatComputeOperator` i nie materializuje gęstego operatora.
+
+Działanie obserwowane przez sondę jest tym samym blokowym działaniem, które
+wywołuje produkcyjny `MatShell`:
+
+```{math}
+:label: eq-floquet-schur-action-diagnostic
+\widehat{\mathcal S}_{\sigma} q
+ = \kappa_{\mathrm{op}}\,
+   \mathcal R_{\sigma}\left(
+     A_{qq}q + A_{q\phi}\left[-P^{-1}(A_{\phi q}q)\right]
+   \right).
+```
+
+gdzie $\mathcal R_{\sigma}$ jest normozachowującą rotacją real-split zależną od znaku fazy $\sigma=\texttt{context\_phase\_sign}\in\{-1,+1\}$. W tym równaniu $A_{qq}$ i $A_{q\phi}$ oznaczają złożone bloki przed normalizacją; kontekst mnoży oba przez rzeczywisty, akumulowany czynnik $\kappa_{\mathrm{op}}$ (`operator_normalization_scale`), natomiast $P$ i $A_{\phi q}$ pozostają w skali używanej do rekonstrukcji potencjału. Wobec tego sonda mierzy dokładnie znormalizowane działanie produkcyjnego MatShella, nie drugi model operatora. Czynnik skali jest stosowany spójnie do obu stron uogólnionego problemu własnego; nie jest tolerancją fizyczną.
+Raport zawiera rzeczywisty `q_complex_dof_count`, `real_split_dimension`, znak
+fazy, obie skale normalizacji (`operator_normalization_scale` oraz
+`preconditioner_normalization_scale`) i fazę pomiaru
+`measurement_phase=before_eps_solve`. Oddzielnie zapisywane są normy części
+magnetycznej $A_{qq}q$, sprzężenia zwrotnego $A_{q\phi}\phi$ oraz ich sumy,
+minimalny współczynnik kasowania pośród zmierzonych wejść
+
+```{math}
+:label: eq-floquet-cancellation-ratio
+\rho_{\mathrm{cancel}}
+ = \frac{\lVert\mathbf y_{\mathrm{mag}}
+                  +\mathbf y_{\mathrm{feedback}}\rVert_2}
+        {\max\!\left(
+          \lVert\mathbf y_{\mathrm{mag}}\rVert_2
+          +\lVert\mathbf y_{\mathrm{feedback}}\rVert_2,
+          \delta_{\mathrm{fp}}
+        \right)}.
+```
+
+Sonda zapisuje także maksymalny względny residual równania potencjału,
+oba indywidualne defekty powtarzalności (`repeatability_first_relative_defect`
+i `repeatability_second_relative_defect`), osobne defekty jednorodności
+(`homogeneity_half_relative_defect`, `homogeneity_double_relative_defect`,
+`homogeneity_tiny_relative_defect`) dla skal $0.5$, $2$ i $10^{-12}$ oraz ich
+maksimum, a także addytywność. W mianowniku residualu Poissona używane jest `max(norm_rhs, std::numeric_limits<double>::min())`; jest to arytmetyczna ochrona przed zerowym mianownikiem w tej reprezentacji, a nie epsilon ani fizyczny próg residualu. Współczynnik z równania {eq}`eq-floquet-cancellation-ratio` jest liczony dla każdego pomiaru; raport publikuje jego minimum. Wektory $\mathbf y_{\mathrm{mag}}$ i $\mathbf y_{\mathrm{feedback}}$ są składowymi po wspólnej normalizacji operatora, przed rotacją; są bezwymiarowe, podobnie jak mianownikowy floor $\delta_{\mathrm{fp}}$.
+
+`status=measured` oznacza wyłącznie, że ograniczony pomiar został wykonany,
+`failed` — że sonda nie ukończyła pomiaru, a `unavailable` — że nie mogła
+zostać uruchomiona. Ten obiekt nie ma pola `passed` i nie jest dołączany do
+`dynamic_demag_operator_probe`; powtarzalność lub addytywność działania nie
+certyfikują fazy Floqueta, znaku operatora, demagnetyzacji ani fizyki modelu.
+Nawet błędny, lecz liniowy operator może przejść te metryki, dlatego wynik
+pozostaje obserwacją do diagnostyki błędu ±2.
+
+Sonda działa przed `EPSSolve`, korzysta z własnych ograniczonych wektorów i
+izolowanego klonu kontekstu callbacku (`workspace_scope=
+isolated_clone_of_production_context`). Klon współdzieli wyłącznie niezmienne
+macierze blokowe i scalar KSP; jego `phi_rhs`, `phi_solution`, `feedback` oraz
+`error_message` są prywatne. Sonda nie zapisuje oryginalnego
+`context.error_message`, produkcyjnych buforów ani tolerancji KSP/EPS.
+Współdzielony scalar KSP pozostaje obserwowalnym stanem solvera: sondowane
+`KSPSolve` może zmienić jego ostatni `reason` i liczbę iteracji. Następne
+produkcyjne działanie wykonuje własne rozwiązanie i nadpisuje te wartości;
+sonda nie zmienia opcji, tolerancji ani faktoryzacji i nie jest przedstawiana
+jako pełna izolacja stanu KSP.
+Po twardym błędzie `EPSSolve` kod nie odpytuje EPS/ST/KSP ani obiektów z
+pożyczonym widokiem. Brak ustawienia zmiennej środowiskowej publikuje
+`floquet_schur_action_diagnostic:null`. Gdy zmienna jest ustawiona, lecz
+solver zakończy się przed przygotowaniem sondy, publikowany jest obiekt
+`status=unavailable`, `available=false` i powód
+`diagnostic_not_reached_before_solver_setup_failure`; liczniki pozostają zerowe,
+a nieznane skale i metryki są serializowane jako JSON `null`. Dzięki temu
+`unavailable` nie jest mylone z wyłączonym `null`. Awaria sondy nie zmienia
+wyniku produkcyjnego solvera. Wykonanie managed runtime, porównanie z analityką oraz
+bramka certyfikacji pozostają osobnymi wymaganiami i przed ich wykonaniem mają
+status NOT VERIFIED.
+
+Źródła implementacji i regresji przygotowanej do uruchomienia:
+`backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp`,
+`backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp` oraz
+`backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp`;
+`backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` sprawdza
+optymalizowany przypadek powyżej limitu gęstego oracle, rekonstrukcję callbacku
+oraz ścieżkę twardego błędu. Kompilacja i wykonanie regresji native pozostają
+do potwierdzenia przez managed build.
+
+
+Symbole użyte w równaniach sondy:
+
+| Token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\sigma$ | znak fazy Floqueta używany przez transformację real-split; należy do $\{-1,+1\}$ | $1$ |
+| $\kappa_{\mathrm{op}}$ | akumulowany czynnik `operator_normalization_scale` wspólny dla bloków operatora Schura | $\mathrm{s\,m^{-3}}$ |
+| $\widehat{\mathcal S}_{\sigma}$ | znormalizowane, obrócone działanie operatora Schura obserwowane przez MatShell | $1$ |
+| $\mathcal R_{\sigma}$ | normozachowująca rotacja real-split zależna od znaku fazy | $1$ |
+| $\mathbf y_{\mathrm{mag}}$, $\mathbf y_{\mathrm{feedback}}$ | znormalizowane składowe magnetyczna i sprzężenia zwrotnego przed rotacją | $1$ |
+| $\rho_{\mathrm{cancel}}$ | współczynnik kasowania dla jednego wejścia diagnostycznego; nie jest testem akceptacji | $1$ |
+| $\delta_{\mathrm{fp}}$ | `std::numeric_limits<double>::min()` po normalizacji; wyłącznie numeryczny floor mianownika | $1$ |
+
+`DBL_MIN` nie jest progiem błędu ani skalą fizyczną. Użycie flooru chroni wyłącznie sam iloraz przed dzieleniem przez dokładne zero. `status=measured` oznacza wykonany pomiar, a nie przejście testu ani certyfikat liniowości/fizyki.
+
+Mapowanie diagnostyki w source index (ścieżka + stabilny symbol):
+
+| Source ID | Path + symbol | Odpowiedzialność | Dowód / ograniczenie |
+|---|---|---|---|
+| source-floquet-operator-normalization | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `normalize_native_floquet_pencil` | Skaluje wspólnie bloki magnetyczne Schura i gyrotropiczną prawą stronę; zapisuje akumulowany czynnik operatora. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-schur-components | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `apply_native_floquet_schur_components` | Oblicza znormalizowaną składową magnetyczną i sprzężenie zwrotne przez scalar Poisson KSP. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-action-probe | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `run_floquet_schur_action_diagnostic` | Wykonuje ograniczoną sondę przed EPSSolve na prywatnych wektorach; wynik w typie FloquetSchurActionDiagnostic zadeklarowanym w backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-diagnostic-initialization | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Przed setupem wywołuje initialize_floquet_schur_action_diagnostic i zachowuje requested/unavailable także przy wcześniejszych return. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-diagnostic-serialization | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` + `solve_sparse_production_modal_payload` | Wynik diagnostyczny jest serializowany przez floquet_schur_action_diagnostic_json_field i dołączany do success/error JSON. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-pre-eps-query | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum` | Odczytuje rzeczywiste PC side i KSP norm type tuż przed EPSSolve, osobno od telemetry ostatniego solve. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-pre-eps-query-json | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` + `floquet_shifted_ksp_configuration_json_field` | Publikuje oba skopiowane enumy tylko przy udanym odczycie; null zachowuje brak obserwacji. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-native-regressions | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` + `main` | Native test harness invokes reports_opt_in_action_diagnostic_unavailable_before_setup, executes_native_sparse_matshell_above_dense_bound, and normalizes_si_scale_floquet_pencil. Tests remain prepared only. | test source prepared; not compiled or run |
+
 (modal-normalization-common-scale)=
 ## Wspólna skala normalizacji sprzężonego modu — korekta 2026-10-03
 

@@ -142,6 +142,61 @@ struct FloquetDenseOracleDiagnostics {
     double q_projection_ratio = std::numeric_limits<double>::quiet_NaN();
 };
 
+/*
+ * Opt-in action-only observation of the production Floquet Schur blocks.
+ * This is deliberately independent from FloquetDemagOperatorProbeResult:
+ * measured linear-action defects are diagnostics, not a demagnetization or
+ * physical-correctness certificate.
+ */
+struct FloquetSchurActionDiagnostic {
+    bool requested = false;
+    bool available = false;
+    bool pre_eps_only = true;
+    bool dense_materialization = false;
+    const char *status = "disabled";
+    const char *reason = "";
+    const char *measurement_phase = "before_eps_solve";
+    const char *workspace_scope = "isolated_clone_of_production_context";
+    int q_complex_dof_count = 0;
+    int real_split_dimension = 0;
+    int context_phase_sign = 0;
+    int action_count = 0;
+    int expected_action_count = 9;
+    int nonzero_signal_count = 0;
+    double operator_normalization_scale = 1.0;
+    double preconditioner_normalization_scale = 1.0;
+    double max_potential_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_repeatability_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double repeatability_first_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double repeatability_second_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_homogeneity_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double homogeneity_half_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double homogeneity_double_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double homogeneity_tiny_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double additivity_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double mat_shell_reconstruction_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double min_cancellation_ratio =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_magnetic_l2_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_feedback_l2_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_combined_l2_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    double min_rhs_l2_norm = std::numeric_limits<double>::quiet_NaN();
+    double max_rhs_l2_norm = std::numeric_limits<double>::quiet_NaN();
+};
+
 struct SLEPcTinyGyrotropicModalEigenResult {
     bool ok = false;
     const char *status = "unavailable";
@@ -195,6 +250,10 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     int linear_iterations_total = 0;
     int ksp_last_iterations = 0;
     bool ksp_diagnostics_available = false;
+    // Observed before EPSSolve; distinct from last-solve residual telemetry.
+    bool shifted_ksp_configuration_before_eps_available = false;
+    int shifted_ksp_pc_side_before_eps = -1;
+    int shifted_ksp_norm_type_before_eps = -1;
     bool ksp_converged_reason_available = false;
     int ksp_converged_reason = 0;
     int ksp_max_iterations = 0;
@@ -253,6 +312,7 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     double max_relative_residual = 0.0;
     FloquetDemagOperatorProbeResult dynamic_demag_operator_probe{};
     FloquetDenseOracleDiagnostics floquet_dense_oracle{};
+    FloquetSchurActionDiagnostic floquet_schur_action_diagnostic{};
     std::vector<SLEPcModalAcceptedMode> accepted_modes{};
 };
 
