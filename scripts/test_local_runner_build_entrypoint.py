@@ -302,6 +302,40 @@ class BuildEntryPointTests(unittest.TestCase):
                 self.assertEqual(mode, stat.S_IMODE(path.stat().st_mode))
         self.assertEqual(nested_bytes, (copied_nested / "input.txt").read_bytes())
 
+    def test_materialization_refreshes_mtimes_without_mutating_capsule_or_cache(self) -> None:
+        tree = self.source / "tree"
+        nested = tree / "crates" / "example" / "src" / "lib.rs"
+        nested.parent.mkdir(parents=True)
+        nested.write_bytes(b"pub const NEW_ABI: u32 = 1;\n")
+        nested.chmod(0o644)
+        files = list(self.manifest["files"])
+        files.append({
+            "path": "crates/example/src/lib.rs", "type": "file", "mode": "100644",
+            "size": nested.stat().st_size,
+            "sha256": hashlib.sha256(nested.read_bytes()).hexdigest(),
+        })
+        original_time = 946684800_000000000
+        cache_time = original_time + 60_000000000
+        capsule_files = [tree / "README.txt", nested]
+        for path in capsule_files:
+            entrypoint.os.utime(path, ns=(original_time, original_time))
+        cached = self.workspace / ".fullmag-build" / "old-dependency.rmeta"
+        cached.write_bytes(b"previous ABI")
+        entrypoint.os.utime(cached, ns=(cache_time, cache_time))
+        capsule_before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                          for path in capsule_files}
+
+        entrypoint.materialize_capsule({**self.manifest, "files": files},
+                                      self.source, self.workspace)
+
+        for path, (content, timestamp) in capsule_before.items():
+            copied = self.workspace / path.relative_to(tree)
+            self.assertEqual(copied.read_bytes(), content)
+            self.assertGreater(copied.stat().st_mtime_ns, cached.stat().st_mtime_ns)
+            self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (content, timestamp))
+        self.assertEqual(cached.read_bytes(), b"previous ABI")
+        self.assertEqual(cached.stat().st_mtime_ns, cache_time)
+
     def test_tail_text_reads_only_a_bounded_suffix(self) -> None:
         log = self.root / "large.log"
         log.write_text("a" * 10000 + "TAIL", encoding="utf-8")

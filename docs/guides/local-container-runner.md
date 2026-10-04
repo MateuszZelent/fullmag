@@ -64,6 +64,17 @@ odrzuca zgłoszenie. Po utworzeniu kapsuły można dalej edytować branch; build
 otrzymuje kopię, a nie późniejszy stan ścieżki. SHA kapsuły i natywna tożsamość
 `fullmag.source-snapshot.v2` są różnymi, powiązanymi dowodami.
 
+Kopia wykonania musi otrzymać świeże mtime plików, a nie czasy z chwili capture.
+`materialize_capsule` kopiuje bajty przez `copyfile`, odtwarza tryby z manifestu
+i sprawdza size/SHA. Dzięki temu starsza oczekująca kapsuła nie dziedziczy
+pozornej aktualności zależności z później zapisanej wspólnej pamięci Cargo/Make
+przy stałej ścieżce `/workspace`. Kapsuła i cache pozostają niezmienione.
+Regresja tej poprawki przeszła lokalnie; produkcyjne wdrożenie pozostaje
+**NOT VERIFIED**, dopóki nowy obraz koordynatora nie dostarczy poprawionego
+`/runner/build_entrypoint.py` i pełny build nie przejdzie. Zmiana skryptu
+wyłącznie w kapsule nie aktualizuje trusted entrypoint. Nie kasować targetu
+ani nie przerywać aktywnego joba jako obejścia tej usterki.
+
 Nieśledzone wymagane wejście pominięte w kapsule jest błędem, nie cichym buildem
 starszej wersji. Nie kopiuj całego `.env`. Jawne gitlinki zewnętrznych solverów są
 odnotowane, ale niematerializowane; operacja potrzebująca tych źródeł wymaga

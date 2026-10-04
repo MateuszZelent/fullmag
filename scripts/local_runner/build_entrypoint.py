@@ -311,7 +311,7 @@ def _workspace_is_empty(workspace: Path) -> None:
 
 
 def materialize_capsule(manifest: Mapping[str, Any], source: Path, workspace: Path) -> None:
-    """Copy the verified capsule tree into an empty execution workspace."""
+    """Copy verified bytes with fresh mtimes into an empty execution workspace."""
 
     _check_capsule_has_no_git(manifest)
     tree = source / "tree"
@@ -328,13 +328,17 @@ def materialize_capsule(manifest: Mapping[str, Any], source: Path, workspace: Pa
             if child.is_symlink():
                 raise BuildEntryPointError(f"source capsule contains a symlink: {child}")
             if child.is_dir():
-                shutil.copytree(child, destination, copy_function=shutil.copy2)
+                # A queued capsule can predate cached builds of different source.
+                # Preserving its mtimes lets Cargo/Make mistake stale output for
+                # fresh output at the reused /workspace path. Restore only the
+                # declared modes below; keep execution-time file mtimes.
+                shutil.copytree(child, destination, copy_function=shutil.copyfile)
                 # Only the private copy is writable. Never recurse into the
                 # persistent mountpoints or change the readonly capsule.
                 for current, _, _ in os.walk(destination, followlinks=False):
                     _private_directory(Path(current), 'materialized source directory')
             elif child.is_file():
-                shutil.copy2(child, destination)
+                shutil.copyfile(child, destination)
             else:
                 raise BuildEntryPointError(f"source capsule contains unsupported entry: {child}")
     except OSError as error:
