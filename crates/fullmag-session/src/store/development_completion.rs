@@ -36,7 +36,8 @@ const RUNTIME_SERVICE_METADATA: [&str; 4] = [
 #[serde(deny_unknown_fields)]
 pub struct DevelopmentReplacementIdentity {
     pub api_instance_id: String,
-    pub session_id: String,
+    #[serde(deserialize_with = "deserialize_present_session_id")]
+    pub session_id: Option<String>,
     pub session_epoch: u64,
     pub scene_document_sha256: String,
     pub target_build_id: String,
@@ -49,9 +50,12 @@ impl DevelopmentReplacementIdentity {
         if self.api_instance_id == commit.api_instance_id {
             bail!("development replacement API instance must differ from the committed API");
         }
-        validate_store_id(&self.session_id).context("replacement session ID")?;
-        if self.session_epoch != 1 {
-            bail!("development replacement session epoch must start at one");
+        if let Some(session_id) = &self.session_id {
+            validate_store_id(session_id).context("replacement session ID")?;
+        }
+        let expected_epoch = if self.session_id.is_some() { 1 } else { 0 };
+        if self.session_epoch != expected_epoch {
+            bail!("development replacement session state and epoch differ");
         }
         validate_lower_hex(
             &self.scene_document_sha256,
@@ -457,4 +461,11 @@ fn validate_lower_hex(value: &str, length: usize, field: &str) -> Result<()> {
         bail!("{field} must be {length} lowercase hexadecimal characters");
     }
     Ok(())
+}
+
+fn deserialize_present_session_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
 }

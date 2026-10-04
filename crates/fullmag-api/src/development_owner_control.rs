@@ -148,7 +148,8 @@ impl PreparedOwnerControl {
             Ok(request)
                 if self.authenticated(&request)
                     && request.command == Command::Acquire
-                    && request.handoff.is_none() =>
+                    && request.handoff.is_none()
+                    && request.completion.is_none() =>
             {
                 request
             }
@@ -212,7 +213,7 @@ impl PreparedOwnerControl {
             };
             match control.command {
                 Command::Confirm => {
-                    if control.handoff.is_some() {
+                    if control.handoff.is_some() || control.completion.is_some() {
                         drop(acquisition);
                         return reject(stream).await;
                     }
@@ -227,7 +228,7 @@ impl PreparedOwnerControl {
                     .await?;
                 }
                 Command::Abort => {
-                    if control.handoff.is_some() {
+                    if control.handoff.is_some() || control.completion.is_some() {
                         drop(acquisition);
                         return reject(stream).await;
                     }
@@ -247,6 +248,10 @@ impl PreparedOwnerControl {
                     return reject(stream).await;
                 }
                 Command::CommitCold => {
+                    if control.completion.is_some() {
+                        drop(acquisition);
+                        return reject(stream).await;
+                    }
                     let Some(handoff) = control.handoff else {
                         drop(acquisition);
                         return reject(stream).await;
@@ -296,6 +301,73 @@ impl PreparedOwnerControl {
                         "accepted_store_binding":record.accepted_store_binding,
                     })).await;
                 }
+                Command::CompleteCold => {
+                    if control.handoff.is_some() {
+                        drop(acquisition);
+                        return reject(stream).await;
+                    }
+                    let Some(completion) = control.completion else {
+                        drop(acquisition);
+                        return reject(stream).await;
+                    };
+                    let validated =
+                        match crate::development_handoff_validation::validate_cold_completion(
+                            &self.state,
+                            &acquisition.workspace,
+                            &completion,
+                            started + HOLD_TIMEOUT,
+                        ) {
+                            Ok(validated) => validated,
+                            Err(_) => {
+                                drop(acquisition);
+                                return reject(stream).await;
+                            }
+                        };
+                    if started.elapsed() >= HOLD_TIMEOUT {
+                        drop(acquisition);
+                        return reject(stream).await;
+                    }
+
+                    // Once armed, every error or cancellation preserves closed
+                    // admission. Both workspace guards remain held until the
+                    // store confirms completion or this request exits.
+                    let acquisition = acquisition.retain_closed_for_completion();
+                    let authorization =
+                        match validated.store.prepare_development_handoff_completion(
+                            &validated.commit,
+                            &validated.replacement,
+                        ) {
+                            Ok(authorization) => authorization,
+                            Err(_) => return reject(stream).await,
+                        };
+                    if started.elapsed() >= HOLD_TIMEOUT {
+                        return reject(stream).await;
+                    }
+                    if validated
+                        .store
+                        .finish_development_handoff_completion(&authorization)
+                        .is_err()
+                    {
+                        return reject(stream).await;
+                    }
+
+                    let response = json!({
+                        "schema": "fullmag.development-api-completion.v1",
+                        "nonce": control.nonce,
+                        "api_instance_id": authorization.replacement.api_instance_id,
+                        "old_api_instance_id": authorization.commit.api_instance_id,
+                        "handoff_id": authorization.commit.handoff_id,
+                        "snapshot_sha256": authorization.commit.snapshot_sha256,
+                        "target_build_id": authorization.commit.target_build_id,
+                        "accepted_store_binding": authorization.commit.accepted_store_binding,
+                        "session_id": authorization.replacement.session_id,
+                        "session_epoch": authorization.replacement.session_epoch,
+                        "scene_document_sha256": authorization.replacement.scene_document_sha256,
+                        "admission_reopened": true,
+                    });
+                    acquisition.reopen_after_confirmed_completion();
+                    return write_response(stream, &response).await;
+                }
             }
         }
     }
@@ -318,6 +390,8 @@ struct ControlRequest {
     command: Command,
     #[serde(default)]
     handoff: Option<crate::development_handoff_validation::ColdCommitRequest>,
+    #[serde(default)]
+    completion: Option<crate::development_handoff_validation::ColdCompletionRequest>,
 }
 
 #[derive(Deserialize, PartialEq, Eq)]
@@ -327,6 +401,7 @@ enum Command {
     Confirm,
     Abort,
     CommitCold,
+    CompleteCold,
 }
 
 struct ShutdownAfterCommit<'a>(&'a Mutex<Option<oneshot::Sender<()>>>);

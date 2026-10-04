@@ -1,7 +1,7 @@
 """Managed verifier gate for a fresh candidate API from an accepted handoff.
 
-This owns only a disposable verifier API. It leaves the accepted store fenced
-and the capsule staged; listening authoring state is not full UI hydration.
+This owns only a disposable verifier API. It completes admission only after
+its exact restored acquisition; the capsule remains staged pending UI hydration.
 """
 import http.client
 import json
@@ -184,12 +184,115 @@ def run_probe(repo, fixture, env, prepared_result, old_api_instance_id, receipt)
                                       "committed-replacement-exact-prelisten-authoring",
                                       "committed-replacement-fresh-authoring-acquisition",
                                       "committed-replacement-lifecycle-markers-retained"))
+            complete_live_restore(host, int(control_port), owner_token, pin, port,
+                                  prepared_result, accepted, before_commit, before_fence,
+                                  receipt_path, before_capsule_receipt, process_record, receipt)
         finally:
             # Only this fresh verifier API is stopped, after no compute command
-            # was submitted and while the durable store fence is still closed.
+            # was submitted. No user runtime is involved in this cleanup.
             if child.poll() is None:
                 child.terminate()
                 process_record["termination_reason"] = "owned verifier replacement cleanup; no compute submitted"
             process_record.update(exit_code=child.wait(timeout=10), waited=True)
             if writer is not None:
                 writer.join(timeout=1)
+
+
+def complete_live_restore(host, control_port, owner_token, pin, http_port,
+                          prepared_result, accepted, before_commit, before_fence,
+                          receipt_path, before_capsule_receipt, process_record, receipt):
+    prepared = prepared_result["preparation"]
+    candidate_id = Path(prepared["candidate"]["bundle_root"]).name
+    completion = {"handoff_id": prepared["handoff"]["handoff_id"],
+                  "snapshot_sha256": prepared["handoff"]["snapshot_sha256"],
+                  "target_build_id": prepared_result["binding"]["target_build_id"],
+                  "candidate_bundle_id": candidate_id,
+                  "candidate_manifest_sha256": prepared_result["candidate_manifest_sha256"],
+                  "commit_sha256": prepared_result["commit_sha256"]}
+
+    def exchange(control, frame):
+        control.sendall(json.dumps(frame, separators=(",", ":")).encode() + b"\n")
+        with control.makefile("rb") as reader:
+            raw = reader.readline(capsule.MAX_SNAPSHOT_BYTES + 1)
+        if len(raw) > capsule.MAX_SNAPSHOT_BYTES or not raw.endswith(b"\n"):
+            raise capsule.HandoffError("Completion private response exceeds its limit")
+        return capsule._strict_json(raw, "completion private response")
+
+    def acquire(control, nonce):
+        frame = {"schema": "fullmag.development-api-control.v1", "owner_token": owner_token,
+                 "api_instance_id": pin, "nonce": nonce, "command": "acquire"}
+        acquired = exchange(control, frame)
+        if (acquired.get("schema") != "fullmag.development-authoring-acquisition.v1"
+                or acquired.get("nonce") != nonce or acquired.get("api_instance_id") != pin):
+            raise capsule.HandoffError("Completion did not acquire its exact replacement API")
+        workspace = acquired.get("workspace", {})
+        envelope = prepared["envelope"]
+        if envelope is None:
+            if workspace.get("state") != "no_session" or workspace.get("session_epoch") != 0:
+                raise capsule.HandoffError("Empty completion has a different authoring state")
+        elif (workspace.get("state") != "session"
+              or workspace.get("scene_document") != envelope["scene_document"]
+              or workspace.get("identity", {}).get("session_epoch") != 1):
+            raise capsule.HandoffError("Completion acquisition differs from restored capsule")
+        return frame, workspace
+
+    for field in ("commit_sha256", "snapshot_sha256", "candidate_manifest_sha256", "target_build_id"):
+        nonce = str(uuid.uuid4())
+        with socket.create_connection((host, control_port), timeout=20) as control:
+            frame, _ = acquire(control, nonce)
+            invalid = {**completion, field: "0" * 64}
+            response = exchange(control, {**frame, "command": "complete_cold", "completion": invalid})
+            if (response.get("schema") != "fullmag.development-api-control.v1"
+                    or response.get("status") != "rejected"):
+                raise capsule.HandoffError("Invalid completion pin lacked an explicit rejection")
+        if (accepted.joinpath("development/HANDOFF-COMMIT.json").read_bytes() != before_commit
+                or accepted.joinpath("development/ADMISSION-FENCE.json").read_bytes() != before_fence
+                or os.path.lexists(accepted / "development/HANDOFF-COMPLETION.json")):
+            raise capsule.HandoffError("Invalid completion changed durable admission state")
+        receipt["checks"].append("live-completion-invalid-" + field + "-refused")
+    nonce = str(uuid.uuid4())
+    with socket.create_connection((host, control_port), timeout=20) as control:
+        frame, workspace = acquire(control, nonce)
+        response = exchange(control, {**frame, "command": "complete_cold", "completion": completion})
+    identity = workspace.get("identity", {})
+    expected_session = identity.get("session_id") if prepared["envelope"] is not None else None
+    expected_epoch = 1 if expected_session is not None else 0
+    if (response.get("schema") != "fullmag.development-api-completion.v1"
+            or response.get("nonce") != nonce or response.get("api_instance_id") != pin
+            or response.get("old_api_instance_id") != prepared_result["binding"]["api_instance_id"]
+            or any(response.get(field) != completion[field] for field in ("handoff_id", "snapshot_sha256", "target_build_id"))
+            or response.get("accepted_store_binding") != prepared_result["accepted_store_binding"]
+            or response.get("session_id") != expected_session or response.get("session_epoch") != expected_epoch
+            or response.get("scene_document_sha256") != (workspace.get("scene_sha256") if expected_session is not None else capsule._sha256(b"null"))
+            or response.get("admission_reopened") is not True):
+        raise capsule.HandoffError("Live completion acknowledgement differs from trusted restore")
+    for name in ("HANDOFF-COMMIT.json", "ADMISSION-FENCE.json", "HANDOFF-COMPLETION.json"):
+        if os.path.lexists(accepted / "development" / name):
+            raise capsule.HandoffError("Live completion retained an active admission marker")
+    history = accepted / "development/completion-authorizations" / (completion["handoff_id"] + ".json")
+    record = capsule._strict_json(capsule._read_limited(history, accepted, "live completion history", 64 * 1024), "live completion history")
+    replacement = record.get("replacement", {})
+    if (record.get("schema") != "fullmag.development-handoff-completion.v1"
+            or record.get("commit") != capsule._strict_json(before_commit, "accepted commit")
+            or any(replacement.get(field) != response.get(field) for field in
+                   ("api_instance_id", "session_id", "session_epoch", "scene_document_sha256", "target_build_id", "accepted_store_binding"))
+            or receipt_path.read_bytes() != before_capsule_receipt):
+        raise capsule.HandoffError("Live completion history differs from acknowledgement")
+    connection = http.client.HTTPConnection("127.0.0.1", http_port, timeout=2)
+    try:
+        if prepared["envelope"] is None:
+            connection.request("GET", "/v2/platform/development-backend")
+        else:
+            connection.request("PUT", "/v2/sessions/current/model/scene",
+                               body=json.dumps(prepared["envelope"]["scene_document"]).encode(),
+                               headers={"Content-Type": "application/json"})
+        result = connection.getresponse()
+        result.read(capsule.MAX_SNAPSHOT_BYTES + 1)
+        if result.status != 200 or result.getheader("x-fullmag-api-instance") != pin:
+            raise capsule.HandoffError("Live completion did not reopen pinned HTTP admission")
+    finally:
+        connection.close()
+    process_record.update(fence_retained=False, live_completion=True, admission_reopened=True,
+                          completion_history_sha256=capsule._sha256(history.read_bytes()))
+    receipt["checks"].extend(("live-completion-exact-history", "live-completion-active-markers-retired",
+                              "live-completion-pinned-http-admission-reopened"))

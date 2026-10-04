@@ -60,7 +60,7 @@ def run(repo_root: str) -> int:
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
                    "build_commit": manifest["git_commit"],
                    "started_at": storage.now(), "checks": [], "processes": [],
-                   "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten authoring restore, interrupted store completion journals and repeated store cycles, empty-service terminal drain; no UI hydration, end-to-end compute reopening, solver or release qualification"}
+                   "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten asset-backed authoring restore and live cold completion with HTTP mutation admission, interrupted store completion journals and repeated store cycles, empty-service terminal drain; no UI hydration, end-to-end compute reopening, solver or release qualification"}
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -224,6 +224,11 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         assert preparation["handoff"]["snapshot_sha256"] == result["durable_commit"]["snapshot_sha256"]
         assert preparation["envelope"] is not None
         assert preparation["envelope"]["scene_document"] == loaded_capsule["scene"]
+        source_asset = loaded_capsule["source_scene"]["magnetization_assets"][0]["source_path"]
+        restored_asset = loaded_capsule["scene"]["magnetization_assets"][0]["source_path"]
+        assert source_asset != restored_asset
+        assert Path(source_asset).read_bytes() == Path(restored_asset).read_bytes()
+        receipt["checks"].append(f"{label}-committed-asset-rebased-with-exact-bytes")
         assert preparation["editor"] == loaded_capsule["editor"]
         replacement_parent = fixture / f"{label}-replacement-parent"
         replacement_parent.mkdir()

@@ -1,5 +1,12 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AE](53ae-live-cold-completion.md) podłącza dziennik completion do
+prywatnego ownera nowego API. 215 natywnych kontroli potwierdza odtworzenie
+sceny z assetem, odmowę błędnych pinów, retirement markerów i HTTP mutację po
+completion; wszystkie 60 procesów sondy odebrano. 124 kontrole interpretowane
+przeszły. Produkcyjny koordynator, Compute, powtórny live restart, warm service
+i hydration UI pozostają otwarte; `restart_available` pozostaje `false`.
+
 [P8-53AD](53ad-completion-journal-and-repeated-store-cycle.md) dodaje trwały
 dziennik zakończenia i odmowę admission przy częściowym retirement. Produkcyjny
 primitive przeszedł dwa cykle magazynu i 13 nowych kontroli; cała natywna

@@ -10,16 +10,26 @@ import uuid
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from windows import development_acquisition_handoff as acquisition
 from windows import development_handoff as capsule
 from windows import development_scene_handoff as semantic
 
 REQUEST_SCHEMA = "fullmag.development-cold-handoff-validation-request.v1"
 ACK_SCHEMA = "fullmag.development-cold-handoff-validation-ack.v1"
 PROFILE = "windows-native-fdm-cpu-dev"
-MAX_REQUEST_BYTES = 16 * 1024
+MAX_REQUEST_BYTES = capsule.MAX_SNAPSHOT_BYTES + 16 * 1024
 MAX_ACK_BYTES = 16 * 1024
 _REQUEST_FIELDS = frozenset(
-    {"schema", "storage_root", "worktree_id", "handoff_id", "snapshot_sha256", "binding"}
+    {
+        "schema",
+        "storage_root",
+        "worktree_id",
+        "handoff_id",
+        "snapshot_sha256",
+        "binding",
+        "verify_restored_scene",
+        "restored_scene",
+    }
 )
 _WORKTREE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 
@@ -35,6 +45,8 @@ def validate_request(repo_root: str, request: Any) -> dict[str, Any]:
     handoff_id = request["handoff_id"]
     snapshot_sha256 = request["snapshot_sha256"]
     raw_binding = request["binding"]
+    verify_restored_scene = request["verify_restored_scene"]
+    restored_scene = request["restored_scene"]
     if not isinstance(storage_value, str) or not isinstance(worktree_id, str):
         raise capsule.HandoffError("Cold handoff storage identity is invalid")
     if not isinstance(handoff_id, str) or not isinstance(snapshot_sha256, str):
@@ -51,6 +63,10 @@ def validate_request(repo_root: str, request: Any) -> dict[str, Any]:
         raise capsule.HandoffError("Cold handoff ID must be canonical and nonnil")
     if not isinstance(raw_binding, dict):
         raise capsule.HandoffError("Cold handoff binding is invalid")
+    if type(verify_restored_scene) is not bool:
+        raise capsule.HandoffError("Cold handoff restored-scene check flag is invalid")
+    if not verify_restored_scene and restored_scene is not None:
+        raise capsule.HandoffError("Unrequested restored scene must be empty")
     binding = capsule._validate_binding(
         raw_binding,
         allow_empty_session=raw_binding.get("session_id") is None,
@@ -86,6 +102,10 @@ def validate_request(repo_root: str, request: Any) -> dict[str, Any]:
         or loaded.get("receipt", {}).get("state") != "staged"
     ):
         raise capsule.HandoffError("Cold handoff capsule differs from its expected staged identity")
+    if verify_restored_scene and not acquisition._same_json(
+        loaded["scene"], restored_scene, "restored SceneDocument"
+    ):
+        raise capsule.HandoffError("Restored SceneDocument differs from the canonical rebased handoff scene")
     assets = loaded.get("assets")
     if not isinstance(assets, list) or len(assets) > capsule.MAX_ASSET_COUNT:
         raise capsule.HandoffError("Cold handoff asset list is invalid")
@@ -98,6 +118,7 @@ def validate_request(repo_root: str, request: Any) -> dict[str, Any]:
         "snapshot_sha256": snapshot_sha256,
         "binding": binding,
         "asset_count": len(assets),
+        "restored_scene_matches": verify_restored_scene,
     }
 
 

@@ -36,7 +36,7 @@ const MAX_BUNDLE_MANIFEST_BYTES: usize = 256 * 1024;
 const MAX_BINARY_BYTES: usize = 256 * 1024 * 1024;
 const MAX_BUNDLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ASSET_COUNT: usize = 512;
-const MAX_VALIDATOR_REQUEST_BYTES: usize = 16 * 1024;
+const MAX_VALIDATOR_REQUEST_BYTES: usize = MAX_SNAPSHOT_BYTES + 16 * 1024;
 const MAX_VALIDATOR_ACK_BYTES: usize = 16 * 1024;
 const VALIDATOR_REQUEST_SCHEMA: &str = "fullmag.development-cold-handoff-validation-request.v1";
 const VALIDATOR_ACK_SCHEMA: &str = "fullmag.development-cold-handoff-validation-ack.v1";
@@ -75,6 +75,253 @@ pub(crate) struct ValidatedColdCommit {
     pub(crate) store: fullmag_session::SessionStore,
     pub(crate) fence: fullmag_session::store::DevelopmentAdmissionFence,
     pub(crate) accepted_store_binding: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ColdCompletionRequest {
+    pub(crate) handoff_id: String,
+    pub(crate) snapshot_sha256: String,
+    pub(crate) target_build_id: String,
+    pub(crate) candidate_bundle_id: String,
+    pub(crate) candidate_manifest_sha256: String,
+    pub(crate) commit_sha256: String,
+}
+
+pub(crate) struct ValidatedColdCompletion {
+    pub(crate) store: fullmag_session::SessionStore,
+    pub(crate) commit: fullmag_session::store::DevelopmentHandoffCommit,
+    pub(crate) replacement: fullmag_session::store::DevelopmentReplacementIdentity,
+}
+
+/// The owner supplies this request only after waiting its exact old API child.
+/// Disk metadata alone is not process-exit evidence. The new API independently
+/// binds the capsule, actual running candidate, restored provenance and store.
+pub(crate) fn validate_cold_completion(
+    state: &AppState,
+    workspace: &RestartableWorkspace,
+    request: &ColdCompletionRequest,
+    deadline: Instant,
+) -> Result<ValidatedColdCompletion> {
+    ensure_before_deadline(deadline, "cold completion validation")?;
+    validate_uuid(&request.handoff_id, "completion handoff ID")?;
+    for digest in [
+        &request.snapshot_sha256,
+        &request.target_build_id,
+        &request.candidate_manifest_sha256,
+        &request.commit_sha256,
+    ] {
+        validate_lower_hex(digest, 64, "completion digest")?;
+    }
+    validate_lower_hex(&request.candidate_bundle_id, 32, "completion candidate ID")?;
+    if env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some() {
+        bail!("cold completion is unavailable with a configured runtime service");
+    }
+    let DevelopmentBackendConfig::Managed {
+        storage_root,
+        worktree,
+        current,
+        ..
+    } = &state.development_backend
+    else {
+        bail!("cold completion requires managed development identity");
+    };
+    let root = state
+        .submit_store_root
+        .as_deref()
+        .context("completion store is not configured")?;
+    if fullmag_runtime_control::accepted_store::writable_product_state_path(root).as_deref()
+        != Some(root)
+    {
+        bail!("completion store is not an existing canonical path");
+    }
+    validate_managed_store_location(storage_root, worktree, root)?;
+    let store = fullmag_session::SessionStore::open_existing(root.to_path_buf())?;
+    require_cold_store(&store)?;
+    let raw_commit = fullmag_session::repository_path::read_bounded_regular_file(
+        root,
+        "development/HANDOFF-COMMIT.json",
+        16 * 1024,
+    )?;
+    if fullmag_session::hex_sha256(&raw_commit) != request.commit_sha256 {
+        bail!("completion commit differs from the owner's exit-bound pin");
+    }
+    let commit = store
+        .read_development_handoff_commit()?
+        .context("completion commit is absent")?;
+    if commit.handoff_id != request.handoff_id
+        || commit.snapshot_sha256 != request.snapshot_sha256
+        || commit.target_build_id != request.target_build_id
+        || commit.api_instance_id == state.request_scope_instance_id
+        || store.read_development_idle_fence()?.as_ref() != Some(&commit.fence)
+    {
+        bail!("completion commit and exact fence do not match replacement");
+    }
+    let snapshot_relative = format!(
+        "runtimes/{worktree}/development-handoffs/{}/snapshot.json",
+        request.handoff_id
+    );
+    let raw_snapshot = fullmag_session::repository_path::read_bounded_regular_file(
+        storage_root,
+        &snapshot_relative,
+        MAX_SNAPSHOT_BYTES,
+    )?;
+    if fullmag_session::hex_sha256(&raw_snapshot) != request.snapshot_sha256 {
+        bail!("completion capsule differs from accepted snapshot");
+    }
+    let snapshot: HandoffSnapshot = serde_json::from_slice(&raw_snapshot)?;
+    let (session_id, epoch, scene) = match workspace {
+        RestartableWorkspace::NoSession {
+            api_instance_id,
+            session_epoch,
+        } if api_instance_id == &state.request_scope_instance_id
+            && *session_epoch == 0
+            && snapshot.binding.session_id.is_none() =>
+        {
+            (None, 0, Value::Null)
+        }
+        RestartableWorkspace::Session {
+            identity,
+            scene_document,
+        } => {
+            let old_session = snapshot
+                .binding
+                .session_id
+                .as_ref()
+                .context("session completion capsule is empty")?;
+            if identity.api_instance_id != state.request_scope_instance_id
+                || identity.session_epoch != 1
+                || &identity.session_id == old_session
+                || identity.run_id.is_some()
+                || !state
+                    .development_restored_authoring
+                    .get()
+                    .is_some_and(|provenance| {
+                        provenance.matches(
+                            &identity.api_instance_id,
+                            &identity.session_id,
+                            &identity.scene_id,
+                            identity.session_epoch,
+                        )
+                    })
+            {
+                bail!("completion workspace is not the fresh privately restored authoring session");
+            }
+            (
+                Some(identity.session_id.clone()),
+                1,
+                serde_json::to_value(scene_document)?,
+            )
+        }
+        _ => bail!("completion workspace state differs from accepted capsule"),
+    };
+    if snapshot.binding.api_instance_id != commit.api_instance_id
+        || snapshot.binding.target_build_id != commit.target_build_id
+    {
+        bail!("completion capsule does not identify the committed old API and target");
+    }
+    let expected = ExpectedWorkspaceBinding {
+        state: if session_id.is_some() {
+            "session"
+        } else {
+            "no_session"
+        },
+        api_instance_id: commit.api_instance_id.clone(),
+        session_id: snapshot.binding.session_id.clone(),
+        session_epoch: snapshot.binding.session_epoch,
+        generation_id: snapshot.binding.generation_id.clone(),
+        source_build_id: snapshot.binding.source_build_id.clone(),
+        source_sha256: snapshot.binding.source_sha256.clone(),
+        target_build_id: commit.target_build_id.clone(),
+        scene: scene.clone(),
+    };
+    let capsule_request = ColdCommitRequest {
+        handoff_id: request.handoff_id.clone(),
+        snapshot_sha256: request.snapshot_sha256.clone(),
+        target_build_id: request.target_build_id.clone(),
+        candidate_bundle_id: request.candidate_bundle_id.clone(),
+        candidate_manifest_sha256: request.candidate_manifest_sha256.clone(),
+    };
+    validate_snapshot(&snapshot, &expected, &capsule_request, None)?;
+    validate_capsule_semantics(
+        state,
+        storage_root,
+        worktree,
+        &snapshot.binding,
+        &capsule_request,
+        snapshot.assets.len(),
+        Some(&scene),
+        deadline,
+    )?;
+    validate_candidate_bundle(
+        storage_root,
+        worktree,
+        &request.candidate_bundle_id,
+        &request.target_build_id,
+        &request.candidate_manifest_sha256,
+        deadline,
+    )?;
+    let manifest_relative = format!(
+        "runtimes/{worktree}/native-bundles/{}/manifest.json",
+        request.candidate_bundle_id
+    );
+    let raw_manifest = fullmag_session::repository_path::read_bounded_regular_file(
+        storage_root,
+        &manifest_relative,
+        MAX_BUNDLE_MANIFEST_BYTES,
+    )?;
+    if fullmag_session::hex_sha256(&raw_manifest) != request.candidate_manifest_sha256 {
+        bail!("completion candidate manifest changed during validation");
+    }
+    let manifest: RuntimeBundleManifest = serde_json::from_slice(&raw_manifest)?;
+    let build = fullmag_build_info::identity();
+    if manifest.source.git_commit != build.git_commit
+        || manifest.source.source_snapshot_sha256 != build.source_snapshot_sha256
+        || manifest.source.backend_source_sha256 != current.source_sha256
+        || manifest
+            .source
+            .build_version
+            .get("product_version")
+            .and_then(Value::as_str)
+            != Some(current.id.as_str())
+        || current.id != fullmag_build_info::version()
+    {
+        bail!("completion candidate does not identify the actual running build");
+    }
+    let expected_api = fullmag_session::repository_path::checked_path(
+        storage_root,
+        &format!(
+            "runtimes/{worktree}/native-bundles/{}/bin/fullmag-api.exe",
+            request.candidate_bundle_id
+        ),
+    )?;
+    if fs::canonicalize(env::current_exe()?)? != fs::canonicalize(expected_api)? {
+        bail!("completion API was not launched from the requested sealed candidate");
+    }
+    if store.read_development_handoff_commit()?.as_ref() != Some(&commit)
+        || store.read_development_idle_fence()?.as_ref() != Some(&commit.fence)
+        || fullmag_session::repository_path::read_bounded_regular_file(
+            root,
+            "development/HANDOFF-COMMIT.json",
+            16 * 1024,
+        )? != raw_commit
+    {
+        bail!("completion store markers changed during validation");
+    }
+    ensure_before_deadline(deadline, "cold completion validation")?;
+    let replacement = fullmag_session::store::DevelopmentReplacementIdentity {
+        api_instance_id: state.request_scope_instance_id.clone(),
+        session_id,
+        session_epoch: epoch,
+        scene_document_sha256: fullmag_session::canonical_json_sha256(&scene),
+        target_build_id: commit.target_build_id.clone(),
+        accepted_store_binding: commit.accepted_store_binding.clone(),
+    };
+    Ok(ValidatedColdCompletion {
+        store,
+        commit,
+        replacement,
+    })
 }
 
 pub(crate) fn validate_cold_commit(
@@ -186,7 +433,7 @@ pub(crate) fn validate_cold_commit(
     ensure_before_deadline(deadline, "staged handoff snapshot digest")?;
     let snapshot: HandoffSnapshot =
         serde_json::from_slice(&snapshot_bytes).context("parsing strict handoff snapshot")?;
-    validate_snapshot(&snapshot, &expected, request)?;
+    validate_snapshot(&snapshot, &expected, request, Some(&expected.scene))?;
     let expected_binding = handoff_binding(&expected);
     validate_capsule_semantics(
         state,
@@ -195,6 +442,7 @@ pub(crate) fn validate_cold_commit(
         &expected_binding,
         request,
         snapshot.assets.len(),
+        None,
         deadline,
     )?;
 
@@ -320,6 +568,7 @@ fn validate_snapshot(
     snapshot: &HandoffSnapshot,
     expected: &ExpectedWorkspaceBinding,
     request: &ColdCommitRequest,
+    expected_source_scene: Option<&Value>,
 ) -> Result<()> {
     let expected_schema = if expected.state == "no_session" {
         EMPTY_HANDOFF_SCHEMA
@@ -346,8 +595,8 @@ fn validate_snapshot(
     {
         bail!("staged handoff binding differs from the frozen API workspace");
     }
-    if snapshot.payload.scene != expected.scene {
-        bail!("staged handoff scene differs from the captured authoring scene");
+    if expected_source_scene.is_some_and(|scene| &snapshot.payload.scene != scene) {
+        bail!("staged handoff source scene differs from the captured authoring scene");
     }
     validate_lower_hex(&snapshot.payload_sha256, 64, "payload SHA-256")?;
     validate_exact_hash_fields(&snapshot.component_sha256)?;
@@ -380,6 +629,8 @@ struct SemanticValidationRequest<'a> {
     handoff_id: &'a str,
     snapshot_sha256: &'a str,
     binding: &'a HandoffBinding,
+    verify_restored_scene: bool,
+    restored_scene: Option<&'a Value>,
 }
 
 #[derive(Deserialize)]
@@ -392,6 +643,7 @@ struct SemanticValidationAck {
     snapshot_sha256: String,
     binding: HandoffBinding,
     asset_count: usize,
+    restored_scene_matches: bool,
 }
 
 fn validate_capsule_semantics(
@@ -401,6 +653,7 @@ fn validate_capsule_semantics(
     binding: &HandoffBinding,
     request: &ColdCommitRequest,
     asset_count: usize,
+    restored_scene: Option<&Value>,
     deadline: Instant,
 ) -> Result<()> {
     ensure_before_deadline(deadline, "semantic capsule validator startup")?;
@@ -449,6 +702,8 @@ fn validate_capsule_semantics(
         handoff_id: &request.handoff_id,
         snapshot_sha256: &request.snapshot_sha256,
         binding,
+        verify_restored_scene: restored_scene.is_some(),
+        restored_scene,
     };
     let request_bytes = serde_json::to_vec(&request_value)
         .context("encoding semantic capsule validation request")?;
@@ -471,6 +726,7 @@ fn validate_capsule_semantics(
         || ack.snapshot_sha256 != request.snapshot_sha256
         || ack.binding != *binding
         || ack.asset_count != asset_count
+        || ack.restored_scene_matches != restored_scene.is_some()
     {
         bail!("semantic capsule validation ACK differs from the frozen request");
     }

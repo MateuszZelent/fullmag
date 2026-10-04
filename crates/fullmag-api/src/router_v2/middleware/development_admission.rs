@@ -81,6 +81,19 @@ pub(crate) struct DevelopmentFreeze {
 }
 
 impl DevelopmentFreeze {
+    /// Keep mutation admission closed if an armed completion operation exits
+    /// before the durable completion boundary is confirmed.
+    pub(crate) fn arm_closed_on_drop(&mut self) {
+        self.keep_closed = true;
+    }
+
+    /// Permit the acquisition guard to reopen admission after durable
+    /// completion has been confirmed. The guard's drop releases exclusivity
+    /// before clearing the closed flag.
+    pub(crate) fn reopen_on_confirmed_completion(&mut self) {
+        self.keep_closed = false;
+    }
+
     /// Call only after a durable handoff is accepted by its process owner.
     #[allow(dead_code)]
     pub(crate) fn keep_closed_until_shutdown(mut self) {

@@ -241,6 +241,19 @@ Ta ścieżka nie obejmuje jeszcze działającego service ani udostępnienia
 komendy restartu frontendowi. Zwykły start API bez prywatnego ownera nie
 może zakończyć się wskutek braku kanału shutdown.
 
+Prywatne `complete_cold` przejmuje wyłącznie nowy API kandydata. Owner musi
+wcześniej odebrać własny proces starego API; zapis commit nie dowodzi exit.
+Walidacja wiąże raw commit/snapshot/manifest, aktualny sealed EXE i jego build,
+rzeczywisty accepted store oraz scenę trzymaną przez guard. Scenę po restore
+porównuje z kanonicznym loaderem, który rebazuje zadeklarowane assets; pierwotny
+snapshot i jego źródłowe ścieżki pozostają osobno sprawdzane i niezmienione.
+Prepare/finish dziennika odbywa się przy zamkniętym HTTP admission. Dopiero
+potwierdzone zakończenie zwalnia freeze. Błąd po uzbrojeniu completion pozostawia
+HTTP zamknięte, także przy utracie kanału. Historia przechowuje nowy session ID
+i epoch 1 albo jawne `session_id=null` i epoch 0 dla pustego workspace.
+Completion nie publikuje `restored` kapsuły i nie zastępuje hydration UI.
+Nie dodaje publicznego endpointu ani uprawnienia restartu dla przeglądarki.
+
 Wymagane są: zgodność generated API, regresje błędnego/starego handoffu,
 odrzucenie aktywnego solve i wyścigu Start, ochrony szkiców i awarii restore,
 a także rzeczywisty przebieg Windows i przeglądarki z niepustą geometrią,

@@ -80,6 +80,20 @@ pub(crate) struct WorkspaceRestartAcquisition<'a> {
 }
 
 impl<'a> WorkspaceRestartAcquisition<'a> {
+    /// Arm closed-on-drop while retaining both the exclusive freeze and
+    /// transition guards through durable completion.
+    pub(crate) fn retain_closed_for_completion(mut self) -> Self {
+        self._freeze.arm_closed_on_drop();
+        self
+    }
+
+    /// Reopen mutation admission only after the durable completion boundary
+    /// has been confirmed. Consuming this guard releases exclusivity first.
+    pub(crate) fn reopen_after_confirmed_completion(mut self) {
+        self._freeze.reopen_on_confirmed_completion();
+        drop(self);
+    }
+
     /// Only the private owner coordinator calls this before attempting durable
     /// acceptance. An uncertain publication must not reopen HTTP mutations.
     pub(crate) fn retain_closed_admission(self) -> MutexGuard<'a, ()> {

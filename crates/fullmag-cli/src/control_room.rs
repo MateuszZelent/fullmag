@@ -2596,6 +2596,23 @@ pub(crate) fn verify_development_api_owner() -> Result<()> {
     {
         bail!("development owner abort did not reopen mutation admission");
     }
+    let mut scene: serde_json::Value = client
+        .get(format!("{url}/v2/sessions/current/model/scene"))
+        .send()?
+        .error_for_status()?
+        .json()?;
+    // Exercise canonical asset rebasing through the real old/new API handoff.
+    let asset_path = state_root.join("owner-fixture-initial.ovf");
+    std::fs::write(&asset_path, b"# OOMMF OVF 2.0\n# Segment count: 1\n# Begin: Segment\n# Begin: Header\n# meshtype: rectangular\n# meshunit: m\n# valuedim: 3\n# valuelabels: m_x m_y m_z\n# valueunits: 1 1 1\n# xmin: 0\n# ymin: 0\n# zmin: 0\n# xmax: 1e-9\n# ymax: 1e-9\n# zmax: 1e-9\n# xbase: 5e-10\n# ybase: 5e-10\n# zbase: 5e-10\n# xstepsize: 1e-9\n# ystepsize: 1e-9\n# zstepsize: 1e-9\n# xnodes: 1\n# ynodes: 1\n# znodes: 1\n# End: Header\n# Begin: Data Text\n1 0 0\n# End: Data Text\n# End: Segment\n")?;
+    scene["magnetization_assets"] = serde_json::json!([{
+        "id": "owner-fixture-initial", "name": "Owner fixture initial M", "kind": "sampled",
+        "source_path": asset_path, "source_format": "ovf"
+    }]);
+    client
+        .put(format!("{url}/v2/sessions/current/model/scene"))
+        .json(&scene)
+        .send()?
+        .error_for_status()?;
     let scene: serde_json::Value = client
         .get(format!("{url}/v2/sessions/current/model/scene"))
         .send()?
@@ -3038,7 +3055,7 @@ fn verify_development_completion_storage(
     use fullmag_session::store::DevelopmentReplacementIdentity;
     let replacement = DevelopmentReplacementIdentity {
         api_instance_id: uuid::Uuid::new_v4().to_string(),
-        session_id: "completion-fixture-session".into(),
+        session_id: Some("completion-fixture-session".into()),
         session_epoch: 1,
         scene_document_sha256: "c".repeat(64),
         target_build_id: commit.target_build_id.clone(),
@@ -3213,7 +3230,7 @@ fn verify_development_completion_storage(
     )?;
     let mut next_replacement = replacement;
     next_replacement.api_instance_id = uuid::Uuid::new_v4().to_string();
-    next_replacement.session_id = "completion-fixture-second-session".into();
+    next_replacement.session_id = Some("completion-fixture-second-session".into());
     let next_authorization =
         reopened.prepare_development_handoff_completion(&next, &next_replacement)?;
     reopened.finish_development_handoff_completion(&next_authorization)?;
