@@ -452,23 +452,32 @@ pub(crate) fn scene_document_overrides(scene_document: &SceneDocument) -> Result
         .rewrite_overrides)
 }
 
-pub(crate) fn python_executable(repo_root: &Path) -> String {
+/// Resolve the one Fullmag Python interpreter for `repo_root` (see
+/// `fullmag_runtime_control::python_runtime::resolve_interpreter`).
+pub(crate) fn resolve_python(
+    repo_root: &Path,
+) -> Result<fullmag_runtime_control::python_runtime::ResolvedInterpreter, ApiError> {
     let real_root = python_workspace_root(repo_root);
-    if let Some(candidate) =
-        fullmag_runtime_control::python_runtime::packaged_windows_python(&real_root)
-    {
-        return candidate.display().to_string();
-    }
-    if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
-        return preferred;
-    }
-    if let Some(candidate) = python_path_candidates(&real_root)
-        .into_iter()
-        .find(|candidate| candidate.is_file())
-    {
-        return candidate.display().to_string();
-    }
-    "python3".to_string()
+    fullmag_runtime_control::python_runtime::resolve_interpreter(&real_root)
+        .map_err(|error| ApiError::internal(error.to_string()))
+}
+
+#[cfg(test)]
+pub(crate) fn python_executable(repo_root: &Path) -> Result<String, ApiError> {
+    Ok(resolve_python(repo_root)?.path.display().to_string())
+}
+
+/// A command for the resolved interpreter, already carrying its flags, the
+/// UTF-8 switch and (for the packaged bundle) the isolation environment.
+pub(crate) fn python_command(repo_root: &Path) -> Result<ProcessCommand, ApiError> {
+    let real_root = python_workspace_root(repo_root);
+    resolve_python(repo_root)?
+        .command(&real_root)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "bundled Python runtime is incomplete or invalid: {error}"
+            ))
+        })
 }
 
 pub(crate) fn python_workspace_root(root: &Path) -> PathBuf {
@@ -479,22 +488,6 @@ pub(crate) fn python_workspace_root(root: &Path) -> PathBuf {
     } else {
         self::repo_root()
     }
-}
-
-pub(crate) fn configure_python_command(
-    root: &Path,
-    command: &mut ProcessCommand,
-) -> Result<(), ApiError> {
-    let root = python_workspace_root(root);
-    if fullmag_runtime_control::python_runtime::packaged_windows_python(&root).is_some() {
-        fullmag_runtime_control::python_runtime::configure_packaged_python(command, &root)
-            .map_err(|error| {
-                ApiError::internal(format!(
-                    "bundled Python runtime is incomplete or invalid: {error}"
-                ))
-            })?;
-    }
-    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -513,27 +506,8 @@ fn run_python_helper_with_policy(
     policy: PythonHelperOutputPolicy<'_>,
 ) -> Result<Output, ApiError> {
     let real_root = python_workspace_root(repo_root);
-    let mut candidates = Vec::new();
-    let bundled_python =
-        fullmag_runtime_control::python_runtime::packaged_windows_python(&real_root);
-    let uses_bundle = bundled_python.is_some();
-
-    if let Some(bundled_python) = bundled_python {
-        candidates.push(bundled_python.display().to_string());
-    } else if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
-        candidates.push(preferred);
-    } else {
-        for candidate in python_path_candidates(&real_root) {
-            if candidate.is_file() {
-                candidates.push(candidate.display().to_string());
-            }
-        }
-    }
-    for fallback in ["python3", "python"] {
-        if !uses_bundle && !candidates.iter().any(|candidate| candidate == fallback) {
-            candidates.push(fallback.to_string());
-        }
-    }
+    let interpreter = resolve_python(repo_root)?;
+    let uses_bundle = interpreter.isolated;
 
     let pythonpath = real_root.join("packages").join("fullmag-py").join("src");
     let packaged_site_packages = real_root.join("python").join("site-packages");
@@ -543,11 +517,8 @@ fn run_python_helper_with_policy(
         .join("cache")
         .join("fem_mesh_assets");
     let inherited_pythonpath = std::env::var("PYTHONPATH").ok();
-    let mut last_error = None;
-
-    for candidate in candidates {
-        let mut command = ProcessCommand::new(&candidate);
-        configure_python_command(&real_root, &mut command)?;
+    {
+        let mut command = python_command(repo_root)?;
         command.args(args);
         command.env("PYTHONUNBUFFERED", "1");
         command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir);
@@ -574,28 +545,24 @@ fn run_python_helper_with_policy(
         }
 
         match policy {
-            PythonHelperOutputPolicy::Capture => match command.output() {
-                Ok(output) => return Ok(output),
-                Err(error) => {
-                    last_error = Some(format!("{}: {}", candidate, error));
-                }
-            },
+            PythonHelperOutputPolicy::Capture => command.output().map_err(|error| {
+                ApiError::internal(format!(
+                    "failed to spawn python helper ({}): {error}",
+                    interpreter.path.display()
+                ))
+            }),
             PythonHelperOutputPolicy::Bounded { workspace_root } => {
                 match run_bounded_python_helper(command, workspace_root) {
-                    Ok(output) => return Ok(output),
-                    Err(BoundedHelperError::Spawn(error)) => {
-                        last_error = Some(format!("{}: {}", candidate, error));
-                    }
-                    Err(BoundedHelperError::Started(error)) => return Err(error),
+                    Ok(output) => Ok(output),
+                    Err(BoundedHelperError::Spawn(error)) => Err(ApiError::internal(format!(
+                        "failed to spawn python helper ({}): {error}",
+                        interpreter.path.display()
+                    ))),
+                    Err(BoundedHelperError::Started(error)) => Err(error),
                 }
             }
         }
     }
-
-    Err(ApiError::internal(format!(
-        "failed to spawn python helper ({})",
-        last_error.unwrap_or_else(|| "unknown error".to_string())
-    )))
 }
 
 enum BoundedHelperError {
@@ -814,38 +781,6 @@ fn combine_bounded_error<E: std::fmt::Display>(
             "{message}: {error}; process cleanup failed: {cleanup}"
         )),
     }
-}
-
-fn python_path_candidates(repo_root: &Path) -> Vec<PathBuf> {
-    vec![
-        repo_root
-            .join(".fullmag")
-            .join("local")
-            .join("python")
-            .join("bin")
-            .join("python"),
-        repo_root
-            .join(".fullmag")
-            .join("local")
-            .join("python")
-            .join("python.exe"),
-        repo_root.join(".venv").join("bin").join("python"),
-        repo_root.join(".venv").join("Scripts").join("python.exe"),
-        repo_root
-            .join("packages")
-            .join("fullmag-py")
-            .join(".venv")
-            .join("bin")
-            .join("python"),
-        repo_root
-            .join("packages")
-            .join("fullmag-py")
-            .join(".venv")
-            .join("Scripts")
-            .join("python.exe"),
-        repo_root.join("python").join("python.exe"),
-        repo_root.join("python").join("Scripts").join("python.exe"),
-    ]
 }
 
 #[cfg(test)]
