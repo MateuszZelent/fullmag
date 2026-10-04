@@ -28,7 +28,9 @@ mod error;
 mod legacy;
 mod paths;
 mod script_meta;
+mod seen;
 mod store;
+mod thumbnail;
 mod timefmt;
 mod types;
 
@@ -41,12 +43,13 @@ pub use paths::{
 pub use script_meta::{script_meta, script_meta_from_text, MAX_SCRIPT_BYTES};
 pub use store::{
     log_outcome, merge_patch, record_best_effort, Workspace, MAX_EVENTS_PER_ITEM, SCHEMA_V1_SQL,
-    SCHEMA_VERSION,
+    SCHEMA_V2_SQL, SCHEMA_VERSION,
 };
+pub use thumbnail::{Thumbnail, MAX_THUMBNAIL_BYTES, PNG_SIGNATURE};
 pub use timefmt::{now_rfc3339, parse_rfc3339, rfc3339_millis};
 pub use types::{
     Actor, Event, EventKind, Item, ItemKind, ItemRef, ItemStatus, LegacyImportReport, OpenOutcome,
-    Query, RecordEvent, RecordReceipt, Sort,
+    Query, RecordEvent, RecordReceipt, SeenItem, Sort,
 };
 
 /// Redact command-line arguments before they are stored as `meta.args`
@@ -95,3 +98,5 @@ pub fn redact_args<S: AsRef<str>>(args: &[S]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_v2;

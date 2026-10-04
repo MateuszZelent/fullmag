@@ -125,6 +125,7 @@ pub(crate) fn execute_accepted_fem_cpu_attempt(
     accepted_step: &AcceptedWorkerStep,
     prepared: &AcceptedFemCpuPreparedExecution,
     attempt_output_dir: &Path,
+    autosave_root: &Path,
     interrupt_requested: Option<&AtomicBool>,
 ) -> Result<AcceptedFemCpuExecutionOutcome> {
     let display_selection = fullmag_runner::DisplaySelectionState::default;
@@ -134,7 +135,7 @@ pub(crate) fn execute_accepted_fem_cpu_attempt(
         Some(&prepared.stage_mesh.identity),
         prepared.until_seconds,
         attempt_output_dir,
-        attempt_output_dir,
+        autosave_root,
         u64::MAX,
         &display_selection,
         interrupt_requested,

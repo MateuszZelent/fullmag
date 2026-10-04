@@ -44,7 +44,7 @@ __all__ = [
     "state_dir",
 ]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DATABASE_FILE_NAME = "workspace.db"
 MAX_EVENTS_PER_ITEM = 500
 MAX_SCRIPT_BYTES = 1024 * 1024
@@ -108,6 +108,17 @@ CREATE TABLE kv (
 );
 """
 _SCHEMA_V1 = tuple(part.strip() for part in _SCHEMA_V1_SQL.split(";") if part.strip())
+
+# Schema version 2 adds the thumbnails table (crates/fullmag-workspace/schema/v2.sql).
+_SCHEMA_V2_SQL = """\
+CREATE TABLE thumbnails (
+  item_id  INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+  sha256   TEXT NOT NULL,
+  png      BLOB NOT NULL
+);
+"""
+_SCHEMA_V2 = tuple(part.strip() for part in _SCHEMA_V2_SQL.split(";") if part.strip())
+_MIGRATIONS = (_SCHEMA_V1, _SCHEMA_V2)
 
 
 class WorkspaceError(RuntimeError):
@@ -348,9 +359,11 @@ def _user_version(connection: sqlite3.Connection) -> int:
 def _migrate(connection: sqlite3.Connection) -> None:
     connection.execute("BEGIN IMMEDIATE")
     try:
-        if _user_version(connection) < SCHEMA_VERSION:
-            for statement in _SCHEMA_V1:
-                connection.execute(statement)
+        current = _user_version(connection)
+        if current < SCHEMA_VERSION:
+            for step in _MIGRATIONS[current:SCHEMA_VERSION]:
+                for statement in step:
+                    connection.execute(statement)
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.execute("COMMIT")
     except BaseException:

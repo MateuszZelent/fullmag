@@ -22,12 +22,22 @@ const markup = `
         <div class="fm-start-tiles">
           <button class="fm-start-tile">FDM</button><button class="fm-start-tile">FEM</button>
           <button class="fm-start-tile">Template</button><button class="fm-start-tile">Import</button>
+          <button class="fm-start-tile fm-start-tile--script">Open script…</button>
         </div>
+        <div class="fm-start-recent-kinds" id="kinds"><span>All · Projects · Scripts</span></div>
         <div class="fm-start-list"><div class="fm-start-row">
           <span class="fm-start-thumb fm-start-thumb--row"></span>
           <span class="fm-start-row__main"><span class="fm-start-row__name"><span class="fm-start-row__name-text">Name</span></span>
           <span class="fm-start-row__path">C:\\data\\fullmag\\projects\\group\\project.fms</span></span>
           <span>FDM</span><span>Ready</span><span class="fm-start-row__size">1 MB</span><span class="fm-start-row__opened">today</span><span class="fm-start-row__pin"></span>
+        </div>
+        <div class="fm-start-row" id="script-row" data-kind="script">
+          <span class="fm-start-thumb fm-start-thumb--row fm-start-thumb--script"></span>
+          <span class="fm-start-row__main"><span class="fm-start-row__name"><span class="fm-start-row__name-text">sp4</span></span>
+          <span class="fm-start-row__path">C:/data/fullmag/scripts/group</span></span>
+          <span class="fm-start-badge fm-start-badge--script" id="py-badge">.py</span>
+          <span class="fm-start-pill fm-start-pill--ready"><span class="fm-start-pill__dot"></span>Run ok</span>
+          <span class="fm-start-row__size">120 lines</span><span class="fm-start-row__opened">today</span><span class="fm-start-row__pin"></span>
         </div></div>
       </div></main>
       <aside class="fm-start__inspector" id="inspector">Inspector</aside>
@@ -64,6 +74,10 @@ try {
       const status = rect(".fm-start-status");
       const rail = rect(".fm-start__rail");
       const path = document.querySelector(".fm-start-row__path");
+      const columnsOf = (selector) =>
+        getComputedStyle(document.querySelector(selector)).gridTemplateColumns.split(" ").length;
+      const scriptRow = rect("#script-row");
+      const projectRow = rect(".fm-start-row");
       return {
         columns: getComputedStyle(document.querySelector(".fm-start")).gridTemplateColumns.split(" ").length,
         inspectorDisplay: getComputedStyle(inspector).display,
@@ -72,6 +86,9 @@ try {
         statusAtBottom: Math.abs(status.bottom - start.bottom) <= 1,
         statusFullWidth: Math.abs(status.width - start.width) <= 1,
         railAboveStatus: rail.bottom <= status.top + 1,
+        scriptRowSharesProjectGrid: columnsOf("#script-row") === columnsOf(".fm-start-row"),
+        scriptRowHeightMatches: Math.abs(scriptRow.height - projectRow.height) <= 1,
+        pyBadgeWidth: document.querySelector("#py-badge").getBoundingClientRect().width,
         pathDirection: getComputedStyle(path).direction,
         pathTruncates: path.scrollWidth >= path.clientWidth,
       };
@@ -82,7 +99,10 @@ try {
   assert.equal(wide.columns, 3, "Three columns at 1680px");
   assert.equal(wide.inspectorDisplay !== "none", true, "Inspector visible at 1680px");
   assert.ok(Math.abs(wide.inspectorWidth - 364) <= 1, `Inspector is 364px wide, got ${wide.inspectorWidth}`);
-  assert.ok(wide.tilesOnOneRow, "The four launch tiles share one row at 1680px");
+  assert.ok(wide.tilesOnOneRow, "The five launch tiles share one row at 1680px");
+  assert.ok(wide.scriptRowSharesProjectGrid, "A script row uses the project row grid");
+  assert.ok(wide.scriptRowHeightMatches, "A script row is as tall as a project row");
+  assert.ok(wide.pyBadgeWidth > 0, "The .py badge renders");
   assert.ok(wide.statusAtBottom && wide.statusFullWidth, "Status strip spans the bottom");
   assert.ok(wide.railAboveStatus, "Rail ends above the status strip");
   assert.equal(wide.pathDirection, "ltr", "Paths are not right-to-left (it reorders Windows backslashes)");
@@ -109,6 +129,8 @@ try {
     ].map((s) => [`status ${s}`, `--fm-project-${s}-text`, ["--fm-bg-app", "--fm-bg-surface", "--fm-bg-selected"]]),
     ["FDM badge", "--fm-solver-fdm-text", ["--fm-bg-surface", "--fm-bg-app"]],
     ["FEM badge", "--fm-solver-fem-text", ["--fm-bg-surface", "--fm-bg-app"]],
+    // The .py badge uses primary text on a transparent fill, selected rows included.
+    [".py badge", "--fm-text-primary", ["--fm-bg-surface", "--fm-bg-app", "--fm-bg-selected"]],
   ];
 
   for (const theme of ["dark", "light"]) {

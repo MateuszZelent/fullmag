@@ -95,6 +95,23 @@ describe("homeSubline", () => {
     expect(homeSubline(ready(false))).toBe("1 project is indexed on this machine.");
   });
 
+  it("counts scripts with projects when the list shows both", () => {
+    expect(homeSubline(ready(false), 3)).toBe("1 project and 3 scripts are recorded on this machine.");
+    expect(homeSubline(ready(true), 1)).toBe(
+      "One run is paused and waiting. 1 project and 1 script are recorded on this machine.",
+    );
+  });
+
+  it("ignores a script count of zero or null", () => {
+    expect(homeSubline(ready(false), 0)).toBe("1 project is indexed on this machine.");
+    expect(homeSubline(ready(false), null)).toBe("1 project is indexed on this machine.");
+  });
+
+  it("speaks of scripts alone when there is no project index", () => {
+    expect(homeSubline({ kind: "unavailable" }, 2)).toBe("2 scripts are recorded on this machine.");
+    expect(homeSubline({ kind: "empty" }, 1)).toBe("1 script is recorded on this machine.");
+  });
+
   it("falls back to the generic invitation without an index", () => {
     expect(homeSubline({ kind: "unavailable" })).toContain("empty FDM or FEM problem");
   });

@@ -159,9 +159,9 @@ sibling `/path/x.zarr` Zarr v2 group. The bundle has the stable roles:
   compatibility members retained inside the versioned result bundle.
 
 The root `.zattrs` declares `fullmag.script_results.v1` and records script and
-session identity. A repeated ordinary launch removes the existing default
-sibling directory and creates a fresh bundle, so artifacts from two attempts
-are never mixed. A non-directory or symbolic-link collision fails closed. An
-explicit `--output-dir` overrides the sibling-bundle convention, is never
-removed automatically, and preserves its caller-selected artifact/session
-layout.
+session identity. A repeated ordinary launch reserves a fresh directory with
+an execution suffix (`existing_output=timestamp`) or fails explicitly
+(`existing_output=error`). Existing results are never removed or overwritten.
+An explicit `--output-dir` overrides the sibling convention with the same
+safe reservation policy. Output format, private temporary storage and cleanup
+follow [the common project policy](project-output-storage.md).

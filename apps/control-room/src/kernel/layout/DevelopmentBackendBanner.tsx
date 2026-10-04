@@ -5,6 +5,7 @@ import { Button } from "@/shared/ui/Button";
 import type { DevelopmentBackendResource } from "../api/apiTypes";
 import { useDevelopmentBackendResource } from "../resources/developmentBackendResource";
 import type { ResourceResult } from "../resources/resourceTypes";
+import { useDevelopmentWorkspacePublicationError } from "../development/useDevelopmentWorkspacePaused";
 
 type DevelopmentBackendView = {
   action: "retry" | null;
@@ -14,7 +15,10 @@ type DevelopmentBackendView = {
 
 export function DevelopmentBackendBanner() {
   const resource = useDevelopmentBackendResource();
-  const view = resolveDevelopmentBackendView(resource);
+  const publicationError = useDevelopmentWorkspacePublicationError();
+  const view: DevelopmentBackendView = publicationError
+    ? { action: null, message: publicationError, state: "failed" }
+    : resolveDevelopmentBackendView(resource);
 
   if (!view) return null;
 

@@ -5,7 +5,10 @@ import type { StartSection } from "../model/startScreenState";
 import { STUDY_TEMPLATES } from "../model/templates";
 import type { ComputeProbeState, ContinueSession, RecentEntry } from "../model/types";
 
+import type { WorkspaceItem } from "../model/workspaceItems";
+
 import { ProjectDetails } from "./ProjectDetails";
+import { ScriptDetails, type ScriptDetailsProps } from "./ScriptDetails";
 import { TemplateDetails } from "./TemplateDetails";
 
 interface InspectorHint {
@@ -17,8 +20,8 @@ interface InspectorHint {
 const INSPECTOR_HINTS: Readonly<Record<StartSection, InspectorHint>> = {
   home: {
     icon: Box,
-    title: "No project selected",
-    body: "Select a project in the list to see its model, authors, history and runs.",
+    title: "Nothing selected",
+    body: "Select a project or a script in the list to see its details, history and runs.",
   },
   templates: {
     icon: LayoutGrid,
@@ -63,6 +66,9 @@ export interface ProjectInspectorProps {
   readonly onOpen: (entry: RecentEntry) => Promise<string | null>;
   readonly onTogglePin: (projectId: string, pinned: boolean) => void;
   readonly onForget: (projectId: string) => void;
+  /** The selected script; only the Home section has one. */
+  readonly script?: WorkspaceItem | null;
+  readonly scriptActions?: Omit<ScriptDetailsProps, "item"> | null;
   /** Opens a template script as a project; null when this build cannot. */
   readonly scriptOpener?: ScriptOpener | null;
 }
@@ -77,6 +83,8 @@ export function ProjectInspector({
   templateId,
   compute,
   scriptOpener = null,
+  script = null,
+  scriptActions = null,
   ...actions
 }: ProjectInspectorProps) {
   const template = STUDY_TEMPLATES.find((t) => t.id === templateId);
@@ -93,6 +101,10 @@ export function ProjectInspector({
   if (section === "home" && entry) {
     // Keyed so the tab and the copied flag reset when another project is chosen.
     return <ProjectDetails entry={entry} key={entry.projectId} {...actions} />;
+  }
+  if (section === "home" && script && scriptActions) {
+    // Keyed so the notice and the history reset when another script is chosen.
+    return <ScriptDetails item={script} key={script.id} {...scriptActions} />;
   }
   const hint = INSPECTOR_HINTS[section];
   const Icon = hint.icon;

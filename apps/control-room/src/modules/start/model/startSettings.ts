@@ -1,24 +1,37 @@
+import { isKindFilter, isSortKey, type KindFilter, type SortKey } from "./recentRows";
+
 export type RecentView = "list" | "grid";
 
 export interface StartSettings {
   readonly defaultView: RecentView;
+  /** Which recents the Home list shows; remembered across sessions. */
+  readonly recentKind: KindFilter;
+  /** Last chosen sort; coerced to one the active kind offers when it is used. */
+  readonly recentSort: SortKey;
 }
 
 const STORAGE_KEY = "fullmag.start-screen.settings";
-const DEFAULTS: StartSettings = { defaultView: "list" };
+const DEFAULTS: StartSettings = { defaultView: "list", recentKind: "all", recentSort: "last_used" };
 
 type Listener = () => void;
+
+/** Anything stored that is not a known value falls back to its default. */
+export function parseStartSettings(parsed: unknown): StartSettings {
+  if (!parsed || typeof parsed !== "object") return DEFAULTS;
+  const record = parsed as Record<string, unknown>;
+  return {
+    defaultView: record.defaultView === "grid" ? "grid" : "list",
+    recentKind: isKindFilter(record.recentKind) ? record.recentKind : DEFAULTS.recentKind,
+    recentSort: isSortKey(record.recentSort) ? record.recentSort : DEFAULTS.recentSort,
+  };
+}
 
 /** Browser storage can be absent, blocked or full; settings must never throw. */
 function readStored(): StartSettings {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULTS;
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      const view = (parsed as Record<string, unknown>).defaultView;
-      return { defaultView: view === "grid" ? "grid" : "list" };
-    }
+    return parseStartSettings(JSON.parse(raw));
   } catch {
     // Fall through to the defaults.
   }
@@ -51,6 +64,11 @@ class StartSettingsStore {
       // The setting still applies for this session.
     }
     for (const listener of this.listeners) listener();
+  }
+
+  resetForTests(): void {
+    this.snapshot = null;
+    this.listeners.clear();
   }
 }
 

@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Mapping
 
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
+from fullmag.model.output_storage import OutputStorage
+from fullmag.runtime.output_storage_lowering import (
+    configure_scene_stage_autosaves,
+    configure_study_pipeline_autosaves,
+)
 from fullmag.model.constraints import FrozenSpins
 from fullmag.model.selection import SelectionDefinition
 from fullmag.runtime.loader import load_problem_from_script
@@ -63,6 +68,7 @@ _STUDY_FIELDS = frozenset(
         "stages",
         "study_pipeline",
         "table_autosave",
+        "output_storage",
         "initial_state",
     }
 )
@@ -112,6 +118,20 @@ def scene_document_to_problem_ir(
         study = {}
     else:
         study = dict(study)
+    output_storage = study.get("output_storage")
+    if output_storage is not None:
+        output_storage = OutputStorage.from_ir(output_storage).to_ir()
+        study["output_storage"] = output_storage
+        study["stages"] = configure_scene_stage_autosaves(
+            study.get("stages") or [],
+            output_storage,
+            table_autosave=study.get("table_autosave"),
+        )
+        study["study_pipeline"] = configure_study_pipeline_autosaves(
+            study.get("study_pipeline"),
+            output_storage,
+            table_autosave=study.get("table_autosave"),
+        )
     backend = BackendTarget(requested_backend)
     mode = ExecutionMode(requested_mode)
     precision = ExecutionPrecision(requested_precision)
@@ -143,6 +163,8 @@ def scene_document_to_problem_ir(
 
         def attach_scene_semantics(problem):
             runtime_metadata = dict(problem.runtime_metadata)
+            if output_storage is not None:
+                runtime_metadata["output_storage"] = copy.deepcopy(output_storage)
             if isinstance(study_pipeline, Mapping):
                 pipeline = copy.deepcopy(dict(study_pipeline))
                 runtime_metadata["study_pipeline"] = pipeline
@@ -171,7 +193,7 @@ def scene_document_to_problem_ir(
                 else None
             ),
         )
-        return loaded.to_ir(
+        result = loaded.to_ir(
             requested_backend=backend,
             execution_mode=mode,
             execution_precision=precision,
@@ -179,6 +201,14 @@ def scene_document_to_problem_ir(
             runtime_device_override=device if device in {"cpu", "gpu"} else None,
             source_root=source_root,
         )
+        runtime_metadata = result.get("problem_meta", {}).get("runtime_metadata")
+        if isinstance(runtime_metadata, dict):
+            runtime_metadata["output_storage_source_dir"] = str(
+                (Path(source_root) if source_root is not None else Path.cwd()).resolve()
+            )
+            if isinstance(scene.get("study_name"), str) and scene["study_name"].strip():
+                runtime_metadata["output_storage_source_stem"] = str(scene["study_name"])
+        return result
 
 
 def _has_enabled_study_pipeline_node(nodes: object) -> bool:

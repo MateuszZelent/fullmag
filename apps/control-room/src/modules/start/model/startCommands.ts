@@ -50,6 +50,8 @@ export function startActionDisabledReason(
   context: CommandContext,
 ): string | null {
   if (!host) return NOT_SHOWING;
+  // Opening a script is a host dialog, not a workspace command to delegate to.
+  if (commandId === "start.open-script") return host.openScriptDisabledReason ?? null;
   const action = START_ACTIONS[commandId];
   if (!action) return null;
   if (action.createsProblem && host.createProblemDisabledReason) {
@@ -109,6 +111,31 @@ function actionCommand(id: string, title: string, shortcut: string): CommandCont
   };
 }
 
+/**
+ * Runs the native script picker. The mounted start screen owns the flow (it
+ * has the list to select the result in), so the command only raises a request
+ * and is available exactly when the host reports a desktop shell.
+ */
+function openScriptCommand(id: string, title: string): CommandContribution {
+  const reason = (context: CommandContext) =>
+    startActionDisabledReason(id, startScreenStore.getSnapshot().host, context);
+  return {
+    id,
+    title,
+    group: "start-actions",
+    category: "Start",
+    scope: "workspace",
+    isEnabled: (context) => reason(context) === null,
+    disabledReason: reason,
+    run: (context): CommandResult => {
+      const blocked = reason(context);
+      if (blocked) return { message: blocked, status: "failed" };
+      startScreenStore.requestOpenScript();
+      return { status: "completed" };
+    },
+  };
+}
+
 function listCommand(
   id: string,
   title: string,
@@ -150,7 +177,9 @@ function selectionCommand(
     const snapshot = startScreenStore.getSnapshot();
     if (!snapshot.host) return NOT_SHOWING;
     if (snapshot.section !== "home") return "Open the Home section first.";
-    return snapshot.selectedProjectId ? null : "Select a project in the list first.";
+    return snapshot.selectedProjectId || snapshot.selectedScriptId !== null
+      ? null
+      : "Select a project or script in the list first.";
   };
   return {
     id,
@@ -183,10 +212,11 @@ export const START_COMMANDS: readonly CommandContribution[] = [
   actionCommand("start.new-fdm", "New FDM simulation", "Ctrl+N"),
   actionCommand("start.new-fem", "New FEM simulation", "Ctrl+Shift+N"),
   actionCommand("start.browse", "Open project…", "Ctrl+O"),
+  openScriptCommand("start.open-script", "Open script…"),
   listCommand("start.search", "Search recent projects", () => startScreenStore.requestSearchFocus()),
-  selectionCommand("start.open-selected", "Open selected project", "open"),
-  selectionCommand("start.pin-selected", "Pin or unpin selected project", "pin"),
-  selectionCommand("start.remove-selected", "Remove selected project from recent", "remove"),
+  selectionCommand("start.open-selected", "Open selected project or script", "open"),
+  selectionCommand("start.pin-selected", "Pin or unpin selected project or script", "pin"),
+  selectionCommand("start.remove-selected", "Remove selected project or script from recent", "remove"),
   listCommand("start.rebuild-index", "Rebuild project index", () => startScreenStore.requestRebuild()),
   {
     id: "workspace.search-docs",
