@@ -4,6 +4,7 @@ import { PLATFORM_DEVELOPMENT_BACKEND_PATH } from "../api/apiPaths";
 import { sharedResourceRuntimeStore } from "../resources/ResourceRuntimeStore";
 import { resourceRuntimeKeyForClientScope } from "../resources/resourceClientScope";
 import { createDevelopmentKernelOwners } from "./DevelopmentKernelOwners";
+import { DevelopmentRestartActionService } from "./DevelopmentRestartActionService";
 
 export interface DevelopmentKernelFactoryOptions {
   readonly expectedApiInstance?: string;
@@ -19,6 +20,7 @@ export interface DevelopmentKernelHostSnapshot {
 
 /** Imperative owner of mounted kernel generations; never contains model/draft copies. */
 export class DevelopmentKernelHost {
+  readonly restartAction: DevelopmentRestartActionService;
   private snapshot: DevelopmentKernelHostSnapshot;
   private readonly listeners = new Set<() => void>();
   private prepared: KernelApi | null = null;
@@ -31,6 +33,7 @@ export class DevelopmentKernelHost {
   constructor(factory: (options: DevelopmentKernelFactoryOptions, host: DevelopmentKernelHost) => KernelApi) {
     this.factory = factory;
     this.snapshot = { kernel: factory({}, this), generation: 0, paused: false, publicationError: null };
+    this.restartAction = new DevelopmentRestartActionService(this);
   }
 
   getSnapshot = (): DevelopmentKernelHostSnapshot => this.snapshot;

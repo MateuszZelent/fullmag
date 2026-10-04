@@ -14,6 +14,7 @@ from fullmag.runtime.output_storage_lowering import (
     configure_scene_stage_autosaves,
     configure_study_pipeline_autosaves,
 )
+from fullmag.runtime.cli import _reserve_stage_sequence_root
 from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.scene_document import build_scene_document_from_builder
 from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
@@ -162,6 +163,28 @@ study.storage()
         require("conflicts" in str(error), "format conflict error was not specific")
     else:
         raise AssertionError("explicit autosave format conflict was silently changed")
+
+    with TemporaryDirectory(prefix="fullmag-sequence-contract-") as temporary:
+        root = Path(temporary) / "script.zarr"
+        first = _reserve_stage_sequence_root(root, existing_output="timestamp")
+        sentinel = first / "earlier-results.txt"
+        sentinel.write_text("keep earlier data", encoding="utf-8")
+        second = _reserve_stage_sequence_root(root, existing_output="timestamp")
+        require(second != first and second.suffix == ".zarr", "sequence collision did not create a fresh Zarr root")
+        require(sentinel.read_text(encoding="utf-8") == "keep earlier data", "sequence collision changed earlier results")
+        try:
+            _reserve_stage_sequence_root(root, existing_output="error")
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError("sequence error policy accepted an occupied root")
+        try:
+            _reserve_stage_sequence_root(root / ".." / "escaped.zarr", existing_output="timestamp")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("sequence output accepted a parent traversal")
+        require(not (root.parent / "escaped.zarr").exists(), "invalid sequence path wrote output")
 
     lease_source = (REPO / "crates/fullmag-runner/src/project_storage.rs").read_text(encoding="utf-8")
     require("fs::create_dir(&output_dir)" in lease_source, "result reservation is not exclusive")

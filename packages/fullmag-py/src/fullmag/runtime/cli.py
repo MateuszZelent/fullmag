@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -98,24 +100,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             if authored_formats:
                 effective_format = authored_formats.pop()
         if args.output_dir is not None:
-            base_output_dir = Path(args.output_dir).expanduser().resolve()
+            base_output_dir = Path(args.output_dir).expanduser().absolute()
         elif storage.output_dir is not None:
             authored_output_dir = Path(storage.output_dir).expanduser()
             base_output_dir = (
                 authored_output_dir
                 if authored_output_dir.is_absolute()
                 else (loaded.source_path.parent / authored_output_dir)
-            ).resolve()
+            ).absolute()
         else:
             base_output_dir = loaded.source_path.with_suffix(
                 ".zarr" if effective_format == "zarr" else ".results"
             )
         if loaded.stages and loaded.auto_execute_stages:
-            if base_output_dir.exists():
-                raise FileExistsError(
-                    "multi-stage output directory already exists; refusing to write a sequence manifest into an existing project"
-                )
-            base_output_dir.mkdir(parents=True, exist_ok=False)
+            base_output_dir = _reserve_stage_sequence_root(
+                base_output_dir, existing_output=args.existing_output or storage.existing_output,
+            )
             if effective_format == "zarr":
                 (base_output_dir / ".zgroup").write_text(
                     json.dumps({"zarr_format": 2}), encoding="utf-8"
@@ -366,6 +366,38 @@ def _require_target_grid_identity(
             "FEM→FDM state transfer received invalid canonical target grid identity"
         )
     return target_grid
+
+
+def _reserve_stage_sequence_root(base: Path, *, existing_output: str) -> Path:
+    """Reserve a fresh sequence root without changing an earlier project's files."""
+    if existing_output not in {"timestamp", "error"}:
+        raise ValueError("existing_output must be 'timestamp' or 'error'")
+    if ".." in base.parts:
+        raise ValueError("output path must not contain '..' components")
+    base = base.expanduser().absolute()
+    # Check the original path before resolving it: a junction must not hide
+    # another project's ownership. Each stage performs the native lease checks.
+    for ancestor in (base, *base.parents):
+        try:
+            attributes = ancestor.lstat()
+        except FileNotFoundError:
+            continue
+        if ancestor.is_symlink() or getattr(attributes, "st_file_attributes", 0) & 0x400:
+            raise ValueError(f"output path contains a link/reparse point: {ancestor}")
+    base.parent.mkdir(parents=True, exist_ok=True)
+    suffix = ".zarr" if base.name.endswith(".zarr") else ""
+    stem = base.name[:-len(suffix)] if suffix else base.name
+    run_id = f"py-sequence-{time.time_ns()}-{os.getpid()}"
+    candidate = base
+    for attempt in range(100):
+        try:
+            candidate.mkdir(exist_ok=False)
+            return candidate
+        except FileExistsError:
+            if existing_output == "error":
+                raise FileExistsError(f"result location already exists: {candidate}") from None
+            candidate = base.parent / f"{stem}-{run_id}-{attempt}{suffix}"
+    raise FileExistsError("unable to reserve a fresh sequence root after 100 attempts")
 
 
 def _stage_output_dir(

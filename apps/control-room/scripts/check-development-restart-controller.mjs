@@ -14,7 +14,7 @@ await source.link((name) => {
   return pin;
 });
 await source.evaluate();
-const { DevelopmentRestartController } = source.namespace;
+const { DevelopmentRestartController, DevelopmentRestartCaptureError } = source.namespace;
 const generatedPaths = new vm.SourceTextModule(stripTypeScriptTypes(readFileSync("src/kernel/api/generated/openapi-v2-paths.ts", "utf8")), { context });
 await generatedPaths.link(() => { throw new Error("Unexpected generated path dependency"); });
 const paths = new vm.SourceTextModule(stripTypeScriptTypes(readFileSync("src/kernel/api/apiPaths.ts", "utf8")), { context });
@@ -61,6 +61,7 @@ function fixture(overrides = {}) {
     },
   }, {
     capture: async () => {
+      if (overrides.captureError) throw overrides.captureError;
       if (overrides.captureFailure) throw new Error("Busy owner");
       return { sessionId: overrides.sessionId ?? null, sessionEpoch: 2,
         editor: { draft: "unsaved" }, workspace: { panel: "Geometry" }, projectDocument: { archive: "original" },
@@ -112,6 +113,10 @@ for (const mode of ["captureFailure", "readFailure", "hydrationFailure"]) {
   await controller.start(); await controller.reconcile();
   assert.equal(controller.getSnapshot().state, mode === "readFailure" ? "unknown" : "failed");
   assert.equal(calls.submit, mode === "captureFailure" ? 0 : 1); assert.equal(calls.release, 0);
+  if (mode === "captureFailure") {
+    assert.equal(controller.getSnapshot().captureCleanup, "unconfirmed");
+    assert.match(controller.getSnapshot().message, /cleanup is unconfirmed/);
+  }
   if (mode === "hydrationFailure") { await controller.reconcile(); assert.equal(calls.hydrate, 1); }
   groups++;
 }
@@ -128,6 +133,15 @@ for (const releaseFailure of [false, true]) {
   await controller.start();
   assert.equal(controller.getSnapshot().state, "failed");
   assert.equal(calls.submit, 0); assert.equal(calls.release, 1);
+  assert.equal(controller.getSnapshot().captureCleanup, releaseFailure ? "unconfirmed" : "confirmed");
+  groups++;
+}
+for (const confirmed of [true, false]) {
+  const { controller, calls } = fixture({ captureError: new DevelopmentRestartCaptureError(confirmed) });
+  await controller.start();
+  assert.equal(controller.getSnapshot().state, "failed");
+  assert.equal(controller.getSnapshot().captureCleanup, confirmed ? "confirmed" : "unconfirmed");
+  assert.equal(calls.submit, 0); assert.equal(calls.release, 0);
   groups++;
 }
 {
