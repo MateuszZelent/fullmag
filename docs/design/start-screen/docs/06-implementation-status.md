@@ -18,7 +18,7 @@ desktop application against real project archives.
 | 1 | Shell, rail, launch tiles | Done | typecheck, lint, browser |
 | 2 | Recent index (list, search, filter, sort, grouping, virtualisation) | Done, front + host | typecheck, lint, browser against mocked host; `cargo check` |
 | 3 | Inspector: header, chips, context banner, Overview | Done | typecheck, lint, browser (five banner states) |
-| 4 | Thumbnails, card grid, result preview, LRU | Done in the renderer | typecheck, lint, browser. **No frame scrubber** (host provides no frames); thumbnails are produced by nothing yet |
+| 4 | Thumbnails, card grid, result preview, LRU | Done in the renderer | typecheck, lint, browser. **No frame scrubber** (host provides no frames); the host reads `project/preview/thumb.png` (a PNG up to 256 kB) into the index; nothing writes that file yet |
 | 5 | Authors, History, Runs, BibTeX | Done: read side and writer | browser (three tabs, mocked host); `cargo check`. Writer records edit saves only, see §3 |
 | 6 | Continue card | Done in the renderer | browser (resumable / not / host error). `resume_run`, `discard_checkpoint` do not exist |
 | 7 | Compute environment | Done, front + host | `cargo check`, typecheck; **not** against a real GPU |
@@ -63,7 +63,7 @@ Continuous integration shows four failing checks that also fail on an unmodified
 
 Host (needs work outside the renderer):
 
-- **Thumbnails** are not generated. The renderer shows a placeholder.
+- **Thumbnails** are read but not generated: the index carries `project/preview/thumb.png` when a project has one (PNG, up to 256 kB, inlined as a data URI), and nothing produces it after a run. Without it the renderer shows a placeholder.
 - **Checkpoints:** no `resume_run` or `discard_checkpoint`; the Continue card
   appears only if an index carries `continue`, which nothing writes yet.
 - **Provenance writer** records only a generic "Saved revision N" entry when a
