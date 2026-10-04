@@ -15,6 +15,7 @@ from local_runner.build_source import bind_identity
 from local_runner.worker_entrypoint import canonical, SCHEMA
 from local_runner.coordinator import inspect_owned
 from local_runner.retention import plan as retention_plan
+from local_runner.retention_service import RetentionService
 from local_runner.service import (
     RunnerService,
     ServicePaths,
@@ -87,12 +88,17 @@ class Application:
         self.storage = Path('/storage')
         self.owner = config['operator']
         self.layout = {'storage_root': '/storage', 'container_coordinator': True,
+                       'host_storage_root': config['host_storage_root'],
                        'daemon_storage_root': desktop_daemon_root(config['host_storage_root'])}
         for name in ('index', 'locks'):
             validate_path(self.storage / name, self.storage).mkdir(exist_ok=True)
         self.queue = JobQueue(validate_path(self.storage / 'index' / 'runner-jobs.sqlite', self.storage))
         self.paths = ServicePaths.from_storage(self.storage)
         self.hub = ObservabilityHub(self.storage, owner=self.owner)
+        self.retention_service = RetentionService(self.hub, self.queue, self.layout,
+                                                  owner=self.owner, call=docker)
+        if read_stop_request(self.paths) is not None:
+            self.retention_service.drain()
         self._lifecycle_lock = threading.RLock()
         self._worker_thread = None
         self._worker_state = 'starting'
@@ -266,13 +272,20 @@ class Application:
         journal_path = validate_path(root / 'coordinator.json', self.storage)
         if journal_path.exists():
             journal = json.loads(journal_path.read_text())
-            if journal.get('container_id'):
+            terminal = job.get('state') in ('succeeded', 'failed', 'cancelled')
+            saved = validate_path(root / 'worker.log', self.storage)
+            if terminal and saved.is_file():
+                with saved.open('rb') as stream:
+                    stream.seek(max(0, saved.stat().st_size - 16000))
+                    parts.append(stream.read(16000).decode(errors='replace'))
+            elif journal.get('container_id'):
                 inspect_owned(docker, journal['container_id'], job_id)
                 parts.append(docker(['logs', '--tail', '100', journal['container_id']]))
         return {'job_id': job_id, 'tail': '\n'.join(parts)}
 
     def stop(self):
         with self._lifecycle_lock:
+            self.retention_service.drain()
             existing = read_stop_request(self.paths)
             if existing is None:
                 existing = request_stop(self.paths, requested_by=self.owner)
@@ -298,6 +311,7 @@ class Application:
                     'reason': 'worker is finishing its stop; retry resume after it exits',
                 }
             clear_stop_request(self.paths, reason='operator resumed the service')
+            self.retention_service.resume()
             started = self._start_worker_locked()
             health = self._health_snapshot()
             if started:
@@ -341,6 +355,8 @@ class Application:
             'legacy_jobs': snapshot['legacy_jobs'],
             'stop_requested': snapshot['stop_requested'],
             'storage_free_bytes': free_bytes,
+            'retention_busy': self.retention_service.busy,
+            'retention_draining': self.retention_service.stopping,
             'allowed_profiles': sorted(self.allowed_profiles),
             'qualification': 'NOT VERIFIED',
         }
@@ -497,7 +513,8 @@ class Application:
             'last_cleanup': {
                 'candidates_count': last_plan['candidates_count'] if last_plan else None,
                 'estimated_reclaimed_bytes': last_plan['estimated_reclaimed_bytes'] if last_plan else None,
-                'reclaimed_bytes': last_plan.get('actual_reclaimed_bytes', 0) if last_plan and last_plan.get('applied') else 0,
+                'reclaimed_bytes': last_plan.get('reclaimed_bytes') if last_plan else None,
+                'removed_logical_bytes': last_plan.get('removed_logical_bytes') if last_plan else None,
                 'status': last_plan['status'] if last_plan else 'brak',
             },
             'trends': trends,
@@ -976,10 +993,13 @@ class Application:
         return self.hub.get_events(limit=limit, level=level, job_id=job_id)
 
     def retention_plan_preview(self):
-        return self.hub.generate_retention_plan(queue=self.queue)
+        return self.retention_service.preview()
 
     def retention_plan_apply(self, plan_id):
-        return self.hub.apply_retention_plan(plan_id)
+        return self.retention_service.apply(plan_id)
+
+    def retention_plan_get(self, plan_id):
+        return self.retention_service.get(plan_id)
 
     def get_retention_policy(self):
         return self.hub.get_retention_policy()
@@ -993,6 +1013,16 @@ class Application:
         return self.hub.set_pinned(resource_id, pinned, reason)
 
     def _execute_next(self):
+        self.retention_service.tick()
+        with self.retention_service.build_slot() as admitted:
+            if not admitted:
+                return {'state': 'retention_running'}
+            result = self._execute_next_reserved()
+        if isinstance(result, dict) and result.get('state') in ('succeeded', 'failed', 'cancelled', 'blocked'):
+            self.retention_service.tick(force=True)
+        return result
+
+    def _execute_next_reserved(self):
         queued = self.queue.next_queued(self.owner)
         if queued is not None and queued.get('operation') != 'build':
             raise APIUnavailable('Legacy queued job requires manual recovery')
@@ -1078,7 +1108,7 @@ def main():
         'submit', 'list', 'get', 'logs', 'cancel', 'stop', 'health', 'resume', 'retention',
         'overview', 'paginated_jobs', 'job_detail', 'job_events', 'job_metrics', 'job_resources',
         'storage_volumes', 'storage_resources', 'processes', 'alerts', 'events',
-        'retention_plan_preview', 'retention_plan_apply', 'get_retention_policy',
+        'retention_plan_preview', 'retention_plan_apply', 'retention_plan_get', 'get_retention_policy',
         'put_retention_policy', 'pin_resource',
     )
     callbacks = {name: getattr(app, name) for name in callback_names}

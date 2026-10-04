@@ -129,6 +129,7 @@ class APICallbacks:
     events: Callable[[dict], object] | None = None
     retention_plan_preview: Callable[[], object] | None = None
     retention_plan_apply: Callable[[str], object] | None = None
+    retention_plan_get: Callable[[str], object] | None = None
     get_retention_policy: Callable[[], object] | None = None
     put_retention_policy: Callable[[dict], object] | None = None
     pin_resource: Callable[[str, dict], object] | None = None
@@ -157,6 +158,7 @@ class APICallbacks:
             "events",
             "retention_plan_preview",
             "retention_plan_apply",
+            "retention_plan_get",
             "get_retention_policy",
             "put_retention_policy",
             "pin_resource",
@@ -607,6 +609,11 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
                 self._invoke(self.server.callbacks.get_retention_policy)
             else:
                 self._send(200, {})
+        elif len(parts) == 5 and parts[:4] == ["api", "v1", "retention", "plans"]:
+            if self.server.callbacks.retention_plan_get is not None:
+                self._invoke(self.server.callbacks.retention_plan_get, parts[4])
+            else:
+                self._error(503, "retention_unavailable")
         elif parts == ["api", "v1", "retention", "plans"]:
             if self.server.callbacks.retention_plan_preview is not None:
                 self._invoke(self.server.callbacks.retention_plan_preview)
@@ -823,6 +830,7 @@ def _coerce_callbacks(callbacks: APICallbacks | Mapping[str, Callable[..., objec
                 events=callbacks.get("events"),
                 retention_plan_preview=callbacks.get("retention_plan_preview"),
                 retention_plan_apply=callbacks.get("retention_plan_apply"),
+                retention_plan_get=callbacks.get("retention_plan_get"),
                 get_retention_policy=callbacks.get("get_retention_policy"),
                 put_retention_policy=callbacks.get("put_retention_policy"),
                 pin_resource=callbacks.get("pin_resource"),

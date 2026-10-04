@@ -21,7 +21,7 @@ import time
 import uuid
 from typing import Any, Mapping
 
-from fullmag_storage import atomic_json, validate_path
+from fullmag_storage import atomic_json, validate_path, file_lock
 from local_runner.retention import plan as retention_plan
 
 
@@ -262,6 +262,7 @@ class ObservabilityHub:
         self._events: deque[dict[str, Any]] = deque(maxlen=_MAX_EVENTS)
         self._metric_samples: deque[dict[str, Any]] = deque(maxlen=_MAX_METRIC_SAMPLES)
         self._plans: dict[str, dict[str, Any]] = {}
+        self.retention_execution_available = False
         self._resources_cache: dict[str, Any] | None = None
         self._resources_cache_time: float = 0.0
         self._resources_cache_queue = None
@@ -425,13 +426,21 @@ class ObservabilityHub:
                 data = json.loads(policy_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     policy = {**_DEFAULT_POLICY, **data}
-                    policy['mode'] = 'preview'
-                    policy['mode_supported'] = ['preview']
-                    policy['automatic_mode_available'] = False
-                    return policy
+                    return self._effective_retention_policy(policy)
             except Exception:
                 pass
-        return dict(_DEFAULT_POLICY)
+        return self._effective_retention_policy(dict(_DEFAULT_POLICY))
+
+    def _effective_retention_policy(self, policy):
+        available = self.retention_execution_available
+        policy['automatic_mode_available'] = available
+        policy['execution_available'] = available
+        policy['mode_supported'] = ['preview', 'automatic'] if available else ['preview']
+        if not available or policy.get('mode') not in policy['mode_supported']:
+            policy['mode'] = 'preview'
+        if available:
+            policy['notice'] = 'Retencja execution: podgląd lub rzeczywiste wykonanie z ponowną walidacją. Źródła, wyniki i cache nie podlegają temu TTL.'
+        return policy
 
     def set_retention_policy(self, updates: Mapping[str, Any]) -> dict[str, Any]:
         current = self.get_retention_policy()
@@ -468,7 +477,10 @@ class ObservabilityHub:
 
         if "mode" in updates:
             requested_mode = str(updates["mode"]).strip().lower()
-            if requested_mode == "automatic":
+            if requested_mode == "automatic" and self.retention_execution_available:
+                current.update(mode='automatic', requested_mode='automatic', mode_status='implemented')
+                current.pop('mode_notice', None)
+            elif requested_mode == "automatic":
                 # Honest notification: automatic cleanup scheduler is not attached
                 current["mode"] = "preview"
                 current["requested_mode"] = "automatic"
@@ -506,7 +518,9 @@ class ObservabilityHub:
         return {}
 
     def set_pinned(self, resource_id: str, pin: bool, reason: str = "") -> dict[str, Any]:
-        with self._lock:
+        lock = validate_path(self.storage / 'locks' / 'retention.lock', self.storage)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock, file_lock(lock, 'retention pin mutation'):
             pinned = self.get_pinned()
             if pin:
                 pinned[resource_id] = {
@@ -663,14 +677,14 @@ class ObservabilityHub:
         if queue is not None:
             jobs = []
             try:
-                if hasattr(queue, 'connection') and getattr(queue, 'path', None) and Path(queue.path).is_file():
+                if callable(getattr(queue, 'connection', None)) and getattr(queue, 'path', None) and Path(queue.path).is_file():
                     with queue.connection() as db:
                         rows = db.execute("SELECT * FROM jobs ORDER BY sequence DESC").fetchall()
                         jobs = [queue.record(row) for row in rows]
                 else:
                     jobs = queue.list(owner=self.owner, limit=1000)
-            except Exception:
-                jobs = []
+            except Exception as error:
+                raise RuntimeError('Retention queue inventory unavailable') from error
             if jobs:
                 try:
                     raw_engine_plan = retention_plan(
@@ -1033,129 +1047,133 @@ class ObservabilityHub:
     # Retention Planning
     # -------------------------------------------------------------------------
     def generate_retention_plan(self, queue=None) -> dict[str, Any]:
-        with self._lock:
-            jobs = []
-            if queue is not None:
-                try:
-                    if hasattr(queue, 'connection') and getattr(queue, 'path', None) and Path(queue.path).is_file():
-                        with queue.connection() as db:
-                            rows = db.execute("SELECT * FROM jobs ORDER BY sequence DESC").fetchall()
-                            jobs = [queue.record(row) for row in rows]
-                    else:
-                        jobs = queue.list(owner=self.owner, limit=1000)
-                except Exception:
-                    jobs = []
+        jobs = []
+        if queue is not None:
+            try:
+                if callable(getattr(queue, 'connection', None)) and getattr(queue, 'path', None) and Path(queue.path).is_file():
+                    with queue.connection() as db:
+                        rows = db.execute("SELECT * FROM jobs ORDER BY sequence DESC").fetchall()
+                        jobs = [queue.record(row) for row in rows]
+                else:
+                    jobs = queue.list(owner=self.owner, limit=1000)
+            except Exception as error:
+                raise RuntimeError('Retention queue inventory unavailable') from error
 
-            policy = self.get_retention_policy()
-            ttl_success_h = float(policy.get("ttl_success_hours", 24))
-            ttl_failure_h = float(policy.get("ttl_failure_hours", 168))
-            now = time.time()
+        policy = self.get_retention_policy()
+        ttl_success_h = float(policy.get("ttl_success_hours", 24))
+        ttl_failure_h = float(policy.get("ttl_failure_hours", 168))
+        now = time.time()
 
-            raw_plan = {}
-            if jobs:
-                try:
-                    raw_plan = retention_plan(str(self.storage), jobs, now, success_hours=ttl_success_h, failed_hours=ttl_failure_h)
-                except Exception as err:
-                    raw_plan = {"error": str(err), "candidates": [], "retained": []}
+        raw_plan = {"candidates": [], "retained": []}
+        if jobs:
+            try:
+                raw_plan = retention_plan(str(self.storage), jobs, now, success_hours=ttl_success_h, failed_hours=ttl_failure_h)
+            except Exception as error:
+                raise RuntimeError('Retention execution inventory unavailable') from error
+        if raw_plan.get('error'):
+            raise RuntimeError('Retention inventory failed: ' + str(raw_plan['error']))
 
-            pinned = self.get_pinned()
-            plan_id = f"plan-{uuid.uuid4().hex[:8]}"
+        pinned = self.get_pinned()
+        plan_id = f"plan-{uuid.uuid4().hex[:8]}"
 
-            candidates = []
-            pinned_retained = []
-            for c in raw_plan.get("candidates", []):
-                wt = c.get("worktree_id")
-                jid = c.get("job_id")
-                res_id = f"exec-{wt}-{jid}"
-                if res_id in pinned or jid in pinned:
-                    pin_info = pinned.get(res_id) or pinned.get(jid) or {}
-                    pin_reason = pin_info.get("reason", "Przypięte przez operatora")
-                    pinned_retained.append({
-                        "resource_id": res_id,
-                        "name": f"{wt}/{jid}/execution",
-                        "worktree_id": wt,
-                        "job_id": jid,
-                        "path": c.get("execution"),
-                        "size_bytes": c.get("bytes", 0),
-                        "why_retained": f"{pin_reason} (ochrona przed retencją)",
-                    })
-                    continue
-                candidates.append({
+        candidates = []
+        pinned_retained = []
+        for c in raw_plan.get("candidates", []):
+            wt = c.get("worktree_id")
+            jid = c.get("job_id")
+            res_id = f"exec-{wt}-{jid}"
+            if res_id in pinned or jid in pinned:
+                pin_info = pinned.get(res_id) or pinned.get(jid) or {}
+                pin_reason = pin_info.get("reason", "Przypięte przez operatora")
+                pinned_retained.append({
                     "resource_id": res_id,
                     "name": f"{wt}/{jid}/execution",
                     "worktree_id": wt,
                     "job_id": jid,
                     "path": c.get("execution"),
                     "size_bytes": c.get("bytes", 0),
-                    "reason": c.get("reason", "Upłynął okres retencji po zakończeniu zadania"),
+                    "why_retained": f"{pin_reason} (ochrona przed retencją)",
                 })
+                continue
+            candidates.append({
+                "resource_id": res_id,
+                "name": f"{wt}/{jid}/execution",
+                "worktree_id": wt,
+                "job_id": jid,
+                "path": c.get("execution"),
+                "size_bytes": c.get("bytes", 0),
+                "reason": c.get("reason", "Upłynął okres retencji po zakończeniu zadania"),
+            })
 
-            retained = list(pinned_retained)
-            for r in raw_plan.get("retained", []):
-                wt = r.get("worktree_id")
-                jid = r.get("job_id")
-                res_id = f"exec-{wt}-{jid}"
-                retained.append({
-                    "resource_id": res_id,
-                    "name": f"{wt}/{jid}/execution" if wt and jid else "unknown",
-                    "worktree_id": wt,
-                    "job_id": jid,
-                    "path": r.get("execution"),
-                    "size_bytes": r.get("bytes", 0) or 0,
-                    "why_retained": r.get("reason", "Chronione przez silnik retencji"),
-                })
+        retained = list(pinned_retained)
+        for r in raw_plan.get("retained", []):
+            wt = r.get("worktree_id")
+            jid = r.get("job_id")
+            res_id = f"exec-{wt}-{jid}"
+            retained.append({
+                "resource_id": res_id,
+                "name": f"{wt}/{jid}/execution" if wt and jid else "unknown",
+                "worktree_id": wt,
+                "job_id": jid,
+                "path": r.get("execution"),
+                "size_bytes": r.get("bytes", 0) or 0,
+                "why_retained": r.get("reason", "Chronione przez silnik retencji"),
+            })
 
-            # Ensure all on-disk execution trees missing identity/journal or absent from raw_plan are protected
-            accounted_identities = {
-                (item.get("worktree_id"), item.get("job_id"))
-                for item in candidates + retained
-                if item.get("worktree_id") and item.get("job_id")
-            }
-            runs_dir = self.storage / "runs"
-            if runs_dir.is_dir() and not _is_reparse_or_symlink(runs_dir):
-                for wt_dir in sorted(runs_dir.iterdir()):
-                    if not wt_dir.is_dir() or _is_reparse_or_symlink(wt_dir):
+        # Ensure all on-disk execution trees missing identity/journal or absent from raw_plan are protected
+        accounted_identities = {
+            (item.get("worktree_id"), item.get("job_id"))
+            for item in candidates + retained
+            if item.get("worktree_id") and item.get("job_id")
+        }
+        runs_dir = self.storage / "runs"
+        if runs_dir.is_dir() and not _is_reparse_or_symlink(runs_dir):
+            for wt_dir in sorted(runs_dir.iterdir()):
+                if not wt_dir.is_dir() or _is_reparse_or_symlink(wt_dir):
+                    continue
+                for job_dir in sorted(wt_dir.iterdir()):
+                    if not job_dir.is_dir() or _is_reparse_or_symlink(job_dir):
                         continue
-                    for job_dir in sorted(wt_dir.iterdir()):
-                        if not job_dir.is_dir() or _is_reparse_or_symlink(job_dir):
-                            continue
-                        ident = (wt_dir.name, job_dir.name)
-                        if ident not in accounted_identities:
-                            exec_dir = job_dir / "execution"
-                            if exec_dir.is_dir() and not _is_reparse_or_symlink(exec_dir):
-                                sz = _fast_dir_size(exec_dir)
-                                retained.append({
-                                    "resource_id": f"exec-{wt_dir.name}-{job_dir.name}",
-                                    "name": f"{wt_dir.name}/{job_dir.name}/execution",
-                                    "worktree_id": wt_dir.name,
-                                    "job_id": job_dir.name,
-                                    "path": str(exec_dir),
-                                    "size_bytes": sz[0],
-                                    "why_retained": "Niezweryfikowany lub osierocony katalog - ochrona przed usunięciem",
-                                })
-                                accounted_identities.add(ident)
+                    ident = (wt_dir.name, job_dir.name)
+                    if ident not in accounted_identities:
+                        exec_dir = job_dir / "execution"
+                        if exec_dir.is_dir() and not _is_reparse_or_symlink(exec_dir):
+                            sz = _fast_dir_size(exec_dir)
+                            retained.append({
+                                "resource_id": f"exec-{wt_dir.name}-{job_dir.name}",
+                                "name": f"{wt_dir.name}/{job_dir.name}/execution",
+                                "worktree_id": wt_dir.name,
+                                "job_id": job_dir.name,
+                                "path": str(exec_dir),
+                                "size_bytes": sz[0],
+                                "why_retained": "Niezweryfikowany lub osierocony katalog - ochrona przed usunięciem",
+                            })
+                            accounted_identities.add(ident)
 
-            volumes = self.get_storage_volumes()
-            free_before = volumes[0].get("free_bytes") if volumes else None
-            estimated_reclaim = sum(c["size_bytes"] for c in candidates)
+        volumes = self.get_storage_volumes()
+        free_before = volumes[0].get("free_bytes") if volumes else None
+        estimated_reclaim = sum(c["size_bytes"] for c in candidates)
 
-            plan_record = {
-                "plan_id": plan_id,
-                "created_at": _utc_now_iso(),
-                "policy_version": self.get_retention_policy()["version"],
-                "status": "preview",
-                "candidates_count": len(candidates),
-                "candidates": candidates,
-                "retained_count": len(retained),
-                "retained": retained,
-                "estimated_reclaimed_bytes": estimated_reclaim,
-                "disk_free_before_bytes": free_before,
-                "disk_free_after_estimated_bytes": free_before + estimated_reclaim if free_before is not None else None,
-                "raw_engine_plan": raw_plan,
-            }
+        plan_record = {
+            "plan_id": plan_id,
+            "created_at": _utc_now_iso(),
+            "policy_version": self.get_retention_policy()["version"],
+            "status": "preview",
+            "candidates_count": len(candidates),
+            "candidates": candidates,
+            "retained_count": len(retained),
+            "retained": retained,
+            "estimated_reclaimed_bytes": estimated_reclaim,
+            "disk_free_before_bytes": free_before,
+            "disk_free_after_estimated_bytes": free_before + estimated_reclaim if free_before is not None else None,
+            "raw_engine_plan": raw_plan,
+        }
+        with self._lock:
             self._plans[plan_id] = plan_record
-            self.record_event("INFO", "retention_plan_created", f"Created retention plan {plan_id} ({len(candidates)} candidates)")
-            return plan_record
+            while len(self._plans) > 16:
+                self._plans.pop(next(iter(self._plans)))
+        self.record_event("INFO", "retention_plan_created", f"Created retention plan {plan_id} ({len(candidates)} candidates)")
+        return plan_record
 
     def apply_retention_plan(self, plan_id: str) -> dict[str, Any]:
         """Idempotent and safe plan execution. Never removes unverified or shared data."""

@@ -306,8 +306,13 @@ class ContainerClientTests(unittest.TestCase):
                                   'active_job_ids': [], 'last_error': None,
                                   'finished_at': '2026-09-11T18:36:12Z'}}
         container_client._assert_replacement_health(health)
+        with self.assertRaisesRegex(container_client.ContainerClientError, 'must be drained'):
+            container_client._assert_replacement_health({**health, 'ok': True,
+                'coordinator': {'state': 'paused'}, 'retention_busy': False, 'retention_draining': False})
+        container_client._assert_replacement_health({**health, 'retention_busy': False, 'retention_draining': True})
         for field, value in (('worker_alive', True), ('worker_error', 'failure'),
-                             ('stop_requested', False), ('legacy_jobs', [{}])):
+                             ('stop_requested', False), ('legacy_jobs', [{}]),
+                             ('retention_busy', True), ('retention_busy', None)):
             with self.subTest(field=field):
                 with self.assertRaises(container_client.ContainerClientError):
                     container_client._assert_replacement_health({**health, field: value})

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -109,6 +110,24 @@ class ContainerAPITests(unittest.TestCase):
         status, _, payload = self.request("GET", "/jobs", headers={"Authorization": "Basic unit-test-secret"})
         self.assertEqual(401, status)
         self.assertNotIn(b"unit-test-secret", payload)
+
+    def test_retention_ack_and_poll_are_authenticated_and_poll_does_not_apply(self):
+        pid = 'plan-1234abcd'
+        self.server.callbacks = replace(self.server.callbacks,
+            retention_plan_apply=lambda value: self.calls.append(('apply', value)) or {'plan_id': value, 'status': 'accepted'},
+            retention_plan_get=lambda value: self.calls.append(('poll', value)) or {'plan_id': value, 'status': 'running'})
+        route = '/api/v1/retention/plans/' + pid
+        self.assertEqual(401, self.request('POST', route + '/apply', body={}, token='wrong')[0])
+        self.assertEqual(401, self.request('GET', route, token='wrong')[0])
+        self.assertEqual([], self.calls)
+        status, _, payload = self.request('POST', route + '/apply', body={})
+        self.assertEqual(200, status)
+        self.assertEqual('accepted', self.json_body(payload)['status'])
+        for _ in range(2):
+            status, _, payload = self.request('GET', route)
+            self.assertEqual(200, status)
+            self.assertEqual(pid, self.json_body(payload)['plan_id'])
+        self.assertEqual([('apply', pid), ('poll', pid), ('poll', pid)], self.calls)
 
     def test_origin_is_rejected_without_cors_headers(self):
         status, headers, payload = self.request("GET", "/jobs", headers={"Origin": "http://evil.invalid"})

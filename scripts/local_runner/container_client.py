@@ -842,6 +842,10 @@ def stop(layout: Mapping[str, object], owner: str) -> Any:
 def _assert_replacement_health(health: object) -> None:
     if not isinstance(health, Mapping):
         raise ContainerClientError("Coordinator health did not confirm a healthy service")
+    if health.get('retention_busy', False) is not False:
+        raise ContainerClientError('Coordinator retention is active; replacement is refused')
+    if 'retention_busy' in health and health.get('retention_draining') is not True:
+        raise ContainerClientError('Coordinator retention must be drained before replacement')
     service = health.get('coordinator')
     # Upgrade compatibility: old Application.run discarded the normal stopped
     # result. Accept only a completed intentional stop, never a crashed worker

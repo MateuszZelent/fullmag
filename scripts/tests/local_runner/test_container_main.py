@@ -51,6 +51,21 @@ class LiveThread:
 
 
 class ContainerMainTests(unittest.TestCase):
+    def test_retention_busy_defers_build_dispatch(self):
+        app = self.app()
+        app.retention_service.thread = LiveThread()
+        with patch.object(container_main, 'execute_build', side_effect=AssertionError('must wait')):
+            self.assertEqual({'state': 'retention_running'}, app._execute_next())
+
+    def test_terminal_logs_survive_worker_removal(self):
+        app = self.app(FakeQueue(jobs=[{'job_id': 'job', 'worktree_id': 'wt', 'state': 'failed', 'owner': 'alice'}]))
+        run = self.root / 'runs' / 'wt' / 'job'
+        run.mkdir(parents=True)
+        (run / 'coordinator.json').write_text('{"container_id":"removed-worker"}')
+        (run / 'worker.log').write_text('saved compiler output')
+        with patch.object(container_main, 'docker', side_effect=AssertionError('worker was removed')):
+            self.assertIn('saved compiler output', app.logs('job')['tail'])
+
     def test_waiting_admission_does_not_emit_claim_or_compilation_start(self):
         queued = {"job_id": "job-waiting", "operation": "build", "profile": "fem-cpu-release"}
         app = self.app(FakeQueue(queued=queued))
@@ -107,6 +122,9 @@ class ContainerMainTests(unittest.TestCase):
         app.queue = queue or FakeQueue()
         from local_runner.observability import ObservabilityHub
         app.hub = ObservabilityHub(self.root, owner=app.owner)
+        app.retention_service = container_main.RetentionService(
+            app.hub, app.queue, {'storage_root': str(self.root)}, owner=app.owner,
+            call=lambda argv: self.fail('Unexpected Docker call from retention fixture'))
         app._lifecycle_lock = threading.RLock()
         app._worker_thread = None
         app._worker_state = "starting"
@@ -656,7 +674,7 @@ class ContainerMainTests(unittest.TestCase):
         self.assertEqual(1773000010.0, detail["started_at"])
         self.assertEqual(1773000050.0, detail["finished_at"])
 
-    def test_overview_last_cleanup_honest_zero_reclaimed_when_not_applied(self):
+    def test_overview_last_cleanup_does_not_present_estimate_as_measured_reclaim(self):
         app = self.app(FakeQueue(jobs=[]))
         app.health = lambda: {
             "ok": True,
@@ -677,7 +695,7 @@ class ContainerMainTests(unittest.TestCase):
         }
         ov = app.overview()
         self.assertEqual(4096, ov["last_cleanup"]["estimated_reclaimed_bytes"])
-        self.assertEqual(0, ov["last_cleanup"]["reclaimed_bytes"])
+        self.assertIsNone(ov["last_cleanup"]["reclaimed_bytes"])
 
     def test_queue_summary_excludes_large_capsules_and_filters_before_paging(self):
         from local_runner.container_api import _json_bytes

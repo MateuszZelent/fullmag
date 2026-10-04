@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -159,8 +160,8 @@ def _read_json(path: Path) -> Mapping[str, Any]:
     return value
 
 
-def _safe_execution_bytes(root: Path) -> int:
-    """Count regular files below ``root`` without crossing links or mounts."""
+def inspect_execution(root: Path) -> dict[str, Any]:
+    """Bind a private tree to its no-follow metadata inventory, not link targets."""
 
     try:
         root_info = os.lstat(root)
@@ -172,6 +173,9 @@ def _safe_execution_bytes(root: Path) -> int:
         raise _PathIssue("invalid_execution_tree")
     root_device = getattr(root_info, "st_dev", None)
     total = 0
+    fingerprint = hashlib.sha256()
+    files = 0
+    links = 0
     pending = [root]
     while pending:
         current = pending.pop()
@@ -179,14 +183,25 @@ def _safe_execution_bytes(root: Path) -> int:
             entries = list(os.scandir(current))
         except OSError as error:
             raise _PathIssue("unreadable_execution_tree") from error
-        for entry in entries:
+        for entry in sorted(entries, key=lambda item: item.name):
             path = Path(entry.path)
             try:
                 info = entry.stat(follow_symlinks=False)
             except OSError as error:
                 raise _PathIssue("unreadable_execution_tree") from error
-            if stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT):
-                raise _PathIssue("unsafe_execution_tree")
+            record = [path.relative_to(root).as_posix(), info.st_mode, info.st_size,
+                      info.st_mtime_ns, info.st_ctime_ns, info.st_ino]
+            fingerprint.update(json.dumps(record, ensure_ascii=True).encode("ascii") + b"\n")
+            if stat.S_ISLNK(info.st_mode):
+                links += 1
+                continue
+            if bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT):
+                # A junction is a leaf for cleanup. Unknown reparse providers
+                # (for example offline/cloud files) require explicit support.
+                if getattr(info, "st_reparse_tag", None) not in (0xA0000003, 0xA000000C):
+                    raise _PathIssue("unsafe_execution_tree")
+                links += 1
+                continue
             if stat.S_ISDIR(info.st_mode):
                 # A mount placed inside an execution tree is outside the exact
                 # job directory even when it is not represented as a symlink.
@@ -195,15 +210,22 @@ def _safe_execution_bytes(root: Path) -> int:
                 # while ``lstat`` reports the volume identity.  Device-boundary
                 # protection is meaningful on POSIX; reparse checks above are
                 # the corresponding Windows boundary.
-                if (os.name != "nt" and root_device is not None
+                if os.path.ismount(path) or (os.name != "nt" and root_device is not None
                         and entry_device not in (None, 0, root_device)):
                     raise _PathIssue("unsafe_execution_tree")
                 pending.append(path)
             elif stat.S_ISREG(info.st_mode):
                 total += info.st_size
+                files += 1
             else:
                 raise _PathIssue("unsafe_execution_tree")
-    return total
+    return {"logical_bytes": total, "files": files, "links": links,
+            "fingerprint": fingerprint.hexdigest(),
+            "root_device": root_info.st_dev, "root_inode": root_info.st_ino}
+
+
+def _safe_execution_bytes(root: Path) -> int:
+    return inspect_execution(root)["logical_bytes"]
 
 
 def _record(*, job_id: str | None, worktree_id: str | None, state: str | None,
@@ -378,7 +400,8 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
         expiry = timestamp + float(hours) * 3600
 
         try:
-            size = _safe_execution_bytes(execution)
+            inventory = inspect_execution(execution)
+            size = inventory["logical_bytes"]
         except _PathIssue as issue:
             retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
                                     execution=execution, container_id=container_id,
@@ -401,6 +424,8 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
         candidate = _record(job_id=job_id, worktree_id=worktree_id, state=state,
                             execution=execution, container_id=container_id,
                             reason=f"{state}_expired", expiry=expiry, size=size)
+        candidate["tree_identity"] = inventory
+        candidate["source_digest"] = raw["source_digest"]
         candidates.append(candidate)
         candidate_bytes += size
         retained_bytes -= size

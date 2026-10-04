@@ -1,6 +1,7 @@
 """Small Docker Engine adapter over the coordinator-only Unix socket."""
 import http.client
 import json
+import re
 import socket
 import struct
 from urllib.parse import urlencode, quote
@@ -83,7 +84,7 @@ def create_payload(argv):
     return name, config
 
 
-def decode_logs(content):
+def decode_logs(content, *, errors='replace'):
     output = bytearray()
     while content:
         if len(content) < 8 or content[0] not in (0, 1, 2) or content[1:4] != b'\0\0\0':
@@ -93,7 +94,7 @@ def decode_logs(content):
             raise CoordinatorError('Truncated Docker log frame')
         output.extend(content[8:8 + length])
         content = content[8 + length:]
-    return output.decode('utf-8', errors='replace')
+    return output.decode('utf-8', errors=errors)
 
 
 def _stats_container_id(argv):
@@ -161,6 +162,14 @@ def docker(argv):
     if argv[0] == 'stop' and argv[1:3] == ['--time', '10'] and len(argv) == 4:
         engine('POST', '/containers/' + quote(argv[3], safe='') + '/stop?t=10')
         return argv[3]
+    if argv[0] == 'rm' and len(argv) == 2 and re.fullmatch(r'[a-f0-9]{64}', argv[1]):
+        # Exact attested exited worker only; Docker also refuses a live worker.
+        engine('DELETE', '/containers/' + argv[1] + '?force=false&v=false')
+        return argv[1]
+    if argv[0] == 'logs' and len(argv) == 2 and re.fullmatch(r'[a-f0-9]{64}', argv[1]):
+        # The bound in engine still fails closed for oversized logs. Never
+        # silently keep a tail when retention is preserving complete logs.
+        return decode_logs(engine('GET', '/containers/' + argv[1] + '/logs?stdout=1&stderr=1&tail=all'), errors='strict')
     if argv[0] == 'logs' and argv[1] == '--tail' and len(argv) == 4 and argv[2].isdigit():
         return decode_logs(engine('GET', '/containers/' + quote(argv[3], safe='') + '/logs?' + urlencode({'stdout': 1, 'stderr': 1, 'tail': min(int(argv[2]), 3000)})))
     if argv[0] == 'info':

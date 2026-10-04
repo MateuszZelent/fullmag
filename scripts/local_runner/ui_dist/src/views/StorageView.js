@@ -11,6 +11,8 @@ export function renderStorageView(container) {
   let storageLoadGeneration = 0;
   let storageLoadPromise = null;
   let destroyed = false;
+  let planObservation = 0;
+  const savedPlanKey = 'fullmag-runner-retention-plan';
 
   container.innerHTML = `
     <div class="view-container storage-view">
@@ -33,7 +35,8 @@ export function renderStorageView(container) {
             <span class="section-subtitle" id="plan-metadata"></span>
           </div>
           <div>
-            <button class="btn btn-secondary btn-sm" id="btn-apply-plan">⚡ Wykonaj plan (Tryb podglądu / Preview)</button>
+            <button class="btn btn-secondary btn-sm" id="btn-plan-refresh">Odśwież wynik operacji</button>
+            <button class="btn btn-secondary btn-sm" id="btn-apply-plan" disabled>Usuń wskazane kopie robocze</button>
           </div>
         </div>
         <div id="plan-content-container"></div>
@@ -68,13 +71,16 @@ export function renderStorageView(container) {
 
   // Attach button actions
   container.querySelector('#btn-storage-refresh')?.addEventListener('click', () => loadStorageData());
+  container.querySelector('#btn-plan-refresh')?.addEventListener('click', async () => {
+    if (!activePlan?.plan_id) return;
+    try { await observePlan(await api.getRetentionPlan(activePlan.plan_id)); }
+    catch (err) { alert(`Nie udało się odczytać operacji ${activePlan.plan_id}: ${err.message}`); }
+  });
   container.querySelector('#btn-create-plan')?.addEventListener('click', async () => {
     const btn = container.querySelector('#btn-create-plan');
     if (btn) btn.disabled = true;
     try {
-      const plan = await api.createRetentionPlan();
-      activePlan = plan;
-      renderPlan(plan);
+      activePlan = await observePlan(await api.createRetentionPlan());
     } catch (err) {
       alert('Błąd generowania planu: ' + err.message);
     } finally {
@@ -84,13 +90,17 @@ export function renderStorageView(container) {
 
   container.querySelector('#btn-apply-plan')?.addEventListener('click', async () => {
     if (!activePlan) return;
-    if (confirm(`Czy na pewno wykonać plan retencji ${activePlan.plan_id}? Operacja jest restartowalna i bezpieczna.`)) {
+    if (activePlan.status !== 'preview') return;
+    if (confirm(`Usunąć wskazane kopie robocze z planu ${activePlan.plan_id}? Przed usunięciem ponownie sprawdzimy ich użycie. Wyniki, źródła i cache pozostaną zachowane.`)) {
+      const btn = container.querySelector('#btn-apply-plan');
+      if (btn) btn.disabled = true;
       try {
-        const res = await api.applyRetentionPlan(activePlan.plan_id);
+        const res = await observePlan(await api.applyRetentionPlan(activePlan.plan_id));
+        if (destroyed) return;
         if (res && res.status === 'preview_only') {
           alert(`Tryb podglądu (Preview): ${res.message || 'Wykonawca automatycznego usuwania nie jest włączony.'}`);
           activePlan.status = 'preview_only';
-          renderPlan();
+          renderPlan(activePlan);
           return;
         }
         if (!res || res.applied !== true) {
@@ -98,13 +108,32 @@ export function renderStorageView(container) {
           alert('Błąd wykonania retencji: ' + errMsg);
           return;
         }
-        alert(res.message || 'Plan retencji został pomyślnie wykonany w trybie bezpiecznym.');
+        alert(`Usunięto kopie robocze o rozmiarze logicznym ${formatBytes(res.removed_logical_bytes)}. Zmiana wolnego miejsca: ${formatBytes(res.disk_free_change_bytes)}. Pomiar miejsca może obejmować równoległe zapisy innych programów.`);
         loadStorageData();
       } catch (err) {
         alert('Błąd wykonania retencji: ' + err.message);
       }
     }
   });
+
+  async function observePlan(initial) {
+    const observation = ++planObservation;
+    let current = initial;
+    while (!destroyed && observation === planObservation) {
+      activePlan = activePlan?.plan_id === current.plan_id ? { ...activePlan, ...current } : current;
+      if (current.plan_id) {
+        try { sessionStorage.setItem(savedPlanKey, current.plan_id); } catch (_) { /* Storage may be disabled. */ }
+      }
+      renderPlan(activePlan);
+      if (!['planning', 'accepted', 'running'].includes(current.status)) return activePlan;
+      // Poll the same operation. A network error preserves its ID and never
+      // retries the mutation or creates a replacement plan.
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      if (destroyed || observation !== planObservation) return activePlan;
+      current = await api.getRetentionPlan(current.plan_id);
+    }
+    return activePlan;
+  }
 
   function loadStorageData() {
     if (destroyed) return Promise.resolve();
@@ -325,12 +354,22 @@ export function renderStorageView(container) {
     if (!sec || !content) return;
 
     sec.style.display = 'block';
-    meta.textContent = `ID: ${plan.plan_id} • Polityka v${plan.policy_version} • Data: ${formatTimestamp(plan.created_at)}`;
+    meta.textContent = `ID: ${plan.plan_id} • Status: ${plan.status} • Data: ${formatTimestamp(plan.created_at)}`;
+    const applyButton = container.querySelector('#btn-apply-plan');
+    if (applyButton) applyButton.disabled = plan.status !== 'preview' || !plan.candidates_count;
+    if (['planning', 'accepted', 'running'].includes(plan.status)) {
+      content.textContent = plan.status === 'planning'
+        ? 'Trwa przygotowanie wykazu. Żadne dane nie są jeszcze usuwane.'
+        : 'Trwa sprawdzanie i sprzątanie. Wynik zostanie zapisany dla tego identyfikatora operacji.';
+      return;
+    }
 
     content.innerHTML = `
+      ${plan.error ? `<p class="error-box">${escapeHtml(plan.error)}</p>` : ''}
+      ${plan.items ? `<h3>Wynik wykonania</h3><ul>${plan.items.map(item => `<li>${escapeHtml(item.job_id)}: ${escapeHtml(item.status)} ${escapeHtml(item.reason || '')}</li>`).join('')}</ul>` : ''}
       <div class="plan-summary-grid">
         <div class="plan-summary-box">
-          <span class="plan-box-label">Szacowane zwolnione miejsce:</span>
+          <span class="plan-box-label">Rozmiar logiczny kandydatów (estymata):</span>
           <span class="plan-box-val text-success font-mono font-bold">${formatBytes(plan.estimated_reclaimed_bytes)}</span>
         </div>
         <div class="plan-summary-box">
@@ -454,6 +493,16 @@ export function renderStorageView(container) {
   }
 
   loadStorageData();
+  try {
+    const savedId = sessionStorage.getItem(savedPlanKey);
+    if (savedId && /^plan-[a-f0-9]{8,32}$/.test(savedId)) {
+      activePlan = { plan_id: savedId, status: 'reconnecting' };
+      renderPlan(activePlan);
+      api.getRetentionPlan(savedId).then(observePlan).catch(error => {
+        if (!destroyed) renderPlan({ ...activePlan, error: `Nie udało się odczytać zapisanego wyniku: ${error.message}` });
+      });
+    }
+  } catch (_) { /* Browser storage availability does not gate the API. */ }
 
   return {
     update: () => {

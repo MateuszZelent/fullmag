@@ -166,9 +166,10 @@ class RetentionPlanTests(unittest.TestCase):
 
         result = plan(self.storage, [job], self.now)
 
-        self.assertEqual([], result["candidates"])
-        self.assertEqual("unsafe_execution_tree", result["retained"][0]["reason"])
-        self.assertEqual(0, result["space"]["candidate_bytes"])
+        self.assertEqual([], result["retained"])
+        self.assertEqual(1, result["candidates"][0]["tree_identity"]["links"])
+        self.assertEqual(5, result["space"]["candidate_bytes"])
+        self.assertEqual(b"outside bytes", outside.read_bytes())
 
     def test_reparse_run_component_is_not_accepted(self):
         job = self._job("redirected")

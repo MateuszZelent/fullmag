@@ -292,6 +292,10 @@ class RunnerAPI {
     });
   }
 
+  async getRetentionPlan(planId) {
+    return await this.request(`/api/v1/retention/plans/${encodeURIComponent(planId)}`);
+  }
+
   async pinResource(resourceId, pinned, reason = '') {
     return await this.request(`/api/v1/resources/${encodeURIComponent(resourceId)}/pin`, {
       method: 'POST',

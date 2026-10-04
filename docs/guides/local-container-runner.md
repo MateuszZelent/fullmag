@@ -109,6 +109,39 @@ Zdrowie API i stan wykonawcy są oddzielne: sprawdzaj `accepting_jobs`,
 
 ## Dane, zakończenie i retencja
 
+### Sprzątanie prywatnych kopii wykonania
+
+Koordynator udostępnia nieblokujące operacje: `POST /api/v1/retention/plans`
+zwraca `plan_id` i `planning`; `GET /api/v1/retention/plans/<plan_id>` odczytuje
+ten sam plan; `POST /api/v1/retention/plans/<plan_id>/apply` zwraca ACK
+`accepted`. Po timeoutcie klient odczytuje istniejący identyfikator zamiast
+ponawiać mutację. Raporty pozostają w `index/retention-plans` i
+`index/retention-operations`. Restart z nieznanym wynikiem daje
+`interrupted_unknown`, a błąd częściowy `partial`, bez deklaracji pełnego sukcesu.
+
+Wykonawca obejmuje wyłącznie dokładne `runs/<worktree>/<job>/execution`.
+Sprawdza ponownie queue/journal/receipt, digest źródeł, zachowane artefakty,
+piny, blokady, znaczniki właścicieli, tożsamość drzewa i wszystkie bind mounty.
+Wiążące blokady chronią zarządzanych użytkowników; procesy uruchamiane poza
+zarządzanymi launcherami wymagają osobnej kontroli operatora przed cleanupem.
+Link wewnątrz drzewa jest usuwany jako link, bez przechodzenia do celu.
+Zakończony kontener własnego joba może zostać usunięty bez `force` i bez wolumenów
+dopiero po zapisaniu wszystkich dostępnych logów w `worker-full.log` z hashem.
+Niepoprawne UTF-8 lub przekroczenie limitu odpowiedzi Docker zatrzymuje ten krok.
+
+Polityka `mode=automatic` włącza ten sam wykonawca pomiędzy buildami; domyślnie
+pozostaje `preview`. Drain zatrzymuje przyjmowanie nowych operacji, a wymiana
+koordynatora wymaga także zakończenia już przyjętej retencji. TTL źródeł,
+logów i niezweryfikowanych stagingów nie jest wykonywany i jest nieaktywny w UI.
+Rozmiar logiczny usuniętych drzew oraz zmiana wolnego miejsca są osobnymi polami;
+zmiana miejsca może obejmować pracę innych programów i nie jest przypisywana
+w całości retencji.
+
+Stan wdrożenia i dowody:
+[plan retencji](../superpowers/plans/2026-10-05-runner-storage-retention.md),
+[ADR 0052](../adr/0052-runner-storage-retention.md). Obecność kodu nie dowodzi
+aktualizacji uruchomionego koordynatora.
+
 - `storage/runs/<worktree-id>/<capture-id>/source`: kapsuła readonly.
 - `storage/runs/<worktree-id>/<job-id>/execution`: prywatna kopia robocza.
 - `storage/runs/<worktree-id>/<job-id>/artifacts`: logi, receipt i wybrane wyniki.

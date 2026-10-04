@@ -46,17 +46,17 @@ export function renderPoliciesView(container) {
       card.innerHTML = `
         <form id="policy-form" class="policy-form">
           <div class="alert-box alert-warning" style="margin-bottom: 1.5rem; padding: 0.75rem 1rem; border-left: 4px solid var(--warning); background: rgba(245, 158, 11, 0.1);">
-            <strong>Tryb działania:</strong> Automatyczny harmonogram usuwania danych (Automatic Mode) jest obecnie wyłączony. Wszystkie operacje retencji działają w bezpiecznym trybie podglądu (Preview).
+            <strong>Tryb działania:</strong> ${escapeHtml(currentPolicy.notice || 'Sprawdź dostępność wykonawcy retencji.')}
           </div>
           <div class="form-row">
             <div class="form-group">
               <label class="form-label">Tryb działania retencji (Execution Mode):</label>
               <select id="pol-mode" class="form-select">
-                <option value="preview" selected>
-                  Preview (Tylko audytowalny podgląd, bez usuwania plików)
+                <option value="preview" ${currentPolicy.mode === 'preview' ? 'selected' : ''}>
+                  Podgląd i ręczne wykonanie planu
                 </option>
-                <option value="automatic" disabled>
-                  Tryb automatyczny niedostępny (wyłącznie podgląd)
+                <option value="automatic" ${currentPolicy.mode === 'automatic' ? 'selected' : ''} ${currentPolicy.automatic_mode_available ? '' : 'disabled'}>
+                  ${currentPolicy.automatic_mode_available ? 'Automatyczne sprzątanie zakończonych execution' : 'Tryb automatyczny niedostępny'}
                 </option>
               </select>
               <span class="form-hint">Domyślnie włączony jest bezpieczny tryb podglądu (preview).</span>
@@ -79,26 +79,26 @@ export function renderPoliciesView(container) {
 
             <div class="form-group">
               <label class="form-label">Osierocone katalogi staging (godz.):</label>
-              <input type="number" id="pol-ttl-orphan" class="form-input" value="${currentPolicy.ttl_orphan_hours || 24}" min="1" max="720" />
-              <span class="form-hint">Domyślnie 24 godziny od zakończenia.</span>
+              <input type="number" id="pol-ttl-orphan" class="form-input" value="${currentPolicy.ttl_orphan_hours || 24}" disabled />
+              <span class="form-hint">Nieaktywny zakres. Niezweryfikowane katalogi są zachowywane.</span>
             </div>
 
             <div class="form-group">
               <label class="form-label">Kapsuły źródeł (godz.):</label>
-              <input type="number" id="pol-ttl-sources" class="form-input" value="${currentPolicy.ttl_sources_hours || 168}" min="24" max="720" />
-              <span class="form-hint">Domyślnie 7 dni.</span>
+              <input type="number" id="pol-ttl-sources" class="form-input" value="${currentPolicy.ttl_sources_hours || 168}" disabled />
+              <span class="form-hint">Źródła i manifesty są zachowywane; pliki mogą współdzielić zawartość.</span>
             </div>
 
             <div class="form-group">
               <label class="form-label">Historia logów kompilacji (dni):</label>
-              <input type="number" id="pol-ttl-logs" class="form-input" value="${currentPolicy.ttl_logs_days || 30}" min="1" max="365" />
-              <span class="form-hint">Domyślnie 30 dni.</span>
+              <input type="number" id="pol-ttl-logs" class="form-input" value="${currentPolicy.ttl_logs_days || 30}" disabled />
+              <span class="form-hint">Logi i raporty wykonania pozostają zachowane.</span>
             </div>
 
             <div class="form-group">
               <label class="form-label">Minimalna liczba zachowanych artefaktów na profil:</label>
-              <input type="number" id="pol-min-artifacts" class="form-input" value="${currentPolicy.min_artifacts_to_keep || 3}" min="1" max="20" />
-              <span class="form-hint">Domyślnie minimum 3 sukcesy.</span>
+              <input type="number" id="pol-min-artifacts" class="form-input" value="${currentPolicy.min_artifacts_to_keep || 3}" min="1" max="20" disabled />
+              <span class="form-hint">Retencja pakietów runtime wymaga osobnej weryfikacji odwołań.</span>
             </div>
           </div>
 
@@ -144,19 +144,15 @@ export function renderPoliciesView(container) {
     if (!card) return;
 
     const chosenMode = card.querySelector('#pol-mode')?.value;
-    if (chosenMode === 'automatic') {
+    if (chosenMode === 'automatic' && !currentPolicy.automatic_mode_available) {
       alert('Tryb automatyczny niedostępny (wyłącznie podgląd). Harmonogram usuwania w tle nie jest włączony.');
       return;
     }
 
     const payload = {
-      mode: 'preview',
+      mode: chosenMode,
       ttl_success_hours: parseInt(card.querySelector('#pol-ttl-success')?.value, 10) || 24,
       ttl_failure_hours: parseInt(card.querySelector('#pol-ttl-failure')?.value, 10) || 168,
-      ttl_orphan_hours: parseInt(card.querySelector('#pol-ttl-orphan')?.value, 10) || 24,
-      ttl_sources_hours: parseInt(card.querySelector('#pol-ttl-sources')?.value, 10) || 168,
-      ttl_logs_days: parseInt(card.querySelector('#pol-ttl-logs')?.value, 10) || 30,
-      min_artifacts_to_keep: parseInt(card.querySelector('#pol-min-artifacts')?.value, 10) || 3,
       disk_warning_threshold_gib: parseInt(card.querySelector('#pol-warn-gib')?.value, 10) || 30,
       disk_critical_threshold_gib: parseInt(card.querySelector('#pol-crit-gib')?.value, 10) || 10,
       min_free_space_gib: parseInt(card.querySelector('#pol-min-free')?.value, 10) || 8,
