@@ -8,6 +8,42 @@ NOT VERIFIED. Utrata ACK wymaga potwierdzonego exit własnego API i zgodnego
 trwałego rekordu; nie upoważnia do ponowienia commit ani zwolnienia fence.
 Data: 03.10.2026.
 
+### Zakończenie cold handoff — dziennik i admission
+
+Zakończenie wymaga przypiętego starego commit, potwierdzonego exit starego
+procesu i prywatnego przejęcia odtworzonej sceny w nowym API. Warstwa magazynu
+nie wyprowadza tych dowodów z samego istnienia plików. Przyjmuje jawny rekord
+autoryzacji z nowym API/session ID, epoch 1, hashem sceny, target build ID
+i rzeczywistym bindingiem magazynu.
+
+Pod WRITER najpierw publikowany i potwierdzany jest
+`development/HANDOFF-COMPLETION.json`, następnie niezmienny historyczny rekord
+`development/completion-authorizations/<handoff_id>.json`. Historia oznacza
+autoryzację, nie dowód otwartego admission. Dopiero po readback obu rekordów
+można usunąć dokładny active commit i fence. Pending journal jest usuwany
+ostatni; jego usunięcie jest granicą ponownego otwarcia admission.
+Prepare i finish utrzymują również kernelowe rezerwacje launch/startup
+w kolejności launch → startup → WRITER, aby service nie rozpoczął startu
+między sprawdzeniem admission a publikacją swojego owner record.
+
+Compute, preparation i service startup odmawiają admission przy dowolnym
+pending journal, active commit lub fence, także uszkodzonym. Zwykły abort
+i nowe przejęcie fence nie mogą ominąć pending journal. Każdy etap usuwania
+stosuje dostępne bariery platformy. Power-loss Windows pozostaje NOT VERIFIED.
+Przerwanie wymaga jawnego finish z tym samym pełnym rekordem; nie stosuje się
+timeoutu jako zgody na zdjęcie blokady. Finish odmawia zmiany obcego lub
+nowszego commit/fence. Powtórzenie po zakończeniu jest tylko odczytem historii
+i wymaga braku nowych active markers.
+Jeżeli usunięcie pending już nastąpiło, ale końcowa bariera katalogu zawiedzie,
+wynik otwarcia admission jest nieznany; nie wolno twierdzić, że pending nadal
+istnieje. Jawne uzgodnienie bez active markers ponownie potwierdza historię
+i dostępną barierę katalogu. Nie odtwarza automatycznie fence ani nowego commit.
+
+Primitive magazynu oraz 13 natywnych kontroli przerwań/replay i dwóch cykli
+potwierdzono w [P8-53AD](../plans/active/refactor_runtime/final/p8/53ad-completion-journal-and-repeated-store-cycle.md).
+Podłączenie live owner completion pozostaje w realizacji.
+Nie udostępnia to jeszcze restartu w UI ani warm-service completion.
+
 ## Kontekst
 
 Jedno `just windows-ui dev` ma uruchamiać frontend z HMR i przyrostową

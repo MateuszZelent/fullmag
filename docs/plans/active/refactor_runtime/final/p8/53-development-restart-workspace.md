@@ -1,5 +1,11 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AD](53ad-completion-journal-and-repeated-store-cycle.md) dodaje trwały
+dziennik zakończenia i odmowę admission przy częściowym retirement. Produkcyjny
+primitive przeszedł dwa cykle magazynu i 13 nowych kontroli; cała natywna
+bramka: 199 sprawdzeń, 60 odebranych procesów. Live owner completion oraz
+odtworzenie UI pozostają do podłączenia.
+
 [P8-53AC](53ac-lost-ack-and-candidate-restore.md) potwierdza natywne uzgodnienie
 zatwierdzenia po utracie ACK oraz odtworzenie sceny w nowym API kandydata.
 186 kontroli przeszło; wszystkie 60 procesów sondy odebrano. Fence pozostaje

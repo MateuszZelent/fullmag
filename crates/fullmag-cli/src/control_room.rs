@@ -3014,6 +3014,7 @@ pub(crate) fn verify_development_handoff_commit(
     {
         bail!("corrupt commit publication did not retain its durable fence");
     }
+    let completion_checks = verify_development_completion_storage(&reopened, &record)?;
     println!(
         "{}",
         serde_json::json!({
@@ -3022,9 +3023,227 @@ pub(crate) fn verify_development_handoff_commit(
             "repeat_refused":true,"abort_release_refused":true,"reopen_preserved":true,
             "corrupt_publication_refused":true,"corrupt_abort_release_refused":true,
             "record_sha256":fullmag_session::canonical_json_sha256(&serde_json::to_value(&record)?),
+            "completion_storage_checks":completion_checks,
         })
     );
     Ok(())
+}
+
+/// Exercise the production journal only in the explicitly managed disposable
+/// commit fixture. These synthetic pins do not prove live replacement readiness.
+fn verify_development_completion_storage(
+    store: &fullmag_session::SessionStore,
+    commit: &fullmag_session::store::DevelopmentHandoffCommit,
+) -> Result<Vec<&'static str>> {
+    use fullmag_session::store::DevelopmentReplacementIdentity;
+    let replacement = DevelopmentReplacementIdentity {
+        api_instance_id: uuid::Uuid::new_v4().to_string(),
+        session_id: "completion-fixture-session".into(),
+        session_epoch: 1,
+        scene_document_sha256: "c".repeat(64),
+        target_build_id: commit.target_build_id.clone(),
+        accepted_store_binding: commit.accepted_store_binding.clone(),
+    };
+    for change in 0..5 {
+        let mut invalid = replacement.clone();
+        match change {
+            0 => invalid.api_instance_id = commit.api_instance_id.clone(),
+            1 => invalid.session_epoch = 0,
+            2 => invalid.scene_document_sha256 = "invalid".into(),
+            3 => invalid.target_build_id = "d".repeat(64),
+            _ => invalid.accepted_store_binding = "e".repeat(64),
+        }
+        if store
+            .prepare_development_handoff_completion(commit, &invalid)
+            .is_ok()
+            || store.read_development_handoff_completion()?.is_some()
+        {
+            bail!("invalid development completion identity was published");
+        }
+    }
+    let launch =
+        fullmag_session::runtime_service::RuntimeServiceLaunchGuard::try_acquire(store.root())?
+            .context("completion fixture launch guard is already held")?;
+    if store
+        .prepare_development_handoff_completion(commit, &replacement)
+        .is_ok()
+        || store.read_development_handoff_completion()?.is_some()
+    {
+        bail!("completion ignored an active launch reservation");
+    }
+    drop(launch);
+    let startup =
+        fullmag_session::runtime_service_startup::RuntimeServiceStartupGuard::try_acquire(
+            store.root(),
+        )?
+        .context("completion fixture startup guard is already held")?;
+    if store
+        .prepare_development_handoff_completion(commit, &replacement)
+        .is_ok()
+        || store.read_development_handoff_completion()?.is_some()
+    {
+        bail!("completion ignored an active direct startup reservation");
+    }
+    drop(startup);
+    let authorization = store.prepare_development_handoff_completion(commit, &replacement)?;
+    if store.prepare_development_handoff_completion(commit, &replacement)? != authorization
+        || store.assert_development_admission_open().is_ok()
+        || store.release_development_idle_fence(&commit.fence).is_ok()
+        || store
+            .acquire_development_idle_fence("other-owner", "other-nonce")
+            .is_ok()
+    {
+        bail!("pending completion did not retain its admission gates");
+    }
+    let mut foreign = authorization.clone();
+    foreign.replacement.api_instance_id = uuid::Uuid::new_v4().to_string();
+    if store
+        .finish_development_handoff_completion(&foreign)
+        .is_ok()
+        || store.read_development_handoff_completion()?.as_ref() != Some(&authorization)
+    {
+        bail!("foreign completion changed the pending authorization");
+    }
+    let history_relative = format!(
+        "development/completion-authorizations/{}.json",
+        commit.handoff_id
+    );
+    let history = fullmag_session::repository_path::checked_path(store.root(), &history_relative)?;
+    let original_history = std::fs::read(&history)?;
+    std::fs::write(&history, b"{corrupt fixture history")?;
+    if store
+        .prepare_development_handoff_completion(commit, &replacement)
+        .is_ok()
+        || store
+            .finish_development_handoff_completion(&authorization)
+            .is_ok()
+        || std::fs::read(&history)? != b"{corrupt fixture history"
+        || store.assert_development_admission_open().is_ok()
+    {
+        bail!("corrupt completion history was overwritten or opened admission");
+    }
+    std::fs::write(&history, original_history)?; // Restore only the fixture's own bytes.
+                                                 // Simulate interruption between pending and history publication. Only the
+                                                 // fixture's own history is removed; prepare must recover from exact pending.
+    std::fs::remove_file(&history)?;
+    if store
+        .finish_development_handoff_completion(&authorization)
+        .is_ok()
+        || store.assert_development_admission_open().is_ok()
+        || store.prepare_development_handoff_completion(commit, &replacement)? != authorization
+    {
+        bail!("missing completion history was not recovered explicitly");
+    }
+    // Simulate both retirement boundaries. Pending alone must still fence all
+    // work and service startup after a process/store reopen.
+    let commit_path = fullmag_session::repository_path::checked_path(
+        store.root(),
+        "development/HANDOFF-COMMIT.json",
+    )?;
+    std::fs::remove_file(&commit_path)?;
+    if store.assert_development_admission_open().is_ok() {
+        bail!("commit retirement reopened admission early");
+    }
+    let fence_path = fullmag_session::repository_path::checked_path(
+        store.root(),
+        "development/ADMISSION-FENCE.json",
+    )?;
+    std::fs::remove_file(&fence_path)?;
+    let reopened = fullmag_session::SessionStore::open_existing(store.root().to_path_buf())?;
+    if reopened.assert_development_admission_open().is_ok()
+        || fullmag_session::runtime_service::RuntimeServiceOwner::acquire(
+            &reopened,
+            "completion-probe",
+        )
+        .is_ok()
+    {
+        bail!("pending journal alone did not fence admission and service startup");
+    }
+    reopened.finish_development_handoff_completion(&authorization)?;
+    reopened.assert_development_admission_open()?;
+    let history_bytes = std::fs::read(&history)?;
+    if reopened.read_development_handoff_commit()?.is_some()
+        || reopened.read_development_idle_fence()?.is_some()
+        || reopened.read_development_handoff_completion()?.is_some()
+        || reopened.finish_development_handoff_completion(&authorization)? != authorization
+        || std::fs::read(&history)? != history_bytes
+    {
+        bail!("completion did not preserve immutable history and reopen admission");
+    }
+    let pending_path = fullmag_session::repository_path::checked_path(
+        store.root(),
+        "development/HANDOFF-COMPLETION.json",
+    )?;
+    let mut malformed = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pending_path)?;
+    malformed.write_all(b"{interrupted completion fixture")?;
+    malformed.sync_all()?;
+    drop(malformed);
+    if reopened.assert_development_admission_open().is_ok()
+        || reopened
+            .acquire_development_idle_fence("other-owner", "other-nonce")
+            .is_ok()
+        || reopened
+            .finish_development_handoff_completion(&authorization)
+            .is_ok()
+    {
+        bail!("malformed pending completion was treated as open admission");
+    }
+    std::fs::remove_file(&pending_path)?; // Only this deliberately malformed fixture.
+    let next_fence = reopened.acquire_development_idle_fence(
+        &uuid::Uuid::new_v4().simple().to_string(),
+        &uuid::Uuid::new_v4().to_string(),
+    )?;
+    if reopened
+        .finish_development_handoff_completion(&authorization)
+        .is_ok()
+        || reopened.read_development_idle_fence()?.as_ref() != Some(&next_fence)
+    {
+        bail!("old completion affected a newer restart fence");
+    }
+    let next = reopened.accept_development_handoff(
+        &next_fence,
+        &replacement.api_instance_id,
+        &uuid::Uuid::new_v4().to_string(),
+        &"f".repeat(64),
+        &commit.target_build_id,
+        &commit.accepted_store_binding,
+    )?;
+    let mut next_replacement = replacement;
+    next_replacement.api_instance_id = uuid::Uuid::new_v4().to_string();
+    next_replacement.session_id = "completion-fixture-second-session".into();
+    let next_authorization =
+        reopened.prepare_development_handoff_completion(&next, &next_replacement)?;
+    reopened.finish_development_handoff_completion(&next_authorization)?;
+    reopened.assert_development_admission_open()?;
+    if reopened
+        .read_development_handoff_completion_authorization(&commit.handoff_id)?
+        .as_ref()
+        != Some(&authorization)
+        || reopened
+            .read_development_handoff_completion_authorization(&next.handoff_id)?
+            .as_ref()
+            != Some(&next_authorization)
+    {
+        bail!("repeated restart did not preserve both authorization records");
+    }
+    Ok(vec![
+        "invalid-replacement-refused",
+        "startup-reservation-refused",
+        "pending-admission-and-abort-fenced",
+        "foreign-finish-refused",
+        "corrupt-history-preserved",
+        "missing-history-explicit-recovery",
+        "commit-retirement-still-fenced",
+        "pending-only-reopen-and-startup-fenced",
+        "partial-retirement-explicit-finish",
+        "idempotent-readonly-finish",
+        "malformed-pending-refused",
+        "newer-restart-preserved",
+        "two-complete-store-cycles",
+    ])
 }
 
 /// Managed verifier only: drain the explicitly selected isolated service.
@@ -3174,7 +3393,7 @@ pub(crate) fn verify_development_cold_idle(config_path: &Path) -> Result<()> {
     proof.verify_current()?;
     drop(proof);
     let fenced =
-        blocked_start("runtime service startup refused while development admission is fenced")?;
+        blocked_start("runtime service startup refused while development admission is closed")?;
     let store = fullmag_session::SessionStore::open_existing(config.store_root.clone())?;
     if store.read_development_idle_fence()?.as_ref() != Some(&fence) {
         bail!("cold idle fixture lost the durable fence after reservation drop");

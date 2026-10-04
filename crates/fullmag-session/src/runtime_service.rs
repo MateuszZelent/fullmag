@@ -109,9 +109,9 @@ impl RuntimeServiceOwner {
         let Some(_startup_guard) = RuntimeServiceStartupGuard::try_acquire(store.root())? else {
             bail!("runtime service startup is reserved by another operation");
         };
-        if store.read_development_idle_fence()?.is_some() {
-            bail!("runtime service startup refused while development admission is fenced");
-        }
+        store
+            .assert_development_admission_open()
+            .context("runtime service startup refused while development admission is closed")?;
 
         let lock_path = create_parent(store.root(), RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
         let descriptor_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;

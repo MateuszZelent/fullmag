@@ -60,7 +60,7 @@ def run(repo_root: str) -> int:
                    "build_snapshot_sha256": manifest["source_snapshot_sha256"],
                    "build_commit": manifest["git_commit"],
                    "started_at": storage.now(), "checks": [], "processes": [],
-                   "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten authoring restore, empty-service terminal drain; no UI hydration, compute reopening, solver or release qualification"}
+                   "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten authoring restore, interrupted store completion journals and repeated store cycles, empty-service terminal drain; no UI hydration, end-to-end compute reopening, solver or release qualification"}
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -420,6 +420,13 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
         receipt["checks"].append("handoff-commit-" + name)
     receipt["handoff_commit_fixture"] = dict(store_root=str(commit_store), corrupt_store_root=str(corrupt_store),
                                             record_sha256=frames[0]["record_sha256"])
+    expected_completion_checks = ["invalid-replacement-refused", "startup-reservation-refused", "pending-admission-and-abort-fenced",
+        "foreign-finish-refused", "corrupt-history-preserved", "missing-history-explicit-recovery", "commit-retirement-still-fenced",
+        "pending-only-reopen-and-startup-fenced", "partial-retirement-explicit-finish",
+        "idempotent-readonly-finish", "malformed-pending-refused", "newer-restart-preserved",
+        "two-complete-store-cycles"]
+    assert frames[0]["completion_storage_checks"] == expected_completion_checks
+    receipt["checks"].extend("handoff-completion-" + check for check in expected_completion_checks)
     for label, args, private_value, expected_error in (
         ("restore-cli-release", ["ui"], "1", "requires development UI without a script"),
         ("restore-cli-script", ["ui", "--dev", str(run_root / "missing-script.py")], "1", "requires development UI without a script"),

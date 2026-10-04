@@ -175,7 +175,7 @@ fn validate_lower_hex(value: &str, length: usize, field: &str) -> Result<()> {
     Ok(())
 }
 
-fn accepted_store_binding_for_root(root: &std::path::Path) -> Result<String> {
+pub(super) fn accepted_store_binding_for_root(root: &std::path::Path) -> Result<String> {
     // Preserve the existing runtime resolver's canonical-directory spelling:
     // writable_product_state_path appends the (empty) missing suffix even for
     // an existing root. Its trailing separator is part of the local binding.

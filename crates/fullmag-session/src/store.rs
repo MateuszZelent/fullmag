@@ -34,8 +34,12 @@ use crate::types::*;
 use crate::writer::{WriteTransaction, Writer};
 
 mod development_commit;
+mod development_completion;
 mod development_fence;
 pub use development_commit::DevelopmentHandoffCommit;
+pub use development_completion::{
+    DevelopmentHandoffCompletionAuthorization, DevelopmentReplacementIdentity,
+};
 pub use development_fence::DevelopmentAdmissionFence;
 
 /// Admission was refused because the durable non-terminal run backlog reached

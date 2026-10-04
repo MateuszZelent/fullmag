@@ -66,6 +66,7 @@ impl SessionStore {
         validate_token(owner_token)?;
         validate_token(nonce)?;
         let _writer = self.write_transaction()?;
+        super::development_completion::ensure_completion_pending_absent_unlocked(self)?;
         let existing = self.read_development_admission_fence_unlocked()?;
         if let Some(record) = &existing {
             if record.owner_token != owner_token || record.nonce != nonce {
@@ -98,6 +99,7 @@ impl SessionStore {
     ) -> Result<()> {
         let _writer = self.write_transaction()?;
         super::development_commit::ensure_handoff_commit_absent_unlocked(self)?;
+        super::development_completion::ensure_completion_pending_absent_unlocked(self)?;
         expected.validate()?;
         let current = self
             .read_development_admission_fence_unlocked()?
@@ -116,10 +118,19 @@ impl SessionStore {
     /// Call only with WRITER held at an admission boundary. Terminal completion
     /// and lease release must remain possible while a fence exists.
     pub(super) fn ensure_development_admission_open_unlocked(&self) -> Result<()> {
+        super::development_commit::ensure_handoff_commit_absent_unlocked(self)?;
+        super::development_completion::ensure_completion_pending_absent_unlocked(self)?;
         if self.read_development_admission_fence_unlocked()?.is_some() {
-            bail!("development admission fence is closed");
+            bail!("development admission is closed by an active fence");
         }
         Ok(())
+    }
+
+    /// Check admission under the store writer lease before a runtime service
+    /// publishes or acquires ownership metadata.
+    pub fn assert_development_admission_open(&self) -> Result<()> {
+        let _writer = self.write_transaction()?;
+        self.ensure_development_admission_open_unlocked()
     }
 
     fn read_development_admission_fence_unlocked(
