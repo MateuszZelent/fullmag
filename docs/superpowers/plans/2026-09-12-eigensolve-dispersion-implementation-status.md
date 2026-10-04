@@ -1,5 +1,21 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+<!-- raw-waveguide-mesh-checkpoint-20261004 -->
+## Aktualny checkpoint — surowy typed mesh 2D na remote
+
+Odczyt 2026-10-04T06:03:21.897124+00:00. Po zapisaniu diagnostyki EPS i porównania analitycznego Γ dodano kolejny wymagany składnik S09: surowy typ siatki przekroju. Cały cel S00–S12 pozostaje aktywny, bez nowych zaakceptowanych punktów solvera.
+
+- Źródłowy commit `940626c21dc4f48063d25da2c3f1642c90544d66`: osobny WaveguideCrossSectionMeshIR, schema v1, local nodes [m], P1 triangles, edges i skierowane half-edge incidence, region/object/material references oraz ordered contours. Obiekty i tagged region enum mają required fields i deny_unknown_fields. Local edge index przyjmuje wyłącznie integer 0,1,2. String-only schema/loop_kind odrzucają alternatywne mapy unit wariantu; tę nieścisłość poprawiono przed commitem. Nie reinterpretujemy siatki 3D.
+- Bounded source review sześciu plików bez P1/P2, parser/format nowego Rust i parser lib PASS, fixture JSON PASS, dokładnie staged nota/mapa naukowa i whitespace PASS. Przygotowano sześć regresji rzeczywistej serde; nie kompilowano ani nie uruchamiano ich zgodnie z zakazem. To nie jest dowód działania deserializera w nowym runtime.
+- Niezależny exact Fraction audit przykładu: 16 węzłów, 18 dodatnio zorientowanych trójkątów, 33 krawędzie, 2 regiony, 3 domknięte kontury i jedna składowa scalar mesh. Incidencje, mapping konturów, exact area closure, vertex fans i brak przecięć/T-junction w tym przykładzie sprawdzone; cztery uszkodzone mutacje odrzucone. Jest to audit pojedynczego fixture, nie ogólny production geometry validator, invariance certificate lub kwalifikacja FEM.
+- S09 nadal OPEN: scaled geometry/representability, pełna kontrola topology/non-overlap i registry mapping; wersjonowany fingerprint z frame; kompletne structural_2d fields/interactions/BC; atomiczny StudyIRV04/Wire.study i migracja/admission z missing/null BC; planner unavailable guards, owner MFEM 2.5D, exchange k², rekonstruowane pola/normy/residual oraz zbieżność/k→0/TetraX/extruded3D. Publiczny writer/reader 0.3 i jego guard przestrzennego intent pozostają bez zmian. Surowy typed wire nie jest certyfikowanym meshem i nie otwiera providera.
+- Kolejka: worker_alive=True, accepting_jobs=True, worker_error=None; aktywne joby [], ostatni stan waiting_for_disk. Wolne 1990201344 B (~1.85 GiB), próg 8 GiB. Ten sam #227 d2a6c2dd0c3c4a66a1e05fce10bb32c7 ma stan `queued`; kontroler 81829/PID243032 potwierdzony live. Jego źródła a8d67ac92002b884799119578a054b518cf40cbf nie zawierają nowych typów ani diagnostyki EPS.
+- Lokalny read-only planer retencji: 2121606033 B (~1.98 GiB) kandydatów execution naszego worktree. Nawet cały ten odzysk nie osiągnąłby progu startu przy ostatnim pomiarze; nie kasowano danych ani cache. API retencji miało timeout; odczyt SQLite był read-only, nie restartowano koordynatora/jobów ani nie zwiększano timeoutu.
+- Następna ścieżka CPU3D nadal ma pierwszeństwo: terminalny sukces #227 i managed preflight → nowy nearest Γ i pełna walidacja μ₀/demag/residual/bindings → świeży pakiet diagnostyki i controlled frequency_window → rzeczywiste signed15 → wykres i analityka → serial/adaptive parity/pomiary puli i GUI. Oryginalny benchmark A1 Γ-X-M-Γ (61 próbek/8 pasm), COMSOL/DE/BV i zbieżności, S10/GPU oraz PR97/integracja pozostają wymagane i OPEN. Cztery dawne ±10/±25 pozostają dotychczasowymi zaakceptowanymi punktami; nie utworzono punktów przez symetrię.
+
+Dowody: preview-state-checkpoint/waveguide-mesh-wire-final-staged-validation.json, waveguide-mesh-wire-review.md, waveguide-mesh-wire-source.md, waveguide-mesh-fixture-rational-audit.json i owned-retention-inventory-20261004.json w wizualizacjach wątku. [Kontrakt surowego mesha](../../specs/fem-waveguide-spatial-representation-v1.md#typowany-surowy-descriptor-przekroju--wire-v1).
+
+
 <!-- eps-dimensions-analytic-checkpoint-20261004 -->
 ## Aktualny checkpoint — wymiary EPS i analityka Γ
 
