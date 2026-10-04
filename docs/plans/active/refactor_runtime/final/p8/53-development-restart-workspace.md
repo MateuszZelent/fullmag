@@ -1,5 +1,10 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53X](53x-cold-accepted-store-reservation.md) dodaje rezerwację istniejącego
+zimnego magazynu, wspólną z bezpośrednim przejmowaniem ownera service.
+Zarządzany build i 110 sprawdzeń natywnych przeszły; pełny restart pozostaje
+NOT VERIFIED do atomowego commit, replacement i hydration UI.
+
 ## Cel zatwierdzony przez użytkownika
 
 Checkpoint backendowej instalacji sceny przed listenerem i jego dowody:

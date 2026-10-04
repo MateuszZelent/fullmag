@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 use uuid::Uuid;
 
 use crate::repository_path::{checked_path, create_parent, validate_store_id};
+use crate::runtime_service_startup::RuntimeServiceStartupGuard;
 use crate::store::SessionStore;
 use crate::{
     FmsPreparationResourceOffer, FmsPreparationResourcePool, FmsSchedulerResourceOffer,
@@ -105,6 +106,12 @@ impl RuntimeServiceOwner {
     pub fn acquire(store: &SessionStore, target_id: &str) -> Result<Self> {
         validate_store_id(target_id).context("runtime service target id")?;
         crate::writer::require_local_filesystem(store.root())?;
+        let Some(_startup_guard) = RuntimeServiceStartupGuard::try_acquire(store.root())? else {
+            bail!("runtime service startup is reserved by another operation");
+        };
+        if store.read_development_idle_fence()?.is_some() {
+            bail!("runtime service startup refused while development admission is fenced");
+        }
 
         let lock_path = create_parent(store.root(), RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
         let descriptor_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;

@@ -2628,6 +2628,150 @@ pub(crate) fn verify_development_service_drain(config_path: &std::path::Path) ->
     Ok(())
 }
 
+/// Exercise the production reservation and direct service startup in a managed
+/// fixture. No live API is shut down or replaced by this diagnostic.
+pub(crate) fn verify_development_cold_idle(config_path: &Path) -> Result<()> {
+    if std::env::var("FULLMAG_DEVELOPMENT_COLD_IDLE_PROBE").as_deref() != Ok("1") {
+        bail!("development cold idle verification requires an explicit managed fixture");
+    }
+    let config = fullmag_session::runtime_service::RuntimeServiceConfig::read(config_path)?;
+    let owner = uuid::Uuid::new_v4().simple().to_string();
+    let nonce = uuid::Uuid::new_v4().to_string();
+    // Concurrent first acquisition must leave one complete stable descriptor,
+    // never an empty inode that poisons subsequent service startup.
+    if config
+        .store_root
+        .join("runtime-services/STARTUP-GATE.lock")
+        .exists()
+    {
+        bail!("cold idle concurrency fixture requires an uninitialized startup gate");
+    }
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let mut contenders = Vec::new();
+    for _ in 0..8 {
+        let barrier = barrier.clone();
+        let root = config.store_root.clone();
+        contenders.push(std::thread::spawn(move || -> Result<bool> {
+            barrier.wait();
+            match fullmag_session::runtime_service_startup::RuntimeServiceStartupGuard::try_acquire(
+                &root,
+            ) {
+                Ok(Some(guard)) => {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    drop(guard);
+                    Ok(true)
+                }
+                Ok(None) => Ok(false),
+                Err(error)
+                    if error
+                        .downcast_ref::<fullmag_session::StoreWriterBusy>()
+                        .is_some() =>
+                {
+                    Ok(false)
+                }
+                Err(error) => Err(error),
+            }
+        }));
+    }
+    let mut acquired = 0;
+    let mut contention_error = None;
+    for contender in contenders {
+        match contender.join() {
+            Ok(Ok(true)) => acquired += 1,
+            Ok(Ok(false)) => {}
+            Ok(Err(error)) => contention_error = Some(error),
+            Err(_) => contention_error = Some(anyhow::anyhow!("cold startup contender panicked")),
+        }
+    }
+    if let Some(error) = contention_error {
+        return Err(error);
+    }
+    if acquired == 0 {
+        bail!("cold startup fixture did not acquire the initial gate");
+    }
+    let proof = fullmag_runtime_control::development_cold_idle::acquire_cold_idle_fence(
+        &config.store_root,
+        &owner,
+        &nonce,
+    )?;
+    proof.verify_current()?;
+    let fence = proof.admission_fence.clone();
+    let service = std::env::current_exe()?.with_file_name(if cfg!(windows) {
+        "fullmag-runtime-service.exe"
+    } else {
+        "fullmag-runtime-service"
+    });
+    let blocked_start = |expected: &str| -> Result<serde_json::Value> {
+        let log_path =
+            config_path.with_file_name(format!("cold-start-{}.log", uuid::Uuid::new_v4()));
+        let stderr = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&log_path)?;
+        let mut command = ProcessCommand::new(&service);
+        command
+            .arg("--config")
+            .arg(config_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let mut child = BootstrapProcessGuard::new(ChildProcess(command.spawn()?));
+        let pid = child.process_mut().0.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.process_mut().0.try_wait()? {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!("cold idle fixture service did not terminate before the deadline");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        };
+        child.release();
+        if std::fs::metadata(&log_path)?.len() > 65536 {
+            bail!("cold idle fixture stderr exceeded its bound");
+        }
+        let stderr = std::fs::read_to_string(&log_path)?;
+        if status.success() || !stderr.contains(expected) {
+            bail!("cold idle fixture did not refuse the specific protected startup");
+        }
+        Ok(serde_json::json!({"pid":pid,"waited":true,"exit_code":status.code()}))
+    };
+    let reserved = blocked_start("runtime service startup is reserved by another operation")?;
+    proof.verify_current()?;
+    drop(proof);
+    let fenced =
+        blocked_start("runtime service startup refused while development admission is fenced")?;
+    let store = fullmag_session::SessionStore::open_existing(config.store_root.clone())?;
+    if store.read_development_idle_fence()?.as_ref() != Some(&fence) {
+        bail!("cold idle fixture lost the durable fence after reservation drop");
+    }
+    // Explicit fixture abort, never an implicit failure-path cleanup.
+    store.release_development_idle_fence(&fence)?;
+    let repeated = fullmag_runtime_control::development_cold_idle::acquire_cold_idle_fence(
+        &config.store_root,
+        &owner,
+        &uuid::Uuid::new_v4().to_string(),
+    )?;
+    repeated.release_fence()?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema":"fullmag.development-cold-idle-check.v1",
+            "children":[reserved,fenced], "fence_nonce":nonce,
+            "fence_sha256":fullmag_session::canonical_json_sha256(&serde_json::to_value(&fence)?),
+            "explicit_abort":true,"reacquired":true,
+        "initialization_contenders":8,"initialization_acquired":acquired,
+        })
+    );
+    Ok(())
+}
+
 pub(crate) fn which_opener() -> Result<String> {
     let candidates: &[&str] = if cfg!(windows) {
         &["cmd.exe"]

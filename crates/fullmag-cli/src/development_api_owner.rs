@@ -52,6 +52,7 @@ const BACKEND_ENV_KEYS: [&str; 4] = [
 /// The launcher's validated authority for one managed native development API.
 /// This type deliberately does not implement `Debug` because it holds a token.
 pub(crate) struct OwnerLaunch {
+    service_configured: bool,
     storage_root: PathBuf,
     worktree: String,
     generation: String,
@@ -110,6 +111,7 @@ impl OwnerLaunch {
         )?;
 
         Ok(Some(Self {
+            service_configured: env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_some(),
             storage_root,
             worktree,
             generation: generation.clone(),
@@ -200,6 +202,7 @@ impl OwnerLaunch {
         }
 
         Ok(OwnedDevelopmentApi {
+            service_configured: self.service_configured,
             control_address: address,
             api_port,
             api_instance_id: record.api_instance_id,
@@ -216,6 +219,7 @@ impl OwnerLaunch {
 /// A confirmed owner endpoint. It carries credentials privately and has no
 /// public HTTP-control or process-management operations.
 pub(crate) struct OwnedDevelopmentApi {
+    service_configured: bool,
     control_address: SocketAddrV4,
     api_port: u16,
     api_instance_id: String,
@@ -278,6 +282,7 @@ impl OwnedDevelopmentApi {
             .context("development API acquisition response is not UTF-8")?;
 
         Ok(AuthoringAcquisition {
+            service_configured: self.service_configured,
             stream: Some(stream),
             owner_token: self.owner_token.clone(),
             api_port: self.api_port,
@@ -300,6 +305,7 @@ impl OwnedDevelopmentApi {
 /// Owns both the captured snapshot and the private connection that holds the
 /// API guard. Dropping this value disconnects and releases the guard.
 pub(crate) struct AuthoringAcquisition {
+    service_configured: bool,
     stream: Option<TcpStream>,
     owner_token: String,
     api_port: u16,
@@ -478,6 +484,45 @@ impl AuthoringAcquisition {
         self.confirm_held()
             .context("development API acquisition could not be confirmed after idle drain")?;
         Ok(proof)
+    }
+
+    /// Reserve an existing accepted store without a configured resident service.
+    /// Unknown outcomes close this acquisition and retain any durable fence.
+    pub(crate) fn acquire_cold_idle(
+        &mut self,
+        staged: &StagedAuthoringHandoff,
+        store_root: &Path,
+    ) -> Result<fullmag_runtime_control::development_cold_idle::ColdIdleProof> {
+        let result = (|| {
+            if self.stream.is_none() {
+                bail!("development API acquisition connection is unavailable");
+            }
+            if staged.source_nonce != self.nonce
+                || staged.source_api_instance_id != self.api_instance_id
+            {
+                bail!("staged handoff does not belong to this API acquisition");
+            }
+            if self.service_configured {
+                bail!("configured runtime service cannot use the cold idle handoff");
+            }
+            self.confirm_held()
+                .context("development API acquisition could not be confirmed before cold idle")?;
+            let proof = fullmag_runtime_control::development_cold_idle::cold_idle_for_api(
+                self.api_port,
+                &self.api_instance_id,
+                store_root,
+                &self.owner_token,
+                &self.nonce,
+            )?;
+            self.confirm_held()
+                .context("development API acquisition could not be confirmed after cold idle")?;
+            proof.verify_current()?;
+            Ok(proof)
+        })();
+        if result.is_err() {
+            self.invalidate_control_stream();
+        }
+        result
     }
 
     fn invalidate_control_stream(&mut self) {

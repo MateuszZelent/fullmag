@@ -302,6 +302,43 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
                   heartbeat_interval_milliseconds=100, startup_timeout_seconds=10, drain_timeout_seconds=10)
     config_path = run_root / "service-config.json"
     storage.atomic_json(config_path, config)
+    cold_child = subprocess.Popen(
+        [str(binaries / "fullmag.exe"), "runtime", "verify-development-cold-idle", "--config", str(config_path)],
+        cwd=repo, env={**env, "FULLMAG_DEVELOPMENT_COLD_IDLE_PROBE": "1"},
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    cold_record = dict(label="native-cold-idle-client", pid=cold_child.pid, waited=False)
+    receipt["processes"].append(cold_record)
+    try:
+        cold_output, cold_errors = cold_child.communicate(timeout=30)
+    finally:
+        if cold_child.poll() is None:
+            cold_child.kill()  # Only this fixture's diagnostic CLI.
+            cold_child.wait(timeout=10)
+        cold_record.update(waited=True, exit_code=cold_child.returncode)
+    (run_root / "native-cold-idle-client.log").write_bytes(cold_output + cold_errors)
+    if cold_child.returncode:
+        raise storage.StorageError("Production cold idle reservation fixture failed")
+    cold_frames = [json.loads(line) for line in cold_output.decode().splitlines() if line.startswith('{')]
+    assert len(cold_frames) == 1
+    cold_proof = cold_frames[0]
+    assert cold_proof["schema"] == "fullmag.development-cold-idle-check.v1"
+    assert cold_proof["explicit_abort"] is True and cold_proof["reacquired"] is True
+    assert cold_proof["initialization_contenders"] == 8 and cold_proof["initialization_acquired"] > 0
+    assert len(cold_proof["children"]) == 2
+    for label, process in zip(("cold-start-reserved", "cold-start-durable-fence"), cold_proof["children"]):
+        assert process["waited"] is True and isinstance(process["pid"], int) and process["pid"] > 0
+        assert isinstance(process["exit_code"], int) and process["exit_code"] != 0
+        receipt["processes"].append(dict(label=label, **process))
+    for name in ("APPLICATION.json", "OWNER.lock", "OWNER.json", "LAUNCH.json"):
+        assert not os.path.lexists(store / "runtime-services" / name)
+    receipt["checks"].extend((
+        "cold-idle-concurrent-first-startup-initializes-complete-descriptor",
+        "cold-idle-direct-service-blocked-before-owner-publication",
+        "cold-idle-drop-retains-durable-admission-fence",
+        "cold-idle-explicit-abort-reacquires-stable-mutex",
+        "cold-idle-leaves-no-service-owner-metadata",
+    ))
     owner_path = store / "runtime-services/OWNER.json"
     log_path = run_root / "service.log"
     with log_path.open("w", encoding="utf-8") as log:

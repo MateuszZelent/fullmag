@@ -156,6 +156,13 @@ UI przypiętym do tej samej instancji API, sesji i epoki. Trwały ACK wymaga
 odczytu zwrotnego hashów, stanu `staged`, oryginalnej sceny i danych UI.
 Nie zastępuje aktualnego potwierdzenia przejęcia ani atomowego commit/shutdown.
 
+Zimny istniejący accepted store wymaga braku metadanych ownera/config oraz
+rezerwacji launchera i przejmowania ownera. Osobny `STARTUP-GATE.lock`
+obejmuje również bezpośredni start service przed publikacją ownera.
+Trwały admission fence pozostaje po Drop rezerwacji i blokuje nowych ownerów;
+zwolnienie wymaga jawnej decyzji lifecycle, nie automatycznego cleanup po błędzie.
+Brak magazynu nie jest dowodem pustego workspace ani zgodą na inicjalizację.
+
 Wymagane są: zgodność generated API, regresje błędnego/starego handoffu,
 odrzucenie aktywnego solve i wyścigu Start, ochrony szkiców i awarii restore,
 a także rzeczywisty przebieg Windows i przeglądarki z niepustą geometrią,

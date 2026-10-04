@@ -22,8 +22,8 @@ mod live_workspace;
 mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
-mod runtime_supervisor;
 mod runtime_service_client;
+mod runtime_supervisor;
 mod saved_fem_snapshot_gate;
 mod scratch_runtime;
 mod simulation_preparation;
@@ -72,17 +72,27 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Runtime(RuntimeCommand::ServiceEnsure { config }) => {
             let owner = runtime_service_client::ensure(&config)?;
-            println!("{}", serde_json::to_string(&serde_json::json!({
-                "schema_version": "runtime_service_discovery.v1",
-                "status": "ready", "owner": owner,
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema_version": "runtime_service_discovery.v1",
+                    "status": "ready", "owner": owner,
+                }))?
+            );
         }
-        Command::Runtime(RuntimeCommand::ServiceStatus { store, target, timeout_seconds }) => {
+        Command::Runtime(RuntimeCommand::ServiceStatus {
+            store,
+            target,
+            timeout_seconds,
+        }) => {
             let owner = runtime_service_client::probe(&store, &target, timeout_seconds)?;
-            println!("{}", serde_json::to_string(&serde_json::json!({
-                "schema_version": "runtime_service_discovery.v1",
-                "status": "ready", "owner": owner,
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema_version": "runtime_service_discovery.v1",
+                    "status": "ready", "owner": owner,
+                }))?
+            );
         }
         Command::Runtime(RuntimeCommand::VerifySavedFemSnapshot {
             store,
@@ -93,6 +103,9 @@ fn main() -> Result<()> {
         }
         Command::Runtime(RuntimeCommand::VerifyDevelopmentApiOwner) => {
             control_room::verify_development_api_owner()?;
+        }
+        Command::Runtime(RuntimeCommand::VerifyDevelopmentColdIdle { config }) => {
+            control_room::verify_development_cold_idle(&config)?;
         }
         Command::Runtime(RuntimeCommand::VerifyDevelopmentServiceDrain { config }) => {
             control_room::verify_development_service_drain(&config)?;
@@ -506,11 +519,16 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
         SessionSubcommand::Open { path } => {
             let file = std::fs::File::open(&path)?;
             let reader = std::io::BufReader::new(file);
-            let decoding_root = default_store_root.parent().context("session storage parent is missing")?;
+            let decoding_root = default_store_root
+                .parent()
+                .context("session storage parent is missing")?;
             std::fs::create_dir_all(decoding_root)?;
             let preflight = preflight_fms_staged(reader, &[], decoding_root)?;
             if default_store_root.exists() {
-                bail!("session import destination already exists: {}", default_store_root.display());
+                bail!(
+                    "session import destination already exists: {}",
+                    default_store_root.display()
+                );
             }
             let staging = decoding_root.join(format!(".session-import-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir(&staging)?;
@@ -524,11 +542,20 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
             let session = match result {
                 Ok(session) => session,
                 Err(error) => {
-                    if error.downcast_ref::<fullmag_session::PublicationUncertain>().is_none()
-                        && error.downcast_ref::<fullmag_session::WriterReleaseUnconfirmed>().is_none() {
+                    if error
+                        .downcast_ref::<fullmag_session::PublicationUncertain>()
+                        .is_none()
+                        && error
+                            .downcast_ref::<fullmag_session::WriterReleaseUnconfirmed>()
+                            .is_none()
+                    {
                         let _ = std::fs::remove_dir_all(&staging);
                     }
-                    return Err(error.context(format!("import staging: {}; destination: {}", staging.display(), default_store_root.display())));
+                    return Err(error.context(format!(
+                        "import staging: {}; destination: {}",
+                        staging.display(),
+                        default_store_root.display()
+                    )));
                 }
             };
 
@@ -540,7 +567,9 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
         SessionSubcommand::Inspect { path } => {
             let file = std::fs::File::open(&path)?;
             let reader = std::io::BufReader::new(file);
-            let decoding_root = default_store_root.parent().context("session storage parent is missing")?;
+            let decoding_root = default_store_root
+                .parent()
+                .context("session storage parent is missing")?;
             std::fs::create_dir_all(decoding_root)?;
             let staged = preflight_fms_staged(reader, &[], decoding_root)?;
             let info = &staged.inspection;
