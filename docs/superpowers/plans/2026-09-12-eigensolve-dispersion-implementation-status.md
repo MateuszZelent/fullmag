@@ -1,3 +1,42 @@
+<!-- air231-six-results-ksp-checkpoint-20261004 -->
+## Aktualny checkpoint — sześć prób siatki powietrza i diagnostyka KSP
+
+Na pakiecie #231, source `4b34ec7b91dadb18ac87d7f8b98b3a2cf5c8f574`,
+zakończono sześć rzeczywistych prób +10/+25 rad/µm × growth 1,3/1,15/1,075.
+Wszystkie wiersze przechodzą kontrolę artefaktów i residualu modu;
+zakres pełnego residualu wynosi 1,54264e-11–2,47329e-11 przy progu 1e-8.
+Okna pozostają `not_certified`, z jednym zwróconym modem i możliwością
+istnienia dalszych modów. Nie jest to pełne widmo ani geometria COMSOL A1.
+
+Rzeczywista siatka filmu jest zachowana; zmienia się harmonogram powietrza.
+Porównanie stanu spełnia istniejącą bezwzględną rozdzielczość replay pól
+1e-8 A/m. Pierwotny nieudany audyt używał innego ad hoc progu; zachowano
+zarówno jego dowód, jak nowy raport, bez zmiany tolerancji solvera.
+Odchylenie względem świeżej referencji open-air 1D/basis32 spada przy +10
+z -0,204668% do -0,074200%, a przy +25 z -0,616906% do -0,371054%.
+To trend zbieżności powietrza, bez domknięcia filmu, paddingu i liczby modów.
+
+Opublikowano CSV, dwa wykresy PNG/PDF, receptę renderu oraz manifest i oba
+pliki dowodowe w `docs/raports/2026-10-04-de-air-matrix-runtime231.md`
+i `docs/raports/assets/de-air-matrix-20261004/`. Historyczne signed15
+#227/#228 pozostaje osobno oznaczone; nie dopisano ujemnych refinementów.
+
+Commit `4451860087a7fdd27e087b27cae0f6cadc47bc44` zachowuje postęp monitora
+KSP przed unwindem twardego błędu. Rekurencyjny residual i obserwowany reason
+nie zastępują true residualu ani końcowych query. Consumer: 9/9 PASS,
+kontrakty noty: 10/10 PASS, mapa źródeł PASS. Natywne regresje przygotowano,
+bez kompilacji; wykonanie nowego monitora wymaga kolejnego managed pakietu.
+Commit `0e5b7755bb665d120502511911c845aabd2ae817` naprawia rozpoznawanie
+Rust async w walidatorze dokumentacji: 20+15 interpretowanych kontroli PASS.
+
+Po odświeżeniu origin/master pozostaje na
+`eae25cc2b393f78e7ff0e9da727344f08c62ee41`. Cztery rozwiązania konfliktów
+przygotowano i sprawdzono w preview; właściwy merge i nowy build są następne.
+S00–S12 nadal OPEN: aktualny Γ/full window, shared signed15 i serial/adaptive
+parity/zasoby, zbieżność, GUI/browser, A1, S09/provider, interakcje/GPU oraz
+wymagane review/CI/integracja/main FF/cleanup. Starsze checkpointy poniżej
+opisują wcześniejsze obserwacje, a nie stan bieżący.
+
 <!-- runner231-nearest-runtime-checkpoint-20261004 -->
 ## Aktualny checkpoint — pakiet #231, eksport OpenAPI i rzeczywisty punkt +10
 
@@ -3846,8 +3885,8 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja i bounded sparse operator są w źródłach; geometry-aware tet/prism oraz ich rzeczywista kwadratura mają review. Wymagane są bieżący managed assembly/runtime i pełne certyfikaty deskryptora. |
-| S04 — dynamiczny demag-k CPU | W TRAKCIE | Sparse Schur/SLEPc i MFEM blocks są źródłowo zaimplementowane. Pozostają residual pełnego deskryptora/gauge/szwów, zbieżność airboxu i siatki oraz kwalifikacja nowego źródła; archiwalne punkty nie zastępują tych bramek. |
-| S05 — natywny solver spektralny | W TRAKCIE | #231 succeeded; managed eksport OpenAPI PASS. Nearest +10: GMRES solve_error, FGMRES 11,205285324453773 GHz, pełny residual modu 1,82158e-13, true KSP 32/32 bez naruszeń. Selected-only nie jest pełnym oknem. Otwarta diagnoza KSP i snapshot błędów, Γ/window/resume oraz zbieżność; null solver-summary ma zamierzoną semantykę, certyfikat jest przypisany do modu. |
+| S04 — dynamiczny demag-k CPU | W TRAKCIE | Sześć actual prób #231 +10/+25 × air growth 1,3/1,15/1,075 przechodzi kontrolę artefaktów i pełnego residualu modu. Body mesh zachowany, replay pól zgodny w istniejącym progu; trend względem 1D poprawia się do -0,0742%/-0,3711%. Pełna zbieżność filmu, paddingu, descriptor/gauge/geometry certification i kwalifikacja nadal OPEN. |
+| S05 — natywny solver spektralny | W TRAKCIE | #231 runtime/eksport PASS, nearest FGMRES oraz sześć window selected-mode wyników zapisane. GMRES hard-error zachowany; źródłowa migawka pre-unwind KSP w 445186008 z interpretowanymi regresjami PASS wymaga nowego managed build/runtime. Pełne Γ/window/resume, głębsza diagnoza GMRES i zbieżność pozostają OPEN. |
 | S06 — śledzenie gałęzi | W TRAKCIE | Źródła mają Hungarian/gaps, spójną masę P1, kąty główne i transport Procrustesa podprzestrzeni; pozostają wykonanie/regresje runtime, fizyczny crossing/split/merge, stabilność kroku k i zgodność publikacji |
 | S07 — artefakty i API | W TRAKCIE | Exact producer/consumer/mesh/native input replay zapisano i zreviewowano. Nowe refs diagnostyki mają odrębny writer/consumer i coverage, 44 regresje przyrostu oraz 213 głównego verifiera PASS; historyczne 56 regresji nonshared pozostają osobnym dowodem. P1 oznaczania nonzero-k jako K0 naprawiony w źródłach bf25. Nadal potrzebne pełne native matrix/physical replay, managed publikacja nowych refs, aktualne binary fields/selektory i managed evidence. |
 | S08 — Control Room | W TRAKCIE | Źródła authoring/scatterplot, selekcji k/pola i linewidth zostały poprawione. Wymagane są bieżący managed frontend/runtime, browser/WebGL, FMS round-trip, dostępność pól i stabilność Inspectora. Historyczny #119 nie jest aktualnym buildem. |

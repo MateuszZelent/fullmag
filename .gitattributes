@@ -6,3 +6,10 @@ justfile text eol=lf
 scripts/local_runner/worker_entrypoint.py text eol=lf
 agent/skills/**/scripts/* text eol=lf
 .agents/skills/**/scripts/* text eol=lf
+
+# Preserve hash-bound DE runtime231 publication bytes across platforms.
+docs/raports/2026-10-04-de-signed15-runtime.csv text eol=lf
+docs/raports/2026-10-04-de-air-matrix-runtime231.* text eol=lf
+docs/raports/assets/de-air-matrix-20261004/*.py text eol=lf
+docs/raports/assets/de-air-matrix-20261004/manifest.json text eol=lf
+docs/raports/assets/de-air-matrix-20261004/air-matrix231-*.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

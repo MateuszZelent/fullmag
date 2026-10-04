@@ -1,3 +1,46 @@
+<!-- de-air-matrix231-observed-field-resolution-20261004 -->
+(de-air-matrix231-observed-field-resolution)=
+## Rzeczywista macierz siatki powietrza i rozdzielczość porównania pól
+
+Na pakiecie FEM CPU/double #231 ze źródła
+`4b34ec7b91dadb18ac87d7f8b98b3a2cf5c8f574` wykonano sześć prób
+$k_y=+10,+25\,\mathrm{rad/\mu m}$ × air growth 1,3/1,15/1,075.
+Pełne wejścia, pomiary, referencje i ograniczenia zawiera
+[raport macierzy runtime #231](../raports/2026-10-04-de-air-matrix-runtime231.md).
+To kontynuacja kontraktów `de-air-refinement-levels`,
+`modal-equilibrium-field-replay-domain` i `modal-static-demag-replay-preimage`;
+nie zmienia równań, operatorów ani tolerancji solvera.
+
+Porównanie izoluje zmianę harmonogramu powietrza w rozdzielczości istniejącego
+kontraktu odtwarzania stanu. Kanoniczne współrzędne i connectivity filmu są
+zgodne, a maksymalna różnica surowych współrzędnych wynosi
+$3{,}31\cdot10^{-24}\,\mathrm m$. Wszystkie siatki mają 396 węzłów
+magnetycznych, 1476 tetraedrów filmu i cztery płaszczyzny przez grubość.
+Cała siatka zmienia się z 6138/30012 do 10098/49692 węzłów/tetraedrów.
+Maksymalna różnica składowej $m_0$ wynosi $4{,}79\cdot10^{-20}$.
+
+Pomocniczy audyt v1 używał ad hoc progu
+$\max(1\,\mathrm{A/m},|H|)\cdot10^{-12}$ i odrzucił porównanie
+prawie zerowego pola statycznego demagu. Zachowano jego nieudany wynik i hash.
+Audyt v2 używa istniejącego bezwzględnego progu replay
+$10^{-8}\,\mathrm{A/m}$ z `build_shared_domain_linearization_state`
+na odpowiadających sobie węzłach magnetycznych. Zmierzone maksima wynoszą
+$3{,}62\cdot10^{-11}\,\mathrm{A/m}$ dla $H_{demag,0}$ oraz
+$2{,}04\cdot10^{-9}\,\mathrm{A/m}$ dla $H_{eff,0}$.
+To zgodność przy rozdzielczości kontraktu replay, bez twierdzenia o dokładnej
+równości pól, zgodności do roundoff albo ograniczeniu błędu częstotliwości.
+Każdy run zachowuje niezależne sprawdzenie podpisów własnego stanu i siatki.
+
+Residual pełnej postaci słabej zaakceptowanych modów mieści się między
+$1{,}54\cdot10^{-11}$ i $2{,}48\cdot10^{-11}$ przy niezmienionym progu
+$10^{-8}$. W najgęstszej z tych siatek odchylenie od otwartej referencji
+grubościowej 1D/basis32 wynosi −0,0742% dla +10 oraz −0,3711% dla +25.
+Kwadrat nakładania modów w spójnej masie P1 przekracza 0,9999996;
+nie zastępuje to identyfikacji kompletnej gałęzi. Nie zmieniono tolerancji,
+aby uzyskać akceptację solvera. Okna wszystkich sześciu prób pozostają
+`not_certified`; zbieżność filmu, paddingu, pełnego widma i parytet GPU
+pozostają OPEN. Przypadek jest jednorodnym filmem DE, nie geometrią COMSOL A1.
+
 <!-- nearest-floquet-telemetry-consumer-20261004 -->
 (nearest-floquet-telemetry-consumer)=
 ## Konsument pojedynczego świadectwa shifted KSP dla nearest
