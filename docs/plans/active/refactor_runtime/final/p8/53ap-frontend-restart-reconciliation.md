@@ -64,3 +64,21 @@ w świeżym `ProjectDocumentController` istniejącą metodą
 `restoreDevelopmentHandoff`, a layout i lokalne szkice przez ich właścicieli.
 Odtwarzanie i publikacja nowego pinu są obowiązkami callbacku `hydrate`;
 obecny przyrost nie dostarcza jeszcze jego produkcyjnego adaptera.
+
+## Checkpoint i integracja
+
+Lokalny commit źródeł: `424926e3c5b0a2ea5421a92dfa3b1b269a780f6c`,
+branch `master`. Hook React Doctor zwrócił dwa ostrzeżenia `await` w pętlach
+odczytu zakresów topologii; oba miejsca istnieją identycznie w rodzicu commita
+i nie były zmieniane przez ten przyrost. Review nie uznał ich za nową regresję.
+
+Próba aktualizacji istniejącego rejestru `p6-fmr-artifact-routes` przez
+`just worktree-finish ... wip` została odrzucona:
+`Existing real path requires inventoried migration, never automatic removal: C:\git\fullmag\fullmag\target`.
+Potwierdzono zwykły katalog `target`, bez linku. Nie usuwano ani nie migrowano
+go; aktualizacja rejestru pozostaje zablokowana do sprawdzenia jego własności
+i aktywnych użytkowników. Cel całego planu pozostaje otwarty.
+
+Push/integracja remote nadal podlega wcześniejszej odmowie automatycznej
+kontroli publikacji do publicznego repozytorium; nie ponawiano ani nie obchodzono
+tej odmowy. Zachowano niezwiązane lokalne zmiany `fullmag-session` i submodułu.
