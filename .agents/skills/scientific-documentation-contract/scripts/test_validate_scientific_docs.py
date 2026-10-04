@@ -201,6 +201,32 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
 
         self.assertEqual([], self.errors(manifest))
 
+    def test_async_rust_function_requires_one_real_declaration(self) -> None:
+        source = self.repo / "src/resource.rs"
+        source.parent.mkdir(exist_ok=True)
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0]["path"] = "src/resource.rs"
+        manifest["sources"][0]["symbol"] = "load_resource"
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + "\n| async resource | src/resource.rs | load_resource |\n",
+            encoding="utf-8",
+        )
+        for declaration in (
+            "async fn load_resource() {}",
+            "pub async fn load_resource() {}",
+            "pub(crate) async fn load_resource() {}",
+            "pub async unsafe fn load_resource() {}",
+            "pub async fn load_resource<T>(value: T) {}",
+        ):
+            with self.subTest(declaration=declaration):
+                source.write_text(declaration + "\n", encoding="utf-8")
+                self.assertEqual([], self.errors(manifest))
+        source.write_text("// pub async fn load_resource() {}\nload_resource().await;\n", encoding="utf-8")
+        self.assertTrue(any("declaration not found" in e for e in self.errors(manifest)))
+        source.write_text("async fn load_resource() {}\npub async fn load_resource() {}\n", encoding="utf-8")
+        self.assertTrue(any("declaration is not unique" in e for e in self.errors(manifest)))
+
     def test_typescript_functions_methods_and_test_suites_are_stable_symbols(self) -> None:
         source = self.repo / "src/viewport.ts"
         source.parent.mkdir(exist_ok=True)
