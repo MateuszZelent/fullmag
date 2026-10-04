@@ -965,7 +965,9 @@ describe("FdmCuboidLayer model", () => {
     expect(sceneModelSource).toContain(
       "modelFieldVector: fdmInstanceModelFieldVector",
     );
-    expect(sceneModelSource).toContain("fdmInstanceModel: fdmInstanceModel");
+    expect(sceneModelSource).toContain(
+      "fdmInstanceModel: savedSelectionActive ? null : fdmInstanceModel",
+    );
     expect(sceneModelSource).toContain("fdmVectorSegments");
     expect(sceneModelSource).toContain("fdmBuildState?.error?.message");
     expect(sceneModelSource).not.toContain("buildFdmCuboidInstanceModel(");

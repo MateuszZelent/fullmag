@@ -159,7 +159,7 @@ describe("resolveViewport3DFieldDomainCompatibility", () => {
     const geometryObjectRef = "geometry-object-1";
     const savedScopeKey = "saved-field-viewport:dataset-1:range-0";
     const field = {
-      formatVersion: 2,
+      formatVersion: 2 as const,
       indexing: "explicit_node_indices" as const,
       meshTopologyHash: "h",
       meshTopologyRevision: geometryObjectRef,

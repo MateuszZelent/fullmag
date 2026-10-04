@@ -776,8 +776,10 @@ function checkFieldCatalogResourceSeparation() {
   ]);
   requireTokens(studyRuntimeResources, "field catalog resource hook", [
     "export function useFieldCatalogResource",
-    "api.data.fields.catalog({ signal })",
-    "resourceKey: DATA_FIELDS_PATH",
+    "api.data.fields.catalog({ sessionScopeKey, signal })",
+    "useSessionScopedResourceKey(",
+    "DATA_FIELDS_PATH",
+    "enabled: enabled && sessionIdentity !== null",
   ]);
   requireTokens(objectVisualizationSources, "ObjectVisualizationPanel field catalog separation", [
     "useFieldCatalogResource",
@@ -1176,7 +1178,7 @@ function checkCommandShortcutConnector() {
     "const runtimeResourceDataRef = useRef(runtimeResourceData)",
     "runtimeResourceDataRef.current = runtimeResourceData",
     "resourceData: runtimeResourceDataRef.current",
-    "}, [kernel, startupVisible]);",
+    "}, [kernel, sessionScopeKey, startupVisible]);",
   ]);
   forbidTokens(block, "CommandShortcutConnector", [
     "useSessionStatus()",
