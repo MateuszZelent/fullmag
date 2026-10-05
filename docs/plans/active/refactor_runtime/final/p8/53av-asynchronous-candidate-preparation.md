@@ -105,5 +105,16 @@ Kanoniczny OpenAPI potwierdził tożsamość zbudowanego kodu.
 
 Po próbie UI nadal używało tego samego API i watchera. Kliknięcie Build
 backend przyjęło jawny request `1a86350e-94dd-4194-b07d-7365d7ed11c1`.
-Terminalny wynik tego żądania jest osobną bramką; 13 kontroli pompy nie
-zastępuje fault injection, anulowania, stale scope ani odtworzenia modelu.
+Request zakończył się **completed, exit 0**, 12:17:48–12:26:59 UTC
+(9 min 11 s łącznie; CLI/API 3 min 23 s, desktop 1 min 02 s).
+Manifest: `5a39579927002b073b821ae140f52f0bc72b39a4c8b6aef86a393303b161f251`,
+snapshot: `d474838d1d4433aee937c029799755ef94af3102b27e7942064368f8258881c3`.
+API nadal miało tożsamość `b0407349-d370-456f-b2a5-ca43a771faeb` i
+dotychczasowy source SHA; resource oraz przeglądarka potwierdziły Ready.
+Commit checkoutu podczas buildu nie odrzucił wyniku snapshotu.
+Nie było automatycznego restartu workspace ani kolejnego buildu.
+Publiczny restart pozostaje niedostępny (`restart_integration_pending`).
+Te dowody nie zastępują fault injection, anulowania, stale scope ani
+odtworzenia modelu. Przyrost pompy zapisano w lokalnym commicie
+`3a157b229eb2a1111440f641b1cca7fef566bb36`; nie stanowi to dowodu publikacji
+na remote ani ukończenia całego P8-53.
