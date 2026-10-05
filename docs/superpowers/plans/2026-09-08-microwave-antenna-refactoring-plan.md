@@ -670,12 +670,51 @@ Powyższy oracle uzupełnić testem rzeczywistego plannera: input 1000×10000 pr
 
 ## T12. Związać lifecycle, cache i anulowanie z wykonaniem
 
+### Checkpoint 2026-10-05 — korekta globalnego carrieru importu FEM
+
+Przegląd commita `c9c1d0334169529b9d374fe5c637fd7bc51717a1` wykazał,
+że legalny lokalny `SampledField` magnesu nie musi mieć liczności globalnego
+stanu runtime. `crates/fullmag-plan/src/fem.rs::assign_domain_initial_for_segments`
+dopuszcza oba warianty authoringu; import płaskiego stanu musi być ostrzejszy.
+`crates/fullmag-cli/src/step_utils.rs::validate_imported_magnetization`
+sprawdza teraz dodatkowo wynikowy plan: FDM wymaga liczności
+`initial_magnetization`, multilayer sumy natywnych wektorów wszystkich warstw
+(nie union-grid), a FEM, FemEigen i FemFrequencyResponse całego `mesh.nodes`.
+Niezgodność kończy preflight przed publikacją, bez niejawnego resamplingu.
+
+Druga korekta w `crates/fullmag-cli/src/step_utils.rs::apply_continuation_initial_state`:
+istnienie shared-domain assetu uruchamia odczyt liczności rozwiązanej siatki
+także przy `mesh=None, mesh_source=Some(...)`. Poprzedni warunek zależny od
+inline mesh odrzucał legalny globalny import wielu magnesów z pliku.
+Kanoniczny loader nadal odpowiada za format i walidację siatki.
+
+Regresje Rust zapisano jako
+`step_utils::imported_fem_state_requires_global_nodes_not_local_initializer`
+(4 lokalne wektory legalne dla authoringu, 5 globalnych wymagane przy imporcie)
+oraz `step_utils::imported_fem_state_supports_multi_magnet_source_only_mesh`
+(5 węzłów pliku, 8 rozwiązanych węzłów po pakowaniu interfejsu per obiekt;
+import 8 akceptowany, 5 i 7 odrzucane według zapisanych oczekiwań).
+Obie sprawdzają niezmienność bazowego IR. Wersjonowana siatka
+`crates/fullmag-cli/tests/fixtures/import_shared_domain.mesh.json` eliminuje
+potrzebę tworzenia tymczasowych plików testowych. Te testy **nie zostały
+skompilowane ani wykonane**; pozostają do uruchomienia po odwołaniu zakazu.
+
+Dowody ograniczone do źródeł: RED trzech nowych oczekiwań (2 failures,
+1 error) → **26 PASS** w `scripts/test_antenna_observation_source.py`.
+`just check-cli-source`: końcowy receipt `5a083d2acd1d481da2ae604000c304a8`,
+**passed**, exit 0, HEAD `c9c1d0334169529b9d374fe5c637fd7bc51717a1` z WIP,
+digest przed/po `05e2b4affddd5a69dde1eef1515de53885840cecdee9224efd431f400f496a15`,
+`source_changed_during_run=false`. To check produkcyjnych typów CLI,
+nie kompilacja testów ani wykonanie FEM/GPU. Wynik nie kwalifikuje fizyki,
+import events, atomowości uploadu, spatial identity ani pełnego T00–T18.
+
 ### Checkpoint 2026-10-05 — prywatna walidacja importu przed publikacją
 
 `crates/fullmag-cli/src/step_utils.rs::validate_imported_magnetization`
 klonuje bazowe IR, stosuje istniejące `apply_continuation_initial_state`
-i uruchamia kanoniczny planner na prywatnym kandydacie. Błąd liczności lub
-planowania docelowego problemu wraca przed publikacją continuation.
+i uruchamia kanoniczny planner na prywatnym kandydacie. Pierwsza wersja
+odrzucała błędy planowania, lecz nie odróżniała lokalnego initializeru FEM
+od globalnego carrieru; korektę i jej zakres opisano w checkpointcie powyżej.
 Helper nie tworzy runtime, nie ładuje bazy anteny, nie uruchamia solve/LLG
 i nie przepisuje zegara segmentu ani waveformu. Nie zmienia równań, jednostek,
 publicznego Python ani `ProblemIR`.

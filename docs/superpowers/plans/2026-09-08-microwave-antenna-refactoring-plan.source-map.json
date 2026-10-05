@@ -35,7 +35,7 @@
       "id": "antenna-import-private-preflight",
       "path": "crates/fullmag-cli/src/step_utils.rs",
       "symbol": "validate_imported_magnetization",
-      "responsibility": "Prywatny kandydat IR i kanoniczny planner przed publikacja importu; bez runtime, source solve i zmiany zegarow.",
+      "responsibility": "Prywatny kandydat IR, kanoniczny planner i strict global flat carrier count dla pieciu wariantow przed publikacja importu; bez runtime, source solve i zmiany zegarow.",
       "evidence_status": "source_only"
     },
     {
@@ -43,6 +43,20 @@
       "path": "crates/fullmag-cli/src/step_utils.rs",
       "symbol": "imported_magnetization_validation_rejects_wrong_size_without_mutating_problem",
       "responsibility": "Zapisane FDM scenariusze liczności i niezmiennosci IR; unit Rust niekompilowany i nieuruchomiony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-import-fem-global-carrier-regression",
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "symbol": "imported_fem_state_requires_global_nodes_not_local_initializer",
+      "responsibility": "Zapisana regresja local4 kontra global5 dla magnesu z airbox; unit Rust niekompilowany i nieuruchomiony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-import-fem-source-only-regression",
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "symbol": "imported_fem_state_supports_multi_magnet_source_only_mesh",
+      "responsibility": "Zapisana regresja wielomagnesowego importu globalnego mesh_source bez inline mesh; unit Rust niekompilowany i nieuruchomiony.",
       "evidence_status": "source_only"
     },
     {

@@ -4078,7 +4078,26 @@ pub(crate) fn validate_imported_magnetization(
 ) -> Result<()> {
     let mut candidate = base_problem.clone();
     apply_continuation_initial_state(&mut candidate, magnetization)?;
-    fullmag_plan::plan(&candidate).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let plan = fullmag_plan::plan(&candidate)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let expected_vectors = match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => fdm.initial_magnetization.len(),
+        BackendPlanIR::FdmMultilayer(fdm) => fdm
+            .layers
+            .iter()
+            .map(|layer| layer.initial_magnetization.len())
+            .sum(),
+        BackendPlanIR::Fem(fem) => fem.mesh.nodes.len(),
+        BackendPlanIR::FemEigen(fem) => fem.mesh.nodes.len(),
+        BackendPlanIR::FemFrequencyResponse(fem) => fem.mesh.nodes.len(),
+    };
+    if magnetization.len() != expected_vectors {
+        bail!(
+            "imported magnetization has {} vectors, but the resolved global flat carrier requires {} (length mismatch)",
+            magnetization.len(),
+            expected_vectors
+        );
+    }
     Ok(())
 }
 
@@ -4162,13 +4181,18 @@ pub(crate) fn apply_continuation_initial_state(
         return Ok(());
     }
 
+    let has_shared_domain = problem
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+        .is_some();
     let shared_domain_node_count = problem
         .geometry_assets
         .as_ref()
         .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
         .and_then(|asset| asset.mesh.as_ref())
         .map(|mesh| mesh.nodes.len());
-    let planned_fem_node_count = if shared_domain_node_count.is_some() {
+    let planned_fem_node_count = if has_shared_domain {
         match planned_fem_mesh_node_count(problem) {
             Ok(node_count) => node_count,
             Err(_error) if shared_domain_node_count == Some(final_magnetization.len()) => None,
@@ -5768,6 +5792,74 @@ mod tests {
         }
         validate_imported_magnetization(&problem, &vec![[0.0, 1.0, 0.0]; expected])
             .expect("matching sampled state should be accepted privately");
+        assert_eq!(serde_json::to_value(&problem).unwrap(), before);
+    }
+
+    #[test]
+    fn imported_fem_state_requires_global_nodes_not_local_initializer() {
+        let mut mesh: fullmag_ir::MeshIR = serde_json::from_str(include_str!(
+            "../tests/fixtures/import_shared_domain.mesh.json"
+        ))
+        .expect("shared-domain fixture should parse");
+        mesh.element_markers[1] = 0;
+        let problem = fem_target_problem_ir(mesh);
+        let before = serde_json::to_value(&problem).unwrap();
+        let mut local = problem.clone();
+        apply_continuation_initial_state(&mut local, &vec![[1.0, 0.0, 0.0]; 4]).unwrap();
+        fullmag_plan::plan(&local).expect("local magnetic initializer is legal for authoring");
+        let error = validate_imported_magnetization(&problem, &vec![[1.0, 0.0, 0.0]; 4])
+            .expect_err("local initializer is not a global runtime carrier");
+        assert!(error.to_string().contains("global flat carrier"));
+        validate_imported_magnetization(&problem, &vec![[0.0, 1.0, 0.0]; 5])
+            .expect("global carrier should be accepted");
+        assert_eq!(serde_json::to_value(&problem).unwrap(), before);
+    }
+
+    #[test]
+    fn imported_fem_state_supports_multi_magnet_source_only_mesh() {
+        let mesh = serde_json::from_str(include_str!(
+            "../tests/fixtures/import_shared_domain.mesh.json"
+        ))
+        .expect("shared-domain fixture should parse");
+        let mut problem = fem_target_problem_ir(mesh);
+        problem.geometry.entries.push(fullmag_ir::GeometryEntryIR::Box {
+            name: "ring".to_string(),
+            size: [1.0, 1.0, 1.0],
+        });
+        problem.regions.push(fullmag_ir::RegionIR {
+            name: "ring".to_string(),
+            geometry: "ring".to_string(),
+        });
+        let mut ring = problem.magnets[0].clone();
+        ring.object_id = Some("ring".to_string());
+        ring.name = "ring".to_string();
+        ring.region = "ring".to_string();
+        problem.magnets.push(ring);
+        let asset = problem.geometry_assets.as_mut().unwrap()
+            .fem_domain_mesh_asset.as_mut().unwrap();
+        asset.region_markers.push(fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "ring".to_string(),
+            marker: 2,
+        });
+        asset.mesh = None;
+        asset.mesh_source = Some(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/import_shared_domain.mesh.json")
+                .display().to_string(),
+        );
+        let before = serde_json::to_value(&problem).unwrap();
+        let plan = fullmag_plan::plan(&problem).expect("source-only shared domain should resolve");
+        let BackendPlanIR::Fem(fem) = plan.backend_plan else {
+            panic!("source-only import fixture requires FEM");
+        };
+        let expected = fem.mesh.nodes.len();
+        assert_eq!(expected, 8, "shared magnetic interface nodes are packed per object");
+        validate_imported_magnetization(&problem, &vec![[0.0, 1.0, 0.0]; expected])
+            .expect("source-only multi-magnet global carrier should be accepted");
+        for count in [5, expected - 1] {
+            validate_imported_magnetization(&problem, &vec![[0.0, 1.0, 0.0]; count])
+                .expect_err("source mesh node count is not the resolved runtime carrier length");
+        }
         assert_eq!(serde_json::to_value(&problem).unwrap(), before);
     }
 
