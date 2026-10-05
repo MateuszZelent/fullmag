@@ -28929,7 +28929,7 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
         let (before_m, before_step, before_time, before_version) = {
             let mut guard = state.current_live_state.write().await;
             let snapshot = guard.as_mut().unwrap();
-            snapshot.coupled_checkpoint = Some(candidate);
+            snapshot.coupled_checkpoint = Some(candidate.clone());
             let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
             (
                 latest.magnetization.clone(),
@@ -28952,9 +28952,15 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             )
             .await
             .unwrap();
-        if create.status() == StatusCode::BAD_REQUEST {
+        let create_status = create.status();
+        if create_status == StatusCode::BAD_REQUEST {
             let mut guard = state.current_live_state.write().await;
             let snapshot = guard.as_mut().unwrap();
+            assert_eq!(
+                snapshot.coupled_checkpoint.as_ref(),
+                Some(&candidate),
+                "capture {label} coupled checkpoint"
+            );
             let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
             assert_eq!(latest.magnetization, before_m, "capture {label}");
             assert_eq!(latest.step, before_step, "capture {label}");
@@ -28963,7 +28969,10 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             snapshot.coupled_checkpoint = Some(expected.clone());
             continue;
         }
-        assert_eq!(create.status(), StatusCode::OK, "capture {label}");
+        if create_status != StatusCode::OK {
+            let response_body = body_json(create).await;
+            panic!("capture {label}: unexpected HTTP {create_status}: {response_body}");
+        }
         let checkpoint_id = body_json(create).await["checkpoint"]["checkpoint_id"]
             .as_str()
             .unwrap()

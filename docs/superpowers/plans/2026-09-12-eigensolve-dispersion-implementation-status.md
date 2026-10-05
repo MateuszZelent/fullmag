@@ -1,3 +1,28 @@
+<!-- runtime234-canonical-worker-build-20261006 -->
+## Checkpoint — build234 przyjęty, watcher przygotowuje ponowienie adaptive15
+
+Job234 4ea6f05931f045a3a644a3c424cc1da2 potwierdzony API state running,
+commit888be1c223d851aa4af1f1365f1e7cf3fc3106b9, source digest
+a8aa1b32c194a44fe54b26008d2c04a4a9d0584341f164c161a1862a71e68370.
+Coordinator healthy/accepting, brak aktywnych jobów przed submit,17.7GB free.
+Profil fem-cpu-slepc-runtime-v2 bez kompilacji testów jednostkowych.
+Submission exit0; nie duplikowano requestu mimo początkowej ciszy klienta.
+Osobny list endpoint zwrócił500; status dokładnego joba i submit działały.
+
+Watcher runtime234-canonical-signed15-adaptive obserwuje ten sam build;
+po terminal succeeded/exit0 uruchomi świeży managed OpenAPI export,
+dry-run i ten sam signed15 adaptive z wersjonowanym modelem ba0045fef.
+Timeout obserwacji nie anuluje ani nie ponawia builda. Nowe częstotliwości
+poza ukończoną parą ±10 pozostają NOT VERIFIED do postsolve.
+
+CI merge491b1fc8578ad09814cc3e5ad3ced0f1567d2d52 ma dokładnie drzewo
+cc32e3ec075c4cfc0b849aeba713dc123cf1ec62 jak branch3878; brak source drift
+w ostatnim błędzie coupled M3. Fixture wzmacnia no-mutation dla checkpoint
+oraz pokaże response body przy niespodziewanym500, bez zmiany fizycznego
+sum guardu Oersted. Root pobrał remote master1bdb48274050e66aabcb490b52873c5b9cc02f98;
+nie wykonano merge w dirty worktree. Integracja po odrębnym checkpointcie.
+Pełny plan S00–S12 nadal aktywny, source/build/science/GUI rozdzielone.
+
 <!-- canonical-worker-plan-digest-20261006 -->
 ## Checkpoint — przyczyna digest mismatch potwierdzona w zachowanych taskach
 
