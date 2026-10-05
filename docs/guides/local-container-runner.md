@@ -422,3 +422,14 @@ Pełne usunięcie pozostawia tombstone `removed` związany z SHA-256 oryginalneg
 build receipt. Stan `partial_error`, `deleting` albo niezgodna tożsamość blokuje
 ponowną próbę i wymaga ręcznego sprawdzenia danych. Nie deklaruj udanego
 sprzątania na podstawie braku katalogu bez takiego dowodu.
+
+
+Przy maintenance można jawnie użyć
+`just runner-container-replace <verified-image-sha256> <readonly-preview-plan-id>`.
+To wyłącznie porzucenie wskazanego execution preview w statusie planning,
+przy policy preview i potwierdzonym Drain bez aktywnych jobów/workerów/błędów.
+Klient sprawdza uwierzytelnione API, kanoniczny rekord i brak operation/admission,
+a po stop ponownie atestuje kontener i metadane. Przerwany preview otrzymuje
+blocked/applied=false; trzeba wygenerować świeży plan. Nie używaj tego wariantu
+do apply, automatycznej retencji lub odzyskania nieznanego wyniku mutacji.
+Domyślny wariant recepty zachowuje odmowę podczas retention_busy.

@@ -1065,7 +1065,7 @@ class ObservabilityHub:
     # -------------------------------------------------------------------------
     # Retention Planning
     # -------------------------------------------------------------------------
-    def generate_retention_plan(self, queue=None) -> dict[str, Any]:
+    def generate_retention_plan(self, queue=None, *, job_ids=None, progress=None) -> dict[str, Any]:
         jobs = []
         if queue is not None:
             try:
@@ -1078,6 +1078,41 @@ class ObservabilityHub:
             except Exception as error:
                 raise RuntimeError('Retention queue inventory unavailable') from error
 
+        outside = []
+        if job_ids is not None:
+            wanted = set(job_ids)
+            by_id = {job['job_id']: job for job in jobs if isinstance(job, Mapping) and isinstance(job.get('job_id'), str)}
+            if not wanted or not wanted <= set(by_id) or any(by_id[jid].get('owner') != self.owner for jid in wanted):
+                raise ValueError('Unknown or foreign retention selection')
+            outside = [job for job in jobs if not isinstance(job, Mapping) or job.get('job_id') not in wanted]
+            jobs = [job for job in jobs if isinstance(job, Mapping) and job.get('job_id') in wanted]
+
+        pinned = self.get_pinned()
+        indexed_pins = []
+        scan_jobs = []
+        for job in jobs:
+            if not isinstance(job, Mapping) or not isinstance(job.get('job_id'), str) or not isinstance(job.get('worktree_id'), str):
+                scan_jobs.append(job)
+                continue
+            key = f"exec-{job['worktree_id']}-{job['job_id']}"
+            if key in pinned or job['job_id'] in pinned:
+                info = pinned.get(key) or pinned.get(job['job_id']) or {}
+                reason = info.get('reason', 'Przypięte przez operatora') if isinstance(info, dict) else 'Przypięte przez operatora'
+                indexed_pins.append({'job_id': job['job_id'], 'worktree_id': job['worktree_id'],
+                                     'state': job.get('state'), 'execution': None,
+                                     'reason': str(reason) + ' (ochrona przed retencją)'})
+            else:
+                scan_jobs.append(job)
+        jobs = scan_jobs
+
+        def monitored_jobs():
+            for index, job in enumerate(jobs):
+                if progress is not None:
+                    progress({'processed_jobs': index, 'total_jobs': len(jobs), 'current_job_id': job.get('job_id') if isinstance(job, Mapping) else None})
+                yield job
+            if progress is not None:
+                progress({'processed_jobs': len(jobs), 'total_jobs': len(jobs), 'current_job_id': None})
+
         policy = self.get_retention_policy()
         ttl_success_h = float(policy.get("ttl_success_hours", 24))
         ttl_failure_h = float(policy.get("ttl_failure_hours", 168))
@@ -1086,12 +1121,20 @@ class ObservabilityHub:
         raw_plan = {"candidates": [], "retained": []}
         if jobs:
             try:
-                raw_plan = retention_plan(str(self.storage), jobs, now, success_hours=ttl_success_h, failed_hours=ttl_failure_h)
+                raw_plan = retention_plan(str(self.storage), monitored_jobs(), now, success_hours=ttl_success_h, failed_hours=ttl_failure_h)
             except Exception as error:
                 raise RuntimeError('Retention execution inventory unavailable') from error
         if raw_plan.get('error'):
             raise RuntimeError('Retention inventory failed: ' + str(raw_plan['error']))
 
+        raw_plan['retained'] += [{'job_id': job.get('job_id') if isinstance(job, Mapping) else None,
+                                  'worktree_id': job.get('worktree_id') if isinstance(job, Mapping) else None,
+                                  'state': job.get('state') if isinstance(job, Mapping) else None, 'execution': None,
+                                  'reason': 'outside_selected_scope'} for job in outside]
+        raw_plan['retained'] += indexed_pins
+        if 'space' in raw_plan:
+            unknown_sizes = sum(row.get('bytes') is None for row in raw_plan['retained'])
+            raw_plan['space'].update(unmeasured_retained_count=unknown_sizes, measurement_complete=unknown_sizes == 0)
         pinned = self.get_pinned()
         plan_id = f"plan-{uuid.uuid4().hex[:8]}"
 
@@ -1103,7 +1146,7 @@ class ObservabilityHub:
             res_id = f"exec-{wt}-{jid}"
             if res_id in pinned or jid in pinned:
                 pin_info = pinned.get(res_id) or pinned.get(jid) or {}
-                pin_reason = pin_info.get("reason", "Przypięte przez operatora")
+                pin_reason = pin_info.get("reason", "Przypięte przez operatora") if isinstance(pin_info, dict) else "Przypięte przez operatora"
                 pinned_retained.append({
                     "resource_id": res_id,
                     "name": f"{wt}/{jid}/execution",
@@ -1135,7 +1178,7 @@ class ObservabilityHub:
                 "worktree_id": wt,
                 "job_id": jid,
                 "path": r.get("execution"),
-                "size_bytes": r.get("bytes", 0) or 0,
+                "size_bytes": r.get("bytes"),
                 "why_retained": r.get("reason", "Chronione przez silnik retencji"),
             })
 
@@ -1146,7 +1189,7 @@ class ObservabilityHub:
             if item.get("worktree_id") and item.get("job_id")
         }
         runs_dir = self.storage / "runs"
-        if runs_dir.is_dir() and not _is_reparse_or_symlink(runs_dir):
+        if job_ids is None and runs_dir.is_dir() and not _is_reparse_or_symlink(runs_dir):
             for wt_dir in sorted(runs_dir.iterdir()):
                 if not wt_dir.is_dir() or _is_reparse_or_symlink(wt_dir):
                     continue
@@ -1157,14 +1200,13 @@ class ObservabilityHub:
                     if ident not in accounted_identities:
                         exec_dir = job_dir / "execution"
                         if exec_dir.is_dir() and not _is_reparse_or_symlink(exec_dir):
-                            sz = _fast_dir_size(exec_dir)
                             retained.append({
                                 "resource_id": f"exec-{wt_dir.name}-{job_dir.name}",
                                 "name": f"{wt_dir.name}/{job_dir.name}/execution",
                                 "worktree_id": wt_dir.name,
                                 "job_id": job_dir.name,
                                 "path": str(exec_dir),
-                                "size_bytes": sz[0],
+                                "size_bytes": None,
                                 "why_retained": "Niezweryfikowany lub osierocony katalog - ochrona przed usunięciem",
                             })
                             accounted_identities.add(ident)

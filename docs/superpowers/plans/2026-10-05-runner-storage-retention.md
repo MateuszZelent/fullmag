@@ -159,3 +159,32 @@ sprzątania produkcyjnego storage.
   Przed wdrożeniem trzeba ustalić rzeczywisty stan kontenera, zakończyć aktywny
   job, potwierdzić Drain i brak użytkowników. Bez tych dowodów nie podmieniamy
   koordynatora i nie usuwamy produkcyjnych danych.
+
+### Wdrożenie i korekta kosztu pierwszego preview — 2026-10-05
+
+- Integracja commit `0dfc03396a40301aac8f0fc5d879091da093374e`, push PASS.
+  Po potwierdzonym Drain bez aktywnych jobów wdrożono obraz
+  `sha256:b180a7e9d4ffd7a9867e075d2c38fe2d8c7c25ed7e5624eca2f890476d911a39`.
+  Zachowano 7 profili oraz kolejkę; resume i health PASS. Produkcyjne UI:
+  widoczny bound plan, brak page errors, osobny runtime opt-in wyłączony.
+- Niedestrukcyjny probe POSIX na rzeczywistym bind mount potwierdził hardlinki
+  dwóch nowych kapsuł, nlink=3, readonly CAS i niezmienione manifesty. Usunięto
+  wyłącznie własny katalog probe po sprawdzeniu tokenu. Historia pozostaje nietknięta.
+- Pierwszy produkcyjny preview `plan-fab83fd5c3c14cb38e73199751cafba8`
+  obejmuje wybór 151 terminalnych buildów naszego worktree, lecz starszy kod
+  mierzy też niewygasłe i chronione wykonania przed filtrem zakresu.
+  Wielomilionowy skan na Docker Desktop/NTFS jest za wolny; niczego nie usunął.
+- Poprawka: scope, indeksowe piny oraz TTL/receipt piny są sprawdzane przed
+  pomiarem. Kandydaci nadal otrzymują pełny fingerprint i rozmiar; executor
+  zachowuje walidację źródeł, receiptów, użytkowników, mountów i świeżości.
+  Niezmierzone rozmiary są null, nie zero. Preview zapisuje rzeczywiste
+  processed_jobs/total_jobs i pierwotny czas requestu; UI pokazuje ten licznik.
+- Kontrole: retention 10/10, executor/service 32/32, observability 26/26,
+  lifecycle/CLI 35/35 PASS. Chromium fixture zaobserwowała realne 1/2 jobów,
+  a potem poprawne sources/runtime apply i replay po reload bez page errors.
+- Przygotowano jawny wyjątek maintenance wyłącznie dla named read-only
+  execution preview: completed Drain, tryb preview, brak workerów/jobów/błędów,
+  zgodne public/raw planning z applied=false, brak operation file i admission
+  gate. Po stop ponowna atestacja i walidacja metadanych. Domyślna odmowa
+  replacement podczas mutacji pozostaje. Wyjątek nie jest generic force.
+  Użycie na produkcji oraz właściwy cleanup: nadal NOT VERIFIED.

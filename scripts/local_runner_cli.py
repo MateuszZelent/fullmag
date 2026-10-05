@@ -43,6 +43,7 @@ def main(argv=None):
     profile_activation.add_argument('--enable-slepc-runtime-v2', action='store_true')
     replacement = sub.add_parser('container-replace')
     replacement.add_argument('--image-id', required=True)
+    replacement.add_argument('--abandon-readonly-preview', default=None)
     sub.add_parser('container-resume')
     for command in ('container-start', 'container-status', 'container-stop'):
         sub.add_parser(command)
@@ -122,7 +123,9 @@ def main(argv=None):
                     enable_slepc_runtime_v2=args.enable_slepc_runtime_v2,
                 )
             elif args.action == 'container-replace':
-                result = container_client.replace(layout, args.image_id, owner=owner)
+                options = ({'abandon_readonly_preview': args.abandon_readonly_preview}
+                           if args.abandon_readonly_preview is not None else {})
+                result = container_client.replace(layout, args.image_id, owner=owner, **options)
             elif args.action == 'container-resume':
                 result = container_client.request(layout, owner=owner, method='POST', path='/resume', payload={})
             elif args.action == 'container-start':

@@ -101,7 +101,9 @@ class RetentionService:
                 return {'scope': scope, 'status': 'blocked', 'applied': False,
                         'error': 'another_retention_operation_active', 'active_plan_id': self.active_id}
             plan_id = 'plan-' + uuid.uuid4().hex
-            self._save({'plan_id': plan_id, 'scope': scope, 'status': 'planning', 'applied': False})
+            created_at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            planning = {'plan_id': plan_id, 'scope': scope, 'status': 'planning', 'applied': False, 'created_at': created_at}
+            self._save(planning)
             def work():
                 try:
                     if scope == 'sources':
@@ -112,22 +114,11 @@ class RetentionService:
                         plan = plan_runtime_cleanup(self.layout, self.queue, owner=self.owner, call=self.call,
                                                     policy=self.hub.get_retention_policy(), job_ids=job_ids)
                     else:
-                        plan = self.hub.generate_retention_plan(queue=self.queue)
-                        if job_ids is not None:
-                            wanted = set(job_ids)
-                            for jid in wanted:
-                                if self.queue.get(jid)['owner'] != self.owner:
-                                    raise ValueError('Foreign job selection')
-                            excluded = [item for item in plan['candidates'] if item['job_id'] not in wanted]
-                            plan['candidates'] = [item for item in plan['candidates'] if item['job_id'] in wanted]
-                            plan['retained'] += [{**item, 'why_retained': 'outside_selected_scope'} for item in excluded]
-                            plan['candidates_count'] = len(plan['candidates'])
-                            plan['retained_count'] = len(plan['retained'])
-                            plan['estimated_reclaimed_bytes'] = sum(item['size_bytes'] for item in plan['candidates'])
-                            free = plan.get('disk_free_before_bytes')
-                            plan['disk_free_after_estimated_bytes'] = (free + plan['estimated_reclaimed_bytes']
-                                                                       if free is not None else None)
+                        plan = self.hub.generate_retention_plan(
+                            queue=self.queue, job_ids=job_ids,
+                            progress=lambda fields: self._save({**planning, **fields}))
                     plan['scope'] = scope
+                    plan['created_at'] = created_at
                     plan['plan_id'] = plan_id
                     self._save(plan)
                     if automatic:

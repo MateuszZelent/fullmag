@@ -45,6 +45,14 @@ Powoduje to narastanie milionów plików niezależnie od ustawionego TTL.
    ticketu, bez poświadczania historii. Brak potwierdzonego inventory blokuje
    retencję runtime; błędny consumer chroni również nieznane odwołania cross-job.
 
+9. Konserwatywne preview nie musi mierzyć zasobów, które są już chronione przez
+   zakres, pin albo TTL; ich rozmiar pozostaje nieznany. Fingerprint kandydatów
+   i walidacja executora pozostają obowiązkowe. Dla utrwalonego, nazwanego
+   read-only execution preview dopuszczamy jawne porzucenie przy maintenance,
+   po ukończonym Drain i po potwierdzeniu braku apply, admission i aktywnych
+   użytkowników runnera. Automatyczna retencja i mutacja nie korzystają z tego
+   wyjątku; default replacement nadal odmawia przy retention_busy.
+
 ## Zgodność i migracja
 
 Nie zmieniamy ProblemIR, fizyki, publicznego Python DSL ani Control Room API.

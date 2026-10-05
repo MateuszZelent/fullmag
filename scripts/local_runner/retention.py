@@ -3,9 +3,10 @@
 The planner is deliberately an inventory operation.  It never removes files,
 changes queue state, calls Docker, or follows links.  A run is eligible only
 when the queue record and its durable coordinator journal identify the same
-job, owner, source digest, and full container ID.  Only the ``execution``
-tree is measured; artifacts, logs, source capsules, and shared caches are
-outside the retention scope.
+job, owner, source digest, and full container ID.  Only retention-eligible
+``execution`` trees are measured; artifacts, logs, source capsules, and shared
+caches are outside the retention scope. The byte summary describes measured
+job executions, not a complete physical inventory.
 """
 
 from __future__ import annotations
@@ -399,6 +400,17 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
         hours = success_hours if state == "succeeded" else failed_hours
         expiry = timestamp + float(hours) * 3600
 
+        if _pin_present(run_root):
+            retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
+                                    execution=execution, container_id=container_id,
+                                    reason="pinned", expiry=expiry))
+            continue
+        if float(now) < expiry:
+            retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
+                                    execution=execution, container_id=container_id,
+                                    reason="not_expired", expiry=expiry))
+            continue
+
         try:
             inventory = inspect_execution(execution)
             size = inventory["logical_bytes"]
@@ -409,17 +421,6 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
             continue
         retained_bytes += size
         scanned_bytes += size
-
-        if _pin_present(run_root):
-            retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
-                                    execution=execution, container_id=container_id,
-                                    reason="pinned", expiry=expiry, size=size))
-            continue
-        if float(now) < expiry:
-            retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
-                                    execution=execution, container_id=container_id,
-                                    reason="not_expired", expiry=expiry, size=size))
-            continue
 
         candidate = _record(job_id=job_id, worktree_id=worktree_id, state=state,
                             execution=execution, container_id=container_id,
@@ -432,6 +433,7 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
 
     candidates.sort(key=_sort_key)
     retained.sort(key=_sort_key)
+    unmeasured_retained_count = sum(1 for item in retained if "bytes" not in item)
     return {
         "schema": _SCHEMA,
         "generated_at": float(now),
@@ -443,6 +445,10 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
             "scanned_bytes": scanned_bytes,
             "candidate_count": len(candidates),
             "retained_count": len(retained),
+            # Completeness covers measured eligible job executions only, not all
+            # paths or physical storage volumes in the host inventory.
+            "unmeasured_retained_count": unmeasured_retained_count,
+            "measurement_complete": unmeasured_retained_count == 0,
         },
     }
 

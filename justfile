@@ -139,8 +139,8 @@ runner-retention-get plan_id:
 runner-retention-apply plan_id:
     {{storage_python}} scripts/local_runner_cli.py retention-apply {{quote(plan_id)}}
 
-runner-container-replace image_id:
-    {{storage_python}} scripts/local_runner_cli.py container-replace --image-id {{quote(image_id)}}
+runner-container-replace image_id preview_id="":
+    {{storage_python}} scripts/local_runner_cli.py container-replace --image-id {{quote(image_id)}} {{if preview_id == "" { "" } else { "--abandon-readonly-preview " + quote(preview_id) }}}
 
 runner-reconcile job:
     {{storage_python}} scripts/local_runner_cli.py reconcile {{quote(job)}}

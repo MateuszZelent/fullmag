@@ -382,7 +382,7 @@ export function renderStorageView(container) {
     }
     if (['planning', 'accepted', 'running'].includes(plan.status)) {
       content.textContent = plan.status === 'planning'
-        ? 'Trwa przygotowanie wykazu. Żadne dane nie są jeszcze usuwane.'
+        ? `Trwa przygotowanie wykazu. Żadne dane nie są jeszcze usuwane.${Number.isInteger(plan.processed_jobs) && Number.isInteger(plan.total_jobs) ? ` Sprawdzono ${plan.processed_jobs} z ${plan.total_jobs} zadań.` : ''}`
         : 'Trwa sprawdzanie i sprzątanie. Wynik zostanie zapisany dla tego identyfikatora operacji.';
       return;
     }

@@ -355,7 +355,9 @@ class ObservabilityTests(unittest.TestCase):
             def list(self, owner=None, limit=1000):
                 return []
 
-        plan = self.hub.generate_retention_plan(queue=EmptyQueue())
+        with patch('local_runner.observability._fast_dir_size') as scan:
+            plan = self.hub.generate_retention_plan(queue=EmptyQueue())
+            scan.assert_not_called()
         # The unindexed execution directory MUST NOT be a candidate!
         self.assertEqual(0, plan["candidates_count"])
         # It MUST be retained and protected
@@ -363,7 +365,7 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIn("exec-wt-unindexed-job-unindexed", retained_ids)
         retained_item = next(r for r in plan["retained"] if r["resource_id"] == "exec-wt-unindexed-job-unindexed")
         self.assertIn("ochrona przed usunięciem", retained_item["why_retained"])
-        self.assertEqual(2048, retained_item["size_bytes"])
+        self.assertIsNone(retained_item["size_bytes"])
 
     def test_timeline_progress_from_worker_log(self):
         job = {

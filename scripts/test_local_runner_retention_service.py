@@ -177,6 +177,26 @@ class RetentionServiceTests(unittest.TestCase):
         apply.assert_called_once()
         execution.assert_not_called()
 
+    def test_execution_scope_filters_before_scan_and_persists_real_progress(self):
+        selected = ['a' * 32]
+        entered, release = threading.Event(), threading.Event()
+        def inventory(*, queue, job_ids, progress):
+            self.assertEqual(selected, job_ids)
+            progress({'processed_jobs': 0, 'total_jobs': 1, 'current_job_id': selected[0]})
+            entered.set()
+            self.assertTrue(release.wait(5))
+            return {'status': 'preview', 'candidates_count': 0, 'candidates': [], 'retained': []}
+        with patch.object(self.hub, 'generate_retention_plan', side_effect=inventory):
+            accepted = self.service.preview(job_ids=selected)
+            self.assertTrue(entered.wait(2))
+            observed = self.service.get(accepted['plan_id'])
+            self.assertEqual(0, observed['processed_jobs'])
+            self.assertEqual(1, observed['total_jobs'])
+            self.assertTrue(observed['created_at'])
+            release.set()
+            self.finish()
+        self.assertEqual(observed['created_at'], self.service.get(accepted['plan_id'])['created_at'])
+
     def test_scope_and_selection_validation_precedes_background_work(self):
         for kwargs in ({'scope': 'all'}, {'scope': 'sources', 'job_ids': []},
                        {'job_ids': ['../job']}, {'job_ids': ['a' * 32] * 257}):

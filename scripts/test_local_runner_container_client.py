@@ -327,6 +327,76 @@ class ContainerClientTests(unittest.TestCase):
                 container_client.replace(self.layout, NEW_IMAGE, "alice", call=docker)
         self.assertFalse(any(call[0] in {"stop", "rm"} for call in docker.calls))
 
+    def test_explicit_abandonment_only_accepts_drained_unapplied_execution_preview(self):
+        pid = 'plan-' + 'e' * 32
+        raw = {'plan_id': pid, 'scope': 'execution', 'status': 'planning', 'applied': False}
+        health = {'ok': True, 'worker_alive': False, 'worker_error': None, 'legacy_jobs': [],
+                  'active_jobs': [], 'accepting_jobs': False, 'stop_requested': True,
+                  'retention_busy': True, 'retention_draining': True,
+                  'coordinator': {'state': 'stopped', 'active_job_ids': [], 'last_error': None}}
+        self.configure()
+        directory = self.storage / 'index/retention-plans'
+        directory.mkdir()
+        record = directory / (pid + '.json')
+        record.write_text(json.dumps(raw))
+        policy = {'mode': 'preview'}
+        def rpc(layout, owner, method, path, **kwargs):
+            return health if path == '/health' else (policy if path.endswith('/policy') else raw)
+        def docker_fixture():
+            docker = FakeDocker(self.storage)
+            docker.container_id = CONTAINER_ID
+            docker.inspection = docker._inspection(running=True)
+            docker.available_images.add(NEW_IMAGE)
+            return docker
+        with patch.object(container_client, 'request', side_effect=rpc):
+            for field, value in (('status', 'running'), ('status', 'accepted'), ('scope', 'sources'), ('applied', True), ('applied', 0)):
+                with self.subTest(field=field, value=value):
+                    bad = {**raw, field: value};record.write_text(json.dumps(bad));docker = docker_fixture()
+                    with self.assertRaises(container_client.ContainerClientError):
+                        container_client.replace(self.layout, NEW_IMAGE, 'alice', call=docker, abandon_readonly_preview=pid)
+                    self.assertFalse(any(call[0] in ('stop', 'rm') for call in docker.calls))
+            record.write_text(json.dumps(raw))
+            policy['mode'] = 'automatic'
+            docker = docker_fixture()
+            with self.assertRaises(container_client.ContainerClientError):
+                container_client.replace(self.layout, NEW_IMAGE, 'alice', call=docker, abandon_readonly_preview=pid)
+            self.assertFalse(any(call[0] in ('stop', 'rm') for call in docker.calls))
+            policy['mode'] = 'preview'
+            health['active_jobs'] = [{'job_id': 'active'}]
+            docker = docker_fixture()
+            with self.assertRaises(container_client.ContainerClientError):
+                container_client.replace(self.layout, NEW_IMAGE, 'alice', call=docker, abandon_readonly_preview=pid)
+            self.assertFalse(any(call[0] in ('stop', 'rm') for call in docker.calls))
+            health['active_jobs'] = []
+            gate = self.storage / 'locks/retention-admission'
+            gate.mkdir()
+            docker = docker_fixture()
+            with self.assertRaises(container_client.ContainerClientError):
+                container_client.replace(self.layout, NEW_IMAGE, 'alice', call=docker, abandon_readonly_preview=pid)
+            self.assertFalse(any(call[0] in ('stop', 'rm') for call in docker.calls))
+            gate.rmdir()
+            operation = self.storage / 'index/retention-operations' / (pid + '.json')
+            operation.parent.mkdir();operation.write_text('{}')
+            docker = docker_fixture()
+            with self.assertRaises(container_client.ContainerClientError):
+                container_client.replace(self.layout, NEW_IMAGE, 'alice', call=docker, abandon_readonly_preview=pid)
+            self.assertFalse(any(call[0] in ('stop', 'rm') for call in docker.calls))
+            operation.unlink()
+            docker = docker_fixture()
+            def finish_during_stop(argv):
+                value = docker(argv)
+                if argv[0] == 'stop':
+                    ready = {**raw, 'status': 'preview'}
+                    ready.pop('applied')
+                    record.write_text(json.dumps(ready))
+                return value
+            result = container_client.replace(self.layout, NEW_IMAGE, 'alice', call=finish_during_stop, abandon_readonly_preview=pid)
+        self.assertEqual(NEW_IMAGE, result['image_id'])
+        saved = json.loads(record.read_text())
+        self.assertEqual('blocked', saved['status'])
+        self.assertFalse(saved['applied'])
+        self.assertTrue(saved['abandoned_readonly_preview'])
+
     def test_replace_rejects_idle_coordinator_even_when_queue_is_empty(self):
         self.configure()
         docker = FakeDocker(self.storage)
