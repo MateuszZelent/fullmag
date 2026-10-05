@@ -746,8 +746,9 @@ export function useCurrentRunResource({
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     SIMULATION_RUN_CURRENT_PATH,
   );
-  const runAvailable = useSessionStatusSelector((status) =>
-    hasCurrentSimulationRun(status.data),
+  const runAvailable = useSessionStatusSelector(
+    (status) => hasCurrentSimulationRun(status.data),
+    { enabled: sessionIdentity !== null },
   );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
