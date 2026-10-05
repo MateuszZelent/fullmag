@@ -55,7 +55,11 @@ const SESSION_UNCONFIRMED =
 export function StartScreen({ kernel }: ModuleProps) {
   const sessions = useSessionCollection();
   const sessionIdentity = useSessionResourceIdentity();
-  const sessionName = useSessionStatusSelector((status) => status.data?.session?.name ?? null);
+  const sessionName = useSessionStatusSelector(
+    (status) => status.data?.session?.name ?? null,
+    // No session means no status resource to read; do not request one.
+    { enabled: sessionIdentity !== null },
+  );
   // Subscribing re-renders the tiles when the project controller changes the
   // enablement of workspace.open-project.
   useProjectDocumentSnapshot();
