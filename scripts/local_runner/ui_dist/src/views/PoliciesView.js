@@ -97,9 +97,13 @@ export function renderPoliciesView(container) {
 
             <div class="form-group">
               <label class="form-label">Minimalna liczba zachowanych artefaktów na profil:</label>
-              <input type="number" id="pol-min-artifacts" class="form-input" value="${currentPolicy.min_artifacts_to_keep || 3}" min="1" max="20" disabled />
-              <span class="form-hint">Retencja pakietów runtime wymaga osobnej weryfikacji odwołań.</span>
+              <input type="number" id="pol-min-artifacts" class="form-input" value="${currentPolicy.min_artifacts_to_keep ?? 3}" min="1" max="20" ${currentPolicy.runtime_available ? '' : 'disabled'} />
+              <span class="form-hint">Na worktree i profil. Odwołania wyników oraz aktywne instancje mogą chronić więcej paczek.</span>
             </div>
+          </div>
+          <div class="form-group">
+            <label><input type="checkbox" id="pol-runtime-enabled" ${currentPolicy.runtime_retention_enabled ? 'checked' : ''} ${currentPolicy.runtime_available ? '' : 'disabled'} /> Automatycznie sprzątaj również stare, nieużywane paczki programu</label>
+            <span class="form-hint">Działa w trybie automatycznym, z pełną kontrolą odwołań. Źródła, wyniki, manifesty i logi pozostają zachowane.</span>
           </div>
 
           <h3 class="subsection-title">Progi ochrony wolnego miejsca:</h3>
@@ -157,6 +161,12 @@ export function renderPoliciesView(container) {
       disk_critical_threshold_gib: parseInt(card.querySelector('#pol-crit-gib')?.value, 10) || 10,
       min_free_space_gib: parseInt(card.querySelector('#pol-min-free')?.value, 10) || 8,
     };
+    if (currentPolicy.runtime_available) {
+      payload.runtime_retention_enabled = card.querySelector('#pol-runtime-enabled')?.checked === true;
+      const minimumInput = card.querySelector('#pol-min-artifacts');
+      if (!minimumInput?.checkValidity()) { minimumInput?.reportValidity(); return; }
+      payload.min_artifacts_to_keep = Number(minimumInput.value);
+    }
 
     try {
       await api.updateRetentionPolicy(payload);

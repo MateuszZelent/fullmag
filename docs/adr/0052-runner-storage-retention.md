@@ -35,6 +35,16 @@ Powoduje to narastanie milionów plików niezależnie od ustawionego TTL.
    interoperacyjności blokad `msvcrt` i `flock` przez Docker Desktop.
    Przerwany gate lub ticket wymaga sprawdzenia właściciela; sam wiek go nie wygasza.
 
+7. Plan administracyjny wiąże zakres i wskazane joby. Przy zajętym wykonawcy
+   klient dostaje odmowę, a nie ID wcześniejszego planu o innym zakresie.
+   Częściowe usunięcie paczki wymaga sprawdzenia danych; świeży plan nie może
+   automatycznie ponowić takiej operacji.
+8. Kompletność historycznych lokalizacji konsumentów jest osobnym warunkiem.
+   Rejestr metadanych nie uzyskuje tego statusu przez samo utworzenie pliku.
+   Nowy COMSOL/DE output jest rejestrowany pod bramką admission przed zwolnieniem
+   ticketu, bez poświadczania historii. Brak potwierdzonego inventory blokuje
+   retencję runtime; błędny consumer chroni również nieznane odwołania cross-job.
+
 ## Zgodność i migracja
 
 Nie zmieniamy ProblemIR, fizyki, publicznego Python DSL ani Control Room API.

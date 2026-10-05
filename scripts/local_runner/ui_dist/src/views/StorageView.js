@@ -22,6 +22,12 @@ export function renderStorageView(container) {
           <p class="view-subtitle">Zarządzanie wolumenami dyskowymi, alokacją klas danych i audytowalną retencją</p>
         </div>
         <div class="header-btns">
+          <label for="retention-scope">Zakres:</label>
+          <select id="retention-scope" class="form-select">
+            <option value="execution">Zakończone kopie robocze</option>
+            <option value="sources">Współdzielenie źródeł</option>
+            <option value="runtime">Stare paczki programu</option>
+          </select>
           <button class="btn btn-secondary btn-sm" id="btn-storage-refresh">↻ Odśwież stan</button>
           <button class="btn btn-primary btn-sm" id="btn-create-plan">🔍 Przygotuj plan retencji</button>
         </div>
@@ -31,7 +37,7 @@ export function renderStorageView(container) {
       <section class="section-card retention-plan-card" id="retention-plan-section" style="display: none;">
         <div class="card-header-flex">
           <div>
-            <h2 class="section-title">Podgląd planu retencji (Audytowany preview)</h2>
+            <h2 class="section-title" id="plan-title">Plan obsługi danych</h2>
             <span class="section-subtitle" id="plan-metadata"></span>
           </div>
           <div>
@@ -80,7 +86,8 @@ export function renderStorageView(container) {
     const btn = container.querySelector('#btn-create-plan');
     if (btn) btn.disabled = true;
     try {
-      activePlan = await observePlan(await api.createRetentionPlan());
+      const scope = container.querySelector('#retention-scope')?.value || 'execution';
+      activePlan = await observePlan(await api.createRetentionPlan(scope));
     } catch (err) {
       alert('Błąd generowania planu: ' + err.message);
     } finally {
@@ -91,7 +98,12 @@ export function renderStorageView(container) {
   container.querySelector('#btn-apply-plan')?.addEventListener('click', async () => {
     if (!activePlan) return;
     if (activePlan.status !== 'preview') return;
-    if (confirm(`Usunąć wskazane kopie robocze z planu ${activePlan.plan_id}? Przed usunięciem ponownie sprawdzimy ich użycie. Wyniki, źródła i cache pozostaną zachowane.`)) {
+    const question = activePlan.scope === 'sources'
+      ? `Współdzielić identyczną treść wskazanych źródeł z planu ${activePlan.plan_id}? Każda kapsuła zachowa swój manifest i zawartość.`
+      : activePlan.scope === 'runtime'
+        ? `Usunąć wskazane stare paczki programu z planu ${activePlan.plan_id}? Ponownie sprawdzimy odwołania wyników, instancje i ochronę paczek.`
+        : `Usunąć wskazane kopie robocze z planu ${activePlan.plan_id}? Przed usunięciem ponownie sprawdzimy ich użycie. Wyniki, źródła i cache pozostaną zachowane.`;
+    if (confirm(question)) {
       const btn = container.querySelector('#btn-apply-plan');
       if (btn) btn.disabled = true;
       try {
@@ -108,7 +120,10 @@ export function renderStorageView(container) {
           alert('Błąd wykonania retencji: ' + errMsg);
           return;
         }
-        alert(`Usunięto kopie robocze o rozmiarze logicznym ${formatBytes(res.removed_logical_bytes)}. Zmiana wolnego miejsca: ${formatBytes(res.disk_free_change_bytes)}. Pomiar miejsca może obejmować równoległe zapisy innych programów.`);
+        const outcome = activePlan.scope === 'sources'
+          ? `Współdzielono zawartość ${res.items?.filter(item => item.status === 'compacted').length || 0} kapsuł źródeł.`
+          : `Usunięto wskazane zasoby o rozmiarze logicznym ${formatBytes(res.removed_logical_bytes)}.`;
+        alert(`${outcome} Zmiana wolnego miejsca: ${formatBytes(res.disk_free_change_bytes)}. Pomiar miejsca może obejmować równoległe zapisy innych programów.`);
         loadStorageData();
       } catch (err) {
         alert('Błąd wykonania retencji: ' + err.message);
@@ -354,9 +369,17 @@ export function renderStorageView(container) {
     if (!sec || !content) return;
 
     sec.style.display = 'block';
-    meta.textContent = `ID: ${plan.plan_id} • Status: ${plan.status} • Data: ${formatTimestamp(plan.created_at)}`;
+    const sourceScope = plan.scope === 'sources';
+    const title = container.querySelector('#plan-title');
+    if (title) title.textContent = sourceScope ? 'Współdzielenie źródeł'
+      : plan.scope === 'runtime' ? 'Retencja starych paczek programu' : 'Retencja kopii roboczych';
+    meta.textContent = `ID: ${plan.plan_id || 'nie przyjęto operacji'} • Status: ${plan.status} • Data: ${formatTimestamp(plan.created_at)}`;
     const applyButton = container.querySelector('#btn-apply-plan');
-    if (applyButton) applyButton.disabled = plan.status !== 'preview' || !plan.candidates_count;
+    if (applyButton) {
+      applyButton.disabled = plan.status !== 'preview' || !plan.candidates_count;
+      applyButton.textContent = sourceScope ? 'Współdziel wskazane źródła'
+        : plan.scope === 'runtime' ? 'Usuń wskazane paczki programu' : 'Usuń wskazane kopie robocze';
+    }
     if (['planning', 'accepted', 'running'].includes(plan.status)) {
       content.textContent = plan.status === 'planning'
         ? 'Trwa przygotowanie wykazu. Żadne dane nie są jeszcze usuwane.'
@@ -367,13 +390,14 @@ export function renderStorageView(container) {
     content.innerHTML = `
       ${plan.error ? `<p class="error-box">${escapeHtml(plan.error)}</p>` : ''}
       ${plan.items ? `<h3>Wynik wykonania</h3><ul>${plan.items.map(item => `<li>${escapeHtml(item.job_id)}: ${escapeHtml(item.status)} ${escapeHtml(item.reason || '')}</li>`).join('')}</ul>` : ''}
+      ${plan.reference_errors?.length ? `<p class="error-box">Kontrola odwołań wykryła ${plan.reference_errors.length} problemów. Paczki objęte niepewną kontrolą pozostają chronione.</p>` : ''}
       <div class="plan-summary-grid">
         <div class="plan-summary-box">
           <span class="plan-box-label">Rozmiar logiczny kandydatów (estymata):</span>
           <span class="plan-box-val text-success font-mono font-bold">${formatBytes(plan.estimated_reclaimed_bytes)}</span>
         </div>
         <div class="plan-summary-box">
-          <span class="plan-box-label">Liczba kandydatów do usunięcia:</span>
+          <span class="plan-box-label">Liczba wskazanych zasobów:</span>
           <span class="plan-box-val font-mono">${plan.candidates_count}</span>
         </div>
         <div class="plan-summary-box">
@@ -382,7 +406,7 @@ export function renderStorageView(container) {
         </div>
       </div>
 
-      <h3 class="subsection-title">Kandydaci do usunięcia w tym planie:</h3>
+      <h3 class="subsection-title">Zasoby objęte tym planem:</h3>
       ${plan.candidates && plan.candidates.length > 0 ? `
         <div class="table-responsive">
           <table class="data-table">
@@ -407,8 +431,11 @@ export function renderStorageView(container) {
           </table>
         </div>
       ` : `
-        <p class="empty-hint">Brak kwalifikujących się zasobów do usunięcia w tym planie.</p>
+        <p class="empty-hint">Brak kwalifikujących się zasobów w tym planie.</p>
       `}
+      ${plan.retained?.length ? `<h3>Zasoby zachowane</h3><ul>${plan.retained.slice(0, 50).map(item =>
+        `<li>${escapeHtml(item.name || item.job_id || item.path)}: ${escapeHtml(item.why_retained || item.reason || '')}</li>`).join('')}</ul>
+        ${plan.retained.length > 50 ? `<p>Pozostałe ${plan.retained.length - 50} zapisano w raporcie operacji.</p>` : ''}` : ''}
     `;
   }
 

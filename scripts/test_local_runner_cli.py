@@ -40,8 +40,10 @@ class ClientTests(unittest.TestCase):
             self.layout,
             image,
             owner="alice",
+            port=None,
             enable_current_contracts=False,
             enable_slepc_modal=True,
+            enable_slepc_runtime_v2=False,
         )
 
     def test_list_does_not_create_empty_queue(self):
@@ -49,6 +51,40 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual([], json.loads(output))
         self.assertFalse((self.root / 'index').exists())
+
+    def enable_container_mode(self):
+        (self.root / 'index').mkdir(exist_ok=True)
+        (self.root / 'index/local-runner-container.json').write_text('{}')
+
+    def test_scoped_preview_submits_once_with_bounded_job_selection(self):
+        self.enable_container_mode()
+        with patch('local_runner.container_client.request',
+                   return_value={'scope': 'sources', 'plan_id': 'plan-01234567', 'status': 'planning'}) as request:
+            code, output, errors = self.run_client('retention-preview', '--scope', 'sources', '--job-id', 'a' * 32)
+        self.assertEqual(0, code, errors)
+        self.assertEqual('sources', json.loads(output)['scope'])
+        request.assert_called_once_with(self.layout, owner='alice', method='POST',
+                                        path='/api/v1/retention/plans',
+                                        payload={'scope': 'sources', 'job_ids': ['a' * 32]})
+
+    def test_preview_rejects_ignored_scope_without_retry(self):
+        self.enable_container_mode()
+        with patch('local_runner.container_client.request',
+                   return_value={'plan_id': 'plan-01234567', 'status': 'planning'}) as request:
+            code, output, errors = self.run_client('retention-preview', '--scope', 'runtime')
+        self.assertEqual(2, code)
+        self.assertEqual('', output)
+        self.assertIn('requested maintenance scope', errors)
+        request.assert_called_once()
+
+    def test_busy_preview_is_reported_as_blocked_without_apply(self):
+        self.enable_container_mode()
+        response = {'scope': 'runtime', 'status': 'blocked', 'active_plan_id': 'plan-01234567'}
+        with patch('local_runner.container_client.request', return_value=response) as request:
+            code, output, errors = self.run_client('retention-preview', '--scope', 'runtime')
+        self.assertEqual(1, code, errors)
+        self.assertEqual(response, json.loads(output))
+        request.assert_called_once()
 
     def test_status_never_exposes_lease(self):
         queue = JobQueue(self.root / 'index' / 'runner-jobs.sqlite')

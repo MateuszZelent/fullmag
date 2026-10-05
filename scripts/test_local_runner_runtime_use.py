@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from fullmag_storage import StorageError
-from local_runner.runtime_use import retention_mutation_guard, runtime_package_use
+from local_runner.runtime_use import register_runtime_reference_root, retention_mutation_guard, runtime_package_use
 
 
 class RuntimeAdmissionTests(unittest.TestCase):
@@ -13,6 +13,22 @@ class RuntimeAdmissionTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.layout = {'storage_root': str(self.root)}
+
+    def test_consumer_registration_preserves_unverified_legacy_inventory(self):
+        (self.root / 'runs').mkdir()
+        output = self.root / 'runs' / 'new-output'
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output)
+        config = json.loads((self.root / 'index/runtime-reference-roots.json').read_text())
+        self.assertEqual(['runs/new-output'], config['relative_roots'])
+        self.assertFalse(config['legacy_inventory_complete'])
+        config['legacy_inventory_complete'] = True
+        (self.root / 'index/runtime-reference-roots.json').write_text(json.dumps(config))
+        register_runtime_reference_root(self.layout, output)
+        self.assertTrue(json.loads((self.root / 'index/runtime-reference-roots.json').read_text())['legacy_inventory_complete'])
+        (self.root / 'cache').mkdir()
+        register_runtime_reference_root(self.layout, self.root / 'cache' / 'unsupported-output')
+        self.assertFalse(json.loads((self.root / 'index/runtime-reference-roots.json').read_text())['legacy_inventory_complete'])
 
     def test_parallel_readers_protect_until_both_exit(self):
         with runtime_package_use(self.layout):

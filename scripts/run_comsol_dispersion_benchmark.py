@@ -46,7 +46,7 @@ import fullmag_storage  # noqa: E402  (the path setup above is intentional)
 from local_runner.build_executor import validate_build_receipt  # noqa: E402
 from local_runner.build_source import bind_identity  # noqa: E402
 from local_runner.worker_entrypoint import canonical, verify_source  # noqa: E402
-from local_runner.runtime_use import runtime_package_use  # noqa: E402
+from local_runner.runtime_use import register_runtime_reference_root, runtime_package_use  # noqa: E402
 from validate_comsol_dispersion_scientific_gate import (  # noqa: E402
     EVIDENCE_RELATIVE_PATH,
     EVIDENCE_SCHEMA,
@@ -1169,6 +1169,7 @@ def _new_output_dir(
         if candidate.exists() or _is_reparse(candidate):
             raise BenchmarkError(f"benchmark output already exists: {candidate}")
         candidate.parent.mkdir(parents=True, exist_ok=True)
+        register_runtime_reference_root(context.layout, candidate)
         return candidate
     parent = _contained_path(
         storage,
@@ -1181,6 +1182,7 @@ def _new_output_dir(
     for _ in range(8):
         candidate = parent / uuid.uuid4().hex
         if not candidate.exists() and not _is_reparse(candidate):
+            register_runtime_reference_root(context.layout, candidate)
             return candidate
     raise BenchmarkError("could not allocate a unique benchmark output directory")
 

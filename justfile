@@ -130,6 +130,15 @@ runner-container-resume:
 runner-retention-plan:
     {{storage_python}} scripts/local_runner_cli.py retention-plan
 
+runner-retention-preview scope="execution":
+    {{storage_python}} scripts/local_runner_cli.py retention-preview --scope {{quote(scope)}}
+
+runner-retention-get plan_id:
+    {{storage_python}} scripts/local_runner_cli.py retention-get {{quote(plan_id)}}
+
+runner-retention-apply plan_id:
+    {{storage_python}} scripts/local_runner_cli.py retention-apply {{quote(plan_id)}}
+
 runner-container-replace image_id:
     {{storage_python}} scripts/local_runner_cli.py container-replace --image-id {{quote(image_id)}}
 

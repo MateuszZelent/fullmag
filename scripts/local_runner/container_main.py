@@ -992,8 +992,11 @@ class Application:
         job_id = query.get('job_id')
         return self.hub.get_events(limit=limit, level=level, job_id=job_id)
 
-    def retention_plan_preview(self):
-        return self.retention_service.preview()
+    def retention_plan_preview(self, payload=None):
+        payload = {} if payload is None else payload
+        if not isinstance(payload, dict) or set(payload) - {'scope', 'job_ids'}:
+            raise ValueError('Invalid maintenance preview request')
+        return self.retention_service.preview(**payload)
 
     def retention_plan_apply(self, plan_id):
         return self.retention_service.apply(plan_id)

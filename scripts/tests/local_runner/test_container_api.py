@@ -50,6 +50,23 @@ class ContainerAPITests(unittest.TestCase):
         self.server.server_close()
         self.thread.join(timeout=2)
 
+    def test_scoped_maintenance_preview_preserves_request_body(self):
+        def preview(body):
+            self.calls.append(('preview', body))
+            return {'scope': body['scope'], 'plan_id': 'plan-01234567', 'status': 'planning'}
+        self.server.callbacks = replace(self.server.callbacks, retention_plan_preview=preview)
+        body = {'scope': 'sources', 'job_ids': ['a' * 32]}
+        status, _, response = self.request('POST', '/api/v1/retention/plans', body=body)
+        self.assertEqual(200, status)
+        self.assertEqual('sources', self.json_body(response)['scope'])
+        self.assertIn(('preview', body), self.calls)
+
+    def test_legacy_preview_cannot_silently_ignore_a_new_scope(self):
+        status, _, response = self.request('POST', '/api/v1/retention/plans', body={'scope': 'runtime'})
+        self.assertEqual(503, status)
+        self.assertEqual('maintenance_scope_unavailable', self.json_body(response)['error'])
+        self.assertNotIn(('retention',), self.calls)
+
     def request(self, method, path, *, body=None, token="unit-test-secret", headers=None):
         request_headers = {"Authorization": f"Bearer {token}"}
         if headers:

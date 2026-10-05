@@ -278,11 +278,15 @@ class RunnerAPI {
     return await this.request('/api/v1/retention/plans');
   }
 
-  async createRetentionPlan() {
-    return await this.request('/api/v1/retention/plans', {
+  async createRetentionPlan(scope = 'execution') {
+    const result = await this.request('/api/v1/retention/plans', {
       method: 'POST',
-      body: '{}',
+      body: JSON.stringify({ scope }),
     });
+    if (result.scope !== scope) {
+      throw new Error('Koordynator nie potwierdził wybranego zakresu operacji. Odśwież panel po jego aktualizacji.');
+    }
+    return result;
   }
 
   async applyRetentionPlan(planId) {

@@ -7,6 +7,7 @@ Unknown tickets and interrupted gates are protective, never expired by age.
 """
 from contextlib import contextmanager
 import os
+from pathlib import Path
 import socket
 import time
 import uuid
@@ -105,3 +106,40 @@ def runtime_package_use(layout):
     finally:
         with _admission_gate(layout, 'runtime release'):
             _remove_owned(storage, ticket, token)
+
+
+def register_runtime_reference_root(layout, output):
+    """Enroll a new consumer path before its runtime reader ticket is released.
+
+    Enrollment never certifies historic inventory. Unknown/control namespaces
+    invalidate coverage rather than silently permitting an untracked publisher.
+    """
+    with _admission_gate(layout, 'runtime reference publication') as (storage, locks):
+        candidate = Path(output).absolute()
+        try:
+            parts = candidate.relative_to(storage).parts
+            if not parts or any(part in ('', '.', '..') for part in parts):
+                raise ValueError('Invalid consumer path')
+            _checked_child(storage, parts[:-1], kind='directory')
+            if os.path.lexists(candidate):
+                _checked_child(storage, parts, kind='directory')
+        except (ValueError, _PathIssue) as error:
+            raise StorageError('Unsafe runtime consumer path') from error
+        index = _ensure_directory(storage, storage / 'index')
+        config_path = index / 'runtime-reference-roots.json'
+        if os.path.lexists(config_path):
+            _checked_child(storage, ('index', 'runtime-reference-roots.json'), kind='file')
+            config = dict(_read_json(config_path))
+            if (config.get('schema') != 'fullmag.runtime-reference-roots.v1'
+                    or not isinstance(config.get('relative_roots'), list)):
+                raise StorageError('Invalid runtime reference root registry')
+        else:
+            config = {'schema': 'fullmag.runtime-reference-roots.v1',
+                      'relative_roots': [], 'legacy_inventory_complete': False}
+        if parts[0] in ('builds', 'cache', 'locks', 'index'):
+            config['legacy_inventory_complete'] = False
+        else:
+            relative = '/'.join(parts)
+            if relative not in config['relative_roots']:
+                config['relative_roots'] = sorted(config['relative_roots'] + [relative])
+        atomic_json(config_path, config)

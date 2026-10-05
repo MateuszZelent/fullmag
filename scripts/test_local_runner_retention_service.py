@@ -144,6 +144,76 @@ class RetentionServiceTests(unittest.TestCase):
                 self.hub.set_pinned('job', True)
         self.assertEqual({}, self.hub.get_pinned())
 
+    def test_busy_preview_cannot_acknowledge_another_scope_or_selection(self):
+        entered, release = threading.Event(), threading.Event()
+        def inventory(*args, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            return {'scope': 'runtime', 'status': 'preview', 'candidates': [], 'retained': []}
+        with patch('local_runner.runtime_retention.plan_runtime_cleanup', side_effect=inventory):
+            original = self.service.preview(scope='runtime', job_ids=['a' * 32])
+            self.assertTrue(entered.wait(2))
+            for scope in ('runtime', 'sources', 'execution'):
+                result = self.service.preview(scope=scope, job_ids=['b' * 32])
+                self.assertEqual('blocked', result['status'])
+                self.assertEqual(scope, result['scope'])
+                self.assertNotIn('plan_id', result)
+                self.assertEqual(original['plan_id'], result['active_plan_id'])
+            release.set()
+            self.finish()
+
+    def test_source_scope_routes_preview_and_apply_without_execution_fallback(self):
+        selected = ['a' * 32]
+        with patch('local_runner.storage_maintenance.plan_source_compaction',
+                   return_value={'scope': 'sources', 'status': 'preview', 'candidates': [], 'retained': []}) as preview:
+            response = self.service.preview(scope='sources', job_ids=selected)
+            self.finish()
+        preview.assert_called_once_with(self.service.layout, self.queue, owner='operator', job_ids=selected)
+        with patch('local_runner.storage_maintenance.apply_source_compaction',
+                   return_value={'plan_id': response['plan_id'], 'scope': 'sources', 'status': 'succeeded', 'applied': True}) as apply, \
+                patch('local_runner.retention_service.apply_execution_plan') as execution:
+            self.service.apply(response['plan_id'])
+            self.finish()
+        apply.assert_called_once()
+        execution.assert_not_called()
+
+    def test_scope_and_selection_validation_precedes_background_work(self):
+        for kwargs in ({'scope': 'all'}, {'scope': 'sources', 'job_ids': []},
+                       {'job_ids': ['../job']}, {'job_ids': ['a' * 32] * 257}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                self.service.preview(**kwargs)
+        self.assertIsNone(self.service.thread)
+
+    def test_runtime_automatic_is_separate_opt_in_and_alternates_with_execution(self):
+        self.hub.set_retention_policy({'mode': 'automatic'})
+        with patch.object(self.service, 'preview') as preview:
+            self.service.tick(force=True)
+            self.assertEqual('execution', preview.call_args.kwargs['scope'])
+            self.hub.set_retention_policy({'runtime_retention_enabled': True})
+            self.service.last_automatic = 0
+            self.service.tick()
+            self.assertEqual('runtime', preview.call_args.kwargs['scope'])
+            self.service.last_automatic = 0
+            self.service.tick()
+            self.assertEqual('execution', preview.call_args.kwargs['scope'])
+
+    def test_disabling_runtime_during_inventory_cancels_automatic_mutation(self):
+        self.hub.set_retention_policy({'mode': 'automatic', 'runtime_retention_enabled': True})
+        entered, release = threading.Event(), threading.Event()
+        def inventory(*args, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            return {'scope': 'runtime', 'status': 'preview', 'candidates': [], 'retained': []}
+        with patch('local_runner.runtime_retention.plan_runtime_cleanup', side_effect=inventory), \
+                patch('local_runner.runtime_retention.apply_runtime_cleanup') as apply:
+            accepted = self.service.preview(scope='runtime', automatic=True)
+            self.assertTrue(entered.wait(2))
+            self.hub.set_retention_policy({'runtime_retention_enabled': False})
+            release.set()
+            self.finish()
+        apply.assert_not_called()
+        self.assertEqual('preview', self.service.get(accepted['plan_id'])['status'])
+
 
 if __name__ == '__main__':
     unittest.main()

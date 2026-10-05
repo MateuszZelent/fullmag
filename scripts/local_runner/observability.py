@@ -37,6 +37,7 @@ _DEFAULT_POLICY = {
     "ttl_sources_hours": 168,
     "ttl_logs_days": 30,
     "min_artifacts_to_keep": 3,
+    "runtime_retention_enabled": False,
     "disk_warning_threshold_gib": 30,
     "disk_critical_threshold_gib": 10,
     "min_free_space_gib": 8,
@@ -263,6 +264,7 @@ class ObservabilityHub:
         self._metric_samples: deque[dict[str, Any]] = deque(maxlen=_MAX_METRIC_SAMPLES)
         self._plans: dict[str, dict[str, Any]] = {}
         self.retention_execution_available = False
+        self.runtime_retention_available = False
         self._resources_cache: dict[str, Any] | None = None
         self._resources_cache_time: float = 0.0
         self._resources_cache_queue = None
@@ -435,15 +437,33 @@ class ObservabilityHub:
         available = self.retention_execution_available
         policy['automatic_mode_available'] = available
         policy['execution_available'] = available
+        runtime_available = self.runtime_retention_available
+        policy['runtime_available'] = runtime_available
+        policy['maintenance_scopes_supported'] = (['execution', 'sources', 'runtime'] if runtime_available
+                                                   else (['execution'] if available else []))
+        policy['runtime_retention_enabled'] = runtime_available and policy.get('runtime_retention_enabled') is True
         policy['mode_supported'] = ['preview', 'automatic'] if available else ['preview']
         if not available or policy.get('mode') not in policy['mode_supported']:
             policy['mode'] = 'preview'
         if available:
             policy['notice'] = 'Retencja execution: podgląd lub rzeczywiste wykonanie z ponowną walidacją. Źródła, wyniki i cache nie podlegają temu TTL.'
+            if runtime_available:
+                policy['notice'] += ' Stare paczki runtime wymagają pełnej kontroli odwołań; ich automatyczne usuwanie włącza się osobno.'
         return policy
 
     def set_retention_policy(self, updates: Mapping[str, Any]) -> dict[str, Any]:
         current = self.get_retention_policy()
+        if 'runtime_retention_enabled' in updates:
+            enabled = updates['runtime_retention_enabled']
+            if not isinstance(enabled, bool) or (enabled and not self.runtime_retention_available):
+                raise ValueError('Runtime retention is unavailable or its flag is not boolean')
+            current['runtime_retention_enabled'] = enabled
+
+        if 'min_artifacts_to_keep' in updates:
+            minimum = updates['min_artifacts_to_keep']
+            if isinstance(minimum, bool) or not isinstance(minimum, int) or not 1 <= minimum <= 20:
+                raise ValueError('min_artifacts_to_keep must be an integer between 1 and 20')
+            current['min_artifacts_to_keep'] = minimum
 
         # Validate numeric ranges
         for num_key in (
@@ -452,7 +472,6 @@ class ObservabilityHub:
             "ttl_orphan_hours",
             "ttl_sources_hours",
             "ttl_logs_days",
-            "min_artifacts_to_keep",
             "min_free_space_gib",
             "disk_sample_interval_seconds",
         ):

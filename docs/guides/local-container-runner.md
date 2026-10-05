@@ -381,3 +381,44 @@ Przed operatorską budową obrazu należy zakończyć aktywne wykonania i potwie
 zwolnienie lease oraz zdrowie koordynatora. Kolejka obsługuje build źródeł,
 nie budowę obrazu. Zachowaj istniejące profile i obrazy wykorzystywane przez
 wcześniejsze kapsuły. Oba prefixy CPU/GPU kwalifikuj oddzielnie.
+
+
+### Obsługa źródeł i paczek runtime
+
+Plan retencji jest związany z zakresem (`execution`, `sources`, `runtime`) oraz
+opcjonalnym wyborem pełnych ID jobów. Klient CLI udostępnia
+`retention-preview --scope sources`, `retention-get <plan-id>` i
+`retention-apply <plan-id>`; recepty `just runner-retention-preview sources`,
+`runner-retention-get` i `runner-retention-apply` korzystają z tego samego API.
+Nie ponawiaj POST po timeout: odczytaj trwały wynik tego samego ID.
+
+Kompakcja historycznych źródeł zachowuje manifest, digest i ścieżkę kapsuły.
+Identyczna treść jest współdzielona w CAS; execution nadal otrzymuje prywatną
+zapisywalną kopię. Operacja chroni aktywne zadania, piny, obce hardlinki,
+reparse points i mounty. Liczniki logicznych bajtów nie są pomiarem odzysku
+fizycznego miejsca.
+
+Retencja runtime obejmuje wyłącznie dokładny lokalny katalog paczki terminalnego
+udanego buildu. Zachowuje źródła, wyniki naukowe, logi, receipty i historię
+kolejki. Zostawia co najmniej `min_artifacts_to_keep` najnowszych dostępnych
+pakietów dla każdej pary worktree/profil (liczba całkowita 1–20) oraz wszystkie
+paczki używane przez wyniki, UI, eksporty, piny i kontenery. Brak pełnego
+inwentarza lub uszkodzone metadane chronią potencjalnie używane zasoby.
+Automatyczne usuwanie paczek wymaga oddzielnego `runtime_retention_enabled=true`
+oraz trybu `automatic`; domyślnie jest wyłączone.
+
+Autorytatywny rejestr metadanych w `index/runtime-reference-roots.json` ma
+schema `fullmag.runtime-reference-roots.v1`, tablicę `relative_roots` i jawne
+`legacy_inventory_complete`. Nie ustawiaj kompletności na true bez sprawdzenia
+historycznych lokalizacji wyników i zapisania dowodów audytu. Brak pliku albo
+wartości true blokuje usuwanie wszystkich paczek runtime. COMSOL/DE rejestruje
+nowy output pod bramką admission przed zwolnieniem ticketu; utworzenie rejestru
+nie poświadcza historii. Nieobsługiwany output w namespace kontrolnym/payload
+unieważnia kompletność. Katalogi rejestru są względem kanonicznego storage,
+bez ścieżek absolutnych i przejść `..`.
+
+Przed usuwaniem paczki powstaje `artifacts/runtime-package-retention.json`.
+Pełne usunięcie pozostawia tombstone `removed` związany z SHA-256 oryginalnego
+build receipt. Stan `partial_error`, `deleting` albo niezgodna tożsamość blokuje
+ponowną próbę i wymaga ręcznego sprawdzenia danych. Nie deklaruj udanego
+sprzątania na podstawie braku katalogu bez takiego dowodu.

@@ -127,7 +127,7 @@ class APICallbacks:
     processes: Callable[[], object] | None = None
     alerts: Callable[[], object] | None = None
     events: Callable[[dict], object] | None = None
-    retention_plan_preview: Callable[[], object] | None = None
+    retention_plan_preview: Callable[..., object] | None = None
     retention_plan_apply: Callable[[str], object] | None = None
     retention_plan_get: Callable[[str], object] | None = None
     get_retention_policy: Callable[[], object] | None = None
@@ -690,9 +690,15 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
             if body is _BODY_ERROR:
                 return
             if self.server.callbacks.retention_plan_preview is not None:
-                self._invoke(self.server.callbacks.retention_plan_preview)
+                if body:
+                    self._invoke(self.server.callbacks.retention_plan_preview, body)
+                else:
+                    self._invoke(self.server.callbacks.retention_plan_preview)
             elif self.server.callbacks.retention is not None:
-                self._invoke(self.server.callbacks.retention)
+                if body:
+                    self._error(503, "maintenance_scope_unavailable")
+                else:
+                    self._invoke(self.server.callbacks.retention)
             else:
                 self._error(503, "retention_unavailable")
         elif len(parts) == 6 and parts[:4] == ["api", "v1", "retention", "plans"] and parts[5] == "apply":

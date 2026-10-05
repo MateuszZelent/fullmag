@@ -98,3 +98,64 @@ sprzątania produkcyjnego storage.
   Dowód: `storage-admission-cross-host-proof-20261005.json` w evidence wątku.
 - Wdrożenie retencji produkcyjnej i usunięcie historycznych danych nadal OPEN;
   #232 pozostaje aktywny. Ten probe nie zastępuje dowodu rzeczywistego cleanup.
+
+### Checkpoint kompakcji i review retencji runtime — 2026-10-05
+
+- Ochrona użytkowników i probe Windows/Docker: commit
+  `68f8c0646656c075fad31838ed69a082127bd26e`, wypchnięty na branch zadania.
+- Kompakcja historycznych kapsuł jest zaimplementowana: weryfikuje manifest
+  przed i po atomowej podmianie identycznych plików na linki CAS, chroni obce
+  hardlinki i zapisuje postęp partiami. Testy na Windows: 7/7 PASS;
+  niezależne review modułu: SOURCE PASS. Produkcyjna kompakcja: NOT VERIFIED.
+- Integracja source/runtime obejmuje plan związany z zakresem i wyborem jobów,
+  asynchroniczne API, CLI i UI oraz osobne włączenie automatycznej retencji
+  runtime. Busy preview nie zwraca ID innego planu. Częściowe usunięcie runtime
+  wymaga ręcznego sprawdzenia danych; nie jest automatycznie ponawiane.
+- Review retencji runtime ujawniło braki ochrony: worktree-scoped OpenAPI/UI,
+  managed-browser, custom output scientific-batches, uszkodzone dokumenty
+  odwołujące się do różnych buildów oraz piny w receiptach. Korekty są w toku;
+  R3 pozostaje OPEN. Brak autorytatywnego rejestru historycznych lokalizacji
+  wyników blokuje wszystkich kandydatów runtime; nie deklarujemy kompletności
+  na podstawie samego braku znalezionych odwołań.
+- Service/CLI: 25/25 PASS; root source maintenance: 11/11 PASS;
+  API: 16/16 PASS. Zestaw runtime przed ostatnią zmianą kompletności: 9/9 PASS.
+  Nowa regresja kompletności i rozszerzone review wymagają końcowej weryfikacji.
+- Produkcyjny #232 nadal ma aktywny zapis. Runner zgłosił timeout, a dysk C:
+  zapełnił się (nawet mały fixture browser zakończył się Errno 28). Nie wykonano
+  podmiany koordynatora ani produkcyjnego usuwania. Nowe proof przeglądarki,
+  wdrożenie i realny odzysk miejsca pozostają NOT VERIFIED.
+
+### Checkpoint odzyskania miejsca i nowego UI — 2026-10-05
+
+- Kompakcja: commit `c38ec0a8e538a7c8d1c64a81d290967ee2eedb7a`, wypchnięty.
+- Po zwolnieniu miejsca runner ponownie zgłasza healthy, brak worker error
+  i około 37,6 GB wolnego; #232 nadal running. Nie zastąpiono koordynatora.
+- Admission/registration, runtime executor i source wrapper: 30/30 PASS;
+  COMSOL producer: 22/22 PASS; observability: 23/23 PASS; składnia 3 plików JS PASS.
+- Chromium z rzeczywistym testowym API: sources i runtime
+  preview→apply→succeeded, zachowane manifesty i frequency.csv, ten sam runtime
+  plan ID po reload, brak page errors, dostępne oddzielne opt-in runtime.
+  Dokładna paczka fixture została usunięta; źródła i dane naukowe pozostały.
+  Dowody: `storage-maintenance-browser-proof-20261005.json` oraz PNG w evidence.
+  To proof integracji na danych tymczasowych, nie produkcyjnego odzysku miejsca.
+- Nowe COMSOL/DE output są rejestrowane automatycznie przed oddaniem ochrony.
+  `legacy_inventory_complete` pozostaje false dla nowego rejestru. Historyczny
+  audyt/enrolment i produkcyjny cleanup nadal OPEN.
+
+### Końcowa weryfikacja integracji źródeł — 2026-10-05
+
+- Braki ochrony runtime z review zostały poprawione: rzeczywiste lokalizacje
+  OpenAPI/UI i managed-browser, bounded metadane scientific-batches, globalna
+  ochrona przy błędnym consumer cross-job, wszystkie historyczne receipt piny
+  oraz klucz exec. Planner: 15/15 PASS; executor runtime po ostatecznej korekcie
+  walidowanego odczytu rejestru: 10/10 PASS.
+- Rejestr nowych output nie poświadcza historii; planner odczytuje listę roots
+  i flagę kompletności z jednej walidowanej, niepodążającej za linkami kopii.
+- Poprawiony wybór minimalnej liczby runtime jest walidowany w UI i API,
+  bez cichego zaokrąglania wartości operatora.
+- Nieudana próba łagodnego Drain miała nieznany wynik HTTP. Odczyt trwałego
+  requestu potwierdził requested=false; nie ponowiono mutacji. Serwis pozostaje
+  w reconciling z timeoutami Dockera i aktywnym #232 mimo dostępnego miejsca.
+  Przed wdrożeniem trzeba ustalić rzeczywisty stan kontenera, zakończyć aktywny
+  job, potwierdzić Drain i brak użytkowników. Bez tych dowodów nie podmieniamy
+  koordynatora i nie usuwamy produkcyjnych danych.

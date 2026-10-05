@@ -184,6 +184,14 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual("preview", persisted["mode"])
         self.assertEqual(48, persisted["ttl_success_hours"])
 
+    def test_runtime_minimum_requires_bounded_integer(self):
+        for invalid in (0, 21, 1.5, True, "3", None):
+            with self.subTest(value=invalid):
+                with self.assertRaises(ValueError):
+                    self.hub.set_retention_policy({'min_artifacts_to_keep': invalid})
+        self.assertEqual(3, self.hub.get_retention_policy()['min_artifacts_to_keep'])
+        self.assertEqual(1, self.hub.set_retention_policy({'min_artifacts_to_keep': 1})['min_artifacts_to_keep'])
+
     def test_build_job_timeline_decomposition(self):
         job = {
             "job_id": "job-timeline-test",

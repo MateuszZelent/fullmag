@@ -7,6 +7,7 @@ It never accepts a Docker mount or an arbitrary shell command from a job.
 import argparse
 import getpass
 import json
+import re
 import sqlite3
 from pathlib import Path
 import sys
@@ -27,6 +28,12 @@ def main(argv=None):
     sub.add_parser('list')
     sub.add_parser('doctor')
     sub.add_parser('retention-plan')
+    preview = sub.add_parser('retention-preview')
+    preview.add_argument('--scope', choices=('execution', 'sources', 'runtime'), default='execution')
+    preview.add_argument('--job-id', action='append', default=None)
+    for action in ('retention-get', 'retention-apply'):
+        command = sub.add_parser(action)
+        command.add_argument('plan_id')
     container_config = sub.add_parser('container-configure')
     container_config.add_argument('--image-id', required=True)
     container_config.add_argument('--port', type=int, default=None)
@@ -78,7 +85,26 @@ def main(argv=None):
             raise QueueError('No runner jobs have been submitted')
         owner = getpass.getuser()
         container_mode = (storage / 'index' / 'local-runner-container.json').exists()
-        if args.action == 'retention-plan':
+        if args.action in ('retention-preview', 'retention-get', 'retention-apply'):
+            if not container_mode:
+                raise QueueError('Maintenance requires the container coordinator')
+            from local_runner.container_client import request
+            if args.action == 'retention-preview':
+                payload = {'scope': args.scope}
+                if args.job_id is not None:
+                    payload['job_ids'] = args.job_id
+                result = request(layout, owner=owner, method='POST', path='/api/v1/retention/plans', payload=payload)
+                if result.get('scope') != args.scope:
+                    raise QueueError('Coordinator did not acknowledge the requested maintenance scope')
+            else:
+                if re.fullmatch(r'plan-[a-f0-9]{8,32}', args.plan_id) is None:
+                    raise QueueError('Invalid maintenance plan ID')
+                path = '/api/v1/retention/plans/' + args.plan_id
+                if args.action == 'retention-apply':
+                    path += '/apply'
+                result = request(layout, owner=owner, method='POST' if args.action == 'retention-apply' else 'GET',
+                                 path=path, payload={} if args.action == 'retention-apply' else None)
+        elif args.action == 'retention-plan':
             if not container_mode:
                 raise QueueError('Retention inventory requires the container coordinator')
             from local_runner.container_client import request
@@ -228,6 +254,9 @@ def main(argv=None):
                 queue.cancel(args.job_id, owner)
                 result = queue.get(args.job_id)
         print(json.dumps(result, indent=2))
+        if args.action in ('retention-preview', 'retention-apply') and result.get('status') in (
+                'blocked', 'failed', 'partial', 'interrupted_unknown'):
+            return 1
         if args.action == 'run-once' and result is not None and result.get('state') != 'succeeded':
             return 1
         return 0
