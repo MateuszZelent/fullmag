@@ -95,9 +95,49 @@ if ($RunMode -eq "workspace" -and $BuildOnly -and (
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $BuildSourceRoot = $RepoRoot
 $BuildSnapshot = $null
+$VolatileBuild = $null
 function Get-WindowsBuildToolsRoot {
   if ($BuildSnapshot) { return (Join-Path $BuildSourceRoot "scripts\windows") }
   return $PSScriptRoot
+}
+
+function Invoke-CompilerInputsTool {
+  param(
+    [Parameter(Mandatory = $true)][ValidateSet("materialize", "verify")][string]$Command,
+    [Parameter(Mandatory = $true)][string]$RecordPath
+  )
+  $arguments = @($Command, "--record", $RecordPath, "--build-root", $BuildRoot)
+  $useVolatile = $null -ne $VolatileBuild -and [bool]$VolatileBuild.enabled -and [bool]$VolatileBuild.compiler_inputs_enabled
+  if ($useVolatile) {
+    $arguments += @("--working-root", [string]$VolatileBuild.compiler_inputs_root)
+  }
+
+  $volatileRootWasSet = Test-Path "Env:FULLMAG_WINDOWS_VOLATILE_ROOT"
+  $previousVolatileRoot = [Environment]::GetEnvironmentVariable("FULLMAG_WINDOWS_VOLATILE_ROOT", "Process")
+  try {
+    if ($useVolatile) {
+      $env:FULLMAG_WINDOWS_VOLATILE_ROOT = [string]$VolatileBuild.root
+    }
+    $output = (& python -B (Join-Path (Get-WindowsBuildToolsRoot) "compiler_inputs.py") @arguments 2>&1 | Out-String)
+    $exitCode = $LASTEXITCODE
+  }
+  finally {
+    if ($volatileRootWasSet) {
+      [Environment]::SetEnvironmentVariable("FULLMAG_WINDOWS_VOLATILE_ROOT", $previousVolatileRoot, "Process")
+    }
+    else {
+      Remove-Item Env:FULLMAG_WINDOWS_VOLATILE_ROOT -ErrorAction SilentlyContinue
+    }
+  }
+  if ($exitCode -ne 0) {
+    throw "Compiler input $Command failed: $output"
+  }
+  try {
+    return $output | ConvertFrom-Json
+  }
+  catch {
+    throw "Compiler input $Command returned invalid JSON: $output"
+  }
 }
 if ($ExpectedBuildId -and ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1" -or
     $ExpectedBuildId -notmatch '^[0-9a-f]{64}$' -or $RunMode -ne "workspace" -or
@@ -192,7 +232,6 @@ $CacheRoot = [string]$StorageLayout.cache_root
 $BuildRoot = [string]$StorageLayout.build_root
 $TargetRoot = [string]$StorageLayout.env.CARGO_TARGET_DIR
 $TempRoot = [string]$StorageLayout.temp_root
-$VolatileBuild = $null
 
 function Resolve-AbsolutePath {
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -800,6 +839,22 @@ if ($BuildMode -eq "true" -and $RunMode -eq "workspace" -and
 } elseif ($ExpectedBuildId) {
   throw "The requested build has no verified frozen sources"
 }
+if ($BuildMode -eq "true") {
+  $volatileToolsRoot = if ($BuildSnapshot) { Get-WindowsBuildToolsRoot } else { $PSScriptRoot }
+  $volatileBuildOutput = (& python -B (Join-Path $volatileToolsRoot "volatile_build_storage.py") `
+    --repo-root $RepoRoot --profile $StorageProfile --build-root $BuildRoot 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw "Volatile compiler storage preparation failed: $volatileBuildOutput" }
+  $VolatileBuild = $volatileBuildOutput | ConvertFrom-Json
+  if ([bool]$VolatileBuild.enabled -and (
+      -not $VolatileBuild.root -or -not $VolatileBuild.temp_root -or
+      -not $VolatileBuild.compiler_inputs_root -or -not $VolatileBuild.durable_build_root -or
+      (Resolve-AbsolutePath ([string]$VolatileBuild.durable_build_root)) -ine (Resolve-AbsolutePath $BuildRoot))) {
+    throw "Volatile compiler storage does not match the durable build profile"
+  }
+  if ([bool]$VolatileBuild.enabled -and -not [bool]$VolatileBuild.compiler_inputs_enabled) {
+    Write-Host "RAM-disk path normalization unsupported: keeping one durable compiler mirror; compiler TEMP uses $($VolatileBuild.temp_root)"
+  }
+}
 $needsControlRoomToolchain = $RunMode -eq "workspace" -or $Frontend -eq "static" -or
   (-not $BuildOnly -and $RunMode -in @("interactive", "workspace"))
 
@@ -919,16 +974,6 @@ if ($needsControlRoomToolchain) {
 }
 
 if ($BuildMode -eq "true") {
-  $volatileToolsRoot = if ($BuildSnapshot) { Get-WindowsBuildToolsRoot } else { $PSScriptRoot }
-  $volatileOutput = (& python -B (Join-Path $volatileToolsRoot "volatile_build_storage.py") `
-    --repo-root $RepoRoot --profile $StorageProfile --build-root $BuildRoot 2>&1 | Out-String)
-  if ($LASTEXITCODE -ne 0) { throw "Volatile compiler storage preparation failed: $volatileOutput" }
-  $VolatileBuild = $volatileOutput | ConvertFrom-Json
-  if ([bool]$VolatileBuild.enabled -and (
-      -not $VolatileBuild.root -or -not $VolatileBuild.temp_root -or
-      (Resolve-AbsolutePath ([string]$VolatileBuild.durable_build_root)) -ine (Resolve-AbsolutePath $BuildRoot))) {
-    throw "Volatile compiler storage does not match the durable build profile"
-  }
   Require-Command "cargo"
   Require-Command "rustc"
   Require-Command "rustup"
@@ -955,15 +1000,24 @@ if ($BuildMode -eq "true") {
   # authority for Python, frontend staging, versioning and provenance.
   $CompilerSourceRoot = $BuildSourceRoot
   if ($BuildSnapshot) {
-    $compilerInputsOutput = (& python -B (Join-Path (Get-WindowsBuildToolsRoot) "compiler_inputs.py") materialize --record ([string]$BuildSnapshot.record_path) --build-root $BuildRoot 2>&1 | Out-String)
-    if ($LASTEXITCODE -ne 0) { throw "Compiler input materialization failed: $compilerInputsOutput" }
-    $CompilerInputs = $compilerInputsOutput | ConvertFrom-Json
+    $CompilerInputs = Invoke-CompilerInputsTool -Command materialize -RecordPath ([string]$BuildSnapshot.record_path)
     if ([string]$CompilerInputs.snapshot_id -ne [string]$BuildSnapshot.snapshot_id -or
         [string]$CompilerInputs.inventory_sha256 -ne [string]$BuildSnapshot.inventory_sha256 -or
+        [string]$CompilerInputs.record_path -ne [string]$BuildSnapshot.record_path -or
         [string]$CompilerInputs.snapshot_source_root -ne $BuildSourceRoot) {
       throw "Compiler inputs do not match the frozen build source"
     }
-    $CompilerSourceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$CompilerInputs.source_root) -Label "native compiler inputs" -Parent $BuildRoot
+    if ($null -ne $VolatileBuild -and [bool]$VolatileBuild.enabled -and [bool]$VolatileBuild.compiler_inputs_enabled) {
+      $expectedCompilerSourceRoot = Resolve-AbsolutePath (Join-Path ([string]$VolatileBuild.compiler_inputs_root) "source")
+      $actualCompilerSourceRoot = Resolve-AbsolutePath ([string]$CompilerInputs.source_root)
+      if (-not $actualCompilerSourceRoot.Equals($expectedCompilerSourceRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Compiler inputs are outside the prepared volatile working root"
+      }
+      $CompilerSourceRoot = $actualCompilerSourceRoot
+    }
+    else {
+      $CompilerSourceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$CompilerInputs.source_root) -Label "native compiler inputs" -Parent $BuildRoot
+    }
   }
 
   $cargoProfileArguments = @(Get-WindowsCargoProfileArguments -CompilerProfile $CargoCompilerProfile)
@@ -1016,7 +1070,8 @@ if ($BuildMode -eq "true") {
         $saved = $savedTemporaryEnvironment[$name]
         if ($saved.was_set) {
           [Environment]::SetEnvironmentVariable($name, [string]$saved.value, "Process")
-        } else {
+        }
+        else {
           Remove-Item "Env:$name" -ErrorAction SilentlyContinue
         }
       }
@@ -1024,12 +1079,12 @@ if ($BuildMode -eq "true") {
   }
 
   if ($BuildSnapshot) {
-    $compilerInputsOutput = (& python -B (Join-Path (Get-WindowsBuildToolsRoot) "compiler_inputs.py") verify --record ([string]$BuildSnapshot.record_path) --build-root $BuildRoot 2>&1 | Out-String)
-    if ($LASTEXITCODE -ne 0) { throw "Compiler inputs changed during compilation: $compilerInputsOutput" }
-    $verifiedCompilerInputs = $compilerInputsOutput | ConvertFrom-Json
+    $verifiedCompilerInputs = Invoke-CompilerInputsTool -Command verify -RecordPath ([string]$BuildSnapshot.record_path)
     if ([string]$verifiedCompilerInputs.source_root -ne $CompilerSourceRoot -or
         [string]$verifiedCompilerInputs.snapshot_id -ne [string]$BuildSnapshot.snapshot_id -or
-        [string]$verifiedCompilerInputs.inventory_sha256 -ne [string]$BuildSnapshot.inventory_sha256) {
+        [string]$verifiedCompilerInputs.inventory_sha256 -ne [string]$BuildSnapshot.inventory_sha256 -or
+        [string]$verifiedCompilerInputs.record_path -ne [string]$BuildSnapshot.record_path -or
+        [string]$verifiedCompilerInputs.snapshot_source_root -ne $BuildSourceRoot) {
       throw "Compiler input binding changed during compilation"
     }
   }
@@ -1106,7 +1161,6 @@ if ($BuildMode -eq "true") {
     workspace_namespace = $WorkspaceNamespace
     cuda_bin = $cudaBin
     cargo_target_dir = $TargetRoot
-    volatile_build_storage = $VolatileBuild
     cache_root = $CacheRoot
     git_commit = $sourceCommit
     worktree_state = $sourceWorktreeState
@@ -1123,6 +1177,13 @@ if ($BuildMode -eq "true") {
       record_path = [string]$BuildSnapshot.record_path
       inventory_sha256 = [string]$BuildSnapshot.inventory_sha256
       source_root = $BuildSourceRoot
+    } } else { $null }
+    volatile_build_storage = if ($null -ne $VolatileBuild -and [bool]$VolatileBuild.enabled) { [ordered]@{
+      root = [string]$VolatileBuild.root
+      temp_root = [string]$VolatileBuild.temp_root
+      compiler_inputs_root = if ([bool]$VolatileBuild.compiler_inputs_enabled) { [string]$VolatileBuild.compiler_inputs_root } else { Join-Path $BuildRoot "compiler-inputs" }
+      compiler_inputs_enabled = [bool]$VolatileBuild.compiler_inputs_enabled
+      durable_build_root = [string]$VolatileBuild.durable_build_root
     } } else { $null }
     frontend_source_sha256 = $FrontendSourceDigest
     frontend_mode = $Frontend

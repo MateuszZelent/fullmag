@@ -1,3 +1,26 @@
+<!-- master1bdb-integration-20261006 -->
+## Checkpoint — najnowszy master, trzy konflikty rozwiązane
+
+Integracja origin/master1bdb48274050e66aabcb490b52873c5b9cc02f98 do dedykowanego
+brancha. Zachowano18 zmian mastera i naszą implementację. Konflikty:
+.env.example zachowuje pełny Windows-only komentarz mastera;
+fixture volatile zachowuje dodatkowy RepoRoot inicjalizujący kontekst testu;
+launcher zachowuje identyczny rollback z multiline else. Automerge tworzył
+podwójny klucz volatile_build_storage i dwa wywołania prepare adaptera:
+pozostawiono pojedynczą, pełniej walidowaną wersję mastera i manifest
+faktycznych compiler inputs (C przy wyłączonym mirrorze R), zamiast surowych
+planowanych ścieżek helpera. Autoports/frozen inputs/TEMP rollback zachowane.
+BOM zachowany, Python AST i PowerShell parser PASS, review bez blockerów.
+Lokalnych testów ani builda natywnego Windows nie wykonano.
+
+PR97 wcześniej CONFLICTING, co blokowało nowe workflow pull_request.
+Push merge ma przywrócić testy nowego digestu/fixture API. To nie jest merge
+PR do mastera ani zakończenie naukowej kwalifikacji. Build234 nadal przypięty
+do immutable888, watcher i model niezależne od merge; źródłowe drivery pilota,
+benchmarku i klienta runnera nie zmieniły się po stronie mastera. Resolver
+storage otrzymał jedynie zarządzany klucz Windows-only, bez mapowania R do FEM.
+Pełny S00–S12 i shared runtime/science/GUI/integracja nadal OPEN.
+
 <!-- runtime234-canonical-worker-build-20261006 -->
 ## Checkpoint — build234 przyjęty, watcher przygotowuje ponowienie adaptive15
 

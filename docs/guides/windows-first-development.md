@@ -1,5 +1,34 @@
 # Windows-first development
 
+## Ulotne dane kompilacji na RAM-disku
+
+Opcjonalny `FULLMAG_WINDOWS_VOLATILE_ROOT` w lokalnym `.env` głównego
+checkoutu wskazuje absolutny katalog na lokalnym dysku Windows. Worktree
+dziedziczą tę konfigurację. Launcher tworzy tam oznaczony katalog osobno dla
+worktree i profilu: `builds/<worktree-id>/<profile>/compiler-inputs` oraz `tmp`.
+Katalog `tmp` służy jako `TEMP`, `TMP` i `TMPDIR` wyłącznie podczas
+wywołań Cargo. Zmienne są przywracane również po błędzie kompilacji;
+konfiguracja systemu nie jest zmieniana.
+
+Kopia źródeł kompilatora trafia na RAM-disk tylko wtedy, gdy jego sterownik
+obsługuje Windows `GetFinalPathNameByHandleW`, wymaganą przez Rust/Tauri.
+Przy błędzie `ERROR_INVALID_FUNCTION` launcher jawnie pozostawia jedną
+kopię źródeł w trwałym profilu. TEMP kompilatora nadal wskazuje RAM-disk.
+Jedna ścieżka źródeł dla backendu i desktopu zapobiega naprzemiennemu
+unieważnianiu cache Cargo. Inne błędy preflightu nie są ignorowane.
+
+Snapshoty źródeł i ich hashe, cache przyrostowy Cargo, Python, frontend,
+gotowe EXE, pakiety, manifesty, logi, receipts oraz dane sesji pozostają w
+`FULLMAG_PROJECT_STORAGE_ROOT`. Utrata RAM-diska nie usuwa tych danych.
+Kopia kompilatora powstaje ponownie ze zweryfikowanego snapshotu. Zmiana
+ścieżki kompilatora może jednorazowo przebudować część kodu projektu.
+
+Brak skonfigurowanego dysku blokuje nowy build; nie następuje cichy wybór
+innego katalogu. Uruchomienie istniejącego zgodnego pakietu z `build=false`
+nie wymaga RAM-diska. Nieoznaczony niepusty katalog, obcy profil, przekierowanie
+ścieżki lub nakładanie się na trwałe dane są odrzucane. Ustawienie nie
+przenosi buildów kontenerowego FEM ani Linuxa.
+
 Windows is the host build and orchestration environment. The current development routes are:
 
 | Lane | Build/runtime |

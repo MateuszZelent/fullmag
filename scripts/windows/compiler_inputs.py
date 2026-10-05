@@ -18,7 +18,8 @@ import sys
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from windows import build_snapshot
+import fullmag_storage
+from windows import build_snapshot, volatile_build_storage
 
 
 SCHEMA = "fullmag.windows-compiler-inputs.v1"
@@ -61,9 +62,17 @@ def _directory(path, label):
     return metadata
 
 
-def _paths(build_root):
+def _paths(build_root, working_root=None):
     build = build_snapshot._checked_root(build_root)
-    root = build / "compiler-inputs"
+    if working_root is None:
+        root = build / "compiler-inputs"
+    else:
+        try:
+            # The working root is the helper's exact compiler_inputs_root;
+            # callers cannot choose an arbitrary destination below it.
+            root = volatile_build_storage.validate_working_root(build, working_root)
+        except (fullmag_storage.StorageError, OSError, ValueError, TypeError) as error:
+            raise CompilerInputsError(f"Compiler-input working root was refused: {error}") from error
     source = root / "source"
     binding = root / "record.json"
     build_snapshot._no_link(root)
@@ -321,10 +330,10 @@ def _result(metadata, source, binding_path):
     return result
 
 
-def verify(record_path, build_root):
+def verify(record_path, build_root, *, working_root=None):
     """Verify a published mirror against the requested immutable snapshot."""
     metadata, record = _read_verified_record(record_path, build_root)
-    build, root, source, binding_path = _paths(build_root)
+    build, root, source, binding_path = _paths(build_root, working_root)
     if _lstat(root) is None:
         raise CompilerInputsError("Compiler-input mirror has not been materialized")
     value, _ = _read_binding(root, binding_path, build, verified_record=(metadata, record))
@@ -333,7 +342,7 @@ def verify(record_path, build_root):
     return _result(metadata, source, binding_path)
 
 
-def materialize(record_path, build_root):
+def materialize(record_path, build_root, *, working_root=None):
     """Materialize or update the one fixed compiler-input mirror.
 
     The requested source snapshot is fully verified before any mirror write.
@@ -342,7 +351,7 @@ def materialize(record_path, build_root):
     worktree and native heavy-build locks.
     """
     metadata, record = _read_verified_record(record_path, build_root)
-    build, root, source, binding_path = _paths(build_root)
+    build, root, source, binding_path = _paths(build_root, working_root)
     root_metadata = _lstat(root)
     previous = None
     previous_inventory = {}
@@ -425,14 +434,16 @@ def main():
         child = commands.add_parser(command)
         child.add_argument("--record", required=True, type=Path)
         child.add_argument("--build-root", required=True, type=Path)
+        child.add_argument("--working-root", type=Path)
     args = parser.parse_args()
     try:
-        result = (materialize(args.record, args.build_root) if args.command == "materialize"
-                  else verify(args.record, args.build_root))
+        result = (materialize(args.record, args.build_root, working_root=args.working_root)
+                  if args.command == "materialize"
+                  else verify(args.record, args.build_root, working_root=args.working_root))
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
     except (build_snapshot.SnapshotError, build_snapshot.SourceIdentityError,
-            OSError, ValueError) as error:
+            fullmag_storage.StorageError, OSError, ValueError) as error:
         print(f"WINDOWS_COMPILER_INPUTS_ERROR={error}", file=sys.stderr)
         return 1
 

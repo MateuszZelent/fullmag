@@ -30,7 +30,11 @@ export function createDevelopmentKernelOwners(
       const pending = kernel.pendingForms.getTransitionSnapshot();
       // This synchronous rejection acquires no guard and never applies a form.
       if (!options.applyPendingChanges && (pending.dirtyOwnerCount > 0 || pending.applyingOwnerCount > 0
-        || pending.preparing || pending.guarded)) throw new DevelopmentRestartCaptureError(true);
+        || pending.preparing || pending.guarded)) {
+        const reason = pending.dirtyOwnerCount > 0 && pending.applyingOwnerCount === 0
+          && !pending.preparing && !pending.guarded ? "pending_changes" : "capture_rejected";
+        throw new DevelopmentRestartCaptureError(true, reason);
+      }
       let forms: Awaited<ReturnType<NonNullable<OwnerKernel["pendingForms"]>["prepareTransition"]>>;
       try {
         forms = await kernel.pendingForms.prepareTransition({ applyPendingChanges: options.applyPendingChanges });

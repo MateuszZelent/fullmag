@@ -137,6 +137,15 @@ for (const releaseFailure of [false, true]) {
   groups++;
 }
 for (const confirmed of [true, false]) {
+  const { controller, calls } = fixture({ captureError: new DevelopmentRestartCaptureError(confirmed, "pending_changes") });
+  await controller.start();
+  assert.equal(controller.getSnapshot().state, "failed");
+  assert.equal(controller.getSnapshot().captureCleanup, confirmed ? "confirmed" : "unconfirmed");
+  assert.equal(calls.submit, 0); assert.equal(calls.release, 0);
+  assert.match(controller.getSnapshot().message, confirmed ? /Apply or revert pending Inspector changes/ : /cleanup is unconfirmed/);
+  groups++;
+}
+for (const confirmed of [true, false]) {
   const { controller, calls } = fixture({ captureError: new DevelopmentRestartCaptureError(confirmed) });
   await controller.start();
   assert.equal(controller.getSnapshot().state, "failed");
