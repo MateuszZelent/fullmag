@@ -31,7 +31,7 @@ against real project archives.
 | 3 | Inspector: header, chips, context banner, Overview | Done | typecheck, lint, browser (five banner states) |
 | 4 | Thumbnails, card grid, result preview, LRU | Done in the renderer | typecheck, lint, browser. **No frame scrubber**: not built, see section 3 for the exact reason. Result folders show the stored preview of their source project (labelled "project preview"), never a render of the result. The thumbnail is now written: a finished run records its outcome and a viewport thumbnail into the open project (`project_record_outcome`, `project/preview/thumb.png`, a PNG up to 256 kB) and the index reads it. Writer verified by `cargo check` and a mocked-host browser check, **not** in a packaged app |
 | 5 | Authors, History, Runs, BibTeX | Done: read side and writer | browser (three tabs, mocked host); `cargo check`. Writer records edit saves only, see §3 |
-| 6 | Continue card | Done in the renderer | browser (resumable / not / host error). `resume_run`, `discard_checkpoint` do not exist |
+| 6 | Continue card | Done in the renderer. Discard checkpoint works for an open project through the runtime route `DELETE /v2/sessions/current/persistence/checkpoints/{id}` (inline two-step confirmation, command `study.discard-checkpoint`) | browser (resumable / not / host error) for the card; Rust handler tests, session store test and vitest for Discard; **no browser run of Discard and no run against a real project**. `resume_run` and the host `discard_checkpoint` do not exist |
 | 7 | Compute environment | Rozbudowany widget i szczegóły Settings; istniejące zasoby runtime v2 | Przeglądarka: rzeczywisty RTX 4080 SUPER, 48 wątków CPU i 10 kontroli stanów/motywów/układu. Lint zmiany i kontrole API/architektury: PASS. Pełna kontrola typów/lint: błędy poza zakresem; szczegóły w [09-compute-environment.md](09-compute-environment.md) |
 | 8 | Templates gallery | Gallery plus a validated canonical Python script per template (save, copy) | each script loads to ProblemIR with the repository Python package (loader only, no solver). **Create script from template…** (desktop only) saves the script through the host command `script_save_new` (native Save dialog, no overwrite without the dialog's confirmation, atomic UTF-8 write, first-line origin comment, `create` + `open` events), then Home selects it so Run in new window is next. Outside the desktop host the button is disabled with its reason; Download and Copy script work everywhere. Templates are scripts, not projects: no project is created |
 | 9 | Import | `.fms`; `.mx3` as a reported subset translator | translator tests and a Python load of every generated fixture script. **Save translated script…** (desktop only) goes through the same `script_save_new` (event `import`); the report of untranslated statements stays visible before saving, and an incomplete translation can be saved (the report says it stops when run). Download and Copy script work everywhere. No other importer |
@@ -135,9 +135,14 @@ Host (needs work outside the renderer):
   resume. Verified by Rust tests (writer, reader, route, OpenAPI) and vitest;
   the runner crate's own unit tests were not built or run (build rule for unit
   tests), and no run was executed end to end to produce a real `frames.json`.
-- **Checkpoints:** `discard_checkpoint` does not exist and stays out of scope:
-  the runtime has no route to discard a checkpoint, so the Continue card shows
-  the action disabled.
+- **Checkpoints:** Discard is built for a project that is **open** in the
+  runtime: `DELETE /v2/sessions/current/persistence/checkpoints/{id}` removes
+  the run's latest checkpoint (the one Resume would restore) and refuses with
+  409 while a stage restored from it, or the run manifest names it as latest;
+  CAS objects stay for the store's reviewed GC. The Tauri `discard_checkpoint`
+  host command for a project that is **not open** does not exist and stays out
+  of scope, so the card hides Discard then (no open runtime to delete from).
+  Details: section 11.4 of `docs/specs/control-room-api-endpoint-reference-v1.md`.
 - **Provenance writer** records only a generic "Saved revision N" entry when a
   save to an existing file changes its content. It does not record the first
   write of a new file or what changed, and is **unverified in a running
@@ -146,7 +151,7 @@ Host (needs work outside the renderer):
 - **Rebuild** opens whole archives rather than reading only a manifest head.
 - **Disabled, with their reason shown:** creating or saving a script from a
   template or a translated `.mx3` outside the desktop host (browser build);
-  importers other than `.fms` and the `.mx3` subset; discarding a checkpoint;
+  importers other than `.fms` and the `.mx3` subset; discarding the checkpoint of a project that is not open (Discard is hidden there);
   the result frame preview image (only the frame index is built, see above).
 - **Not built:** turning script text into a *project* (the API still has no
   such operation); templates therefore create scripts, never projects. The

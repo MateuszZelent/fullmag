@@ -1571,6 +1571,15 @@
   margin-top: auto;
 }
 
+.fm-start-continue__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2);
+  font-size: var(--fm-font-size-xs);
+  color: var(--fm-start-meta);
+}
+
 /* ── Templates gallery ────────────────────────────────────────────────── */
 
 .fm-start-templates {

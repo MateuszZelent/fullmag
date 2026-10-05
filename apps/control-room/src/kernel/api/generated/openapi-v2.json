@@ -58154,6 +58154,37 @@
       }
     },
     "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}": {
+      "delete": {
+        "operationId": "persistence_delete_sessions_current_persistence_checkpoints_checkpoint_id",
+        "parameters": [
+          {
+            "description": "Checkpoint id",
+            "in": "path",
+            "name": "checkpoint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Checkpoint deleted"
+          },
+          "404": {
+            "description": "No active workspace or checkpoint not found"
+          },
+          "409": {
+            "description": "Checkpoint is still referenced as a restore source or by the run manifest"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      },
       "get": {
         "operationId": "persistence_get_sessions_current_persistence_checkpoints_checkpoint_id",
         "parameters": [

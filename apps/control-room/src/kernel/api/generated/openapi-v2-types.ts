@@ -3797,7 +3797,7 @@ export interface paths {
         get: operations["persistence_get_sessions_current_persistence_checkpoints_checkpoint_id"];
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["persistence_delete_sessions_current_persistence_checkpoints_checkpoint_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -26335,6 +26335,44 @@ export interface operations {
             };
             /** @description No active workspace or checkpoint not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_delete_sessions_current_persistence_checkpoints_checkpoint_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Checkpoint id */
+                checkpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Checkpoint deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or checkpoint not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Checkpoint is still referenced as a restore source or by the run manifest */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

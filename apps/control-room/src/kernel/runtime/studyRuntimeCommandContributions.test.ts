@@ -2121,6 +2121,61 @@ describe("study runtime command contributions", () => {
     expect(checkpointListener).toHaveBeenCalledWith("cp-000042");
   });
 
+  it("discards only the named checkpoint and invalidates the catalogue and stage link", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const remove = vi.fn(async () => undefined);
+    const context = {
+      api: { persistence: { checkpoints: { delete: remove } } } as never,
+      resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test" as const,
+    };
+
+    // Nothing is deleted implicitly: no id, no request.
+    expect(registry.isEnabled("study.discard-checkpoint", context)).toBe(false);
+    expect(
+      await registry.execute("study.discard-checkpoint", context),
+    ).toMatchObject({ status: "failed" });
+    expect(remove).not.toHaveBeenCalled();
+
+    const result = await registry.execute("study.discard-checkpoint", {
+      ...context,
+      input: { checkpointId: "cp-000042" },
+    });
+
+    expect(result).toEqual({ message: "Checkpoint discarded.", status: "completed" });
+    expect(remove).toHaveBeenCalledWith("cp-000042", {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+    });
+    expect(resources.getRevision(PERSISTENCE_CHECKPOINTS_PATH)).toBe("cp-000042:discarded");
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe("cp-000042:discarded");
+  });
+
+  it("reports a refused discard as a failed command with the runtime's message", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const remove = vi.fn(async () => {
+      throw new Error("checkpoint_delete_referenced: still the restore source");
+    });
+
+    const result = await registry.execute("study.discard-checkpoint", {
+      api: { persistence: { checkpoints: { delete: remove } } } as never,
+      input: { checkpointId: "cp-000042" },
+      resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    });
+
+    expect(result).toMatchObject({
+      message: expect.stringContaining("checkpoint_delete_referenced"),
+      status: "failed",
+    });
+    expect(resources.getRevision(PERSISTENCE_CHECKPOINTS_PATH)).toBeNull();
+  });
+
   it("restores checkpoints and invalidates field, scalar, energy, metric, and visualization resources", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();

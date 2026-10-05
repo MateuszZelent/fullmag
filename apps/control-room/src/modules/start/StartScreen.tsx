@@ -194,6 +194,22 @@ export function StartScreen({ kernel }: ModuleProps) {
     return result.message ?? `Could not restore the checkpoint of ${entry.name}.`;
   };
 
+  // Discard deletes the checkpoint through the open session's runtime
+  // (study.discard-checkpoint -> DELETE .../persistence/checkpoints/{id}). Home
+  // stays up; the refetched catalogue decides what the card offers next.
+  const discardContinue = async (checkpointId: string, entry: RecentEntry): Promise<string | null> => {
+    const result = await kernel.commands.execute(
+      "study.discard-checkpoint",
+      createCommandContext("menu", kernel, {
+        input: { checkpointId },
+        sourceDetail: "start-screen",
+      }),
+    );
+    return result.status === "completed"
+      ? null
+      : (result.message ?? `Could not discard the checkpoint of ${entry.name}.`);
+  };
+
   // A template or translated .mx3 is a Python script: the host saves it through
   // its native Save dialog, then Home shows the new script selected so its
   // inspector (and Run in new window, which asks for consent itself) is next.
@@ -314,6 +330,7 @@ export function StartScreen({ kernel }: ModuleProps) {
               compute={compute}
               onOpenRecent={openRecent}
               onResumeContinue={resumeContinue}
+              onDiscardContinue={discardContinue}
               onRunCommand={runCommand}
             />
           ) : section === "templates" ? (

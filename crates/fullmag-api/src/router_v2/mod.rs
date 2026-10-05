@@ -1083,7 +1083,8 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints/:checkpoint_id",
-            get(handlers::persistence::get_checkpoint),
+            get(handlers::persistence::get_checkpoint)
+                .delete(handlers::persistence::delete_checkpoint),
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints/:checkpoint_id/restore",

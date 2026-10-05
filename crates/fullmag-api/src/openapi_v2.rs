@@ -326,6 +326,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::persistence::session::commit_session,
         crate::router_v2::handlers::persistence::session::list_checkpoints,
         crate::router_v2::handlers::persistence::session::get_checkpoint,
+        crate::router_v2::handlers::persistence::session::delete_checkpoint,
         crate::router_v2::handlers::persistence::session::create_checkpoint,
         crate::router_v2::handlers::persistence::session::restore_checkpoint,
         crate::router_v2::handlers::persistence::session::export_field_state,

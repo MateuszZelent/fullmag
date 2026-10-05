@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import {
   useCheckpointCatalogResource,
   useCurrentRunResource,
+  useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
 
 import { toCatalogState, type ContinueLiveInput } from "./continueModel";
@@ -22,6 +23,14 @@ export function useContinueLive(
   const catalog = useCheckpointCatalogResource();
   const currentRun = useCurrentRunResource();
   const run = currentRun.data;
+  const stages = useStageExecutionResource().data;
+  const restoreSources = useMemo(
+    () =>
+      (stages?.stages ?? []).flatMap((stage) =>
+        stage.resume_from_checkpoint_ref ? [stage.resume_from_checkpoint_ref] : [],
+      ),
+    [stages],
+  );
 
   return useMemo<ContinueLiveInput>(
     () => ({
@@ -33,11 +42,12 @@ export function useContinueLive(
             resolvedDevice: run.resolved_device,
             resolvedRuntimeFamily: run.resolved_runtime_family,
             totalSteps: run.total_steps,
+            restoreSourceCheckpointIds: restoreSources,
           }
         : null,
       compute,
       restoring,
     }),
-    [catalog, compute, restoring, run],
+    [catalog, compute, restoring, restoreSources, run],
   );
 }
