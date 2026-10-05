@@ -519,6 +519,12 @@ pub(crate) struct CandidatePreparationIdentity {
     pub(crate) ready_source_sha256: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CanceledCandidateHelperEvidence {
+    pub(crate) pid: u32,
+    pub(crate) exit_code: Option<i32>,
+}
+
 pub(crate) enum CandidatePreparationPoll {
     Pending { helper_pid: u32 },
     Unconfirmed { helper_pid: u32 },
@@ -532,6 +538,7 @@ pub(crate) struct CandidatePreparationJob {
     phase: CandidatePreparationPhase,
     cancel_requested: bool,
     cleanup_unconfirmed_reported: bool,
+    last_canceled_helper: Option<CanceledCandidateHelperEvidence>,
 }
 
 enum CandidatePreparationPhase {
@@ -561,6 +568,10 @@ impl CandidatePreparationJob {
 
     pub(crate) fn cleanup_unconfirmed(&self) -> bool {
         self.cleanup_unconfirmed_reported
+    }
+
+    pub(crate) fn last_canceled_helper_for_probe(&self) -> Option<CanceledCandidateHelperEvidence> {
+        self.last_canceled_helper
     }
 
     pub(crate) fn helper_running(&mut self) -> Result<Option<(u32, bool)>> {
@@ -593,7 +604,22 @@ impl CandidatePreparationJob {
                         self.phase = CandidatePreparationPhase::Selector(helper);
                         Ok(false)
                     }
-                    Ok(HelperPoll::Completed { .. } | HelperPoll::Failed { .. }) => Ok(true),
+                    Ok(HelperPoll::Completed {
+                        helper_pid,
+                        exit_code,
+                        ..
+                    })
+                    | Ok(HelperPoll::Failed {
+                        helper_pid,
+                        exit_code,
+                        ..
+                    }) => {
+                        self.last_canceled_helper = Some(CanceledCandidateHelperEvidence {
+                            pid: helper_pid,
+                            exit_code,
+                        });
+                        Ok(true)
+                    }
                     Ok(HelperPoll::Unconfirmed { helper_pid, reason }) => {
                         self.phase = CandidatePreparationPhase::Selector(helper);
                         self.report_cleanup_unconfirmed(helper_pid, reason);
@@ -626,7 +652,22 @@ impl CandidatePreparationJob {
                     };
                     Ok(false)
                 }
-                Ok(HelperPoll::Completed { .. } | HelperPoll::Failed { .. }) => Ok(true),
+                Ok(HelperPoll::Completed {
+                    helper_pid,
+                    exit_code,
+                    ..
+                })
+                | Ok(HelperPoll::Failed {
+                    helper_pid,
+                    exit_code,
+                    ..
+                }) => {
+                    self.last_canceled_helper = Some(CanceledCandidateHelperEvidence {
+                        pid: helper_pid,
+                        exit_code,
+                    });
+                    Ok(true)
+                }
                 Ok(HelperPoll::Unconfirmed { helper_pid, reason }) => {
                     self.phase = CandidatePreparationPhase::OwnerVerifier {
                         helper,
@@ -878,6 +919,7 @@ impl OwnedDevelopmentApi {
             phase: CandidatePreparationPhase::Selector(selector),
             cancel_requested: false,
             cleanup_unconfirmed_reported: false,
+            last_canceled_helper: None,
         })
     }
 

@@ -51,6 +51,11 @@ EXPECTED_CHECKS = frozenset({
     "no_request_or_process_replacement",
     "readiness_withdrawn",
     "api_waited",
+    "scope_loss_pending_observed",
+    "scope_loss_nonblocking",
+    "scope_loss_helper_reaped",
+    "scope_loss_no_candidate",
+    "scope_loss_no_replacement",
 })
 HASHED_HELPERS = (
     "scripts/windows/verify_consumer_pump.py",
@@ -60,7 +65,30 @@ HASHED_HELPERS = (
 )
 
 
-def _preparation_starts(frames, ready_build_id, ready_source_sha256):
+def _terminal_helper(value, canceled_pid):
+    """Accept terminal custody only with an actual integer process exit."""
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"pid", "waited", "exit_code"}
+        or type(value.get("pid")) is not int
+        or value["pid"] <= 0
+        or value.get("waited") is not True
+        or type(value.get("exit_code")) is not int
+        or (value["pid"] != canceled_pid and value["exit_code"] != 0)
+    ):
+        raise storage.StorageError("Consumer pump has invalid terminal helper custody")
+    return dict(value)
+
+
+def _canceled_preparation_pid(result, preparation_starts):
+    pid = result.get("canceled_helper_pid")
+    ordered = list(preparation_starts)
+    if type(pid) is not int or pid <= 0 or len(ordered) != 2 or pid != ordered[1]:
+        raise storage.StorageError("Consumer pump cancellation does not match its second preparation")
+    return pid
+
+
+def _preparation_starts(frames, ready_build_id, ready_source_sha256, on_start=None):
     """Capture early custody evidence even when the CLI later fails."""
     starts = {}
     expected = {"schema", "event", "helper_pid", "api_instance_id",
@@ -83,6 +111,8 @@ def _preparation_starts(frames, ready_build_id, ready_source_sha256):
         if parsed_instance.int == 0 or str(parsed_instance) != instance:
             raise storage.StorageError("Candidate preparation API identity is not canonical")
         starts[pid] = dict(frame)
+        if on_start is not None:
+            on_start(pid)
     return starts
 
 
@@ -430,75 +460,86 @@ def exercise(
         helper_progress = [frame for frame in frames if frame.get("schema") == HELPER_PROGRESS_SCHEMA]
         api_starts = [frame for frame in frames if frame.get("schema") == OWNER_PROGRESS_SCHEMA]
         results = [frame for frame in frames if frame.get("schema") == RESULT_SCHEMA]
-        preparation_starts = _preparation_starts(frames, ready_build_id, ready_source_sha256)
-
-        helper_evidence: dict[int, dict[str, Any]] = {}
-        for frame in helper_progress:
-            pid = frame.get("helper_pid")
-            if (
-                type(pid) is not int
-                or pid <= 0
-                or pid in helper_evidence
-                or frame.get("helper_waited") is not True
-                or frame.get("helper_exit_code") != 0
-            ):
-                raise storage.StorageError("Consumer pump emitted invalid owner-helper progress")
-            helper_evidence[pid] = {"pid": pid, "waited": True, "exit_code": 0}
-
         api_started = bool(api_starts)
         api_records: dict[int, dict[str, Any]] = {}
         for frame in api_starts:
             pid = frame.get("api_pid")
             if (
                 frame.get("event") != "owned_api_started"
-                or type(pid) is not int
-                or pid <= 0
-                or type(frame.get("api_port")) is not int
-                or frame["api_port"] != port
+                or type(pid) is not int or pid <= 0
+                or type(frame.get("api_port")) is not int or frame["api_port"] != port
                 or pid in api_records
             ):
                 raise storage.StorageError("Consumer pump emitted invalid owned API start progress")
-            record = {
-                "label": "consumer-pump-owned-api-a",
-                "pid": pid,
-                "api_port": port,
-                "waited": False,
-                "outcome": "unknown" if timed_out else "pending",
-            }
+            record = {"label": "consumer-pump-owned-api-a", "pid": pid,
+                      "api_port": port, "waited": False,
+                      "outcome": "unknown" if timed_out else "pending"}
             api_records[pid] = record
             receipt["processes"].append(record)
+        preparation_records = {}
+        def remember_preparation(pid):
+            record = {"label": "consumer-pump-candidate-preparation", "pid": pid,
+                      "waited": False, "outcome": "unknown"}
+            preparation_records[pid] = record
+            receipt["processes"].append(record)
+        preparation_starts = _preparation_starts(
+            frames, ready_build_id, ready_source_sha256, remember_preparation,
+        )
+        helper_records = dict(preparation_records)
         result = results[0] if len(results) == 1 else None
+        canceled_pid = (_canceled_preparation_pid(result, preparation_starts)
+                        if result is not None else None)
+
+        helper_evidence: dict[int, dict[str, Any]] = {}
+        for frame in helper_progress:
+            pid = frame.get("helper_pid")
+            value = {"pid": pid, "waited": frame.get("helper_waited"),
+                     "exit_code": frame.get("helper_exit_code")}
+            observed = _terminal_helper(value, pid)
+            if pid not in helper_records:
+                helper_records[pid] = {"label": "consumer-pump-owned-helper"}
+                receipt["processes"].append(helper_records[pid])
+            helper_records[pid].update(observed, outcome="terminal")
+            terminal = _terminal_helper(
+                value, canceled_pid,
+            )
+            if (
+                pid in helper_evidence
+            ):
+                raise storage.StorageError("Consumer pump emitted invalid owner-helper progress")
+            helper_evidence[pid] = terminal
+
         result_helpers: set[int] = set()
         if result is not None:
             helpers = result.get("helper_processes")
             if not isinstance(helpers, list):
                 raise storage.StorageError("Consumer pump result lacks helper process evidence")
             for helper in helpers:
-                if (
-                    not isinstance(helper, dict)
-                    or set(helper) != {"pid", "waited", "exit_code"}
-                    or type(helper.get("pid")) is not int
-                    or helper["pid"] <= 0
-                    or helper.get("waited") is not True
-                    or helper.get("exit_code") != 0
-                ):
-                    raise storage.StorageError("Consumer pump result has invalid helper process evidence")
+                terminal = _terminal_helper(helper, canceled_pid)
                 pid = helper["pid"]
                 if pid in result_helpers:
                     raise storage.StorageError("Consumer pump result duplicated a helper PID")
                 result_helpers.add(pid)
-                helper_evidence.setdefault(pid, {"pid": pid, "waited": True, "exit_code": 0})
-            if len(helper_progress) != 3 or len(result_helpers) != 3:
+                if pid in helper_evidence and helper_evidence[pid] != terminal:
+                    raise storage.StorageError("Consumer pump helper exit differs from terminal progress")
+                helper_evidence.setdefault(pid, terminal)
+            if len(helper_progress) != 4 or len(result_helpers) != 4:
                 raise storage.StorageError("Consumer pump omitted owner and selector/verifier helper evidence")
             if set(helper_evidence) != result_helpers:
                 raise storage.StorageError("Consumer pump result helper PIDs differ from terminal progress")
-            if (len(preparation_starts) != 1
+            if (len(preparation_starts) != 2
                     or not set(preparation_starts).issubset(result_helpers)
-                    or next(iter(preparation_starts.values()))["api_instance_id"] != result.get("api_instance_id")):
+                    or any(start["api_instance_id"] != result.get("api_instance_id")
+                           for start in preparation_starts.values())):
                 raise storage.StorageError("Consumer pump lacks matching early preparation custody evidence")
 
         for pid in sorted(set(helper_evidence) | set(preparation_starts)):
             helper = helper_evidence.get(pid, {"pid": pid, "waited": False, "outcome": "unknown"})
+            if pid in helper_records:
+                helper_records[pid].update(helper)
+                if helper.get("waited") is True:
+                    helper_records[pid]["outcome"] = "terminal"
+                continue
             label = "consumer-pump-candidate-preparation" if pid in preparation_starts else "consumer-pump-owned-helper"
             receipt["processes"].append({"label": label, **helper})
 
@@ -533,7 +574,7 @@ def exercise(
             raise storage.StorageError(
                 f"Consumer pump CLI failed with exit code {process.returncode}; see {log_path}"
             )
-        if len(helper_progress) != 3 or len(api_starts) != 1 or len(results) != 1:
+        if len(helper_progress) != 4 or len(api_starts) != 1 or len(results) != 1:
             raise storage.StorageError("Consumer pump did not produce exactly one complete owner/API/result trace")
 
         expected_result_fields = {
@@ -542,12 +583,16 @@ def exercise(
             "owner_source_sha256", "candidate_bundle_id", "candidate_manifest_sha256",
             "ready_build_id", "ready_source_sha256", "renewal_observation_ms",
             "paused_observation_ms", "preparation_step_elapsed_ms", "helper_processes", "checks",
+            "canceled_helper_pid", "cancel_step_elapsed_ms",
         }
         if set(result) != expected_result_fields:
             raise storage.StorageError("Consumer pump result fields differ from the pinned probe contract")
         step_elapsed_ms = result.get("preparation_step_elapsed_ms")
         if type(step_elapsed_ms) is not int or not 0 <= step_elapsed_ms < 1000:
             raise storage.StorageError("Consumer pump preparation step blocked its control loop")
+        cancel_step_ms = result.get("cancel_step_elapsed_ms")
+        if type(cancel_step_ms) is not int or not 0 <= cancel_step_ms < 1000:
+            raise storage.StorageError("Consumer pump scope-loss step blocked its control loop")
         checks_object = result.get("checks")
         if (
             result.get("status") != "passed"

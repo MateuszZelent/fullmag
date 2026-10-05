@@ -26,6 +26,17 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v2/platform/health", get(handlers::platform::get_health))
         .route(
+            "/v2/platform/compute/preview",
+            post(handlers::platform::compute_preview::post_compute_preview)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/v2/platform/compute/profiles",
+            get(handlers::platform::compute_profiles::get_compute_profiles)
+                .post(handlers::platform::compute_profiles::post_compute_profile)
+                .layer(axum::extract::DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
             "/v2/platform/output-storage",
             get(handlers::platform::output_storage::get_output_storage_defaults)
                 .put(handlers::platform::output_storage::put_output_storage_defaults),
@@ -37,6 +48,15 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/platform/development-backend",
             get(handlers::platform::development_backend::get_development_backend),
+        )
+        .route(
+            "/v2/platform/development-backend/build-requests",
+            post(handlers::platform::development_backend_build_request::post_development_backend_build_request)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
+            "/v2/platform/development-backend/build-requests/:request_id",
+            get(handlers::platform::development_backend_build_request::get_development_backend_build_request),
         )
         .route(
             "/v2/platform/development-restart-requests",

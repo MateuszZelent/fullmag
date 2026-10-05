@@ -113,6 +113,7 @@ from fullmag.model.planar_monitor import (
 )
 from fullmag.model.output_storage import OutputStorage
 from fullmag.model.compute_resources import ComputeResources
+from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer
 from fullmag.model.study import (
     DEFAULT_RELAXATION_TORQUE_TOLERANCE_T,
     AdaptiveRefinement,
@@ -2493,6 +2494,7 @@ class _WorldState:
     _domain_object_region_markers: list[dict[str, object]] | None = None
     _frozen_magnetic_submesh_source: dict[str, object] | None = None
     _extra_runtime_metadata: dict[str, object] = field(default_factory=dict)
+    _legacy_execution_selection_calls: set[str] = field(default_factory=set)
     _exchange_enabled: bool = True
     _demag_enabled: bool = True
     _demag_realization: str | None = None
@@ -4771,6 +4773,11 @@ class StudyStagesBuilder:
         return self
 
     def change_device(self, device: str) -> "StudyStagesBuilder":
+        if "execution_profile" in _state._extra_runtime_metadata:
+            raise ValueError(
+                "execution_profile_change_device_stage_conflict: use per-step profile "
+                "references in StudyPlan instead of change_device stages"
+            )
         normalized = _normalize_stage_device(device)
         _state._declared_stages.append(
             CapturedStage(
@@ -5597,6 +5604,49 @@ def _validate_current_compute_resources_runtime_intent() -> None:
     )
 
 
+def _check_legacy_execution_selection_call(selection: str) -> None:
+    if "execution_profile" in _state._extra_runtime_metadata:
+        raise ValueError(
+            "execution_profile_selection_conflict: legacy "
+            f"{selection} selection cannot be combined with study.execution_profile(); "
+            "put the requested value in an ExecutionRequestLayer"
+        )
+
+
+def _record_legacy_execution_selection(selection: str) -> None:
+    _state._legacy_execution_selection_calls.add(selection)
+
+
+def _check_execution_profile_declaration_order() -> None:
+    if _state._legacy_execution_selection_calls:
+        selections = ", ".join(sorted(_state._legacy_execution_selection_calls))
+        raise ValueError(
+            "execution_profile_selection_conflict: declare the profile before legacy "
+            f"execution selections ({selections}); use ExecutionRequestLayer values instead"
+        )
+    declared_stages = _state._declared_stages
+    captured_stages = _capture_binding.current().stages
+    if declared_stages or captured_stages:
+        if any(
+            isinstance(stage.action, Mapping)
+            and stage.action.get("kind") == "change_device"
+            for stage in (*declared_stages, *captured_stages)
+        ):
+            raise ValueError(
+                "execution_profile_change_device_stage_conflict: declare the profile "
+                "before stages; use per-step profile references in StudyPlan"
+            )
+        raise ValueError(
+            "execution_profile_order_conflict: declare the profile before solver or "
+            "pipeline stages; use per-step profile references in StudyPlan"
+        )
+    if _state._last_result is not None:
+        raise ValueError(
+            "execution_profile_order_conflict: declare the profile before direct "
+            "solver execution"
+        )
+
+
 class StudyBuilder:
     """Study-root facade over the current script-local world state."""
 
@@ -5664,6 +5714,30 @@ class StudyBuilder:
         engine(backend)
         return self
 
+    def execution_profile(
+        self,
+        profile: ExecutionProfile,
+        *,
+        layers: Sequence[ExecutionRequestLayer] = (),
+    ) -> "StudyBuilder":
+        """Attach an immutable profile and explicit layers for shared materialization."""
+        if not isinstance(profile, ExecutionProfile):
+            raise TypeError("execution_profile() requires an ExecutionProfile value")
+        _check_execution_profile_declaration_order()
+        if isinstance(layers, (str, bytes)) or not isinstance(layers, Sequence):
+            raise TypeError("execution_profile() layers must be a sequence of ExecutionRequestLayer")
+        layer_values = list(layers)
+        if any(not isinstance(layer, ExecutionRequestLayer) for layer in layer_values):
+            raise TypeError("execution_profile() layers must contain ExecutionRequestLayer values")
+        profile_ir = profile.to_ir()
+        layers_ir = [layer.to_ir() for layer in layer_values]
+        _state._extra_runtime_metadata["execution_profile"] = profile_ir
+        if layers_ir:
+            _state._extra_runtime_metadata["execution_layers"] = layers_ir
+        else:
+            _state._extra_runtime_metadata.pop("execution_layers", None)
+        return self
+
     def device(self, spec: str, *, precision: str | None = None) -> "StudyBuilder":
         previous = (
             _state._device,
@@ -5671,6 +5745,7 @@ class StudyBuilder:
             _state._device_index,
             _state._precision,
         )
+        previous_selection_calls = set(_state._legacy_execution_selection_calls)
         try:
             device(spec, precision=precision)
             _validate_current_compute_resources_runtime_intent()
@@ -5681,6 +5756,7 @@ class StudyBuilder:
                 _state._device_index,
                 _state._precision,
             ) = previous
+            _state._legacy_execution_selection_calls = previous_selection_calls
             raise
         return self
 
@@ -5690,11 +5766,13 @@ class StudyBuilder:
 
     def threads(self, cpu_threads: int) -> "StudyBuilder":
         previous = _state._cpu_threads
+        previous_selection_calls = set(_state._legacy_execution_selection_calls)
         try:
             threads(cpu_threads)
             _validate_current_compute_resources_runtime_intent()
         except Exception:
             _state._cpu_threads = previous
+            _state._legacy_execution_selection_calls = previous_selection_calls
             raise
         return self
 
@@ -5702,6 +5780,7 @@ class StudyBuilder:
         """Set the typed compute-resource request preserved in ProblemIR."""
         if not isinstance(value, ComputeResources):
             raise TypeError("resources() requires a ComputeResources value")
+        _check_legacy_execution_selection_call("resources")
         request = value.to_ir()
         _validate_compute_resources_runtime_intent(
             request,
@@ -5711,6 +5790,7 @@ class StudyBuilder:
             device_index=_state._device_index,
         )
         _state._extra_runtime_metadata["compute_resources"] = request
+        _record_legacy_execution_selection("resources")
         return self
 
     def storage(
@@ -6440,6 +6520,7 @@ def frequency_response(
         )
         return problem
 
+    _guard_profile_direct_execution()
     result = Simulation(problem).run()
     _record_result(result)
     return result
@@ -6539,7 +6620,9 @@ def thermal_noise(temperature: float, *, seed: int | None = None) -> ThermalNois
 
 def engine(backend: str) -> None:
     """Set computation backend: ``"fdm"``, ``"fem"``, or ``"auto"``."""
+    _check_legacy_execution_selection_call("backend")
     _state._backend = backend.lower()
+    _record_legacy_execution_selection("backend")
 
 
 def device(spec: str, *, precision: str | None = None) -> None:
@@ -6551,6 +6634,7 @@ def device(spec: str, *, precision: str | None = None) -> None:
         fm.device("cuda:0")
         fm.device("cuda:0", precision="single")
     """
+    _check_legacy_execution_selection_call("device")
     spec = spec.lower()
     if spec == "cpu":
         _state._device = "cpu"
@@ -6569,22 +6653,29 @@ def device(spec: str, *, precision: str | None = None) -> None:
         _state._device = spec
     if precision is not None:
         _state._precision = precision.lower()
+    _record_legacy_execution_selection("device")
+    if precision is not None:
+        _record_legacy_execution_selection("precision")
 
 
 def mode(execution_mode: str) -> None:
     """Set execution policy: ``"strict"``, ``"extended"``, or ``"hybrid"``."""
+    _check_legacy_execution_selection_call("mode")
     normalized = str(execution_mode).strip().lower()
     if normalized not in {"strict", "extended", "hybrid"}:
         raise ValueError("execution_mode must be 'strict', 'extended', or 'hybrid'")
     _state._execution_mode = normalized
+    _record_legacy_execution_selection("mode")
 
 
 def threads(cpu_threads: int) -> None:
     """Set requested CPU thread count for the next run."""
+    _check_legacy_execution_selection_call("threads")
     resolved = int(cpu_threads)
     if resolved < 1:
         raise ValueError("threads() requires cpu_threads >= 1")
     _state._cpu_threads = resolved
+    _record_legacy_execution_selection("threads")
 
 
 def fem_demag_solver(
@@ -7164,6 +7255,11 @@ def adaptive_mesh(
 def runtime_metadata(key: str, value: object) -> None:
     """Attach script-owned runtime metadata to the exported problem."""
     normalized_key = require_non_empty(str(key), "runtime_metadata key")
+    if normalized_key in {"execution_profile", "execution_layers"}:
+        raise ValueError(
+            "execution profile metadata must be authored with "
+            "study.execution_profile()"
+        )
     _state._extra_runtime_metadata[normalized_key] = copy.deepcopy(value)
 
 
@@ -9207,6 +9303,18 @@ def _build_problem(
 # Run / Relax
 # ---------------------------------------------------------------------------
 
+def _guard_profile_direct_execution() -> None:
+    if (
+        "execution_profile" in _state._extra_runtime_metadata
+        and not _capture_binding.current().enabled
+    ):
+        raise RuntimeError(
+            "execution_profile_requires_shared_materialization: eager Python solver "
+            "execution cannot resolve a profile; submit the authored IR through the "
+            "shared application materializer"
+        )
+
+
 def run(until: float) -> Any:
     """Build the problem and run until the given simulation time."""
     if until <= 0.0:
@@ -9222,6 +9330,7 @@ def run(until: float) -> Any:
             )
         )
         return problem
+    _guard_profile_direct_execution()
     result = Simulation(problem).run(until=until)
     _record_result(result)
     return result
@@ -9252,6 +9361,7 @@ def run_while(
     * At least one guard (`max_time` or `max_steps`) is required.
     * `max_steps` guards the accumulated solver steps across all chunks.
     """
+    _guard_profile_direct_execution()
     relax_kwargs: dict[str, object] = {}
     relax_fn = globals()["relax"]
     if kwargs:
@@ -9531,6 +9641,7 @@ def relax(
         )
         return problem
 
+    _guard_profile_direct_execution()
     if isinstance(problem.study, Relaxation):
         until_seconds = _relaxation_default_until_seconds(problem.study)
     else:
@@ -9678,6 +9789,7 @@ def eigenmodes(
         )
         return problem
 
+    _guard_profile_direct_execution()
     result = Simulation(problem).run()
     _record_result(result)
     return result

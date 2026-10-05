@@ -8,9 +8,8 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::{
     CoordinatorError, CoordinatorMessage, DurableWorkerCoordinator, ExecutionError,
-    RequestedExecution, RequestedResourceBudget, ResourceKind, ResourceLease, RunId, TaskClaim,
-    WorkerCommandEnvelope, WorkerCoordinator, WorkerEvent, WorkerEventEnvelope,
-    WORKER_PROTOCOL_SCHEMA,
+    RequestedExecution, ResourceKind, ResourceLease, RunId, TaskClaim, WorkerCommandEnvelope,
+    WorkerCoordinator, WorkerEvent, WorkerEventEnvelope, WORKER_PROTOCOL_SCHEMA,
 };
 use fullmag_authoring::StudyInputSource;
 use fullmag_session::{FmsTaskLifecycle, FmsTaskReadiness, SessionStore};
@@ -118,6 +117,48 @@ pub fn schedule_next_ready_accepted_task(
     run_id: &RunId,
     resource_offer: ResourceLease,
 ) -> Result<Option<ScheduledAcceptedTask>> {
+    schedule_next_ready_accepted_task_with_admission(
+        store,
+        run_id,
+        resource_offer,
+        |task, claim| crate::commit_claimed_task_admission(store, task, claim),
+    )
+}
+
+/// Dispatch through the shared host owner before preparing commands or handing
+/// Start to a supervisor. Allocation must use the configured physical topology,
+/// not infer GPU identity or CPU placement from an arbitrary resource label.
+/// Placement and the pinned policy stay unchanged for retries of one claim;
+/// conflicting replays are rejected by the ledger and never authorize spawn.
+pub fn schedule_next_ready_accepted_task_with_host(
+    store: &SessionStore,
+    run_id: &RunId,
+    resource_offer: ResourceLease,
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    placement: &crate::host_allocation::HostTaskPlacement,
+) -> Result<Option<ScheduledAcceptedTask>> {
+    schedule_next_ready_accepted_task_with_admission(
+        store,
+        run_id,
+        resource_offer,
+        |task, claim| {
+            let request = crate::host_allocation::host_request_for_task_claim(
+                store, ledger, claim, placement,
+            )?;
+            crate::commit_claimed_task_admission_with_host(store, task, claim, ledger, &request)
+        },
+    )
+}
+
+fn schedule_next_ready_accepted_task_with_admission(
+    store: &SessionStore,
+    run_id: &RunId,
+    resource_offer: ResourceLease,
+    admit: impl Fn(
+        &fullmag_application::TaskRecord,
+        &TaskClaim,
+    ) -> Result<fullmag_session::TaskAdmissionCommitDisposition>,
+) -> Result<Option<ScheduledAcceptedTask>> {
     let intent = store
         .read_run_intent(run_id.as_str())?
         .context("accepted scheduler requires an immutable run intent")?;
@@ -166,10 +207,9 @@ pub fn schedule_next_ready_accepted_task(
         let task_request = specification
             .requested_execution
             .for_problem(catalog_entry.problem())
-            .map_err(anyhow::Error::msg)
-            .with_context(|| {
-                format!(
-                    "accepted scheduler step `{}` execution request is invalid",
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "accepted scheduler step `{}` execution request is invalid: {error}",
                     study_step.step_id
                 )
             })?;
@@ -235,9 +275,8 @@ pub fn schedule_next_ready_accepted_task(
         {
             continue;
         }
-        let admission =
-            retry_store_writer_busy(|| crate::commit_claimed_task_admission(store, &task, &claim))
-                .context("durably admitting accepted task claim")?;
+        let admission = retry_store_writer_busy(|| admit(&task, &claim))
+            .context("durably admitting accepted task claim")?;
         let coordinator = WorkerCoordinator::new(task, claim.clone())?;
         let mut coordinator = DurableWorkerCoordinator::new(coordinator);
         let prepare = crate::publish_accepted_task_prepare(
@@ -440,7 +479,19 @@ fn inputs_are_automatically_resolvable(
 #[cfg(test)]
 mod resource_requirement_tests {
     use super::resource_offer_satisfies_requested_minimum;
-    use fullmag_application::{RequestedResourceBudget, ResourceBudget, ResourceKind};
+    use fullmag_application::{
+        RequestedExecution, RequestedResourceBudget, ResourceBudget, ResourceKind,
+    };
+
+    fn request(device: &str, minimum_resources: RequestedResourceBudget) -> RequestedExecution {
+        RequestedExecution {
+            backend: "auto".into(),
+            device: device.into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+            minimum_resources: Some(minimum_resources),
+        }
+    }
 
     fn offer(
         kind: ResourceKind,
@@ -464,15 +515,17 @@ mod resource_requirement_tests {
 
     #[test]
     fn cpu_offer_must_meet_every_requested_minimum() {
-        let required = RequestedResourceBudget {
-            cpu_millis: 500,
-            memory_bytes: 2_000,
-            gpu_memory_bytes: 0,
-            storage_bytes: 4_000,
-        };
-        assert!(resource_offer_satisfies_requested_minimum(
+        let requested = request(
             "cpu",
-            &required,
+            RequestedResourceBudget {
+                cpu_millis: 500,
+                memory_bytes: 2_000,
+                gpu_memory_bytes: 0,
+                storage_bytes: 4_000,
+            },
+        );
+        assert!(resource_offer_satisfies_requested_minimum(
+            &requested,
             &offer(ResourceKind::Cpu, 500, 2_000, 0, 4_000),
         ));
         for insufficient in [
@@ -481,8 +534,7 @@ mod resource_requirement_tests {
             offer(ResourceKind::Cpu, 500, 2_000, 0, 3_999),
         ] {
             assert!(!resource_offer_satisfies_requested_minimum(
-                "cpu",
-                &required,
+                &requested,
                 &insufficient,
             ));
         }
@@ -490,26 +542,76 @@ mod resource_requirement_tests {
 
     #[test]
     fn gpu_minimum_rejects_cpu_and_insufficient_vram() {
-        let required = RequestedResourceBudget {
-            cpu_millis: 500,
-            memory_bytes: 2_000,
-            gpu_memory_bytes: 8_000,
-            storage_bytes: 4_000,
-        };
-        assert!(!resource_offer_satisfies_requested_minimum(
+        let requested = request(
             "gpu",
-            &required,
+            RequestedResourceBudget {
+                cpu_millis: 500,
+                memory_bytes: 2_000,
+                gpu_memory_bytes: 8_000,
+                storage_bytes: 4_000,
+            },
+        );
+        assert!(!resource_offer_satisfies_requested_minimum(
+            &requested,
             &offer(ResourceKind::Cpu, 500, 2_000, 0, 4_000),
         ));
         assert!(!resource_offer_satisfies_requested_minimum(
-            "gpu",
-            &required,
+            &requested,
             &offer(ResourceKind::Gpu, 500, 2_000, 7_999, 4_000),
         ));
         assert!(resource_offer_satisfies_requested_minimum(
-            "gpu",
-            &required,
+            &requested,
             &offer(ResourceKind::Gpu, 500, 2_000, 8_000, 4_000),
+        ));
+    }
+
+    #[test]
+    fn mixed_auto_study_requests_apply_global_vram_only_to_gpu_steps() {
+        let run_request = request(
+            "auto",
+            RequestedResourceBudget {
+                cpu_millis: 500,
+                memory_bytes: 2_000,
+                gpu_memory_bytes: 8_000,
+                storage_bytes: 4_000,
+            },
+        );
+        let problem_with_device = |device: &str| {
+            let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+            problem.problem_meta.runtime_metadata.insert(
+                "runtime_selection".into(),
+                serde_json::json!({"device": device}),
+            );
+            problem
+        };
+        let gpu_problem = problem_with_device("gpu");
+        let cpu_problem = problem_with_device("cpu");
+        let gpu_request = run_request.for_problem(&gpu_problem).unwrap();
+        let cpu_request = run_request.for_problem(&cpu_problem).unwrap();
+
+        assert!(resource_offer_satisfies_requested_minimum(
+            &gpu_request,
+            &offer(ResourceKind::Gpu, 500, 2_000, 8_000, 4_000),
+        ));
+        assert!(!resource_offer_satisfies_requested_minimum(
+            &gpu_request,
+            &offer(ResourceKind::Gpu, 500, 2_000, 7_999, 4_000),
+        ));
+        assert!(!resource_offer_satisfies_requested_minimum(
+            &gpu_request,
+            &offer(ResourceKind::Cpu, 500, 2_000, 0, 4_000),
+        ));
+        assert_eq!(
+            cpu_request
+                .minimum_resources
+                .as_ref()
+                .unwrap()
+                .gpu_memory_bytes,
+            0
+        );
+        assert!(resource_offer_satisfies_requested_minimum(
+            &cpu_request,
+            &offer(ResourceKind::Cpu, 500, 2_000, 0, 4_000),
         ));
     }
 }

@@ -27,6 +27,16 @@ export const PLATFORM_DEVELOPMENT_BACKEND_PATH = openApiV2Path(
   "/v2/platform/development-backend",
 );
 
+export const PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUESTS_PATH =
+  openApiV2Path("/v2/platform/development-backend/build-requests");
+
+export const PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUEST_PATH =
+  openApiV2Path("/v2/platform/development-backend/build-requests/{request_id}");
+
+export function developmentBackendBuildRequestPathParams(requestId: string) {
+  return { path: { request_id: requestId } };
+}
+
 export const PLATFORM_RUNTIME_SERVICE_PATH = openApiV2Path(
   "/v2/platform/runtime-service",
 );
@@ -1143,3 +1153,5 @@ export function workspaceItemArchiveUrl(baseUrl: string, id: string): string {
 export function workspaceItemThumbnailUrl(baseUrl: string, id: string): string {
   return `${baseUrl}${WORKSPACE_ITEM_THUMBNAIL_PATH.replace("{id}", encodeURIComponent(id))}`;
 }
+export const PLATFORM_COMPUTE_PROFILES_PATH = openApiV2Path("/v2/platform/compute/profiles");
+export const PLATFORM_COMPUTE_PREVIEW_PATH = openApiV2Path("/v2/platform/compute/preview");

@@ -39,6 +39,7 @@ pub(crate) struct NativeRestartPump {
     pending_attach_resume: Option<String>,
     readiness_candidate: Option<ConsumerReadinessCandidate>,
     candidate_preparation: Option<crate::development_api_owner::CandidatePreparationJob>,
+    last_canceled_helper: Option<crate::development_api_owner::CanceledCandidateHelperEvidence>,
     readiness_selection_attempt: Option<crate::development_api_owner::CandidatePreparationIdentity>,
     last_readiness_attempt: Option<Instant>,
     pub(crate) last_execution: Option<serde_json::Value>,
@@ -59,6 +60,12 @@ impl NativeRestartPump {
             return Ok(None);
         };
         job.helper_running()
+    }
+
+    pub(crate) fn canceled_helper_for_probe(
+        &self,
+    ) -> Option<crate::development_api_owner::CanceledCandidateHelperEvidence> {
+        self.last_canceled_helper
     }
 
     /// Each old API has one immutable slot. Once attempted, it is never
@@ -405,9 +412,12 @@ impl NativeRestartPump {
             return Ok(true);
         };
         let identity = job.identity.clone();
-        match job.drain_after_cancel() {
+        let drain = job.drain_after_cancel();
+        let terminal_helper = job.last_canceled_helper_for_probe();
+        match drain {
             Ok(true) => {
                 self.candidate_preparation = None;
+                self.last_canceled_helper = terminal_helper;
                 self.readiness_selection_attempt = Some(identity);
                 Ok(true)
             }

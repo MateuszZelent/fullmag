@@ -6,6 +6,8 @@ publish.workspace = true
 rust-version = "1.89"
 
 [dependencies]
+anyhow.workspace = true
+fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
 fullmag-quantities = { path = "../fullmag-quantities" }

@@ -1181,6 +1181,8 @@ dependencies = [
 name = "fullmag-application"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "fullmag-authoring",
  "fullmag-ir",
  "fullmag-plan",
  "fullmag-quantities",

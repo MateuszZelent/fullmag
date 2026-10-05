@@ -336,6 +336,10 @@ pub struct SceneStudyState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_storage: Option<fullmag_ir::OutputStorageIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_profile: Option<fullmag_ir::ExecutionProfileIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub execution_layers: Vec<fullmag_ir::ExecutionRequestLayerIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<ScriptBuilderInitialState>,
 }
 

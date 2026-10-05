@@ -13,6 +13,7 @@ import { createProblemWithPendingFormGuard } from "./createProblemWithPendingFor
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { useOutputStorageDefaults } from "../resources/useOutputStorageDefaults";
 import { tauriInvoke } from "../persistence/ProjectDocumentController";
+import { createProjectAuthoringSessionBinding } from "../persistence/ProjectAuthoringSessionBinding";
 import { useProjectDocumentSnapshot } from "../persistence/ProjectDocumentStatus";
 import { joinStoragePath, newSimulationStorage, simulationTimestamp, suggestedProjectFolder,
   validateProjectFolder, validateStorageParent, validateStorageSeparation } from "./newProblemStorage";
@@ -145,9 +146,11 @@ export function NewProblemDialog({
         warnings.push("Review your preserved Inspector changes before continuing.");
       } else if (kernel.projectDocument) {
         try {
-          await kernel.projectDocument.create(name.trim());
-          const scene = await kernel.api.model.scene();
-          await kernel.projectDocument.synchronizeAuthoring(scene);
+          const project = await kernel.projectDocument.create(name.trim());
+          const binding = createProjectAuthoringSessionBinding(kernel.api, project.project_id, response.session_id);
+          kernel.projectDocument.bindAuthoringSession(binding);
+          const sceneDocument = await binding.readSceneDocument();
+          await kernel.projectDocument.synchronizeAuthoring(sceneDocument, binding.verifyCurrent);
         } catch (cause) {
           warnings.push(`The project document could not be prepared: ${message(cause)}`);
         }

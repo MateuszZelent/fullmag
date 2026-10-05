@@ -1151,11 +1151,12 @@ pub(crate) fn export_script_execution_config_via_python_with_options(
                 .to_string(),
         );
     }
-    if let Some(device) = managed_execution_device(
+    let managed_device = managed_execution_device(
         args.backend,
         std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
         std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref(),
-    ) {
+    );
+    if let Some(device) = managed_device {
         helper_args.push("--runtime-device".to_string());
         helper_args.push(device.to_string());
     }
@@ -1173,8 +1174,85 @@ pub(crate) fn export_script_execution_config_via_python_with_options(
     let stdout = String::from_utf8(output.stdout)
         .context("python helper did not return valid UTF-8 JSON")?;
     let json_str = extract_json_from_stdout(&stdout)?;
-    serde_json::from_str(json_str)
-        .context("failed to deserialize script execution config from python helper")
+    let mut config = serde_json::from_str(json_str)
+        .context("failed to deserialize script execution config from python helper")?;
+    bind_script_execution_profiles(
+        &mut config,
+        &script_cli_execution_layers(args)?,
+        managed_device,
+    )?;
+    Ok(config)
+}
+
+pub(crate) fn script_cli_execution_layers(
+    args: &ScriptCli,
+) -> Result<Vec<fullmag_ir::ExecutionRequestLayerIR>> {
+    use clap::ValueEnum;
+    let mut values = serde_json::Map::new();
+    if let Some(value) = args.backend {
+        values.insert(
+            "backend".into(),
+            Value::String(value.to_possible_value().unwrap().get_name().into()),
+        );
+    }
+    if let Some(value) = args.mode {
+        values.insert(
+            "mode".into(),
+            Value::String(value.to_possible_value().unwrap().get_name().into()),
+        );
+    }
+    if let Some(value) = args.precision {
+        values.insert(
+            "precision".into(),
+            Value::String(value.to_possible_value().unwrap().get_name().into()),
+        );
+    }
+    if values.is_empty() {
+        return Ok(vec![]);
+    }
+    Ok(vec![fullmag_ir::ExecutionRequestLayerIR {
+        origin: fullmag_ir::ExecutionFieldOriginIR {
+            kind: fullmag_ir::ExecutionOriginKindIR::Cli,
+            location: "cli.backend/mode/precision".into(),
+        },
+        request: serde_json::from_value(Value::Object(values))?,
+    }])
+}
+
+pub(crate) fn bind_script_execution_profiles(
+    config: &mut ScriptExecutionConfig,
+    layers: &[fullmag_ir::ExecutionRequestLayerIR],
+    managed_device: Option<&str>,
+) -> Result<()> {
+    for problem in
+        std::iter::once(&mut config.ir).chain(config.stages.iter_mut().map(|stage| &mut stage.ir))
+    {
+        let metadata = &problem.problem_meta.runtime_metadata;
+        let has_profile = metadata.contains_key("execution_profile")
+            || metadata.contains_key("execution_materialization");
+        let bound = fullmag_application::bind_declared_execution(
+            problem,
+            if has_profile { layers.to_vec() } else { vec![] },
+        )
+        .map_err(anyhow::Error::msg)?;
+        if has_profile {
+            if let Some(device) = managed_device {
+                let snapshot: fullmag_ir::MaterializedExecutionRequestIR = serde_json::from_value(
+                    bound.problem_meta.runtime_metadata["execution_materialization"].clone(),
+                )?;
+                let forced = match snapshot.requested.device {
+                    fullmag_ir::ExecutionDevice::Auto => None,
+                    fullmag_ir::ExecutionDevice::Cpu => Some("cpu"),
+                    fullmag_ir::ExecutionDevice::Gpu => Some("gpu"),
+                };
+                if forced.is_some_and(|requested| requested != device) {
+                    bail!("execution_intent_conflict: bound profile device {:?} conflicts with managed execution lane {device}", snapshot.requested.device);
+                }
+            }
+        }
+        *problem = bound;
+    }
+    Ok(())
 }
 
 pub(crate) fn managed_fem_execution_device(value: Option<&str>) -> Option<&'static str> {

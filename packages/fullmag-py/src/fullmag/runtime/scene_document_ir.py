@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import replace
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 import tempfile
 from pathlib import Path
-from typing import Mapping
+from typing import Iterator, Mapping
 
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 from fullmag.model.output_storage import OutputStorage
@@ -16,7 +17,8 @@ from fullmag.runtime.output_storage_lowering import (
 )
 from fullmag.model.constraints import FrozenSpins
 from fullmag.model.selection import SelectionDefinition
-from fullmag.runtime.loader import load_problem_from_script
+from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
+from fullmag.runtime.run_config_export import RunConfigExportOptions, export_run_config
 from fullmag.runtime.script_builder import render_scene_document_as_script
 
 _SCENE_DOCUMENT_FIELDS = frozenset(
@@ -53,6 +55,8 @@ _STUDY_FIELDS = frozenset(
         "requested_precision",
         "requested_mode",
         "requested_cpu_threads",
+        "execution_profile",
+        "execution_layers",
         "fem_demag_solver_policy",
         "exchange_enabled",
         "demag_enabled",
@@ -86,27 +90,35 @@ _TABLE_AUTOSAVE_FIELDS = frozenset(
 )
 
 
-def scene_document_to_problem_ir(
+@dataclass(frozen=True, slots=True)
+class _SceneDocumentCapture:
+    scene: dict[str, object]
+    loaded: LoadedProblem
+    backend: BackendTarget
+    device: str
+    precision: ExecutionPrecision
+    mode: ExecutionMode
+    source_root: Path
+    source_stem: str
+
+
+@contextmanager
+def _capture_scene_document(
     scene_document: Mapping[str, object],
     *,
     requested_backend: str,
     requested_device: str,
     requested_precision: str,
     requested_mode: str,
-    source_root: str | Path | None = None,
-) -> dict[str, object]:
-    """Return the canonical ProblemIR for one captured SceneDocument.
-
-    The generated script is deterministic and is loaded through the same public
-    Python DSL path as user-authored scripts.  The SceneDocument remains the
-    source of physical authoring; the separately captured execution request
-    supplies the requested runtime policy.  Geometry assets are deliberately
-    omitted here because preparation owns their independent producer receipts.
-    """
+    source_root: str | Path | None,
+    include_authored_stages: bool,
+    include_legacy_relax_stages: bool,
+) -> Iterator[_SceneDocumentCapture]:
+    """Render and capture one scene while its private source file is alive."""
 
     if not isinstance(scene_document, Mapping):
         raise TypeError("SceneDocument must be a JSON object")
-    scene = dict(scene_document)
+    scene = copy.deepcopy(dict(scene_document))
     _reject_unlowered_scene_fields(scene)
 
     device = str(requested_device).strip().lower()
@@ -116,8 +128,6 @@ def scene_document_to_problem_ir(
     study = scene.get("study")
     if not isinstance(study, dict):
         study = {}
-    else:
-        study = dict(study)
     output_storage = study.get("output_storage")
     if output_storage is not None:
         output_storage = OutputStorage.from_ir(output_storage).to_ir()
@@ -142,48 +152,46 @@ def scene_document_to_problem_ir(
     study["requested_mode"] = mode.value
     scene["study"] = study
 
-    script_source = render_scene_document_as_script(scene)
+    selections = scene.get("selections", [])
+    if not isinstance(selections, list):
+        raise ValueError("SceneDocument.selections must be a list")
+    constraints = scene.get("magnetization_constraints", [])
+    if not isinstance(constraints, list):
+        raise ValueError("SceneDocument.magnetization_constraints must be a list")
+    typed_selections = tuple(SelectionDefinition.from_ir(item) for item in selections)
+    typed_constraints = tuple(FrozenSpins.from_ir(item) for item in constraints)
+    study_pipeline = study.get("study_pipeline")
+    if study_pipeline is not None and not isinstance(study_pipeline, Mapping):
+        raise ValueError("SceneDocument.study.study_pipeline must be an object")
+
+    def attach_scene_semantics(problem):
+        runtime_metadata = dict(problem.runtime_metadata)
+        if output_storage is not None:
+            runtime_metadata["output_storage"] = copy.deepcopy(output_storage)
+        if isinstance(study_pipeline, Mapping):
+            pipeline = copy.deepcopy(dict(study_pipeline))
+            runtime_metadata["study_pipeline"] = pipeline
+            if (
+                runtime_metadata.get("interactive_session_requested") is True
+                and _has_enabled_study_pipeline_node(pipeline.get("nodes"))
+            ):
+                runtime_metadata["wait_for_solve"] = True
+        return replace(
+            problem,
+            runtime_metadata=runtime_metadata,
+            selections=typed_selections,
+            magnetization_constraints=typed_constraints,
+        )
+
+    script_source = render_scene_document_as_script(
+        scene,
+        include_authored_stages=include_authored_stages,
+        include_legacy_relax_stages=include_legacy_relax_stages,
+    )
     with tempfile.TemporaryDirectory(prefix="fullmag-scene-problem-ir-") as temporary:
         script_path = Path(temporary) / "scene_document.py"
         script_path.write_text(script_source, encoding="utf-8")
         loaded = load_problem_from_script(script_path, lightweight_assets=True)
-
-        selections = scene.get("selections", [])
-        if not isinstance(selections, list):
-            raise ValueError("SceneDocument.selections must be a list")
-        constraints = scene.get("magnetization_constraints", [])
-        if not isinstance(constraints, list):
-            raise ValueError("SceneDocument.magnetization_constraints must be a list")
-
-        typed_selections = tuple(SelectionDefinition.from_ir(item) for item in selections)
-        typed_constraints = tuple(FrozenSpins.from_ir(item) for item in constraints)
-        study_pipeline = study.get("study_pipeline")
-        if study_pipeline is not None and not isinstance(study_pipeline, Mapping):
-            raise ValueError("SceneDocument.study.study_pipeline must be an object")
-
-        def attach_scene_semantics(problem):
-            runtime_metadata = dict(problem.runtime_metadata)
-            if output_storage is not None:
-                runtime_metadata["output_storage"] = copy.deepcopy(output_storage)
-            if isinstance(study_pipeline, Mapping):
-                pipeline = copy.deepcopy(dict(study_pipeline))
-                runtime_metadata["study_pipeline"] = pipeline
-                if (
-                    runtime_metadata.get("interactive_session_requested") is True
-                    and _has_enabled_study_pipeline_node(pipeline.get("nodes"))
-                ):
-                    # The public DSL raises this gate when an executable stage is
-                    # authored in an interactive session. SceneDocument already
-                    # stores the canonical pipeline, although its bootstrap script
-                    # only materializes the typed Problem needed by the writer.
-                    runtime_metadata["wait_for_solve"] = True
-            return replace(
-                problem,
-                runtime_metadata=runtime_metadata,
-                selections=typed_selections,
-                magnetization_constraints=typed_constraints,
-            )
-
         loaded = replace(
             loaded,
             problem=attach_scene_semantics(loaded.problem),
@@ -192,23 +200,163 @@ def scene_document_to_problem_ir(
                 if loaded.workspace_problem is not None
                 else None
             ),
+            stages=tuple(
+                replace(stage, problem=attach_scene_semantics(stage.problem))
+                for stage in loaded.stages
+            ),
         )
-        result = loaded.to_ir(
-            requested_backend=backend,
-            execution_mode=mode,
-            execution_precision=precision,
-            include_geometry_assets=False,
-            runtime_device_override=device if device in {"cpu", "gpu"} else None,
-            source_root=source_root,
+        stable_source_root = (
+            Path(source_root).resolve() if source_root is not None else Path.cwd().resolve()
         )
-        runtime_metadata = result.get("problem_meta", {}).get("runtime_metadata")
-        if isinstance(runtime_metadata, dict):
-            runtime_metadata["output_storage_source_dir"] = str(
-                (Path(source_root) if source_root is not None else Path.cwd()).resolve()
+        raw_study_name = scene.get("study_name")
+        stable_source_stem = (
+            raw_study_name.strip()
+            if isinstance(raw_study_name, str) and raw_study_name.strip()
+            else "scene_document"
+        )
+        yield _SceneDocumentCapture(
+            scene=scene,
+            loaded=loaded,
+            backend=backend,
+            device=device,
+            precision=precision,
+            mode=mode,
+            source_root=stable_source_root,
+            source_stem=stable_source_stem,
+        )
+
+
+def _scene_capture_to_ir(
+    capture: _SceneDocumentCapture,
+    *,
+    include_geometry_assets: bool,
+) -> dict[str, object]:
+    loaded = capture.loaded
+    result = loaded.to_ir(
+        requested_backend=capture.backend,
+        execution_mode=capture.mode,
+        execution_precision=capture.precision,
+        asset_cache=loaded.problem.geometry_asset_cache,
+        include_geometry_assets=include_geometry_assets,
+        runtime_device_override=(
+            capture.device if capture.device in {"cpu", "gpu"} else None
+        ),
+        source_root=capture.source_root,
+        _copy_cached_geometry_assets=False,
+    )
+    runtime_metadata = result.get("problem_meta", {}).get("runtime_metadata")
+    if isinstance(runtime_metadata, dict):
+        runtime_metadata["output_storage_source_dir"] = str(capture.source_root)
+        runtime_metadata["output_storage_source_stem"] = capture.source_stem
+        study_pipeline = _scene_capture_study_pipeline(capture)
+        if study_pipeline is not None:
+            runtime_metadata["study_pipeline"] = copy.deepcopy(study_pipeline)
+            model_builder = runtime_metadata.get("model_builder")
+            if isinstance(model_builder, dict):
+                model_builder["study_pipeline"] = copy.deepcopy(study_pipeline)
+            script_sync = runtime_metadata.get("script_sync")
+            if isinstance(script_sync, dict):
+                script_sync["study_pipeline_version"] = study_pipeline.get("version")
+    return result
+
+
+def _scene_capture_study_pipeline(
+    capture: _SceneDocumentCapture,
+) -> dict[str, object] | None:
+    study = capture.scene.get("study")
+    pipeline = study.get("study_pipeline") if isinstance(study, Mapping) else None
+    return copy.deepcopy(dict(pipeline)) if isinstance(pipeline, Mapping) else None
+
+
+def scene_document_to_problem_ir(
+    scene_document: Mapping[str, object],
+    *,
+    requested_backend: str,
+    requested_device: str,
+    requested_precision: str,
+    requested_mode: str,
+    source_root: str | Path | None = None,
+) -> dict[str, object]:
+    """Return the canonical, geometry-light ProblemIR for a SceneDocument."""
+
+    with _capture_scene_document(
+        scene_document,
+        requested_backend=requested_backend,
+        requested_device=requested_device,
+        requested_precision=requested_precision,
+        requested_mode=requested_mode,
+        source_root=source_root,
+        include_authored_stages=False,
+        include_legacy_relax_stages=True,
+    ) as capture:
+        return _scene_capture_to_ir(capture, include_geometry_assets=False)
+
+
+def scene_document_to_execution_config(
+    scene_document: Mapping[str, object],
+    *,
+    requested_backend: str,
+    requested_device: str,
+    requested_precision: str,
+    requested_mode: str,
+    source_root: str | Path | None = None,
+) -> dict[str, object]:
+    """Return the canonical base IR and ordered stage IRs for a SceneDocument."""
+
+    raw_study = scene_document.get("study") if isinstance(scene_document, Mapping) else None
+    raw_pipeline = (
+        raw_study.get("study_pipeline") if isinstance(raw_study, Mapping) else None
+    )
+    raw_nodes = raw_pipeline.get("nodes") if isinstance(raw_pipeline, Mapping) else None
+    scene_pipeline_owns_stage_expansion = isinstance(raw_nodes, list) and bool(raw_nodes)
+
+    with _capture_scene_document(
+        scene_document,
+        requested_backend=requested_backend,
+        requested_device=requested_device,
+        requested_precision=requested_precision,
+        requested_mode=requested_mode,
+        source_root=source_root,
+        include_authored_stages=not scene_pipeline_owns_stage_expansion,
+        include_legacy_relax_stages=not scene_pipeline_owns_stage_expansion,
+    ) as capture:
+        study_pipeline = _scene_capture_study_pipeline(capture)
+        run_capture = capture
+        if study_pipeline is not None and study_pipeline.get("nodes"):
+            # The shared Rust materializer expands typed Scene pipeline nodes.
+            # Leave explicit Python stages empty so macros/groups remain the
+            # single execution source instead of being shadowed by flattened
+            # DSL captures.
+            base_problem = capture.loaded.workspace_problem or (
+                capture.loaded.pipeline_base_problem()
             )
-            if isinstance(scene.get("study_name"), str) and scene["study_name"].strip():
-                runtime_metadata["output_storage_source_stem"] = str(scene["study_name"])
-        return result
+            run_capture = replace(
+                capture,
+                loaded=replace(
+                    capture.loaded,
+                    problem=base_problem,
+                    entrypoint_kind="flat_workspace",
+                    stages=(),
+                    workspace_problem=base_problem,
+                ),
+            )
+        base_ir = _scene_capture_to_ir(run_capture, include_geometry_assets=False)
+        return export_run_config(
+            run_capture.loaded,
+            base_ir,
+            options=RunConfigExportOptions(
+                requested_backend=capture.backend,
+                execution_mode=capture.mode,
+                execution_precision=capture.precision,
+                runtime_device_override=(
+                    capture.device if capture.device in {"cpu", "gpu"} else None
+                ),
+                include_geometry_assets=False,
+                source_root=capture.source_root,
+                source_stem=capture.source_stem,
+                study_pipeline=_scene_capture_study_pipeline(capture),
+            ),
+        )
 
 
 def _has_enabled_study_pipeline_node(nodes: object) -> bool:
@@ -339,4 +487,7 @@ def _reject_unlowered_scene_fields(scene: Mapping[str, object]) -> None:
             )
 
 
-__all__ = ["scene_document_to_problem_ir"]
+__all__ = [
+    "scene_document_to_execution_config",
+    "scene_document_to_problem_ir",
+]
