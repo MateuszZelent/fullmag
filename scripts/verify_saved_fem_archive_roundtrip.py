@@ -848,8 +848,11 @@ def copy_store(source: Path, destination: Path, expected: dict) -> None:
 
 
 def check_stamp(stderr: str, commit: str, snapshot: str, *, dirty: bool = False) -> None:
-    stamps = [line for line in stderr.splitlines() if line.startswith("[fullmag] build:")]
-    match = re.fullmatch(r"\[fullmag\] build: [^|\r\n]+ \| commit: ([0-9a-f]{40}) \| (clean|dirty) \| source snapshot: ([0-9a-f]{64})",
+    # The product-version prefix does not replace the exact source identity.
+    # Count both headers together so a mixed duplicate cannot pass either.
+    stamps = [line for line in stderr.splitlines()
+              if line.startswith(("[fullmag] build:", "[fullmag] version:"))]
+    match = re.fullmatch(r"\[fullmag\] (?:version: [^\s|]+ \| )?build: [^|\r\n]+ \| commit: ([0-9a-f]{40}) \| (clean|dirty) \| source snapshot: ([0-9a-f]{64})",
                          stamps[0]) if len(stamps) == 1 else None
     if type(dirty) is not bool or match is None \
             or match.groups() != (commit, "dirty" if dirty else "clean", snapshot):
