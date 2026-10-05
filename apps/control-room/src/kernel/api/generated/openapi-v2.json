@@ -2207,6 +2207,38 @@
       "AuthoringTransactionRequest": {
         "oneOf": [
           {
+            "description": "Replace an immutable profile snapshot atomically, without merging\nsparse defaults from a previously assigned version.",
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "execution_layers": {
+                "items": {
+                  "$ref": "#/components/schemas/ExecutionLayerSchema"
+                },
+                "type": "array"
+              },
+              "execution_profile": {
+                "$ref": "#/components/schemas/ExecutionProfileSchema"
+              },
+              "kind": {
+                "enum": [
+                  "assign_study_execution"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "base_revision",
+              "execution_profile",
+              "execution_layers",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "base_revision": {
                 "format": "int64",
@@ -4161,6 +4193,340 @@
         ],
         "type": "string"
       },
+      "ComputeAdmissionState": {
+        "enum": [
+          "not_evaluated"
+        ],
+        "type": "string"
+      },
+      "ComputeParallelismSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "single_process"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "gpus_per_rank": {
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "distributed"
+                ],
+                "type": "string"
+              },
+              "ranks": {
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ranks_per_node": {
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "threads_per_rank": {
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ranks",
+              "threads_per_rank",
+              "ranks_per_node",
+              "gpus_per_rank",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ComputePlacementSchema": {
+        "enum": [
+          "balanced",
+          "throughput",
+          "pinned"
+        ],
+        "type": "string"
+      },
+      "ComputePreviewInput": {
+        "additionalProperties": false,
+        "properties": {
+          "layers": {
+            "description": "Missing layers mean an empty override list, as in ExecutionRequestLayerIR.",
+            "items": {
+              "$ref": "#/components/schemas/ExecutionLayerSchema"
+            },
+            "type": "array"
+          },
+          "problem": {
+            "additionalProperties": {},
+            "description": "ProblemIR remains the canonical transport and is validated by the Rust\ndomain type; OpenAPI treats its established JSON object shape as opaque.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "step_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_id",
+          "problem"
+        ],
+        "type": "object"
+      },
+      "ComputePreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_profile_catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/ComputePreviewInput"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "study_plan": {
+            "additionalProperties": {},
+            "description": "The canonical StudyPlan transport is opaque here; fullmag-authoring\nowns its deserialization and validation rules.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "expected_profile_catalog_revision",
+          "study_plan",
+          "inputs"
+        ],
+        "type": "object"
+      },
+      "ComputePreviewResource": {
+        "properties": {
+          "admission_state": {
+            "$ref": "#/components/schemas/ComputeAdmissionState"
+          },
+          "blocking_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "preview_id": {
+            "type": "string"
+          },
+          "profile_catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_digest": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ComputePreviewStep"
+            },
+            "type": "array"
+          },
+          "study_catalog_sha256": {
+            "type": "string"
+          },
+          "study_problem_catalog": {
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "preview_id",
+          "source_digest",
+          "profile_catalog_revision",
+          "study_problem_catalog",
+          "study_catalog_sha256",
+          "steps",
+          "admission_state",
+          "blocking_reasons"
+        ],
+        "type": "object"
+      },
+      "ComputePreviewStep": {
+        "properties": {
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionMaterializationSchema"
+          },
+          "step_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_id",
+          "execution"
+        ],
+        "type": "object"
+      },
+      "ComputeResourcePatchSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/CpuResourcePatchSchema"
+          },
+          "gpu": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GpuResourcesSchema"
+              }
+            ]
+          },
+          "parallelism": {
+            "$ref": "#/components/schemas/ComputeParallelismSchema"
+          },
+          "placement": {
+            "$ref": "#/components/schemas/ComputePlacementSchema"
+          },
+          "ram": {
+            "$ref": "#/components/schemas/MemoryResourcePatchSchema"
+          },
+          "scratch": {
+            "$ref": "#/components/schemas/MemoryResourcePatchSchema"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ComputeTargetSchema"
+          }
+        },
+        "type": "object"
+      },
+      "ComputeResourcesPreviewSchema": {
+        "description": "Fully materialized resource intent. This is deliberately separate from\nComputeResourcePatchSchema, whose optional members represent a sparse patch.",
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/CpuResourcesPreviewSchema"
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GpuResourcesPreviewSchema"
+          },
+          "parallelism": {
+            "$ref": "#/components/schemas/ComputeParallelismSchema"
+          },
+          "placement": {
+            "$ref": "#/components/schemas/ComputePlacementSchema"
+          },
+          "ram": {
+            "$ref": "#/components/schemas/MemoryReservationPreviewSchema"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scratch": {
+            "$ref": "#/components/schemas/MemoryReservationPreviewSchema"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ComputeTargetSchema"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "cpu",
+          "ram",
+          "scratch",
+          "parallelism",
+          "placement"
+        ],
+        "type": "object"
+      },
+      "ComputeTargetSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "local"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "node"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "pool"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ConstraintActivationSchema": {
         "oneOf": [
           {
@@ -4402,6 +4768,92 @@
           "source_resolution",
           "target_resolution",
           "params"
+        ],
+        "type": "object"
+      },
+      "CpuAffinitySchema": {
+        "enum": [
+          "auto",
+          "compact",
+          "spread",
+          "numa"
+        ],
+        "type": "string"
+      },
+      "CpuCorePolicySchema": {
+        "enum": [
+          "physical_first",
+          "logical"
+        ],
+        "type": "string"
+      },
+      "CpuResourcePatchSchema": {
+        "additionalProperties": false,
+        "description": "One sparse CPU patch. Missing fields inherit; nullable fields accept JSON\nnull as an explicit reset.",
+        "properties": {
+          "affinity": {
+            "$ref": "#/components/schemas/CpuAffinitySchema"
+          },
+          "blas_threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          },
+          "core_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CpuCorePolicySchema"
+              }
+            ]
+          },
+          "native_threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          },
+          "numa_node": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          }
+        },
+        "type": "object"
+      },
+      "CpuResourcesPreviewSchema": {
+        "properties": {
+          "affinity": {
+            "$ref": "#/components/schemas/CpuAffinitySchema"
+          },
+          "blas_threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          },
+          "core_policy": {
+            "$ref": "#/components/schemas/CpuCorePolicySchema"
+          },
+          "native_threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          },
+          "numa_node": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          }
+        },
+        "required": [
+          "threads",
+          "affinity",
+          "native_threads",
+          "blas_threads"
         ],
         "type": "object"
       },
@@ -4894,6 +5346,69 @@
         ],
         "type": "object"
       },
+      "DevelopmentBackendBuildRequest": {
+        "additionalProperties": false,
+        "description": "Explicit build-only intent. The API derives and pins the managed worktree scope.",
+        "properties": {
+          "api_instance_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "request_id",
+          "api_instance_id"
+        ],
+        "type": "object"
+      },
+      "DevelopmentBackendBuildRequestResource": {
+        "description": "Bounded status for one authenticated build-only intent.",
+        "properties": {
+          "ready_build_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ready_source_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DevelopmentBackendBuildRequestState"
+          }
+        },
+        "required": [
+          "schema",
+          "request_id",
+          "state"
+        ],
+        "type": "object"
+      },
+      "DevelopmentBackendBuildRequestState": {
+        "enum": [
+          "pending",
+          "building",
+          "ready",
+          "failed",
+          "unknown"
+        ],
+        "type": "string"
+      },
       "DevelopmentBackendReason": {
         "enum": [
           "disabled",
@@ -4911,6 +5426,17 @@
       "DevelopmentBackendResource": {
         "description": "Compilation observation only; applying a build requires a separate guarded command.",
         "properties": {
+          "build_available": {
+            "description": "True when this pinned development API can accept an explicit build-only request.",
+            "type": "boolean"
+          },
+          "build_request_id": {
+            "description": "Owner request currently reflected by the native watcher status frame.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "configured": {
             "type": "boolean"
           },
@@ -5989,6 +6515,293 @@
           "total",
           "entries"
         ],
+        "type": "object"
+      },
+      "ExecutionBackendSchema": {
+        "enum": [
+          "auto",
+          "fdm",
+          "fem",
+          "hybrid"
+        ],
+        "type": "string"
+      },
+      "ExecutionDeviceSchema": {
+        "enum": [
+          "auto",
+          "cpu",
+          "gpu"
+        ],
+        "type": "string"
+      },
+      "ExecutionLayerSchema": {
+        "description": "OpenAPI shape for an incoming ExecutionRequestLayerIR. Its request patch is\noptional because the canonical IR defaults an omitted patch to empty.",
+        "properties": {
+          "origin": {
+            "$ref": "#/components/schemas/ExecutionOriginSchema"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ExecutionRequestPatchSchema"
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "type": "object"
+      },
+      "ExecutionMaterializationSchema": {
+        "description": "MaterializedExecutionRequestIR always has a bound immutable profile and\nits digest in a full Study preview, although the general IR type permits\nthose fields to be absent in other contexts.",
+        "properties": {
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/MaterializedExecutionLayerSchema"
+            },
+            "type": "array"
+          },
+          "origins": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExecutionOriginSchema"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ExecutionProfileSchema"
+          },
+          "profile_sha256": {
+            "type": "string"
+          },
+          "requested": {
+            "$ref": "#/components/schemas/RequestedExecutionPreviewSchema"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "profile_sha256",
+          "layers",
+          "requested",
+          "origins"
+        ],
+        "type": "object"
+      },
+      "ExecutionModeSchema": {
+        "enum": [
+          "strict",
+          "extended",
+          "hybrid"
+        ],
+        "type": "string"
+      },
+      "ExecutionOriginKindSchema": {
+        "enum": [
+          "product_default",
+          "profile",
+          "script",
+          "study",
+          "step",
+          "submit",
+          "cli",
+          "legacy_env"
+        ],
+        "type": "string"
+      },
+      "ExecutionOriginSchema": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ExecutionOriginKindSchema"
+          },
+          "location": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "location"
+        ],
+        "type": "object"
+      },
+      "ExecutionPrecisionSchema": {
+        "enum": [
+          "single",
+          "double"
+        ],
+        "type": "string"
+      },
+      "ExecutionProfileCatalogResource": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionProfileVersionResource"
+            },
+            "type": "array"
+          },
+          "next_offset": {
+            "format": "int32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "total": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "revision",
+          "total",
+          "offset",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "ExecutionProfileInputSchema": {
+        "additionalProperties": false,
+        "description": "Accepted profile input. `description` and `defaults` may be omitted because\n`ExecutionProfileIR` supplies defaults for them during deserialization.",
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/ExecutionRequestPatchSchema"
+          },
+          "description": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "profile_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schema_version": {
+            "$ref": "#/components/schemas/ExecutionProfileSchemaVersion"
+          },
+          "version": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile_id",
+          "version"
+        ],
+        "type": "object"
+      },
+      "ExecutionProfileSchema": {
+        "additionalProperties": false,
+        "description": "Serialized profile resource returned by catalog and publish operations.",
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/ExecutionRequestPatchSchema"
+          },
+          "description": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "profile_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schema_version": {
+            "$ref": "#/components/schemas/ExecutionProfileSchemaVersion"
+          },
+          "version": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile_id",
+          "version",
+          "description",
+          "defaults"
+        ],
+        "type": "object"
+      },
+      "ExecutionProfileSchemaVersion": {
+        "enum": [
+          "execution_profile.v1"
+        ],
+        "type": "string"
+      },
+      "ExecutionProfileVersionResource": {
+        "properties": {
+          "client_intent_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ExecutionProfileSchema"
+          },
+          "profile_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "profile_sha256",
+          "client_intent_id",
+          "published_at",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "ExecutionRequestPatchSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/ExecutionBackendSchema"
+          },
+          "device": {
+            "$ref": "#/components/schemas/ExecutionDeviceSchema"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionModeSchema"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/ExecutionPrecisionSchema"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ComputeResourcePatchSchema"
+          }
+        },
         "type": "object"
       },
       "ExecutionSummary": {
@@ -13010,6 +13823,74 @@
         ],
         "type": "object"
       },
+      "GpuResourcesPreviewSchema": {
+        "properties": {
+          "device_uuids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "devices_per_task": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/GpuSelectorSchema"
+          },
+          "vram_per_device_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "selector",
+          "device_uuids",
+          "devices_per_task"
+        ],
+        "type": "object"
+      },
+      "GpuResourcesSchema": {
+        "additionalProperties": false,
+        "description": "Full GPU value accepted when the sparse `gpu` property is present. The\ncontaining property is separately nullable to represent an explicit reset.",
+        "properties": {
+          "device_uuids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "devices_per_task": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/GpuSelectorSchema"
+          },
+          "vram_per_device_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "GpuSelectorSchema": {
+        "enum": [
+          "any_compatible",
+          "allow_list",
+          "required"
+        ],
+        "type": "string"
+      },
       "GpuTelemetryDevice": {
         "properties": {
           "index": {
@@ -18031,6 +18912,46 @@
           "modal_local_tangent_coefficients"
         ],
         "type": "string"
+      },
+      "MaterializedExecutionLayerSchema": {
+        "description": "The materialized output always serializes its request member, including an\nempty patch, unlike the optional input form in ExecutionLayerSchema.",
+        "properties": {
+          "origin": {
+            "$ref": "#/components/schemas/ExecutionOriginSchema"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ExecutionRequestPatchSchema"
+          }
+        },
+        "required": [
+          "origin",
+          "request"
+        ],
+        "type": "object"
+      },
+      "MemoryReservationPreviewSchema": {
+        "properties": {
+          "reservation_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "MemoryResourcePatchSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reservation_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "MeshActiveBuildResource": {
         "properties": {
@@ -24325,6 +25246,11 @@
         ],
         "type": "object"
       },
+      "PositiveThreadCountSchema": {
+        "maximum": 4294967295,
+        "minimum": 1,
+        "type": "integer"
+      },
       "PreparationClockAdjustment": {
         "properties": {
           "backward_delta_ms": {
@@ -24696,6 +25622,13 @@
           "status"
         ],
         "type": "object"
+      },
+      "ProfilePublicationDispositionSchema": {
+        "enum": [
+          "published",
+          "existing"
+        ],
+        "type": "string"
       },
       "ProjectArchiveDurability": {
         "enum": [
@@ -25780,6 +26713,51 @@
           "model",
           "execution",
           "outputs"
+        ],
+        "type": "object"
+      },
+      "PublishExecutionProfileRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "client_intent_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ExecutionProfileInputSchema"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "client_intent_id",
+          "profile"
+        ],
+        "type": "object"
+      },
+      "PublishExecutionProfileResource": {
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/ProfilePublicationDispositionSchema"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/ExecutionProfileVersionResource"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "disposition",
+          "revision",
+          "entry"
         ],
         "type": "object"
       },
@@ -26941,6 +27919,44 @@
           "tangent_plane_implicit"
         ],
         "type": "string"
+      },
+      "RequestedExecutionPreviewSchema": {
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/ExecutionBackendSchema"
+          },
+          "device": {
+            "$ref": "#/components/schemas/ExecutionDeviceSchema"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionModeSchema"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/ExecutionPrecisionSchema"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ComputeResourcesPreviewSchema"
+          }
+        },
+        "required": [
+          "backend",
+          "device",
+          "precision",
+          "mode",
+          "resources"
+        ],
+        "type": "object"
+      },
+      "RequestedThreadsSchema": {
+        "description": "`RequestedThreads` is an untagged union of the string `\"auto\"` and a\npositive u32 count. It is intentionally represented as an OpenAPI `oneOf`.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ThreadAutoSchema"
+          },
+          {
+            "$ref": "#/components/schemas/PositiveThreadCountSchema"
+          }
+        ]
       },
       "ResolvedFallbackResource": {
         "properties": {
@@ -37448,6 +38464,12 @@
         ],
         "type": "string"
       },
+      "ThreadAutoSchema": {
+        "enum": [
+          "auto"
+        ],
+        "type": "string"
+      },
       "TimeDependenceResource": {
         "oneOf": [
           {
@@ -42520,6 +43542,182 @@
         ]
       }
     },
+    "/v2/platform/compute/preview": {
+      "post": {
+        "operationId": "platform_post_platform_compute_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComputePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputePreviewResource"
+                }
+              }
+            },
+            "description": "Canonical intent preview; host admission is not evaluated"
+          },
+          "400": {
+            "description": "Invalid or oversized canonical study inputs"
+          },
+          "409": {
+            "description": "Profile revision or immutable reference conflict"
+          },
+          "503": {
+            "description": "No configured profile store"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/compute/profiles": {
+      "get": {
+        "operationId": "platform_get_platform_compute_profiles",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "profile_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "client_intent_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionProfileCatalogResource"
+                }
+              }
+            },
+            "description": "Immutable profile versions and catalogue revision"
+          },
+          "304": {
+            "description": "Profile catalogue page is unchanged"
+          },
+          "400": {
+            "description": "Invalid catalogue query"
+          },
+          "409": {
+            "description": "Catalogue revision changed while paging"
+          },
+          "503": {
+            "description": "No configured profile store"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      },
+      "post": {
+        "operationId": "platform_post_platform_compute_profiles",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishExecutionProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishExecutionProfileResource"
+                }
+              }
+            },
+            "description": "Identical publication intent replayed"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishExecutionProfileResource"
+                }
+              }
+            },
+            "description": "Immutable profile version published"
+          },
+          "400": {
+            "description": "Invalid profile or publication identity"
+          },
+          "409": {
+            "description": "Revision, intent, version or catalogue capacity conflict"
+          },
+          "503": {
+            "description": "No configured profile store"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/v2/platform/development-backend": {
       "get": {
         "operationId": "platform_get_platform_development_backend",
@@ -42536,6 +43734,138 @@
           },
           "304": {
             "description": "Development backend status has not changed"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/development-backend/build-requests": {
+      "post": {
+        "operationId": "platform_post_platform_development_backend_build_requests",
+        "parameters": [
+          {
+            "description": "Bearer token generated before submission",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact launcher UI origin",
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current API instance pin",
+            "in": "header",
+            "name": "x-fullmag-api-instance",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentBackendBuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentBackendBuildRequestResource"
+                }
+              }
+            },
+            "description": "Build-only intent durably queued"
+          },
+          "409": {
+            "description": "Build coordinator unavailable or request conflicts"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/development-backend/build-requests/{request_id}": {
+      "get": {
+        "operationId": "platform_get_platform_development_backend_build_requests_request_id",
+        "parameters": [
+          {
+            "description": "Opaque build request identity",
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bearer status token",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact launcher UI origin when sent",
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact launcher UI origin echo for same-origin GET",
+            "in": "header",
+            "name": "x-fullmag-ui-origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current API instance pin",
+            "in": "header",
+            "name": "x-fullmag-api-instance",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentBackendBuildRequestResource"
+                }
+              }
+            },
+            "description": "Token-bound build request state"
+          },
+          "404": {
+            "description": "Request unavailable"
           }
         },
         "tags": [

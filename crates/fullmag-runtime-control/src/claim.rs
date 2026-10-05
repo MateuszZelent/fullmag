@@ -18,6 +18,33 @@ pub fn commit_claimed_task_admission(
     task: &TaskRecord,
     claim: &TaskClaim,
 ) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
+    commit_claimed_task_admission_with(store, task, claim, |lease| {
+        store.commit_task_admission(lease)
+    })
+}
+
+/// Admit through the shared physical-host ledger when the caller has resolved
+/// an explicit host policy/allocation. The ledger owns the host-before-store
+/// transaction and retains reservations after an unknown publication outcome.
+/// This does not infer UUIDs from offer IDs or enable unsupported concurrency.
+pub fn commit_claimed_task_admission_with_host(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    request: &fullmag_session::host_resource_ledger::HostReservationRequest,
+) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
+    commit_claimed_task_admission_with(store, task, claim, |lease| {
+        ledger.commit_task_admission(request, store, lease)
+    })
+}
+
+fn commit_claimed_task_admission_with(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    admit: impl FnOnce(&FmsResourceLease) -> Result<fullmag_session::TaskAdmissionCommitDisposition>,
+) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
     task.fence(claim)
         .context("application task does not own the supplied claim")?;
     if task.run_id != claim.run_id
@@ -106,7 +133,7 @@ pub fn commit_claimed_task_admission(
         heartbeat_sequence: claim.lease.heartbeat_sequence,
         released_at: None,
     };
-    let disposition = store.commit_task_admission(&lease)?;
+    let disposition = admit(&lease)?;
     let persisted_claim = load_current_task_claim(store, &claim.run_id, claim.task_id.as_str())?;
     if persisted_claim != *claim {
         bail!("durable admission recovered a claim different from the application claim");

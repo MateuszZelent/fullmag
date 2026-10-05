@@ -356,6 +356,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/platform/compute/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["platform_post_platform_compute_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/compute/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_compute_profiles"];
+        put?: never;
+        post: operations["platform_post_platform_compute_profiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/platform/development-backend": {
         parameters: {
             query?: never;
@@ -364,6 +396,38 @@ export interface paths {
             cookie?: never;
         };
         get: operations["platform_get_platform_development_backend"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/development-backend/build-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["platform_post_platform_development_backend_build_requests"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/platform/development-backend/build-requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_platform_development_backend_build_requests_request_id"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5071,6 +5135,13 @@ export interface components {
         };
         AuthoringTransactionRequest: {
             /** Format: int64 */
+            base_revision: number;
+            execution_layers: components["schemas"]["ExecutionLayerSchema"][];
+            execution_profile: components["schemas"]["ExecutionProfileSchema"];
+            /** @enum {string} */
+            kind: "assign_study_execution";
+        } | {
+            /** Format: int64 */
             base_revision?: number | null;
             /** @enum {string} */
             kind: "replace_scene";
@@ -5515,6 +5586,102 @@ export interface components {
         };
         /** @enum {string} */
         CompressionProfile: "speed" | "balanced" | "smallest";
+        /** @enum {string} */
+        ComputeAdmissionState: "not_evaluated";
+        ComputeParallelismSchema: {
+            /** @enum {string} */
+            kind: "single_process";
+        } | {
+            /** Format: int64 */
+            gpus_per_rank: number;
+            /** @enum {string} */
+            kind: "distributed";
+            /** Format: int64 */
+            ranks: number;
+            /** Format: int64 */
+            ranks_per_node: number;
+            /** Format: int64 */
+            threads_per_rank: number;
+        };
+        /** @enum {string} */
+        ComputePlacementSchema: "balanced" | "throughput" | "pinned";
+        ComputePreviewInput: {
+            /** @description Missing layers mean an empty override list, as in ExecutionRequestLayerIR. */
+            layers?: components["schemas"]["ExecutionLayerSchema"][];
+            /**
+             * @description ProblemIR remains the canonical transport and is validated by the Rust
+             *     domain type; OpenAPI treats its established JSON object shape as opaque.
+             */
+            problem: {
+                [key: string]: unknown;
+            };
+            step_id: string;
+        };
+        ComputePreviewRequest: {
+            /** Format: int64 */
+            expected_profile_catalog_revision: number;
+            inputs: components["schemas"]["ComputePreviewInput"][];
+            /**
+             * @description The canonical StudyPlan transport is opaque here; fullmag-authoring
+             *     owns its deserialization and validation rules.
+             */
+            study_plan: {
+                [key: string]: unknown;
+            };
+        };
+        ComputePreviewResource: {
+            admission_state: components["schemas"]["ComputeAdmissionState"];
+            blocking_reasons: string[];
+            preview_id: string;
+            /** Format: int64 */
+            profile_catalog_revision: number;
+            schema_version: string;
+            source_digest: string;
+            steps: components["schemas"]["ComputePreviewStep"][];
+            study_catalog_sha256: string;
+            study_problem_catalog: {
+                [key: string]: unknown;
+            };
+        };
+        ComputePreviewStep: {
+            execution: components["schemas"]["ExecutionMaterializationSchema"];
+            step_id: string;
+        };
+        ComputeResourcePatchSchema: {
+            cpu?: components["schemas"]["CpuResourcePatchSchema"];
+            gpu?: null | components["schemas"]["GpuResourcesSchema"];
+            parallelism?: components["schemas"]["ComputeParallelismSchema"];
+            placement?: components["schemas"]["ComputePlacementSchema"];
+            ram?: components["schemas"]["MemoryResourcePatchSchema"];
+            scratch?: components["schemas"]["MemoryResourcePatchSchema"];
+            target?: components["schemas"]["ComputeTargetSchema"];
+        };
+        /**
+         * @description Fully materialized resource intent. This is deliberately separate from
+         *     ComputeResourcePatchSchema, whose optional members represent a sparse patch.
+         */
+        ComputeResourcesPreviewSchema: {
+            cpu: components["schemas"]["CpuResourcesPreviewSchema"];
+            gpu?: components["schemas"]["GpuResourcesPreviewSchema"];
+            parallelism: components["schemas"]["ComputeParallelismSchema"];
+            placement: components["schemas"]["ComputePlacementSchema"];
+            ram: components["schemas"]["MemoryReservationPreviewSchema"];
+            schema_version: string;
+            scratch: components["schemas"]["MemoryReservationPreviewSchema"];
+            target: components["schemas"]["ComputeTargetSchema"];
+        };
+        ComputeTargetSchema: {
+            /** @enum {string} */
+            kind: "local";
+        } | {
+            id: string;
+            /** @enum {string} */
+            kind: "node";
+        } | {
+            id: string;
+            /** @enum {string} */
+            kind: "pool";
+        };
         ConstraintActivationSchema: {
             /** @enum {string} */
             kind: "all_stages";
@@ -5569,6 +5736,32 @@ export interface components {
             source_resolution: components["schemas"]["CouplingEndpointResolutionResource"];
             target: components["schemas"]["SceneCouplingEndpoint"];
             target_resolution: components["schemas"]["CouplingEndpointResolutionResource"];
+        };
+        /** @enum {string} */
+        CpuAffinitySchema: "auto" | "compact" | "spread" | "numa";
+        /** @enum {string} */
+        CpuCorePolicySchema: "physical_first" | "logical";
+        /**
+         * @description One sparse CPU patch. Missing fields inherit; nullable fields accept JSON
+         *     null as an explicit reset.
+         */
+        CpuResourcePatchSchema: {
+            affinity?: components["schemas"]["CpuAffinitySchema"];
+            blas_threads?: components["schemas"]["RequestedThreadsSchema"];
+            core_policy?: null | components["schemas"]["CpuCorePolicySchema"];
+            native_threads?: components["schemas"]["RequestedThreadsSchema"];
+            /** Format: int64 */
+            numa_node?: number | null;
+            threads?: components["schemas"]["RequestedThreadsSchema"];
+        };
+        CpuResourcesPreviewSchema: {
+            affinity: components["schemas"]["CpuAffinitySchema"];
+            blas_threads: components["schemas"]["RequestedThreadsSchema"];
+            core_policy?: components["schemas"]["CpuCorePolicySchema"];
+            native_threads: components["schemas"]["RequestedThreadsSchema"];
+            /** Format: int64 */
+            numa_node?: number;
+            threads: components["schemas"]["RequestedThreadsSchema"];
         };
         CpuTelemetryResponse: {
             /** Format: double */
@@ -5694,10 +5887,30 @@ export interface components {
             /** Format: double */
             position_fraction: number;
         };
+        /** @description Explicit build-only intent. The API derives and pins the managed worktree scope. */
+        DevelopmentBackendBuildRequest: {
+            api_instance_id: string;
+            request_id: string;
+            schema: string;
+        };
+        /** @description Bounded status for one authenticated build-only intent. */
+        DevelopmentBackendBuildRequestResource: {
+            ready_build_id?: string | null;
+            ready_source_sha256?: string | null;
+            request_id: string;
+            schema: string;
+            state: components["schemas"]["DevelopmentBackendBuildRequestState"];
+        };
+        /** @enum {string} */
+        DevelopmentBackendBuildRequestState: "pending" | "building" | "ready" | "failed" | "unknown";
         /** @enum {string} */
         DevelopmentBackendReason: "disabled" | "configuration_invalid" | "observation_unavailable" | "observation_invalid" | "observation_stale" | "watcher_stopped" | "build_pending" | "build_failed" | "restart_integration_pending";
         /** @description Compilation observation only; applying a build requires a separate guarded command. */
         DevelopmentBackendResource: {
+            /** @description True when this pinned development API can accept an explicit build-only request. */
+            build_available?: boolean;
+            /** @description Owner request currently reflected by the native watcher status frame. */
+            build_request_id?: string | null;
             configured: boolean;
             current_build?: null | components["schemas"]["DevelopmentBuildIdentity"];
             ready_build?: null | components["schemas"]["DevelopmentBuildIdentity"];
@@ -5956,6 +6169,91 @@ export interface components {
             /** Format: int64 */
             revision: number;
             total: number;
+        };
+        /** @enum {string} */
+        ExecutionBackendSchema: "auto" | "fdm" | "fem" | "hybrid";
+        /** @enum {string} */
+        ExecutionDeviceSchema: "auto" | "cpu" | "gpu";
+        /**
+         * @description OpenAPI shape for an incoming ExecutionRequestLayerIR. Its request patch is
+         *     optional because the canonical IR defaults an omitted patch to empty.
+         */
+        ExecutionLayerSchema: {
+            origin: components["schemas"]["ExecutionOriginSchema"];
+            request?: components["schemas"]["ExecutionRequestPatchSchema"];
+        };
+        /**
+         * @description MaterializedExecutionRequestIR always has a bound immutable profile and
+         *     its digest in a full Study preview, although the general IR type permits
+         *     those fields to be absent in other contexts.
+         */
+        ExecutionMaterializationSchema: {
+            layers: components["schemas"]["MaterializedExecutionLayerSchema"][];
+            origins: {
+                [key: string]: components["schemas"]["ExecutionOriginSchema"];
+            };
+            profile: components["schemas"]["ExecutionProfileSchema"];
+            profile_sha256: string;
+            requested: components["schemas"]["RequestedExecutionPreviewSchema"];
+            schema_version: string;
+        };
+        /** @enum {string} */
+        ExecutionModeSchema: "strict" | "extended" | "hybrid";
+        /** @enum {string} */
+        ExecutionOriginKindSchema: "product_default" | "profile" | "script" | "study" | "step" | "submit" | "cli" | "legacy_env";
+        ExecutionOriginSchema: {
+            kind: components["schemas"]["ExecutionOriginKindSchema"];
+            location: string;
+        };
+        /** @enum {string} */
+        ExecutionPrecisionSchema: "single" | "double";
+        ExecutionProfileCatalogResource: {
+            entries: components["schemas"]["ExecutionProfileVersionResource"][];
+            /** Format: int32 */
+            next_offset?: number | null;
+            /** Format: int32 */
+            offset: number;
+            /** Format: int64 */
+            revision: number;
+            schema_version: string;
+            /** Format: int32 */
+            total: number;
+        };
+        /**
+         * @description Accepted profile input. `description` and `defaults` may be omitted because
+         *     `ExecutionProfileIR` supplies defaults for them during deserialization.
+         */
+        ExecutionProfileInputSchema: {
+            defaults?: components["schemas"]["ExecutionRequestPatchSchema"];
+            description?: string;
+            profile_id: string;
+            schema_version: components["schemas"]["ExecutionProfileSchemaVersion"];
+            version: string;
+        };
+        /** @description Serialized profile resource returned by catalog and publish operations. */
+        ExecutionProfileSchema: {
+            defaults: components["schemas"]["ExecutionRequestPatchSchema"];
+            description: string;
+            profile_id: string;
+            schema_version: components["schemas"]["ExecutionProfileSchemaVersion"];
+            version: string;
+        };
+        /** @enum {string} */
+        ExecutionProfileSchemaVersion: "execution_profile.v1";
+        ExecutionProfileVersionResource: {
+            client_intent_id: string;
+            profile: components["schemas"]["ExecutionProfileSchema"];
+            profile_sha256: string;
+            published_at: string;
+            /** Format: int64 */
+            revision: number;
+        };
+        ExecutionRequestPatchSchema: {
+            backend?: components["schemas"]["ExecutionBackendSchema"];
+            device?: components["schemas"]["ExecutionDeviceSchema"];
+            mode?: components["schemas"]["ExecutionModeSchema"];
+            precision?: components["schemas"]["ExecutionPrecisionSchema"];
+            resources?: components["schemas"]["ComputeResourcePatchSchema"];
         };
         ExecutionSummary: {
             /** @description External field and enabled field drives, in words. */
@@ -7724,6 +8022,28 @@ export interface components {
             scene_revision: number;
             status: string;
         };
+        GpuResourcesPreviewSchema: {
+            device_uuids: string[];
+            /** Format: int64 */
+            devices_per_task: number;
+            selector: components["schemas"]["GpuSelectorSchema"];
+            /** Format: int64 */
+            vram_per_device_bytes?: number;
+        };
+        /**
+         * @description Full GPU value accepted when the sparse `gpu` property is present. The
+         *     containing property is separately nullable to represent an explicit reset.
+         */
+        GpuResourcesSchema: {
+            device_uuids?: string[];
+            /** Format: int64 */
+            devices_per_task?: number;
+            selector?: components["schemas"]["GpuSelectorSchema"];
+            /** Format: int64 */
+            vram_per_device_bytes?: number | null;
+        };
+        /** @enum {string} */
+        GpuSelectorSchema: "any_compatible" | "allow_list" | "required";
         GpuTelemetryDevice: {
             /** Format: int32 */
             index: number;
@@ -8951,6 +9271,22 @@ export interface components {
         MaterializedDatasetUnavailableDataResource: "fail" | "preserve_unavailable";
         /** @enum {string} */
         MaterializedDatasetValueRepresentationResource: "physical_field" | "modal_physical_components" | "modal_function_space_coefficients" | "modal_local_tangent_coefficients";
+        /**
+         * @description The materialized output always serializes its request member, including an
+         *     empty patch, unlike the optional input form in ExecutionLayerSchema.
+         */
+        MaterializedExecutionLayerSchema: {
+            origin: components["schemas"]["ExecutionOriginSchema"];
+            request: components["schemas"]["ExecutionRequestPatchSchema"];
+        };
+        MemoryReservationPreviewSchema: {
+            /** Format: int64 */
+            reservation_bytes?: number;
+        };
+        MemoryResourcePatchSchema: {
+            /** Format: int64 */
+            reservation_bytes?: number | null;
+        };
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
             active_build?: Record<string, never> | null;
@@ -10513,6 +10849,7 @@ export interface components {
             /** Format: double */
             opacity: number;
         };
+        PositiveThreadCountSchema: number;
         PreparationClockAdjustment: {
             /** Format: int64 */
             backward_delta_ms: number;
@@ -10602,6 +10939,8 @@ export interface components {
             label: string;
             status: components["schemas"]["GeometrySupportStatus"];
         };
+        /** @enum {string} */
+        ProfilePublicationDispositionSchema: "published" | "existing";
         /** @enum {string} */
         ProjectArchiveDurability: "memory_only";
         ProjectArchiveRequest: {
@@ -10910,6 +11249,18 @@ export interface components {
             model: components["schemas"]["ModelSummary"];
             outputs: components["schemas"]["OutputsSummary"];
         };
+        PublishExecutionProfileRequest: {
+            client_intent_id: string;
+            /** Format: int64 */
+            expected_revision: number;
+            profile: components["schemas"]["ExecutionProfileInputSchema"];
+        };
+        PublishExecutionProfileResource: {
+            disposition: components["schemas"]["ProfilePublicationDispositionSchema"];
+            entry: components["schemas"]["ExecutionProfileVersionResource"];
+            /** Format: int64 */
+            revision: number;
+        };
         QuantityCatalogEntry: {
             /** @description Capability of the resolved backend/plan, independent of field cache. */
             capability_state: string;
@@ -11195,6 +11546,18 @@ export interface components {
         };
         /** @enum {string} */
         RelaxationAlgorithm: "llg_overdamped" | "projected_gradient_bb" | "nonlinear_cg" | "tangent_plane_implicit";
+        RequestedExecutionPreviewSchema: {
+            backend: components["schemas"]["ExecutionBackendSchema"];
+            device: components["schemas"]["ExecutionDeviceSchema"];
+            mode: components["schemas"]["ExecutionModeSchema"];
+            precision: components["schemas"]["ExecutionPrecisionSchema"];
+            resources: components["schemas"]["ComputeResourcesPreviewSchema"];
+        };
+        /**
+         * @description `RequestedThreads` is an untagged union of the string `"auto"` and a
+         *     positive u32 count. It is intentionally represented as an OpenAPI `oneOf`.
+         */
+        RequestedThreadsSchema: components["schemas"]["ThreadAutoSchema"] | components["schemas"]["PositiveThreadCountSchema"];
         ResolvedFallbackResource: {
             fallback_engine: string;
             message: string;
@@ -13868,6 +14231,8 @@ export interface components {
         TargetFieldAvailabilityState: "supported" | "materializing" | "ready" | "stale" | "unavailable";
         /** @enum {string} */
         TempCleanupSchema: "on_success" | "always" | "never";
+        /** @enum {string} */
+        ThreadAutoSchema: "auto";
         TimeDependenceResource: {
             /** @enum {string} */
             kind: "constant";
@@ -15878,6 +16243,160 @@ export interface operations {
             };
         };
     };
+    platform_post_platform_compute_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComputePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Canonical intent preview; host admission is not evaluated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputePreviewResource"];
+                };
+            };
+            /** @description Invalid or oversized canonical study inputs */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Profile revision or immutable reference conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No configured profile store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_compute_profiles: {
+        parameters: {
+            query?: {
+                profile_id?: string;
+                version?: string;
+                client_intent_id?: string;
+                offset?: number;
+                limit?: number;
+                revision?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable profile versions and catalogue revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionProfileCatalogResource"];
+                };
+            };
+            /** @description Profile catalogue page is unchanged */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid catalogue query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Catalogue revision changed while paging */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No configured profile store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_post_platform_compute_profiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishExecutionProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description Identical publication intent replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishExecutionProfileResource"];
+                };
+            };
+            /** @description Immutable profile version published */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishExecutionProfileResource"];
+                };
+            };
+            /** @description Invalid profile or publication identity */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision, intent, version or catalogue capacity conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No configured profile store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     platform_get_platform_development_backend: {
         parameters: {
             query?: never;
@@ -15898,6 +16417,83 @@ export interface operations {
             };
             /** @description Development backend status has not changed */
             304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_post_platform_development_backend_build_requests: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Bearer token generated before submission */
+                Authorization: string;
+                /** @description Exact launcher UI origin */
+                Origin: string;
+                /** @description Current API instance pin */
+                "x-fullmag-api-instance": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentBackendBuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Build-only intent durably queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentBackendBuildRequestResource"];
+                };
+            };
+            /** @description Build coordinator unavailable or request conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    platform_get_platform_development_backend_build_requests_request_id: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Bearer status token */
+                Authorization: string;
+                /** @description Exact launcher UI origin when sent */
+                Origin: string;
+                /** @description Exact launcher UI origin echo for same-origin GET */
+                "x-fullmag-ui-origin": string;
+                /** @description Current API instance pin */
+                "x-fullmag-api-instance": string;
+            };
+            path: {
+                /** @description Opaque build request identity */
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Token-bound build request state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentBackendBuildRequestResource"];
+                };
+            };
+            /** @description Request unavailable */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

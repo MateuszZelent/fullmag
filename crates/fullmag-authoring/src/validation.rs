@@ -11,9 +11,10 @@ use crate::{
 };
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, DriveActivationIR,
-    ExchangeCouplingModeIR, FieldSpatialProfileIR, FieldTargetIR, MaterialParameterAssignmentIR,
-    MaterialParameterFieldIR, MaterialParameterNameIR, MaterialTransitionSpecIR, MeshIR,
-    MonitorTargetIR, ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
+    ExchangeCouplingModeIR, ExecutionOriginKindIR, FieldSpatialProfileIR, FieldTargetIR,
+    MaterialParameterAssignmentIR, MaterialParameterFieldIR, MaterialParameterNameIR,
+    MaterialTransitionSpecIR, MeshIR, MonitorTargetIR, ObjectRegionIR, RegionFrameIR,
+    RegionMeshPolicyIR, RegionShapeIR,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,6 +40,108 @@ impl Display for SceneDocumentValidationError {
 }
 
 impl std::error::Error for SceneDocumentValidationError {}
+
+fn validate_execution_profile_intent(
+    study: &crate::SceneStudyState,
+) -> Result<(), SceneDocumentValidationError> {
+    if study.execution_profile.is_none() && !study.execution_layers.is_empty() {
+        return Err(SceneDocumentValidationError::new(
+            "study.execution_layers require study.execution_profile",
+        ));
+    }
+
+    if let Some(profile) = study.execution_profile.as_ref() {
+        profile.validate().map_err(|error| {
+            SceneDocumentValidationError::new(format!(
+                "study.execution_profile is invalid: {error}"
+            ))
+        })?;
+    }
+
+    for (index, layer) in study.execution_layers.iter().enumerate() {
+        layer.origin.validate().map_err(|error| {
+            SceneDocumentValidationError::new(format!(
+                "study.execution_layers[{index}].origin is invalid: {error}"
+            ))
+        })?;
+        if matches!(
+            layer.origin.kind,
+            ExecutionOriginKindIR::ProductDefault | ExecutionOriginKindIR::Profile
+        ) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "study.execution_layers[{index}].origin.kind must identify an authored request layer"
+            )));
+        }
+    }
+
+    if study.execution_profile.is_some() {
+        validate_profile_change_device_stages(study)?;
+    }
+
+    Ok(())
+}
+
+fn validate_profile_change_device_stages(
+    study: &crate::SceneStudyState,
+) -> Result<(), SceneDocumentValidationError> {
+    for (index, stage) in study.stages.iter().enumerate() {
+        if stage.kind.trim().eq_ignore_ascii_case("change_device")
+            || stage
+                .entrypoint_kind
+                .trim()
+                .eq_ignore_ascii_case("flat_change_device")
+        {
+            return Err(execution_profile_change_device_stage_error(&format!(
+                "study.stages[{index}]"
+            )));
+        }
+    }
+
+    if let Some(pipeline) = study.study_pipeline.as_ref() {
+        validate_profile_change_device_pipeline_nodes(
+            &pipeline.nodes,
+            "study.study_pipeline.nodes",
+        )?;
+    }
+
+    Ok(())
+}
+
+fn validate_profile_change_device_pipeline_nodes(
+    nodes: &[StudyPipelineNode],
+    path: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    for (index, node) in nodes.iter().enumerate() {
+        let node_path = format!("{path}[{index}]");
+        match node {
+            StudyPipelineNode::Primitive(node)
+                if node.stage_kind == crate::StudyPrimitiveStageKind::ChangeDevice
+                    || node
+                        .payload
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("change_device")) =>
+            {
+                return Err(execution_profile_change_device_stage_error(&node_path));
+            }
+            // MacroStageNode is a leaf with a macro kind/config, not nested child nodes.
+            StudyPipelineNode::Primitive(_) | StudyPipelineNode::Macro(_) => {}
+            StudyPipelineNode::Group(group) => {
+                validate_profile_change_device_pipeline_nodes(
+                    &group.children,
+                    &format!("{node_path}.children"),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn execution_profile_change_device_stage_error(path: &str) -> SceneDocumentValidationError {
+    SceneDocumentValidationError::new(format!(
+        "execution_profile_change_device_stage_conflict: {path} cannot change the device while study.execution_profile is bound; declare per-step execution through canonical StudyPlan layers/references instead of change_device stages"
+    ))
+}
 
 pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumentValidationError> {
     validate_scene_document_with_mode(scene, true)
@@ -68,6 +171,7 @@ fn validate_scene_document_with_mode(
     if scene.version == "scene.v1" {
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
+    validate_execution_profile_intent(&scene.study)?;
     validate_dmi_scope_exclusivity(scene)?;
     if !matches!(
         scene.study.requested_mode.as_str(),
@@ -841,12 +945,12 @@ fn validate_adaptive_state(
         "max_error" => {
             return Err(SceneDocumentValidationError::new(format!(
                 "{context} max_error mode requires atol>0 and rtol=0"
-            )))
+            )));
         }
         other => {
             return Err(SceneDocumentValidationError::new(format!(
                 "{context} has unsupported tolerance_mode '{other}'"
-            )))
+            )));
         }
     }
     validate_present_positive(
@@ -1074,7 +1178,7 @@ fn validate_spin_authoring(
             SceneSpinTransport::Unsupported(_) => {
                 return Err(SceneDocumentValidationError::new(format!(
                     "spin_transports[{index}] uses an unsupported read-only variant"
-                )))
+                )));
             }
         };
         if module.id.trim().is_empty() || !spin_transport_ids.insert(module.id.clone()) {
@@ -1317,7 +1421,7 @@ fn validate_spin_authoring(
             SceneOerstedField::Unsupported(_) => {
                 return Err(SceneDocumentValidationError::new(format!(
                     "oersted_fields[{index}] uses an unsupported read-only variant"
-                )))
+                )));
             }
         };
         match field {
@@ -2148,8 +2252,8 @@ fn validate_scene_conservative_current_view(
                     pair_faces.push(ids);
                     if !source_cut_faces.contains(&ids) {
                         return Err(SceneDocumentValidationError::new(format!(
-                        "{pair_path}.{field} must reference a boundary face with role source_cut"
-                    )));
+                            "{pair_path}.{field} must reference a boundary face with role source_cut"
+                        )));
                     }
                 }
                 if pair_faces[0] == pair_faces[1] {
@@ -2471,7 +2575,7 @@ fn validate_spin_torque(
         SceneSpinTorque::Unsupported(_) => {
             return Err(SceneDocumentValidationError::new(format!(
                 "spin_torques[{index}] uses an unsupported read-only variant"
-            )))
+            )));
         }
     };
     match torque {
@@ -2619,7 +2723,9 @@ fn validate_spin_torque(
                 }
                 SlonczewskiFormulaVersion::LegacyFullmagV0 => {
                     if target.is_some() || stack_normal.is_some() || realization.is_some() {
-                        return Err(SceneDocumentValidationError::new(format!("spin_torques[{index}] legacy Slonczewski must not define canonical geometry")));
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}] legacy Slonczewski must not define canonical geometry"
+                        )));
                     }
                     if !matches!(fixed_layer_position.as_deref(), Some("top" | "bottom")) {
                         return Err(SceneDocumentValidationError::new(format!(
@@ -2829,7 +2935,7 @@ fn validate_prescribed_drive(
         _ => {
             return Err(SceneDocumentValidationError::new(format!(
                 "spin_torques[{index}].drive is incompatible with formula_version"
-            )))
+            )));
         }
     }
     Ok(())
@@ -3545,9 +3651,11 @@ mod tests {
 
             let error = validate_scene_document(&scene)
                 .expect_err("object-scoped rotated DMI must be rejected unconditionally");
-            assert!(error
-                .message
-                .contains("cannot appear in object physics_stack"));
+            assert!(
+                error
+                    .message
+                    .contains("cannot appear in object physics_stack")
+            );
         }
     }
 

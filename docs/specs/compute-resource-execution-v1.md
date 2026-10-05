@@ -699,7 +699,408 @@ pól. `from_entries` zachowuje v1 dla starych wpisów; użycie snapshotów
 przechodzi na v2 i wymaga ich dla całego katalogu. Nie dopisujemy originów
 historycznym runom. Binding tworzy nowy ProblemIR, nie mutuje oryginału.
 
-Ten fragment nie zamyka E1: provider trwałych profili Settings, allowed lanes
-i failure policy, integracja UI/DSL/CLI/env oraz preview pozostają do
-połączenia z tym samym resolverem. Udostępnienie konstruktora profilu nie
-jest deklaracją istniejącego endpointu ani wykonania jego zasobów.
+Ten fragment nie zamyka E1: allowed lanes i failure policy, powiązanie
+profilu Settings ze Study/DSL/CLI/env oraz preview pozostają do połączenia
+z tym samym resolverem. Provider opisany w 13.2 przechowuje wersje; nie
+jest dowodem wykonania ich zasobów.
+
+### 13.2 Trwały katalog profili i publikacja z Settings
+
+Właścicielem `execution_profile_catalog.v1` jest skonfigurowany accepted-run
+`SessionStore`. Jedyny plik `compute/EXECUTION_PROFILES.json` jest zapisywany
+atomowo pod istniejącą blokadą writera. Nie należy do odbudowywalnego indeksu
+ostatnich projektów ani localStorage. Odczyt nie tworzy katalogów. Brak
+konfiguracji magazynu zwraca 503; nieprawidłowy istniejący katalog pozostaje
+błędem i nie jest zastępowany pustym.
+
+`GET /v2/platform/compute/profiles` zwraca rewizję, stronicowane entries,
+`total`, `offset` i `next_offset`. Limit domyślny wynosi 50, maksymalny 100.
+Kolejne strony przypinają `revision`; jej zmiana daje 409. Filtry
+`profile_id`, `version` (tylko wraz z ID) i `client_intent_id` umożliwiają
+lookup konkretnej wersji lub uzgodnienie publikacji. ETag obejmuje treść
+strony i instancję API.
+
+POST przyjmuje `expected_revision`, `client_intent_id` oraz typowany profil.
+Application materializuje i sprawdza semantykę defaults przed zapisem.
+Publikacja dopisuje wersję z kanonicznym SHA-256, datą UTC i kolejną rewizją;
+odpowiedź 201 oznacza nowy zapis. Ten sam intent i ta sama treść zwracają 200
+oraz oryginalny wpis, nawet przy nieaktualnej expected_revision. Ponowne
+użycie intentu z inną treścią lub pary ID/version z innym intentem daje 409.
+Rewizja chroni dwa równoczesne szkice; użyta wersja nigdy nie jest nadpisywana.
+Granice katalogu: 1024 wpisy, 4 MiB pliku, 32 KiB pojedynczego profilu.
+
+Settings rozdziela szkic od zapisu. Apply tworzy stałą wersję; Cancel porzuca
+nieopublikowany szkic. Refresh aktualizuje katalog bez nadpisania szkicu.
+Nieznany wynik POST wymaga lookup po tym samym intent ID; retry zachowuje
+identyczną treść i tożsamość. Inherit pomija pole, Auto pozostaje jawne.
+Edytor podstawowych pól zachowuje pozostałe sparse resources skopiowanego
+profilu. Zapis nie przypisuje profilu do Study ani nie zmienia aktywnych runów.
+Uprawnienia operatora NodePolicy i pełna integracja authoring pozostają
+osobnymi bramkami E1/E4. Bieżące dowody implementacji są w checkpointcie planu.
+
+### 13.3 Powiązanie opublikowanej wersji z nowym Submit
+
+Nowy HTTP Submit z materializacją profilu w katalogu Study odczytuje katalog
+profili tego samego accepted-run store. Application rozwiązuje dokładne
+`profile_id/version` przez provider i odtwarza zapisane jawne warstwy requestu.
+Cały otrzymany snapshot — profil, SHA-256, requested i origins — musi mieć tę
+samą kanoniczną treść co żądanie klienta. Brak opublikowanej wersji daje 409
+`execution_profile_reference_conflict`; inna treść pod tym samym ID/version
+lub niezgodne pochodzenie daje 409 `execution_profile_snapshot_conflict`.
+Nie ma fallbacku do domyślnego profilu ani ruchomej wersji.
+
+Przenośny profil zaimportowany ze skryptu trzeba opublikować w docelowym store
+przed nowym HTTP Submit. Publikacja nie uruchamia zadania. Stare katalogi v1
+bez materializacji zachowują trasę zgodności; nie dopisujemy im pochodzenia.
+Powtórzenie zaakceptowanego intentu nie korzysta ponownie z bieżącego katalogu
+preferencji: obowiązują zapisane immutable wejścia i fingerprint runu.
+Nie zmienia to admission ani nie stanowi dowodu użycia zasobów przez worker.
+
+Python przyjmuje opublikowaną kanoniczną odpowiedź przez
+`ExecutionProfile.from_ir(profile_json)`. Typed import zachowuje omission,
+jawne Auto i nullable null; `to_ir()` oraz `canonical_sha256()` odtwarzają
+treść i tożsamość profilu. Pełny obiekt GPU z opublikowanej odpowiedzi wymaga
+selector, UUID list i devices_per_task; VRAM pozostaje opcjonalne. Puste
+sparse obiekty normalizują się do pominięcia, zgodnie z Rust. Import odrzuca
+obcy schema, nieznane pola, błędne typy i ruchomą wersję `latest`. Nie czyta
+hosta, nie rozwiązuje dziedziczenia i nie przypisuje profilu do Study.
+
+### 13.4 Jedna materializacja całego Study
+
+`fullmag-application::materialize_study_execution` przyjmuje dokładny
+StudyPlan, authored ProblemIR i jawne warstwy każdego włączonego kroku oraz
+provider immutable profili. Nie wnioskuje warstw ze środowiska. Odrzuca
+nieznane, wyłączone, brakujące i powielone wejścia. Wersja współdzielona przez
+kilka kroków jest odczytywana raz; każdy krok nadal ma własny request/origins.
+Wynik powstaje w kolejności StudyPlan, niezależnie od kolejności wejść.
+Binding tworzy nowy ProblemIR i katalog v2 związany z rewizją i hashem planu;
+oryginalne authored wejście pozostaje niezmienione.
+
+Nowy HTTP Submit używa tej materializacji dla całego katalogu i porównuje
+snapshoty po step_id, również gdy klient przesłał inną kolejność entries.
+Nie jest to admission preview: topologia, polityka hosta i przydział pozostają
+odrębnymi bramkami E2–E4. Study UI nadal wymaga połączenia wcześniejszego
+modelu sceny/etapów z kanonicznym authoringiem StudyPlan; sam selector profilu
+nie zastępuje tej migracji.
+
+### 13.5 Stateless preview żądania wykonania
+
+`POST /v2/platform/compute/preview` przyjmuje rewizję katalogu profili,
+kanoniczny StudyPlan oraz ProblemIR i jawne warstwy każdego kroku. Odtwarza
+całe Study tym samym resolverem co Submit i sprawdza lowering przez istniejący
+planner. Zwraca pełny katalog do Submit, jego SHA-256, digest znormalizowanych
+authored wejść oraz typowane requested/origins per step. `preview_id` obejmuje
+instancję API, oba digests i rewizję profili. Kolejność inputów nie zmienia
+tożsamości; zmiana instancji lub treści tak. Tożsamość preview nie zastępuje
+tożsamości archiwum projektu ani fingerprintu RunSpecification.
+
+Preview nie zapisuje katalogu, nie przyjmuje runu i nie uruchamia preparation
+ani workera. `admission_state` ma obecnie wyłącznie `not_evaluated`, a
+`blocking_reasons` zawiera `host_admission_not_evaluated`. Sukces 200 oznacza
+poprawny podgląd intentu; nie jest potwierdzeniem available capacity, GPU
+execution ani kwalifikacji. Policy/inventory/allocation preview wymaga E2–E4.
+
+Granice: 256 kroków, 8 MiB body i 8 MiB odpowiedzi. Nieaktualna rewizja lub
+brak opublikowanej wersji daje 409; błędne wejścia/lowering dają 400, brak
+skonfigurowanego store 503, uszkodzony istniejący katalog 500. Odczyt
+nieistniejącego skonfigurowanego store nie tworzy katalogu na dysku.
+
+OpenAPI typuje envelope, warstwy, profile, pełne zasoby i pochodzenie. Wewnętrzny
+StudyPlan/ProblemIR oraz katalog zachowują dotychczasową kanoniczną granicę
+JSON stosowaną przez ProjectRunSubmit; Rust jest właścicielem deserializacji
+i walidacji tych domain objects. Ta granica nie oznacza pełnych wygenerowanych
+typów StudyPlan w UI. Jej usunięcie należy do migracji authoringu E1/E4;
+frontend nie tworzy drugiego modelu ani własnego resolvera.
+
+Transport StudyPlan/ProblemIR w preview jest otwartą mapą JSON z wartościami
+unknown w wygenerowanym kliencie. Nie jest obiektem bez dozwolonych pól;
+pełna deserializacja i walidacja domenowa nadal należy do Rust.
+`prepareComputeExecutionPreview` odłącza i zamraża HTTP body oraz zapisuje
+jego digest. To digest transportu, nie kanoniczny `source_digest` serwera.
+`useComputeExecutionPreviewResource` używa fasady i wspólnej warstwy resource;
+klucz obejmuje body i sesję, a API scope izoluje cache. Zmiana epoch/scope
+wyłącza stary preview. Hook nie konwertuje sceny do StudyPlan, nie zgaduje
+wejść i nie wywołuje Submit; ta projekcja pozostaje oddzielną integracją.
+
+### 13.6 Deklaracja profilu w scenie i Pythonie
+
+SceneStudyState i ScriptBuilderState zachowują opcjonalny `execution_profile`
+oraz `execution_layers`. Brak deklaracji pomija oba pola w dotychczasowym
+JSON. Projekcje scena → builder → skrypt zachowują wersję i sparse patches;
+nie rozwiązują żądań na podstawie hosta ani bieżących preferencji.
+
+Kanoniczny Python udostępnia `ExecutionRequestLayer` oraz
+`study.execution_profile(profile, layers=[...])`. Deklaracja musi poprzedzać
+kroki solvera/pipeline. Nie można mieszać jej z legacy engine/device/mode/
+threads/resources ani change_device, również gdy użytkownik jawnie wybrał
+Auto. Eksport używa typed `from_ir()` i zachowuje geometrię oraz numerykę.
+Bezpośrednie eager wykonanie z deklaracją profilu jest odrzucane; capture
+do ProblemIR pozostaje dostępny i wymaga wspólnej materializacji Rust.
+
+`fullmag-application::bind_declared_execution` rozstrzyga deklarację przed
+planowaniem. Zastępuje authored markers w kopii ProblemIR pełnym snapshotem
+`execution_materialization`; zapisany snapshot jest odtwarzany również bez
+nowych nadpisań. API scene loader, CLI JSON loader oraz oba przebiegi importu
+skryptu korzystają z tej samej funkcji. Jawne opcje CLI backend/mode/precision
+są warstwą `cli`; sprzeczny wymuszony device i managed lane dają błąd.
+
+Materializacja całego Study nie może pomijać deklaracji przeniesionej w
+ProblemIR: pinned profile musi odpowiadać authored wejściu, a lista jawnych
+warstw musi zachowywać carried layers przed dodaniem kolejnych. Zastąpienie
+profilu wymaga nowego authored wejścia zamiast ukrytego rebindu. Istniejący
+snapshot jest sprawdzany przez canonical replay przed wykorzystaniem.
+
+Planner odrzuca unresolved markers i późniejszą zmianę konkretnych bound
+backend/device, precision/mode lub zasobów. Auto może zostać zawężone przez
+wybór wykonania; requested snapshot nadal zachowuje Auto. Ta kontrola nie
+jest host admission ani dowodem egzekwowania przydziału. Scene loader API
+nadal ma istniejącą granicę auto/fdm; obsługa FEM i formularz authoringu
+Study wymagają kolejnej integracji. Profile nie odblokowują zasobów, których
+istniejący planner jawnie nie obsługuje.
+
+### 13.7 Atomowe przypisanie wersji profilu
+
+Istniejący endpoint model transactions obsługuje `assign_study_execution`:
+wymagane base_revision, pełny execution_profile oraz execution_layers.
+Transakcja zastępuje dokładny snapshot i tablicę warstw, zachowując pozostałą
+scenę. Nie scala sparse defaults z poprzednią wersją, nie przydziela zasobów
+i nie zmienia przyjętych runów. Walidacja sceny sprawdza originy i konflikt
+z Change device; commit nadal korzysta z istniejącego session/revision fence.
+
+Non-null execution_profile w zwykłym merge_patch jest odrzucany jako
+execution_profile_requires_atomic_assignment. Merge patch obu pól null
+pozostaje sposobem jawnego wyczyszczenia przypisania; ReplaceScene służy
+nadal pełnemu importowi i Undo/Redo. Nie ma pośredniej transakcji kasowania
+starego profilu przed przypisaniem nowego.
+
+Porównanie zgodności restore uwzględnia authored execution_profile/layers
+w kategorii execution. Dotychczasowe sceny bez przypisania zachowują formę
+tej kategorii. Sam niezmieniony resolved device nie oznacza tożsamości dwóch
+różnych authored profili. Python importuje pominięty request warstwy jako
+pusty patch zgodnie z domyślną deserializacją IR; jawny request null jest błędem.
+
+### 13.8 Study Inspector i zapis przypisania w projekcie
+
+Study Inspector wybiera dokładną wersję z resource hook katalogu, zachowuje
+nieedytowane warstwy i zaawansowane wartości oraz rozróżnia Inherit i Auto.
+Apply korzysta z atomowej transakcji i pierwotnej rewizji szkicu; konflikt
+zachowuje szkic i blokuje ponowne Apply do Cancel. Zmiana sesji lub scope API
+resetuje szkic. None jawnie czyści przypisanie i warstwy. Profil blokuje
+Change device; admission pozostaje Not evaluated. Jednoczesny szkic profilu
+i innych zmian Study wymaga osobnego Apply/Cancel; combined Apply jest dalszą
+pracą. Formularz kanonicznego preview nie jest jeszcze podłączony.
+
+Zapis projektu korzysta ze wspólnego ProjectDocumentController i projekcji
+kanonicznej sceny. Po jawnym utworzeniu projektu powiązanie przechwytuje ID
+zaakceptowanej sesji, scope API i potwierdzoną tożsamość session/epoch/request
+scope. Save pobiera scenę z tego zakresu, synchronizuje archiwum i dopiero po
+potwierdzeniu zapisuje plik. Błąd odczytu, nieznany wynik synchronizacji lub
+zmiana zakresu zatrzymuje zapis; starsze bajty nie są używane jako fallback.
+Projection zachowuje cały Study wraz z profilem/warstwami, a pomija metadane
+zasobu takie jak scene_revision. Same panele nie synchronizują archiwum.
+
+Otwarte archiwum bez jawnego powiązania nadal zapisuje własne dane; nie wolno
+zgadywać, że bieżąca sesja do niego należy. Powiązanie po imporcie/restore
+i development handoff wymaga dalszej integracji. Kontrole interpretowane
+oraz browser fixture nie dowodzą rzeczywistego zapisu przez host/backend ani
+egzekwowania zasobów solvera.
+
+### 13.9 Wspólna granica producentów authoringu i preview
+
+API rozdziela przechwycenie authored ProblemIR od wiązania profilu.
+`scene_document_to_authored_problem_ir` używa istniejącego kanonicznego Python
+DSL i zachowuje surowe profile/layers. Walidacja i binding należą do granicy
+materializacji wybranej przez konsumenta. Dotychczasowe live preparation nadal
+stosuje swoje ograniczenie auto/FDM, binding i końcową walidację. Funkcja nie
+generuje per-step inputs i nie jest oceną dostępności wykonania.
+
+Czysta konfiguracja głównego autosave jest współdzielona jako
+`fullmag_ir::configure_project_autosave_policy`. Runtime wrapper zachowuje
+sprawdzenie dostępnych formatów przed delegacją; rezerwacje katalogów i zapis
+pozostają u istniejącego właściciela OutputStorage. Przeniesienie nie zmienia
+cadence, istniejącego explicit stage policy, konfliktów formatu ani reguł dla
+modal/hysteresis. Sama konfiguracja polityki nie dowodzi dostępności writera.
+
+Kanoniczne per-step IR wraz z akcjami i przejściami są obecnie produkowane
+przez `materialize_script_stages` w CLI. Podgląd musi współdzielić ten producent
+po wydzieleniu jego czystej części; kopiowanie jednego base ProblemIR do każdego
+kroku nie zastępuje materializacji solvera, zmian stanu ani zależności. Sam
+strukturalny adapter StudyPlan nie jest kompilatorem sekwencyjnego wykonania.
+
+`scene_document_to_study_plan` wymaga jawnych migration references modelu,
+solver config, discretization i profilu. Nie pobiera mutable current. Niepusty
+authored study_pipeline korzysta ze wspólnego from_pipeline; inaczej płaskie
+stages zachowują kolejność i pełny legacy payload. Brak etapów nie tworzy Run.
+Nieznane rodzaje pozostają Unsupported. Jawne błędne enabled lub source są
+odrzucane; brak enabled oznacza true. Podany profil musi odpowiadać referencji
+ID/version i poprawnemu authored intent. Wspólny parser Run jest używany także
+dla płaskich etapów. Migracja grup dziedziczy enabled od wszystkich przodków,
+zgodnie z istniejącym CLI: wyłączona grupa wyłącza wszystkie swoje dzieci,
+zachowując źródłowy dokument. Adapter nie tworzy per-step ProblemIR ani portów
+stanu/zależności wykonania.
+
+### 13.10 Jeden kanoniczny producent per-stage danych
+
+Historyczne typy capture config są współdzielone przez
+`fullmag_application::script_stage_contract`; CLI używa aliasów. Pola,
+serde defaults/tags i nazwy terminal_outward_current_density_Apm2 pozostają
+niezmienione. Nie jest to drugi canonical StudyPlan. RuntimeResolutionSummary
+i dane live pozostają w CLI, bez zależności application od engine/runner/OS.
+
+`script_stage_materialization` posiada istniejącą logikę produkcji stage IR,
+actions, macro expansion, sampling i transitions. Binding profilu jest jawnym
+krokiem caller-side. Output policy jest przekazywana jako callback: CLI nadal
+korzysta z runtime ownera sprawdzającego writer availability, capture API
+konfiguruje tylko czystą politykę IR. Nie ma tu przydziału hosta, wykonania
+solvera ani pozwolenia na uruchomienie writera. Walidacja poleceń live pozostaje
+w CLI. Historyczne źródła regresji są zachowane; nowe Rust fixtures pozostają
+source-only przy obowiązującym zakazie kompilowania unit tests.
+
+API współdzieli jeden transport SceneDocument capture dla base ProblemIR
+i pełnego ScriptExecutionConfig (`export-scene-ir`/`export-scene-config`).
+Pełne authored stages korzystają następnie z tego samego producenta application.
+Binding opublikowanego profilu nadal musi być wykonany raz przez materializer
+Study. Te wewnętrzne funkcje nie są jeszcze formularzem ani nowym endpointem
+preview. Związanie wyników ekspansji/actions z typed steps, CaseIds i portami
+stanu pozostaje osobną bramką przed Submit; base IR nie zastępuje rzeczywistych
+stage inputs.
+
+Renderer przy flat_workspace pomijał authored flat stages; naprawa capture
+i Run payloadu ma focused interpreted regressions. Single/base IR zachowuje
+jawny bootstrap-only mode. Nonempty pipeline korzysta ze stage-free base IR
+i pustych explicit stages, aby shared Rust owner rozwinął grupy/makra. Empty
+pipeline korzysta z rzeczywistych LoadedStage records. Canonical Python export
+makr, export actions i niektórych rich policies nadal kończy się jawnym błędem;
+nie deklarujemy pełnego Scene → Python round-trip tych form.
+
+Scene preview capture ma być asset-light także na granicy to_ir, nie tylko
+podczas load. Include geometry assets uruchamia ich producenta, więc ta
+ścieżka musi pomijać zarówno base, jak i stage assets. Nie tworzy siatki/grid
+ani pozornej readiness. Legacy export-run-config zachowuje dotychczasowe
+pełne assets. Przygotowanie i walidacja realized assets mają własny admission
+oraz receipt i pozostają osobnym etapem.
+
+### 13.11 Granica kompilacji etapów do accepted Study
+
+Wspólny producent zwraca uporządkowane solver IR oraz akcje. Accepted worker
+ma obecnie jeden task na `step_id`, bez pola akcji i bez wymiaru case w tasku.
+Execution i recovery korzystają z case `default`. Nie wolno traktować akcji
+save/load/export, zmian urządzenia, drive, autosave/FFT lub transportu jako
+solver tasków. Settery zmieniające IR bez emisji etapu również wymagają
+audytowalnej reprezentacji skutku. Samo zachowanie źródłowego pipeline w
+metadata nie dowodzi zachowania jego wykonania.
+
+Pierwszy jawny adapter może korzystać z rzeczywistych per-stage IR dla
+obsługiwanych Run/Relax, dodatniego skończonego horizon oraz wspieranej
+rodziny BackendPlan. Standardowy accepted FDM wymaga double/strict; FEM
+obecnie CPU/double/strict i H1/P1. Modal, frequency response i multilayer
+mają osobne plan variants i nie stają się obsługiwane przez sam capture.
+To ograniczenia aktualnej ścieżki, a nie docelowa capability matrix.
+
+Sekwencyjna zależność może wskazywać dokładny output poprzednika:
+`initial_state: State <- StepOutput(step_id, final_state, default)`, przy
+zadeklarowanym `final_state: State`. Istniejący CAS wiąże artefakt z próbą
+producenta i ownership epoch. Worker odtwarza magnetyzację; osobne taski nie
+zachowują historii integratora ani cache runtime. Taki transfer nie jest
+równoważny `ContinueInPlace`. Kompilator musi blokować sekwencje wymagające
+tej ciągłości, dopóki właściwy runtime nie zapewni jej kontraktu.
+
+Rozwinięte makro nadaje dziś wszystkim etapom parent `active_stage_id`.
+Przyszły compiler musi utworzyć stabilne unikalne step IDs z zachowaniem
+parent ID i parametrów ekspansji. Nie wolno przedstawiać niezależnego sweep
+jako sekwencji ani nadawać case IDs, których task creation/worker nie obsługuje.
+
+StudyProblemCatalog wiąże digest StudyPlan, komplet per-step ProblemIR oraz
+równość referencji ID/version. Nie rozwiązuje treści modelu, presetów solvera
+i mesh recipes. ModelDefinition ma canonical digest bez pola version;
+ProjectSnapshot ma definition revision/hash, lecz nie ma jeszcze mapowania
+do StudyModelReference. Solver/discretization references nie mają obecnie
+wspólnego immutable content ownera. Testowe `solver:default`/`mesh:default`
+nie są produkcyjnymi defaults. Przed formularzem Scene preview/Submit trzeba
+ustanowić jawne mapowanie do rzeczywistych utrwalonych snapshots; brak
+referencji blokuje kompilację, zamiast tworzyć pozornie gotowy katalog.
+
+### 13.12 Limit materializacji Scene preview
+
+Wewnętrzny capture API korzysta z bounded wariantu tego samego producenta,
+z limitem 256 wynikowych etapów. Explicit stage list jest sprawdzana przed
+klonowaniem assets/polityk; wspólny licznik obejmuje zagnieżdżone enabled groups.
+Wyłączone węzły nie zużywają limitu. Makra sprawdzają rzeczywistą liczbę
+punktów pomnożoną przez liczbę emitowanych run/relax/save records, z checked
+arithmetic, przed alokacją sweep vectors i kopii IR. Hysteresis z jawnymi
+field_values sprawdza ich liczbę przed parsowaniem do wektora float.
+
+Primitive sprawdza wynik po jednorazowej materializacji i przed dołączeniem
+do kolekcji; nie ma drugiego klasyfikatora rodzajów etapów. Limit ten nie
+jest admission ani oceną pamięci solvera. Dotychczasowy dwuargumentowy caller
+CLI zachowuje ścieżkę bez nowego limitu. Źródła regresji Rust nie są kompilowane
+przy aktualnym zakazie unit-test builds; produkcyjne source gates i dalsza
+runtime weryfikacja pozostają odrębnymi dowodami.
+
+### 13.13 Referencje captured input zamiast fikcyjnych presetów
+
+Nowy katalog v3 może posiadać model/solver/discretization input jako trzy
+role jednego kompletnego bound ProblemIR. Captured identity v1 zawiera jawny
+stabilny source ID i digest tych rzeczywistych bajtów; entry jest właścicielem
+content i nie przechowuje jego drugiej kopii. Role mają IDs `captured-model:`,
+`captured-solver:` i `captured-discretization:` z tym samym source ID oraz
+version `sha256:<digest>`. To nie są registered presets ani wersje mutable
+ModelDefinition. Konserwatywnie każda zmiana IR/provenance zmienia wersje.
+
+Canonical IR JSON używa istniejącego sorted-key/UTF-8 encoding profili,
+z zachowaniem kolejności tablic. Hash identyfikuje wejście, nie fizyczną
+równoważność. Weryfikacja ponownie haszuje całe IR i porównuje role references.
+V3 wymaga captured identity i materialized execution dla wszystkich entries.
+Brak, mieszanie i downgrade nowej identity do v1/v2 są błędami. Stare katalogi
+v1/v2 zachowują dotychczasowy odczyt bez dopisywania brakujących dowodów.
+
+Application współdzieli dotychczasową kolejność validate → published profile
+lookup/resolver → carried intent check → bind. Captured input wyprowadza
+referencje dopiero z finalnego bound IR, bez ponownego bindingu. Caller nadal
+musi zachować authored layers i skompilować rzeczywiste actions/transitions/
+typed steps. Sam content owner nie odblokowuje Submit ani równoległości.
+
+V3 preview/Submit wymaga lossless transportu zamrożonego catalog JSON lub
+referencji do jego utrwalonego ownera. Read-only parsed projekcja w browserze
+nie może być ponownie zakodowana jako accepted content: Number może zmienić
+metadata 1.0 na 1 oraz duże integers. Zmienione bytes muszą zostać odrzucone,
+zamiast normalizacji scientific input dla dopasowania digestu. Ta bramka
+transportu pozostaje do wdrożenia przy Scene preview/Submit.
+
+### 13.14 Trwały ledger hosta przed zwiększeniem concurrency
+
+HostResourceLedger posiada jeden jawny lokalny root, stable host ID,
+topology digest, policy revision i owner epoch. Wykorzystuje istniejący
+native Writer; JSON owner descriptor nie zastępuje kernel lock. Policy
+initialize porównuje już utrwaloną konfigurację, zamiast ponownie próbkować
+free RAM lub resetować rezerwacje. Reader nie inicjuje brakującej polityki.
+
+Rezerwacje sumują host CPU/RAM/scratch oraz trzymają wyłączne pełne GPU UUIDs
+z osobnymi limitami VRAM. Nie mnożymy RAM przez liczbę GPU offers. Jawne
+CPU IDs są sprawdzane pod kątem dozwolonego zbioru i konfliktu; bez IDs
+bilans agregatów nie jest deklaracją placement/affinity. Tentative i unknown/
+quarantined konsumują zasoby tak jak committed. Exact replay nie tworzy
+drugiej rezerwacji, a zmiana tokenu/budżetu/fence nie jest replayem.
+
+Ledger ma bounded document/record limits i checked arithmetic. Każdy zapis
+waliduje kompletny stan, a uszkodzony dokument blokuje admission. Nie
+odzyskujemy zasobów po wieku heartbeat ani śmierci service ownera. Początkowy
+moduł nie udostępnia niepotwierdzonego release/cancel. Worker release sprawdza
+trwały process-exit receipt i już zwolniony local lease, wraz z exact identity,
+heartbeat i budżetem. Aktywny lease nadal blokuje release, nawet po zapisaniu
+receipt. Content-addressed proof jest publikowany przed Released i sprawdzany
+przy każdym odczycie; jego brak/uszkodzenie blokuje admission. Publication
+unknown nie jest podstawą zwolnienia. Durable local admission precedes spawn.
+Identity rozróżnia typed owners Solver (attempt i ownership epoch) oraz
+Preparation (preparation attempt), z common store/run/task/resource/token.
+Resource ID jest częścią request digest; zmiana lokalnej oferty nie jest
+idempotentnym replayem. Preparation nie otrzymuje fikcyjnej epoki solvera.
+
+Runtime-control ma wspólny adapter host allocation oraz wariant dispatch
+schedulera z host admission przed Prepare/Start. GPU placement wymaga jawnego
+UUID od właściciela topologii, także gdy label lokalnej oferty zawiera UUID.
+Adapter przekształca legacy single-GPU lease w per-device VRAM, bez poolingu.
+Nie jest to jeszcze konfiguracja działającej usługi ani dowód enforcement.
+
+Root/config/topology ownership, service scheduler/preparation wiring, owner lifecycle
+i runtime recovery są nadal otwartymi bramkami E2. Service cap pozostaje 1.

@@ -6,6 +6,7 @@ import hashlib
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -23,6 +24,12 @@ class DevelopmentStatusError(RuntimeError):
     """A managed development status cannot be published or trusted."""
 
 
+def _write_status_json(path, document):
+    # A transient Windows rename denial must not permanently kill liveness.
+    # Persistent errors still poison the publisher after a bounded one second.
+    atomic_json(path, document, retry_windows_replace=True)
+
+
 class DevelopmentStatusPublisher:
     """Serialize state changes and heartbeats into one atomic status file."""
 
@@ -33,7 +40,7 @@ class DevelopmentStatusPublisher:
         worktree_id: str,
         *,
         clock_ms: Callable[[], int] | None = None,
-        write_json: Callable[[Path, Mapping[str, Any]], None] = atomic_json,
+        write_json: Callable[[Path, Mapping[str, Any]], None] = _write_status_json,
     ):
         if not isinstance(generation_id, str) or not GENERATION_ID.fullmatch(generation_id):
             raise DevelopmentStatusError("Managed status requires a lowercase 32-character generation id")
@@ -79,6 +86,12 @@ class DevelopmentStatusPublisher:
                     "state": state,
                     "source_sha256": source_sha256,
                 }
+                request_id = update.get("request_id")
+                if request_id is not None:
+                    parsed = uuid.UUID(request_id)
+                    if parsed.int == 0 or str(parsed) != request_id:
+                        raise DevelopmentStatusError("Invalid backend build request identity")
+                    event_values["request_id"] = request_id
                 if state == "ready":
                     ready_build_id = update.get("ready_build_id")
                     ready_source_sha256 = update.get("ready_source_sha256")
@@ -169,11 +182,16 @@ def verified_build_identity(
     build_root: str | Path,
     runtime_root: str | Path,
     manifest_path: str | Path,
-    expected_source_sha256: str,
+    expected_source_sha256: str | None,
+    expected_manifest_sha256: str | None = None,
 ) -> dict[str, str]:
     """Return a build id only after the runtime-bundle validator verifies the manifest and binaries."""
-    if not isinstance(expected_source_sha256, str) or not SHA256.fullmatch(expected_source_sha256):
+    if expected_source_sha256 is not None and (not isinstance(expected_source_sha256, str) or not SHA256.fullmatch(expected_source_sha256)):
         raise DevelopmentStatusError("Expected backend source identity is invalid")
+    if expected_manifest_sha256 is not None and (
+        not isinstance(expected_manifest_sha256, str) or not SHA256.fullmatch(expected_manifest_sha256)
+    ):
+        raise DevelopmentStatusError("Expected backend manifest identity is invalid")
 
     try:
         # This validator checks the complete bounded executable inventory and
@@ -186,6 +204,19 @@ def verified_build_identity(
     except Exception as error:
         raise DevelopmentStatusError("Backend build manifest or binaries failed verification") from error
 
+    manifest_sha256 = hashlib.sha256(raw_manifest).hexdigest()
+    if expected_manifest_sha256 is not None and manifest_sha256 != expected_manifest_sha256:
+        raise DevelopmentStatusError("Backend build manifest changed after the managed build completed")
+
+    if expected_source_sha256 is None:
+        from windows.build_snapshot import verify_snapshot
+        record = manifest.get("build_source_snapshot")
+        if not isinstance(record, dict):
+            raise DevelopmentStatusError("Manual builds require a frozen source snapshot")
+        frozen = verify_snapshot(record["record_path"], build_root)
+        if frozen["inventory_sha256"] != record.get("inventory_sha256"):
+            raise DevelopmentStatusError("Frozen source inventory does not match its build manifest")
+        expected_source_sha256 = frozen["backend_source_sha256"]
     if (
         manifest.get("compiler_profile") != "backend-dev"
         or manifest.get("frontend_mode") != "dev"
@@ -200,7 +231,7 @@ def verified_build_identity(
         raise DevelopmentStatusError("Backend build manifest has no sealed product version")
 
     return {
-        "ready_build_id": hashlib.sha256(raw_manifest).hexdigest(),
+        "ready_build_id": manifest_sha256,
         "ready_source_sha256": expected_source_sha256,
     }
 

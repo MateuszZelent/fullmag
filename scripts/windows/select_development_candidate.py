@@ -9,6 +9,7 @@ import os
 import shutil
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,7 @@ READY_STATUS_FIELDS = frozenset(
         "updated_unix_ms",
     }
 )
+READY_STATUS_OPTIONAL_FIELDS = frozenset({"request_id"})
 
 
 def _samefile(left: Path, right: Path, label: str) -> bool:
@@ -75,9 +77,12 @@ def _validate_owner_pins(value: dict[str, str], generation_id: str, worktree_id:
 
 
 def _validate_ready_status_document(value: Any, now_ms: int | None = None) -> dict[str, Any]:
+    fields = READY_STATUS_FIELDS
+    if isinstance(value, dict) and "request_id" in value:
+        fields |= READY_STATUS_OPTIONAL_FIELDS
     value = capsule._exact_keys(
         value,
-        READY_STATUS_FIELDS,
+        fields,
         "backend watcher status",
     )
     if value["schema"] != development_status.SCHEMA or value["state"] != "ready":
@@ -102,6 +107,15 @@ def _validate_ready_status_document(value: Any, now_ms: int | None = None) -> di
         or ready_source_sha256 != source_sha256
     ):
         raise capsule.HandoffError("Backend watcher ready identity is invalid")
+
+    if "request_id" in value:
+        request_id = value["request_id"]
+        try:
+            parsed_request_id = uuid.UUID(request_id) if isinstance(request_id, str) else None
+        except (ValueError, AttributeError, TypeError):
+            parsed_request_id = None
+        if parsed_request_id is None or parsed_request_id.int == 0 or str(parsed_request_id) != request_id:
+            raise capsule.HandoffError("Backend watcher request identity is invalid")
 
     revision = value["revision"]
     updated_unix_ms = value["updated_unix_ms"]
@@ -165,21 +179,9 @@ def _source_inventory_bytes(
     manifest_path: Path,
     expected_manifest_sha256: str,
 ) -> int:
-    raw_manifest = capsule._read_limited(
-        manifest_path, storage_root, "backend build manifest", MAX_BUILD_MANIFEST_BYTES
+    manifest, _raw_manifest = _read_build_manifest_document(
+        manifest_path, storage_root, expected_manifest_sha256
     )
-    if hashlib.sha256(raw_manifest).hexdigest() != expected_manifest_sha256:
-        raise capsule.HandoffError("Backend build manifest changed before storage preflight")
-    try:
-        manifest = json.loads(
-            raw_manifest.decode("utf-8-sig"),
-            object_pairs_hook=runtime_bundle._duplicate_rejecting_object,
-        )
-    except (UnicodeError, json.JSONDecodeError) as error:
-        raise capsule.HandoffError("Backend build manifest is invalid") from error
-    if not isinstance(manifest, dict):
-        raise capsule.HandoffError("Backend build manifest is invalid")
-
     target_root_value = manifest.get("cargo_target_dir")
     target_triple = manifest.get("target_triple")
     if (
@@ -207,7 +209,88 @@ def _source_inventory_bytes(
     return total
 
 
-def validate_request(repo_root: str, request: Any) -> dict[str, str]:
+def _read_build_manifest_document(
+    manifest_path: Path,
+    storage_root: Path,
+    expected_manifest_sha256: str,
+) -> tuple[dict[str, Any], bytes]:
+    raw_manifest = capsule._read_limited(
+        manifest_path, storage_root, "backend build manifest", MAX_BUILD_MANIFEST_BYTES
+    )
+    if hashlib.sha256(raw_manifest).hexdigest() != expected_manifest_sha256:
+        raise capsule.HandoffError("Backend build manifest changed during candidate selection")
+    try:
+        manifest = json.loads(
+            raw_manifest.decode("utf-8-sig"),
+            object_pairs_hook=runtime_bundle._duplicate_rejecting_object,
+        )
+    except (UnicodeError, ValueError) as error:
+        raise capsule.HandoffError("Backend build manifest is invalid") from error
+    if not isinstance(manifest, dict):
+        raise capsule.HandoffError("Backend build manifest is invalid")
+    return manifest, raw_manifest
+
+
+def _verified_build_source_snapshot(
+    build_root: Path,
+    storage_root: Path,
+    manifest_path: Path,
+    expected_manifest_sha256: str,
+    status: dict[str, Any],
+    *,
+    force_verify: bool = False,
+) -> dict[str, Any] | None:
+    manifest, _raw_manifest = _read_build_manifest_document(
+        manifest_path, storage_root, expected_manifest_sha256
+    )
+    snapshot_record = manifest.get("build_source_snapshot")
+    if snapshot_record is None:
+        return None
+    if not isinstance(snapshot_record, dict):
+        raise capsule.HandoffError("Backend build manifest has an invalid frozen-source record")
+    try:
+        from windows.build_snapshot import verify_snapshot
+
+        frozen = verify_snapshot(
+            snapshot_record.get("record_path", ""), build_root, force_verify=force_verify
+        )
+    except Exception as error:
+        raise capsule.HandoffError("Frozen backend source snapshot failed verification") from error
+
+    for field in ("record_path", "source_root", "inventory_sha256"):
+        if snapshot_record.get(field) != frozen.get(field):
+            raise capsule.HandoffError("Backend build manifest differs from its frozen source inventory")
+    for field in (
+        "snapshot_id",
+        "origin_repo_root",
+        "backend_source_sha256",
+        "dependency_source_sha256",
+        "source_identity",
+    ):
+        if field in snapshot_record and snapshot_record[field] != frozen.get(field):
+            raise capsule.HandoffError("Backend build manifest differs from its frozen source identity")
+
+    source_identity = frozen.get("source_identity")
+    if (
+        not isinstance(source_identity, dict)
+        or manifest.get("backend_source_sha256") != frozen.get("backend_source_sha256")
+        or manifest.get("dependency_source_sha256") != frozen.get("dependency_source_sha256")
+        or manifest.get("git_commit") != source_identity.get("head_commit_full")
+        or manifest.get("source_snapshot_sha256") != source_identity.get("source_snapshot_sha256")
+        or manifest.get("source_commit_after") != source_identity.get("head_commit_full")
+        or manifest.get("source_snapshot_sha256_after") != source_identity.get("source_snapshot_sha256")
+        or manifest.get("worktree_state")
+        != ("dirty" if source_identity.get("source_snapshot_dirty") else "clean")
+        or manifest.get("source_worktree_state_after")
+        != ("dirty" if source_identity.get("source_snapshot_dirty") else "clean")
+        or status.get("source_sha256") != frozen.get("backend_source_sha256")
+        or status.get("ready_source_sha256") != frozen.get("backend_source_sha256")
+    ):
+        raise capsule.HandoffError("Frozen backend sources do not match the build manifest and ready status")
+    return frozen
+
+
+def _validate_request_scoped(repo_root: str, request: Any) -> dict[str, str]:
     request = _validate_request_document(request)
     if os.environ.get("FULLMAG_NATIVE_RUNTIME_ACTIVE") != "1" or os.environ.get(
         "FULLMAG_STORAGE_PROFILE"
@@ -262,10 +345,6 @@ def validate_request(repo_root: str, request: Any) -> dict[str, str]:
     status_before = _read_ready_status(status_path, storage_root)
     _validate_status_pins(status_before, generation_id, worktree_id)
 
-    source_before = fingerprint(repo_path).get("sha256")
-    if source_before != status_before["source_sha256"]:
-        raise capsule.HandoffError("Current backend sources differ from the ready watcher status")
-
     manifest_path = runtime_bundle._absolute_path(
         build_root / "windows-runtime" / "build-manifest.json", "managed backend build manifest"
     )
@@ -273,6 +352,24 @@ def validate_request(repo_root: str, request: Any) -> dict[str, str]:
     canonical_manifest = manifest_path.resolve(strict=True)
     if not _samefile(manifest_path, canonical_manifest, "managed backend build manifest"):
         raise capsule.HandoffError("Managed backend build manifest is not canonical")
+
+    snapshot_before = _verified_build_source_snapshot(
+        build_root,
+        storage_root,
+        canonical_manifest,
+        status_before["ready_build_id"],
+        status_before,
+    )
+    if snapshot_before is not None and (
+        snapshot_before.get("origin_worktree_id") != worktree_id
+        or not _samefile(
+            Path(snapshot_before["origin_repo_root"]), repo_path, "frozen snapshot origin checkout"
+        )
+    ):
+        raise capsule.HandoffError("Frozen source snapshot belongs to another registered worktree")
+    source_before = None if snapshot_before is not None else fingerprint(repo_path).get("sha256")
+    if snapshot_before is None and source_before != status_before["source_sha256"]:
+        raise capsule.HandoffError("Current backend sources differ from the ready watcher status")
 
     ready_identity = development_status.verified_build_identity(
         build_root, runtime_root, canonical_manifest, status_before["ready_source_sha256"]
@@ -325,7 +422,20 @@ def validate_request(repo_root: str, request: Any) -> dict[str, str]:
     ) != raw_manifest:
         raise capsule.HandoffError("Sealed candidate manifest changed during verification")
 
-    source_after = fingerprint(repo_path).get("sha256")
+    snapshot_after = _verified_build_source_snapshot(
+        build_root,
+        storage_root,
+        canonical_manifest,
+        status_before["ready_build_id"],
+        status_before,
+        force_verify=True,
+    )
+    if snapshot_before is not None:
+        if snapshot_after != snapshot_before:
+            raise capsule.HandoffError("Frozen source snapshot changed while the candidate was being sealed")
+        source_after = snapshot_after["backend_source_sha256"]
+    else:
+        source_after = fingerprint(repo_path).get("sha256")
     status_after = _read_ready_status(status_path, storage_root)
     _validate_status_pins(status_after, generation_id, worktree_id)
     _validate_final_ready_identity(
@@ -341,6 +451,13 @@ def validate_request(repo_root: str, request: Any) -> dict[str, str]:
         "candidate_bundle_id": candidate_root.name,
         "candidate_manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(),
     }
+
+
+def validate_request(repo_root: str, request: Any) -> dict[str, str]:
+    from windows.build_snapshot import snapshot_verification_scope
+
+    with snapshot_verification_scope():
+        return _validate_request_scoped(repo_root, request)
 
 
 def main() -> int:

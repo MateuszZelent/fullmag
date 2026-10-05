@@ -140,10 +140,9 @@ windows-workspace-build backend_profile="dev" frontend="dev" web_port="3197" bui
 windows-runtime-recover port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/windows/recover_runtime.py" --repo-root "{{repo_root}}" --web-port "{{port}}"
 
-# Watch native backend inputs and build a new dev binary after edits. The
-# active workspace remains untouched until the user saves and restarts it.
+# Explicit one-shot backend rebuild; does not restart the active workspace.
 windows-backend-dev web_port="3197":
-    @{{storage_python}} "{{repo_root}}/scripts/windows/watch_backend.py" --repo-root "{{repo_root}}" --web-port "{{web_port}}"
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode "true" -Frontend "dev" -BackendProfile "dev" -RunMode workspace -WebPort "{{web_port}}" -BuildOnly
 
 # Fixed interpreted checks for development handoff persistence, without Cargo.
 verify-windows-development-handoff:
@@ -164,6 +163,14 @@ verify-windows-development-restart-consumer:
 # Owner-authenticated lease proof in separate owned APIs with controlled frames.
 verify-windows-development-consumer-readiness:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --consumer-readiness-only
+
+# Exercise the B consumer pump with an independently verified A API bundle.
+verify-windows-development-consumer-pump owner_bundle:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --consumer-pump-owner-bundle "{{owner_bundle}}"
+
+# Real candidate helper faults in owned processes; no API or unit compilation.
+verify-windows-candidate-preparation:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --candidate-preparation-only
 
 # Native request transport proof; no unit-test compilation or user-session restart.
 verify-windows-development-restart-transport:
@@ -430,6 +437,9 @@ verify-control-room-development-restart-action:
 lint-control-room-development-restart-action:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-restart-action-lint --repo-root "{{repo_root}}"
 
+verify-control-room-development-backend-build-action:
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-backend-build-action-check --repo-root "{{repo_root}}"
+
 # Actual browser interaction on an isolated managed frontend source snapshot.
 # Responses are fixtures; this is neither a backend runtime nor a solver gate.
 verify-pinned-dataset-browser:
@@ -447,6 +457,10 @@ verify-development-run-outcome-handoff-browser:
 
 verify-development-restart-action-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3254 --scenario development-restart-action
+
+# Real Study profile component/facade against controlled HTTP; no solver gate.
+verify-study-execution-profile-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3256 --scenario study-execution-profile
 
 lint-control-room-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"
@@ -5720,6 +5734,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$r/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
       if [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; then \
+        case ",$seen_options," in *",web_port,"*) ;; *) web_port="3100" ;; esac; \
         exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$r/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
       if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "$r/.fullmag/local/python/bin/python" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi; \
@@ -7154,3 +7169,4 @@ verify-fdm-gpu-solved-current-racetrack-production:
         --execution-audit "$evidence_root/execution-audit.v1.json" || true; \
       python3 scripts/verify_fdm_gpu_racetrack_qualification.py --evidence-root "$evidence_root" --source-snapshot "$source_snapshot"; \
       echo "production-qualified racetrack manifest: $evidence_root/fdm_gpu_solved_current_racetrack_qualification_v1.json"'
+                                                                                                                                                                                                                                                  

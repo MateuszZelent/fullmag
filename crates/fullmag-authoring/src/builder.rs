@@ -885,6 +885,10 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_storage: Option<fullmag_ir::OutputStorageIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_profile: Option<fullmag_ir::ExecutionProfileIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub execution_layers: Vec<fullmag_ir::ExecutionRequestLayerIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<ScriptBuilderInitialState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub geometries: Vec<ScriptBuilderGeometryEntry>,
@@ -906,6 +910,19 @@ pub struct ScriptBuilderState {
     pub oersted_terms: Vec<crate::SceneOerstedField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ScriptBuilderExcitationAnalysisState>,
+}
+
+impl Default for ScriptBuilderState {
+    /// An empty builder: every field takes its serde default. Master's
+    /// `session_persistence` test calls this and no impl existed.
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({
+            "revision": 0,
+            "solver": {},
+            "mesh": {}
+        }))
+        .expect("an empty script builder state deserializes from serde defaults")
+    }
 }
 
 fn default_inherit_mesh_mode() -> String {

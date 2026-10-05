@@ -11,6 +11,8 @@ import {
 } from "../realtime/communicationPolicy";
 
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
+import { useSessionStatusSelector } from "./useSessionStatus";
+import { hasSimulationPreparation } from "./simulationResourceAvailability";
 import { useResource } from "./useResource";
 
 function resolvePreparationRevision(data: SimulationPreparationResource) {
@@ -28,7 +30,10 @@ export function useSimulationPreparation({
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     SIMULATION_PREPARATION_PATH,
   );
-  const effectiveEnabled = enabled && sessionIdentity !== null;
+  const preparationAvailable = useSessionStatusSelector((status) =>
+    hasSimulationPreparation(status.data, requiredRevision),
+  );
+  const effectiveEnabled = enabled && sessionIdentity !== null && preparationAvailable;
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation.preparation({ sessionScopeKey, signal }),

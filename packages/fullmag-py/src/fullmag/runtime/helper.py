@@ -11,13 +11,25 @@ from typing import Sequence
 from fullmag._progress import emit_progress
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 from fullmag.model.canonical import canonical_json_sha256
-from fullmag.runtime.loader import apply_ir_runtime_device_selection, load_problem_from_script
+from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
     build_scene_document_from_builder,
     builder_overrides_from_scene_document,
 )
-from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
+from fullmag.runtime.scene_document_ir import (
+    scene_document_to_execution_config,
+    scene_document_to_problem_ir,
+)
+from fullmag.runtime.run_config_export import (
+    RunConfigExportOptions as RunConfigExportOptions,
+    _change_device_action_device as _change_device_action_device,
+    _compact_stage_ir as _compact_stage_ir,
+    _geometry_assets_semantically_equal as _geometry_assets_semantically_equal,
+    _prepare_run_config_geometry_assets as _prepare_run_config_geometry_assets,
+    _requires_analytic_fdm_transport_grid as _requires_analytic_fdm_transport_grid,
+    export_run_config as export_run_config,
+)
 from fullmag.runtime.script_builder import (
     export_builder_draft,
     render_scene_document_as_script,
@@ -182,6 +194,17 @@ def build_parser() -> argparse.ArgumentParser:
     export_scene_ir.add_argument("--mode", choices=[mode.value for mode in ExecutionMode], required=True)
     export_scene_ir.add_argument("--asset-root", help="Project-owned root for resolving imported geometry sources.")
 
+    export_scene_config = subparsers.add_parser(
+        "export-scene-config",
+        help="Lower a SceneDocument into canonical ProblemIR and ordered script stages.",
+    )
+    export_scene_config.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
+    export_scene_config.add_argument("--backend", choices=[target.value for target in BackendTarget], required=True)
+    export_scene_config.add_argument("--device", choices=["auto", "cpu", "gpu"], required=True)
+    export_scene_config.add_argument("--precision", choices=[precision.value for precision in ExecutionPrecision], required=True)
+    export_scene_config.add_argument("--mode", choices=[mode.value for mode in ExecutionMode], required=True)
+    export_scene_config.add_argument("--asset-root", help="Project-owned root for resolving imported geometry sources.")
+
     read_state = subparsers.add_parser(
         "read-magnetization-state",
         help="Load a magnetization state file and print canonical JSON values.",
@@ -222,19 +245,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_json(_inspect_script(args.script))
         return 0
 
-    if args.command == "export-scene-ir":
+    if args.command in {"export-scene-ir", "export-scene-config"}:
         emit_progress("Lowering SceneDocument through the canonical Python DSL")
         scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
-        problem_ir = scene_document_to_problem_ir(
-            scene_document,
-            requested_backend=args.backend,
-            requested_device=args.device,
-            requested_precision=args.precision,
-            requested_mode=args.mode,
-            source_root=args.asset_root,
-        )
-        _write_json(problem_ir)
-        emit_progress("SceneDocument ProblemIR export completed")
+        if args.command == "export-scene-config":
+            execution_config = scene_document_to_execution_config(
+                scene_document,
+                requested_backend=args.backend,
+                requested_device=args.device,
+                requested_precision=args.precision,
+                requested_mode=args.mode,
+                source_root=args.asset_root,
+            )
+            _write_json(execution_config)
+            emit_progress("SceneDocument execution config export completed")
+        else:
+            problem_ir = scene_document_to_problem_ir(
+                scene_document,
+                requested_backend=args.backend,
+                requested_device=args.device,
+                requested_precision=args.precision,
+                requested_mode=args.mode,
+                source_root=args.asset_root,
+            )
+            _write_json(problem_ir)
+            emit_progress("SceneDocument ProblemIR export completed")
         return 0
 
     if args.command in {"export-ir", "export-run-config"}:
@@ -243,7 +278,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             Path(args.script),
             lightweight_assets=getattr(args, "skip_geometry_assets", False),
         )
-        study_pipeline = loaded.study_pipeline_document()
         asset_cache = loaded.problem.geometry_asset_cache
         requested_backend = BackendTarget(args.backend) if args.backend is not None else None
         execution_mode = ExecutionMode(args.mode) if args.mode is not None else None
@@ -264,70 +298,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "export-ir":
             _write_json(ir)
             return 0
-
-        ir, shared_geometry_assets = _prepare_run_config_geometry_assets(
-            ir,
-            has_stages=bool(loaded.stages),
-        )
-        requires_analytic_fdm_transport = _requires_analytic_fdm_transport_grid(ir)
-        if requires_analytic_fdm_transport:
-            # FDM solved-current transport constructs one common charge/spin
-            # grid from analytic FM and conductor geometries.  A precomputed
-            # magnet-only grid asset cannot describe the auxiliary charge
-            # domain and is rejected by the planner.
-            ir["geometry_assets"] = None
-            shared_geometry_assets = None
-
-        stages = []
-        script_device_override: str | None = None
-        stage_start_time_s = 0.0
-        for stage in loaded.stages or ():
-            action_device = _change_device_action_device(stage.action)
-            stage_ir = stage.to_ir(
-                requested_backend=requested_backend,
-                execution_mode=execution_mode,
-                execution_precision=execution_precision,
-                script_source=loaded.script_source,
-                source_root=loaded.source_path.parent,
-                source_stem=loaded.source_path.stem,
-                until_seconds=stage.default_until_seconds,
-                asset_cache=asset_cache,
-                include_geometry_assets=(
-                    not getattr(args, "skip_geometry_assets", False)
-                    and not requires_analytic_fdm_transport
-                ),
-                study_pipeline=study_pipeline,
-                runtime_device_override=getattr(args, "runtime_device", None),
-                stage_start_time_s=stage_start_time_s,
-                _copy_cached_geometry_assets=False,
-            )
-            authored_stage_device = action_device or script_device_override
-            if authored_stage_device is not None:
-                apply_ir_runtime_device_selection(stage_ir, authored_stage_device)
-            if action_device is not None:
-                script_device_override = action_device
-            stages.append(
-                {
-                    "ir": _compact_stage_ir(
-                        stage_ir,
-                        shared_geometry_assets=shared_geometry_assets,
-                    ),
-                    "default_until_seconds": stage.default_until_seconds,
-                    "entrypoint_kind": stage.entrypoint_kind,
-                    "action": stage.action,
-                }
-            )
-            if stage.default_until_seconds is not None:
-                stage_start_time_s += stage.default_until_seconds
-
         _write_json(
-            {
-                "ir": ir,
-                "shared_geometry_assets": shared_geometry_assets,
-                "default_until_seconds": loaded.default_until_seconds,
-                "study_pipeline": study_pipeline,
-                "stages": stages,
-            }
+            export_run_config(
+                loaded,
+                ir,
+                options=RunConfigExportOptions(
+                    requested_backend=requested_backend,
+                    execution_mode=execution_mode,
+                    execution_precision=execution_precision,
+                    runtime_device_override=getattr(args, "runtime_device", None),
+                    include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
+                    source_root=loaded.source_path.parent,
+                    source_stem=loaded.source_path.stem,
+                ),
+            )
         )
         emit_progress("Run configuration exported")
         return 0
@@ -465,84 +449,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser.error(f"Unsupported helper command: {args.command}")
     return 2
-
-
-def _compact_stage_ir(
-    ir: dict[str, object],
-    *,
-    shared_geometry_assets: object,
-) -> dict[str, object]:
-    detached = dict(ir)
-    if _geometry_assets_semantically_equal(
-        detached.get("geometry_assets"),
-        shared_geometry_assets,
-    ):
-        detached["geometry_assets"] = None
-    return copy.deepcopy(detached)
-
-
-def _prepare_run_config_geometry_assets(
-    ir: dict[str, object],
-    *,
-    has_stages: bool,
-) -> tuple[dict[str, object], object]:
-    """Keep one asset owner unless compacted stage IRs need a shared copy."""
-    if not has_stages:
-        return ir, None
-
-    shared_geometry_assets = ir.get("geometry_assets")
-    if shared_geometry_assets is None:
-        return ir, None
-
-    detached_root = dict(ir)
-    detached_root["geometry_assets"] = None
-    return copy.deepcopy(detached_root), shared_geometry_assets
-
-
-def _geometry_assets_semantically_equal(left: object, right: object) -> bool:
-    if left is right:
-        return True
-    if isinstance(left, dict) and isinstance(right, dict):
-        return left.keys() == right.keys() and all(
-            _geometry_assets_semantically_equal(left[key], right[key])
-            for key in left
-        )
-    if isinstance(left, list) and isinstance(right, list):
-        return len(left) == len(right) and all(
-            _geometry_assets_semantically_equal(left_value, right_value)
-            for left_value, right_value in zip(left, right, strict=True)
-        )
-    if type(left) is not type(right):
-        return False
-    if left is None or isinstance(left, (bool, int, float, str)):
-        return left == right
-    return False
-
-
-def _requires_analytic_fdm_transport_grid(ir: dict[str, object]) -> bool:
-    """Return whether FDM transport must rebuild a common analytic grid."""
-    problem_meta = ir.get("problem_meta")
-    runtime_metadata = problem_meta.get("runtime_metadata") if isinstance(problem_meta, dict) else None
-    runtime_selection = runtime_metadata.get("runtime_selection") if isinstance(runtime_metadata, dict) else None
-    if not isinstance(runtime_selection, dict) or runtime_selection.get("backend") != "fdm":
-        return False
-    graph = ir.get("physics_graph")
-    modules = graph.get("modules") if isinstance(graph, dict) else None
-    if not isinstance(modules, list):
-        return False
-    return any(
-        isinstance(module, dict)
-        and module.get("kind") == "spin_transport"
-        and module.get("activation") == "active"
-        for module in modules
-    )
-
-
-def _change_device_action_device(action: dict[str, object] | None) -> str | None:
-    if not isinstance(action, dict) or action.get("kind") != "change_device":
-        return None
-    device = action.get("device")
-    return device if isinstance(device, str) else None
 
 
 if __name__ == "__main__":  # pragma: no cover

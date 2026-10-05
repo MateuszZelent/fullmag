@@ -717,7 +717,7 @@ export function buildMagnetizationTransactionRequest(
   model: ObjectMagneticTexturePanelModel,
   asset: MagnetizationAssetDraft | null,
   magnetizationRef: string | null,
-): AuthoringTransactionRequest {
+): Extract<AuthoringTransactionRequest, { kind: "patch_magnetization" }> {
   const transaction = {
     base_revision: model.baseRevision,
     kind: "patch_magnetization" as const,

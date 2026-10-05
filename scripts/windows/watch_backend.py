@@ -1,15 +1,22 @@
-"""Build changed native backend sources; never restart an application session."""
+"""Consume explicit native backend build requests; never restart a session."""
 import argparse
-import math
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import time
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fullmag_storage import file_lock, resolve_layout, validate_path
+from fullmag_storage import (
+    atomic_json,
+    file_lock,
+    read_workspace_build_request_receipt,
+    resolve_layout,
+    validate_path,
+)
 from windows.development_status import (
     DevelopmentStatusError,
     StatusHeartbeat,
@@ -19,77 +26,147 @@ from windows.development_status import (
 from windows.workspace_backend_identity import fingerprint
 
 
-DEFAULT_DEBOUNCE_SECONDS = 120.0
-
-
 class BuildWatcher:
-    def __init__(self, digest, build, publish, debounce=DEFAULT_DEBOUNCE_SECONDS, may_build=lambda: True, verify_ready=None):
+    def __init__(
+        self, digest, build, publish, debounce=None, may_build=lambda: True,
+        verify_ready=None, read_build_manifest_sha256=None,
+    ):
         self.digest, self.build, self.publish = digest, build, publish
-        self.debounce = debounce
         self.may_build = may_build
         self.verify_ready = verify_ready
+        self.read_build_manifest_sha256 = read_build_manifest_sha256
         self.pending = None
-        self.changed_at = 0
         self.attempted = None
         self.last_result = None
         self.last_validation_error = None
-        self.wait_after_superseded = False
 
-    def step(self, now):
-        current = self.digest()
-        if current != self.pending:
-            self.pending, self.changed_at = current, now
-            self.wait_after_superseded = False
-            self.publish({"state": "waiting", "source_sha256": current})
-        elif self.wait_after_superseded:
-            self.wait_after_superseded = False
-            self.publish({"state": "waiting", "source_sha256": current})
-        if current == self.attempted or now - self.changed_at < self.debounce:
+    def step(self, now, request_id=None):
+        # Idle source edits have no side effects. A request is consumed once,
+        # even when a failed build or an interrupted HTTP reply is retried.
+        if request_id is None or request_id == self.attempted:
             return
         if not self.may_build():
-            self.publish({"state": "stopped", "source_sha256": current})
             return
-        self.attempted = current
+        self.attempted = request_id
+        current = self.digest()
+        self.pending = current
+        if not self.may_build():
+            self.publish({"state": "stopped", "source_sha256": current, "request_id": request_id})
+            return
         self.last_validation_error = None
-        self.publish({"state": "building", "source_sha256": current})
-        result = self.build()
+        self.publish({"state": "building", "source_sha256": current, "request_id": request_id})
+        result = self.build(request_id)
         self.last_result = result
-        after = self.digest()
-        state = "superseded" if after != current else "failed"
+        state = "failed"
         details = {}
-        if result == 0 and after == current:
+        if result == 0:
             if self.verify_ready is None:
                 state = "ready"
             else:
                 try:
-                    details = self.verify_ready(current)
+                    # The build captures its own frozen source under the build
+                    # lease. Never compare it with a later live checkout hash.
+                    if self.read_build_manifest_sha256 is None:
+                        raise ValueError("Managed build has no request-scoped manifest receipt")
+                    manifest_sha256 = self.read_build_manifest_sha256(request_id)
+                    if not isinstance(manifest_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
+                        raise ValueError("Managed build receipt has no valid manifest pin")
+                    details = self.verify_ready(manifest_sha256)
                     if not isinstance(details, dict):
                         raise ValueError("Build verification did not return an identity record")
                     state = "ready"
                     self.last_validation_error = None
                 except Exception as error:
                     self.last_validation_error = error
-        self.publish({"state": state, "source_sha256": current, "exit_code": result,
+        self.pending = details.get("ready_source_sha256", current)
+        self.publish({"state": state, "source_sha256": self.pending, "exit_code": result,
+                      "request_id": request_id,
                       "runtime_restart": "manual_after_saving", **details})
-        # Changes made during compilation are coalesced into the next attempt.
-        if after != current:
-            self.pending, self.changed_at = after, time.monotonic()
-            self.wait_after_superseded = True
 
 
-def validate_debounce_seconds(value, *, once):
-    """Parse an operator quiet-window setting without accepting NaN or infinity."""
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError) as error:
-        raise ValueError("Backend debounce seconds must be numeric") from error
-    if not math.isfinite(seconds):
-        raise ValueError("Backend debounce seconds must be finite")
-    if seconds == 0 and once:
-        return 0.0
-    if not 1 <= seconds <= 300:
-        raise ValueError("Backend debounce seconds must be from 1 to 300; zero is allowed only with --once")
-    return seconds
+def read_build_intent(path, generation_id, worktree_id):
+    """Read the API's bounded, scoped intent; never execute client commands."""
+    if not path.exists():
+        return None
+    from windows.runtime_bundle import _duplicate_rejecting_object
+    from windows.development_handoff import _read_limited
+    raw = _read_limited(path, path.parent, "backend build request", 4096)
+    value = json.loads(raw.decode("utf-8"), object_pairs_hook=_duplicate_rejecting_object)
+    fields = {"schema", "request_id", "api_instance_id", "worktree_id", "generation_id", "status_token_sha256"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise DevelopmentStatusError("Invalid backend build request")
+    if value["schema"] != "fullmag.development-backend-build-intent.v1":
+        raise DevelopmentStatusError("Unsupported backend build request")
+    for key in ("request_id", "api_instance_id"):
+        parsed = uuid.UUID(value[key])
+        if parsed.int == 0 or str(parsed) != value[key]:
+            raise DevelopmentStatusError("Invalid backend build request identity")
+    if not isinstance(value["status_token_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["status_token_sha256"]):
+        raise DevelopmentStatusError("Invalid backend build status credential")
+    if value["generation_id"] != generation_id or value["worktree_id"] != worktree_id:
+        return None
+    return value
+
+
+def read_build_request(path, generation_id, worktree_id):
+    value = read_build_intent(path, generation_id, worktree_id)
+    return None if value is None else value["request_id"]
+
+
+def publish_build_result(path, state, generation_id, worktree_id):
+    """Keep one terminal intent result independently of later CLI builds."""
+    if state.get("state") not in {"ready", "failed"} or not state.get("request_id"):
+        return
+    intent = read_build_intent(path, generation_id, worktree_id)
+    if intent is None or intent["request_id"] != state["request_id"]:
+        return
+    result = {**intent, "schema": "fullmag.development-backend-build-result.v1",
+              "state": state["state"], "ready_build_id": state.get("ready_build_id"),
+              "ready_source_sha256": state.get("ready_source_sha256")}
+    atomic_json(path.with_name("backend-build-result.json"), result)
+
+
+class ExplicitBuildObserver:
+    """Observe the managed CLI route without ever requesting a compilation."""
+
+    def __init__(self, path, worktree_id, profile, publish, verify_ready, source):
+        self.path, self.worktree_id, self.profile = path, worktree_id, profile
+        self.publish, self.verify_ready, self.source = publish, verify_ready, source
+        self.signature = self._signature()
+
+    def _signature(self):
+        try:
+            value = self.path.stat()
+            return value.st_mtime_ns, value.st_size
+        except FileNotFoundError:
+            return None
+
+    def step(self):
+        signature = self._signature()
+        if signature is None or signature == self.signature:
+            return
+        from windows.development_handoff import _read_limited
+        value = json.loads(_read_limited(self.path, self.path.parent, "native build receipt", 65536))
+        self.signature = signature
+        if (value.get("worktree_id") != self.worktree_id or value.get("profile") != self.profile
+                or value.get("execution_mode") != "windows-workspace-build"):
+            return
+        if value.get("state") == "running":
+            self.publish({"state": "building", "source_sha256": self.source})
+        elif value.get("state") == "completed" and value.get("exit_code") == 0:
+            manifest_sha256 = value.get("build_manifest_sha256")
+            if not isinstance(manifest_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
+                self.publish({"state": "failed", "source_sha256": self.source})
+                return
+            try:
+                identity = self.verify_ready(manifest_sha256)
+                self.source = identity["ready_source_sha256"]
+                self.publish({"state": "ready", "source_sha256": self.source, **identity})
+            except Exception as error:
+                print(f"[backend dev] Build verification failed: {error}", flush=True)
+                self.publish({"state": "failed", "source_sha256": self.source})
+        elif value.get("state") in {"failed", "interrupted"}:
+            self.publish({"state": "failed", "source_sha256": self.source})
 
 
 def main(argv=None):
@@ -100,16 +177,7 @@ def main(argv=None):
     parser.add_argument("--stop-file")
     parser.add_argument("--baseline-digest")
     parser.add_argument("--generation-id")
-    parser.add_argument(
-        "--debounce-seconds",
-        default=os.environ.get("FULLMAG_BACKEND_DEV_DEBOUNCE_SECONDS", str(DEFAULT_DEBOUNCE_SECONDS)),
-        help="Quiet time required before building changed backend sources (default: 120; env override supported)",
-    )
     args = parser.parse_args(argv)
-    try:
-        debounce_seconds = validate_debounce_seconds(args.debounce_seconds, once=args.once)
-    except ValueError as error:
-        parser.error(str(error))
     if sys.platform != "win32":
         parser.error("Native backend watch requires Windows")
     if not 1 <= args.web_port <= 65535:
@@ -134,10 +202,12 @@ def main(argv=None):
     command = [sys.executable, str(Path(__file__).resolve().parents[1] / "fullmag_storage.py"),
                "run-windows-workspace-build", "--repo-root", layout["repo_root"],
                "--profile", layout["profile"], "--workspace-frontend", "dev",
-               "--workspace-backend-profile", "dev", "--workspace-build-mode", "auto",
+               "--workspace-backend-profile", "dev", "--workspace-build-mode", "true",
                "--workspace-web-port", str(args.web_port)]
 
     def publish(state):
+        publish_build_result(status.with_name("backend-build-request.json"), state,
+                             args.generation_id, layout["worktree_id"])
         if status_publisher is not None:
             status_publisher.publish(state)
         print("[backend dev] " + state["state"], flush=True)
@@ -148,27 +218,59 @@ def main(argv=None):
     heartbeat = None
 
     watcher = BuildWatcher(lambda: fingerprint(layout["repo_root"])["sha256"],
-                           lambda: subprocess.run(command, cwd=layout["repo_root"]).returncode,
-                           publish, debounce=0 if args.once else debounce_seconds,
+                           lambda request_id: subprocess.run(
+                               [*command, "--workspace-request-id", request_id],
+                               cwd=layout["repo_root"],
+                           ).returncode,
+                           publish,
                            may_build=lambda: stop is None or not stop.exists(),
-                           verify_ready=lambda expected: verified_build_identity(
+                           verify_ready=lambda expected_manifest: verified_build_identity(
                                layout["build_root"], layout["runtime_root"],
                                Path(layout["build_root"]) / "windows-runtime" / "build-manifest.json",
-                               expected,
-                           ))
-    watcher.attempted = args.baseline_digest
+                               None,
+                               expected_manifest_sha256=expected_manifest,
+                           ),
+                           read_build_manifest_sha256=lambda request_id: read_workspace_build_request_receipt(
+                               layout, request_id
+                           )["build_manifest_sha256"])
+    request_path = status.with_name("backend-build-request.json")
+    once_request = str(uuid.uuid4()) if args.once else None
+    observer = ExplicitBuildObserver(Path(layout["build_root"]) / "build-status.json",
+                                     layout["worktree_id"], layout["profile"], publish,
+                                     watcher.verify_ready, args.baseline_digest)
     with file_lock(lock, "backend watcher"):
         try:
             if status_publisher is not None:
                 if not args.baseline_digest:
                     raise DevelopmentStatusError("Managed watcher requires its sealed baseline source identity")
-                publish({"state": "waiting", "source_sha256": args.baseline_digest})
+                initial = {"state": "waiting", "source_sha256": args.baseline_digest}
+                # A consumer crash must not replay a possibly completed build.
+                # Keep its intent terminal/unknown until a NEW user request.
+                if status.is_file():
+                    prior = json.loads(status.read_text(encoding="utf-8-sig"))
+                    if (prior.get("generation_id") == args.generation_id and
+                            prior.get("worktree_id") == layout["worktree_id"] and
+                            prior.get("request_id")):
+                        watcher.attempted = prior["request_id"]
+                        initial.update(state="failed", request_id=watcher.attempted)
+                publish(initial)
                 heartbeat = StatusHeartbeat(status_publisher).start()
+            print("[backend dev] Waiting for Build backend in the UI; source edits do not start a build.", flush=True)
             while True:
+                if heartbeat is not None:
+                    heartbeat.raise_if_failed()
                 if stop is not None and stop.exists():
                     publish({"state": "stopped", "source_sha256": watcher.pending or args.baseline_digest})
                     return 0
-                watcher.step(time.monotonic())
+                request_id = once_request or read_build_request(request_path, args.generation_id, layout["worktree_id"])
+                observer.step()
+                attempted_before = watcher.attempted
+                watcher.step(time.monotonic(), request_id)
+                if watcher.attempted != attempted_before:
+                    # The request consumer already published this build's
+                    # terminal result; don't replace its request_id on polling.
+                    observer.signature = observer._signature()
+                    observer.source = watcher.pending or args.baseline_digest
                 if args.once:
                     return 1 if watcher.last_validation_error is not None else watcher.last_result or 0
                 time.sleep(0.5)

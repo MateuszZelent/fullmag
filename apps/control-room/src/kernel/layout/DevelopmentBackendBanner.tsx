@@ -1,15 +1,19 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { Button } from "@/shared/ui/Button";
 
 import type { DevelopmentBackendResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
+import type { DevelopmentBackendBuildActionSnapshot } from "../development/DevelopmentBackendBuildActionService";
 import type { DevelopmentRestartActionSnapshot } from "../development/DevelopmentRestartActionService";
 import { useDevelopmentBackendResource } from "../resources/developmentBackendResource";
 import type { ResourceResult } from "../resources/resourceTypes";
-import { useDevelopmentWorkspacePublicationError } from "../development/useDevelopmentWorkspacePaused";
+import {
+  useDevelopmentWorkspacePaused,
+  useDevelopmentWorkspacePublicationError,
+} from "../development/useDevelopmentWorkspacePaused";
 
 type DevelopmentBackendView = {
   action: "retry" | "restart" | "reconcile" | null;
@@ -20,23 +24,89 @@ type DevelopmentBackendView = {
 const NO_RESTART_SNAPSHOT: DevelopmentRestartActionSnapshot = {
   state: "idle", requestId: null, message: null, busy: false,
 };
+const NO_BUILD_SNAPSHOT: DevelopmentBackendBuildActionSnapshot = {
+  state: "idle", requestId: null, message: null, busy: false,
+};
 const noSubscription = () => () => {};
 const noRestartSnapshot = () => NO_RESTART_SNAPSHOT;
+const noBuildSnapshot = () => NO_BUILD_SNAPSHOT;
 
 export function DevelopmentBackendBanner() {
   const kernel = useKernel();
   const service = kernel.developmentWorkspace?.restartAction;
+  const buildService = kernel.developmentWorkspace?.buildAction;
   const restart = useSyncExternalStore(
     service?.subscribe ?? noSubscription,
     service?.getSnapshot ?? noRestartSnapshot,
     noRestartSnapshot,
   );
+  const build = useSyncExternalStore(
+    buildService?.subscribe ?? noSubscription,
+    buildService?.getSnapshot ?? noBuildSnapshot,
+    noBuildSnapshot,
+  );
   const resource = useDevelopmentBackendResource();
+  const paused = useDevelopmentWorkspacePaused();
   const publicationError = useDevelopmentWorkspacePublicationError();
-  const canRestart = service?.canStart(kernel, resource) ?? false;
+  const buildBlocksRestart = buildService?.blocksWorkspaceTransition() ?? false;
+  const canRestart = (service?.canStart(kernel, resource) ?? false) && !buildBlocksRestart;
+  const backend = resource.status === "ready" && !resource.error && !resource.refreshError
+    ? resource.data
+    : null;
+  useEffect(() => {
+    if (
+      resource.status === "ready" &&
+      !resource.error &&
+      !resource.refreshError &&
+      resource.data
+    ) {
+      buildService?.observeBackend(resource.data);
+    }
+  }, [buildService, resource.data, resource.error, resource.refreshError, resource.status]);
+
+  const restartView = resolveRestartView(restart, canRestart, resource);
+  const backendView = resolveDevelopmentBackendView(resource, canRestart);
+  const terminalBuildView: DevelopmentBackendView =
+    (build.state === "ready" || build.state === "failed") &&
+    build.requestId !== null &&
+    backend?.build_request_id === build.requestId
+      ? {
+          action: backendView?.action ?? null,
+          message: build.message ?? "The requested backend build reached a terminal result.",
+          state: build.state,
+        }
+      : null;
   const view: DevelopmentBackendView = publicationError
     ? { action: null, message: publicationError, state: "failed" }
-    : resolveRestartView(restart, canRestart, resource) ?? resolveDevelopmentBackendView(resource, canRestart);
+    : restartView ?? terminalBuildView ?? backendView ??
+      (build.state === "idle"
+        ? null
+        : { action: null, message: "Checking the existing backend build request.", state: "unknown" });
+  const activeBuildRequest = ["submitting", "pending", "building", "unknown"].includes(build.state);
+  const activeRestartRequest = ["checking", "capturing", "pending", "unknown", "hydrating"].includes(restart.state);
+  const publicRequestPending = backend?.state === "waiting" && backend.build_request_id != null;
+  const canStartBuild = Boolean(
+    buildService &&
+      !paused &&
+      !publicationError &&
+      !activeRestartRequest &&
+      !build.busy &&
+      !activeBuildRequest &&
+      !publicRequestPending &&
+      backend != null &&
+      backend.build_available === true &&
+      backend.state !== "building",
+  );
+  const canReconcileBuild = Boolean(
+    buildService &&
+      !build.busy &&
+      ["pending", "building", "unknown"].includes(build.state),
+  );
+  const canRetrySameBuild = Boolean(
+    buildService &&
+      !build.busy &&
+      build.state === "unknown",
+  );
 
   if (!view) return null;
 
@@ -45,12 +115,49 @@ export function DevelopmentBackendBanner() {
       aria-live="polite"
       className="pointer-events-auto my-1 mr-3 flex max-w-[min(34rem,calc(100vw-1.5rem))] shrink-0 self-end flex-wrap items-center gap-x-3 gap-y-1 rounded-fm-control border border-fm-border bg-fm-surface px-3 py-2 text-fm-xs text-fm-secondary shadow-fm-control"
       data-development-backend-state={view.state}
+      data-development-build-request-state={build.state}
       data-development-restart-state={restart.state}
       data-development-restart-busy={restart.busy}
       role="status"
     >
       <span className="font-medium text-fm-primary">Development backend</span>
       <span>{view.message}</span>
+      {build.message && !terminalBuildView ? <span>{build.message}</span> : null}
+      {canStartBuild ? (
+        <Button
+          disabled={!canStartBuild}
+          onClick={() => {
+            if (backend) void buildService?.start(kernel.api, backend);
+          }}
+          size="sm"
+          type="button"
+          variant="secondary"
+        >
+          Build backend
+        </Button>
+      ) : null}
+      {canReconcileBuild ? (
+        <Button
+          disabled={build.busy}
+          onClick={() => { void buildService?.reconcile(); }}
+          size="sm"
+          type="button"
+          variant="secondary"
+        >
+          Check build request
+        </Button>
+      ) : null}
+      {canRetrySameBuild ? (
+        <Button
+          disabled={build.busy}
+          onClick={() => { void buildService?.retrySameRequest(); }}
+          size="sm"
+          type="button"
+          variant="secondary"
+        >
+          Retry same build request
+        </Button>
+      ) : null}
       {view.action === "retry" ? (
         <Button
           disabled={resource.status === "stale" || resource.status === "loading"}
@@ -169,7 +276,9 @@ function viewForDevelopmentBackendState(
     case "waiting":
       return {
         action: null,
-        message: "Waiting for backend source changes to settle.",
+        message: data.build_request_id
+          ? "A manual backend build request is waiting for the native watcher."
+          : "Waiting for a manual backend build request.",
         state: "waiting",
       };
     case "building":
@@ -178,18 +287,24 @@ function viewForDevelopmentBackendState(
         message: "Building backend development changes.",
         state: "building",
       };
-    case "ready":
+    case "ready": {
+      const buildIsCurrent =
+        data.ready_build?.source_sha256 != null &&
+        data.ready_build.source_sha256 === data.current_build?.source_sha256;
       return {
         action: canRestart ? "restart" : null,
         message: canRestart
-          ? "Backend build is ready. Restart when your current changes are complete."
-          : "Backend build is ready. Restart is not available for this workspace yet.",
+          ? "A backend build is ready to apply. Restart remains a separate workspace action."
+          : buildIsCurrent
+            ? "The current backend already matches the ready build."
+            : "A backend build is ready, but restart is unavailable for this workspace.",
         state: "ready",
       };
+    }
     case "failed":
       return {
         action: null,
-        message: "The latest backend development build failed.",
+        message: "The latest backend build failed. You can submit another manual build request.",
         state: "failed",
       };
     case "disabled":

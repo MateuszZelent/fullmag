@@ -238,6 +238,7 @@ from .model.execution_profile import (
     CpuResourceOverrides,
     ExecutionOverrides,
     ExecutionProfile,
+    ExecutionRequestLayer,
     MemoryResourceOverrides,
 )
 from .model.compute_resources import (
@@ -447,6 +448,7 @@ __all__ = [
     "CpuResourceOverrides",
     "ExecutionOverrides",
     "ExecutionProfile",
+    "ExecutionRequestLayer",
     "MemoryResourceOverrides",
     "ComputeTarget",
     "CpuResources",

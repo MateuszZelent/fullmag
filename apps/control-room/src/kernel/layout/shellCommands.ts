@@ -142,12 +142,25 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.about", "About Fullmag", "Application"),
   {
     id: "workspace.home",
-    title: "Home",
+    title: "Start screen",
     group: "workspace",
     category: "View",
     scope: "global",
     run: () => {
-      homeView.toggle();
+      homeView.open();
+      return { status: "completed" };
+    },
+  },
+  {
+    id: "workspace.return-to-workspace",
+    title: "Return to workspace",
+    group: "workspace",
+    category: "View",
+    scope: "global",
+    isEnabled: () => homeView.isOpen(),
+    disabledReason: () => homeView.isOpen() ? null : "The start screen is not open.",
+    run: () => {
+      homeView.close();
       return { status: "completed" };
     },
   },

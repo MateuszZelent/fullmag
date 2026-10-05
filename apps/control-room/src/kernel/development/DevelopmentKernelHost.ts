@@ -4,6 +4,7 @@ import { PLATFORM_DEVELOPMENT_BACKEND_PATH } from "../api/apiPaths";
 import { sharedResourceRuntimeStore } from "../resources/ResourceRuntimeStore";
 import { resourceRuntimeKeyForClientScope } from "../resources/resourceClientScope";
 import { createDevelopmentKernelOwners } from "./DevelopmentKernelOwners";
+import { DevelopmentBackendBuildActionService } from "./DevelopmentBackendBuildActionService";
 import { DevelopmentRestartActionService } from "./DevelopmentRestartActionService";
 
 export interface DevelopmentKernelFactoryOptions {
@@ -20,6 +21,7 @@ export interface DevelopmentKernelHostSnapshot {
 
 /** Imperative owner of mounted kernel generations; never contains model/draft copies. */
 export class DevelopmentKernelHost {
+  readonly buildAction: DevelopmentBackendBuildActionService;
   readonly restartAction: DevelopmentRestartActionService;
   private snapshot: DevelopmentKernelHostSnapshot;
   private readonly listeners = new Set<() => void>();
@@ -33,6 +35,7 @@ export class DevelopmentKernelHost {
   constructor(factory: (options: DevelopmentKernelFactoryOptions, host: DevelopmentKernelHost) => KernelApi) {
     this.factory = factory;
     this.snapshot = { kernel: factory({}, this), generation: 0, paused: false, publicationError: null };
+    this.buildAction = new DevelopmentBackendBuildActionService();
     this.restartAction = new DevelopmentRestartActionService(this);
   }
 
@@ -97,12 +100,16 @@ export class DevelopmentKernelHost {
     this.publication = null;
     this.prepared = null;
     this.snapshot = { ...this.snapshot, paused: false };
+    this.buildAction.resetForKernelGeneration();
     this.notify();
     publication.resolve();
   }
 
   private pause(owner: KernelApi): () => void {
     if (this.snapshot.kernel !== owner || this.snapshot.paused || this.publication) throw new Error("Kernel is already protected.");
+    if (this.buildAction.blocksWorkspaceTransition()) {
+      throw new Error("Wait for the manual backend build request to reach a confirmed result before restarting.");
+    }
     const camera = owner.cameraRegistry.getSnapshot();
     const visualization = owner.visualizationSync.getSnapshot();
     if (camera.dirty || camera.syncInFlight || camera.error || visualization.error || visualization.pendingPatch || visualization.inflightPatch) {

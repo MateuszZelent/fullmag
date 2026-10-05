@@ -145,7 +145,7 @@ export type RibbonMenuNode =
     };
 
 export const RIBBON_TABS: RibbonTabDef[] = [
-  { id: "home", label: "Home" },
+  { id: "home", label: "Workspace" },
   { id: "view", label: "View" },
   { id: "definitions", label: "Definitions" },
   { id: "geometry", label: "Geometry" },

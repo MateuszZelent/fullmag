@@ -6,11 +6,11 @@
 //! planner remains the execution boundary.
 
 use crate::{
-    normalize_physics_graph, PhysicsModuleIR, PhysicsScopeRef, SceneDocument,
-    SceneDocumentValidationError, SceneObject, ScriptBuilderMagneticInteractionEntry,
+    PhysicsModuleIR, PhysicsScopeRef, SceneDocument, SceneDocumentValidationError, SceneObject,
+    ScriptBuilderMagneticInteractionEntry, normalize_physics_graph,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
@@ -513,7 +513,7 @@ fn interaction_term(object_id: &str, interaction: &ScriptBuilderMagneticInteract
 }
 
 fn discretization_payload(scene: &SceneDocument) -> Value {
-    json!({
+    let mut payload = json!({
         "requested_backend": scene.study.requested_backend,
         "requested_device": scene.study.requested_device,
         "requested_precision": scene.study.requested_precision,
@@ -523,7 +523,24 @@ fn discretization_payload(scene: &SceneDocument) -> Value {
         "shared_domain_mesh": scene.study.shared_domain_mesh,
         "mesh_defaults": scene.study.mesh_defaults,
         "mesh_interfaces": scene.study.mesh_interfaces,
-    })
+    });
+    let object = payload
+        .as_object_mut()
+        .expect("discretization payload is a JSON object");
+    if let Some(profile) = scene.study.execution_profile.as_ref() {
+        object.insert(
+            "execution_profile".to_string(),
+            serde_json::to_value(profile).expect("execution profile is serializable"),
+        );
+    }
+    if !scene.study.execution_layers.is_empty() {
+        object.insert(
+            "execution_layers".to_string(),
+            serde_json::to_value(&scene.study.execution_layers)
+                .expect("execution layers are serializable"),
+        );
+    }
+    payload
 }
 
 fn is_source_module(module: &PhysicsModuleIR) -> bool {

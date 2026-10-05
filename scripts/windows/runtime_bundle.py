@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any
 
 
+_SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
+
+
 BUNDLE_SCHEMA = "fullmag.native-runtime-bundle.v1"
 SOURCE_SCHEMA_VERSION = 1
 COMPILER_PROFILES = {"dev": "backend-dev", "release": "release"}
@@ -231,6 +236,21 @@ def _load_source_manifest(
     ):
         raise BundleError("Build manifest build_version does not match its source identity")
 
+    frozen = manifest.get("build_source_snapshot")
+    if frozen is not None:
+        from windows.build_snapshot import verify_snapshot
+        if not isinstance(frozen, dict) or set(frozen) != {"record_path", "inventory_sha256", "source_root"}:
+            raise BundleError("Invalid frozen source binding")
+        checked = verify_snapshot(frozen["record_path"], build_root)
+        if (checked["inventory_sha256"] != frozen["inventory_sha256"]
+                or checked["source_root"] != frozen["source_root"]
+                or checked["origin_worktree_id"] != manifest["workspace_namespace"]
+                or checked["backend_source_sha256"] != manifest["backend_source_sha256"]
+                or checked["dependency_source_sha256"] != manifest["dependency_source_sha256"]
+                or checked["source_identity"]["head_commit_full"] != manifest["git_commit"]
+                or checked["source_identity"]["source_snapshot_sha256"] != manifest["source_snapshot_sha256"]):
+            raise BundleError("Build manifest differs from its frozen source binding")
+
     target_root_value = manifest.get("cargo_target_dir")
     if not isinstance(target_root_value, str) or not target_root_value:
         raise BundleError("Build manifest cargo_target_dir is missing")
@@ -376,6 +396,8 @@ def create_bundle(
             "features": list(source_manifest["features"]),
             "executable_sha256": dict(source_hashes),
         }
+        if source_manifest.get("build_source_snapshot") is not None:
+            source_record["build_source_snapshot"] = dict(source_manifest["build_source_snapshot"])
         bundle_manifest = {
             "schema": BUNDLE_SCHEMA,
             "schema_version": 1,

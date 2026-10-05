@@ -8,6 +8,7 @@
 
 mod application;
 mod coordinator;
+mod declared_execution;
 mod execution;
 mod execution_profile;
 mod execution_profile_binding;
@@ -16,7 +17,10 @@ mod preparation;
 mod project;
 mod repository;
 mod run_spec;
+pub mod script_stage_contract;
+pub mod script_stage_materialization;
 mod study_artifact;
+mod study_execution_materialization;
 mod task_execution;
 
 pub use application::{
@@ -29,6 +33,7 @@ pub use coordinator::{
     CoordinatorPhase, CoordinatorTransition, DurableWorkerCoordinator, WorkerCoordinator,
     COORDINATOR_CHECKPOINT_SCHEMA, COORDINATOR_TRANSITION_SCHEMA, COORDINATOR_TRANSPORT_SCHEMA,
 };
+pub use declared_execution::bind_declared_execution;
 pub use execution::{
     resolved_inputs_sha256, study_task_input_fingerprint, AttemptId, ClaimIdentity, ExecutionError,
     LeaseToken, ObservationState, OwnershipEpoch, ProtocolDisposition, ResolvedInput,
@@ -37,13 +42,13 @@ pub use execution::{
     TaskClaim, TaskId, TaskLifecycle, TaskReadiness, TaskRecord, WorkerCommand,
     WorkerCommandEnvelope, WorkerCommandInbox, WorkerEvent, WorkerEventEnvelope,
     WorkerInboxCheckpoint, WorkerProtocolLedger, LEGACY_RESOLVED_TASK_INPUT_SCHEMA,
-    RESOLVED_TASK_INPUT_SCHEMA, RETRY_DECISION_SCHEMA,
-    WORKER_INBOX_SCHEMA, WORKER_PROTOCOL_SCHEMA,
+    RESOLVED_TASK_INPUT_SCHEMA, RETRY_DECISION_SCHEMA, WORKER_INBOX_SCHEMA, WORKER_PROTOCOL_SCHEMA,
+};
+pub use execution_profile::{
+    materialize_execution_request, materialize_referenced_execution,
+    validate_execution_materialization,
 };
 pub use execution_profile_binding::bind_materialized_execution;
-pub use execution_profile::{
-    materialize_execution_request, validate_execution_materialization,
-};
 pub use file_repository::{FileProjectRepository, FileRepositoryError};
 pub use preparation::{
     materialize_fdm_preparation_from_problem, materialize_fem_preparation_from_problem,
@@ -67,10 +72,14 @@ pub use run_spec::{
     StudyReference, SubmitDisposition, SubmitReceipt, RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
 };
 pub use study_artifact::{
-    decode_magnetization_field_semantics,
-    decode_study_artifact, decode_study_artifact_bytes, encode_study_scalar_artifact,
-    study_artifact_content_sha256, study_state_layout_sha256, DecodedStudyArtifact,
-    MagnetizationStateArtifact, StudyScalarArtifact, MAGNETIZATION_STATE_IDENTITY_SCHEMA,
-    STUDY_MAGNETIZATION_CODEC_ID, STUDY_MAGNETIZATION_CODEC_VERSION, STUDY_SCALAR_ARTIFACT_SCHEMA,
-    STUDY_SCALAR_CODEC_ID, STUDY_SCALAR_CODEC_VERSION,
+    decode_magnetization_field_semantics, decode_study_artifact, decode_study_artifact_bytes,
+    encode_study_scalar_artifact, study_artifact_content_sha256, study_state_layout_sha256,
+    DecodedStudyArtifact, MagnetizationStateArtifact, StudyScalarArtifact,
+    MAGNETIZATION_STATE_IDENTITY_SCHEMA, STUDY_MAGNETIZATION_CODEC_ID,
+    STUDY_MAGNETIZATION_CODEC_VERSION, STUDY_SCALAR_ARTIFACT_SCHEMA, STUDY_SCALAR_CODEC_ID,
+    STUDY_SCALAR_CODEC_VERSION,
+};
+pub use study_execution_materialization::{
+    materialize_captured_study_input, materialize_study_execution, CapturedStudyExecutionInput,
+    StudyStepExecutionInput,
 };

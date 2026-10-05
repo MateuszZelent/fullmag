@@ -62,7 +62,35 @@
   background: var(--fm-bg-app);
 }
 
-.fm-workspace-shell:has(> .fm-home-overlay) > :not(.fm-header):not(.fm-home-overlay):not(.fm-workspace-overlay-host) {
+/* Keep the mounted workspace children on their original tracks while the overlay spans them. */
+.fm-workspace-shell:has(> .fm-home-overlay)
+  > .fm-slot[data-slot-id="app-menu"] {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.fm-workspace-shell:has(> .fm-home-overlay)
+  > .fm-slot[data-slot-id="ribbon"],
+.fm-workspace-shell:has(> .fm-home-overlay)
+  > [data-project-workspace-session-state] {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.fm-workspace-shell:has(> .fm-home-overlay)
+  > .fm-workspace-body {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.fm-workspace-shell:has(> .fm-home-overlay)
+  > .fm-slot[data-slot-id="status-bar"] {
+  grid-column: 1;
+  grid-row: 4;
+}
+
+.fm-workspace-shell:has(> .fm-home-overlay) >
+  :not(.fm-slot[data-slot-id="app-menu"]):not(.fm-home-overlay):not(.fm-workspace-overlay-host) {
   visibility: hidden;
 }
 

@@ -139,6 +139,7 @@ class RestartActionFixture {
       ready_build: { id: `candidate-${this.candidate}`, source_sha256: SOURCES[this.candidate] },
       reason: "restart_integration_pending", state: this.mode === "building" ? "building" : "ready",
       restart_available: this.mode === "ready", revision: this.revision,
+      build_available: false, build_request_id: null,
       workspace_identity: { api_instance_id: pin, session_id: null, session_epoch: 0 },
     };
   }

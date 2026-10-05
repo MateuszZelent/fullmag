@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -209,7 +210,10 @@ def run_contract_regressions(repo_root: str) -> list[str]:
     if selector._validate_ready_status_document(valid_status, now_ms) != valid_status:
         raise capsule.HandoffError("Candidate diagnostic valid status changed")
     selector._validate_status_pins(valid_status, generation, worktree)
-    checks.append("candidate-ready-status-strict-schema-accepts-fresh-v2")
+    request_status = {**valid_status, "request_id": str(uuid.uuid4())}
+    if selector._validate_ready_status_document(request_status, now_ms) != request_status:
+        raise capsule.HandoffError("Candidate diagnostic request-correlated status changed")
+    checks.append("candidate-ready-status-accepts-optional-canonical-request-id")
     _expect_refusal(
         "candidate-status-unknown-field",
         lambda: selector._validate_ready_status_document({**valid_status, "extra": True}, now_ms),
@@ -231,6 +235,20 @@ def run_contract_regressions(repo_root: str) -> list[str]:
         "candidate-status-source-pair-mismatch",
         lambda: selector._validate_ready_status_document(
             {**valid_status, "ready_source_sha256": "c" * 64}, now_ms
+        ),
+        checks,
+    )
+    _expect_refusal(
+        "candidate-status-invalid-request-id",
+        lambda: selector._validate_ready_status_document(
+            {**valid_status, "request_id": "A" * 36}, now_ms
+        ),
+        checks,
+    )
+    _expect_refusal(
+        "candidate-status-nil-request-id",
+        lambda: selector._validate_ready_status_document(
+            {**valid_status, "request_id": "00000000-0000-0000-0000-000000000000"}, now_ms
         ),
         checks,
     )

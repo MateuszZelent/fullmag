@@ -62,12 +62,16 @@ def port_is_open(port: int):
 
 
 def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
-    if scenario not in {"pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff", "development-restart-action"}:
+    if scenario not in {"pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff", "development-restart-action", "execution-profiles", "study-execution-profile"}:
         raise storage.StorageError("Unknown fixed browser fixture scenario")
+    if scenario == "execution-profiles" and port != 3255:
+        raise storage.StorageError("Execution profiles browser fixture uses fixed port 3255")
+    if scenario == "study-execution-profile" and port != 3256:
+        raise storage.StorageError("Study execution profile browser fixture uses fixed port 3256")
     layout = storage.resolve_layout(repo, PROFILE)
     storage.initialize(layout)
     app = repo / "apps/control-room"
-    smoke_name = {"pinned-dataset": "smoke-pinned-materialized-dataset.mjs", "project-document-handoff": "smoke-project-document-handoff.mjs", "development-kernel-host": "smoke-development-kernel-host.mjs", "development-run-outcome-handoff": "smoke-development-run-outcome-handoff.mjs", "development-restart-action": "smoke-development-restart-action.mjs"}[scenario]
+    smoke_name = {"pinned-dataset": "smoke-pinned-materialized-dataset.mjs", "project-document-handoff": "smoke-project-document-handoff.mjs", "development-kernel-host": "smoke-development-kernel-host.mjs", "development-run-outcome-handoff": "smoke-development-run-outcome-handoff.mjs", "development-restart-action": "smoke-development-restart-action.mjs", "execution-profiles": "smoke-execution-profiles.mjs", "study-execution-profile": "smoke-study-execution-profile.mjs"}[scenario]
     smoke = app / "scripts" / smoke_name
     node = shutil.which("node")
     next_cli = app / "node_modules/next/dist/bin/next"
@@ -89,7 +93,7 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
         before = fingerprint(repo, False)
         receipt_path = run_root / "receipt.json"
         receipt = {
-            "schema": {"pinned-dataset": "fullmag_pinned_dataset_browser_fixture_v1", "project-document-handoff": "fullmag_project_document_browser_fixture_v1", "development-kernel-host": "fullmag_development_kernel_host_browser_fixture_v1", "development-run-outcome-handoff": "fullmag_development_run_outcome_handoff_browser_fixture_v1", "development-restart-action": "fullmag_development_restart_action_browser_fixture_v1"}[scenario], "state": "running",
+            "schema": {"pinned-dataset": "fullmag_pinned_dataset_browser_fixture_v1", "project-document-handoff": "fullmag_project_document_browser_fixture_v1", "development-kernel-host": "fullmag_development_kernel_host_browser_fixture_v1", "development-run-outcome-handoff": "fullmag_development_run_outcome_handoff_browser_fixture_v1", "development-restart-action": "fullmag_development_restart_action_browser_fixture_v1", "execution-profiles": "fullmag_execution_profiles_browser_fixture_v1", "study-execution-profile": "fullmag_study_execution_profile_browser_fixture_v1"}[scenario], "state": "running",
             "scenario": scenario,
             "repo_root": str(repo), "worktree_id": layout["worktree_id"], "profile": PROFILE,
             "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
@@ -128,7 +132,7 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
             if scenario != "pinned-dataset":
                 fixture_page = fixture_app / f"scripts/fixtures/{scenario}-page.tsx"
                 if not fixture_page.is_file():
-                    raise storage.StorageError("Project document browser fixture page is missing")
+                    raise storage.StorageError("Requested browser fixture page is missing")
                 target_page = fixture_app / f"app/{scenario}/page.tsx"
                 if target_page.exists():
                     raise storage.StorageError("Project document fixture must not overwrite a product route")
@@ -165,11 +169,13 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
                 env["FULLMAG_PINNED_DATASET_BROWSER_CHANNEL"] = BROWSER_CHANNEL
             if scenario != "pinned-dataset":
                 env["CONTROL_ROOM_URL"] = f"http://127.0.0.1:{port}/{scenario}"
-                if scenario in {"development-kernel-host", "development-restart-action"}:
+                if scenario in {"development-kernel-host", "development-restart-action", "execution-profiles", "study-execution-profile"}:
                     env["CONTROL_ROOM_URL"] += "?fullmag_api_instance=11111111-1111-4111-8111-111111111111"
                 report_prefix = {
                     "development-run-outcome-handoff": "FULLMAG_DEVELOPMENT_RUN_OUTCOME",
                     "development-restart-action": "FULLMAG_DEVELOPMENT_RESTART_ACTION",
+                    "execution-profiles": "FULLMAG_EXECUTION_PROFILES",
+                    "study-execution-profile": "FULLMAG_STUDY_EXECUTION_PROFILE",
                 }.get(scenario, "FULLMAG_PROJECT_DOCUMENT")
                 env[report_prefix + "_REPORT_DIR"] = str(run_root / "browser")
                 if BROWSER_CHANNEL:
@@ -234,9 +240,13 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--port", type=int, default=3250)
-    parser.add_argument("--scenario", choices=("pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff", "development-restart-action"), default="pinned-dataset")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--scenario", choices=("pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff", "development-restart-action", "execution-profiles", "study-execution-profile"), default="pinned-dataset")
     args = parser.parse_args()
-    if not 1 <= args.port <= 65535:
+    port = args.port if args.port is not None else {
+        "execution-profiles": 3255,
+        "study-execution-profile": 3256,
+    }.get(args.scenario, 3250)
+    if not 1 <= port <= 65535:
         parser.error("port must be between 1 and 65535")
-    raise SystemExit(run(args.repo_root.resolve(), args.port, args.scenario))
+    raise SystemExit(run(args.repo_root.resolve(), port, args.scenario))

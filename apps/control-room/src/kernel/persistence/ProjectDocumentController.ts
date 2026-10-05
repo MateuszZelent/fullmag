@@ -147,7 +147,14 @@ export interface ProjectDocumentDevelopmentGuard {
   release(): void;
 }
 
+export interface ProjectAuthoringSessionBinding {
+  readonly projectId: string;
+  readSceneDocument(): Promise<Record<string, unknown>>;
+  verifyCurrent(): Promise<void>;
+}
+
 export class ProjectDocumentController {
+  private authoringSessionBinding: ProjectAuthoringSessionBinding | null = null;
   private snapshot: ProjectDocumentSnapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
   private readonly listeners = new Set<() => void>();
   private developmentGuard: symbol | null = null;
@@ -185,6 +192,20 @@ export class ProjectDocumentController {
     );
   }
 
+  /** Explicit association from a confirmed session create/restore operation. */
+  bindAuthoringSession(binding: ProjectAuthoringSessionBinding): void {
+    this.assertOperationAvailable();
+    const document = this.documentView();
+    if (!document || document.resource.project_id !== binding.projectId) {
+      throw new Error("The workspace belongs to a different project document.");
+    }
+    this.authoringSessionBinding = Object.freeze({
+      projectId: binding.projectId,
+      readSceneDocument: binding.readSceneDocument.bind(binding),
+      verifyCurrent: binding.verifyCurrent.bind(binding),
+    });
+  }
+
   /**
    * Detach the current project from the workspace without touching runtime
    * state. Dirty documents require an explicit discard decision from the
@@ -205,6 +226,7 @@ export class ProjectDocumentController {
       if (!confirm) return false;
     }
     this.pendingOutcomes = [];
+    this.authoringSessionBinding = null;
     this.scriptImportNotice = null;
     if (snapshot.state === "empty") return true;
     this.snapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
@@ -225,6 +247,7 @@ export class ProjectDocumentController {
         name: trimmedName,
       });
       this.pendingOutcomes = [];
+      this.authoringSessionBinding = null;
       this.scriptImportNotice = null;
       this.setReady(resource, projectFileName(resource.name));
       return resource;
@@ -255,6 +278,7 @@ export class ProjectDocumentController {
       const response = await this.api.persistence.projects.fromScript(request);
       const { script_import: scriptImport, ...project } = response;
       this.pendingOutcomes = [];
+      this.authoringSessionBinding = null;
       this.scriptImportNotice = {
         projectId: project.project_id,
         projectName: project.name,
@@ -287,6 +311,7 @@ export class ProjectDocumentController {
       };
       const resource = await this.api.persistence.projects.open(request);
       this.pendingOutcomes = [];
+      this.authoringSessionBinding = null;
       this.scriptImportNotice = null;
       this.setReady(
         resource,
@@ -410,6 +435,7 @@ export class ProjectDocumentController {
    */
   async synchronizeAuthoring(
     sceneDocument: Record<string, unknown>,
+    verifyCurrent?: () => Promise<void>,
   ): Promise<ProjectDocumentResource> {
     this.assertOperationAvailable();
     const currentSnapshot = this.documentView();
@@ -445,9 +471,11 @@ export class ProjectDocumentController {
         expected_revision: currentResource.revision,
         scene_document: detachedSceneDocument,
       };
+      if (verifyCurrent) await verifyCurrent();
       const response = validateProjectDocumentResource(
         await this.api.persistence.projects.authoringUpdate(request),
       );
+      if (verifyCurrent) await verifyCurrent();
       assertAuthoringUpdateStableMetadata(currentResource, response);
 
       if (response.revision === currentResource.revision) {
@@ -513,6 +541,22 @@ export class ProjectDocumentController {
 
   async save(): Promise<void> {
     this.assertOperationAvailable();
+    const binding = this.authoringSessionBinding;
+    if (binding) {
+      const captured = this.documentView();
+      if (!captured || captured.resource.project_id !== binding.projectId) {
+        throw new Error("The bound project document is no longer current.");
+      }
+      const sceneDocument = await binding.readSceneDocument();
+      if (this.authoringSessionBinding !== binding || this.documentView()?.resource !== captured.resource) {
+        throw new Error("The project changed while reading its workspace. Save was stopped.");
+      }
+      await this.synchronizeAuthoring(sceneDocument, () => binding.verifyCurrent());
+      await binding.verifyCurrent();
+      if (this.authoringSessionBinding !== binding || this.documentView()?.resource.project_id !== binding.projectId) {
+        throw new Error("The project changed while preparing Save.");
+      }
+    }
     const document = this.documentView();
     if (!document) {
       throw new Error("No project document is open.");

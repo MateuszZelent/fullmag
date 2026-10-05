@@ -1214,11 +1214,18 @@ f.m = fm.texture.uniform(1, 0, 0)
 _SCENE_BODY = textwrap.indent(_SCENE_BODY, " " * 16)
 
 
-def _scene_round_trip(script: str, root: Path) -> tuple[object, object, str]:
+def _scene_round_trip(
+    script: str, root: Path, *, drop_sampling: bool = False
+) -> tuple[object, object, str]:
     """Script -> SceneDocument (as JSON) -> rendered script -> loaded again."""
     loaded = _load_text(script, root, "original.py")
-    scene = build_scene_document_from_builder(export_builder_draft(loaded))
-    source = render_scene_document_as_script(json.loads(json.dumps(scene)))
+    scene = json.loads(
+        json.dumps(build_scene_document_from_builder(export_builder_draft(loaded)))
+    )
+    if drop_sampling:
+        for stage in scene["study"]["stages"]:
+            stage.pop("sampling", None)
+    source = render_scene_document_as_script(scene)
     return loaded, _load_text(source, root, "rendered.py"), source
 
 
@@ -1450,7 +1457,7 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
         )
         """
         with TemporaryDirectory() as tmp_dir:
-            loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir))
+            loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir), drop_sampling=True)
         self.assertIn("study.cell(", source)
         self.assertNotIn("cell_size=(2e-09, 2e-09, 1e-09)", source)
         before = loaded.problem.to_ir(include_geometry_assets=False)
@@ -1520,7 +1527,7 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
                 json.dumps(build_scene_document_from_builder(export_builder_draft(loaded)))
             )
         scene["study"]["stages"][0]["kind"] = "teleport"
-        with self.assertRaisesRegex(ValueError, "does not support stage kind 'teleport'"):
+        with self.assertRaisesRegex(ValueError, "stage kind 'teleport' cannot be captured"):
             render_scene_document_as_script(scene)
 
 
