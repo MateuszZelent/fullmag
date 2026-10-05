@@ -7550,3 +7550,26 @@ braku potwierdzenia parametrów po assignment ACK. Druga fixture odpowiedź
 Uzupełniono również tę odpowiedź o ten sam utworzony materiał i SI properties,
 z aktualną revision oraz przypisaniem object-a. Nie osłabiono asercji Ku1 draft
 ani production rebase guard; potwierdzenie wymaga jeszcze kolejnego CI.
+
+
+### S09 — doprecyzowanie compiler bindings po przeglądzie rejestrów V04
+
+Surowy region_id przekroju jest odrębną przestrzenią identyfikatorów od
+ObjectRegionIR. Należy dodać jawny mapping section region -> RegionRefIR
+(object_id oraz opcjonalny region_id; None oznacza cały obiekt). Materiały V04
+są indeksowane MaterialIR.name; magnetyzm wynika z MagnetizationModuleIR oraz
+zgodnego ObjectMaterialAssignmentIR, nie z object_type/nazwy. Air nie ma
+magnetic MaterialIR ani wariantu obiektu Air; musi mieć rzeczywisty object_id
+oraz dowód braku magnetization na wskazanym pokryciu. Nie wybieramy pierwszego
+z nakładających się regional/whole-object assignmentów.
+
+Następny przyrost source: złożyć problem.validate() oraz istniejące kontrole
+contours -> embedding -> elements/incidence; zachować sprawdzoną mapę
+triangle -> scalar component, którą obecne summarize_scalar_components wyrzuca.
+Walidacja Dirichlet ma wiązać wybrane boundary_component_id wyłącznie z
+one-owner exterior air half-edges i sprawdzić faktyczny anchoring każdego
+komponentu. Dodatnie external_air_edge_counts same w sobie nie dowodzą
+wybranego anchoring. Descriptor pozostaje prywatny, z niepodrabialnym validated
+wynikiem i fingerprintem dokładnych danych/frame/polityki. Nie jest certyfikatem
+structural invariance ani dostępnością providera. Typed V04/routing, fields/BC,
+accepted equilibrium, MFEM2D i wszystkie bramki naukowe nadal są wymagane.
