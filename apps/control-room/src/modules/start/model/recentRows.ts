@@ -10,9 +10,10 @@
 
 import { filterEntries } from "./recentIndex";
 import type { RecentEntry, RecentFilter } from "./types";
-import type { WorkspaceItem } from "./workspaceItems";
+import type { ApiWorkspaceItem } from "./workspaceApiTypes";
+import type { WorkspaceItem, WorkspaceItemId } from "./workspaceItems";
 
-export type KindFilter = "all" | "project" | "script";
+export type KindFilter = "all" | "project" | "script" | "result";
 
 export type SortKey = "last_used" | "name" | "modified" | "use_count" | "created" | "size";
 
@@ -28,10 +29,18 @@ export interface ScriptRowData {
   readonly item: WorkspaceItem;
 }
 
-export type RecentRow = ProjectRowData | ScriptRowData;
+/** A result folder; only the HTTP workspace API lists them. */
+export interface ResultRowData {
+  readonly kind: "result";
+  readonly key: string;
+  readonly item: ApiWorkspaceItem;
+}
+
+export type RecentRow = ProjectRowData | ScriptRowData | ResultRowData;
 
 export const projectRowKey = (projectId: string): string => `project:${projectId}`;
-export const scriptRowKey = (id: number): string => `script:${id}`;
+export const scriptRowKey = (id: WorkspaceItemId): string => `script:${id}`;
+export const resultRowKey = (id: string): string => `result:${id}`;
 
 export const projectRow = (entry: RecentEntry): ProjectRowData => ({
   kind: "project",
@@ -42,6 +51,12 @@ export const projectRow = (entry: RecentEntry): ProjectRowData => ({
 export const scriptRow = (item: WorkspaceItem): ScriptRowData => ({
   kind: "script",
   key: scriptRowKey(item.id),
+  item,
+});
+
+export const resultRow = (item: ApiWorkspaceItem): ResultRowData => ({
+  kind: "result",
+  key: resultRowKey(item.id),
   item,
 });
 
@@ -68,6 +83,8 @@ export function sortKeysFor(kind: KindFilter): readonly SortKey[] {
       return ["last_used", "name", "modified", "created", "size"];
     case "script":
       return ["last_used", "name", "modified", "use_count"];
+    case "result":
+      return ["last_used", "name", "modified", "size"];
     case "all":
       return ["last_used", "name", "modified"];
   }
@@ -78,7 +95,7 @@ export function coerceSort(kind: KindFilter, sort: SortKey): SortKey {
   return sortKeysFor(kind).includes(sort) ? sort : "last_used";
 }
 
-export const KIND_FILTERS: readonly KindFilter[] = ["all", "project", "script"];
+export const KIND_FILTERS: readonly KindFilter[] = ["all", "project", "script", "result"];
 
 export const isKindFilter = (value: unknown): value is KindFilter =>
   KIND_FILTERS.includes(value as KindFilter);
@@ -119,6 +136,8 @@ interface SortFields {
  * | created    | createdAt            | first_seen_at   |
  * | size       | sizeBytes            | size_bytes      |
  * | use_count  | (not recorded)       | use_count       |
+ *
+ * A result folder maps like a script (use_count included, it is recorded).
  */
 export function sortFields(row: RecentRow): SortFields {
   if (row.kind === "project") {
@@ -146,7 +165,7 @@ export function sortFields(row: RecentRow): SortFields {
     created: parseTime(s.firstSeenAt),
     size: s.sizeBytes,
     useCount: s.useCount,
-    kindRank: 1,
+    kindRank: row.kind === "script" ? 1 : 2,
     id: String(s.id).padStart(12, "0"),
   };
 }
@@ -222,23 +241,49 @@ export function filterScripts(
   });
 }
 
+/** Result folders have no solver either; the search reads name and path. */
+export function filterResults(
+  items: readonly ApiWorkspaceItem[],
+  filter: RecentFilter,
+  query: string,
+): ApiWorkspaceItem[] {
+  const q = query.trim().toLowerCase();
+  return items.filter((r) => {
+    if (filter === "fdm" || filter === "fem") return false;
+    if (filter === "pinned" && !r.pinned) return false;
+    return q === "" || `${r.name} ${r.path}`.toLowerCase().includes(q);
+  });
+}
+
 export interface BuildRowsInput {
   readonly kind: KindFilter;
   readonly entries: readonly RecentEntry[];
   readonly scripts: readonly WorkspaceItem[];
+  readonly results?: readonly ApiWorkspaceItem[];
   readonly filter: RecentFilter;
   readonly query: string;
   readonly sort: SortKey;
 }
 
 /** Filter, merge and sort. The sort is coerced to one the kind offers. */
-export function buildRows({ kind, entries, scripts, filter, query, sort }: BuildRowsInput): RecentRow[] {
+export function buildRows({
+  kind,
+  entries,
+  scripts,
+  results = [],
+  filter,
+  query,
+  sort,
+}: BuildRowsInput): RecentRow[] {
   const rows: RecentRow[] = [];
-  if (kind !== "script") {
+  if (kind === "all" || kind === "project") {
     for (const entry of filterEntries(entries, filter, query)) rows.push(projectRow(entry));
   }
-  if (kind !== "project") {
+  if (kind === "all" || kind === "script") {
     for (const item of filterScripts(scripts, filter, query)) rows.push(scriptRow(item));
+  }
+  if (kind === "all" || kind === "result") {
+    for (const item of filterResults(results, filter, query)) rows.push(resultRow(item));
   }
   return sortRows(rows, coerceSort(kind, sort));
 }

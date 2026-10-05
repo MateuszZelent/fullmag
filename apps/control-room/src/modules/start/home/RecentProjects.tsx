@@ -1,7 +1,7 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { FileCode2, FolderOpen, LayoutGrid, List, RefreshCw, Search } from "lucide-react";
+import { FileCode2, FilePlus2, FolderOpen, LayoutGrid, List, RefreshCw, Search } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -22,6 +22,7 @@ import {
   buildRows,
   coerceSort,
   projectRowKey,
+  resultRowKey,
   scriptRowKey,
   sortKeysFor,
   type KindFilter,
@@ -32,12 +33,18 @@ import { startScreenStore, type SelectionActionKind } from "../model/startScreen
 import { startSettings } from "../model/startSettings";
 import type { RecentEntry, RecentFilter } from "../model/types";
 import type { RecentIndexController } from "../model/useRecentIndex";
-import type { WorkspaceScriptsController } from "../model/useWorkspaceScripts";
+import type { WorkspaceItemId } from "../model/workspaceItems";
+import {
+  addPathOutcome,
+  type WorkspaceResultsView,
+  type WorkspaceScriptsView,
+} from "../model/workspaceSource";
 import { SectionHeader } from "../ui/SectionHeader";
 
 import { ProjectCard } from "./ProjectCard";
 import { ProjectRow, rowDomId } from "./ProjectRow";
 import { VIRTUALISE_ABOVE, buildListItems, type RecentListItem } from "./recentListModel";
+import { ResultRow, resultRowDomId } from "./ResultRow";
 import { ScriptRow, scriptRowDomId } from "./ScriptRow";
 
 const HEADER_HEIGHT = 26;
@@ -49,6 +56,12 @@ const KINDS = [
   { label: "Scripts", value: "script" },
 ] as const satisfies readonly { label: string; value: KindFilter }[];
 
+/** Result folders only exist where the HTTP workspace API serves them. */
+const KINDS_WITH_RESULTS = [
+  ...KINDS,
+  { label: "Results", value: "result" },
+] as const satisfies readonly { label: string; value: KindFilter }[];
+
 const SOLVER_FILTERS = [
   { label: "All", value: "all" },
   { label: "FDM", value: "fdm" },
@@ -56,7 +69,7 @@ const SOLVER_FILTERS = [
   { label: "Pinned", value: "pinned" },
 ] as const satisfies readonly { label: string; value: RecentFilter }[];
 
-/** Scripts have no solver, so their list offers only the filters that apply. */
+/** Scripts and result folders have no solver, so their lists offer only the filters that apply. */
 const SCRIPT_FILTERS = [
   { label: "All", value: "all" },
   { label: "Pinned", value: "pinned" },
@@ -66,29 +79,49 @@ const NOUN: Readonly<Record<KindFilter, { title: string; plural: string }>> = {
   all: { title: "Recent work", plural: "items" },
   project: { title: "Recent projects", plural: "projects" },
   script: { title: "Recent scripts", plural: "scripts" },
+  result: { title: "Result folders", plural: "result folders" },
 };
 
 const PLACEHOLDER: Readonly<Record<KindFilter, string>> = {
   all: "Filter by name, path or tag",
   project: "Filter by name, path or tag",
   script: "Filter by name or path",
+  result: "Filter by name or path",
 };
 
+/** Neither a backend serving the workspace database nor a desktop host answered. */
+export const UNAVAILABLE_NOTE =
+  "The recent-project index needs the desktop app or a Fullmag backend that serves the workspace database.";
+
 const SCRIPT_RUN_NOTE = "Use Run in new window in the details panel to run it.";
+const RESULT_OPEN_NOTE =
+  "A result folder has no viewer of its own yet. Open its source project from the details panel; the saved runs are listed under Results.";
 
 type Notice = { readonly tone: "warning" | "info"; readonly text: string };
 
 const domIdOf = (row: RecentRow): string =>
-  row.kind === "project" ? rowDomId(row.entry.projectId) : scriptRowDomId(row.item.id);
+  row.kind === "project"
+    ? rowDomId(row.entry.projectId)
+    : row.kind === "script"
+      ? scriptRowDomId(row.item.id)
+      : resultRowDomId(row.item.id);
 
 function selectRow(row: RecentRow): void {
   if (row.kind === "project") startScreenStore.setSelectedProject(row.entry.projectId);
-  else startScreenStore.setSelectedScript(row.item.id);
+  else if (row.kind === "script") startScreenStore.setSelectedScript(row.item.id);
+  else startScreenStore.setSelectedResult(row.item.id);
 }
 
 export interface RecentProjectsProps {
   readonly recent: RecentIndexController;
-  readonly scripts: WorkspaceScriptsController;
+  readonly scripts: WorkspaceScriptsView;
+  readonly results: WorkspaceResultsView;
+  /**
+   * Adds one existing absolute path to the workspace database (the browser has
+   * no file picker). Null when no backend serves the database; the button is
+   * then not offered. Resolves to a failure message, or null on success.
+   */
+  readonly onAddPath: ((path: string) => Promise<string | null>) | null;
   readonly browseDisabledReason: string | null;
   readonly onBrowse: () => void;
   /** Runs the native script picker (the same flow as the palette command). */
@@ -105,6 +138,8 @@ export interface RecentProjectsProps {
 export function RecentProjects({
   recent,
   scripts,
+  results,
+  onAddPath,
   browseDisabledReason,
   onBrowse,
   onOpenScript,
@@ -119,6 +154,7 @@ export function RecentProjects({
     rebuildNonce,
     selectedProjectId,
     selectedScriptId,
+    selectedResultId,
     selectionAction,
   } = useSyncExternalStore(
     startScreenStore.subscribe,
@@ -138,11 +174,19 @@ export function RecentProjects({
   // Without a desktop host (or one that predates the database) there are no
   // scripts to switch to: the list is the project list, as it always was.
   const scriptsUnavailable = scriptsState.kind === "unavailable";
-  const kind: KindFilter = scriptsUnavailable ? "project" : settings.recentKind;
+  const resultsState = results.state;
+  const resultsOffered = resultsState.kind !== "unavailable";
+  const kind: KindFilter = scriptsUnavailable
+    ? "project"
+    : settings.recentKind === "result" && !resultsOffered
+      ? "all"
+      : settings.recentKind;
   const sort: SortKey = coerceSort(kind, settings.recentSort);
   const [filter, setFilter] = useState<RecentFilter>("all");
   const effectiveFilter: RecentFilter =
-    kind === "script" && (filter === "fdm" || filter === "fem") ? "all" : filter;
+    (kind === "script" || kind === "result") && (filter === "fdm" || filter === "fem")
+      ? "all"
+      : filter;
   // The settings default applies until the user picks a view in this session.
   const [chosenView, setView] = useState<"list" | "grid" | null>(null);
   // Cards need a project's thumbnail; scripts have none, so the grid is for
@@ -150,6 +194,10 @@ export function RecentProjects({
   const view = kind === "project" ? (chosenView ?? settings.defaultView) : "list";
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addPath, setAddPath] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -162,8 +210,9 @@ export function RecentProjects({
     [searchRef],
   );
 
-  const needProjects = kind !== "script";
-  const needScripts = kind !== "project";
+  const needProjects = kind === "all" || kind === "project";
+  const needScripts = kind === "all" || kind === "script";
+  const needResults = (kind === "all" || kind === "result") && resultsOffered;
   const entries = useMemo(
     () => (state.kind === "ready" ? state.index.entries : []),
     [state],
@@ -172,10 +221,22 @@ export function RecentProjects({
     () => (scriptsState.kind === "ready" ? scriptsState.items : []),
     [scriptsState],
   );
+  const resultItems = useMemo(
+    () => (resultsState.kind === "ready" ? resultsState.items : []),
+    [resultsState],
+  );
   const rows = useMemo(
     () =>
-      buildRows({ kind, entries, scripts: scriptItems, filter: effectiveFilter, query, sort }),
-    [kind, entries, scriptItems, effectiveFilter, query, sort],
+      buildRows({
+        kind,
+        entries,
+        scripts: scriptItems,
+        results: resultItems,
+        filter: effectiveFilter,
+        query,
+        sort,
+      }),
+    [kind, entries, scriptItems, resultItems, effectiveFilter, query, sort],
   );
   const items = useMemo(() => buildListItems(rows, sort === "last_used"), [rows, sort]);
   const selectable = useMemo(
@@ -189,9 +250,11 @@ export function RecentProjects({
   const selectedKey =
     selectedScriptId !== null
       ? scriptRowKey(selectedScriptId)
-      : selectedProjectId !== null
-        ? projectRowKey(selectedProjectId)
-        : null;
+      : selectedResultId !== null
+        ? resultRowKey(selectedResultId)
+        : selectedProjectId !== null
+          ? projectRowKey(selectedProjectId)
+          : null;
   // The selection survives a rebuild only if its item does; otherwise fall
   // back to nothing selected rather than pointing at a row that is gone.
   const activeIndex = selectable.findIndex((row) => row.key === selectedKey);
@@ -231,7 +294,7 @@ export function RecentProjects({
   );
 
   const activateScript = useCallback(
-    async (id: number) => {
+    async (id: WorkspaceItemId) => {
       const row = selectable.find((r) => r.kind === "script" && r.item.id === id);
       if (!row || row.kind !== "script") return;
       setNotice(null);
@@ -252,8 +315,47 @@ export function RecentProjects({
     [scripts, selectable],
   );
 
+  const activateResult = useCallback(
+    (id: string) => {
+      const row = selectable.find((r) => r.kind === "result" && r.item.id === id);
+      if (!row || row.kind !== "result") return;
+      startScreenStore.setSelectedResult(id);
+      setNotice(
+        row.item.status === "missing"
+          ? {
+              tone: "warning",
+              text: `${row.item.name} is no longer at ${row.item.path}. Remove it from the list or move it back.`,
+            }
+          : { tone: "info", text: RESULT_OPEN_NOTE },
+      );
+    },
+    [selectable],
+  );
+
+  const submitAddPath = useCallback(async () => {
+    if (!onAddPath) return;
+    setAddBusy(true);
+    setAddError(null);
+    const failure = await addPathOutcome(addPath, onAddPath);
+    setAddBusy(false);
+    if (failure) {
+      setAddError(failure);
+      return;
+    }
+    setAddPath("");
+    setAddOpen(false);
+  }, [addPath, onAddPath]);
+
+  const pinResult = useCallback(
+    async (id: string, pinned: boolean) => {
+      const failure = await results.pin(id, pinned);
+      if (failure) setNotice({ tone: "warning", text: failure });
+    },
+    [results],
+  );
+
   const pinScript = useCallback(
-    async (id: number, pinned: boolean) => {
+    async (id: WorkspaceItemId, pinned: boolean) => {
       if (scripts.readOnly) {
         setNotice({ tone: "warning", text: "The workspace database is read-only; pins cannot be saved." });
         return;
@@ -294,6 +396,18 @@ export function RecentProjects({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedScriptId]);
 
+  // The same for a result folder selected from elsewhere (a source link).
+  useEffect(() => {
+    if (selectedResultId === null) return;
+    const hidden = !selectable.some((row) => row.key === resultRowKey(selectedResultId));
+    if (hidden && resultItems.some((item) => item.id === selectedResultId)) {
+      setQuery("");
+      setFilter("all");
+    }
+    // Reacts to a new selection only; the list itself changing is not a reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedResultId]);
+
   const rebuild = recent.rebuild;
   useEffect(() => {
     if (rebuildNonce > 0) void rebuild();
@@ -307,10 +421,12 @@ export function RecentProjects({
     if (!row) return;
     if (action === "open") {
       if (row.kind === "project") void activateProject(row.entry.projectId);
-      else void activateScript(row.item.id);
+      else if (row.kind === "script") void activateScript(row.item.id);
+      else activateResult(row.item.id);
     } else if (action === "pin") {
       if (row.kind === "project") void recent.pin(row.entry.projectId, !row.entry.pinned);
-      else void pinScript(row.item.id, !row.item.pinned);
+      else if (row.kind === "script") void pinScript(row.item.id, !row.item.pinned);
+      else void pinResult(row.item.id, !row.item.pinned);
     } else {
       if (row.kind === "script" && scripts.readOnly) {
         setNotice({
@@ -320,13 +436,15 @@ export function RecentProjects({
         return;
       }
       if (row.kind === "project") void forgetProject(row.entry.projectId);
-      else void scripts.forget(row.item.id);
+      else if (row.kind === "script") void scripts.forget(row.item.id);
+      else void results.forget(row.item.id);
       // Focus moves to the next row, or the previous one if this was last.
       const next = selectable[activeIndex + 1] ?? selectable[activeIndex - 1];
       if (next) selectRow(next);
       else {
         startScreenStore.setSelectedProject(null);
         startScreenStore.setSelectedScript(null);
+        startScreenStore.setSelectedResult(null);
       }
     }
   };
@@ -411,13 +529,23 @@ export function RecentProjects({
 
   // Controls show once any source has answered; the kind switch must stay
   // reachable when one source is empty and the other is not.
-  const showControls = state.kind === "ready" || scriptsState.kind === "ready";
+  const showControls =
+    state.kind === "ready" || scriptsState.kind === "ready" || resultsState.kind === "ready";
   const loading =
-    kind === "script" ? scriptsState.kind === "loading" : needProjects && state.kind === "loading";
+    kind === "result"
+      ? resultsState.kind === "loading"
+      : kind === "script"
+        ? scriptsState.kind === "loading"
+        : needProjects && state.kind === "loading";
   const projectsAnswered = needProjects && (state.kind === "ready" || state.kind === "empty");
   const scriptsAnswered = needScripts && scriptsState.kind === "ready";
-  const showEmpty = !loading && rows.length === 0 && (projectsAnswered || scriptsAnswered);
-  const total = (needProjects ? entries.length : 0) + (needScripts ? scriptItems.length : 0);
+  const resultsAnswered = needResults && resultsState.kind === "ready";
+  const showEmpty =
+    !loading && rows.length === 0 && (projectsAnswered || scriptsAnswered || resultsAnswered);
+  const total =
+    (needProjects ? entries.length : 0) +
+    (needScripts ? scriptItems.length : 0) +
+    (needResults ? resultItems.length : 0);
   const outcome = scriptsState.kind === "ready" && needScripts ? scriptsState.outcome : null;
   const shownNotice: Notice | null =
     notice ?? (scriptFlowNotice ? { tone: "warning", text: scriptFlowNotice } : null);
@@ -425,9 +553,9 @@ export function RecentProjects({
   const footNote = (() => {
     if (browseDisabledReason !== null) return browseDisabledReason;
     if (kind === "project" && state.kind === "unavailable") {
-      return "The recent-project index needs the desktop app.";
+      return UNAVAILABLE_NOTE;
     }
-    if (showControls && (projectsAnswered || scriptsAnswered)) {
+    if (showControls && (projectsAnswered || scriptsAnswered || resultsAnswered)) {
       return `${selectable.length} of ${total} ${noun.plural}`;
     }
     return "";
@@ -444,6 +572,19 @@ export function RecentProjects({
     }
     const { row } = item;
     const position = { index: item.ordinal, count: selectable.length };
+    if (row.kind === "result") {
+      return (
+        <ResultRow
+          item={row.item}
+          key={row.key}
+          onActivate={activateResult}
+          onSelect={(id) => startScreenStore.setSelectedResult(id)}
+          onTogglePin={(id, pinned) => void pinResult(id, pinned)}
+          position={position}
+          selected={row.key === selectedKey}
+        />
+      );
+    }
     if (row.kind === "script") {
       return (
         <ScriptRow
@@ -514,9 +655,9 @@ export function RecentProjects({
           {scriptsUnavailable ? null : (
             <div className="fm-start-recent-kinds">
               <SegmentedControl
-                aria-label="Show projects, scripts or both"
+                aria-label={resultsOffered ? "Show projects, scripts, results or all" : "Show projects, scripts or both"}
                 onValueChange={(value) => startSettings.update({ recentKind: value })}
-                options={KINDS}
+                options={resultsOffered ? KINDS_WITH_RESULTS : KINDS}
                 value={kind}
               />
             </div>
@@ -536,9 +677,15 @@ export function RecentProjects({
               />
             </label>
             <SegmentedControl
-              aria-label={kind === "script" ? "Filter scripts" : "Filter by solver"}
+              aria-label={
+                kind === "script"
+                  ? "Filter scripts"
+                  : kind === "result"
+                    ? "Filter results"
+                    : "Filter by solver"
+              }
               onValueChange={setFilter}
-              options={kind === "script" ? SCRIPT_FILTERS : SOLVER_FILTERS}
+              options={kind === "script" || kind === "result" ? SCRIPT_FILTERS : SOLVER_FILTERS}
               value={effectiveFilter}
             />
             <select
@@ -679,6 +826,48 @@ export function RecentProjects({
         </div>
       ) : null}
 
+      {onAddPath && addOpen ? (
+        <form
+          className="fm-start-addpath"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitAddPath();
+          }}
+        >
+          <label className="fm-start-addpath__field">
+            <span>Absolute path of a project (.fms), script (.py) or result folder (.zarr)</span>
+            <input
+              aria-describedby={addError ? "fm-start-addpath-error" : undefined}
+              aria-invalid={addError !== null}
+              autoComplete="off"
+              onChange={(event) => setAddPath(event.target.value)}
+              spellCheck={false}
+              type="text"
+              value={addPath}
+            />
+          </label>
+          <Button disabled={addBusy || addPath.trim() === ""} size="sm" type="submit" variant="primary">
+            {addBusy ? "Adding…" : "Add"}
+          </Button>
+          <Button
+            onClick={() => {
+              setAddOpen(false);
+              setAddError(null);
+            }}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            Cancel
+          </Button>
+          {addError ? (
+            <p className="fm-start-addpath__error" id="fm-start-addpath-error" role="alert">
+              {addError}
+            </p>
+          ) : null}
+        </form>
+      ) : null}
+
       <div className="fm-start-list-foot">
         <Button
           aria-keyshortcuts="Control+O"
@@ -693,6 +882,20 @@ export function RecentProjects({
           <FolderOpen aria-hidden="true" size={14} />
           Browse…
         </Button>
+        {onAddPath ? (
+          <Button
+            aria-expanded={addOpen}
+            data-action="add-by-path"
+            onClick={() => setAddOpen((open) => !open)}
+            size="sm"
+            title="Add a project, script or result folder by its absolute path"
+            type="button"
+            variant="secondary"
+          >
+            <FilePlus2 aria-hidden="true" size={14} />
+            Add file by path…
+          </Button>
+        ) : null}
         {canOpenScript ? (
           <Button
             data-command-id="start.open-script"

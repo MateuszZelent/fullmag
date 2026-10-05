@@ -27,8 +27,14 @@ export interface WorkspaceItemMeta {
   readonly lastRun?: WorkspaceLastRun;
 }
 
+/**
+ * Desktop database ids are integers; the HTTP workspace API serves opaque
+ * strings. Everything that only displays or selects an item takes either.
+ */
+export type WorkspaceItemId = number | string;
+
 export interface WorkspaceItem {
-  readonly id: number;
+  readonly id: WorkspaceItemId;
   readonly kind: WorkspaceKind;
   readonly path: string;
   readonly name: string;
@@ -160,7 +166,7 @@ function parseLastRun(value: unknown): WorkspaceLastRun | undefined {
   };
 }
 
-function parseMeta(value: unknown): WorkspaceItemMeta {
+export function parseMeta(value: unknown): WorkspaceItemMeta {
   if (!isRecord(value)) return {};
   return {
     lines: optNumber(value.lines),
@@ -218,7 +224,7 @@ function parseOutcome(value: unknown): WorkspaceOutcome {
 export function parseWorkspaceList(raw: unknown): WorkspaceList {
   if (!isRecord(raw) || !Array.isArray(raw.items)) throw invalid("workspace list");
   const outcome = parseOutcome(raw.outcome);
-  const seen = new Set<number>();
+  const seen = new Set<WorkspaceItemId>();
   const items: WorkspaceItem[] = [];
   let skipped = 0;
   for (const value of raw.items) {

@@ -1,4 +1,4 @@
-import { openApiV2Path } from "./generated/openapi-v2-paths";
+import { openApiV2Path, type OpenApiV2Path } from "./generated/openapi-v2-paths";
 
 export const API_CONTRACT_VERSION_HEADER = "x-api-contract-version";
 export const EXPECTED_API_CONTRACT_VERSION = "1.0.0";
@@ -1115,3 +1115,29 @@ export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(
 );
 
 export const PLATFORM_OUTPUT_STORAGE_PATH = openApiV2Path("/v2/platform/output-storage");
+
+/*
+ * Workspace database routes (start screen). Hand-declared: they are served by
+ * the backend before the generated OpenAPI document lists them. When
+ * `pnpm generate:api` includes /v2/workspace/*, replace `handDeclaredPath`
+ * with `openApiV2Path` and delete it.
+ */
+const handDeclaredPath = (path: string): OpenApiV2Path => path as OpenApiV2Path;
+
+export const WORKSPACE_ITEMS_PATH = handDeclaredPath("/v2/workspace/items");
+export const WORKSPACE_ITEM_PATH = handDeclaredPath("/v2/workspace/items/{id}");
+export const WORKSPACE_ITEM_THUMBNAIL_PATH = handDeclaredPath(
+  "/v2/workspace/items/{id}/thumbnail",
+);
+export const WORKSPACE_ITEM_PIN_PATH = handDeclaredPath("/v2/workspace/items/{id}/pin");
+export const WORKSPACE_ITEM_FORGET_PATH = handDeclaredPath("/v2/workspace/items/{id}/forget");
+export const WORKSPACE_ITEM_HISTORY_PATH = handDeclaredPath(
+  "/v2/workspace/items/{id}/history",
+);
+export const WORKSPACE_ROOTS_PATH = handDeclaredPath("/v2/workspace/roots");
+export const WORKSPACE_SCAN_PATH = handDeclaredPath("/v2/workspace/scan");
+
+/** Absolute URL of an item's thumbnail, for an <img>; the id is path-encoded. */
+export function workspaceItemThumbnailUrl(baseUrl: string, id: string): string {
+  return `${baseUrl}${WORKSPACE_ITEM_THUMBNAIL_PATH.replace("{id}", encodeURIComponent(id))}`;
+}

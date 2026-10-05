@@ -7,9 +7,11 @@ import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 import { startSettings, type RecentView } from "../model/startSettings";
 import type { RecentIndexController } from "../model/useRecentIndex";
-import type { ComputeProbeState } from "../model/types";
+import type { WorkspaceItemsController } from "../model/useWorkspaceItems";
+import type { ComputeProbeState, ScannedLocation } from "../model/types";
 
 import { ComputeEnvironmentSettings } from "./ComputeEnvironmentSettings";
+import { IndexedLocations } from "./IndexedLocations";
 
 const VIEW_OPTIONS = [
   { label: "List", value: "list" },
@@ -18,6 +20,8 @@ const VIEW_OPTIONS = [
 
 interface SettingsSectionProps {
   readonly recent: RecentIndexController;
+  /** The workspace database API; "Indexed locations" is shown when it answers. */
+  readonly workspace?: WorkspaceItemsController;
   readonly compute?: ComputeProbeState;
   readonly refreshing?: boolean;
   readonly stale?: boolean;
@@ -27,6 +31,7 @@ interface SettingsSectionProps {
 
 export function SettingsSection({
   recent,
+  workspace,
   compute,
   refreshing = false,
   stale = false,
@@ -73,6 +78,23 @@ export function SettingsSection({
         </div>
       </section>
 
+      {workspace && workspace.state.kind === "ready" ? (
+        <IndexedLocations workspace={workspace} />
+      ) : (
+        <ScannedLocations recent={recent} locations={locations} />
+      )}
+    </>
+  );
+}
+
+function ScannedLocations({
+  recent,
+  locations,
+}: {
+  readonly recent: RecentIndexController;
+  readonly locations: readonly ScannedLocation[];
+}) {
+  return (
       <section aria-labelledby="fm-start-set-locations" className="fm-start-section">
         <h2 className="fm-start-section__title" id="fm-start-set-locations">
           Scanned locations
@@ -105,6 +127,5 @@ export function SettingsSection({
           {recent.rebuilding ? "Scanning…" : "Rebuild index"}
         </Button>
       </section>
-    </>
   );
 }

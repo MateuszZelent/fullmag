@@ -243,10 +243,14 @@ export const HISTORY_LIMIT = 8;
  * new event (the list was re-read and the item's last use moved), so the
  * history follows the list without a timer of its own.
  */
-export function useScriptHistory(id: number, refreshKey: string): ScriptHistoryState {
-  const [state, setState] = useState<ScriptHistoryState>({ kind: "loading" });
+export function useScriptHistory(id: number | null, refreshKey: string): ScriptHistoryState {
+  const [state, setState] = useState<ScriptHistoryState>(
+    id === null ? { kind: "unavailable" } : { kind: "loading" },
+  );
 
   useEffect(() => {
+    // A script the desktop host has no record of has no desktop history.
+    if (id === null) return undefined;
     let current = true;
     void workspaceHistory(id, HISTORY_LIMIT).then(
       (events) => {

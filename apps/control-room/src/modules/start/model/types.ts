@@ -96,6 +96,8 @@ export interface ModelSummary {
 
 export interface RecentEntry {
   readonly projectId: string;
+  /** Id of the workspace database item behind this entry, when the HTTP API served it. */
+  readonly workspaceId?: string;
   readonly name: string;
   readonly path: string;
   readonly solver: SolverKind;
