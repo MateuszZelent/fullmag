@@ -10,7 +10,8 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 pub use fullmag_workspace_inspect::{
-    Author, Citation, ExecutionSummary, HistoryEntry, ItemDetail, ModelSummary, OutputsSummary,
+    Author, Citation, ExecutionSummary, FrameEntry, FramesPage, FramesStageCount, FramesSummary,
+    HistoryEntry, ItemDetail, ModelSummary, OutputsSummary,
     PreviewInfo, ProjectDetail, ProjectRun, ProjectSummary, ResultDetail, ResultGrid, ScriptDetail,
 };
 
@@ -223,4 +224,33 @@ pub struct WorkspaceItemsQuery {
 pub struct WorkspaceHistoryQuery {
     /// 1 to 500; default 100.
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+pub struct WorkspaceFramesQuery {
+    /// Index of the first frame (default 0).
+    pub from: Option<u64>,
+    /// Frames per page (default 200, at most 1000).
+    pub limit: Option<usize>,
+}
+
+/// One allow-listed setting of the per-user workspace database (`kv`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct WorkspaceSetting {
+    /// `telemetry.enabled` or `update.available`.
+    pub key: String,
+    /// The stored value, or the default (`false` / `null`) when unset.
+    #[schema(value_type = Object)]
+    pub value: Value,
+    /// Nothing is stored under the key: `value` is the default.
+    pub is_default: bool,
+    /// The API accepts `PUT` for the key. `update.available` is written by an
+    /// updater, never by the renderer.
+    pub writable: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct WorkspaceSettingRequest {
+    #[schema(value_type = Object)]
+    pub value: Value,
 }

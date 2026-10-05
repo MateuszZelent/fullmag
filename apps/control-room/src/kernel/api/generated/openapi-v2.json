@@ -9106,6 +9106,180 @@
         ],
         "type": "string"
       },
+      "FrameEntry": {
+        "description": "One saved frame of a results folder (an entry of `frames.json`).",
+        "properties": {
+          "bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "index": {
+            "description": "Position over the whole folder, across stages, from 0.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Location of the snapshot relative to the results folder.",
+            "type": "string"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "time_s": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "step",
+          "time_s",
+          "quantity_ids",
+          "path"
+        ],
+        "type": "object"
+      },
+      "FramesPage": {
+        "description": "A page of the frame index.",
+        "properties": {
+          "frames": {
+            "items": {
+              "$ref": "#/components/schemas/FrameEntry"
+            },
+            "type": "array"
+          },
+          "from": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "indexed": {
+            "description": "The folder has a frame index; false lists nothing and means no index was written.",
+            "type": "boolean"
+          },
+          "total": {
+            "description": "Frames in the whole index.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "indexed",
+          "total",
+          "from",
+          "frames",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "FramesStageCount": {
+        "description": "Frames saved per stage, in folder order.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "count"
+        ],
+        "type": "object"
+      },
+      "FramesSummary": {
+        "description": "What `frames.json` says without listing every frame.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "first_time_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "last_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_time_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "note": {
+            "description": "Why part of the index was not read (unknown schema, unreadable file).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema": {
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/FramesStageCount"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "The index reached its entry limit: later frames are not listed.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "schema",
+          "count",
+          "truncated",
+          "stages"
+        ],
+        "type": "object"
+      },
       "FrequencyDomainArtifactExtras": {
         "additionalProperties": true,
         "type": "object"
@@ -26920,6 +27094,17 @@
               "null"
             ]
           },
+          "frames_index": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FramesSummary",
+                "description": "Summary of the per-frame index (`frames.json`) the run wrote; absent\nfor a folder written before the index existed. Frames themselves\nare paged from `GET /v2/workspace/items/{id}/frames`."
+              }
+            ]
+          },
           "grid": {
             "oneOf": [
               {
@@ -40576,6 +40761,45 @@
         },
         "required": [
           "revision"
+        ],
+        "type": "object"
+      },
+      "WorkspaceSetting": {
+        "description": "One allow-listed setting of the per-user workspace database (`kv`).",
+        "properties": {
+          "is_default": {
+            "description": "Nothing is stored under the key: `value` is the default.",
+            "type": "boolean"
+          },
+          "key": {
+            "description": "`telemetry.enabled` or `update.available`.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The stored value, or the default (`false` / `null`) when unset.",
+            "type": "object"
+          },
+          "writable": {
+            "description": "The API accepts `PUT` for the key. `update.available` is written by an\nupdater, never by the renderer.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "is_default",
+          "writable"
+        ],
+        "type": "object"
+      },
+      "WorkspaceSettingRequest": {
+        "properties": {
+          "value": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "value"
         ],
         "type": "object"
       },
@@ -59933,6 +60157,70 @@
         ]
       }
     },
+    "/v2/workspace/items/{id}/frames": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_frames",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Index of the first frame (default 0).",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Frames per page (default 200, at most 1000).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FramesPage"
+                }
+              }
+            },
+            "description": "A page of the saved-frame index (`frames.json`); `indexed` is false when the run wrote none"
+          },
+          "400": {
+            "description": "The item is not a result folder"
+          },
+          "404": {
+            "description": "Unknown, forgotten or missing item"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
     "/v2/workspace/items/{id}/history": {
       "get": {
         "operationId": "workspace_items_get_workspace_items_id_history",
@@ -60144,6 +60432,88 @@
           },
           "409": {
             "description": "A scan is already running, or the database is read-only"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/settings/{key}": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_settings_key",
+        "parameters": [
+          {
+            "description": "`telemetry.enabled` or `update.available`",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSetting"
+                }
+              }
+            },
+            "description": "The stored value, or the default when unset"
+          },
+          "404": {
+            "description": "The key is not an allow-listed setting"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      },
+      "put": {
+        "operationId": "workspace_items_put_workspace_settings_key",
+        "parameters": [
+          {
+            "description": "`telemetry.enabled`",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceSettingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSetting"
+                }
+              }
+            },
+            "description": "Setting saved"
+          },
+          "400": {
+            "description": "The value has the wrong type, or the key is not writable through the API"
+          },
+          "404": {
+            "description": "The key is not an allow-listed setting"
+          },
+          "409": {
+            "description": "The database is read-only (newer schema)"
           }
         },
         "tags": [

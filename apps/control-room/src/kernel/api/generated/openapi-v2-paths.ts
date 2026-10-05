@@ -276,11 +276,13 @@ export const openApiV2PathLiterals = [
   "/v2/workspace/items/{id}",
   "/v2/workspace/items/{id}/archive",
   "/v2/workspace/items/{id}/forget",
+  "/v2/workspace/items/{id}/frames",
   "/v2/workspace/items/{id}/history",
   "/v2/workspace/items/{id}/pin",
   "/v2/workspace/items/{id}/thumbnail",
   "/v2/workspace/roots",
-  "/v2/workspace/scan"
+  "/v2/workspace/scan",
+  "/v2/workspace/settings/{key}"
 ] as const;
 
 export type OpenApiV2Path = (typeof openApiV2PathLiterals)[number];

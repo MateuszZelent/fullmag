@@ -1131,6 +1131,10 @@ export const WORKSPACE_ITEM_FORGET_PATH = openApiV2Path("/v2/workspace/items/{id
 export const WORKSPACE_ITEM_HISTORY_PATH = openApiV2Path(
   "/v2/workspace/items/{id}/history",
 );
+export const WORKSPACE_ITEM_FRAMES_PATH = openApiV2Path(
+  "/v2/workspace/items/{id}/frames",
+);
+export const WORKSPACE_SETTING_PATH = openApiV2Path("/v2/workspace/settings/{key}");
 export const WORKSPACE_ROOTS_PATH = openApiV2Path("/v2/workspace/roots");
 export const WORKSPACE_SCAN_PATH = openApiV2Path("/v2/workspace/scan");
 

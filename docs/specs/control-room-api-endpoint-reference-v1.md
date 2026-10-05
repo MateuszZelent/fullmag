@@ -2306,6 +2306,9 @@ counters are numbers, Windows paths never carry the `\\?\` prefix.
 | `POST /v2/workspace/items/{id}/pin` `{pinned}` | returns the item |
 | `POST /v2/workspace/items/{id}/forget` | `{id, forgotten: true}`; the file is untouched |
 | `GET /v2/workspace/items/{id}/history?limit=` | events, newest first (limit 1 to 500, default 100) |
+| `GET /v2/workspace/items/{id}/frames?from=&limit=` | page of a result folder's saved-frame index (`frames.json`): `{indexed, total, from, frames[], truncated}`; limit 1 to 1000, default 200; metadata only |
+| `GET /v2/workspace/settings/{key}` | allow-listed per-user setting: `telemetry.enabled` (bool, default false) or `update.available` (null until an updater stores it); 404 for other keys |
+| `PUT /v2/workspace/settings/{key}` | body `{value}`; only `telemetry.enabled` (boolean) is writable, `update.available` answers 400 |
 | `GET /v2/workspace/roots`, `PUT /v2/workspace/roots` | scan roots `{roots: [{path, kinds[], recursive, enabled}], source: configured\|legacy\|none}`; `legacy` offers the project folders the desktop host last scanned until roots are saved; `PUT` needs absolute existing folders without `..` (400 otherwise), at most 64 |
 | `POST /v2/workspace/scan` `{roots?}` | `{scanned, added, updated, missing, skipped, warnings}`; no body scans the saved roots; explicit roots are scanned once and not saved; 409 while another scan runs |
 | `POST /v2/workspace/items` `{path, kind?}` | add one existing absolute `.fms`, `.py` or results folder (no `..`, not a symlink or junction); counts as a use, records `import` `{"source":"add"}` actor `web`; returns the item |

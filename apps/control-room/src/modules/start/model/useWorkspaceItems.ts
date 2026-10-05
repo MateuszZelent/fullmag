@@ -7,6 +7,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import { useResource } from "@/kernel/resources/useResource";
 
+import { parseFramesPage, type FramesPage } from "./framesModel";
 import {
   parseApiItemDetailAnswer,
   parseApiScanReport,
@@ -173,6 +174,8 @@ export interface WorkspaceItemsController {
   readonly thumbnailUrl: (id: string) => string;
   /** URL that downloads a result folder as a zip; only result items have one. */
   readonly archiveUrl: (id: string) => string;
+  /** One page of a result folder's saved-frame index; rejects with a readable message. */
+  readonly loadFrames: (id: string, from: number, limit: number) => Promise<FramesPage>;
   /** True while a scan is running. */
   readonly scanning: boolean;
 }
@@ -294,8 +297,28 @@ export function useWorkspaceItems(query: WorkspaceItemsQuery = ALL_ITEMS_QUERY):
 
   const thumbnailUrl = useCallback((id: string) => api.workspace.thumbnailUrl(id), [api]);
   const archiveUrl = useCallback((id: string) => api.workspace.archiveUrl(id), [api]);
+  const loadFrames = useCallback(
+    async (id: string, from: number, limit: number) => {
+      const page = parseFramesPage(await api.workspace.frames(id, from, limit));
+      if (!page) throw new Error("The backend did not return a page of the frame index.");
+      return page;
+    },
+    [api],
+  );
 
-  return { state, announcement, refresh: refetch, pin, forget, scan, addByPath, thumbnailUrl, archiveUrl, scanning };
+  return {
+    state,
+    announcement,
+    refresh: refetch,
+    pin,
+    forget,
+    scan,
+    addByPath,
+    thumbnailUrl,
+    archiveUrl,
+    loadFrames,
+    scanning,
+  };
 }
 
 /**

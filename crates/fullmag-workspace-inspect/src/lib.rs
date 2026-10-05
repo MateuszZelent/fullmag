@@ -13,6 +13,7 @@
 //! reads an array chunk.
 
 pub mod detail;
+mod frames;
 pub mod link;
 pub mod manifest;
 pub mod project;
@@ -23,10 +24,12 @@ pub mod scanner;
 mod script_detail;
 
 pub use detail::{
-    Author, Citation, ExecutionSummary, HistoryEntry, ItemDetail, ModelSummary, OutputsSummary,
+    Author, Citation, ExecutionSummary, FrameEntry, FramesPage, FramesStageCount, FramesSummary,
+    HistoryEntry, ItemDetail, ModelSummary, OutputsSummary,
     PreviewInfo, ProjectDetail, ProjectRun, ProjectSummary, ResultDetail, ResultGrid, ScriptDetail,
     ScriptSyntax,
 };
+pub use frames::{read_frames, read_frames_page, FramesIndexData, FRAMES_PAGE_MAX};
 pub use project_detail::inspect_project;
 pub use result_detail::{display_path, inspect_result, is_result_dir, read_layout, Layout};
 pub use script_detail::{apply_python_inspection, inspect_script};

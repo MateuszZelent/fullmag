@@ -15,10 +15,12 @@ import { copyText, displayPath } from "../model/scriptRowModel";
 import type { WorkspaceItemDetailState } from "../model/useWorkspaceItems";
 import { thumbnailSource } from "../model/workspaceApiAdapters";
 import type { ApiItemDetailAnswer, ApiWorkspaceItem, ResultDetail } from "../model/workspaceApiTypes";
+import { framesSummaryLine, type FramesPage } from "../model/framesModel";
 import { ProjectThumb } from "../ui/ProjectThumb";
 import { StatusPill } from "../ui/StatusPill";
 
 import { ContextBanner } from "./ContextBanner";
+import { FrameScrubber } from "./FrameScrubber";
 import {
   InspectorActionBar,
   InspectorHeader,
@@ -81,6 +83,8 @@ export interface ResultInspectorProps {
   readonly thumbnailUrl?: (id: string) => string;
   /** URL that downloads this folder as a zip; omitted, the download says it needs a backend. */
   readonly archiveUrl?: (id: string) => string;
+  /** Reads a page of the saved-frame index; omitted, the scrubber is not offered. */
+  readonly loadFrames?: (id: string, from: number, limit: number) => Promise<FramesPage>;
   readonly onTogglePin: (id: string, pinned: boolean) => Promise<string | null>;
   readonly onForget: (id: string) => void;
   /** Selects the source script or project in the list. */
@@ -139,6 +143,7 @@ export function resultFacts(item: ApiWorkspaceItem, result: ResultDetail | undef
     ...(result
       ? kvRowOrUnavailable("Frames", result.frames === undefined ? undefined : result.frames.toLocaleString("en-US"))
       : []),
+    ...(result?.framesIndex ? kvRow("Frame index", framesSummaryLine(result.framesIndex)) : []),
     ...kvRowOrUnavailable("Size", total === undefined ? undefined : formatBytes(total)),
     ...(result
       ? kvRowOrUnavailable(
@@ -219,6 +224,7 @@ export function ResultInspector({
   readOnly,
   thumbnailUrl,
   archiveUrl,
+  loadFrames,
   onTogglePin,
   onForget,
   onSelectSource,
@@ -391,6 +397,24 @@ export function ResultInspector({
             <KvGroup rows={runRows} title="Run" />
             <SourceLink linked={answer?.linkedSource} onSelect={onSelectSource} result={result} />
             <KvGroup rows={dataRows} title="Data" />
+            {result?.framesIndex && loadFrames ? (
+              <FrameScrubber
+                itemId={item.id}
+                key={item.id}
+                loadPage={loadFrames}
+                stageName={(id) => {
+                  const stage = stages.find((entry) => entry.id === id);
+                  return stage ? stageLabel(stage) : id;
+                }}
+                summary={result.framesIndex}
+              />
+            ) : result && result.frames ? (
+              <p className="fm-start-inspector__note">
+                {result.framesIndex
+                  ? "The frame index is available from a Fullmag backend that serves the workspace database."
+                  : `${result.frames.toLocaleString("en-US")} frames are saved, but this folder has no frame index (it was written before the index existed), so their steps and times are not listed.`}
+              </p>
+            ) : null}
             <KvGroup rows={whereRows} title="Folder" />
             {note ? <p className="fm-start-inspector__note">{note}</p> : null}
           </>
