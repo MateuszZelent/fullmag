@@ -31,10 +31,10 @@ against real project archives.
 | 3 | Inspector: header, chips, context banner, Overview | Done | typecheck, lint, browser (five banner states) |
 | 4 | Thumbnails, card grid, result preview, LRU | Done in the renderer | typecheck, lint, browser. **No frame scrubber**: not built, see section 3 for the exact reason. Result folders show the stored preview of their source project (labelled "project preview"), never a render of the result. The thumbnail is now written: a finished run records its outcome and a viewport thumbnail into the open project (`project_record_outcome`, `project/preview/thumb.png`, a PNG up to 256 kB) and the index reads it. Writer verified by `cargo check` and a mocked-host browser check, **not** in a packaged app |
 | 5 | Authors, History, Runs, BibTeX | Done: read side and writer | browser (three tabs, mocked host); `cargo check`. Writer records edit saves only, see §3 |
-| 6 | Continue card | Done in the renderer | browser (resumable / not / host error). `resume_run`, `discard_checkpoint` do not exist |
+| 6 | Continue card | Done in the renderer. Discard checkpoint works for an open project through the runtime route `DELETE /v2/sessions/current/persistence/checkpoints/{id}` (inline two-step confirmation, command `study.discard-checkpoint`) | browser (resumable / not / host error) for the card; Rust handler tests, session store test and vitest for Discard; **no browser run of Discard and no run against a real project**. `resume_run` and the host `discard_checkpoint` do not exist |
 | 7 | Compute environment | Rozbudowany widget i szczegóły Settings; istniejące zasoby runtime v2 | Przeglądarka: rzeczywisty RTX 4080 SUPER, 48 wątków CPU i 10 kontroli stanów/motywów/układu. Lint zmiany i kontrole API/architektury: PASS. Pełna kontrola typów/lint: błędy poza zakresem; szczegóły w [09-compute-environment.md](09-compute-environment.md) |
-| 8 | Templates gallery | Gallery plus a validated canonical Python script per template (save, copy) | each script loads to ProblemIR with the repository Python package (loader only, no solver). **Create script from template…** (desktop only) saves the script through the host command `script_save_new` (native Save dialog, no overwrite without the dialog's confirmation, atomic UTF-8 write, first-line origin comment, `create` + `open` events), then Home selects it so Run in new window is next. Outside the desktop host the button is disabled with its reason; Download and Copy script work everywhere. Templates are scripts, not projects: no project is created |
-| 9 | Import | `.fms`; `.mx3` as a reported subset translator | translator tests and a Python load of every generated fixture script. **Save translated script…** (desktop only) goes through the same `script_save_new` (event `import`); the report of untranslated statements stays visible before saving, and an incomplete translation can be saved (the report says it stops when run). Download and Copy script work everywhere. No other importer |
+| 8 | Templates gallery | Gallery plus a validated canonical Python script per template (save, copy) | each script loads to ProblemIR with the repository Python package (loader only, no solver). **Create script from template…** (desktop only) saves the script through the host command `script_save_new` (native Save dialog, no overwrite without the dialog's confirmation, atomic UTF-8 write, first-line origin comment, `create` + `open` events), then Home selects it so Run in new window is next. Outside the desktop host the button is disabled with its reason; Download and Copy script work everywhere. **Create project...** (browser and desktop) runs the script once after a consent dialog, through `POST /v2/persistence/projects/from-script`, and opens a project with the exported scene, the original script embedded (`project/source/script.py`, `script.json`) and an `import` history entry; a banner reports the fidelity verdict (`08-script-open.md`, "Phase 3 as built"). The scene is an approximation: see the survey there |
+| 9 | Import | `.fms`; `.mx3` as a reported subset translator | translator tests and a Python load of every generated fixture script. **Save translated script…** (desktop only) goes through the same `script_save_new` (event `import`); the report of untranslated statements stays visible before saving, and an incomplete translation can be saved (the report says it stops when run). Download and Copy script work everywhere. **Create project...** on the report does the same as for templates, from the translated script. No other importer |
 | 10 | Learn, Settings, About | Done | browser |
 | 11 | Sphinx documentation (this folder, `05-…`) | Done, not bundled by builds | browser against the real built site; `sphinx-build -W -n` of the site with the embed assets succeeds locally (exit 0) |
 
@@ -112,17 +112,37 @@ Host (needs work outside the renderer):
   linked, non-missing folder) use it. Verified by Rust tests (zip content, caps,
   links, route) and vitest; **not** exercised in a browser with a real
   multi-gigabyte folder.
-- **Frame scrubber: not built, and why.** A result folder exposes only the
-  *number* of field frames (`field_sample_count` in the autosave stage manifests,
-  `field_snapshots` in `metadata.json`); no file that can be read without opening
-  array chunks lists the time or step of each frame, and the workspace has no
-  endpoint that renders a field frame of a bare folder (the viewer is the Results
-  module of the owning project). A scrubber would have to open Zarr chunks or
-  invent frame labels, which the metadata-only readers (section 13.1 of `07`)
-  deliberately do not do.
-- **Checkpoints:** `discard_checkpoint` does not exist and stays out of scope:
-  the runtime has no route to discard a checkpoint, so the Continue card shows
-  the action disabled.
+- **Frame scrubber: an index of saved frames, not a player.** The runner now
+  writes `frames.json` (`fullmag.frames_index.v1`: `index`, `step`, `time_s`,
+  `stage_id`, `quantity_ids`, optional `bytes`, `path`) into each results leaf
+  from the step and time every field snapshot already carries
+  (`FieldSnapshot::step`/`time`, all four writer paths in
+  `artifact_pipeline.rs` plus the non-streamed path in `artifacts.rs`),
+  replaced atomically and bounded to 100 000 frames (`truncated: true` beyond).
+  `fullmag-workspace-inspect` reads it (bounded JSON, no chunk is opened), joins
+  the stage leaves and renumbers frames over the folder. The result detail
+  carries `frames_index` (count, first/last step and time, per-stage counts,
+  truncation, a note when a leaf was unreadable); `GET
+  /v2/workspace/items/{id}/frames?from&limit` pages it (limit at most 1000).
+  The inspector's Overview shows a slider with previous/next and the label
+  "frame i of N - step - t = ... ns" plus the stage. It is labelled an index
+  of saved frames: **no image is rendered per frame**, the header still shows
+  only the stored project preview. A folder written before this change has no
+  `frames.json`; it keeps its frame count and the inspector says it has no
+  frame index. Nothing is reconstructed from counts, because the autosave stage
+  manifests hold counts, not per-frame step or time. A run that is resumed into
+  an existing leaf starts a fresh index for the frames written after the
+  resume. Verified by Rust tests (writer, reader, route, OpenAPI) and vitest;
+  the runner crate's own unit tests were not built or run (build rule for unit
+  tests), and no run was executed end to end to produce a real `frames.json`.
+- **Checkpoints:** Discard is built for a project that is **open** in the
+  runtime: `DELETE /v2/sessions/current/persistence/checkpoints/{id}` removes
+  the run's latest checkpoint (the one Resume would restore) and refuses with
+  409 while a stage restored from it, or the run manifest names it as latest;
+  CAS objects stay for the store's reviewed GC. The Tauri `discard_checkpoint`
+  host command for a project that is **not open** does not exist and stays out
+  of scope, so the card hides Discard then (no open runtime to delete from).
+  Details: section 11.4 of `docs/specs/control-room-api-endpoint-reference-v1.md`.
 - **Provenance writer** records only a generic "Saved revision N" entry when a
   save to an existing file changes its content. It does not record the first
   write of a new file or what changed, and is **unverified in a running
@@ -131,8 +151,8 @@ Host (needs work outside the renderer):
 - **Rebuild** opens whole archives rather than reading only a manifest head.
 - **Disabled, with their reason shown:** creating or saving a script from a
   template or a translated `.mx3` outside the desktop host (browser build);
-  importers other than `.fms` and the `.mx3` subset; discarding a checkpoint;
-  the result frame scrubber (not built, see above).
+  importers other than `.fms` and the `.mx3` subset; discarding the checkpoint of a project that is not open (Discard is hidden there);
+  the result frame preview image (only the frame index is built, see above).
 - **Not built:** turning script text into a *project* (the API still has no
   such operation); templates therefore create scripts, never projects. The
   Save dialog's own replacement prompt is the only overwrite confirmation, and
@@ -142,8 +162,18 @@ Host (needs work outside the renderer):
 Packaging and process:
 
 - `docs:bundle --if-present` runs inside `pnpm --dir apps/control-room build`, so every build route bundles the documentation when the Sphinx site has been built first; no route builds Sphinx itself.
-- The status strip lacks the mockup's update notice and telemetry switch
-  (not exposed by the host); both stay absent.
+- **Status strip, telemetry and update notice.** The strip shows a Telemetry
+  switch backed by the per-user setting `telemetry.enabled` (workspace database
+  `kv`, default off) through `GET|PUT /v2/workspace/settings/{key}`. This build
+  has **no telemetry sender and no collector**: the text reads "Telemetry off -
+  this build sends no data" or "Telemetry on - no collector is configured in
+  this build", and an info popover says the switch only stores a preference.
+  The update notice appears only when `update.available` (kv, written by a
+  future updater; the API refuses to write it) holds a value; otherwise it is
+  absent. No network call is made by either. If the backend lacks the route the
+  switch is disabled and says so. The mockup's build number is still absent.
+  Verified by Rust route tests and vitest (parsers, switch and strip markup);
+  the popover and toggle were not exercised in a browser.
 - **Open recent (quick switch)** is `Ctrl Alt O`, not the design's `Ctrl ⇧ O`, which
   is already `study.import-state` (Restore Runtime State). It focuses the list and
   selects the first project.

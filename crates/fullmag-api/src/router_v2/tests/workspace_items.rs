@@ -18,11 +18,11 @@ use tower::ServiceExt;
 
 use super::{body_bytes, body_json, build_v2_router, test_app_state};
 use crate::router_v2::handlers::workspace_items::{
-    add_item_at, forget_item_at, get_item_at, history_at, list_items_at, pin_item_at, put_roots_at,
-    roots_at, scan_at, thumbnail_at, validate_roots,
+    add_item_at, forget_item_at, frames_at, get_item_at, get_setting_at, history_at, list_items_at,
+    pin_item_at, put_roots_at, put_setting_at, roots_at, scan_at, thumbnail_at, validate_roots,
 };
 use crate::schemas::workspace_items::{
-    ItemDetail, WorkspaceAddRequest, WorkspaceHistoryQuery, WorkspaceItemKind, WorkspaceItemStatus,
+    ItemDetail, WorkspaceAddRequest, WorkspaceFramesQuery, WorkspaceHistoryQuery, WorkspaceItemKind, WorkspaceItemStatus,
     WorkspaceItemsQuery, WorkspaceOpenState, WorkspaceRoot, WorkspaceRootsSource,
     WorkspaceThumbnailOrigin,
 };
@@ -627,6 +627,8 @@ fn the_openapi_document_describes_every_workspace_route_and_its_detail_union() {
         ("/v2/workspace/items/{id}/pin", vec!["post"]),
         ("/v2/workspace/items/{id}/forget", vec!["post"]),
         ("/v2/workspace/items/{id}/history", vec!["get"]),
+        ("/v2/workspace/items/{id}/frames", vec!["get"]),
+        ("/v2/workspace/settings/{key}", vec!["get", "put"]),
         ("/v2/workspace/roots", vec!["get", "put"]),
         ("/v2/workspace/scan", vec!["post"]),
     ] {
@@ -790,5 +792,146 @@ async fn a_result_folder_downloads_as_a_zip_and_other_items_do_not() {
     fs::remove_dir_all(&results).unwrap();
     let missing = call(&app, Method::GET, &format!("/v2/workspace/items/{}/archive", result_item.id), None, &[]).await;
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    std::env::remove_var("FULLMAG_STATE_DIR");
+}
+
+// ── frame index and settings ───────────────────────────────────────────────
+
+fn write_frames_index(leaf: &Path, count: u64) {
+    let frames: Vec<Value> = (0..count)
+        .map(|index| {
+            json!({
+                "index": index, "step": index * 10, "time_s": index as f64 * 1e-12,
+                "stage_id": "run", "quantity_ids": ["m"],
+                "path": format!("fields/m/step_{:06}.json", index * 10)
+            })
+        })
+        .collect();
+    fs::write(
+        leaf.join("frames.json"),
+        json!({"schema": "fullmag.frames_index.v1", "truncated": false, "frames": frames}).to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn frames_are_paged_from_the_index_and_missing_indexes_are_reported_as_such() {
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    let results = work.join("run.zarr");
+    write_results(&results, None);
+    let item = add(&fixture, &results);
+
+    let none = frames_at(&fixture.db, &item.id, &WorkspaceFramesQuery::default()).unwrap();
+    assert!(!none.indexed && none.total == 0 && none.frames.is_empty());
+
+    write_frames_index(&results.join("artifacts"), 7);
+    let page = frames_at(
+        &fixture.db,
+        &item.id,
+        &WorkspaceFramesQuery { from: Some(2), limit: Some(3) },
+    )
+    .unwrap();
+    assert!(page.indexed);
+    assert_eq!((page.total, page.from), (7, 2));
+    assert_eq!(page.frames.iter().map(|f| f.step).collect::<Vec<_>>(), vec![20, 30, 40]);
+    assert_eq!(page.frames[0].path, "artifacts/fields/m/step_000020.json");
+    let default_page = frames_at(&fixture.db, &item.id, &WorkspaceFramesQuery::default()).unwrap();
+    assert_eq!(default_page.frames.len(), 7);
+
+    // The detail carries the summary, not the frames.
+    let detail = get_item_at(&fixture.db, &item.id).unwrap();
+    let ItemDetail::Result(result) = detail.detail else { panic!("result detail") };
+    let summary = result.frames_index.unwrap();
+    assert_eq!((summary.count, summary.last_step), (7, Some(60)));
+
+    // Only results have frames; unknown ids are 404, bad ids 400.
+    let script = work.join("a.py");
+    write_script(&script, "import fullmag
+");
+    let script_item = add(&fixture, &script);
+    assert_eq!(
+        frames_at(&fixture.db, &script_item.id, &WorkspaceFramesQuery::default()).unwrap_err().status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        frames_at(&fixture.db, "999999", &WorkspaceFramesQuery::default()).unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        frames_at(&fixture.db, "x", &WorkspaceFramesQuery::default()).unwrap_err().status,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
+fn settings_are_allow_listed_typed_and_default_to_off() {
+    let fixture = Fixture::new();
+    let telemetry = get_setting_at(&fixture.db, "telemetry.enabled").unwrap();
+    assert_eq!(telemetry.value, json!(false));
+    assert!(telemetry.is_default && telemetry.writable);
+
+    let on = put_setting_at(&fixture.db, "telemetry.enabled", json!(true)).unwrap();
+    assert_eq!(on.value, json!(true));
+    let read = get_setting_at(&fixture.db, "telemetry.enabled").unwrap();
+    assert_eq!(read.value, json!(true));
+    assert!(!read.is_default);
+
+    assert_eq!(
+        put_setting_at(&fixture.db, "telemetry.enabled", json!("yes")).unwrap_err().status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        put_setting_at(&fixture.db, "update.available", json!({"version": "9"})).unwrap_err().status,
+        StatusCode::BAD_REQUEST,
+        "the renderer never writes the update notice"
+    );
+    assert_eq!(get_setting_at(&fixture.db, "other.key").unwrap_err().status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        put_setting_at(&fixture.db, "other.key", json!(true)).unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+
+    // `update.available` is hidden (null) until an updater stores it in the kv.
+    let none = get_setting_at(&fixture.db, "update.available").unwrap();
+    assert_eq!(none.value, Value::Null);
+    assert!(none.is_default && !none.writable);
+    let (workspace, _) = fullmag_workspace::Workspace::open(&fixture.db).unwrap();
+    workspace
+        .set_kv("update.available", &json!({"version": "0.9.0"}))
+        .unwrap();
+    let stored = get_setting_at(&fixture.db, "update.available").unwrap();
+    assert_eq!(stored.value["version"], "0.9.0");
+    assert!(!stored.is_default);
+}
+
+#[tokio::test]
+async fn the_frame_and_settings_routes_are_wired() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    std::env::set_var("FULLMAG_STATE_DIR", fixture.dir.path().join("state"));
+    let app = build_v2_router().with_state(test_app_state());
+
+    let put = call(&app, Method::PUT, "/v2/workspace/settings/telemetry.enabled", Some(json!({"value": true})), &[]).await;
+    assert_eq!(put.status(), StatusCode::OK);
+    let get = call(&app, Method::GET, "/v2/workspace/settings/telemetry.enabled", None, &[]).await;
+    assert_eq!(body_json(get).await["value"], json!(true));
+    let bad = call(&app, Method::PUT, "/v2/workspace/settings/telemetry.enabled", Some(json!({"value": 3})), &[]).await;
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    let unknown = call(&app, Method::GET, "/v2/workspace/settings/nope", None, &[]).await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+
+    let results = work.join("run.zarr");
+    write_results(&results, None);
+    write_frames_index(&results.join("artifacts"), 3);
+    let added = call(&app, Method::POST, "/v2/workspace/items", Some(json!({"path": results.display().to_string()})), &[]).await;
+    let id = body_json(added).await["id"].as_str().unwrap().to_string();
+    let frames = call(&app, Method::GET, &format!("/v2/workspace/items/{id}/frames?from=1&limit=1"), None, &[]).await;
+    assert_eq!(frames.status(), StatusCode::OK);
+    let body = body_json(frames).await;
+    assert_eq!((body["total"].as_u64(), body["frames"].as_array().map(Vec::len)), (Some(3), Some(1)));
+    assert_eq!(body["frames"][0]["index"], 1);
+
     std::env::remove_var("FULLMAG_STATE_DIR");
 }

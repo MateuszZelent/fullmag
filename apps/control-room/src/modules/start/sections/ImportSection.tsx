@@ -9,6 +9,7 @@ import { cn } from "@/shared/utils/className";
 import { IMPORT_ACCEPT, IMPORT_FORMATS, classifyImportFile } from "../model/importFormats";
 import { translateMx3, type Mx3Translation } from "../model/mx3Import";
 import { copyScript, saveScriptFile } from "../model/scriptExport";
+import type { ProjectCreator } from "../model/scriptProject";
 import { buildImportSaveRequest, saveTranslatedMx3, type ScriptSaver } from "../model/scriptOpen";
 
 import { Mx3ImportReport } from "./Mx3ImportReport";
@@ -19,6 +20,8 @@ export interface ImportSectionProps {
   readonly openDisabledReason: string | null;
   /** Saves a translated script as a new file; null where there is no desktop host. */
   readonly scriptSaver?: ScriptSaver | null;
+  /** Creates a project from the translated script after consent; null without a project document service. */
+  readonly projectCreator?: ProjectCreator | null;
 }
 
 interface StagedImport {
@@ -29,7 +32,12 @@ interface StagedImport {
 const studyNameFor = (fileName: string): string =>
   fileName.replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9_-]+/g, "_") || "mx3_import";
 
-export function ImportSection({ onOpenFile, openDisabledReason, scriptSaver = null }: ImportSectionProps) {
+export function ImportSection({
+  onOpenFile,
+  openDisabledReason,
+  scriptSaver = null,
+  projectCreator = null,
+}: ImportSectionProps) {
   const [dragging, setDragging] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -153,6 +161,7 @@ export function ImportSection({ onOpenFile, openDisabledReason, scriptSaver = nu
           }}
           onCreate={() => void createStaged()}
           onSave={saveStaged}
+          projectCreator={projectCreator}
           saver={scriptSaver}
           translation={staged.translation}
         />

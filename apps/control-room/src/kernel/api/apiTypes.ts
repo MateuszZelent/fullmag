@@ -839,6 +839,14 @@ export type ProjectAuthoringUpdateRequest =
   components["schemas"]["ProjectAuthoringUpdateRequest"];
 export type ProjectDocumentResource =
   components["schemas"]["ProjectDocumentResource"];
+export type ProjectFromScriptRequest =
+  components["schemas"]["ProjectFromScriptRequest"];
+export type ProjectFromScriptResource =
+  components["schemas"]["ProjectFromScriptResource"];
+export type ProjectScriptImportResource =
+  components["schemas"]["ProjectScriptImportResource"];
+export type ScriptFidelityResource =
+  components["schemas"]["ScriptFidelityResource"];
 export type ProjectRunSubmitRequest =
   components["schemas"]["ProjectRunSubmitRequest"];
 export type ProjectRunSubmitResource =

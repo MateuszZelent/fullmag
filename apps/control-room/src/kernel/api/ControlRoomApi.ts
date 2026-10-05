@@ -187,6 +187,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECT_AUTHORING_PATH,
+  PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
   PERSISTENCE_PROJECTS_PATH,
   PROJECT_MATERIALIZED_DATASET_PATH,
   PROJECT_MATERIALIZED_DATASET_SLICE_PATH,
@@ -210,10 +211,12 @@ import {
   PLATFORM_DEVELOPMENT_BACKEND_PATH,
   WORKSPACE_ITEMS_PATH,
   WORKSPACE_ITEM_FORGET_PATH,
+  WORKSPACE_ITEM_FRAMES_PATH,
   WORKSPACE_ITEM_HISTORY_PATH,
   WORKSPACE_ITEM_PATH,
   WORKSPACE_ITEM_PIN_PATH,
   WORKSPACE_ROOTS_PATH,
+  WORKSPACE_SETTING_PATH,
   WORKSPACE_SCAN_PATH,
   workspaceItemArchiveUrl,
   workspaceItemThumbnailUrl,
@@ -491,6 +494,8 @@ import type {
   SessionImportInspectResponse,
   ProjectArchiveRequest,
   ProjectAuthoringUpdateRequest,
+  ProjectFromScriptRequest,
+  ProjectFromScriptResource,
   ProjectCreateRequest,
   ProjectDocumentResource,
   ProjectRunSubmitRequest,
@@ -1116,6 +1121,22 @@ export class ControlRoomApi {
         path: { id },
         query: limit === undefined ? {} : { limit },
       }),
+    /** One page of the saved-frame index (`frames.json`) of a result folder. */
+    frames: (id: string, from: number, limit: number, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEM_FRAMES_PATH, options, {
+        path: { id },
+        query: { from, limit },
+      }),
+    /** An allow-listed per-user setting (`telemetry.enabled`, `update.available`). */
+    setting: (key: string, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_SETTING_PATH, options, { path: { key } }),
+    saveSetting: (key: string, value: boolean, options?: RequestOptions) =>
+      this.putJson<unknown, { value: boolean }>(
+        WORKSPACE_SETTING_PATH,
+        { value },
+        options,
+        { path: { key } },
+      ),
     thumbnailUrl: (id: string) => workspaceItemThumbnailUrl(this.baseUrl, id),
     archiveUrl: (id: string) => workspaceItemArchiveUrl(this.baseUrl, id),
     setPinned: (id: string, pinned: boolean, options?: RequestOptions) =>
@@ -2946,6 +2967,11 @@ export class ControlRoomApi {
           request,
           options,
         ),
+      /** 204 on success; 404 for an unknown id; 409 while still referenced. */
+      delete: (checkpointId: string, options?: RequestOptions) =>
+        this.deleteJson<void>(PERSISTENCE_CHECKPOINT_PATH, options, {
+          path: { checkpoint_id: checkpointId },
+        }),
       detail: (checkpointId: string, options?: RequestOptions) =>
         this.requestJson<CheckpointEntry>(
           PERSISTENCE_CHECKPOINT_PATH,
@@ -3285,6 +3311,17 @@ export class ControlRoomApi {
       open: (request: ProjectArchiveRequest, options?: RequestOptions) =>
         this.postJson<ProjectDocumentResource, ProjectArchiveRequest>(
           PERSISTENCE_PROJECT_OPEN_PATH,
+          request,
+          options,
+        ),
+      /**
+       * Executes the supplied script in the Python helper (the request must
+       * carry `consent.executed_by_user: true`) and returns a project with the
+       * script embedded plus a fidelity verdict.
+       */
+      fromScript: (request: ProjectFromScriptRequest, options?: RequestOptions) =>
+        this.postJson<ProjectFromScriptResource, ProjectFromScriptRequest>(
+          PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
           request,
           options,
         ),

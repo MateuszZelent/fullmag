@@ -545,6 +545,28 @@ item says `thumbnail_origin: "source_project"` (the inspector labels it
 script runs, folders without a manifest and results of projects without a
 stored preview have no thumbnail and answer 404.
 
+### 13.1a Frame index (`frames.json`)
+
+Each results leaf (`artifacts/`, `stages/stage_NN_<kind>/`, or the folder
+itself) may hold `frames.json`, written by `fullmag-runner`
+(`frames_index.rs`, called from the artifact writer thread and the non-streamed
+artifact path):
+
+```json
+{"schema": "fullmag.frames_index.v1", "truncated": false,
+ "frames": [{"index": 0, "step": 0, "time_s": 0.0, "stage_id": "run",
+             "quantity_ids": ["m"], "bytes": 4096,
+             "path": "fields/m/step_000000.json"}]}
+```
+
+One entry per saved step (quantities saved at the same step and time share an
+entry; `path` is then `fields`). Step and time come from the snapshot the
+writer already holds; no chunk is read back. The file is replaced atomically
+and capped at 100 000 entries (`truncated: true` afterwards). The inspect crate
+(`frames.rs`) reads the leaves in stage order, prefixes `path` with the leaf,
+renumbers `index` over the folder and rejects an unknown schema (reported in
+`note`). Folders without the file have no index.
+
 ### 13.4 HTTP API
 
 `/v2/workspace/...` in `fullmag-api` (`router_v2/handlers/workspace_items.rs`,
@@ -584,6 +606,17 @@ vanishes or outgrows the cap while streaming aborts the connection (a broken
 download, never a short archive that looks complete). The writer's lock file is
 skipped.
 
+**Frames and settings.** `GET /v2/workspace/items/{id}/frames?from&limit`
+returns `{indexed, total, from, frames[], truncated}` for a result item
+(`indexed: false` and no frames when the run wrote no index; 400 for other
+kinds, 404 for a missing folder). The result detail's `frames_index` is the
+summary only. `GET|PUT /v2/workspace/settings/{key}` serves an allow-list of
+two `kv` keys: `telemetry.enabled` (boolean, default `false`, writable) and
+`update.available` (default `null`, read-only through the API because a future
+updater writes it); other keys answer 404, a wrong type or a read-only key 400,
+a newer-schema database 409. The answer is `{key, value, is_default,
+writable}`; a stored value of the wrong type reads as unset.
+
 ### 13.5 Gate coverage
 
 Rust `fullmag-workspace` (`tests_v3`): migration 2 to 3 keeps rows, events,
@@ -595,7 +628,7 @@ directories, caps, depth, kinds, no execution, forgotten, edits, missing),
 `classify_path`, links. `fullmag-api` `router_v2::tests::workspace_items`:
 every route, status codes, ETag/304, read-only, quarantine, OpenAPI, result
 thumbnails (project preview only), syntax result with a real interpreter,
-archive route; `accepted_project_storage::tests` (manifest content, running to
+archive route, frame paging and the settings routes; `accepted_project_storage::tests` (manifest content, running to
 completed/failed/cancelled, only the leaf is written), `script_check::tests`,
 `workspace_archive::tests` (zip content, caps, links). CLI
 `run_manifest::tests`. Python: v3 DDL parity and 2 to 3 migration.

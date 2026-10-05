@@ -33,6 +33,14 @@ describe("TemplateDetails", () => {
     expect(html).not.toContain("Create project from template");
   });
 
+  it("offers Create project in the browser too, enabled only with a project creator", () => {
+    const enabled = render({ projectCreator: vi.fn() });
+    expect(/<button[^>]*>Create project…<\/button>/.exec(enabled)?.[0]).not.toContain(' disabled=""');
+    expect(enabled).toContain("after you confirm");
+    const disabled = render();
+    expect(/<button[^>]*>Create project…<\/button>/.exec(disabled)?.[0]).toContain(' disabled=""');
+  });
+
   it("disables Create and hides the script actions for a template without a validated script", () => {
     const html = render({ scriptSaver: vi.fn(), template: { ...template, id: "not-validated" } });
     expect(createButton(html)).toContain(' disabled=""');

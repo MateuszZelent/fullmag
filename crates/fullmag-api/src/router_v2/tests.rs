@@ -28235,6 +28235,247 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let _ = fs::remove_dir_all(&repo_root);
 }
 
+async fn create_resume_checkpoint_for_delete_tests(app: &axum::Router) -> String {
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"profile": "resume"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    body_json(create).await["checkpoint"]["checkpoint_id"]
+        .as_str()
+        .expect("checkpoint id should be present")
+        .to_string()
+}
+
+async fn delete_checkpoint_request(
+    app: &axum::Router,
+    checkpoint_id: &str,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn listed_checkpoint_ids(app: &axum::Router) -> Vec<String> {
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    body_json(list).await["checkpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["checkpoint_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn checkpoint_delete_unknown_id_is_not_found() {
+    let (app, _state, repo_root) = test_router_with_session_store_state().await;
+    let response = delete_checkpoint_request(&app, "cp-does-not-exist").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn checkpoint_delete_removes_the_checkpoint_and_bumps_state_version() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let kept = create_resume_checkpoint_for_delete_tests(&app).await;
+    let removed = create_resume_checkpoint_for_delete_tests(&app).await;
+    assert_ne!(kept, removed);
+    let version_before = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .state_version;
+
+    let response = delete_checkpoint_request(&app, &removed).await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(body_bytes(response).await.is_empty());
+
+    let listed = listed_checkpoint_ids(&app).await;
+    assert!(listed.contains(&kept));
+    assert!(!listed.contains(&removed));
+    assert_eq!(
+        state
+            .current_live_state
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .state_version,
+        version_before + 1
+    );
+
+    // A second delete names a checkpoint that no longer exists.
+    let again = delete_checkpoint_request(&app, &removed).await;
+    assert_eq!(again.status(), StatusCode::NOT_FOUND);
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v2/sessions/current/persistence/checkpoints/{removed}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::NOT_FOUND);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn checkpoint_delete_refuses_the_restore_source_and_loaded_state() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    set_running_stage_execution(&state, 0).await;
+    let checkpoint_id = create_resume_checkpoint_for_delete_tests(&app).await;
+    let common_state_ref = format!("runs/test-run/checkpoints/{checkpoint_id}/common_state.json");
+
+    // Resume base of a stage.
+    {
+        let mut guard = state.current_live_state.write().await;
+        let record = &mut guard
+            .as_mut()
+            .unwrap()
+            .stage_execution
+            .as_mut()
+            .unwrap()
+            .stages[1];
+        record.resume_from_checkpoint_ref = Some(checkpoint_id.clone());
+    }
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = String::from_utf8(body_bytes(response).await.to_vec()).unwrap();
+    assert!(body.contains("checkpoint_delete_referenced"), "{body}");
+
+    // Loaded state of a stage, without the explicit resume pointer.
+    {
+        let mut guard = state.current_live_state.write().await;
+        let record = &mut guard
+            .as_mut()
+            .unwrap()
+            .stage_execution
+            .as_mut()
+            .unwrap()
+            .stages[1];
+        record.resume_from_checkpoint_ref = None;
+        record.loaded_state_ref = Some(common_state_ref);
+    }
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(listed_checkpoint_ids(&app).await.contains(&checkpoint_id));
+
+    // Released: the same checkpoint can now go.
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard
+            .as_mut()
+            .unwrap()
+            .stage_execution
+            .as_mut()
+            .unwrap()
+            .stages[1]
+            .loaded_state_ref = None;
+    }
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn checkpoint_delete_clears_the_saving_stage_link_instead_of_dangling() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    set_running_stage_execution(&state, 0).await;
+    let checkpoint_id = create_resume_checkpoint_for_delete_tests(&app).await;
+    {
+        let guard = state.current_live_state.read().await;
+        let record = &guard.as_ref().unwrap().stage_execution.as_ref().unwrap().stages[1];
+        assert_eq!(
+            record.checkpoint_ref.as_deref(),
+            Some(checkpoint_id.as_str())
+        );
+    }
+
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let guard = state.current_live_state.read().await;
+    let record = &guard.as_ref().unwrap().stage_execution.as_ref().unwrap().stages[1];
+    assert_eq!(record.checkpoint_ref, None);
+    assert_eq!(record.state_transition, None);
+    assert!(record
+        .artifact_refs
+        .iter()
+        .all(|artifact| !artifact.contains(&checkpoint_id)));
+    drop(guard);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn checkpoint_delete_refuses_the_run_manifests_latest_checkpoint() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let checkpoint_id = create_resume_checkpoint_for_delete_tests(&app).await;
+    let store = crate::session_persistence::open_store(&state).unwrap();
+    store
+        .commit_run(&fullmag_session::FmsRunManifest {
+            run_id: "test-run".into(),
+            status: fullmag_session::RunStatus::Running,
+            study_kind: "time_evolution".into(),
+            backend: "cpu".into(),
+            precision: "f64".into(),
+            started_at: chrono::Utc::now(),
+            finished_at: None,
+            total_steps: 0,
+            total_time_s: 0.0,
+            plan_ref: None,
+            live_state_ref: None,
+            latest_checkpoint_ref: Some(format!(
+                "runs/test-run/checkpoints/{checkpoint_id}/checkpoint.json"
+            )),
+            artifact_index_ref: None,
+        })
+        .unwrap();
+    drop(store);
+
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(listed_checkpoint_ids(&app).await.contains(&checkpoint_id));
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
 #[tokio::test]
 async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
     let (app, state, repo_root) = test_router_with_session_store_state().await;

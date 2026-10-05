@@ -1,6 +1,7 @@
 import { BookOpen, Box, GraduationCap, Import, Info, LayoutGrid, Settings, type LucideIcon } from "lucide-react";
 
 import type { ScriptSaver } from "../model/scriptOpen";
+import type { ProjectCreator } from "../model/scriptProject";
 import type { StartSection } from "../model/startScreenState";
 import { STUDY_TEMPLATES } from "../model/templates";
 import type { ComputeProbeState, ContinueSession, RecentEntry, RecentIndexState } from "../model/types";
@@ -98,6 +99,8 @@ export interface ProjectInspectorProps {
   readonly resultActions?: ResultInspectorActions | null;
   /** Saves a template script as a new file; null where there is no desktop host. */
   readonly scriptSaver?: ScriptSaver | null;
+  /** Creates a project from a template script after consent. */
+  readonly projectCreator?: ProjectCreator | null;
   readonly index?: RecentIndexState;
 }
 
@@ -111,6 +114,7 @@ export function ProjectInspector({
   templateId,
   compute,
   scriptSaver = null,
+  projectCreator = null,
   script = null,
   scriptActions = null,
   result = null,
@@ -128,6 +132,7 @@ export function ProjectInspector({
       <TemplateDetails
         compute={compute}
         key={template.id}
+        projectCreator={projectCreator}
         scriptSaver={scriptSaver}
         template={template}
       />

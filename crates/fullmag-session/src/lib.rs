@@ -64,6 +64,6 @@ pub use durability::{
 pub use fms::{
     inspect_fms, pack_fms, pack_fms_file, preflight_fms, preflight_fms_staged, unpack_fms, unpack_fms_staged, FmsPreflight, FmsStagedPreflight, PackOptions,
 };
-pub use store::{GcPlan, RunBacklogFull, SessionStore};
+pub use store::{CheckpointStillReferenced, GcPlan, RunBacklogFull, SessionStore};
 pub use types::*;
 pub use writer::{StoreWriterBusy, WriteTransaction};

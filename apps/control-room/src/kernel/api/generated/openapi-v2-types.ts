@@ -68,6 +68,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/from-script": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_from_script"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/open": {
         parameters: {
             query?: never;
@@ -3861,7 +3877,7 @@ export interface paths {
         get: operations["persistence_get_sessions_current_persistence_checkpoints_checkpoint_id"];
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["persistence_delete_sessions_current_persistence_checkpoints_checkpoint_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4491,6 +4507,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/workspace/items/{id}/frames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_frames"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/workspace/items/{id}/history": {
         parameters: {
             query?: never;
@@ -4565,6 +4597,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["workspace_items_post_workspace_scan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/settings/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_settings_key"];
+        put: operations["workspace_items_put_workspace_settings_key"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7108,6 +7156,63 @@ export interface components {
         };
         /** @enum {string} */
         FixedSolverIntegratorRequest: "auto" | "heun" | "rk4" | "rk23" | "rk45" | "abm3";
+        /** @description One saved frame of a results folder (an entry of `frames.json`). */
+        FrameEntry: {
+            /** Format: int64 */
+            bytes?: number | null;
+            /**
+             * Format: int64
+             * @description Position over the whole folder, across stages, from 0.
+             */
+            index: number;
+            /** @description Location of the snapshot relative to the results folder. */
+            path: string;
+            quantity_ids: string[];
+            stage_id?: string | null;
+            /** Format: int64 */
+            step: number;
+            /** Format: double */
+            time_s: number;
+        };
+        /** @description A page of the frame index. */
+        FramesPage: {
+            frames: components["schemas"]["FrameEntry"][];
+            /** Format: int64 */
+            from: number;
+            /** @description The folder has a frame index; false lists nothing and means no index was written. */
+            indexed: boolean;
+            /**
+             * Format: int64
+             * @description Frames in the whole index.
+             */
+            total: number;
+            truncated: boolean;
+        };
+        /** @description Frames saved per stage, in folder order. */
+        FramesStageCount: {
+            /** Format: int64 */
+            count: number;
+            stage_id: string;
+        };
+        /** @description What `frames.json` says without listing every frame. */
+        FramesSummary: {
+            /** Format: int64 */
+            count: number;
+            /** Format: int64 */
+            first_step?: number | null;
+            /** Format: double */
+            first_time_s?: number | null;
+            /** Format: int64 */
+            last_step?: number | null;
+            /** Format: double */
+            last_time_s?: number | null;
+            /** @description Why part of the index was not read (unknown schema, unreadable file). */
+            note?: string | null;
+            schema: string;
+            stages: components["schemas"]["FramesStageCount"][];
+            /** @description The index reached its entry limit: later frames are not listed. */
+            truncated: boolean;
+        };
         FrequencyDomainArtifactExtras: {
             [key: string]: unknown;
         };
@@ -10926,6 +11031,42 @@ export interface components {
             schema_version: string;
             source_hash?: string | null;
         };
+        /** @description Explicit statement that the person agreed to run the script. */
+        ProjectFromScriptConsent: {
+            /** @description Must be `true`: the operation executes the script in the Python helper. */
+            executed_by_user: boolean;
+        };
+        /**
+         * @description Turns a Python script into a project. The operation EXECUTES the script in
+         *     the Python helper (same trust model as a script run), so the request must
+         *     carry explicit consent.
+         */
+        ProjectFromScriptRequest: {
+            consent?: null | components["schemas"]["ProjectFromScriptConsent"];
+            /**
+             * @description Where the script came from (for example `template:umag-sp1`,
+             *     `mx3:model.mx3`, `script_file`); recorded in `script.json`.
+             */
+            origin?: string | null;
+            /** @description Project name; defaults to the script file stem. */
+            project_name?: string | null;
+            /**
+             * @description Workspace script item. Not supported by the API; the host reads the
+             *     file and sends its text as `source`. A request that sets it is refused.
+             */
+            script_item_id?: string | null;
+            source?: null | components["schemas"]["ProjectFromScriptSource"];
+        };
+        /** @description The created project (same fields as create/open) plus what was imported. */
+        ProjectFromScriptResource: components["schemas"]["ProjectDocumentResource"] & {
+            script_import: components["schemas"]["ProjectScriptImportResource"];
+        };
+        ProjectFromScriptSource: {
+            /** @description File name shown in provenance; it is not a filesystem path. */
+            name: string;
+            /** @description UTF-8 Python source, at most 1 MiB. */
+            text: string;
+        };
         ProjectMigrationResource: {
             can_write: boolean;
             migrated: boolean;
@@ -11093,6 +11234,15 @@ export interface components {
             resolved_input_fingerprint?: string | null;
             resource_id?: string | null;
             task_id: string;
+        };
+        ProjectScriptImportResource: {
+            exported_at: string;
+            fidelity: components["schemas"]["ScriptFidelityResource"];
+            name: string;
+            origin: string;
+            /** @description Archive path of the embedded original script. */
+            script_path: string;
+            sha256: string;
         };
         ProjectSummary: {
             execution: components["schemas"]["ExecutionSummary"];
@@ -11496,6 +11646,7 @@ export interface components {
             format?: string | null;
             /** Format: int64 */
             frames?: number | null;
+            frames_index?: null | components["schemas"]["FramesSummary"];
             grid?: null | components["schemas"]["ResultGrid"];
             /** @description The folder carries a `fullmag-run.json`. */
             has_manifest: boolean;
@@ -12528,6 +12679,14 @@ export interface components {
             unresolved_imports?: string[] | null;
             uses_fullmag?: boolean | null;
         };
+        ScriptFidelityResource: {
+            notes: string[];
+            round_trip: components["schemas"]["ScriptRoundTripState"];
+            /** @description The helper exported a SceneDocument from the script. */
+            scene_exported: boolean;
+        };
+        /** @enum {string} */
+        ScriptRoundTripState: "verified" | "failed" | "not_checked";
         ScriptSourceResponse: {
             bytes: number;
             /**
@@ -14945,6 +15104,23 @@ export interface components {
             selected_node_id?: string | null;
             selected_object_id?: string | null;
         };
+        /** @description One allow-listed setting of the per-user workspace database (`kv`). */
+        WorkspaceSetting: {
+            /** @description Nothing is stored under the key: `value` is the default. */
+            is_default: boolean;
+            /** @description `telemetry.enabled` or `update.available`. */
+            key: string;
+            /** @description The stored value, or the default (`false` / `null`) when unset. */
+            value: Record<string, never>;
+            /**
+             * @description The API accepts `PUT` for the key. `update.available` is written by an
+             *     updater, never by the renderer.
+             */
+            writable: boolean;
+        };
+        WorkspaceSettingRequest: {
+            value: Record<string, never>;
+        };
         WorkspaceStageLayout: {
             bottom_dock?: string | null;
             center_dock?: string | null;
@@ -15087,6 +15263,51 @@ export interface operations {
             };
             /** @description Canonical source rendering failed */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_from_script: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectFromScriptRequest"];
+            };
+        };
+        responses: {
+            /** @description Project created from the script, with the original script embedded and a fidelity verdict */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectFromScriptResource"];
+                };
+            };
+            /** @description Missing consent, missing source, invalid name or unsupported script_item_id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Script text exceeds 1 MiB */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The helper could not export a scene document from the script; nothing is kept */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26831,6 +27052,44 @@ export interface operations {
             };
         };
     };
+    persistence_delete_sessions_current_persistence_checkpoints_checkpoint_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Checkpoint id */
+                checkpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Checkpoint deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or checkpoint not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Checkpoint is still referenced as a restore source or by the run manifest */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     persistence_post_sessions_current_persistence_checkpoints_checkpoint_id_restore: {
         parameters: {
             query?: never;
@@ -28591,6 +28850,48 @@ export interface operations {
             };
         };
     };
+    workspace_items_get_workspace_items_id_frames: {
+        parameters: {
+            query?: {
+                /** @description Index of the first frame (default 0). */
+                from?: number | null;
+                /** @description Frames per page (default 200, at most 1000). */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the saved-frame index (`frames.json`); `indexed` is false when the run wrote none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FramesPage"];
+                };
+            };
+            /** @description The item is not a result folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown, forgotten or missing item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     workspace_items_get_workspace_items_id_history: {
         parameters: {
             query?: {
@@ -28791,6 +29092,84 @@ export interface operations {
                 content?: never;
             };
             /** @description A scan is already running, or the database is read-only */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_settings_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `telemetry.enabled` or `update.available` */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored value, or the default when unset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSetting"];
+                };
+            };
+            /** @description The key is not an allow-listed setting */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_put_workspace_settings_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `telemetry.enabled` */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceSettingRequest"];
+            };
+        };
+        responses: {
+            /** @description Setting saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSetting"];
+                };
+            };
+            /** @description The value has the wrong type, or the key is not writable through the API */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The key is not an allow-listed setting */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The database is read-only (newer schema) */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -2098,6 +2098,35 @@ Degraded-success rule:
 | `time_s` | `f64` | Solver time | SI seconds. |
 | `created_at` | `string` | Checkpoint creation timestamp | Timestamp string as emitted by the persistence layer. |
 
+#### `DELETE /v2/sessions/current/persistence/checkpoints/{checkpoint_id}` (v2 only)
+
+- Status: `canonical` (v2); the v1 live routes above have no delete.
+- Purpose: discard one checkpoint of the current session's run. Used by the
+  Control Room start screen (Continue card, **Discard checkpoint**).
+- Scope: only checkpoints of the run of the current session; the
+  session-scope middleware applies as for the neighbouring persistence routes.
+- Responses:
+  - `204` the checkpoint is deleted. Idempotence is by outcome, not by status:
+    a repeated request answers `404`.
+  - `404` no active workspace, or no such checkpoint in the current run.
+  - `409` refused, error code text starts with `checkpoint_delete_referenced`.
+    A checkpoint is refused while a stage record of the run names it as
+    restore source (`resume_from_checkpoint_ref`) or loaded state
+    (`loaded_state_ref`), or while the run manifest names it as its latest
+    checkpoint.
+- Effects: the checkpoint-owned files (`checkpoint.json` first, then the common
+  state and per-checkpoint payload files) are removed under the store writer
+  lease. CAS objects are **not** deleted by this route; they become garbage
+  candidates of the store's reviewed GC (`gc_preview`/`gc_apply`) once nothing
+  references them, so an object shared with another checkpoint or a solution
+  set stays. A stage record that only *saved* the checkpoint
+  (`checkpoint_ref`) has that link, its artifact reference and its
+  `save_checkpoint` transition cleared so it does not dangle. The session
+  `state_version` advances by one; clients refetch the checkpoint catalogue and
+  the stage-execution resource.
+- Not covered: a project that is not open (no runtime). The desktop host has no
+  `discard_checkpoint` command for it, so the start screen hides Discard then.
+
 ### 11.5 `GET /v1/live/current/session/recovery`
 
 - Status: `canonical`
@@ -2277,6 +2306,9 @@ counters are numbers, Windows paths never carry the `\\?\` prefix.
 | `POST /v2/workspace/items/{id}/pin` `{pinned}` | returns the item |
 | `POST /v2/workspace/items/{id}/forget` | `{id, forgotten: true}`; the file is untouched |
 | `GET /v2/workspace/items/{id}/history?limit=` | events, newest first (limit 1 to 500, default 100) |
+| `GET /v2/workspace/items/{id}/frames?from=&limit=` | page of a result folder's saved-frame index (`frames.json`): `{indexed, total, from, frames[], truncated}`; limit 1 to 1000, default 200; metadata only |
+| `GET /v2/workspace/settings/{key}` | allow-listed per-user setting: `telemetry.enabled` (bool, default false) or `update.available` (null until an updater stores it); 404 for other keys |
+| `PUT /v2/workspace/settings/{key}` | body `{value}`; only `telemetry.enabled` (boolean) is writable, `update.available` answers 400 |
 | `GET /v2/workspace/roots`, `PUT /v2/workspace/roots` | scan roots `{roots: [{path, kinds[], recursive, enabled}], source: configured\|legacy\|none}`; `legacy` offers the project folders the desktop host last scanned until roots are saved; `PUT` needs absolute existing folders without `..` (400 otherwise), at most 64 |
 | `POST /v2/workspace/scan` `{roots?}` | `{scanned, added, updated, missing, skipped, warnings}`; no body scans the saved roots; explicit roots are scanned once and not saved; 409 while another scan runs |
 | `POST /v2/workspace/items` `{path, kind?}` | add one existing absolute `.fms`, `.py` or results folder (no `..`, not a symlink or junction); counts as a use, records `import` `{"source":"add"}` actor `web`; returns the item |

@@ -11,6 +11,7 @@
  * identity (id, kind, path, name) is rejected, and a list skips and counts it.
  */
 
+import { parseFramesSummary, type FramesSummary } from "./framesModel";
 import {
   parseProvenance,
   type Citation,
@@ -163,6 +164,8 @@ export interface ResultDetail {
   /** Already formatted for display; the wire shape of the grid is not fixed. */
   readonly grid?: string;
   readonly frames?: number;
+  /** Summary of the run's frame index (`frames.json`); absent for a folder written before it. */
+  readonly framesIndex?: FramesSummary;
   readonly totalBytes?: number;
   readonly status?: string;
   readonly startedAt?: string;
@@ -418,6 +421,7 @@ function parseResultDetail(value: Raw): ResultDetail {
     quantities: strings(value.quantities) ?? [],
     grid: formatGrid(value.grid),
     frames: num(value.frames),
+    framesIndex: parseFramesSummary(value.frames_index),
     totalBytes: num(value.total_bytes),
     status: str(value.status),
     startedAt: str(value.started_at),

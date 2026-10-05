@@ -761,3 +761,86 @@ fn an_api_project_run_without_a_known_path_links_by_project_id_only() {
     let source = link::linked_source(&workspace, &result).unwrap().unwrap();
     assert_eq!(source.project_id.as_deref(), Some("pid-api"));
 }
+
+// ── frame index ────────────────────────────────────────────────────────────
+
+fn frames_doc(stage: Option<&str>, steps: &[(u64, f64)]) -> String {
+    let frames: Vec<Value> = steps
+        .iter()
+        .enumerate()
+        .map(|(index, (step, time))| {
+            let mut frame = json!({
+                "index": index, "step": step, "time_s": time,
+                "quantity_ids": ["m"], "bytes": 100, "path": format!("fields/m/step_{step:06}.json")
+            });
+            if let Some(stage) = stage {
+                frame["stage_id"] = json!(stage);
+            }
+            frame
+        })
+        .collect();
+    json!({"schema": "fullmag.frames_index.v1", "truncated": false, "frames": frames}).to_string()
+}
+
+#[test]
+fn frame_indexes_of_all_stages_are_joined_renumbered_and_paged() {
+    let dir = tempfile::tempdir().unwrap();
+    write_results_folder(dir.path(), None);
+    write(
+        &dir.path().join("stages/stage_00_relax/frames.json"),
+        &frames_doc(Some("relax"), &[(0, 0.0), (10, 1e-12)]),
+    );
+    write(
+        &dir.path().join("artifacts/frames.json"),
+        &frames_doc(None, &[(0, 2e-12), (50, 3e-12), (100, 4e-12)]),
+    );
+    let ResultDetail { frames_index, .. } = inspect_result(dir.path());
+    let summary = frames_index.expect("an index is reported");
+    assert_eq!(summary.count, 5);
+    assert_eq!((summary.first_step, summary.last_step), (Some(0), Some(100)));
+    assert_eq!((summary.first_time_s, summary.last_time_s), (Some(0.0), Some(4e-12)));
+    assert_eq!(summary.stages.len(), 2);
+    assert_eq!(summary.stages[0].stage_id, "relax");
+    assert_eq!(summary.stages[1].stage_id, "final");
+    assert!(!summary.truncated && summary.note.is_none());
+
+    let page = read_frames_page(dir.path(), 1, 3);
+    assert_eq!((page.total, page.from), (5, 1));
+    assert_eq!(page.frames.iter().map(|f| f.index).collect::<Vec<_>>(), vec![1, 2, 3]);
+    assert_eq!(page.frames[0].path, "stages/stage_00_relax/fields/m/step_000010.json");
+    assert_eq!(page.frames[1].path, "artifacts/fields/m/step_000000.json");
+    assert_eq!(page.frames[1].stage_id.as_deref(), Some("final"));
+    // Out of range and oversized limits are clamped, not errors.
+    let past = read_frames_page(dir.path(), 99, 10_000);
+    assert!(past.frames.is_empty());
+    assert_eq!(past.total, 5);
+}
+
+#[test]
+fn a_folder_without_frames_json_has_no_index_and_a_bad_one_is_noted() {
+    let dir = tempfile::tempdir().unwrap();
+    write_results_folder(dir.path(), None);
+    assert!(inspect_result(dir.path()).frames_index.is_none());
+    let empty = read_frames_page(dir.path(), 0, 10);
+    assert!(!empty.indexed && empty.total == 0 && empty.frames.is_empty());
+
+    write(&dir.path().join("artifacts/frames.json"), r#"{"schema":"other.v9","frames":[]}"#);
+    write(&dir.path().join("stages/stage_00_relax/frames.json"), "not json");
+    let summary = inspect_result(dir.path()).frames_index.unwrap();
+    assert_eq!(summary.count, 0);
+    let note = summary.note.unwrap();
+    assert!(note.contains("unknown schema") && note.contains("not valid JSON"), "{note}");
+}
+
+#[test]
+fn a_truncated_writer_index_stays_marked_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    write_results_folder(dir.path(), None);
+    let doc = json!({"schema": "fullmag.frames_index.v1", "truncated": true, "frames": [
+        {"index": 0, "step": 1, "time_s": 1e-13, "quantity_ids": ["m"], "path": "fields/m"}
+    ]});
+    write(&dir.path().join("artifacts/frames.json"), &doc.to_string());
+    let summary = inspect_result(dir.path()).frames_index.unwrap();
+    assert!(summary.truncated);
+    assert_eq!(summary.count, 1);
+}

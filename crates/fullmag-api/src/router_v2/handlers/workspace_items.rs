@@ -29,7 +29,8 @@ use fullmag_workspace_inspect::{display_path, inspect_item, link};
 use super::workspace_archive as archive;
 use crate::error::ApiError;
 use crate::schemas::workspace_items::{
-    WorkspaceAddRequest, WorkspaceEvent, WorkspaceForgetResult, WorkspaceHistory,
+    FramesPage, WorkspaceAddRequest, WorkspaceEvent, WorkspaceForgetResult, WorkspaceFramesQuery,
+    WorkspaceSetting, WorkspaceSettingRequest, WorkspaceHistory,
     WorkspaceHistoryQuery, WorkspaceItem, WorkspaceItemDetail, WorkspaceItemKind, WorkspaceItemList,
     WorkspaceItemStatus, WorkspaceItemsQuery, WorkspaceOpenState, WorkspaceOutcome,
     WorkspacePinRequest, WorkspaceRoot, WorkspaceRoots, WorkspaceRootsRequest,
@@ -206,6 +207,60 @@ pub async fn get_item_history(
     Query(query): Query<WorkspaceHistoryQuery>,
 ) -> Result<Json<WorkspaceHistory>, ApiError> {
     run(move |db| history_at(db, &id, &query)).await.map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/workspace/items/{id}/frames",
+    params(("id" = String, Path, description = "Result item id (decimal string)"), WorkspaceFramesQuery),
+    responses(
+        (status = 200, description = "A page of the saved-frame index (`frames.json`); `indexed` is false when the run wrote none", body = FramesPage),
+        (status = 400, description = "The item is not a result folder"),
+        (status = 404, description = "Unknown, forgotten or missing item"),
+    ),
+    tag = "workspace_items"
+)]
+pub async fn get_item_frames(
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<WorkspaceFramesQuery>,
+) -> Result<Json<FramesPage>, ApiError> {
+    run(move |db| frames_at(db, &id, &query)).await.map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/workspace/settings/{key}",
+    params(("key" = String, Path, description = "`telemetry.enabled` or `update.available`")),
+    responses(
+        (status = 200, description = "The stored value, or the default when unset", body = WorkspaceSetting),
+        (status = 404, description = "The key is not an allow-listed setting"),
+    ),
+    tag = "workspace_items"
+)]
+pub async fn get_setting(AxumPath(key): AxumPath<String>) -> Result<Json<WorkspaceSetting>, ApiError> {
+    run(move |db| get_setting_at(db, &key)).await.map(Json)
+}
+
+#[utoipa::path(
+    put,
+    path = "/v2/workspace/settings/{key}",
+    params(("key" = String, Path, description = "`telemetry.enabled`")),
+    request_body = WorkspaceSettingRequest,
+    responses(
+        (status = 200, description = "Setting saved", body = WorkspaceSetting),
+        (status = 400, description = "The value has the wrong type, or the key is not writable through the API"),
+        (status = 404, description = "The key is not an allow-listed setting"),
+        (status = 409, description = "The database is read-only (newer schema)"),
+    ),
+    tag = "workspace_items"
+)]
+pub async fn put_setting(
+    AxumPath(key): AxumPath<String>,
+    Json(request): Json<WorkspaceSettingRequest>,
+) -> Result<Json<WorkspaceSetting>, ApiError> {
+    run(move |db| put_setting_at(db, &key, request.value))
+        .await
+        .map(Json)
 }
 
 #[utoipa::path(
@@ -627,6 +682,90 @@ pub(crate) fn archive_plan_at(
         archive::MAX_ARCHIVE_FILES,
     )?;
     Ok((plan, archive::download_name(&item.name)))
+}
+
+const DEFAULT_FRAMES_LIMIT: usize = 200;
+const TELEMETRY_KEY: &str = "telemetry.enabled";
+const UPDATE_KEY: &str = "update.available";
+
+/// One page of the saved-frame index of a result folder. Only `frames.json`
+/// is read; no chunk or field file is opened.
+pub(crate) fn frames_at(
+    db: &Path,
+    id: &str,
+    query: &WorkspaceFramesQuery,
+) -> Result<FramesPage, ApiError> {
+    let id = parse_id(id)?;
+    let (workspace, _) = open(db)?;
+    let item = require_visible(&workspace, id)?;
+    if item.kind != ItemKind::Result {
+        return Err(ApiError::bad_request(
+            "only result folders have a saved-frame index",
+        ));
+    }
+    if live_status(&item) == ItemStatus::Missing {
+        return Err(ApiError::not_found(format!(
+            "the folder of workspace item {id} is missing"
+        )));
+    }
+    Ok(fullmag_workspace_inspect::read_frames_page(
+        Path::new(&item.path),
+        query.from.unwrap_or(0),
+        query.limit.unwrap_or(DEFAULT_FRAMES_LIMIT),
+    ))
+}
+
+/// `(default value, writable through the API)` of an allow-listed key.
+fn setting_default(key: &str) -> Option<(serde_json::Value, bool)> {
+    match key {
+        TELEMETRY_KEY => Some((serde_json::Value::Bool(false), true)),
+        UPDATE_KEY => Some((serde_json::Value::Null, false)),
+        _ => None,
+    }
+}
+
+fn unknown_setting(key: &str) -> ApiError {
+    ApiError::not_found(format!(
+        "unknown setting `{key}`; expected {TELEMETRY_KEY} or {UPDATE_KEY}"
+    ))
+}
+
+pub(crate) fn get_setting_at(db: &Path, key: &str) -> Result<WorkspaceSetting, ApiError> {
+    let (default, writable) = setting_default(key).ok_or_else(|| unknown_setting(key))?;
+    let (workspace, _) = open(db)?;
+    let stored = workspace.get_kv(key).map_err(map_error)?;
+    // A stored value of the wrong type is reported as unset, never coerced.
+    let stored = stored.filter(|value| key != TELEMETRY_KEY || value.is_boolean());
+    Ok(WorkspaceSetting {
+        key: key.to_string(),
+        is_default: stored.is_none(),
+        value: stored.unwrap_or(default),
+        writable,
+    })
+}
+
+pub(crate) fn put_setting_at(
+    db: &Path,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<WorkspaceSetting, ApiError> {
+    let (_, writable) = setting_default(key).ok_or_else(|| unknown_setting(key))?;
+    if !writable {
+        return Err(ApiError::bad_request(format!(
+            "`{key}` is written by an updater and cannot be set through the API"
+        )));
+    }
+    if !value.is_boolean() {
+        return Err(ApiError::bad_request(format!("`{key}` must be a boolean")));
+    }
+    let workspace = open_writable(db)?;
+    workspace.set_kv(key, &value).map_err(map_error)?;
+    Ok(WorkspaceSetting {
+        key: key.to_string(),
+        value,
+        is_default: false,
+        writable,
+    })
 }
 
 pub(crate) fn pin_item_at(db: &Path, id: &str, pinned: bool) -> Result<WorkspaceItem, ApiError> {

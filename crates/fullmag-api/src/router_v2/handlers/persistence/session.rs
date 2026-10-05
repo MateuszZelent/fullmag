@@ -145,6 +145,32 @@ pub async fn create_checkpoint(
 }
 
 #[utoipa::path(
+    delete,
+    path = "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}",
+    params(
+        ("checkpoint_id" = String, Path, description = "Checkpoint id"),
+    ),
+    responses(
+        (status = 204, description = "Checkpoint deleted"),
+        (status = 404, description = "No active workspace or checkpoint not found"),
+        (status = 409, description = "Checkpoint is still referenced as a restore source or by the run manifest"),
+    ),
+    tag = "persistence"
+)]
+pub async fn delete_checkpoint(
+    State(state): State<Arc<AppState>>,
+    Path(checkpoint_id): Path<String>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::delete_checkpoint_with_context(
+        State(state),
+        checkpoint_id,
+        Some(&context),
+    )
+    .await
+}
+
+#[utoipa::path(
     post,
     path = "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore",
     params(

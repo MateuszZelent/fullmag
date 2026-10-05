@@ -4,6 +4,8 @@ import { Button } from "@/shared/ui/Button";
 
 import { importSaveState, type ScriptSaver } from "../model/scriptOpen";
 import type { Mx3Translation } from "../model/mx3Import";
+import { buildMx3ProjectSource, type ProjectCreator } from "../model/scriptProject";
+import { CreateProjectAction } from "../ui/CreateProjectAction";
 
 export interface Mx3ImportReportProps {
   readonly fileName: string;
@@ -15,6 +17,8 @@ export interface Mx3ImportReportProps {
   readonly onSave: () => void;
   readonly onCopy: () => void;
   readonly onDiscard: () => void;
+  /** Creates a project from the translated script after consent; null without a project document service. */
+  readonly projectCreator?: ProjectCreator | null;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -33,6 +37,7 @@ export function Mx3ImportReport({
   onSave,
   onCopy,
   onDiscard,
+  projectCreator = null,
 }: Mx3ImportReportProps) {
   const { supported, unsupported } = translation;
   const save = importSaveState(saver);
@@ -109,6 +114,12 @@ export function Mx3ImportReport({
         <Button onClick={onCopy} type="button" variant="secondary">
           <Copy aria-hidden="true" size={12} /> Copy script
         </Button>
+        <CreateProjectAction
+          creator={projectCreator}
+          disabled={busy}
+          source={buildMx3ProjectSource(fileName, translation)}
+          variant="secondary"
+        />
         <Button disabled={busy} onClick={onDiscard} type="button" variant="ghost">
           Discard
         </Button>
@@ -116,7 +127,9 @@ export function Mx3ImportReport({
       {save.reason ? <p className="fm-start-inspector__note">{save.reason}</p> : null}
       <p className="fm-start-inspector__note">
         Save translated script asks where to save the .py file, lists it under Recent scripts and
-        selects it. Nothing runs until you choose Run in new window.
+        selects it. Nothing runs until you choose Run in new window. Create project runs the
+        translated script once, after you confirm, to read its model into a project that keeps the
+        script.
       </p>
     </section>
   );

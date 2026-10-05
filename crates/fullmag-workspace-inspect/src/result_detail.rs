@@ -96,6 +96,7 @@ pub fn inspect_result(dir: &Path) -> ResultDetail {
         quantities: Vec::new(),
         grid: None,
         frames: None,
+        frames_index: None,
         total_bytes: None,
         total_bytes_truncated: false,
         modified_at: None,
@@ -166,6 +167,7 @@ pub fn inspect_result(dir: &Path) -> ResultDetail {
     detail.quantities = layout.quantities;
     detail.frames = layout.frames;
     detail.grid = layout.grid;
+    detail.frames_index = crate::frames::read_frames(dir).map(|frames| frames.summary());
     if detail.status.is_none() {
         detail.status = layout.status.or_else(|| {
             storage
@@ -241,6 +243,48 @@ struct StageFacts {
 /// Read stage facts from the directories of a results folder.
 pub fn read_layout(dir: &Path) -> Layout {
     let sequence = read_small_json(&dir.join("sequence_manifest.json"));
+    let candidates = stage_candidates(dir, &sequence);
+
+    let mut layout = Layout::default();
+    let mut frames_total = 0_u64;
+    let mut have_frames = false;
+    for (id, kind, path) in candidates {
+        let facts = read_stage_facts(&path);
+        let time_s = facts.time_s.or_else(|| declared_until(&sequence, kind.as_deref()));
+        layout.stages.push(StageSummary {
+            id,
+            kind,
+            steps: facts.steps,
+            time_s,
+        });
+        for quantity in facts.quantities {
+            if !layout.quantities.contains(&quantity) {
+                layout.quantities.push(quantity);
+            }
+        }
+        if let Some(frames) = facts.frames {
+            frames_total += frames;
+            have_frames = true;
+        }
+        if facts.grid.is_some() {
+            layout.grid = facts.grid;
+        }
+        if facts.status.is_some() {
+            layout.status = facts.status;
+        }
+    }
+    if have_frames {
+        layout.frames = Some(frames_total);
+    }
+    layout
+}
+
+/// Stage directories of a results folder as `(id, kind, path)`: the numbered
+/// `stages/stage_*` groups, then `artifacts/` (id `final`), else the folder itself.
+pub(crate) fn stage_candidates(
+    dir: &Path,
+    sequence: &Option<Value>,
+) -> Vec<(String, Option<String>, PathBuf)> {
     let mut candidates: Vec<(String, Option<String>, PathBuf)> = Vec::new();
     if let Ok(read) = std::fs::read_dir(dir.join("stages")) {
         let mut names: Vec<String> = read
@@ -275,39 +319,7 @@ pub fn read_layout(dir: &Path) -> Layout {
             .to_string();
         candidates.push((name, None, dir.to_path_buf()));
     }
-
-    let mut layout = Layout::default();
-    let mut frames_total = 0_u64;
-    let mut have_frames = false;
-    for (id, kind, path) in candidates {
-        let facts = read_stage_facts(&path);
-        let time_s = facts.time_s.or_else(|| declared_until(&sequence, kind.as_deref()));
-        layout.stages.push(StageSummary {
-            id,
-            kind,
-            steps: facts.steps,
-            time_s,
-        });
-        for quantity in facts.quantities {
-            if !layout.quantities.contains(&quantity) {
-                layout.quantities.push(quantity);
-            }
-        }
-        if let Some(frames) = facts.frames {
-            frames_total += frames;
-            have_frames = true;
-        }
-        if facts.grid.is_some() {
-            layout.grid = facts.grid;
-        }
-        if facts.status.is_some() {
-            layout.status = facts.status;
-        }
-    }
-    if have_frames {
-        layout.frames = Some(frames_total);
-    }
-    layout
+    candidates
 }
 
 fn stage_kind(directory_name: &str) -> Option<String> {
@@ -545,6 +557,10 @@ fn read_scalars_csv(path: &Path) -> Option<ScalarsCsv> {
 
 fn read_small_json(path: &Path) -> Option<Value> {
     read_json_bounded(path, 1024 * 1024)
+}
+
+pub(crate) fn read_small_json_pub(path: &Path) -> Option<Value> {
+    read_small_json(path)
 }
 
 fn read_json_bounded(path: &Path, limit: u64) -> Option<Value> {

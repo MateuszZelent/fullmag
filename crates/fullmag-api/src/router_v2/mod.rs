@@ -860,6 +860,15 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::workspace_items::get_item_history),
         )
         .route(
+            "/v2/workspace/items/:id/frames",
+            get(handlers::workspace_items::get_item_frames),
+        )
+        .route(
+            "/v2/workspace/settings/:key",
+            get(handlers::workspace_items::get_setting)
+                .put(handlers::workspace_items::put_setting),
+        )
+        .route(
             "/v2/workspace/roots",
             get(handlers::workspace_items::get_roots).put(handlers::workspace_items::put_roots),
         )
@@ -1094,7 +1103,8 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints/:checkpoint_id",
-            get(handlers::persistence::get_checkpoint),
+            get(handlers::persistence::get_checkpoint)
+                .delete(handlers::persistence::delete_checkpoint),
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints/:checkpoint_id/restore",
@@ -1139,6 +1149,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/authoring",
             post(handlers::persistence::projects::authoring_update),
+        )
+        .route(
+            "/v2/persistence/projects/from-script",
+            post(handlers::persistence::script_project::from_script),
         )
         .route(
             "/v2/persistence/projects/:project_id/runs",

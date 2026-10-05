@@ -63,6 +63,26 @@ impl std::fmt::Display for RunBacklogFull {
 
 impl std::error::Error for RunBacklogFull {}
 
+/// A checkpoint cannot be deleted because a durable record still names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckpointStillReferenced {
+    pub run_id: String,
+    pub checkpoint_id: String,
+    pub referenced_by: String,
+}
+
+impl std::fmt::Display for CheckpointStillReferenced {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "checkpoint `{}` of run `{}` is still referenced by {}",
+            self.checkpoint_id, self.run_id, self.referenced_by
+        )
+    }
+}
+
+impl std::error::Error for CheckpointStillReferenced {}
+
 /// The internal session store backed by a directory tree and a CAS.
 pub struct SessionStore {
     root: PathBuf,
@@ -4320,6 +4340,65 @@ impl SessionStore {
         Ok(Some(checkpoint))
     }
 
+    /// Delete one committed checkpoint of a run under the writer lease.
+    ///
+    /// Returns `Ok(false)` when the checkpoint does not exist (idempotent).
+    /// Refuses with [`CheckpointStillReferenced`] while the run manifest names
+    /// it as the latest checkpoint. Only the checkpoint-owned directory
+    /// (`checkpoint.json`, `common_state.json`, per-checkpoint payload files)
+    /// is removed, with the commit marker first so an interrupted deletion
+    /// never leaves a readable checkpoint with missing payloads. CAS objects
+    /// are never removed here: reclaiming them is the job of `gc_preview` and
+    /// `gc_apply`, which re-mark reachability from the remaining roots.
+    pub fn delete_checkpoint(&self, run_id: &str, checkpoint_id: &str) -> Result<bool> {
+        validate_store_id(run_id)?;
+        validate_store_id(checkpoint_id)?;
+        let _lease = self.write_transaction()?;
+        let prefix = format!("runs/{run_id}/checkpoints/{checkpoint_id}");
+        let marker = checked_path(&self.root, &format!("{prefix}/checkpoint.json"))?;
+        if !marker.exists() {
+            return Ok(false);
+        }
+        // A checkpoint that fails its own integrity check is not silently dropped.
+        self.read_checkpoint(run_id, checkpoint_id)?
+            .context("checkpoint disappeared under the writer lease")?;
+        if let Some(run) = self.read_run(run_id)? {
+            if run.latest_checkpoint_ref.as_deref()
+                == Some(&format!("{prefix}/checkpoint.json"))
+            {
+                return Err(CheckpointStillReferenced {
+                    run_id: run_id.to_string(),
+                    checkpoint_id: checkpoint_id.to_string(),
+                    referenced_by: "the run manifest (latest checkpoint)".to_string(),
+                }
+                .into());
+            }
+        }
+        let dir = checked_path(&self.root, &prefix)?;
+        let mut children = Vec::new();
+        for child in fs::read_dir(&dir)? {
+            let child = child?;
+            reject_link(&child.path())?;
+            if !child.file_type()?.is_file() {
+                anyhow::bail!(
+                    "unsupported entry in checkpoint directory: {}",
+                    child.path().display()
+                );
+            }
+            children.push(child.path());
+        }
+        fs::remove_file(&marker)?;
+        sync_directory(&dir)?;
+        for child in children {
+            if child != marker {
+                fs::remove_file(&child)?;
+            }
+        }
+        fs::remove_dir(&dir)?;
+        sync_directory(dir.parent().expect("checkpoint directory has a parent"))?;
+        Ok(true)
+    }
+
     // ── Tensor storage ─────────────────────────────────────────────────
 
     /// Store a magnetization vector `Vec<[f64; 3]>` and return the CAS hash.
@@ -5722,6 +5801,66 @@ mod tests {
         let loaded_m = store.load_magnetization(&m_hash).unwrap().unwrap();
         assert_eq!(loaded_m.len(), 100);
         assert_eq!(loaded_m[0], [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn delete_checkpoint_is_idempotent_refuses_referenced_and_leaves_cas_to_gc() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(dir.path().join("session-store")).unwrap();
+        let mut run = FmsRunManifest {
+            run_id: "run-001".into(),
+            status: RunStatus::Running,
+            study_kind: "time_evolution".into(),
+            backend: "cpu".into(),
+            precision: "f64".into(),
+            started_at: chrono::Utc::now(),
+            finished_at: None,
+            total_steps: 0,
+            total_time_s: 0.0,
+            plan_ref: None,
+            live_state_ref: None,
+            latest_checkpoint_ref: None,
+            artifact_index_ref: None,
+        };
+        store.commit_run(&run).unwrap();
+        let m_hash = store.store_magnetization(&vec![[1.0, 0.0, 0.0]; 8]).unwrap();
+        let cp = FmsCheckpoint::new("run-001", 42, 1e-9, 1e-13);
+        let state = CommonSolverState {
+            step: 42,
+            time_s: 1e-9,
+            dt: 1e-13,
+            energies: SolverEnergies::default(),
+            magnetization_ref: Some(m_hash.clone()),
+        };
+        store.commit_checkpoint(&cp, &state).unwrap();
+
+        // The run manifest names it as the latest checkpoint: refuse, keep it.
+        run.latest_checkpoint_ref = Some(format!(
+            "runs/run-001/checkpoints/{}/checkpoint.json",
+            cp.checkpoint_id
+        ));
+        store.commit_run(&run).unwrap();
+        let refused = store
+            .delete_checkpoint("run-001", &cp.checkpoint_id)
+            .unwrap_err();
+        assert!(refused.downcast_ref::<CheckpointStillReferenced>().is_some());
+        assert_eq!(store.list_checkpoints("run-001").unwrap().len(), 1);
+
+        // Ingest pins retire once the checkpoint root proves the object.
+        store.release_published_pins().unwrap();
+        run.latest_checkpoint_ref = None;
+        store.commit_run(&run).unwrap();
+        assert!(!store.delete_checkpoint("run-001", "cp-unknown").unwrap());
+        assert!(store
+            .delete_checkpoint("run-001", &cp.checkpoint_id)
+            .unwrap());
+        assert!(!store
+            .delete_checkpoint("run-001", &cp.checkpoint_id)
+            .unwrap());
+        assert!(store.list_checkpoints("run-001").unwrap().is_empty());
+        // The CAS object is not removed directly; GC finds it unreferenced.
+        assert!(store.load_magnetization(&m_hash).unwrap().is_some());
+        assert!(store.gc_preview().unwrap().candidates.contains(&m_hash));
     }
 
     #[test]

@@ -9919,6 +9919,180 @@
         ],
         "type": "string"
       },
+      "FrameEntry": {
+        "description": "One saved frame of a results folder (an entry of `frames.json`).",
+        "properties": {
+          "bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "index": {
+            "description": "Position over the whole folder, across stages, from 0.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Location of the snapshot relative to the results folder.",
+            "type": "string"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "time_s": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "step",
+          "time_s",
+          "quantity_ids",
+          "path"
+        ],
+        "type": "object"
+      },
+      "FramesPage": {
+        "description": "A page of the frame index.",
+        "properties": {
+          "frames": {
+            "items": {
+              "$ref": "#/components/schemas/FrameEntry"
+            },
+            "type": "array"
+          },
+          "from": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "indexed": {
+            "description": "The folder has a frame index; false lists nothing and means no index was written.",
+            "type": "boolean"
+          },
+          "total": {
+            "description": "Frames in the whole index.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "indexed",
+          "total",
+          "from",
+          "frames",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "FramesStageCount": {
+        "description": "Frames saved per stage, in folder order.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "count"
+        ],
+        "type": "object"
+      },
+      "FramesSummary": {
+        "description": "What `frames.json` says without listing every frame.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "first_time_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "last_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_time_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "note": {
+            "description": "Why part of the index was not read (unknown schema, unreadable file).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema": {
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/FramesStageCount"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "The index reached its entry limit: later frames are not listed.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "schema",
+          "count",
+          "truncated",
+          "stages"
+        ],
+        "type": "object"
+      },
       "FrequencyDomainArtifactExtras": {
         "additionalProperties": true,
         "type": "object"
@@ -25766,6 +25940,103 @@
         ],
         "type": "object"
       },
+      "ProjectFromScriptConsent": {
+        "description": "Explicit statement that the person agreed to run the script.",
+        "properties": {
+          "executed_by_user": {
+            "description": "Must be `true`: the operation executes the script in the Python helper.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "executed_by_user"
+        ],
+        "type": "object"
+      },
+      "ProjectFromScriptRequest": {
+        "description": "Turns a Python script into a project. The operation EXECUTES the script in\nthe Python helper (same trust model as a script run), so the request must\ncarry explicit consent.",
+        "properties": {
+          "consent": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFromScriptConsent"
+              }
+            ]
+          },
+          "origin": {
+            "description": "Where the script came from (for example `template:umag-sp1`,\n`mx3:model.mx3`, `script_file`); recorded in `script.json`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_name": {
+            "description": "Project name; defaults to the script file stem.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "script_item_id": {
+            "description": "Workspace script item. Not supported by the API; the host reads the\nfile and sends its text as `source`. A request that sets it is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFromScriptSource",
+                "description": "The script text. Required: the API cannot resolve workspace items."
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ProjectFromScriptResource": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProjectDocumentResource"
+          },
+          {
+            "properties": {
+              "script_import": {
+                "$ref": "#/components/schemas/ProjectScriptImportResource"
+              }
+            },
+            "required": [
+              "script_import"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "The created project (same fields as create/open) plus what was imported."
+      },
+      "ProjectFromScriptSource": {
+        "properties": {
+          "name": {
+            "description": "File name shown in provenance; it is not a filesystem path.",
+            "type": "string"
+          },
+          "text": {
+            "description": "UTF-8 Python source, at most 1 MiB.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "text"
+        ],
+        "type": "object"
+      },
       "ProjectMigrationResource": {
         "properties": {
           "can_write": {
@@ -26391,6 +26662,38 @@
           "lifecycle",
           "readiness",
           "artifact_ids"
+        ],
+        "type": "object"
+      },
+      "ProjectScriptImportResource": {
+        "properties": {
+          "exported_at": {
+            "type": "string"
+          },
+          "fidelity": {
+            "$ref": "#/components/schemas/ScriptFidelityResource"
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "script_path": {
+            "description": "Archive path of the embedded original script.",
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sha256",
+          "origin",
+          "exported_at",
+          "script_path",
+          "fidelity"
         ],
         "type": "object"
       },
@@ -27934,6 +28237,17 @@
             "type": [
               "integer",
               "null"
+            ]
+          },
+          "frames_index": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FramesSummary",
+                "description": "Summary of the per-frame index (`frames.json`) the run wrote; absent\nfor a folder written before the index existed. Frames themselves\nare paged from `GET /v2/workspace/items/{id}/frames`."
+              }
             ]
           },
           "grid": {
@@ -32033,6 +32347,37 @@
           "degraded"
         ],
         "type": "object"
+      },
+      "ScriptFidelityResource": {
+        "properties": {
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "round_trip": {
+            "$ref": "#/components/schemas/ScriptRoundTripState"
+          },
+          "scene_exported": {
+            "description": "The helper exported a SceneDocument from the script.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "scene_exported",
+          "round_trip",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "ScriptRoundTripState": {
+        "enum": [
+          "verified",
+          "failed",
+          "not_checked"
+        ],
+        "type": "string"
       },
       "ScriptSourceResponse": {
         "properties": {
@@ -41601,6 +41946,45 @@
         ],
         "type": "object"
       },
+      "WorkspaceSetting": {
+        "description": "One allow-listed setting of the per-user workspace database (`kv`).",
+        "properties": {
+          "is_default": {
+            "description": "Nothing is stored under the key: `value` is the default.",
+            "type": "boolean"
+          },
+          "key": {
+            "description": "`telemetry.enabled` or `update.available`.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The stored value, or the default (`false` / `null`) when unset.",
+            "type": "object"
+          },
+          "writable": {
+            "description": "The API accepts `PUT` for the key. `update.available` is written by an\nupdater, never by the renderer.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "is_default",
+          "writable"
+        ],
+        "type": "object"
+      },
+      "WorkspaceSettingRequest": {
+        "properties": {
+          "value": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "WorkspaceStageLayout": {
         "properties": {
           "bottom_dock": {
@@ -41775,6 +42159,45 @@
           },
           "500": {
             "description": "Canonical source rendering failed"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/from-script": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_from_script",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectFromScriptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectFromScriptResource"
+                }
+              }
+            },
+            "description": "Project created from the script, with the original script embedded and a fidelity verdict"
+          },
+          "400": {
+            "description": "Missing consent, missing source, invalid name or unsupported script_item_id"
+          },
+          "413": {
+            "description": "Script text exceeds 1 MiB"
+          },
+          "422": {
+            "description": "The helper could not export a scene document from the script; nothing is kept"
           }
         },
         "tags": [
@@ -59260,6 +59683,37 @@
       }
     },
     "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}": {
+      "delete": {
+        "operationId": "persistence_delete_sessions_current_persistence_checkpoints_checkpoint_id",
+        "parameters": [
+          {
+            "description": "Checkpoint id",
+            "in": "path",
+            "name": "checkpoint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Checkpoint deleted"
+          },
+          "404": {
+            "description": "No active workspace or checkpoint not found"
+          },
+          "409": {
+            "description": "Checkpoint is still referenced as a restore source or by the run manifest"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      },
       "get": {
         "operationId": "persistence_get_sessions_current_persistence_checkpoints_checkpoint_id",
         "parameters": [
@@ -61232,6 +61686,70 @@
         ]
       }
     },
+    "/v2/workspace/items/{id}/frames": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_frames",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Index of the first frame (default 0).",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Frames per page (default 200, at most 1000).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FramesPage"
+                }
+              }
+            },
+            "description": "A page of the saved-frame index (`frames.json`); `indexed` is false when the run wrote none"
+          },
+          "400": {
+            "description": "The item is not a result folder"
+          },
+          "404": {
+            "description": "Unknown, forgotten or missing item"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
     "/v2/workspace/items/{id}/history": {
       "get": {
         "operationId": "workspace_items_get_workspace_items_id_history",
@@ -61443,6 +61961,88 @@
           },
           "409": {
             "description": "A scan is already running, or the database is read-only"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/settings/{key}": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_settings_key",
+        "parameters": [
+          {
+            "description": "`telemetry.enabled` or `update.available`",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSetting"
+                }
+              }
+            },
+            "description": "The stored value, or the default when unset"
+          },
+          "404": {
+            "description": "The key is not an allow-listed setting"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      },
+      "put": {
+        "operationId": "workspace_items_put_workspace_settings_key",
+        "parameters": [
+          {
+            "description": "`telemetry.enabled`",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceSettingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSetting"
+                }
+              }
+            },
+            "description": "Setting saved"
+          },
+          "400": {
+            "description": "The value has the wrong type, or the key is not writable through the API"
+          },
+          "404": {
+            "description": "The key is not an allow-listed setting"
+          },
+          "409": {
+            "description": "The database is read-only (newer schema)"
           }
         },
         "tags": [

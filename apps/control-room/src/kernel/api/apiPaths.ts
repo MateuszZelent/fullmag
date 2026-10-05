@@ -1065,6 +1065,9 @@ export const PERSISTENCE_PROJECT_OPEN_PATH = openApiV2Path(
 export const PERSISTENCE_PROJECT_AUTHORING_PATH = openApiV2Path(
   "/v2/persistence/projects/authoring",
 );
+export const PERSISTENCE_PROJECT_FROM_SCRIPT_PATH = openApiV2Path(
+  "/v2/persistence/projects/from-script",
+);
 
 export const PROJECT_RUN_SUBMIT_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs",
@@ -1141,6 +1144,10 @@ export const WORKSPACE_ITEM_FORGET_PATH = openApiV2Path("/v2/workspace/items/{id
 export const WORKSPACE_ITEM_HISTORY_PATH = openApiV2Path(
   "/v2/workspace/items/{id}/history",
 );
+export const WORKSPACE_ITEM_FRAMES_PATH = openApiV2Path(
+  "/v2/workspace/items/{id}/frames",
+);
+export const WORKSPACE_SETTING_PATH = openApiV2Path("/v2/workspace/settings/{key}");
 export const WORKSPACE_ROOTS_PATH = openApiV2Path("/v2/workspace/roots");
 export const WORKSPACE_SCAN_PATH = openApiV2Path("/v2/workspace/scan");
 
