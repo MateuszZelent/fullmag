@@ -1,3 +1,19 @@
+<!-- application-ci-compile-remediation-20261005 -->
+## Bieżący checkpoint — wykryte dwa błędy kompilacji testów materializacji
+
+CI #37367782823 dla `756c58e1cbbffbb9f7a9eb88005038961defb31a`
+ujawniło E0596 w declared_execution_tests i study_execution_materialization_tests:
+BTreeMap nie implementuje IndexMut. Poprawka używa get_mut z asercją obecności
+materializacji, zachowując modyfikację requested.device i oczekiwanie odrzucenia
+sfałszowanego żądania. Produkcyjny binder, solver, progi i dane #233 bez zmian.
+Parser Rust 2/2 i YAML PASS; kompilacja/wykonanie poprawki NOT VERIFIED.
+
+GitHub będzie wykonywał pełne testy fullmag-application, obejmujące selektory
+eigensolve i przeniesione kontrakty wykonania. Lokalnego zakazu testów nie
+zmieniono. Pozostałe joby CI pozostają pending; nie są wynikiem PASS.
+#233 nadal native-build. Obserwator resume1 działa na tej samej niezmiennej
+kapsule; brak nowych solver rows. Cel S00–S12 pozostaje aktywny i nieukończony.
+
 <!-- ci-source-remediation-complete-checkpoint-20261005 -->
 ## Bieżący checkpoint — poprawki wszystkich 15 przypadków CI przygotowane
 

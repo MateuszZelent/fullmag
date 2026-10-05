@@ -28,8 +28,8 @@ jobs:
       - name: Install Python runtime dependencies
         run: python -m pip install -e packages/fullmag-py
 
-      - name: Run eigen stage selector contracts
-        run: cargo test -p fullmag-application eigen_sampling_selector_tests --no-fail-fast
+      - name: Run application materialization and eigen selector contracts
+        run: cargo test -p fullmag-application --no-fail-fast
 
       - name: Run Rust quantity, API and CLI contracts
         env:
