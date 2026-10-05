@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 import fullmag_storage as storage
 
 PROFILE = "windows-control-room-source-check"
+GENERATED_OUTPUTS = ("openapi-v2-types.ts", "openapi-v2-client.ts", "openapi-v2-paths.ts")
 ROUTES = ("generate-client", "production-source", "api-hygiene", "lint", "openapi-import-check", "react-doctor", "development-restart-check", "resource-client-cache-check", "development-kernel-host-check", "development-transport-pause-check", "development-run-outcome-handoff-check", "development-run-outcome-handoff-lint", "development-restart-action-check", "development-restart-action-lint")
 
 
@@ -25,7 +26,7 @@ def timestamp():
 
 def fingerprint(repo: Path, generating: bool):
     app = repo / "apps/control-room"
-    files = [repo / "scripts/verify_control_room_sources.py", app / "package.json", app / "tsconfig.json", app / "tsconfig.typecheck.json", app / "typecheck-env.d.ts"]
+    files = [repo / "scripts/verify_control_room_sources.py", repo / "scripts/frontend_source_workspace.py", app / "package.json", app / "tsconfig.json", app / "tsconfig.typecheck.json", app / "typecheck-env.d.ts"]
     # Include root configuration, declaration modules and reused Next typegen.
     # Prune dependency/output directories rather than walking node_modules.
     for directory, children, names in os.walk(app):
@@ -48,35 +49,91 @@ def fingerprint(repo: Path, generating: bool):
     return digest.hexdigest()
 
 
-def run(repo: Path, route: str):
+def generated_output_state(repo):
+    output = Path(repo) / "apps/control-room/src/kernel/api/generated"
+    result = {}
+    for name in GENERATED_OUTPUTS:
+        path = storage.validate_path(output / name, repo, "generated output")
+        if path.exists() and not path.is_file():
+            raise storage.StorageError(f"Generated output must be a regular file: {name}")
+        result[name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    return result
+
+
+def publish_generated_outputs(repo, staged_app, expected):
+    # The caller holds the worktree lock, serializing cooperating publishers.
+    # Check editor changes optimistically after preparation and before replace.
+    data = {}
+    for name in GENERATED_OUTPUTS:
+        source = storage.validate_path(Path(staged_app) / "src/kernel/api/generated" / name,
+                                       staged_app, "staged generated output")
+        if not source.is_file():
+            raise storage.StorageError(f"Generator did not produce {name}")
+        data[name] = source.read_bytes()
+    prepared = []
+    try:
+        for name, value in data.items():
+            target = storage.validate_path(Path(repo) / "apps/control-room/src/kernel/api/generated" / name,
+                                           repo, "generated output")
+            temporary = target.with_name(f".{name}.{uuid.uuid4().hex}.tmp")
+            with temporary.open("xb") as output:
+                prepared.append((name, temporary, target))
+                output.write(value)
+        expected_now = dict(expected)
+        for name, temporary, target in prepared:
+            if generated_output_state(repo) != expected_now:
+                raise storage.StorageError("Generated API outputs changed during publication")
+            os.replace(temporary, target)
+            expected_now[name] = hashlib.sha256(data[name]).hexdigest()
+    finally:
+        for _, temporary, _ in prepared:
+            if temporary.exists():
+                temporary.unlink()  # Only this invocation's unpublished output.
+
+
+def run(repo: Path, route: str, dependency_workspace: Path | None = None):
     layout = storage.resolve_layout(repo, PROFILE)
     storage.initialize(layout)
     with storage.build_lock(layout):
         app = repo / "apps/control-room"
-        dependencies = app / "node_modules"
-        if not dependencies.is_dir():
-            raise storage.StorageError("Frontend dependencies are missing; this source route does not install packages")
+        before = fingerprint(repo, route == "generate-client")
+        output_before = generated_output_state(repo) if route == "generate-client" else None
+        run_root = storage.validate_path(Path(layout["build_root"]) / route / uuid.uuid4().hex,
+                                         layout["build_storage_root"], "frontend source run")
+        run_root.mkdir(parents=True)
+        workspace_evidence = {}
+        if dependency_workspace is not None:
+            if route not in {"generate-client", "production-source", "api-hygiene"}:
+                raise storage.StorageError("Native dependency workspace is supported only for API generation and production source checks")
+            from frontend_source_workspace import prepare_source_workspace, validate_dependency_workspace
+            dependency_before = validate_dependency_workspace(repo, layout, dependency_workspace)
+            prepared = prepare_source_workspace(repo, layout, run_root, dependency_workspace)
+            app = prepared["app"]
+            dependencies = prepared["dependencies"]
+            dependency_mode = prepared["dependency_mode"]
+            workspace_evidence = {key: str(value) if isinstance(value, Path) else value for key, value in prepared.items()
+                                  if key not in {"app", "dependencies", "dependency_mode"}}
+        else:
+            dependencies = app / "node_modules"
+            if not dependencies.is_dir():
+                raise storage.StorageError("Frontend dependencies are missing; this source route does not install packages")
+            real = dependencies.resolve()
+            registered = storage.inside(real, Path(layout["frontend_root"]).resolve())
+            local = real == app.resolve() / "node_modules"
+            if not registered and not local:
+                raise storage.StorageError("Frontend dependencies belong to neither the registered frontend root nor this exact checkout")
+            dependency_mode = "registered_frontend" if registered else "existing_worktree_read_only"
         real_dependencies = dependencies.resolve()
-        registered_dependencies = storage.inside(real_dependencies, Path(layout["frontend_root"]).resolve())
-        # Existing dependencies of this exact checkout may be read without
-        # copying, installing or rebinding them. All new mutable outputs still
-        # belong to the managed run; this never admits an unrelated checkout.
-        existing_local_dependencies = real_dependencies == app.resolve() / "node_modules"
-        if not registered_dependencies and not existing_local_dependencies:
-            raise storage.StorageError("Frontend dependencies belong to neither the registered frontend root nor this exact checkout")
-        dependency_mode = "registered_frontend" if registered_dependencies else "existing_worktree_read_only"
         node = shutil.which("node")
         if not node:
             raise storage.StorageError("Node.js is unavailable")
-        run_root = storage.validate_path(Path(layout["build_root"]) / route / uuid.uuid4().hex, layout["build_storage_root"], "frontend source run")
-        run_root.mkdir(parents=True)
         receipt_path = run_root / "receipt.json"
         log_path = run_root / "source.log"
         env = {**os.environ, **layout["env"]}
         env["FULLMAG_FRONTEND_SOURCE_RUN_ROOT"] = str(run_root)
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-        before = fingerprint(repo, route == "generate-client")
         receipt = {"dependency_mode": dependency_mode, "dependency_root": str(real_dependencies), "node": node, "schema": "fullmag_control_room_sources_v1", "route": route, "head": head, "started_at": timestamp(), "state": "running", "source_digest_before": before, "qualification": "not_assessed", "unit_tests": "not_compiled_not_run", "log": str(log_path)}
+        receipt["source_workspace"] = workspace_evidence
         storage.atomic_json(receipt_path, receipt)
         try:
             def cli(package, relative):
@@ -169,11 +226,17 @@ def run(repo: Path, route: str):
                     if result.returncode:
                         return_code = result.returncode
                         break
+            if dependency_workspace is not None:
+                dependency_after = validate_dependency_workspace(repo, layout, dependency_workspace)
+                if dependency_before != dependency_after:
+                    raise storage.StorageError("Native workspace dependency identity changed during the source run")
             after = fingerprint(repo, route == "generate-client")
             receipt.update(source_digest_after=after, source_changed_during_run=before != after, exit_code=return_code)
             receipt["state"] = "passed" if return_code == 0 and before == after else "failed"
-            if route == "generate-client" and return_code == 0:
-                output = app / "src/kernel/api/generated"
+            if route == "generate-client" and return_code == 0 and before == after:
+                if dependency_workspace is not None:
+                    publish_generated_outputs(repo, app, output_before)
+                output = repo / "apps/control-room" / "src/kernel/api/generated"
                 receipt["generated_artifacts"] = [{"path": str(output / name), "sha256": hashlib.sha256((output / name).read_bytes()).hexdigest()} for name in ("openapi-v2-types.ts", "openapi-v2-client.ts", "openapi-v2-paths.ts")]
             return 0 if receipt["state"] == "passed" else (return_code or 1)
         except BaseException as error:
@@ -189,9 +252,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--route", choices=ROUTES, required=True)
+    parser.add_argument("--dependency-workspace", type=Path, help="Existing same-checkout native launcher workspace; read-only dependencies")
     args = parser.parse_args()
     try:
-        return run(Path(args.repo_root).resolve(), args.route)
+        return run(Path(args.repo_root).resolve(), args.route, args.dependency_workspace)
     except (storage.StorageError, OSError, ValueError) as error:
         print(f"[control-room source] {error}", file=sys.stderr)
         return 2

@@ -1,3 +1,34 @@
+<!-- native-source-check-reuse-checkpoint-20261005 -->
+## Aktualny checkpoint — native build PASS i kontrola frontendu PASS
+
+Merge master816 oraz poprawka ścieżek Cargo są na remote38cad3c51.
+Ponowiony windows-workspace-build zakończył się completed/exit0:
+backend39,47s, desktop1min02s. Source identity passed, local changes enforced,
+3 hashe binariów zgodne z manifestem. Dowód dotyczy zbudowanego source digest,
+nie późniejszych fixture’ów ani runtime FEM/GPU/GUI. Receipt tego wrappera
+nie wiąże hashem manifestu; niezależny verifier zachował jego hash.
+
+Lokalny commit `957e73680ae94a08492b9dbe9e46eda820d1893d` naprawia pięć
+błędów cfg(test) ujawnionych przez CI. Parser4 plików i review PASS;
+kompilacja/wykonanie testów NOT VERIFIED. Zachowany test manifestu używa
+syntetycznej częstotliwości analytic*1,01 — nie jest FEM solve.
+Użytkownik dopuścił unit tests wyłącznie w GitHub Actions; lokalny zakaz trwa.
+
+Naprawiono reuse zależności native workspace w lekkiej trasie source-check:
+tylko ten sam worktree, sprawdzony manifest i identyczne dependency inputs,
+własne kopie bieżących źródeł, bez install/rebindingu istniejących katalogów.
+11 regresji helpera +4 shella +4 publikacji PASS, review bez otwartych uwag.
+Ochrona edycji plików generated jest optymistyczna; współpracujących writerów
+serializuje lock worktree. Real generate-client (także po poprawce publikacji),
+production TypeScript i API hygiene: terminalne PASS, source unchanged.
+Generated artifacts semantycznie zgodne z indeksem Git; brak ręcznych zmian.
+
+CI ujawniło również fixture types w8 frontend tests, browser boundary timeout
+i kontrakt noty0832. Te bramki oraz całość S00–S12 pozostają OPEN.
+Szczegóły: [bramki integracji](2026-10-05-eigensolve-master816-integration-gates.md).
+Operator zadeklarował samodzielny restart Docker Desktop. Bez nowych punktów
+solvera; po odzyskaniu runnera wymagane health/reconciliation i exact FEM gates.
+
 <!-- master816-native-link-checkpoint-20261005 -->
 ## Aktualny checkpoint — merge mastera i diagnoza linkowania Windows
 
