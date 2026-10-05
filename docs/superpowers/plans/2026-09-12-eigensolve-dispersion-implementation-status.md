@@ -7518,3 +7518,35 @@ pełne SI properties zgodne z edycją oraz None dla istniejącego certyfikatu v1
 bez Ku. Asercje stabilności/fokusu/scroll/draftów pozostają bez zmian.
 Kontrola diff i parser Rust PASS; wykonanie regresji wymaga następnego CI.
 Nie wykonywano lokalnych testów ani ich kompilacji.
+
+
+### Wynik pierwszego sweepa #234 — korekta kalibracji przy kończeniu workera
+
+Signed15 zakończył się exit1 przed ukończeniem całej ścieżki. Pierwszy worker
+(sample_index=1) zwrócił ok=true i autentyczny terminal getrusage: RSS358105088 B,
+CPU1.0534538148971548 cores. Journal zachował345 poprawnych interwałów próbkowania
+przez34.782354057 s, sampled CPU peak1.1933280551107535. Parent mimo tego trwale
+zamknął telemetrię po błędzie „worker memory high water mark unavailable”.
+Poprawka digestu zadziałała w rzeczywistym workerze; pełna pula nadal nie ma PASS.
+
+Kod czyta stat i status oddzielnie, następnie sprawdza try_wait. Wynik jest zgodny
+z przejściem procesu do zakończenia, kiedy VmHWM może zniknąć przed potwierdzeniem
+waitable exit. Chwilowego status nie utrwalono, więc nie deklarujemy dowodu jego
+konkretnego stanu. Naprawa w toku: odrębny stan oczekiwania na reconciliację,
+zamknięcie nowych admissions podczas tej niepewności, ograniczony deadline,
+pełna walidacja terminal response i rzeczywistego ru_maxrss przed kalibracją.
+Inne błędy telemetrii pozostają fail-closed. Nie przyjmujemy RSS=0, nie obniżamy
+limitów, nie uruchamiamy cichego serial fallbacku. Kontener próby jest nieaktywny;
+artefakty i błędny wynik zachowano. Nowego sweepa jeszcze nie zgłoszono.
+
+Dwie korekty fixtures i poprzedni checkpoint wypchnięto w HEAD
+`a1f8cb094dd8043e275b328e42076b6ee805a905`. Następne CI jest uruchomione.
+Pełny cel pozostaje aktywny; terminalny build nie zastępuje wyników całego sweepa.
+
+
+Kolejne CI37387643334 potwierdziło przejście od undefined.Aex do jawnego błędu
+braku potwierdzenia parametrów po assignment ACK. Druga fixture odpowiedź
+`assignedScene` nadal usuwała materials (scene helper miał pustą listę).
+Uzupełniono również tę odpowiedź o ten sam utworzony materiał i SI properties,
+z aktualną revision oraz przypisaniem object-a. Nie osłabiono asercji Ku1 draft
+ani production rebase guard; potwierdzenie wymaga jeszcze kolejnego CI.

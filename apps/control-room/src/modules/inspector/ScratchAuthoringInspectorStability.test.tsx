@@ -139,7 +139,13 @@ describe("scratch material Inspector stability", () => {
       expect(button(mounted.container, "Create and assign").disabled).toBe(true);
 
       await act(async () => {
-        resolveAssignment(assignedScene(23, "mat:cofeb"));
+        resolveAssignment(assignedScene(23, "mat:cofeb", {
+          Aex: 1.3e-11,
+          Dbulk: null,
+          Dind: null,
+          Ms: 1.1e6,
+          alpha: 0.01,
+        }));
         await Promise.resolve();
       });
       expect(mounted.container.querySelector(".fm-inspector-panel") === panelRoot).toBe(true);
@@ -404,9 +410,14 @@ function createdMaterialAck(
   } as unknown as AuthoringTransactionResponse;
 }
 
-function assignedScene(revision: number, materialRef: string): SceneResource {
+function assignedScene(
+  revision: number,
+  materialRef: string,
+  properties?: MaterialPropertiesResource,
+): SceneResource {
   return {
-    ...scene(revision),
+    ...createdMaterialAck(materialRef, properties).committed_scene,
+    revision,
     objects: [
       sceneObject("object-a", "Object A", materialRef),
       sceneObject("object-b", "Object B"),
