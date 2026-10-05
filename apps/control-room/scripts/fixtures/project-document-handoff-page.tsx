@@ -235,6 +235,9 @@ function makeMockApi(options: MockApiOptions = {}): MockApiState {
           };
           return clone(options.openTransform?.(normalized, request) ?? normalized);
         },
+        fromScript: async () => {
+          throw new Error("fromScript is not used by this fixture");
+        },
         authoringUpdate: async (request) => {
           calls.authoring.push(clone(request));
           const returned = options.authoringDeferred

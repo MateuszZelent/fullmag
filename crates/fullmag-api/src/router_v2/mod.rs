@@ -1131,6 +1131,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::persistence::projects::authoring_update),
         )
         .route(
+            "/v2/persistence/projects/from-script",
+            post(handlers::persistence::script_project::from_script),
+        )
+        .route(
             "/v2/persistence/projects/:project_id/runs",
             get(handlers::persistence::projects::list_runs)
                 .post(handlers::persistence::projects::submit_run),

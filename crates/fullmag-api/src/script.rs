@@ -638,6 +638,20 @@ pub(crate) fn run_python_helper(repo_root: &Path, args: &[String]) -> Result<Out
     run_python_helper_with_policy(repo_root, args, PythonHelperOutputPolicy::Capture)
 }
 
+/// Run a helper command with file-backed bounded output and the 30 second
+/// deadline. `workspace_root` is a private directory that receives the logs.
+pub(crate) fn run_python_helper_bounded(
+    repo_root: &Path,
+    workspace_root: &Path,
+    args: &[String],
+) -> Result<Output, ApiError> {
+    run_python_helper_with_policy(
+        repo_root,
+        args,
+        PythonHelperOutputPolicy::Bounded { workspace_root },
+    )
+}
+
 fn run_python_helper_with_policy(
     repo_root: &Path,
     args: &[String],

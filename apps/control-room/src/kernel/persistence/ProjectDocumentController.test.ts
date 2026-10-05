@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ProjectDocumentResource } from "../api/apiTypes";
+import type { ProjectDocumentResource, ProjectFromScriptResource } from "../api/apiTypes";
 
 import {
   ProjectDocumentController,
@@ -35,6 +35,22 @@ function resource(
   };
 }
 
+function fromScriptResource(
+  round_trip: "verified" | "failed" | "not_checked" = "failed",
+): ProjectFromScriptResource {
+  return {
+    ...resource({ name: "Scripted", project_id: "project-script" }),
+    script_import: {
+      exported_at: "2026-10-05T10:00:00Z",
+      fidelity: { notes: ["materials differ"], round_trip, scene_exported: true },
+      name: "demo.py",
+      origin: "template:demo",
+      script_path: "project/source/script.py",
+      sha256: "a".repeat(64),
+    },
+  };
+}
+
 function apiFor(
   createResponse = resource(),
   openResponse = resource(),
@@ -44,6 +60,7 @@ function apiFor(
       projects: {
         create: vi.fn(async () => createResponse),
         open: vi.fn(async () => openResponse),
+        fromScript: vi.fn(async () => fromScriptResource()),
         authoringUpdate: vi.fn(async () => openResponse),
       },
     },
@@ -71,6 +88,79 @@ describe("ProjectDocumentController", () => {
     await creating;
     expect(controller.getSnapshot().resource?.name).toBe("First project");
   });
+  describe("createFromScript", () => {
+    const request = {
+      consent: { executed_by_user: true },
+      source: { name: "demo.py", text: "import fullmag as fm\n" },
+    };
+
+    it("opens the created project and keeps the fidelity notice beside the document", async () => {
+      const api = apiFor();
+      const controller = new ProjectDocumentController(api);
+      const listener = vi.fn();
+      controller.subscribe(listener);
+
+      const response = await controller.createFromScript(request);
+
+      expect(api.persistence.projects.fromScript).toHaveBeenCalledWith(request);
+      expect(response.script_import.fidelity.round_trip).toBe("failed");
+      const snapshot = controller.getSnapshot();
+      expect(snapshot.state).toBe("ready");
+      expect(snapshot.resource?.project_id).toBe("project-script");
+      expect(snapshot.resource).not.toHaveProperty("script_import");
+      expect(snapshot.fileName).toBe("scripted.fms");
+      expect(controller.getScriptImportNotice()).toMatchObject({
+        projectId: "project-script",
+        scriptName: "demo.py",
+        origin: "template:demo",
+        fidelity: { round_trip: "failed", notes: ["materials differ"] },
+      });
+      expect(listener).toHaveBeenCalled();
+    });
+
+    it("refuses to call the API without the person's consent", async () => {
+      const api = apiFor();
+      const controller = new ProjectDocumentController(api);
+      await expect(
+        controller.createFromScript({ ...request, consent: { executed_by_user: false } }),
+      ).rejects.toThrow("consent");
+      await expect(
+        controller.createFromScript({ source: request.source }),
+      ).rejects.toThrow("consent");
+      expect(api.persistence.projects.fromScript).not.toHaveBeenCalled();
+      expect(controller.getSnapshot().state).toBe("empty");
+    });
+
+    it("keeps the previous document and no notice when the export fails", async () => {
+      const api = apiFor(resource({ name: "Before" }));
+      const controller = new ProjectDocumentController(api);
+      await controller.create("Before");
+      api.persistence.projects.fromScript.mockRejectedValueOnce(new Error("boom"));
+
+      await expect(controller.createFromScript(request)).rejects.toThrow("boom");
+
+      expect(controller.getSnapshot().state).toBe("error");
+      expect(controller.getSnapshot().resource?.name).toBe("Before");
+      expect(controller.getScriptImportNotice()).toBeNull();
+    });
+
+    it("drops the notice when dismissed, closed, or replaced by another project", async () => {
+      const controller = new ProjectDocumentController(apiFor());
+      await controller.createFromScript(request);
+      controller.dismissScriptImportNotice();
+      expect(controller.getScriptImportNotice()).toBeNull();
+
+      await controller.createFromScript(request).catch(() => undefined);
+      expect(controller.close(true)).toBe(true);
+      expect(controller.getScriptImportNotice()).toBeNull();
+
+      const next = new ProjectDocumentController(apiFor());
+      await next.createFromScript(request);
+      await next.open({ bytes: new Uint8Array([1]), fileName: "other.fms" });
+      expect(next.getScriptImportNotice()).toBeNull();
+    });
+  });
+
   it("creates a project through the resource facade and exposes a ready snapshot", async () => {
     const api = apiFor(resource({ name: "New study" }));
     const controller = new ProjectDocumentController(api);

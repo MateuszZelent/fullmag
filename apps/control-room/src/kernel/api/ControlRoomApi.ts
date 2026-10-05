@@ -187,6 +187,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECT_AUTHORING_PATH,
+  PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
   PERSISTENCE_PROJECTS_PATH,
   PROJECT_MATERIALIZED_DATASET_PATH,
   PROJECT_MATERIALIZED_DATASET_SLICE_PATH,
@@ -481,6 +482,8 @@ import type {
   SessionImportInspectResponse,
   ProjectArchiveRequest,
   ProjectAuthoringUpdateRequest,
+  ProjectFromScriptRequest,
+  ProjectFromScriptResource,
   ProjectCreateRequest,
   ProjectDocumentResource,
   ProjectRunSubmitRequest,
@@ -3270,6 +3273,17 @@ export class ControlRoomApi {
       open: (request: ProjectArchiveRequest, options?: RequestOptions) =>
         this.postJson<ProjectDocumentResource, ProjectArchiveRequest>(
           PERSISTENCE_PROJECT_OPEN_PATH,
+          request,
+          options,
+        ),
+      /**
+       * Executes the supplied script in the Python helper (the request must
+       * carry `consent.executed_by_user: true`) and returns a project with the
+       * script embedded plus a fidelity verdict.
+       */
+      fromScript: (request: ProjectFromScriptRequest, options?: RequestOptions) =>
+        this.postJson<ProjectFromScriptResource, ProjectFromScriptRequest>(
+          PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
           request,
           options,
         ),

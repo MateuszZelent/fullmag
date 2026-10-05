@@ -57,4 +57,24 @@ describe("Mx3ImportReport", () => {
     expect(html).toContain("not translated");
     expect(html).toContain("Nothing runs until you choose Run in new window");
   });
+
+  it("offers Create project with the translated script, enabled only with a project creator", () => {
+    const withCreator = renderToStaticMarkup(
+      <Mx3ImportReport
+        busy={false}
+        fileName="standardproblem4.mx3"
+        onCopy={vi.fn()}
+        onCreate={vi.fn()}
+        onDiscard={vi.fn()}
+        onSave={vi.fn()}
+        projectCreator={vi.fn()}
+        saver={null}
+        translation={translateMx3(source("standardproblem4"))}
+      />,
+    );
+    expect(/<button[^>]*>Create project…<\/button>/.exec(withCreator)?.[0]).not.toContain(' disabled=""');
+    expect(withCreator).toContain("Create project runs the translated script once");
+    const without = render("standardproblem4");
+    expect(/<button[^>]*>Create project…<\/button>/.exec(without)?.[0]).toContain(' disabled=""');
+  });
 });
