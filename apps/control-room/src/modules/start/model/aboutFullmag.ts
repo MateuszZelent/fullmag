@@ -88,7 +88,6 @@ export const FULLMAG_NUMERICAL_URL = "https://fullmag.mzelent.pl/numerical-metho
 export const FULLMAG_CAPABILITY_MATRIX_URL = "https://fullmag.mzelent.pl/docs/specs/capability-matrix-v0.md";
 
 export interface ExtendedAuthor extends FullmagAuthor {
-  readonly institution: string;
   readonly role: string;
   readonly title: string;
   readonly fullName: string;
