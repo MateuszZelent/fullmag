@@ -580,10 +580,16 @@ stores one script, not a closure.
   "not_checked", notes: [] }`. The API renders the exported scene back to Python
   (`render-scene-document`) and lowers both the original script and the
   re-rendered one with `export-run-config --skip-geometry-assets`; geometry
-  entries, materials (names ignored), the FDM cell, `study.kind`,
-  `study.dynamics` and the stage list (`default_until_seconds`, `action`, study
-  kind) are compared with a relative tolerance of 1e-9. `verified` means those
-  fields agree; it does not mean the scene is the script. `failed` carries one
+  entries, materials (names ignored), the FDM cell, the energy terms (so the
+  applied field), `study.kind`, `study.dynamics` and the stage list
+  (`default_until_seconds`, `action`, study kind, dynamics, energy terms per
+  stage) are compared with a relative tolerance of 1e-9. Three documented
+  canonicalisations keep equal physics from failing: a `translate` wrapper with
+  a zero offset equals its base geometry; a zero-field Zeeman term equals no
+  Zeeman term; a legacy single-study script (no stage list) equals the scene's
+  single explicit stage built from the same study, energy terms and
+  `default_until_seconds`. `verified` means those fields agree; it does not mean
+  the scene is the script. `failed` carries one
   note per differing field, or the exception line of the helper that could not
   render or load the re-rendered script, and the project is kept. `not_checked`
   means the original script could not be lowered, so there was nothing to compare
@@ -723,26 +729,49 @@ FULLMAG_PYTHON=C:/Users/Mateusz/miniconda3/python.exe \
 cargo test -p fullmag-api --bin fullmag-api from_script_survey -- --ignored --nocapture
 ```
 
-27 scripts: the 8 template scripts, one minimal FEM box, and 18 files of
-`examples/`. Result: 2 `verified`, 21 `failed` (project created, fidelity
-reported), 4 export refused with 422 (nothing kept).
+27 scripts: the 8 template scripts, one minimal FEM box (re-created for the
+second run: a box, `hmax`, rk45 solver, one relax stage with `dt`), and 18 files
+of `examples/`. Before the round-trip fixes of 2026-10-05: 2 `verified`, 21
+`failed`, 4 export refused with 422. After them (same endpoint, same fixture):
+**8 `verified`, 15 `failed`, 4 refused with 422** (nothing kept for the 4).
+This is the result after merging master's commit 86bf7a6b6, whose scene render
+refuses authored stage content it cannot render (`scene_document_<kind>_stage_unrendered_fields`,
+for example a stage `sampling` or `table_autosave` declaration). Before that
+merge the same fixes gave 16 `verified`, 7 `failed`, 4 refused: those renders
+dropped output declarations silently. Output declarations are I/O, not physics,
+and the fidelity check does not compare them, but the merged render now says so
+loudly, so 9 files report "could not be rendered" instead.
+
+What changed in the round-trip work (scene export and script builder; the
+comparison got the three canonicalisations above and the energy-term check):
+
+- the Rust scene solver state no longer invents `fixed_timestep = "1e-13"` when
+  a payload omits it (a fixed step next to adaptive controls, or a step the
+  script never had); scenes now need an explicit step to validate;
+- each relax stage keeps its own timestep policy and integrator on
+  `add_relax`, and no extra `study.solver` call rewrites the study-level
+  dynamics before it;
+- a custom gamma (`g=` / `gamma=`) is carried in `solver.gamma`;
+- hysteresis stages with advanced policies are rebuilt from the exported IR
+  instead of being refused; default hysteresis outputs and the derived
+  `field_unit_provenance` are not treated as unrendered content;
+- editor-state mesh values equal to the DSL defaults are not rendered as FEM
+  mesh controls, so an FDM `cell_size` still loads; a problem with both an FDM
+  cell and FEM controls keeps the cell on `study.fdm(default_cell=...)`;
+- an FDM-lane scene no longer carries the FEM-style `demag_realization = auto`;
+- `difference`, `union` and `intersection` geometries render as `-`, `+`, `&`.
 
 | File | Verdict | First reason |
 |---|---|---|
-| `examples/fem_exchange_zeeman.py` | verified | |
-| `examples/fem_exchange_demag_zeeman.py` | verified | |
-| `examples/mumax_standard_problem_5_fdm.py` | failed | scene renders `fix_dt` together with adaptive controls |
-| `examples/exchange_relax.py`, `exchange_demag_zeeman.py`, `dw_track.py`, `py_layer_relax.py` | failed | re-rendered script combines FEM mesh controls with `cell_size` and does not load |
-| `examples/basic_fem.py` | failed | scene renders `fix_dt` together with adaptive controls |
-| `examples/two_object_couplings.py`, `region_owned_gradient_ms.py` | failed | re-render adds `fixed_timestep = 1e-13` where the script has none |
-| `examples/fdm_cpu_relax_smoke.py`, `viewport_2d_default_slice_fdm_smoke.py` | failed | re-render uses gamma 221100 instead of the script's 233728.48 |
-| `examples/fdm_hysteresis_smoke.py` | failed | re-render has no hysteresis stage |
-| `examples/py_layer_hole_relax_150nm.py` | failed | geometry kind `difference` is not supported by the scene renderer |
+| `examples/mumax_standard_problem_5_fdm.py`, `two_object_couplings.py`, `region_owned_gradient_ms.py`, `basic_fem.py`, `fdm_hysteresis_smoke.py`; templates `umag-sp1`, `magnonic-crystal-bands`, minimal FEM box | verified | |
+| `examples/fem_exchange_zeeman.py`, `fem_exchange_demag_zeeman.py`, `exchange_demag_zeeman.py`, `py_layer_relax.py`, `dw_track.py`; templates `domain-wall-motion`, `spin-wave-dispersion`, `umag-sp4`, `vortex-gyration` | failed | stage `sampling` (and for `spin-wave-dispersion` `spin_wave_response`) is not rendered by the scene render |
+| `examples/fdm_cpu_relax_smoke.py` | failed | relax stage `table_autosave` is not rendered |
+| `examples/viewport_2d_default_slice_fdm_smoke.py` | failed | hysteresis stage `sampling` is not default and not rendered |
+| templates `skyrmion-phase-diagram`, `broadband-fmr` | failed | the script changes the applied field between stages (`study.b_ext(...)`); `scene.v2` has one `external_field`. Reported as differing energy terms per stage (`umag-sp4` and `vortex-gyration` have the same property behind the `sampling` refusal) |
+| `examples/exchange_relax.py` | failed | legacy relaxation with integrator `auto`; the stage API maps a relax stage's `auto` to `rk23` |
+| `examples/py_layer_hole_relax_150nm.py` | failed | legacy advanced adaptive policy without `dt_max`; the stage API requires an explicit `dt_max` (scene validation says the same) |
 | `examples/permalloy_box_relax_300x1000x10nm_fdm.py`, `relaxation_qualification_case.py`, `permalloy_film_relax_1000x500x10nm.py` | 422 | the script itself: LLG relaxation requires an explicit timestep policy |
 | `examples/topological_charge_runtime.py` | 422 | the script reads the required environment variable `FULLMAG_RELAXATION_ALGORITHM` |
-| templates `umag-sp1`, `umag-sp4`, `spin-wave-dispersion`, `skyrmion-phase-diagram`, `domain-wall-motion` | failed | scene renders `fix_dt` together with adaptive controls |
-| templates `broadband-fmr` | failed | scene renders solver controls that are valid only for `llg_overdamped` |
-| templates `magnonic-crystal-bands`, `vortex-gyration`, minimal FEM box | failed | re-render adds a fixed time step or drops stages |
 
 Verified here means only that the compared fields agree in the lowered
 ProblemIR; no solver ran. A script that is run-only today keeps working because

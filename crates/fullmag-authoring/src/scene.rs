@@ -803,6 +803,7 @@ fn default_solver() -> ScriptBuilderSolverState {
         max_err: String::new(),
         adaptive_timestep: None,
         demag_interval_s: String::new(),
+        gamma: String::new(),
         relax_algorithm: String::new(),
         torque_tolerance: String::new(),
         energy_tolerance: String::new(),

@@ -197,13 +197,11 @@ fn declared_execution_profile_must_match_the_explicit_migration_reference() {
     profile.profile_id = "exec:gpu".to_string();
     let scene = scene_with_study(serde_json::json!({
         "execution_profile": profile,
-        "stages": [{"kind": "relax", "entrypoint_kind": "flat_relax"}]
+        "stages": [{"kind": "relax", "entrypoint_kind": "flat_relax", "fixed_timestep": "1e-13"}]
     }));
 
     let error = scene_document_to_study_plan(&scene, "study-profile", 2, &migration_defaults())
         .expect_err("mismatched profile marker must not be rebound implicitly");
 
-    assert!(error
-        .to_string()
-        .contains("does not match StudyPlan migration default"));
+    assert!(error.to_string().contains("does not match StudyPlan migration default"), "{error}");
 }
