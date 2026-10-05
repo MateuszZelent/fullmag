@@ -7612,3 +7612,39 @@ bez lokalnych testów/kompilacji. Wykonanie regresji w GitHub Actions otwarte.
 To prerequisite registry/Dirichlet bindings, nie ukończony descriptor ani S09.
 Wybranie/powiązanie essential nodes, registry target mapping, fingerprint,
 structural/equilibrium certificates oraz MFEM2D nadal wymagają implementacji.
+
+
+### Scheduler — typowana reconciliacja końca procesu
+
+Sampling ma teraz osobny WorkerSampleError::ProcessExitRace dla braku VmHWM
+lub NotFound wyłącznie na własnych /proc/<pid>/{cgroup,stat,status}. Błąd
+/proc/self/cgroup, inny cgroup/PID, parse/units/overflow pozostają Other i
+zamykają admission. Parent najpierw sprawdza try_wait; zakończonego procesu
+nie próbkuje. Niepewność aktywnego procesu zachowuje pierwszy monotonic deadline
+30s, wstrzymuje nowe admissions i utrzymuje dotychczasowe peaks/identity.
+Świeży poprawny pomiar lub confirmed exit + pełna walidacja response/identity/
+artefaktów i dodatni finite terminal CPU/RSS rozstrzygają przejście. Kalibracja
+zachowuje max sampled/terminal RSS; nie wprowadza zera ani current-RSS fallback.
+Cancellation/reaping zachowane. Timeout jest konserwatywny i obejmuje również
+walidację artefaktów; wolna walidacja może być odrzucona, bez osłabienia guardu.
+
+Parser trzech plików Rust, diff i niezależne review PASS. Regresje przejść,
+nieodnawianego deadline, invalid/missing peak oraz rzeczywistego Linux
+worker-owned proc NotFound są zapisane. CI dodaje k_process_pool,
+adaptive_resources i waveguide_mesh; meshing ma faulthandler. Testów lokalnie
+nie kompilowano ani nie uruchamiano. Wymagany kolejny immutable build/runtime
+adaptive; helper regressions nie dowodzą całej pętli procesów.
+
+CI37389228028 dla ab4955abb: Python meshing295 PASS, w tym dokładny wcześniejszy
+OCC case i dwie nowe regresje loggera. Control Room/browser/API również PASS.
+Rust wykazał dwa sporadyczne błędy: restore spin_cache_identity500 zamiast400
+oraz izolowany reopen SessionStore z writer busy. Rooty fixture mają PID+nanos;
+nie potwierdzono ENV collision. Przyczyna oczekuje na body/stage/lock diagnostykę,
+bez blanket retry/serializacji ani usuwania walidacji identity.
+
+Osobno uruchomiono wymagany serial reference signed15 na runtime234, z identycznym
+modelem/ref/solver controls i jawnym parallel-mode serial. To nie zastępuje
+nieudanego adaptive ani jego dowodu. Uchwyt80293 i kontener
+fullmag-dispersion-60db3c9d49a9a30192955a3f565592fc potwierdzone live; native FEM
+wykonuje kolejne solve. Wyjście kończy się UUIDefb6cd49bf8e4cd6bc0366b65c315628.
+Nie ma jeszcze terminalnych15 zaakceptowanych wierszy ani parytetu.

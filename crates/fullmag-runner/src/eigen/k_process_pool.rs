@@ -6,7 +6,7 @@
 //! based so the normal CLI startup banner cannot corrupt the response.
 
 use crate::adaptive_resources::{
-    AdaptiveAdmission, AdmissionDecision, ResourceSampler, WorkerPeak,
+    AdaptiveAdmission, AdmissionDecision, ResourceSampler, WorkerPeak, WorkerSampleError,
 };
 use crate::fem::eigen_k_worker::{
     build_identity_json, executable_sha256, worker_thread_environment, EigenKWorkerHandshakeV1,
@@ -30,6 +30,101 @@ const MAX_ADMISSION_EVENTS: usize = 2048;
 const TELEMETRY_RETRY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_WORKER_LOG_BYTES: u64 = 1024 * 1024;
 const MAX_ADMISSION_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingWorkerExitTelemetry {
+    since: Instant,
+    source: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WorkerExitTelemetryError {
+    Other(String),
+    TimedOut { elapsed: Duration, source: String },
+    MissingTerminalPeak,
+    InvalidTerminalPeak,
+}
+
+impl WorkerExitTelemetryError {
+    fn message(&self) -> String {
+        match self {
+            Self::Other(error) => error.clone(),
+            Self::TimedOut { elapsed, source } => format!(
+                "worker exit telemetry unresolved after {} ms: {source}",
+                elapsed.as_millis(),
+            ),
+            Self::MissingTerminalPeak => {
+                "pending worker exit telemetry requires a terminal resource measurement".into()
+            }
+            Self::InvalidTerminalPeak => {
+                "pending worker exit telemetry requires finite positive terminal CPU and RSS".into()
+            }
+        }
+    }
+
+    fn is_timeout(&self) -> bool {
+        matches!(self, Self::TimedOut { .. })
+    }
+}
+
+fn transition_worker_exit_telemetry_after_sample(
+    pending: Option<&PendingWorkerExitTelemetry>,
+    sample_error: Option<&WorkerSampleError>,
+    now: Instant,
+) -> Result<Option<PendingWorkerExitTelemetry>, WorkerExitTelemetryError> {
+    if let Some(pending) = pending {
+        let elapsed = now.saturating_duration_since(pending.since);
+        if elapsed >= TELEMETRY_RETRY_TIMEOUT {
+            return Err(WorkerExitTelemetryError::TimedOut {
+                elapsed,
+                source: pending.source.clone(),
+            });
+        }
+    }
+
+    match sample_error {
+        None => Ok(None),
+        Some(WorkerSampleError::ProcessExitRace(source)) => {
+            Ok(Some(pending.cloned().unwrap_or_else(|| {
+                PendingWorkerExitTelemetry {
+                    since: now,
+                    source: source.to_string(),
+                }
+            })))
+        }
+        Some(WorkerSampleError::Other(error)) => {
+            Err(WorkerExitTelemetryError::Other(error.clone()))
+        }
+    }
+}
+
+fn resolve_worker_exit_telemetry_from_terminal(
+    pending: Option<&PendingWorkerExitTelemetry>,
+    terminal_peak: Option<WorkerPeak>,
+    now: Instant,
+) -> Result<(), WorkerExitTelemetryError> {
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+    let elapsed = now.saturating_duration_since(pending.since);
+    if elapsed >= TELEMETRY_RETRY_TIMEOUT {
+        return Err(WorkerExitTelemetryError::TimedOut {
+            elapsed,
+            source: pending.source.clone(),
+        });
+    }
+    let Some(peak) = terminal_peak else {
+        return Err(WorkerExitTelemetryError::MissingTerminalPeak);
+    };
+    if !peak.cpu_cores.is_finite() || peak.cpu_cores <= 0.0 || peak.rss_bytes == 0 {
+        return Err(WorkerExitTelemetryError::InvalidTerminalPeak);
+    }
+    Ok(())
+}
+
+fn worker_admission_open(telemetry_open: bool, exit_telemetry_pending: bool) -> bool {
+    telemetry_open && !exit_telemetry_pending
+}
 
 fn telemetry_retry_expired(since: &mut Option<Instant>, now: Instant) -> bool {
     let started = since.get_or_insert(now);
@@ -365,6 +460,7 @@ struct ActiveWorker {
     child: Child,
     peak: WorkerPeak,
     cpu_coverage: WorkerCpuCoverage,
+    exit_telemetry_pending: Option<PendingWorkerExitTelemetry>,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
     cancel_path: PathBuf,
@@ -513,6 +609,7 @@ impl EigenKProcessPool {
             child,
             peak: WorkerPeak::default(),
             cpu_coverage: WorkerCpuCoverage::default(),
+            exit_telemetry_pending: None,
             stdout_path: namespace.join("stdout.log"),
             stderr_path: namespace.join("stderr.log"),
             cancel_path: request.cancel_path.clone().ok_or_else(|| {
@@ -761,7 +858,10 @@ impl EigenKProcessPool {
             .map_err(|error| error.message)
     }
 
-    fn record_peak(sampler: &mut ResourceSampler, worker: &mut ActiveWorker) -> Result<(), String> {
+    fn record_peak(
+        sampler: &mut ResourceSampler,
+        worker: &mut ActiveWorker,
+    ) -> Result<(), WorkerSampleError> {
         match sampler.worker_peak(worker.pid) {
             Ok(measured) => {
                 worker.cpu_coverage.observe(measured.cpu_interval);
@@ -1047,25 +1147,78 @@ impl EigenKProcessPool {
                 return Err("eigen process pool cancelled".into());
             }
 
-            // Take the last live-process sample before polling/reaping.  A
-            // short-lived worker may otherwise disappear from /proc between
-            // try_wait and worker_peak; the terminal zero guard below then
-            // fails closed instead of calibrating from fabricated demand.
+            // Skip proc sampling for children already confirmed terminal.
+            // For live children, only typed worker-owned /proc exit races may
+            // pend; parent cgroup, allocation, identity, and parse errors fail closed.
+            let mut telemetry_resolution_sources = Vec::<String>::new();
+            let mut exit_telemetry_timeout = None;
             for worker in &mut active {
-                let measurement = Self::record_peak(&mut sampler, worker).and_then(|()| {
-                    observe_admission_peak(&mut admission, &mut observed_peak, worker.peak)
-                });
-                if let Err(error) = measurement {
-                    let exited = worker
-                        .child
-                        .try_wait()
-                        .map_err(|poll_error| poll_error.to_string())?
-                        .is_some();
-                    if !exited {
+                // If the child is already terminal, its validated response is
+                // the authoritative peak source; avoid sampling a vanished PID.
+                if worker
+                    .child
+                    .try_wait()
+                    .map_err(|error| {
+                        format!("poll eigen k worker {}: {error}", worker.request_index)
+                    })?
+                    .is_some()
+                {
+                    continue;
+                }
+                let pending_before = worker.exit_telemetry_pending.clone();
+                let sample = Self::record_peak(&mut sampler, worker);
+                let sample_error = sample.as_ref().err();
+                let now = Instant::now();
+                match transition_worker_exit_telemetry_after_sample(
+                    pending_before.as_ref(),
+                    sample_error,
+                    now,
+                ) {
+                    Ok(pending_after) => {
+                        worker.exit_telemetry_pending = pending_after;
+                        if pending_before.is_some() && worker.exit_telemetry_pending.is_none() {
+                            let pending = pending_before.as_ref().unwrap();
+                            let sample_index = requests
+                                .get(worker.request_index)
+                                .map(|request| request.sample_index)
+                                .unwrap_or(worker.request_index);
+                            telemetry_resolution_sources.push(format!(
+                                "worker_exit_telemetry_recovered_by_proc_sample_{}_sample_{sample_index}_after_{}s",
+                                pending.source,
+                                now.saturating_duration_since(pending.since).as_secs()
+                            ));
+                        }
+                        if sample.is_ok() {
+                            if let Err(error) = observe_admission_peak(
+                                &mut admission,
+                                &mut observed_peak,
+                                worker.peak,
+                            ) {
+                                telemetry_open = false;
+                                report
+                                    .telemetry_reason
+                                    .get_or_insert_with(|| format!("worker telemetry: {error}"));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let message = error.message();
                         telemetry_open = false;
-                        report.telemetry_reason.get_or_insert(error);
+                        if error.is_timeout() {
+                            report.telemetry_reason = Some(message.clone());
+                            exit_telemetry_timeout.get_or_insert(message);
+                        } else {
+                            report.telemetry_reason.get_or_insert(message);
+                        }
                     }
                 }
+            }
+            if let Some(error) = exit_telemetry_timeout {
+                // No admission decision runs after the deadline. Finishing the
+                // journal here records the worker-local /proc source and elapsed
+                // reconciliation duration before ActiveWorker drops reap children.
+                journal.finish(&report, "failed");
+                return Err(error);
             }
 
             let mut completed = Vec::new();
@@ -1086,12 +1239,42 @@ impl EigenKProcessPool {
                 let peak = worker.peak;
                 let resolved_threads = worker.resolved_threads;
                 let cpu_coverage = worker.cpu_coverage;
+                let pending_exit_telemetry = worker.exit_telemetry_pending.clone();
                 sampler.forget_worker(worker.pid);
                 let response = self.finish_child(worker)?;
                 let request = requests.get(request_index).ok_or_else(|| {
                     format!("eigen k worker request index {request_index} is out of range")
                 })?;
-                self.validate_terminal_response(request, &response)?;
+                if let Err(error) = self.validate_terminal_response(request, &response) {
+                    if pending_exit_telemetry.is_some() {
+                        let message = format!(
+                            "worker exit telemetry terminal response failed validation: {error}"
+                        );
+                        report.telemetry_reason = Some(message.clone());
+                        journal.finish(&report, "failed");
+                        return Err(message);
+                    }
+                    return Err(error);
+                }
+                if let Err(error) = resolve_worker_exit_telemetry_from_terminal(
+                    pending_exit_telemetry.as_ref(),
+                    response.terminal_peak,
+                    Instant::now(),
+                ) {
+                    let message = error.message();
+                    report.telemetry_reason = Some(message.clone());
+                    journal.finish(&report, "failed");
+                    return Err(message);
+                }
+                if let Some(pending) = pending_exit_telemetry.as_ref() {
+                    telemetry_resolution_sources.push(format!(
+                        "worker_exit_telemetry_resolved_by_terminal_rss_{}_after_{}s",
+                        pending.source,
+                        Instant::now()
+                            .saturating_duration_since(pending.since)
+                            .as_secs()
+                    ));
+                }
                 responses.push((request_index, response));
                 let terminal_peak = responses
                     .last()
@@ -1125,9 +1308,9 @@ impl EigenKProcessPool {
                         .get_or_insert("worker telemetry unavailable".into());
                 }
                 // The first successful worker is the only calibration probe.
-                // Never calibrate from a zero peak or from a sampler that has
-                // already entered a fail-closed state: a very fast child may
-                // exit before the periodic /proc sample otherwise runs.
+                // Never calibrate from a zero peak or a sampler that has
+                // entered a fail-closed state. A worker-local /proc exit race must
+                // first recover from /proc or a validated terminal RSS peak.
                 if responses.len() == 1 && !telemetry_valid {
                     journal.finish(&report, "failed");
                     return Err(report.telemetry_reason.clone().unwrap_or_else(|| {
@@ -1185,7 +1368,27 @@ impl EigenKProcessPool {
                 } else {
                     None
                 };
-                let decision = if telemetry_open {
+                let pending_exit_details = active
+                    .iter()
+                    .filter_map(|worker| {
+                        worker.exit_telemetry_pending.as_ref().map(|pending| {
+                            let sample_index = requests
+                                .get(worker.request_index)
+                                .map(|request| request.sample_index)
+                                .unwrap_or(worker.request_index);
+                            format!(
+                                "{}_sample_{sample_index}_elapsed_{}s",
+                                pending.source,
+                                Instant::now()
+                                    .saturating_duration_since(pending.since)
+                                    .as_secs()
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let exit_telemetry_pending = !pending_exit_details.is_empty();
+                let admission_open = worker_admission_open(telemetry_open, exit_telemetry_pending);
+                let decision = if admission_open {
                     admission.decide(
                         snapshot.as_ref(),
                         active.len(),
@@ -1194,6 +1397,15 @@ impl EigenKProcessPool {
                         requests.len().saturating_sub(next_request),
                         Instant::now(),
                     )
+                } else if exit_telemetry_pending {
+                    AdmissionDecision {
+                        desired_workers: active.len(),
+                        reason: format!(
+                            "worker_exit_telemetry_pending:{}",
+                            pending_exit_details.join(",")
+                        ),
+                        cpu_target_kind: "soft_admission_target".into(),
+                    }
                 } else {
                     AdmissionDecision {
                         desired_workers: active.len(),
@@ -1201,7 +1413,7 @@ impl EigenKProcessPool {
                         cpu_target_kind: "soft_admission_target".into(),
                     }
                 };
-                let budget = if decision.desired_workers > active.len() {
+                let budget = if admission_open && decision.desired_workers > active.len() {
                     Some(self.resolve_thread_budget(
                         snapshot.as_ref().ok_or_else(|| {
                             "adaptive worker admission has no current CPU allocation".to_string()
@@ -1216,7 +1428,15 @@ impl EigenKProcessPool {
                     active_workers: active.len(),
                     pending_samples: requests.len().saturating_sub(next_request),
                     desired_workers: decision.desired_workers,
-                    reason: decision.reason.clone(),
+                    reason: if telemetry_resolution_sources.is_empty() {
+                        decision.reason.clone()
+                    } else {
+                        format!(
+                            "{}; {}",
+                            decision.reason,
+                            telemetry_resolution_sources.join(",")
+                        )
+                    },
                     cpu_target_kind: decision.cpu_target_kind.to_string(),
                     snapshot: snapshot.clone(),
                     worker_peak: (observed_peak.rss_bytes > 0 || observed_peak.cpu_cores > 0.0)
@@ -1432,6 +1652,138 @@ mod tests {
         assert!(!super::telemetry_retry_expired(
             &mut since,
             now + super::TELEMETRY_RETRY_TIMEOUT
+        ));
+    }
+
+    #[test]
+    fn worker_proc_exit_races_are_narrow_and_require_real_telemetry() {
+        use super::{
+            resolve_worker_exit_telemetry_from_terminal,
+            transition_worker_exit_telemetry_after_sample, worker_admission_open,
+            PendingWorkerExitTelemetry, WorkerExitTelemetryError, TELEMETRY_RETRY_TIMEOUT,
+        };
+        use crate::adaptive_resources::{WorkerPeak, WorkerProcessExitRace, WorkerSampleError};
+        use std::time::{Duration, Instant};
+
+        let started = Instant::now();
+        let missing_vmhwm =
+            WorkerSampleError::ProcessExitRace(WorkerProcessExitRace::HighWaterMarkUnavailable);
+        let process_disappeared = WorkerSampleError::ProcessExitRace(
+            WorkerProcessExitRace::ProcFileNotFound("/proc/123/stat".into()),
+        );
+        for unrelated in [
+            "invalid worker memory high water mark units",
+            "worker allocation differs from its parent pool",
+            "worker PID identity changed",
+            "read /proc/self/cgroup: No such file or directory",
+        ] {
+            let error = WorkerSampleError::Other(unrelated.into());
+            assert_eq!(
+                transition_worker_exit_telemetry_after_sample(None, Some(&error), started),
+                Err(WorkerExitTelemetryError::Other(unrelated.into()))
+            );
+        }
+        assert_eq!(
+            WorkerSampleError::from("allocation changed"),
+            WorkerSampleError::Other("allocation changed".into())
+        );
+        assert_eq!(
+            WorkerSampleError::from(String::from("identity changed")),
+            WorkerSampleError::Other("identity changed".into())
+        );
+
+        let pending =
+            transition_worker_exit_telemetry_after_sample(None, Some(&missing_vmhwm), started)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            pending,
+            PendingWorkerExitTelemetry {
+                since: started,
+                source: "worker memory high water mark unavailable".into(),
+            }
+        );
+        assert!(!worker_admission_open(true, true));
+        assert!(!worker_admission_open(false, false));
+        let repeated_pending = transition_worker_exit_telemetry_after_sample(
+            Some(&pending),
+            Some(&process_disappeared),
+            started + Duration::from_secs(1),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(repeated_pending, pending);
+
+        let recovered = transition_worker_exit_telemetry_after_sample(
+            Some(&pending),
+            None,
+            started + Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(recovered, None);
+        assert!(worker_admission_open(true, recovered.is_some()));
+
+        let terminal_peak = WorkerPeak {
+            cpu_cores: 1.05345,
+            rss_bytes: 358_105_088,
+        };
+        assert!(resolve_worker_exit_telemetry_from_terminal(
+            Some(&pending),
+            Some(terminal_peak),
+            started + Duration::from_secs(2),
+        )
+        .is_ok());
+        assert_eq!(
+            resolve_worker_exit_telemetry_from_terminal(
+                Some(&pending),
+                Some(WorkerPeak {
+                    cpu_cores: 1.0,
+                    rss_bytes: 0,
+                }),
+                started + Duration::from_secs(2),
+            ),
+            Err(WorkerExitTelemetryError::InvalidTerminalPeak)
+        );
+        assert_eq!(
+            resolve_worker_exit_telemetry_from_terminal(
+                Some(&pending),
+                None,
+                started + Duration::from_secs(2),
+            ),
+            Err(WorkerExitTelemetryError::MissingTerminalPeak)
+        );
+        assert_eq!(
+            resolve_worker_exit_telemetry_from_terminal(
+                Some(&pending),
+                Some(WorkerPeak {
+                    cpu_cores: f64::NAN,
+                    rss_bytes: 4096,
+                }),
+                started + Duration::from_secs(2),
+            ),
+            Err(WorkerExitTelemetryError::InvalidTerminalPeak)
+        );
+
+        let deadline = started + TELEMETRY_RETRY_TIMEOUT;
+        assert!(matches!(
+            transition_worker_exit_telemetry_after_sample(
+                Some(&pending),
+                Some(&missing_vmhwm),
+                deadline,
+            ),
+            Err(WorkerExitTelemetryError::TimedOut { .. })
+        ));
+        assert!(matches!(
+            transition_worker_exit_telemetry_after_sample(Some(&pending), None, deadline),
+            Err(WorkerExitTelemetryError::TimedOut { .. })
+        ));
+        assert!(matches!(
+            resolve_worker_exit_telemetry_from_terminal(
+                Some(&pending),
+                Some(terminal_peak),
+                deadline,
+            ),
+            Err(WorkerExitTelemetryError::TimedOut { .. })
         ));
     }
 

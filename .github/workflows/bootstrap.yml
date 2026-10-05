@@ -31,8 +31,16 @@ jobs:
       - name: Run deterministic eigen worker input contracts
         run: cargo test -p fullmag-runner eigen_k_worker --no-fail-fast
 
+      - name: Run adaptive eigen process pool contracts
+        run: |
+          cargo test -p fullmag-runner k_process_pool --no-fail-fast
+          cargo test -p fullmag-runner adaptive_resources --no-fail-fast
+
       - name: Run canonical project autosave policy contracts
         run: cargo test -p fullmag-ir project_output_policy --no-fail-fast
+
+      - name: Run waveguide mesh descriptor contracts
+        run: cargo test -p fullmag-ir waveguide_mesh --no-fail-fast
 
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
@@ -300,7 +308,7 @@ jobs:
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
 
       - name: Run Python meshing tests
-        run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v
+        run: python -X faulthandler -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v
 
       - name: Run texture compatibility contracts
         run: >-

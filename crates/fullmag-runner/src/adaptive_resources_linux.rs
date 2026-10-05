@@ -1,4 +1,6 @@
-use super::{ResourceSnapshot, WorkerPeak, WorkerSample};
+use super::{
+    ResourceSnapshot, WorkerPeak, WorkerProcessExitRace, WorkerSample, WorkerSampleError,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -389,13 +391,15 @@ impl ResourceSampler {
         self.last_worker.remove(&pid);
     }
 
-    pub fn worker_peak(&mut self, pid: u32) -> Result<WorkerSample, String> {
-        let membership =
-            fs::read_to_string(format!("/proc/{pid}/cgroup")).map_err(|e| e.to_string())?;
+    pub fn worker_peak(&mut self, pid: u32) -> Result<WorkerSample, WorkerSampleError> {
+        let membership = read_worker_proc_file(pid, "cgroup")?;
         let parent_membership =
-            fs::read_to_string("/proc/self/cgroup").map_err(|e| e.to_string())?;
+            fs::read_to_string("/proc/self/cgroup")
+                .map_err(|error| WorkerSampleError::Other(error.to_string()))?;
         if membership != parent_membership {
-            return Err("worker allocation differs from its parent pool".into());
+            return Err(WorkerSampleError::Other(
+                "worker allocation differs from its parent pool".into(),
+            ));
         }
         let (start, ticks, rss) = process_measurement(pid)?;
         if self
@@ -403,7 +407,9 @@ impl ResourceSampler {
             .get(&pid)
             .is_some_and(|(_, previous_start, _)| *previous_start != start)
         {
-            return Err("worker PID identity changed".into());
+            return Err(WorkerSampleError::Other(
+                "worker PID identity changed".into(),
+            ));
         }
         let now = Instant::now();
         let mut cpu_interval = None;
@@ -428,9 +434,19 @@ impl ResourceSampler {
     }
 }
 
-fn process_measurement(pid: u32) -> Result<(u64, u64, u64), String> {
-    let text = fs::read_to_string(format!("/proc/{pid}/stat"))
-        .map_err(|e| format!("worker {pid}: {e}"))?;
+fn read_worker_proc_file(pid: u32, file: &str) -> Result<String, WorkerSampleError> {
+    let path = format!("/proc/{pid}/{file}");
+    fs::read_to_string(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            WorkerSampleError::ProcessExitRace(WorkerProcessExitRace::ProcFileNotFound(path))
+        } else {
+            WorkerSampleError::Other(format!("read worker proc file {path}: {error}"))
+        }
+    })
+}
+
+fn process_measurement(pid: u32) -> Result<(u64, u64, u64), WorkerSampleError> {
+    let text = read_worker_proc_file(pid, "stat")?;
     // comm may contain spaces or parentheses; fields begin after its LAST closing parenthesis.
     let (_, fields) = text.rsplit_once(')').ok_or("invalid process stat")?;
     let fields: Vec<_> = fields.split_whitespace().collect();
@@ -451,12 +467,13 @@ fn process_measurement(pid: u32) -> Result<(u64, u64, u64), String> {
         .ok_or("worker RSS overflow")?;
     // VmHWM is the kernel-maintained RSS high water mark. Periodic current
     // RSS alone can miss an allocation peak between admission samples.
-    let status = fs::read_to_string(format!("/proc/{pid}/status"))
-        .map_err(|error| format!("worker {pid} memory high water mark: {error}"))?;
+    let status = read_worker_proc_file(pid, "status")?;
     let high_water_line = status
         .lines()
         .find_map(|line| line.strip_prefix("VmHWM:"))
-        .ok_or("worker memory high water mark unavailable")?;
+        .ok_or_else(|| {
+            WorkerSampleError::ProcessExitRace(WorkerProcessExitRace::HighWaterMarkUnavailable)
+        })?;
     let fields: Vec<_> = high_water_line.split_whitespace().collect();
     if fields.len() != 2 || fields[1] != "kB" {
         return Err("invalid worker memory high water mark units".into());
@@ -471,6 +488,17 @@ fn process_measurement(pid: u32) -> Result<(u64, u64, u64), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn worker_owned_proc_not_found_is_a_typed_exit_race() {
+        let pid = u32::MAX;
+        assert_eq!(
+            super::read_worker_proc_file(pid, "stat"),
+            Err(super::WorkerSampleError::ProcessExitRace(
+                super::WorkerProcessExitRace::ProcFileNotFound(format!("/proc/{pid}/stat"))
+            ))
+        );
+    }
+
     #[test]
     fn unlimited_ancestor_usage_does_not_consume_leaf_affinity_budget() {
         assert_eq!(super::cpu_usage_scope_capacity(false, 4.0, None), None);

@@ -33,6 +33,45 @@ pub struct WorkerSample {
     pub cpu_interval: Option<Duration>,
 }
 
+/// Worker-local sampling failure. Only process-owned `/proc/<pid>` exit races
+/// may use a later validated terminal resource response as reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerSampleError {
+    ProcessExitRace(WorkerProcessExitRace),
+    Other(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerProcessExitRace {
+    HighWaterMarkUnavailable,
+    ProcFileNotFound(String),
+}
+
+impl std::fmt::Display for WorkerProcessExitRace {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HighWaterMarkUnavailable => {
+                formatter.write_str("worker memory high water mark unavailable")
+            }
+            Self::ProcFileNotFound(path) => {
+                write!(formatter, "worker process file disappeared: {path}")
+            }
+        }
+    }
+}
+
+impl From<String> for WorkerSampleError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<&'static str> for WorkerSampleError {
+    fn from(error: &'static str) -> Self {
+        Self::Other(error.into())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdmissionDecision {
     pub desired_workers: usize,
@@ -258,8 +297,8 @@ impl ResourceSampler {
         Err("telemetry_unavailable".into())
     }
     pub fn forget_worker(&mut self, _pid: u32) {}
-    pub fn worker_peak(&mut self, _pid: u32) -> Result<WorkerSample, String> {
-        Err("telemetry_unavailable".into())
+    pub fn worker_peak(&mut self, _pid: u32) -> Result<WorkerSample, WorkerSampleError> {
+        Err(WorkerSampleError::Other("telemetry_unavailable".into()))
     }
 }
 
