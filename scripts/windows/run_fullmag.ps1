@@ -178,6 +178,7 @@ $CacheRoot = [string]$StorageLayout.cache_root
 $BuildRoot = [string]$StorageLayout.build_root
 $TargetRoot = [string]$StorageLayout.env.CARGO_TARGET_DIR
 $TempRoot = [string]$StorageLayout.temp_root
+$VolatileBuild = $null
 
 function Resolve-AbsolutePath {
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -843,6 +844,15 @@ if ($needsControlRoomToolchain) {
 }
 
 if ($BuildMode -eq "true") {
+  $volatileOutput = (& python -B (Join-Path $PSScriptRoot "volatile_build_storage.py") `
+    --repo-root $RepoRoot --profile $StorageProfile --build-root $BuildRoot 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw "Volatile compiler storage preparation failed: $volatileOutput" }
+  $VolatileBuild = $volatileOutput | ConvertFrom-Json
+  if ([bool]$VolatileBuild.enabled -and (
+      -not $VolatileBuild.root -or -not $VolatileBuild.temp_root -or
+      (Resolve-AbsolutePath ([string]$VolatileBuild.durable_build_root)) -ine (Resolve-AbsolutePath $BuildRoot))) {
+    throw "Volatile compiler storage does not match the durable build profile"
+  }
   Require-Command "cargo"
   Require-Command "rustc"
   Require-Command "rustup"
@@ -877,20 +887,49 @@ if ($BuildMode -eq "true") {
   if ($useCuda) {
     $cargoArguments += @("--features", "cuda")
   }
-  Push-Location $RepoRoot
+  $useVolatileTemp = $null -ne $VolatileBuild -and [bool]$VolatileBuild.enabled
+  $savedTemporaryEnvironment = @{}
+  if ($useVolatileTemp) {
+    foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+      $savedTemporaryEnvironment[$name] = [pscustomobject]@{
+        was_set = Test-Path "Env:$name"
+        value = [Environment]::GetEnvironmentVariable($name, "Process")
+      }
+    }
+  }
   try {
-    Invoke-External "cargo" $cargoArguments
-    if ($needsControlRoomToolchain) {
-      # CUDA belongs to the solver packages, not the desktop shell.
-      $desktopCargoArguments = @("build", "--locked") + $cargoProfileArguments + @(
-        "--target", $TargetTriple,
-        "-p", "fullmag-desktop"
-      )
-      Invoke-External "cargo" $desktopCargoArguments
+    if ($useVolatileTemp) {
+      foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+        [Environment]::SetEnvironmentVariable($name, [string]$VolatileBuild.temp_root, "Process")
+      }
+    }
+    Push-Location $RepoRoot
+    try {
+      Invoke-External "cargo" $cargoArguments
+      if ($needsControlRoomToolchain) {
+        # CUDA belongs to the solver packages, not the desktop shell.
+        $desktopCargoArguments = @("build", "--locked") + $cargoProfileArguments + @(
+          "--target", $TargetTriple,
+          "-p", "fullmag-desktop"
+        )
+        Invoke-External "cargo" $desktopCargoArguments
+      }
+    }
+    finally {
+      Pop-Location
     }
   }
   finally {
-    Pop-Location
+    if ($useVolatileTemp) {
+      foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+        $saved = $savedTemporaryEnvironment[$name]
+        if ($saved.was_set) {
+          [Environment]::SetEnvironmentVariable($name, [string]$saved.value, "Process")
+        } else {
+          Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+        }
+      }
+    }
   }
 
   if (-not (Test-Path -LiteralPath $FullmagExe -PathType Leaf)) {
@@ -956,6 +995,7 @@ if ($BuildMode -eq "true") {
     workspace_namespace = $WorkspaceNamespace
     cuda_bin = $cudaBin
     cargo_target_dir = $TargetRoot
+    volatile_build_storage = $VolatileBuild
     cache_root = $CacheRoot
     git_commit = $sourceCommit
     worktree_state = $sourceWorktreeState
