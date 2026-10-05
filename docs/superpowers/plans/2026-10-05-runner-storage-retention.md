@@ -219,3 +219,23 @@ Korekta zwraca JSON arrays i normalizuje absolutne ścieżki POSIX niezależnie
 od Windows cwd. Build executor 26/26, execution 19/19, runtime retention 10/10
 PASS; niezależne review bez defektów. Stare operacje pozostają niezmienione;
 nowa próba wymaga wdrożenia i świeżego planu.
+
+
+### Bieżący postęp apply i spójność materializacji — 2026-10-05
+
+- Poprawka mountów jest na remote i wdrożona jako obraz
+  `sha256:635acf5c48d3c364c94995243320d1a4828b4459b0a01c51be053131660b98ab`.
+  Trzy moduły executor/archive/build mają w kontenerze identyczne SHA256 jak
+  zatwierdzone źródła. Zachowano profile, kolejkę i wykonano łagodny Drain/resume.
+- Nowy apply `plan-80a5b6851af941fbb2fd98ac2c417b08` pozostaje aktywny;
+  health potwierdza żywy wątek retencji. Pierwszy job przeszedł walidację
+  i zachowanie wszystkich dostępnych logów; usunięto wyłącznie atestowany,
+  zakończony worker. Usunięcie execution nadal wymaga wyniku końcowego.
+- Źródłowa korekta postępu zapisuje `validating` przed kosztownymi kontrolami,
+  zamiast pusto/pozornego retained. Executor 20/20, service 15/15 PASS.
+  Ta korekta wymaga wdrożenia po zakończeniu aktywnej operacji.
+- Sprawdzono materialize_capsule: prywatna kopia ma świeże czasy plików,
+  immutable kapsuła zachowuje oryginalne czasy. Istniejąca focused regresja
+  odświeżenia timestampów PASS; nie dowodzi to pełnej kwalifikacji CAS/runtime.
+- Pakiet #232 przechodzi aktualną ścisłą walidację 29 artefaktów. To dowód
+  integralności i kontraktu pakietu, bez nowych wyników numerycznych.

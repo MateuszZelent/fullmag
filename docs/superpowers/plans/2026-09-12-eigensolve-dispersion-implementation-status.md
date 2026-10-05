@@ -3957,7 +3957,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
 | S10 — interakcje | W TRAKCIE | Ku tangent terms i canonical/raw artifact v8/v7 mają implementację źródłową; guard/runtime i pełna kwalifikacja nadal otwarte. DMI, surface terms, niejednorodność, seam transport i damping `include` wymagają odpowiednich implementacji i walidacji bez osłabiania capability guards. |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
-| S12 — kwalifikacja i integracja | W TRAKCIE | Master 6c0c765 scalony jako f01644b; poprawki eksportera a5dbff4 wysłane, focused kontrole PASS. PR97 OPEN; master przesunął się do eae25cc, odczyt zgłosił konflikty. Pozostają aktualna integracja, science/browser, wymagane review/CI, merge PR, main fast-forward i kontrolowany cleanup. |
+| S12 — kwalifikacja i integracja | W TRAKCIE | Master eae25cc scalony jako 79a9dcb8, poprawki PBC/nazwy wyników 3da4b53d wysłane. Runtime #232 succeeded/0; aktualna ścisła kontrola 29 artefaktów PASS. Poprawki retencji archiwów i tożsamości mountów wysłane i wdrożone w koordynatorze. PR97 pozostaje OPEN; science/browser, wymagane review/CI, merge PR, main fast-forward i kontrolowany cleanup nadal OPEN. |
 
 ## Zweryfikowane warunki wykonania
 

@@ -222,8 +222,9 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
             if jid not in requested or jid in seen:
                 continue
             seen.add(jid)
-            item = {'job_id': jid, 'status': 'retained', 'removed_logical_bytes': 0}
+            item = {'job_id': jid, 'status': 'validating', 'removed_logical_bytes': 0}
             result['items'].append(item)
+            atomic_json(result_path, result)
             try:
                 job = queue.get(jid)
                 if (job.get('owner') != owner or job.get('operation') != 'build'

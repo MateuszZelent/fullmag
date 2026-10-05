@@ -123,6 +123,20 @@ class ExecutionCleanupTests(unittest.TestCase):
         (self.run / 'artifacts/outputs/result.bin').write_bytes(b'corruption')
         self.assert_retained('Archive artifact size/hash mismatch')
 
+    def test_live_operation_reports_validation_before_expensive_source_check(self):
+        from local_runner.worker_entrypoint import verify_source
+        seen = []
+        def observe(source, digest):
+            operation = json.loads((self.root / 'index/retention-operations/plan-1234abcd.json').read_text())
+            seen.append(operation['items'][0]['status'] if operation['items'] else 'not_reported')
+            self.assertEqual('validating', seen[-1])
+            self.assertTrue(self.execution.is_dir())
+            return verify_source(source, digest)
+        with patch('local_runner.worker_entrypoint.verify_source', side_effect=observe):
+            result = self.apply()
+        self.assertEqual(['validating'], seen)
+        self.assertTrue(result['applied'], result)
+
     def test_removes_only_private_tree_and_replays_receipt(self):
         result = self.apply()
         self.assertTrue(result['applied'])
