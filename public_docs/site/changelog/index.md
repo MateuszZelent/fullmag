@@ -11,12 +11,18 @@ orphan: true
 (public-docs-documentation-changelog)=
 # Documentation changelog
 
+The **Last changes** date above refers to this page’s own source file. The **Latest documentation change** below is generated from the current repository history each time the site is published.
+
 ```{versionadded} development
 This public page and the accompanying Sphinx version-change index were added to make documentation evolution directly inspectable.
 ```
 
 ```{versionchanged} development
 The changelog now exposes separate Documentation and GitHub / code tabs, each with its own latest-change timestamp and history. The version-change report is published at the directory entry point and retains the full generated report at `changes.html`.
+```
+
+```{versionchanged} development
+The 5 October 2026 documentation update corrected the getting-started, Control Room, installation, and architecture guides against the current implementation. The Documentation tab links the exact commit and changed pages.
 ```
 
 FullMag exposes two complementary change records:

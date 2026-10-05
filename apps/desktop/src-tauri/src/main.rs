@@ -8,6 +8,7 @@ mod recent_index;
 mod script_run;
 mod script_run_core;
 mod script_run_process;
+mod script_save;
 mod workspace_commands;
 
 use api_sidecar::ApiSidecar;
@@ -114,6 +115,7 @@ fn main() {
             script_run::script_trust_forget,
             script_run::python_interpreter_status,
             script_run::python_interpreter_set,
+            script_save::script_save_new,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fullmag-ui");

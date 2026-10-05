@@ -25,8 +25,8 @@ against real project archives.
 | 5 | Authors, History, Runs, BibTeX | Done: read side and writer | browser (three tabs, mocked host); `cargo check`. Writer records edit saves only, see §3 |
 | 6 | Continue card | Done in the renderer | browser (resumable / not / host error). `resume_run`, `discard_checkpoint` do not exist |
 | 7 | Compute environment | Rozbudowany widget i szczegóły Settings; istniejące zasoby runtime v2 | Przeglądarka: rzeczywisty RTX 4080 SUPER, 48 wątków CPU i 10 kontroli stanów/motywów/układu. Lint zmiany i kontrole API/architektury: PASS. Pełna kontrola typów/lint: błędy poza zakresem; szczegóły w [09-compute-environment.md](09-compute-environment.md) |
-| 8 | Templates gallery | Gallery plus a validated canonical Python script per template (save, copy) | each script loads to ProblemIR with the repository Python package (loader only, no solver). **Create project from template stays disabled with its reason**: the API has no operation that turns script text into a project |
-| 9 | Import | `.fms`; `.mx3` as a reported subset translator | translator tests and a Python load of every generated fixture script. Opening the translated script as a project is disabled for the same reason as templates; save/copy work. No other importer |
+| 8 | Templates gallery | Gallery plus a validated canonical Python script per template (save, copy) | each script loads to ProblemIR with the repository Python package (loader only, no solver). **Create script from template…** (desktop only) saves the script through the host command `script_save_new` (native Save dialog, no overwrite without the dialog's confirmation, atomic UTF-8 write, first-line origin comment, `create` + `open` events), then Home selects it so Run in new window is next. Outside the desktop host the button is disabled with its reason; Download and Copy script work everywhere. Templates are scripts, not projects: no project is created |
+| 9 | Import | `.fms`; `.mx3` as a reported subset translator | translator tests and a Python load of every generated fixture script. **Save translated script…** (desktop only) goes through the same `script_save_new` (event `import`); the report of untranslated statements stays visible before saving, and an incomplete translation can be saved (the report says it stops when run). Download and Copy script work everywhere. No other importer |
 | 10 | Learn, Settings, About | Done | browser |
 | 11 | Sphinx documentation (this folder, `05-…`) | Done, not bundled by builds | browser against the real built site; `sphinx-build -W -n` of the site with the embed assets succeeds locally (exit 0) |
 
@@ -46,7 +46,10 @@ Additions beyond the original ten steps:
   open, copy, read text) over the workspace commands, with a script inspector
   (history, run outcome, `fullmag script inspect`). The CLI has one Python
   interpreter resolver and `fullmag script inspect` (`crates/fullmag-cli`,
-  PR #129). **Run script in a new window stays disabled** with its reason.
+  PR #129). Run script in a new window is implemented on the host and in the
+  inspector (`08-script-open.md`, Phase 1); not verified on a packaged install
+  or through the UI. Templates and translated `.mx3` files become scripts in
+  this list through `script_save_new`.
 
 ---
 
@@ -57,7 +60,7 @@ Additions beyond the original ten steps:
 | Types | `node scripts/typecheck-control-room.mjs` clean on 2026-10-05 |
 | Lint | `pnpm run lint` clean (`--max-warnings=0`) |
 | Unit (frontend) | vitest `src/modules/start` plus `NewProblemDialog.test.tsx`: 29 files, 280 passed, 12 skipped, 0 failed (2026-10-05). Includes `useWorkspaceScripts` / `useScriptHistory` (mount, focus within 750 ms, after actions, unavailable host, error mapping) |
-| Unit (Rust) | **not run** (suspended); `cargo check` only |
+| Unit (Rust) | `cargo test -p fullmag-desktop` ran on 2026-10-05 for the desktop host: 95 passed, 0 failed, including the 10 `script_save` tests (file name, first line, validation, atomic write, refused overwrite, `create`/`import` events). The workspace crate tests were not re-run for this change |
 | Python | `packages/fullmag-py/tests/test_api.py`: 305 tests, OK (1 skipped), 2026-10-05 |
 | Contrast | 0 below AA on the implementation, both themes (`check:start-screen-browser`, also in CI) |
 | a11y | roles, names and keyboard paths implemented per `03-…`; Storybook + `addon-a11y` **not run** |
@@ -87,10 +90,15 @@ Host (needs work outside the renderer):
   application**. It touches the revision-checked save path and deserves review.
 - **Index solver** is inferred from the scene's `study` keys, defaulting to FDM.
 - **Rebuild** opens whole archives rather than reading only a manifest head.
-- **Disabled, with their reason shown:** running a script from the inspector;
-  creating a project from a template or from a translated `.mx3` (needs an API
-  operation that accepts script text); importers other than `.fms` and the
-  `.mx3` subset; discarding a checkpoint; the result frame scrubber.
+- **Disabled, with their reason shown:** creating or saving a script from a
+  template or a translated `.mx3` outside the desktop host (browser build);
+  importers other than `.fms` and the `.mx3` subset; discarding a checkpoint;
+  the result frame scrubber.
+- **Not built:** turning script text into a *project* (the API still has no
+  such operation); templates therefore create scripts, never projects. The
+  Save dialog's own replacement prompt is the only overwrite confirmation, and
+  no template version exists to record, so the first line carries the template
+  id and the date. The Save flow was not exercised in a running desktop app.
 
 Packaging and process:
 

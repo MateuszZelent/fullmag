@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import stat
 import sys
 
 import pytest
@@ -17,6 +18,24 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "windows"))
 import stage_workspace_frontend as staging
+
+
+def test_frozen_source_is_copied_into_writable_frontend(tmp_path: Path):
+    source = tmp_path / "frozen.ts"
+    destination = tmp_path / "staged" / "live.ts"
+    source.write_text("export const live = 1;\n")
+    source.chmod(stat.S_IREAD)
+    try:
+        staging._copy_regular_file(source, destination)
+        assert destination.stat().st_mode & stat.S_IWUSR
+        destination.write_text("export const live = 2;\n")
+        replacement = destination.with_suffix(".tmp")
+        replacement.write_text("export const live = 3;\n")
+        replacement.replace(destination)
+        assert "= 1" in source.read_text()
+        assert "= 3" in destination.read_text()
+    finally:
+        source.chmod(stat.S_IREAD | stat.S_IWRITE)
 
 
 def _write(path: Path, contents: str | bytes) -> None:
@@ -84,6 +103,62 @@ snapshots:
 def _assert_link(path: Path, target: Path) -> None:
     assert staging._is_reparse_point(path), path
     assert path.resolve() == target.resolve()
+
+
+@pytest.fixture
+def frozen_frontend(tmp_path):
+    from windows import build_snapshot
+
+    repo, build_root = _fixture(tmp_path)
+    _write(repo / "Cargo.toml", "[workspace]\nmembers = []\n")
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Staging fixture",
+         "-c", "user.email=staging@example.invalid", "commit", "-qm", "fixture"],
+        check=True, capture_output=True,
+    )
+    snapshot = build_snapshot.create_snapshot(repo, build_root)
+    try:
+        yield repo, build_root, snapshot
+    finally:
+        for path in (build_root / "source-snapshots").rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                path.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_verified_snapshot_can_stage_frontend_inside_build_root(frozen_frontend):
+    repo, build_root, snapshot = frozen_frontend
+    _write(repo / "apps/control-room/src/live.ts", "changed after capture\n")
+    result = staging.stage_workspace_frontend(
+        snapshot["source_root"], build_root, mode="dev", web_port=3211,
+        source_snapshot_record=snapshot["record_path"],
+    )
+    staged = Path(result["app_root"]) / "src/live.ts"
+    assert staged.read_text() == "export const live = 1;\n"
+    assert staged.stat().st_mode & stat.S_IWUSR
+    manifest = json.loads(Path(result["manifest_path"]).read_text())
+    assert manifest["build_source_snapshot"]["inventory_sha256"] == snapshot["inventory_sha256"]
+
+
+@pytest.mark.parametrize("invalid", ["missing", "wrong-source", "tampered"])
+def test_nested_frontend_source_requires_matching_intact_snapshot(frozen_frontend, invalid):
+    repo, build_root, snapshot = frozen_frontend
+    source = Path(snapshot["source_root"])
+    record = snapshot["record_path"]
+    if invalid == "missing":
+        record = None
+    elif invalid == "wrong-source":
+        source = repo
+    else:
+        tampered = source / "apps/control-room/src/live.ts"
+        tampered.chmod(stat.S_IREAD | stat.S_IWRITE)
+        tampered.write_text("tampered frozen input\n")
+    with pytest.raises(staging.StageError):
+        staging.stage_workspace_frontend(
+            source, build_root, mode="dev", source_snapshot_record=record,
+        )
+    assert not (build_root / "frontend-sources").exists()
 
 
 def test_static_staging_is_fresh_hash_pinned_and_excludes_generated_trees(tmp_path):
