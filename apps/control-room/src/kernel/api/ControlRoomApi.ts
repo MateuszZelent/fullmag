@@ -2908,6 +2908,11 @@ export class ControlRoomApi {
           request,
           options,
         ),
+      /** 204 on success; 404 for an unknown id; 409 while still referenced. */
+      delete: (checkpointId: string, options?: RequestOptions) =>
+        this.deleteJson<void>(PERSISTENCE_CHECKPOINT_PATH, options, {
+          path: { checkpoint_id: checkpointId },
+        }),
       detail: (checkpointId: string, options?: RequestOptions) =>
         this.requestJson<CheckpointEntry>(
           PERSISTENCE_CHECKPOINT_PATH,
