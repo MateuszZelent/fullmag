@@ -21,7 +21,12 @@ Commity lokalne: `3a157b229eb2a1111440f641b1cca7fef566bb36` oraz
 niedostępny. [P8-53AW — rzeczywiste awarie helpera](p8/53aw-candidate-preparation-fault-gates.md)
 ma natywny PASS: receipt `cce9f225893f4fae97c3a3d15906641e`, exit 0,
 10/10 kontroli i potwierdzone zakończenie CLI oraz siedmiu helperów.
-Następne bramki: stale scope i native/browser restore niepustego modelu. Nie podnosimy
+[P8-53AX — utrata owner scope](p8/53ax-owner-scope-loss-during-preparation.md)
+ma natywny PASS: receipt `8028a78624ef450887ed000915957a93`, exit 0,
+18/18 kontroli. Żywy drugi selector został odebrany po zamknięciu własnego
+API; najdłuższy krok drugiej pompy 34 ms, wszystkie siedem procesów waited.
+Następne bramki: native/browser restore niepustego modelu oraz pozostałe
+warianty zmiany gotowego buildu i cleanup. Nie podnosimy
 procentów całego planu na podstawie tej wąskiej kontroli.
 
 Checkpoint P8-54, 05.10.2026: [build natywny na żądanie](p8/54-manual-native-build-snapshot.md).

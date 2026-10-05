@@ -710,6 +710,11 @@ def _scene_pipeline_contains_macro(pipeline: object) -> bool:
 def _has_scene_stage_content(value: object) -> bool:
     if value is None:
         return False
+    if isinstance(value, bool):
+        # The builder stage serializes every flag, so a stage of another kind
+        # carries `false` for flags it never authored (e.g. eigen_include_demag
+        # on a run stage). Only an enabled flag is content to render.
+        return value
     if isinstance(value, str):
         return bool(value.strip())
     if isinstance(value, Mapping):

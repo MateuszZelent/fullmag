@@ -30,8 +30,9 @@ export function useSimulationPreparation({
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     SIMULATION_PREPARATION_PATH,
   );
-  const preparationAvailable = useSessionStatusSelector((status) =>
-    hasSimulationPreparation(status.data, requiredRevision),
+  const preparationAvailable = useSessionStatusSelector(
+    (status) => hasSimulationPreparation(status.data, requiredRevision),
+    { enabled: sessionIdentity !== null },
   );
   const effectiveEnabled = enabled && sessionIdentity !== null && preparationAvailable;
   const load = useCallback(
