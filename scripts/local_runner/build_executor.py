@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import shutil
 import time
@@ -362,8 +363,13 @@ def configured_build(layout, owner, profile):
 
 
 def mount_identity(mounts):
-    return sorted((m.get('Type'), os.path.normcase(os.path.abspath(m.get('Source', ''))),
-                   m.get('Destination'), m.get('RW')) for m in mounts)
+    # Docker reports daemon paths. Do not resolve POSIX daemon paths against a
+    # Windows client cwd; persist JSON arrays so reload preserves equality.
+    return sorted([m.get('Type'),
+                   posixpath.normpath(m.get('Source', ''))
+                   if str(m.get('Source', '')).startswith('/')
+                   else os.path.normcase(os.path.abspath(m.get('Source', ''))),
+                   m.get('Destination'), m.get('RW')] for m in mounts)
 
 
 def capsule_path(storage, job):

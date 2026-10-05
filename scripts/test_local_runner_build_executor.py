@@ -10,6 +10,13 @@ from local_runner import build_executor as executor
 
 
 class BuildExecutorTests(unittest.TestCase):
+    def test_daemon_mount_identity_survives_json_and_host_platform(self):
+        mounts = [{'Type': 'bind', 'Source': '/run/desktop/mnt/host/c/storage/run',
+                   'Destination': '/workspace', 'RW': True}]
+        identity = executor.mount_identity(mounts)
+        self.assertEqual(identity, json.loads(json.dumps(identity)))
+        self.assertEqual(identity[0][1], mounts[0]['Source'])
+
     def test_cpu_mfem_abi_attestation_rejects_missing_or_wrong_prefix(self):
         valid = {
             'mfem_abi': {

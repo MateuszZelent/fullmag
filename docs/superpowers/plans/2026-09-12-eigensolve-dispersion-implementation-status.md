@@ -1,3 +1,32 @@
+<!-- storage-retention-runtime232-checkpoint-20261005 -->
+## Aktualny checkpoint — runtime #232 i naprawa retencji storage
+
+Build #232 `2486b24dc7924dadaff342d4603ed197` jest terminalny `succeeded`,
+exit 0; receipt wiąże pakiet z HEAD `3da4b53d16bf3bbf57c6dde3c0f7541e17e9442c`.
+To dowód buildu, nie wykonania nowych bramek GMRES/FGMRES, GUI ani nauki.
+
+Retencja nie jest już wyłącznie preview. Executor execution, CAS nowych
+kapsuł, historyczna kompakcja i planer/wykonawca runtime są zaimplementowane;
+koordynator obsługuje trwałe plany oraz osobne zakresy. Aktualne dowody i
+pozostałe bramki zawiera [plan storage](2026-10-05-runner-storage-retention.md).
+Nie oznacza to zamknięcia R1–R5 ani S00–S12.
+
+Dwie próby produkcyjne #187/#188 zakończyły się `partial`, retained oba
+execution, 0 bajtów usuniętych. Manifesty i receipty zachowane z identycznymi
+SHA256. Pierwszą blokadę (historyczny CMake a bieżący profil) naprawia osobna
+kontrola integralności archiwalnej; ścisłe dopuszczanie runtime pozostaje.
+Drugą blokadą były krotki mountów porównywane z listami zapisanymi w JSON
+oraz Windowsowa interpretacja absolutnych ścieżek demona Docker.
+Poprawka zachowuje pełne image/mount/isolation checks: 26/19/10 kontroli
+Python PASS i rzeczywista odczytowa atestacja obu zakończonych workerów PASS.
+Wdrożenie tej drugiej korekty i świeży apply są następnym krokiem.
+
+Historyczna kompletność odwołań runtime pozostaje NOT VERIFIED: brak
+runtime-reference-roots.json oraz niestandardowe JSON kontrolerów scientific-batches.
+Nie można zaznaczyć legacy_inventory_complete bez jawnych kontraktów i audytu.
+Po storage wracamy do exact-runtime bramek solvera, shared signed15/parity,
+zbieżności, GUI/A1 oraz pozostałych wymagań S00–S12 i integracji PR97.
+
 <!-- master-eae-scene-pbc-checkpoint-20261005 -->
 ## Aktualny checkpoint — scalony master i zachowanie modelu w eksporcie
 

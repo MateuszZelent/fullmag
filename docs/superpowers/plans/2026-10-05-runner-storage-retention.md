@@ -205,3 +205,17 @@ sprzątania produkcyjnego storage.
   usunięcie wyłącznie execution i zachowanie źródeł/receiptu/wyników w fixture.
 - Faktyczne ponowne sprzątanie wymaga wdrożenia korekty i nowego planu;
   poprzedniej operacji nie odtwarzamy ani nie nadpisujemy.
+
+
+### Reprezentacja tożsamości mountów — 2026-10-05
+
+Drugi apply `plan-da8b802ff7c847b3b58344c486a51962` jest terminalny partial:
+oba execution zachowane, 0 usuniętych bajtów, cztery hashe zachowanych danych
+zgodne. Przyczyna to porównanie krotek mount_identity z listami po JSON oraz
+normalizacja ścieżek demona Linux przez system klienta Windows. Identyczność
+rzeczywistych mountów/obrazu i izolacji potwierdzono odczytem Docker inspect.
+
+Korekta zwraca JSON arrays i normalizuje absolutne ścieżki POSIX niezależnie
+od Windows cwd. Build executor 26/26, execution 19/19, runtime retention 10/10
+PASS; niezależne review bez defektów. Stare operacje pozostają niezmienione;
+nowa próba wymaga wdrożenia i świeżego planu.
