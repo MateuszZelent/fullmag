@@ -352,11 +352,75 @@ fn terminal_measurement_finish(
     }
 }
 
+/// Hash semantic plan JSON with recursively sorted object keys. Array order and
+/// scalar representations are preserved; HashMap iteration order is not part of
+/// the identity. Sort explicitly so serde_json's preserve_order feature cannot
+/// change the parent/child digest contract. The executable/build handshake pins
+/// both processes to this same implementation without changing the wire schema.
 pub(crate) fn plan_sha256(plan: &FemEigenPlanIR) -> Result<String, RunError> {
-    let encoded = serde_json::to_vec(plan).map_err(|error| RunError {
+    let encode = || -> Result<Vec<u8>, serde_json::Error> {
+        let value = serde_json::to_value(plan)?;
+        let mut encoded = Vec::new();
+        write_canonical_plan_json(&value, &mut encoded)?;
+        Ok(encoded)
+    };
+    let encoded = encode().map_err(|error| RunError {
         message: format!("serialize worker plan digest: {error}"),
     })?;
     Ok(sha256_bytes(&encoded))
+}
+
+fn write_canonical_plan_json(
+    value: &serde_json::Value,
+    encoded: &mut Vec<u8>,
+) -> Result<(), serde_json::Error> {
+    match value {
+        serde_json::Value::Object(object) => {
+            encoded.push(b'{');
+            let mut entries: Vec<_> = object.iter().collect();
+            entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+            for (index, (key, child)) in entries.into_iter().enumerate() {
+                if index != 0 {
+                    encoded.push(b',');
+                }
+                serde_json::to_writer(&mut *encoded, key)?;
+                encoded.push(b':');
+                write_canonical_plan_json(child, encoded)?;
+            }
+            encoded.push(b'}');
+        }
+        serde_json::Value::Array(items) => {
+            encoded.push(b'[');
+            for (index, child) in items.iter().enumerate() {
+                if index != 0 {
+                    encoded.push(b',');
+                }
+                write_canonical_plan_json(child, encoded)?;
+            }
+            encoded.push(b']');
+        }
+        _ => serde_json::to_writer(encoded, value)?,
+    }
+    Ok(())
+}
+
+fn validate_input_digests(
+    actual_plan: &str,
+    expected_plan: &str,
+    actual_equilibrium: &str,
+    expected_equilibrium: &str,
+) -> Result<(), RunError> {
+    if actual_plan != expected_plan || actual_equilibrium != expected_equilibrium {
+        return Err(RunError {
+            message: format!(
+                "eigen k worker input digest mismatch: actual_plan_sha256={actual_plan} \
+                 expected_plan_sha256={expected_plan} \
+                 actual_equilibrium_artifact_sha256={actual_equilibrium} \
+                 expected_equilibrium_artifact_sha256={expected_equilibrium}"
+            ),
+        });
+    }
+    Ok(())
 }
 
 pub(crate) fn equilibrium_artifact_sha256(plan: &FemEigenPlanIR) -> Result<String, RunError> {
@@ -690,15 +754,13 @@ pub(crate) fn execute_request(mut request: EigenKWorkerRequestV1) -> EigenKWorke
         Ok(value) => value,
         Err(error) => return response_for_error(&request, error),
     };
-    if actual_plan_sha256 != request.expected_plan_sha256
-        || actual_equilibrium_artifact_sha256 != request.expected_equilibrium_artifact_sha256
-    {
-        return response_for_error(
-            &request,
-            RunError {
-                message: "eigen k worker input digest mismatch".into(),
-            },
-        );
+    if let Err(error) = validate_input_digests(
+        &actual_plan_sha256,
+        &request.expected_plan_sha256,
+        &actual_equilibrium_artifact_sha256,
+        &request.expected_equilibrium_artifact_sha256,
+    ) {
+        return response_for_error(&request, error);
     }
 
     let execution =
@@ -831,4 +893,153 @@ pub fn run_request_file(request_path: &Path) -> Result<(), RunError> {
         message: format!("publish eigen k worker response: {error}"),
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mixed_domain_quality(n_elements: u32) -> fullmag_ir::MeshQualityIR {
+        fullmag_ir::MeshQualityIR {
+            n_elements,
+            sicn_min: 0.04972165803390353,
+            sicn_max: 0.8692633548993621,
+            sicn_mean: 0.21182961426295854,
+            sicn_p5: 0.058568572244461284,
+            sicn_histogram: vec![1, 2, 3],
+            gamma_min: 0.125,
+            gamma_mean: 0.75,
+            gamma_histogram: vec![3, 2, 1],
+            volume_min: 1.3e-27,
+            volume_max: 2.7e-25,
+            volume_mean: 4.5e-26,
+            volume_std: 7.1e-27,
+            avg_quality: 0.5,
+        }
+    }
+
+    fn worker_request(plan: FemEigenPlanIR) -> EigenKWorkerRequestV1 {
+        EigenKWorkerRequestV1 {
+            protocol: EIGEN_K_WORKER_PROTOCOL_V1.into(),
+            expected_plan_sha256: plan_sha256(&plan).unwrap(),
+            expected_equilibrium_artifact_sha256: format!("sha256:{}", "a".repeat(64)),
+            plan,
+            outputs: Vec::new(),
+            execution: serde_json::from_value(serde_json::json!({
+                "requested_device": "cpu", "resolved_device": "cpu",
+                "requested_precision": "double", "resolved_precision": "double",
+                "requested_engine": "auto",
+                "resolved_engine": "floquet_airbox_cpu_schur_slepc",
+                "fallback_used": false, "selection_reason": "worker digest fixture"
+            }))
+            .unwrap(),
+            parallel_policy: ParallelExecutionPolicyIR::default(),
+            thread_budget: EigenKWorkerThreadBudgetV1 {
+                requested_threads: 1,
+                resolved_threads: 1,
+                cap_reason: "parent_admission_pending".into(),
+                allocation_cpu_cores: 1.0,
+                host_cpu_cores: 1,
+            },
+            sample_index: 1,
+            k_vector: [0.0, -2.0e7, 0.0],
+            artifact_dir: PathBuf::from("worker-artifacts"),
+            response_path: PathBuf::from("worker-response.json"),
+            cancel_path: None,
+        }
+    }
+
+    #[test]
+    fn canonical_json_sorts_nested_keys_and_preserves_arrays_and_scalars() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"z":[{"z":-0.0,"a":1.3e-11},3,2,1],"a":"quoted\"value"}"#)
+                .unwrap();
+        let mut encoded = Vec::new();
+        write_canonical_plan_json(&input, &mut encoded).unwrap();
+        assert_eq!(
+            String::from_utf8(encoded).unwrap(),
+            r#"{"a":"quoted\"value","z":[{"a":1.3e-11,"z":-0.0},3,2,1]}"#
+        );
+    }
+
+    #[test]
+    fn mixed_domain_plan_digest_survives_permuted_full_request_roundtrip() {
+        let mut plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, -2.0e7, 0.0],
+        });
+        plan.external_field = Some([79577.47154594767, 0.0, 0.0]);
+        plan.equilibrium = EquilibriumSourceIR::Artifact {
+            path: "equilibrium.v8.json".into(),
+        };
+        let air = mixed_domain_quality(28536);
+        let film = mixed_domain_quality(1476);
+        plan.mesh.per_domain_quality.insert(0, air.clone());
+        plan.mesh.per_domain_quality.insert(1, film.clone());
+        let request = worker_request(plan);
+        let expected = request.expected_plan_sha256.clone();
+        let encoded = serde_json::to_string(&request).unwrap();
+        let original_map = serde_json::to_string(&request.plan.mesh.per_domain_quality).unwrap();
+        for domains in [
+            format!(
+                "{{\"0\":{},\"1\":{}}}",
+                serde_json::to_string(&air).unwrap(),
+                serde_json::to_string(&film).unwrap()
+            ),
+            format!(
+                "{{\"1\":{},\"0\":{}}}",
+                serde_json::to_string(&film).unwrap(),
+                serde_json::to_string(&air).unwrap()
+            ),
+        ] {
+            let permuted = encoded.replace(
+                &format!("\"per_domain_quality\":{original_map}"),
+                &format!("\"per_domain_quality\":{domains}"),
+            );
+            assert!(permuted.contains(&format!("\"per_domain_quality\":{domains}")));
+            let child: EigenKWorkerRequestV1 = serde_json::from_str(&permuted).unwrap();
+            assert_eq!(child.plan, request.plan);
+            assert_eq!(plan_sha256(&child.plan).unwrap(), expected);
+            validate_input_digests(
+                &plan_sha256(&child.plan).unwrap(),
+                &expected,
+                &child.expected_equilibrium_artifact_sha256,
+                &request.expected_equilibrium_artifact_sha256,
+            )
+            .unwrap();
+        }
+        let mut reverse_insertion = request.plan.clone();
+        reverse_insertion.mesh.per_domain_quality.clear();
+        reverse_insertion.mesh.per_domain_quality.insert(1, film);
+        reverse_insertion.mesh.per_domain_quality.insert(0, air);
+        assert_eq!(plan_sha256(&reverse_insertion).unwrap(), expected);
+
+        let mut changed = request.plan.clone();
+        changed.material.exchange_stiffness *= 2.0;
+        let changed_digest = plan_sha256(&changed).unwrap();
+        assert_ne!(changed_digest, expected);
+        let error = validate_input_digests(
+            &changed_digest,
+            &expected,
+            &request.expected_equilibrium_artifact_sha256,
+            &request.expected_equilibrium_artifact_sha256,
+        )
+        .unwrap_err();
+        assert!(error
+            .message
+            .contains(&format!("actual_plan_sha256={changed_digest}")));
+        assert!(error
+            .message
+            .contains(&format!("expected_plan_sha256={expected}")));
+        assert!(error
+            .message
+            .contains("actual_equilibrium_artifact_sha256="));
+        assert!(error
+            .message
+            .contains("expected_equilibrium_artifact_sha256="));
+        assert!(
+            validate_input_digests(&expected, &expected, "sha256:changed", "sha256:original")
+                .is_err()
+        );
+    }
 }

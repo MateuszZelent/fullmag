@@ -1,3 +1,54 @@
+<!-- canonical-worker-plan-digest-20261006 -->
+## Checkpoint — przyczyna digest mismatch potwierdzona w zachowanych taskach
+
+Request worker000000 dla sample1/k=-20rad/um zachował exact raw plan hash
+f993eb61560493de2d102a500cbb1b26e3eb7647f3e991d00dda78961c29eebd,
+zgodny z expected_plan_sha256; bajty równowagi także zgodne ze stored SHA.
+Transport nie zmienił wejściowego JSON. FemEigenPlanIR zawiera MeshIR
+per_domain_quality HashMap z kluczami0,1. Ponowna deserializacja tworzy
+HashMap z niezależną kolejnością iteracji. plan_sha256 hashuje bezpośrednie
+serde_json::to_vec(plan), więc nieistotna kolejność map zmienia digest.
+Zamiana wyłącznie tych dwóch wpisów oryginalnego JSON daje inny SHA,
+bez zmiany parametrów ani liczb. Child nie raportował actual hash;
+nie przypisujemy konkretnej permutacji po fakcie. Float roundtrip włączone
+w obu wersjach; worker/pool/IR/Cargo identyczne z runtime1f0e.
+
+Naprawa właściciela eigen_k_worker::plan_sha256: deterministyczny JSON
+z rekurencyjnie uporządkowanymi kluczami obiektów. Kolejność tablic,
+wartości f64, SI, równania, material state i residual thresholds bez zmian.
+Guard rodzic/dziecko i hash bajtów równowagi pozostają wymagane. Prywatny
+format tasków bez zmiany; identyczność wykonawcy/build identity w handshake
+wymusza ten sam algorytm po obu stronach. Historyczne taski i wyniki nie są
+przepisywane; ich źródłowa wersja algorytmu pozostaje przypięta do runtime.
+Nowa diagnostyka zapisuje actual/expected hashe, bez danych wejściowych.
+Implementacja, dwie regresje i source review PASS; parser Rust/YAML PASS.
+Regresje wykonania i świeży runtime pozostają OPEN. CI3878: frontend, browser
+fixture, Python, generated API, API hygiene, FDM i Windows volatile PASS.
+API976 PASS /1 FAIL w coupled M3 capture Oersted: oddzielna diagnoza trwa.
+Regresje roundtrip/map-order i zmiany fizyki wykonywane wyłącznie w GitHub.
+Do kwalifikacji potrzeba nowego managed runtime i ponowienia adaptive15.
+Pełny zakres celu pozostaje zachowany.
+
+<!-- adaptive-signed15-worker-integrity-20261005 -->
+## Checkpoint — podpisany sweep15 uruchomiony, błąd integralności workera
+
+Wszystkie zmiany źródeł wypchnięto do3878f33431ad298bd8a90a5f4c7b2de4b83e8d25;
+worktree czysty przy push. CI #37379147889 in_progress przy odczycie.
+Uruchomiono istniejącą kampanię de-smoke-signed-fifteen (-25..25 rad/um,
+15 punktów), wersjonowany model ba0045fef, #233, L2/trzy warstwy,
+FGMRES, EPS/KSP1e-9, restart8, physical rtol1e-8, adaptive CPU90% RAM80%.
+Redundantny single-k-only diagnostic growth override usunięto po odmowie dry-run;
+niezmienny model ustawia i publikuje ten sam growth1.3.
+Kolejny managed dry-run PASS i kontener rzeczywiście wykonał relaksację
+oraz bazowy solve, lecz pool przerwał z RunError:
+eigen k worker input digest mismatch. Runtime/driver exit1, brak pełnego
+sweepa, kontener verified_absent; run633992f212a8408abea195784abc1076 zachowany.
+
+Diagnostyka producenta/odbiorcy task digest w eigen_k_pool.rs i
+eigen_k_worker.rs trwa. Nie wyłączamy integralności, nie zastępujemy adaptive
+trybem serial i nie wykorzystujemy niepełnego runa jako zweryfikowanej krzywej.
+Para ±10 pozostaje udanym, odrębnym wynikiem; pełny cel nadal OPEN.
+
 <!-- stage-status-bootstrap-guard-20261005 -->
 ## Checkpoint — consumer stages blokuje status do potwierdzenia sesji
 
