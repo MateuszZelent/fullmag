@@ -173,3 +173,52 @@ Not wired or not verified:
   the next scan or open corrects it; a database written by this build is
   read-only for an older CLI or Python at schema version 1.
 - Nothing ran inside a packaged desktop application.
+
+---
+
+## 6. Workspace API in the renderer and the three-kind inspector
+
+Added on 2026-10-05 (branch `codex/ws-inspector-20261005`), so the browser build
+shows the same lists and details as the desktop app.
+
+- **Data flow.** `api.workspace` (typed client, `src/kernel/api/ControlRoomApi.ts`)
+  serves `GET /v2/workspace/items`, `/items/{id}`, `/roots`, `POST /scan`, pin,
+  forget and add-by-path. The routes and their wire types are hand-declared
+  (`apiPaths.ts`, `model/workspaceApiTypes.ts`) until the generated OpenAPI
+  types carry them; every parser leaves a missing optional field `undefined`
+  and the view says "unavailable" for it. `useWorkspaceItems` and
+  `useWorkspaceItemDetail` read through `useResource`: one cached resource per
+  query, refetched when the `workspace:` prefix is invalidated (pin, forget,
+  scan), on focus and when the document becomes visible, never on a timer.
+- **Source choice** (`model/workspaceSource.ts`, `useWorkspaceSource.ts`): the
+  backend answer is the source of every list once it arrives. A 404/405/501
+  (older backend) or a failed read falls back to the desktop host's own recent
+  index and script list; with neither the list says it needs the desktop app
+  or a backend that serves the workspace database. Dialogs, reading, running
+  and revealing a script stay on the desktop host, which reaches its own
+  record of an API script by path.
+- **Inspectors by kind:** project (Overview, Authors, History, Runs), script
+  (Overview with syntax, imports and environment reads; History with edit
+  events before/after; Runs from run events and linked result folders; the
+  Run in new window panel) and result folder (Overview, Stages, History; the
+  source links to and selects the script or project). Header with star and
+  more-menu, path with copy, chips, context banner, and the bottom action bar
+  (primary action, open-options dropdown, open-externally button) follow the
+  sketch.
+- **Open results viewer** is enabled only where a saved-results viewer route
+  exists: the Results module of an open project (`SavedResultsBrowser`). A
+  folder linked to a project opens that project on Results; a folder written
+  by a script, or with no source, shows the button disabled with the reason.
+  The **download** button on the Runs tab is disabled ("Downloading results is
+  not available yet"): there is no route for it.
+- **Settings > Indexed locations:** list and edit the roots (absolute paths are
+  typed in a browser; the desktop app also offers its native folder picker),
+  save, **Scan now** with the report. **Add file by path…** in the list footer
+  adds one existing path through `POST /v2/workspace/items`.
+- **Evidence:** vitest for the parsers, adapters, hooks (mount, focus merge,
+  refetch after actions, 404 fallback, unavailable), source selection and every
+  inspector; `check:start-screen-browser` now renders the three real inspectors
+  through Vite's SSR loader into the real stylesheets and asserts the sketch
+  layout (364 px right column, preview, title row, tabs, sections, action bar)
+  and WCAG AA of every text they draw in both themes. Not verified against a
+  real backend serving the routes, and nothing ran in a packaged desktop app.

@@ -1097,6 +1097,156 @@
   flex: 1;
 }
 
+/* Action bar of the sketch: primary button joined to its dropdown, then an
+   open-externally icon. Extra rows (Run in new window) sit above the bar. */
+.fm-start-actionbar {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.fm-start-actionbar__extra {
+  display: grid;
+  gap: var(--fm-space-1);
+}
+
+.fm-start-actionbar__bar {
+  display: flex;
+  gap: var(--fm-space-2);
+}
+
+.fm-start-btn-group {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.fm-start-btn-group .fm-start-inspector__open {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.fm-start-btn-group__split {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 0 var(--fm-space-2);
+}
+
+/* Runs tab: a run id that selects its result folder, and the viewer buttons. */
+.fm-start-runs__link {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.fm-start-runs__link:hover {
+  text-decoration: underline;
+}
+
+.fm-start-runs__actions {
+  display: flex;
+  gap: var(--fm-space-2);
+  margin-top: var(--fm-space-3);
+}
+
+.fm-start-runs__actions > :first-child {
+  flex: 1;
+}
+
+/* Adding a path by typing it (a browser has no file picker). */
+.fm-start-addpath {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--fm-space-2);
+  margin-top: var(--fm-space-2);
+}
+
+.fm-start-addpath__field {
+  display: grid;
+  flex: 1;
+  gap: var(--fm-space-1);
+  min-width: 14rem;
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-addpath__error {
+  margin: var(--fm-space-1) 0 0;
+  color: var(--fm-danger);
+  font-size: var(--fm-font-size-xs);
+  flex-basis: 100%;
+}
+
+/* Settings: indexed locations. */
+.fm-start-roots {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0 0 var(--fm-space-3);
+  padding: 0;
+  list-style: none;
+}
+
+.fm-start-roots__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-3);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-start-roots__path {
+  flex: 1 1 14rem;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-start-roots__kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-3);
+}
+
+.fm-start-roots__check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-roots__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2);
+  margin-top: var(--fm-space-3);
+}
+
+.fm-start-scan {
+  margin-top: var(--fm-space-2);
+}
+
+.fm-start-section__title + .fm-start-inspector__note {
+  margin: var(--fm-space-1) 0 var(--fm-space-3);
+}
+
+.fm-start-scan__warnings {
+  margin: var(--fm-space-1) 0 0;
+  padding-left: var(--fm-space-4);
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+}
+
 /* ── Thumbnails, cards, view toggle ───────────────────────────────────── */
 
 /* A render is data: the frame keeps the viewport background in both themes. */
@@ -1156,7 +1306,7 @@
   top: var(--fm-space-2);
   left: var(--fm-space-3);
   z-index: var(--fm-z-base);
-  color: var(--fm-start-meta);
+  color: var(--fm-start-thumb-text);
   font-size: var(--fm-start-section-size);
   font-weight: var(--fm-font-weight-semibold);
   letter-spacing: var(--fm-start-section-tracking);

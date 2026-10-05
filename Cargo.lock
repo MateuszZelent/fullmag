@@ -1154,9 +1154,11 @@ dependencies = [
  "fullmag-runtime-control",
  "fullmag-session",
  "fullmag-workspace",
+ "fullmag-workspace-inspect",
  "futures-core",
  "libc",
  "png 0.17.16",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -1234,12 +1236,14 @@ dependencies = [
  "fullmag-runtime-control",
  "fullmag-session",
  "fullmag-workspace",
+ "fullmag-workspace-inspect",
  "libc",
  "rayon",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "uuid",
 ]
 
@@ -1251,6 +1255,7 @@ dependencies = [
  "fullmag-application",
  "fullmag-runtime-control",
  "fullmag-workspace",
+ "fullmag-workspace-inspect",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1423,7 +1428,21 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "fullmag-workspace-inspect"
+version = "0.1.0"
+dependencies = [
+ "fullmag-application",
+ "fullmag-workspace",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "utoipa",
 ]
 
 [[package]]

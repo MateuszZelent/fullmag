@@ -44,14 +44,14 @@ __all__ = [
     "state_dir",
 ]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DATABASE_FILE_NAME = "workspace.db"
 MAX_EVENTS_PER_ITEM = 500
 MAX_SCRIPT_BYTES = 1024 * 1024
 _BUSY_TIMEOUT_SECONDS = 5.0
 
-_KINDS = ("project", "script")
-_EVENTS = ("open", "save", "run", "create", "import", "pin", "unpin", "forget")
+_KINDS = ("project", "script", "result")
+_EVENTS = ("open", "save", "run", "create", "import", "pin", "unpin", "forget", "edit")
 _COUNTS_AS_USE = frozenset({"open", "run", "save", "create", "import"})
 _SORTS = {
     "last_used": " ORDER BY pinned DESC, last_used_at DESC, id DESC",
@@ -118,7 +118,55 @@ CREATE TABLE thumbnails (
 );
 """
 _SCHEMA_V2 = tuple(part.strip() for part in _SCHEMA_V2_SQL.split(";") if part.strip())
-_MIGRATIONS = (_SCHEMA_V1, _SCHEMA_V2)
+
+# Schema version 3 allows kind 'result' and event 'edit'
+# (crates/fullmag-workspace/schema/v3.sql). It rebuilds two tables, so the
+# migration runs with foreign keys off (see _migrate).
+_SCHEMA_V3_SQL = """\
+CREATE TABLE items_v3 (
+  id              INTEGER PRIMARY KEY,
+  kind            TEXT NOT NULL CHECK (kind IN ('project','script','result')),
+  path            TEXT NOT NULL,
+  path_key        TEXT NOT NULL UNIQUE,
+  name            TEXT NOT NULL,
+  project_id      TEXT,
+  first_seen_at   TEXT NOT NULL,
+  last_used_at    TEXT NOT NULL,
+  use_count       INTEGER NOT NULL DEFAULT 0,
+  pinned          INTEGER NOT NULL DEFAULT 0,
+  forgotten       INTEGER NOT NULL DEFAULT 0,
+  size_bytes      INTEGER,
+  modified_at     TEXT,
+  status          TEXT NOT NULL DEFAULT 'ready'
+                  CHECK (status IN ('ready','missing','failed','migrate','readonly')),
+  meta            TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(meta))
+);
+INSERT INTO items_v3 (id, kind, path, path_key, name, project_id, first_seen_at, last_used_at,
+  use_count, pinned, forgotten, size_bytes, modified_at, status, meta)
+  SELECT id, kind, path, path_key, name, project_id, first_seen_at, last_used_at,
+  use_count, pinned, forgotten, size_bytes, modified_at, status, meta FROM items;
+DROP TABLE items;
+ALTER TABLE items_v3 RENAME TO items;
+CREATE INDEX items_recent ON items (forgotten, kind, last_used_at DESC);
+CREATE INDEX items_project_id ON items (project_id) WHERE project_id IS NOT NULL;
+
+CREATE TABLE events_v3 (
+  id        INTEGER PRIMARY KEY,
+  item_id   INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  at        TEXT NOT NULL,
+  kind      TEXT NOT NULL CHECK (kind IN
+            ('open','save','run','create','import','pin','unpin','forget','edit')),
+  actor     TEXT NOT NULL CHECK (actor IN ('desktop','cli','python','web')),
+  detail    TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail))
+);
+INSERT INTO events_v3 (id, item_id, at, kind, actor, detail)
+  SELECT id, item_id, at, kind, actor, detail FROM events;
+DROP TABLE events;
+ALTER TABLE events_v3 RENAME TO events;
+CREATE INDEX events_item ON events (item_id, at DESC);
+"""
+_SCHEMA_V3 = tuple(part.strip() for part in _SCHEMA_V3_SQL.split(";") if part.strip())
+_MIGRATIONS = (_SCHEMA_V1, _SCHEMA_V2, _SCHEMA_V3)
 
 
 class WorkspaceError(RuntimeError):
@@ -181,7 +229,8 @@ def recent(
 ) -> list[dict[str, Any]]:
     """The start-screen list: recently used projects and scripts.
 
-    ``kind`` is ``None``/``"all"``, ``"project"`` or ``"script"``. ``sort`` is
+    ``kind`` is ``None``/``"all"`` (projects and scripts), ``"project"``,
+    ``"script"`` or ``"result"`` (scanned result folders). ``sort`` is
     ``"last_used"`` (default), ``"name"``, ``"modified"`` or ``"use_count"``;
     pinned items always come first and ties break by id, so the order equals
     the Rust query for the same database. ``search`` is a case-insensitive
@@ -197,7 +246,9 @@ def recent(
     if kind in (None, "all"):
         kind = None
     elif kind not in _KINDS:
-        raise ValueError(f"kind must be None, 'all', 'project' or 'script', not {kind!r}")
+        raise ValueError(
+            f"kind must be None, 'all', 'project', 'script' or 'result', not {kind!r}"
+        )
     if sort not in _SORTS:
         raise ValueError(f"sort must be one of {sorted(_SORTS)}, not {sort!r}")
     path = database_path(database)
@@ -214,6 +265,8 @@ def recent(
         if kind is not None:
             args["kind"] = kind
             sql += " AND kind = :kind"
+        else:
+            sql += " AND kind != 'result'"
         if not include_missing:
             sql += " AND status != 'missing'"
         term = (search or "").strip()
@@ -357,18 +410,28 @@ def _user_version(connection: sqlite3.Connection) -> int:
 
 
 def _migrate(connection: sqlite3.Connection) -> None:
-    connection.execute("BEGIN IMMEDIATE")
+    # Version 3 rebuilds tables other tables reference; dropping them while
+    # foreign keys are enforced would cascade-delete rows. The pragma is a
+    # no-op inside a transaction, so it is switched around it.
+    foreign_keys = int(connection.execute("PRAGMA foreign_keys").fetchone()[0])
+    connection.execute("PRAGMA foreign_keys = OFF")
     try:
-        current = _user_version(connection)
-        if current < SCHEMA_VERSION:
-            for step in _MIGRATIONS[current:SCHEMA_VERSION]:
-                for statement in step:
-                    connection.execute(statement)
-            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        connection.execute("COMMIT")
-    except BaseException:
-        connection.execute("ROLLBACK")
-        raise
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = _user_version(connection)
+            if current < SCHEMA_VERSION:
+                for step in _MIGRATIONS[current:SCHEMA_VERSION]:
+                    for statement in step:
+                        connection.execute(statement)
+                if connection.execute("PRAGMA foreign_key_check").fetchall():
+                    raise sqlite3.IntegrityError("migration left dangling foreign keys")
+                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {'ON' if foreign_keys else 'OFF'}")
 
 
 def _stamp(moment: datetime) -> str:

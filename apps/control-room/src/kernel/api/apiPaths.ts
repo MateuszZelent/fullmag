@@ -1115,3 +1115,23 @@ export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(
 );
 
 export const PLATFORM_OUTPUT_STORAGE_PATH = openApiV2Path("/v2/platform/output-storage");
+
+// Workspace database routes (start screen).
+
+export const WORKSPACE_ITEMS_PATH = openApiV2Path("/v2/workspace/items");
+export const WORKSPACE_ITEM_PATH = openApiV2Path("/v2/workspace/items/{id}");
+export const WORKSPACE_ITEM_THUMBNAIL_PATH = openApiV2Path(
+  "/v2/workspace/items/{id}/thumbnail",
+);
+export const WORKSPACE_ITEM_PIN_PATH = openApiV2Path("/v2/workspace/items/{id}/pin");
+export const WORKSPACE_ITEM_FORGET_PATH = openApiV2Path("/v2/workspace/items/{id}/forget");
+export const WORKSPACE_ITEM_HISTORY_PATH = openApiV2Path(
+  "/v2/workspace/items/{id}/history",
+);
+export const WORKSPACE_ROOTS_PATH = openApiV2Path("/v2/workspace/roots");
+export const WORKSPACE_SCAN_PATH = openApiV2Path("/v2/workspace/scan");
+
+/** Absolute URL of an item's thumbnail, for an <img>; the id is path-encoded. */
+export function workspaceItemThumbnailUrl(baseUrl: string, id: string): string {
+  return `${baseUrl}${WORKSPACE_ITEM_THUMBNAIL_PATH.replace("{id}", encodeURIComponent(id))}`;
+}

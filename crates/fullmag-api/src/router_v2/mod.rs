@@ -812,6 +812,38 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .put(handlers::workspace::replace_workspace_active_node),
         )
         .route(
+            "/v2/workspace/items",
+            get(handlers::workspace_items::list_items).post(handlers::workspace_items::post_item),
+        )
+        .route(
+            "/v2/workspace/items/:id",
+            get(handlers::workspace_items::get_item),
+        )
+        .route(
+            "/v2/workspace/items/:id/thumbnail",
+            get(handlers::workspace_items::get_item_thumbnail),
+        )
+        .route(
+            "/v2/workspace/items/:id/pin",
+            post(handlers::workspace_items::pin_item),
+        )
+        .route(
+            "/v2/workspace/items/:id/forget",
+            post(handlers::workspace_items::forget_item),
+        )
+        .route(
+            "/v2/workspace/items/:id/history",
+            get(handlers::workspace_items::get_item_history),
+        )
+        .route(
+            "/v2/workspace/roots",
+            get(handlers::workspace_items::get_roots).put(handlers::workspace_items::put_roots),
+        )
+        .route(
+            "/v2/workspace/scan",
+            post(handlers::workspace_items::post_scan),
+        )
+        .route(
             "/v2/sessions/current/analysis/eigenmodes/spectrum",
             get(handlers::analysis::get_spectrum),
         )

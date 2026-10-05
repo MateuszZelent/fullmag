@@ -25,6 +25,7 @@ mod live_workspace;
 mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
+mod run_manifest;
 mod runtime_service_client;
 mod runtime_supervisor;
 mod saved_fem_snapshot_gate;

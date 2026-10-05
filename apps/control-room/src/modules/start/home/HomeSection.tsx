@@ -7,7 +7,7 @@ import { startSettings } from "../model/startSettings";
 import type { ComputeProbeState, RecentEntry } from "../model/types";
 import { useContinueLive } from "../model/useContinueLive";
 import type { RecentIndexController } from "../model/useRecentIndex";
-import type { WorkspaceScriptsController } from "../model/useWorkspaceScripts";
+import type { WorkspaceResultsView, WorkspaceScriptsView } from "../model/workspaceSource";
 
 import { SectionHeader } from "../ui/SectionHeader";
 
@@ -35,7 +35,9 @@ function useToday(): string {
 
 export interface HomeSectionProps {
   readonly recent: RecentIndexController;
-  readonly scripts: WorkspaceScriptsController;
+  readonly scripts: WorkspaceScriptsView;
+  readonly results: WorkspaceResultsView;
+  readonly onAddPath: ((path: string) => Promise<string | null>) | null;
   /** Runs the native script picker; the same flow as the palette command. */
   readonly onOpenScript: () => void;
   readonly canOpenScript: boolean;
@@ -59,6 +61,8 @@ export function HomeSection({
   initialFocusRef,
   recent,
   scripts,
+  results,
+  onAddPath,
   onOpenScript,
   canOpenScript,
   scriptFlowNotice = null,
@@ -139,6 +143,8 @@ export function HomeSection({
       <RecentProjects
         recent={recent}
         scripts={scripts}
+        results={results}
+        onAddPath={onAddPath}
         browseDisabledReason={browseDisabledReason}
         onBrowse={() => onRunCommand("start.browse")}
         onOpenScript={onOpenScript}
