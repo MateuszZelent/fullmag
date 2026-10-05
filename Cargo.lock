@@ -1261,6 +1261,8 @@ dependencies = [
  "tauri-plugin-shell",
  "tempfile",
  "url",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

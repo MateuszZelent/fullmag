@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { script } from "../model/__fixtures__/workspaceScripts";
-import { RUN_SCRIPT_UNAVAILABLE } from "../model/scriptRowModel";
+import { RUN_NEEDS_DESKTOP } from "../model/scriptRun";
 
 import { ProjectInspector } from "./ProjectInspector";
 import { ScriptDetails, type ScriptDetailsProps } from "./ScriptDetails";
@@ -73,13 +73,15 @@ describe("ScriptDetails", () => {
     expect(html).toContain("Pin sp4");
   });
 
-  it("keeps Run in new window disabled, with the reason, and wires nothing to it", () => {
+  it("disables Run in new window, with the reason, when there is no desktop host", () => {
     const html = render();
     const run = button(html, "run-script");
     expect(run).toContain(' disabled=""');
-    expect(run).toContain(`title="${RUN_SCRIPT_UNAVAILABLE}"`);
+    expect(run).toContain(`title="${RUN_NEEDS_DESKTOP}"`);
     expect(run).toContain("aria-describedby=");
-    expect(html).toContain(`${RUN_SCRIPT_UNAVAILABLE}.`);
+    expect(html).toContain(`${RUN_NEEDS_DESKTOP}.`);
+    // Nothing is offered until a run was prepared.
+    expect(html).not.toContain("Review and run");
     // The other actions are live.
     expect(button(html, "open-script")).not.toContain(' disabled=""');
     expect(button(html, "copy-command")).not.toContain(' disabled=""');

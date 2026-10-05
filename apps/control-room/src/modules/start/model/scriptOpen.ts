@@ -27,7 +27,7 @@ export type ScriptOpener = (request: ScriptOpenRequest) => Promise<string | null
  * to bind, so `resolveScriptOpener` returns null and every caller shows this.
  */
 export const SCRIPT_OPEN_UNAVAILABLE =
-  "This build cannot open a Python script as a project yet: the API creates projects empty or from .fms archives and has no operation that accepts script text. Save the script and run it with the fullmag command line.";
+  "This build cannot open a Python script as a project yet: the API creates projects empty or from .fms archives and has no operation that accepts script text. Save the script, then open it from Recent scripts and use Run in new window, or run it with the fullmag command line.";
 
 /** The one place a script-open operation is bound once the API provides one. */
 export function resolveScriptOpener(): ScriptOpener | null {

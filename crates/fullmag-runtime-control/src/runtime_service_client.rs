@@ -75,7 +75,7 @@ fn require_api_instance_header(headers: &str) -> Result<String> {
     Ok((*value).to_owned())
 }
 
-pub(crate) fn verify_api_identity(port: u16) -> Result<String> {
+pub fn verify_api_identity(port: u16) -> Result<String> {
     let (document, instance) = read_api_document(port)?;
     let local = fullmag_build_info::identity();
     require_api_identity(&document, local.git_commit, local.source_snapshot_sha256)?;

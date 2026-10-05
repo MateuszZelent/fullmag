@@ -92,6 +92,7 @@ export interface ExtendedAuthor extends FullmagAuthor {
   readonly title: string;
   readonly fullName: string;
   readonly initials: string;
+  readonly institution: string;
   readonly institutionShort: string;
   readonly department: string;
   readonly location: string;

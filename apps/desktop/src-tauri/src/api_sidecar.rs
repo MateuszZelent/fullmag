@@ -144,9 +144,29 @@ impl Drop for ApiSidecar {
 }
 
 fn find_api_binary() -> Option<PathBuf> {
+    find_named_binary("fullmag-api")
+}
+
+/// The `fullmag` command line, found the way the API sidecar is.
+pub(crate) fn find_cli_binary() -> Option<PathBuf> {
+    find_named_binary("fullmag")
+}
+
+/// The repository (or install) root and the runtime state root that processes
+/// started from `exe` share with the API sidecar.
+pub(crate) fn runtime_roots(exe: &std::path::Path) -> Result<(PathBuf, PathBuf), String> {
+    let repo_root = discover_repo_root(exe);
+    let state_root = sidecar_state_root(
+        &repo_root,
+        std::env::var_os("FULLMAG_STATE_ROOT").map(PathBuf::from),
+    )?;
+    Ok((repo_root, state_root))
+}
+
+fn find_named_binary(stem: &str) -> Option<PathBuf> {
     let self_exe = std::env::current_exe().ok()?;
     let self_dir = self_exe.parent()?;
-    let name = format!("fullmag-api{EXE_SUFFIX}");
+    let name = format!("{stem}{EXE_SUFFIX}");
 
     let mut candidates: Vec<PathBuf> = vec![self_dir.join(&name)];
 

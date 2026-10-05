@@ -5,6 +5,9 @@ mod commands;
 mod compute_probe;
 mod provenance;
 mod recent_index;
+mod script_run;
+mod script_run_core;
+mod script_run_process;
 mod workspace_commands;
 
 use api_sidecar::ApiSidecar;
@@ -24,7 +27,14 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
-            app.manage(WorkspaceHost::default());
+            let workspace = WorkspaceHost::default();
+            app.manage(workspace.clone());
+            app.manage(script_run::ScriptRunHost::default());
+            // Runs an earlier session left without a database event are recorded now.
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || script_run::reconcile_at_startup(&handle, &workspace));
+            }
             let (url, sidecar) = if let Some(ref url) = external_url {
                 let api_base = std::env::var("FULLMAG_API_BASE")
                     .unwrap_or_else(|_| "http://localhost:8083".into());
@@ -95,6 +105,15 @@ fn main() {
             workspace_commands::workspace_open_script,
             workspace_commands::workspace_reveal,
             workspace_commands::workspace_read_script_text,
+            script_run::script_pick,
+            script_run::script_open_recent,
+            script_run::script_preflight,
+            script_run::script_run,
+            script_run::script_run_status,
+            script_run::script_run_stop,
+            script_run::script_trust_forget,
+            script_run::python_interpreter_status,
+            script_run::python_interpreter_set,
         ])
         .run(tauri::generate_context!())
         .expect("error while running fullmag-ui");
