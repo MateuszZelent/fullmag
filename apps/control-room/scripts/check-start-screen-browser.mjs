@@ -40,7 +40,10 @@ const markup = `
           <span class="fm-start-row__size">120 lines</span><span class="fm-start-row__opened">today</span><span class="fm-start-row__pin"></span>
         </div></div>
       </div></main>
-      <aside class="fm-start__inspector" id="inspector">Inspector</aside>
+      <aside class="fm-start__inspector fm-start-inspector" id="inspector">
+        <div class="fm-start-inspector__body"><p class="fm-start-inspector__note">Inspector</p></div>
+        <footer class="fm-start-inspector__foot"><button class="fm-start-inspector__open" id="create-script">Waiting for the Save dialog…</button></footer>
+      </aside>
       <footer class="fm-start-status"><span class="fm-start-status__item">No active session</span></footer>
     </div>
   </div>`;
@@ -94,6 +97,11 @@ try {
         pyBadgeWidth: document.querySelector("#py-badge").getBoundingClientRect().width,
         pathDirection: getComputedStyle(path).direction,
         pathTruncates: path.scrollWidth >= path.clientWidth,
+        createScriptFits: (() => {
+          const button = document.querySelector("#create-script").getBoundingClientRect();
+          const panel = inspector.getBoundingClientRect();
+          return button.width > 0 && button.left >= panel.left - 1 && button.right <= panel.right + 1;
+        })(),
       };
     });
   };
@@ -109,6 +117,8 @@ try {
   assert.ok(wide.statusAtBottom && wide.statusFullWidth, "Status strip spans the bottom");
   assert.ok(wide.railAboveStatus, "Rail ends above the status strip");
   assert.equal(wide.pathDirection, "ltr", "Paths are not right-to-left (it reorders Windows backslashes)");
+
+  assert.ok(wide.createScriptFits, "The longest Create script label stays inside the inspector at 1680px");
 
   const narrow = await layout(1000, 800);
   assert.equal(narrow.columns, 2, "Two columns below 1180px");

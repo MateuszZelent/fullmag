@@ -7,9 +7,9 @@ import { Button } from "@/shared/ui/Button";
 
 import { copyScript, saveScriptFile } from "../model/scriptExport";
 import {
-  createProjectFromTemplate,
+  createScriptFromTemplate,
   templateCreateState,
-  type ScriptOpener,
+  type ScriptSaver,
 } from "../model/scriptOpen";
 import { startScreenStore } from "../model/startScreenState";
 import { estimateFor, templateScript, templateScriptFileName, type StudyTemplate } from "../model/templates";
@@ -19,24 +19,24 @@ import { SolverBadge } from "../ui/SolverBadge";
 export function TemplateDetails({
   template,
   compute,
-  scriptOpener = null,
+  scriptSaver = null,
 }: {
   readonly template: StudyTemplate;
   readonly compute: ComputeProbeState;
-  /** Opens the template script as a project; null when this build has no such operation. */
-  readonly scriptOpener?: ScriptOpener | null;
+  /** Saves the template script as a new file; null where there is no desktop host. */
+  readonly scriptSaver?: ScriptSaver | null;
 }) {
   const estimate = estimateFor(template, compute);
-  const create = templateCreateState(template, scriptOpener);
+  const create = templateCreateState(template, scriptSaver);
   const script = templateScript(template);
   const fileName = templateScriptFileName(template);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const createProject = async () => {
+  const createScript = async () => {
     setBusy(true);
     setMessage(null);
-    setMessage(await createProjectFromTemplate(template, scriptOpener));
+    setMessage(await createScriptFromTemplate(template, scriptSaver));
     setBusy(false);
   };
   const save = () => {
@@ -87,11 +87,13 @@ export function TemplateDetails({
           <section className="fm-start-kv">
             <h3 className="fm-start-kv__title">Python script</h3>
             <p className="fm-start-inspector__note">
-              Canonical Fullmag Python, SI units. Run it with <code>{`fullmag ${fileName}`}</code>.
+              Canonical Fullmag Python, SI units. Create script asks where to save a copy, adds it to
+              Recent scripts and selects it; nothing runs until you choose Run in new window. Or run
+              it yourself with <code>{`fullmag ${fileName}`}</code>.
             </p>
             <div className="fm-start-report__actions">
               <Button onClick={save} size="sm" type="button" variant="secondary">
-                <Download aria-hidden="true" size={12} /> {`Save ${fileName}`}
+                <Download aria-hidden="true" size={12} /> {`Download ${fileName}`}
               </Button>
               <Button onClick={() => void copy()} size="sm" type="button" variant="secondary">
                 <Copy aria-hidden="true" size={12} /> Copy script
@@ -108,12 +110,12 @@ export function TemplateDetails({
         <Button
           className="fm-start-inspector__open"
           disabled={!create.available || busy}
-          onClick={() => void createProject()}
+          onClick={() => void createScript()}
           title={create.reason ?? undefined}
           type="button"
           variant="primary"
         >
-          {busy ? "Creating…" : "Create project from template"}
+          {busy ? "Waiting for the Save dialog…" : "Create script from template…"}
         </Button>
       </footer>
       {create.reason ? (

@@ -49,7 +49,7 @@ export function TemplatesSection({ compute }: { readonly compute: ComputeProbeSt
           <h1>Templates</h1>
           <p>
             Ready-made studies, each a canonical Fullmag Python script with geometry, materials and
-            a configured solver. Select one to create a project from it or to save the script.
+            a configured solver. Select one and create a script from it: Fullmag asks where to save the .py file, lists it under Recent scripts and lets you run it from there.
           </p>
         </div>
       </div>
