@@ -237,6 +237,8 @@ def _verified_build_source_snapshot(
     manifest_path: Path,
     expected_manifest_sha256: str,
     status: dict[str, Any],
+    *,
+    force_verify: bool = False,
 ) -> dict[str, Any] | None:
     manifest, _raw_manifest = _read_build_manifest_document(
         manifest_path, storage_root, expected_manifest_sha256
@@ -249,7 +251,9 @@ def _verified_build_source_snapshot(
     try:
         from windows.build_snapshot import verify_snapshot
 
-        frozen = verify_snapshot(snapshot_record.get("record_path", ""), build_root)
+        frozen = verify_snapshot(
+            snapshot_record.get("record_path", ""), build_root, force_verify=force_verify
+        )
     except Exception as error:
         raise capsule.HandoffError("Frozen backend source snapshot failed verification") from error
 
@@ -286,7 +290,7 @@ def _verified_build_source_snapshot(
     return frozen
 
 
-def validate_request(repo_root: str, request: Any) -> dict[str, str]:
+def _validate_request_scoped(repo_root: str, request: Any) -> dict[str, str]:
     request = _validate_request_document(request)
     if os.environ.get("FULLMAG_NATIVE_RUNTIME_ACTIVE") != "1" or os.environ.get(
         "FULLMAG_STORAGE_PROFILE"
@@ -424,6 +428,7 @@ def validate_request(repo_root: str, request: Any) -> dict[str, str]:
         canonical_manifest,
         status_before["ready_build_id"],
         status_before,
+        force_verify=True,
     )
     if snapshot_before is not None:
         if snapshot_after != snapshot_before:
@@ -446,6 +451,13 @@ def validate_request(repo_root: str, request: Any) -> dict[str, str]:
         "candidate_bundle_id": candidate_root.name,
         "candidate_manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(),
     }
+
+
+def validate_request(repo_root: str, request: Any) -> dict[str, str]:
+    from windows.build_snapshot import snapshot_verification_scope
+
+    with snapshot_verification_scope():
+        return _validate_request_scoped(repo_root, request)
 
 
 def main() -> int:

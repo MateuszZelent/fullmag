@@ -8,6 +8,9 @@ This is source integrity evidence, not runtime or scientific qualification.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import copy
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -16,6 +19,7 @@ import re
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -65,6 +69,23 @@ class SnapshotError(RuntimeError):
 
 class SourceChangedSnapshot(SnapshotError):
     """The live checkout changed during the short source-copy phase."""
+
+
+_SNAPSHOT_VERIFICATION_CACHE = ContextVar("fullmag_snapshot_verification_cache", default=None)
+
+
+@contextmanager
+def snapshot_verification_scope():
+    """Reuse checks within one operation; force a full final check before ACK.
+
+    Record/path validation on a hit is not proof of unchanged source bytes.
+    Callers must force fresh verification before publishing a dependent result.
+    """
+    token = _SNAPSHOT_VERIFICATION_CACHE.set((threading.current_thread(), {}))
+    try:
+        yield
+    finally:
+        _SNAPSHOT_VERIFICATION_CACHE.reset(token)
 
 
 def _json_bytes(value):
@@ -245,7 +266,7 @@ def _metadata(record):
             if key not in {"inventory", "backend_input_paths", "dependency_input_paths"}}
 
 
-def verify_snapshot(record, build_root):
+def _verify_snapshot_full(record, build_root):
     """Check only frozen files and pinned provenance; origin may already differ."""
     build = _checked_root(build_root)
     supplied = record if isinstance(record, dict) else None
@@ -318,6 +339,89 @@ def verify_snapshot(record, build_root):
     if supplied is not None and supplied != metadata:
         raise SnapshotError("Supplied snapshot metadata differs from its sealed record")
     return metadata
+
+
+def _stable_record_bytes(path):
+    try:
+        _, raw = _read_regular_file_stable(path, "frozen source snapshot record")
+        return raw
+    except (OSError, SourceIdentityError) as error:
+        raise SnapshotError("Snapshot record is unavailable or changed") from error
+
+
+def _validate_cached_paths(build, path, metadata):
+    if os.path.normcase(str(Path(metadata["record_path"]))) != os.path.normcase(str(path)):
+        raise SnapshotError("Cached snapshot record path differs from its verified location")
+    source = Path(metadata["source_root"])
+    checked_source = _checked_root(source)
+    if os.path.normcase(str(checked_source)) != os.path.normcase(str(source)):
+        raise SnapshotError("Cached snapshot source root is not canonical")
+    identity = Path(metadata["source_identity_file"])
+    if not identity.is_absolute() or build not in identity.parents:
+        raise SnapshotError("Cached snapshot identity file is outside the build root")
+    identity = _checked_child(build, identity.relative_to(build).as_posix())
+    try:
+        identity_metadata = identity.lstat()
+    except OSError as error:
+        raise SnapshotError("Cached snapshot identity file is unavailable") from error
+    if not stat.S_ISREG(identity_metadata.st_mode):
+        raise SnapshotError("Cached snapshot identity file is not regular")
+
+
+def verify_snapshot(record, build_root, *, force_verify=False):
+    """Verify a frozen snapshot, reusing only exact records in an active scope.
+
+    Calls outside ``snapshot_verification_scope`` retain full verification.
+    Within a scope, cache hits still validate the canonical roots and record
+    paths; callers can force a fresh inventory pass with ``force_verify=True``.
+    """
+    if type(force_verify) is not bool:
+        raise SnapshotError("force_verify must be a boolean")
+    cache_state = _SNAPSHOT_VERIFICATION_CACHE.get()
+    if cache_state is None or cache_state[0] is not threading.current_thread():
+        return _verify_snapshot_full(record, build_root)
+    cache = cache_state[1]
+
+    build = _checked_root(build_root)
+    supplied = record if isinstance(record, dict) else None
+    path = Path(supplied["record_path"] if supplied else record)
+    if not path.is_absolute() or build not in path.parents:
+        raise SnapshotError("Snapshot record must be below the canonical build root")
+    _checked_child(build, path.relative_to(build).as_posix())
+    key = (os.path.normcase(str(build)), os.path.normcase(str(path)))
+    if force_verify:
+        cache.pop(key, None)
+    try:
+        raw_before = _stable_record_bytes(path)
+    except Exception:
+        cache.pop(key, None)
+        raise
+
+    raw_sha256 = _sha(raw_before)
+    cached = cache.get(key)
+    if not force_verify and cached is not None:
+        cached_sha256, cached_raw, cached_metadata = cached
+        if cached_sha256 == raw_sha256 and cached_raw == raw_before:
+            try:
+                _validate_cached_paths(build, path, cached_metadata)
+            except Exception:
+                cache.pop(key, None)
+                raise
+            if supplied is not None and supplied != cached_metadata:
+                raise SnapshotError("Supplied snapshot metadata differs from its sealed record")
+            return copy.deepcopy(cached_metadata)
+        cache.pop(key, None)
+
+    try:
+        metadata = _verify_snapshot_full(record, build_root)
+        raw_after = _stable_record_bytes(path)
+        if raw_after != raw_before:
+            raise SnapshotError("Snapshot record changed during verification")
+    except Exception:
+        cache.pop(key, None)
+        raise
+    cache[key] = (raw_sha256, raw_before, copy.deepcopy(metadata))
+    return copy.deepcopy(metadata)
 
 
 def create_snapshot(repo_root, build_root):
