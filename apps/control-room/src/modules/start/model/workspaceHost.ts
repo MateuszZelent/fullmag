@@ -105,6 +105,30 @@ export async function openScript(id: number): Promise<WorkspaceItem> {
   return parseWorkspaceItemResponse(await call("workspace_open_script", { id }));
 }
 
+/**
+ * Saves a script as a new file through the native Save dialog. The host picks
+ * the folder, owns the path and refuses to replace a file the dialog did not
+ * confirm; the renderer sends text and origin only. Resolves to null when the
+ * person cancels the dialog.
+ */
+export async function saveNewScript(request: {
+  readonly suggestedName: string;
+  readonly text: string;
+  readonly origin: "template" | "mx3";
+  readonly originId: string;
+}): Promise<WorkspaceItem | null> {
+  return parseWorkspaceDialogResponse(
+    await call("script_save_new", {
+      request: {
+        suggested_name: request.suggestedName,
+        text: request.text,
+        origin: request.origin,
+        origin_id: request.originId,
+      },
+    }),
+  );
+}
+
 export async function revealWorkspaceItem(id: number): Promise<void> {
   await call("workspace_reveal", { id });
 }

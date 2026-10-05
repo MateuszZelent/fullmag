@@ -49,8 +49,8 @@ export const LAUNCH_TILES: readonly LaunchTile[] = [
   {
     commandId: "start.templates",
     description:
-      "Benchmarks and ready-made studies — µMAG problems, dispersion, FMR, skyrmions.",
-    foot: "template gallery",
+      "Benchmarks and ready-made studies saved as Python scripts — µMAG problems, dispersion, FMR, skyrmions.",
+    foot: "saved as a .py script",
     icon: FlaskConical,
     id: "template",
     keys: "Control+T",

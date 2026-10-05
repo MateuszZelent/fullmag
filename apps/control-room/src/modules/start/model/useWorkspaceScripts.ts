@@ -10,8 +10,10 @@ import {
   pinWorkspaceItem,
   readScriptText,
   revealWorkspaceItem,
+  saveNewScript,
   workspaceHistory,
 } from "./workspaceHost";
+import type { ScriptSaveOutcome, ScriptSaveRequest } from "./scriptOpen";
 import {
   WorkspaceHostError,
   type WorkspaceEvent,
@@ -62,6 +64,8 @@ export interface WorkspaceScriptsController {
   readonly reveal: (id: number) => Promise<string | null>;
   /** The native picker; the item is null when the person cancelled. */
   readonly pickAndOpen: () => Promise<{ readonly item: WorkspaceItem | null; readonly failure: string | null }>;
+  /** The native Save dialog for a template or translated script; re-reads the list once saved. */
+  readonly saveNew: (request: ScriptSaveRequest) => Promise<ScriptSaveOutcome>;
   readonly readText: (id: number) => Promise<{ readonly text: string } | { readonly failure: string }>;
 }
 
@@ -185,6 +189,23 @@ export function useWorkspaceScripts(): WorkspaceScriptsController {
     }
   }, [refresh]);
 
+  const saveNew = useCallback(
+    async (request: ScriptSaveRequest): Promise<ScriptSaveOutcome> => {
+      try {
+        const item = await saveNewScript(request);
+        if (!item) return { kind: "cancelled" };
+        if (alive.current) setAnnouncement(`Saved ${item.name}.`);
+        await refresh();
+        return { kind: "saved", item };
+      } catch (error) {
+        const message = `Could not save the script: ${describe(error)}`;
+        if (alive.current) setAnnouncement(message);
+        return { kind: "failed", message };
+      }
+    },
+    [refresh],
+  );
+
   const readText = useCallback(async (id: number) => {
     try {
       return { text: (await readScriptText(id)).text };
@@ -203,6 +224,7 @@ export function useWorkspaceScripts(): WorkspaceScriptsController {
     open,
     reveal,
     pickAndOpen,
+    saveNew,
     readText,
   };
 }

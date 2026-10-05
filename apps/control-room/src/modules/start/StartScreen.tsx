@@ -12,7 +12,7 @@ import { HomeSection } from "./home/HomeSection";
 import { LAUNCH_TILES } from "./home/LaunchTiles";
 import { ProjectInspector } from "./inspector/ProjectInspector";
 import { readProjectArchiveAtPath } from "./model/recentIndexHost";
-import { resolveScriptOpener, type ScriptOpener } from "./model/scriptOpen";
+import { scriptSaveAvailable, type ScriptSaver } from "./model/scriptOpen";
 import { useAuthorName } from "./model/useAuthorName";
 import { useComputeProbe } from "./model/useComputeProbe";
 import { useRecentIndex } from "./model/useRecentIndex";
@@ -177,14 +177,22 @@ export function StartScreen({ kernel }: ModuleProps) {
     return result.message ?? `Could not restore the checkpoint of ${entry.name}.`;
   };
 
-  // A script opens as a project only where the API has such an operation; the
-  // closure leaves Home on success, exactly like opening an archive.
-  const baseOpener = resolveScriptOpener();
-  const scriptOpener: ScriptOpener | null = baseOpener
+  // A template or translated .mx3 is a Python script: the host saves it through
+  // its native Save dialog, then Home shows the new script selected so its
+  // inspector (and Run in new window, which asks for consent itself) is next.
+  const saveNew = scripts.saveNew;
+  const scriptSaver: ScriptSaver | null = desktop && scriptSaveAvailable()
     ? async (request) => {
-        const failure = await baseOpener(request);
-        if (failure === null) homeView.close();
-        return failure;
+        const outcome = await saveNew(request);
+        if (outcome.kind === "saved") {
+          if (startSettings.getSnapshot().recentKind === "project") {
+            startSettings.update({ recentKind: "all" });
+          }
+          setScriptFlowNotice(null);
+          startScreenStore.setSection("home");
+          startScreenStore.setSelectedScript(outcome.item.id);
+        }
+        return outcome;
       }
     : null;
 
@@ -252,7 +260,7 @@ export function StartScreen({ kernel }: ModuleProps) {
           ) : section === "import" ? (
             <ImportSection
               onOpenFile={openFile}
-              onOpenScript={scriptOpener}
+              scriptSaver={scriptSaver}
               openDisabledReason={browseDisabledReason}
             />
           ) : section === "docs" ? (
@@ -296,7 +304,7 @@ export function StartScreen({ kernel }: ModuleProps) {
             void scripts.forget(id);
           },
         }}
-        scriptOpener={scriptOpener}
+        scriptSaver={scriptSaver}
         section={section}
         templateId={selectedTemplateId}
         session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}

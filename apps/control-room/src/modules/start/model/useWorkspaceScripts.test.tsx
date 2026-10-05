@@ -20,6 +20,7 @@ const host = vi.hoisted(() => ({
   pinWorkspaceItem: vi.fn(),
   readScriptText: vi.fn(),
   revealWorkspaceItem: vi.fn(),
+  saveNewScript: vi.fn(),
   workspaceHistory: vi.fn(),
 }));
 
@@ -205,6 +206,34 @@ describe("workspace hooks", () => {
     expect(picked?.item?.id).toBe(3);
     expect(host.listWorkspace).toHaveBeenCalledTimes(3);
     expect(hook.current().announcement).toBe("Opened new.");
+  });
+
+  it("saveNew re-reads the list once saved, treats a cancelled dialog as nothing, and reports failures", async () => {
+    host.listWorkspace.mockResolvedValue(list(1));
+    const hook = await mountScripts();
+    const request = { suggestedName: "sp4.py", text: "x = 1", origin: "template", originId: "umag-sp4" } as const;
+
+    host.saveNewScript.mockResolvedValueOnce(null);
+    await act(async () => { expect(await hook.current().saveNew(request)).toEqual({ kind: "cancelled" }); });
+    expect(host.listWorkspace).toHaveBeenCalledTimes(1);
+
+    host.saveNewScript.mockResolvedValueOnce(script({ id: 9, name: "umag-sp4" }));
+    await act(async () => {
+      const outcome = await hook.current().saveNew(request);
+      expect(outcome.kind === "saved" && outcome.item.id).toBe(9);
+    });
+    expect(host.listWorkspace).toHaveBeenCalledTimes(2);
+    expect(host.saveNewScript).toHaveBeenLastCalledWith(request);
+    expect(hook.current().announcement).toBe("Saved umag-sp4.");
+
+    host.saveNewScript.mockRejectedValueOnce(new Error("already exists"));
+    await act(async () => {
+      expect(await hook.current().saveNew(request)).toEqual({
+        kind: "failed",
+        message: "Could not save the script: already exists",
+      });
+    });
+    expect(host.listWorkspace).toHaveBeenCalledTimes(2);
   });
 
   it("reveal and readText report failures without touching the list", async () => {

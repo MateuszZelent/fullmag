@@ -10,6 +10,7 @@ import {
   pinWorkspaceItem,
   readScriptText,
   revealWorkspaceItem,
+  saveNewScript,
   workspaceHistory,
   workspaceHostAvailable,
 } from "./workspaceHost";
@@ -24,6 +25,30 @@ function withHost<F extends (command: string, args?: Record<string, unknown>) =>
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("saveNewScript", () => {
+  const request = { suggestedName: "sp4.py", text: "x = 1", origin: "mx3", originId: "a.mx3" } as const;
+
+  it("sends text and origin in the wire shape, never a path, and parses the item", async () => {
+    const invoke = withHost(vi.fn(async () => RAW_SCRIPT));
+    expect((await saveNewScript(request))?.id).toBe(RAW_SCRIPT.id);
+    expect(invoke).toHaveBeenCalledWith("script_save_new", {
+      request: { suggested_name: "sp4.py", text: "x = 1", origin: "mx3", origin_id: "a.mx3" },
+    });
+  });
+
+  it("resolves to null when the dialog is cancelled and rejects without a host", async () => {
+    withHost(vi.fn(async () => null));
+    expect(await saveNewScript(request)).toBeNull();
+    vi.stubGlobal("window", {});
+    await expect(saveNewScript(request)).rejects.toMatchObject({ code: "unavailable" });
+  });
+
+  it("says so when the desktop build predates the command", async () => {
+    withHost(vi.fn(async () => { throw new Error("Command script_save_new not found"); }));
+    await expect(saveNewScript(request)).rejects.toMatchObject({ code: "command_missing" });
+  });
 });
 
 describe("workspace host adapter", () => {
