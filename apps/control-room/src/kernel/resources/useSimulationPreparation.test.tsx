@@ -14,7 +14,6 @@ import type { KernelEventMap } from "../events/eventTypes";
 import { KernelContext } from "../KernelContext";
 import { DiagnosticRecorderController } from "../performance/diagnostic-recorder/DiagnosticRecorderController";
 import { updateRealtimeCommunicationPolicy } from "../realtime/communicationPolicy";
-import type { ResourceResult } from "./resourceTypes";
 import { ResourceInvalidationController } from "./ResourceInvalidationController";
 import { resetSharedResourceRuntimeStoreForTests } from "./ResourceRuntimeStore";
 import { sessionScopedResourceKey } from "./sessionResourceIdentity";
@@ -26,7 +25,7 @@ interface Deferred<TData> {
   resolve: (value: TData) => void;
 }
 
-type PreparationResult = ResourceResult<SimulationPreparationResource>;
+type PreparationResult = ReturnType<typeof useSimulationPreparation>;
 
 afterEach(() => {
   updateRealtimeCommunicationPolicy({});

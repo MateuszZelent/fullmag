@@ -1,3 +1,32 @@
+<!-- frontend-fixture-source-remediation-20261005 -->
+## Bieżący checkpoint — fixture’y źródłowo naprawione, integracja i FEM otwarte
+
+Poprzednia tura: postęp — jedna wspólna konfiguracja RAM-dysku Windows,
+managed build exit0 i trzy hashe EXE sprawdzone. R: jest wyłącznie dla
+natywnych buildów Windows; runner FEM/Docker nie używa R:.
+
+Naprawiono osiem frontendowych plików testowych z logu CI master816:
+pełny fixture LiveStatus, nullable wynik rzeczywistego hooka, obserwację
+asynchroniczną bez never, zawężenie JSON study oraz kompletne identyfikatory
+session/epoch/run w stage execution. Asercje zakresu sesji i odświeżenia
+zachowane. Parser składni 8/8 PASS, niezależne review bez otwartych uwag.
+Nie kompilowano i nie wykonywano unit tests lokalnie. Typowanie i wykonanie
+pozostają NOT VERIFIED do GitHub Actions (wyjątek zaakceptowany przez operatora).
+
+PR97 aktualnie CONFLICTING. Pobrano remote master; read-only merge-tree
+wskazuje 10 konfliktów (Inspector, Python scene/IR/script, step_utils,
+launcher oraz source-check wrapper). Właściwe scalenie nie jest jeszcze
+rozpoczęte. Potrzebne zachowanie obu kontraktów parallel_execution i
+execution_profile oraz autorytatywnego Windows P8-57, bez generowanych
+artefaktów edytowanych ręcznie.
+
+Runner ma worker_alive=true, brak aktywnych jobów i worker_error=null,
+ale odczyt 05.10.2026 18:25 UTC wykazuje 1 070 415 872 B wolnych (<8 GiB).
+Nowy build FEM jest zablokowany zasobem; nie zlecono duplikatu ani nie
+usunięto danych. To nie blokuje poprawy źródeł i integracji.
+GMRES/FGMRES runtime, shared signed sweep/parity, zbieżność, GUI, COMSOL A1,
+S09/provider i GPU pozostają OPEN. Pełny cel S00–S12 nie jest zakończony.
+
 <!-- native-source-check-reuse-checkpoint-20261005 -->
 ## Aktualny checkpoint — native build PASS i kontrola frontendu PASS
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JsonObject, JsonValue } from "@/kernel/api/apiTypes";
 import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 
 import {
@@ -10,6 +11,13 @@ import {
   resolveFdmGridPreview,
   validateStudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
+
+function requireJsonObject(value: JsonValue | undefined): JsonObject {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("expected a JSON object in the study merge patch");
+  }
+  return value;
+}
 
 function activeLaneSnapshot({
   device,
@@ -646,7 +654,7 @@ describe("StudyGlobalAuthoringModel", () => {
     const request = buildStudyGlobalMergePatch(draft);
     expect(request.kind).toBe("merge_patch");
     if (request.kind !== "merge_patch") throw new Error("expected merge patch");
-    expect(request.merge_patch.study.parallel_execution).toEqual({
+    expect(requireJsonObject(request.merge_patch.study).parallel_execution).toEqual({
       mode: "adaptive",
       max_cpu_percent: 90,
       max_memory_percent: 80,
@@ -689,7 +697,7 @@ describe("StudyGlobalAuthoringModel", () => {
       const request = buildStudyGlobalMergePatch(draft);
       expect(request.kind).toBe("merge_patch");
       if (request.kind !== "merge_patch") throw new Error("expected merge patch");
-      expect(request.merge_patch.study.parallel_execution).toMatchObject({
+      expect(requireJsonObject(request.merge_patch.study).parallel_execution).toMatchObject({
         memory_reserve_bytes: memoryReserveBytes,
       });
     }
@@ -710,7 +718,7 @@ describe("StudyGlobalAuthoringModel", () => {
     const request = buildStudyGlobalMergePatch(halfMiBDraft);
     expect(request.kind).toBe("merge_patch");
     if (request.kind !== "merge_patch") throw new Error("expected merge patch");
-    expect(request.merge_patch.study.parallel_execution).toMatchObject({
+    expect(requireJsonObject(request.merge_patch.study).parallel_execution).toMatchObject({
       memory_reserve_bytes: 524288,
     });
   });

@@ -454,6 +454,9 @@ const runtime = runtimeExplorerSnapshotFromResources({
     data: {
       completed_stage_indexes: [],
       revision: 1,
+      run_id: "run-fixture",
+      session_epoch: "session-fixture@0",
+      session_id: "session-fixture",
       runtime_state: "running",
       stage_statuses: ["running"],
       stages: [{

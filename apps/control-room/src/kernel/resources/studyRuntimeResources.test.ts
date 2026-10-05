@@ -219,10 +219,7 @@ function statusWith({
   run?: LiveStatusResource["run"];
   sessionEpoch?: string;
   sessionId?: string;
-} = {}): Pick<
-  LiveStatusResource,
-  "capabilities" | "domain" | "resources" | "run" | "session"
-> {
+} = {}): LiveStatusResource {
   const activeLane = activeLaneCapabilityFixture();
   activeLane.authored = { ...activeLane.authored, discretization };
   activeLane.requested = { ...activeLane.requested, discretization };
@@ -231,6 +228,31 @@ function statusWith({
     discretization,
   };
   return {
+    api_contract_version: "2.0.0",
+    runtime_bundle_version: "test-fixture",
+    display: {
+      active_quantity_id: "magnetization",
+      auto_contrast: true,
+      colormap: "viridis",
+      field_component: "magnitude",
+      max_points: 1000,
+      slice_layer: 0,
+      slice_mode: "xy",
+      vector_density: 1,
+      vector_glyphs: false,
+      view_mode: "2d",
+      x_chosen_size: 1,
+      y_chosen_size: 1,
+    },
+    energies: {},
+    lifecycle: {
+      commandability: "allowed",
+      connectivity: "connected",
+      session_resource: "active",
+      solver: "idle",
+    },
+    metrics: { total_steps: 0, uptime_seconds: 0 },
+    solver: { state: "idle" },
     capabilities: {
       active_lane: activeLane,
       algorithms_available: [],

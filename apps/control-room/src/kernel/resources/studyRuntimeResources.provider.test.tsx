@@ -183,10 +183,10 @@ describe("production runtime command resource provider", () => {
     const container = dom.document.createElement("div");
     dom.document.body.appendChild(container);
     const root = createRoot(container as unknown as Element);
-    let latest: ReturnType<typeof useCurrentRunResource> | null = null;
+    const latest: { current: ReturnType<typeof useCurrentRunResource> | null } = { current: null };
 
     function Harness() {
-      latest = useCurrentRunResource();
+      latest.current = useCurrentRunResource();
       return null;
     }
 
@@ -200,10 +200,10 @@ describe("production runtime command resource provider", () => {
       });
       await vi.waitFor(() => {
         expect(currentRunLoad).toHaveBeenCalledTimes(1);
-        expect(latest?.status).toBe("ready");
+        expect(latest.current?.status).toBe("ready");
       });
-      expect(latest?.data).toBeNull();
-      expect(latest?.error).toBeNull();
+      expect(latest.current?.data).toBeNull();
+      expect(latest.current?.error).toBeNull();
       expect(failures).toEqual([]);
     } finally {
       await act(async () => root.unmount());
