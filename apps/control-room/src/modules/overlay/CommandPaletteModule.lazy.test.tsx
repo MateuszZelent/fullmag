@@ -54,7 +54,8 @@ async function renderClosedPalette(sessionState: "no-session" | "ready") {
   return { MeshBuildDialog, markup, useStudyRuntimeCommandResourceData };
 }
 
-describe("CommandPaletteModule lazy runtime resources", () => {
+// The lazy import is slow when the whole suite runs in parallel.
+describe("CommandPaletteModule lazy runtime resources", { timeout: 20_000 }, () => {
   it("does not subscribe to the full runtime command bundle while closed", async () => {
     const rendered = await renderClosedPalette("ready");
 

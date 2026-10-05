@@ -8,7 +8,6 @@ import {
   Cpu,
   ExternalLink,
   Globe,
-  Layers,
   Sparkles,
 } from "lucide-react";
 import { useEffect, useState } from "react";

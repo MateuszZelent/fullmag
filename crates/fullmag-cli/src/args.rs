@@ -65,6 +65,65 @@ pub(crate) struct ScriptCli {
         help = "Port for the dev control room frontend (auto-selects 3000-3010 if omitted)"
     )]
     pub web_port: Option<u16>,
+    #[arg(
+        long,
+        value_enum,
+        help = "Where the Control Room opens: browser (default), desktop (Fullmag window) or none (same as --headless)."
+    )]
+    pub ui: Option<UiModeArg>,
+    #[arg(
+        long,
+        help = "Explicit API port for this run; it must be free or already serve a compatible API."
+    )]
+    pub api_port: Option<u16>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Materialize the script, then wait for COMPUTE in the Control Room."
+    )]
+    pub wait_for_solve: bool,
+    #[arg(
+        long,
+        value_name = "SHA256",
+        help = "Abort with exit code 11, before executing anything, when the script bytes differ."
+    )]
+    pub expect_script_sha256: Option<String>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Write a fullmag.script_run_receipt.v1 JSON document here on every exit path."
+    )]
+    pub receipt: Option<PathBuf>,
+    #[arg(long, value_enum, hide = true)]
+    pub launched_by: Option<LaunchedByArg>,
+    #[arg(
+        long,
+        value_name = "ABS_PATH",
+        help = "Explicit Python interpreter; ignored with a note when a packaged bundle owns Python."
+    )]
+    pub python: Option<PathBuf>,
+}
+
+impl ScriptCli {
+    /// True when any option that makes this a host-managed run is present.
+    /// Only managed runs use the documented exit codes and write receipts.
+    pub(crate) fn is_managed(&self) -> bool {
+        self.receipt.is_some() || self.expect_script_sha256.is_some() || self.launched_by.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum UiModeArg {
+    Browser,
+    Desktop,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum LaunchedByArg {
+    Desktop,
+    Cli,
+    Python,
 }
 
 #[derive(Subcommand)]

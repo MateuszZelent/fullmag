@@ -273,6 +273,13 @@ function makeKernel(): KernelApi {
   modules.register({ ...startScreenManifest, component: async () => ({ default: StartScreen }) });
   return {
     api: {
+      diagnostics: {
+        cpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },
+        gpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },
+      },
+      platform: {
+        capabilities: async () => { throw new Error("capabilities are not served in this test"); },
+      },
       sessions: {
         create: vi.fn(),
         current: { status: vi.fn() },

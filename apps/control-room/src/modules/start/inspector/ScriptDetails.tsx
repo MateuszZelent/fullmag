@@ -7,7 +7,6 @@ import { Button } from "@/shared/ui/Button";
 
 import { formatBytes, formatOpened } from "../model/recentIndex";
 import {
-  RUN_SCRIPT_UNAVAILABLE,
   copyText,
   displayPath,
   formatDuration,
@@ -15,9 +14,13 @@ import {
   launchCommand,
   runChip,
 } from "../model/scriptRowModel";
+import { RUN_NEEDS_DESKTOP, isRunBusy } from "../model/scriptRun";
+import { useScriptRun } from "../model/useScriptRun";
 import { useScriptHistory, type ScriptHistoryState } from "../model/useWorkspaceScripts";
 import type { WorkspaceEvent, WorkspaceItem } from "../model/workspaceItems";
 import { StatusPill } from "../ui/StatusPill";
+
+import { ScriptRunPanel } from "./ScriptRunPanel";
 
 const EVENT_LABEL: Readonly<Record<WorkspaceEvent["kind"], string>> = {
   open: "Opened",
@@ -47,6 +50,8 @@ export interface ScriptDetailsProps {
   readonly onReadText: (id: number) => Promise<{ readonly text: string } | { readonly failure: string }>;
   readonly onTogglePin: (id: number, pinned: boolean) => Promise<string | null>;
   readonly onForget: (id: number) => void;
+  /** Called when a run started here has ended, so the list re-reads its last run. */
+  readonly onRunFinished?: () => void;
 }
 
 interface Row {
@@ -109,9 +114,9 @@ function HistoryList({ history }: { readonly history: ScriptHistoryState }) {
 
 /**
  * What the start screen knows about a script, and what it can do with it.
- * Fullmag cannot execute a script from here yet: Open script records the open
- * and Run in new window is shown disabled, with the reason, so the position
- * and semantics are fixed for the phase that enables it.
+ * Open script records the open. Run in new window reads the file's static
+ * facts (nothing executes), shows them, and only then asks the host, which
+ * shows its own native confirmation before it starts a separate process.
  */
 export function ScriptDetails({
   item,
@@ -121,8 +126,10 @@ export function ScriptDetails({
   onReadText,
   onTogglePin,
   onForget,
+  onRunFinished,
 }: ScriptDetailsProps) {
   const baseId = useId();
+  const runner = useScriptRun(item.id, onRunFinished);
   const [notice, setNotice] = useState<{ readonly tone: "info" | "error"; readonly text: string } | null>(
     null,
   );
@@ -171,6 +178,13 @@ export function ScriptDetails({
     }, "Script copied.");
 
   const rows = facts(item);
+  const runDisabledReason = !runner.hostAvailable
+    ? RUN_NEEDS_DESKTOP
+    : missing
+      ? "The file is missing"
+      : isRunBusy(runner.phase)
+        ? "A run for this script is in progress"
+        : null;
 
   return (
     <aside aria-label="Script details" className="fm-start__inspector fm-start-inspector" data-kind="script">
@@ -276,10 +290,12 @@ export function ScriptDetails({
             </dl>
           ) : (
             <p className="fm-start-inspector__note">
-              No run is recorded. Runs started with the fullmag command line appear here.
+              No run is recorded. Runs started here or with the fullmag command line appear here.
             </p>
           )}
         </section>
+
+        <ScriptRunPanel controller={runner} />
 
         <section aria-labelledby={`${baseId}-history`} className="fm-start-kv">
           <h3 className="fm-start-kv__title" id={`${baseId}-history`}>
@@ -307,12 +323,7 @@ export function ScriptDetails({
             className="fm-start-inspector__open"
             data-action="open-script"
             disabled={missing || busy}
-            onClick={() =>
-              void run(
-                () => onOpen(item.id),
-                "Recorded as opened. Fullmag cannot run scripts from the start screen yet.",
-              )
-            }
+            onClick={() => void run(() => onOpen(item.id), "Recorded as opened.")}
             title={missing ? "The file is missing." : undefined}
             type="button"
             variant="primary"
@@ -321,10 +332,11 @@ export function ScriptDetails({
             Open script
           </Button>
           <Button
-            aria-describedby={`${baseId}-run-reason`}
+            aria-describedby={runDisabledReason ? `${baseId}-run-reason` : undefined}
             data-action="run-script"
-            disabled
-            title={RUN_SCRIPT_UNAVAILABLE}
+            disabled={runDisabledReason !== null}
+            onClick={() => void runner.prepare()}
+            title={runDisabledReason ?? undefined}
             type="button"
             variant="secondary"
           >
@@ -332,9 +344,11 @@ export function ScriptDetails({
             Run in new window
           </Button>
         </div>
-        <p className="fm-start-inspector__note" id={`${baseId}-run-reason`}>
-          {RUN_SCRIPT_UNAVAILABLE}.
-        </p>
+        {runDisabledReason ? (
+          <p className="fm-start-inspector__note" id={`${baseId}-run-reason`}>
+            {runDisabledReason}.
+          </p>
+        ) : null}
         <div className="fm-start-inspector__actions">
           <Button
             data-action="reveal-script"
