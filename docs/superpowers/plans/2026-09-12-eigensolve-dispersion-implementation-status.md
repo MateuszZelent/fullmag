@@ -1,3 +1,17 @@
+<!-- scene-name-fixture-correction-20261005 -->
+## Bieżący checkpoint — 102/103 regresje sceny/profilu PASS
+
+CI #37369463128 potwierdziło wcześniejszą korektę dwóch asercji GPU/auto;
+102 przypadki PASS. Ostatni FAIL to KeyError w nowo dodanej asercji nazwy:
+study_name jest kluczem buildera, a dokument SceneDocument używa scene.name.
+Sprawdzono producenta dokumentu i inverse scene_to_builder; asercja teraz
+porównuje nazwę IR, scene.name oraz literalną nazwę autorskiego fixture'u.
+Brak technicznego stem i pozostałe asercje pozostają zachowane. Parser
+Python PASS; wykonanie tej korekty oczekuje CI. Produkcyjny kod bez zmian.
+
+#233 nadal native-build. Pozostałe bramki fullmag-application, frontend,
+managed FEM i nauka pozostają niezamknięte. Pełny cel S00–S12 trwa.
+
 <!-- python-ci-assertion-remediation-20261005 -->
 ## Bieżący checkpoint — CI potwierdza RAM-dysk, trzy korekty asercji Python
 
