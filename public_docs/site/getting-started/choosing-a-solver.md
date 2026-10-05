@@ -11,7 +11,7 @@ owner: fullmag-public-docs
 
 FullMag has one physical problem contract and several execution realizations. You select the
 numerical backend with `study.engine("fdm")` or `study.engine("fem")`, and the device with
-`study.device("cpu" | "gpu", precision="double")`. The rest of the study stays the same.
+`study.device("cpu" | "gpu", precision="double")`. Physical parameters keep the same SI meaning, but discretization, demagnetization boundaries and supported stages must be configured for the selected lane.
 
 ## Finite difference (FDM)
 
@@ -24,8 +24,8 @@ Choose FDM when:
 - you need open-boundary demagnetization with fast FFT convolution,
 - you want the grid-to-cell physical meaning of an FDM magnet (native `cell_size` resolution).
 
-The canonical FDM pages are {doc}`../../numerical-methods/demag-solvers/fdm-convolution` and
-{doc}`../../python-api/discretization/fdm`.
+The canonical FDM pages are {doc}`../numerical-methods/demag-solvers/fdm-convolution` and
+{doc}`../python-api/discretization/fdm`.
 
 ## Finite element (FEM)
 
@@ -40,8 +40,8 @@ Choose FEM when:
   MFEM/hypre/libCEED solvers.
 
 The canonical FEM pages are
-{doc}`../../numerical-methods/demag-solvers/fem-poisson-airbox` and
-{doc}`../../python-api/discretization/fem`.
+{doc}`../numerical-methods/demag-solvers/fem-poisson-airbox` and
+{doc}`../python-api/discretization/fem`.
 
 ## CPU versus GPU
 
@@ -60,9 +60,9 @@ Each terminal page documents its own four-lane matrix for FDM CPU, FDM GPU, FEM 
 including unsupported and unqualified states. Use those matrices as the authoritative support
 status instead of this summary:
 
-See {doc}`../../numerical-methods/demag-solvers/fdm-convolution`,
-{doc}`../../numerical-methods/demag-solvers/fem-poisson-airbox`, and
-{doc}`../../physics/interactions/demagnetization/index` for the terminal matrices.
+See {doc}`../numerical-methods/demag-solvers/fdm-convolution`,
+{doc}`../numerical-methods/demag-solvers/fem-poisson-airbox`, and
+{doc}`../physics/interactions/demagnetization/index` for the terminal matrices.
 
 Do not infer a solver is production-ready from its name or from source presence. Requested intent
 and resolved execution are kept separate, and the planner rejects unsupported engine/device/
@@ -73,7 +73,7 @@ Use the authoring path stated in this guide, normally `Model Explorer -> Objects
 
 ## Python/API crosswalk
 
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked `{doc}``/python-api/index` page rather than duplicating an unverified signature.
+The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
 
 ## Physics, limitations, and bibliography
 
