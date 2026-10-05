@@ -91,7 +91,7 @@ class ExecutionCleanupTests(unittest.TestCase):
         self.assertTrue(self.execution.is_dir())
         return result
 
-    def test_succeeded_historical_build_removes_execution_preserves_archive(self):
+    def prepare_historical_archive(self):
         from test_local_runner_archive_receipt import ArchiveReceiptTests
         fixture = ArchiveReceiptTests()
         fixture.setUp()
@@ -107,12 +107,21 @@ class ExecutionCleanupTests(unittest.TestCase):
         shutil.copytree(fixture.root, self.run / 'artifacts', dirs_exist_ok=True)
         before = (self.run / 'artifacts/build-receipt.json').read_bytes()
         self.make_plan()
+        return before
+
+    def test_succeeded_historical_build_removes_execution_preserves_archive(self):
+        before = self.prepare_historical_archive()
         result = self.apply()
         self.assertTrue(result['applied'], result)
         self.assertFalse(self.execution.exists())
         self.assertEqual((self.run / 'artifacts/build-receipt.json').read_bytes(), before)
         self.assertTrue((self.run / 'results/frequency.csv').is_file())
         self.assertTrue((self.source / 'manifest.json').is_file())
+
+    def test_corrupt_successful_archive_preserves_execution(self):
+        self.prepare_historical_archive()
+        (self.run / 'artifacts/outputs/result.bin').write_bytes(b'corruption')
+        self.assert_retained('Archive artifact size/hash mismatch')
 
     def test_removes_only_private_tree_and_replays_receipt(self):
         result = self.apply()
