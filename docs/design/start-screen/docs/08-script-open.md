@@ -23,7 +23,13 @@ the literal request to the receipt; extra refusal codes `ticket`, `busy`,
 `confirm_required`, `storage`; exit code 14 is chosen from the error text when
 the runtime reports no code. Not verified on a packaged install or through the
 UI. **Phase 0b is implemented** (2026-10-05): see "Phase 0b as built" in
-6.4. Everything else here is not implemented. Every claim about
+6.4. **Templates and translated `.mx3` (2026-10-05):** "Create script from
+template…" and "Save translated script…" use the host command `script_save_new`
+(`apps/desktop/src-tauri/src/script_save.rs`): native Save dialog, no overwrite
+unless that dialog confirmed it, atomic UTF-8 write, `create`/`import` + `open`
+events; the new script is selected on Home with Run in new window (consent
+still native). Not exercised in a running desktop app. Everything else here is
+not implemented. Every claim about
 current behaviour was read in the source of this worktree (commit `688f1f23c`);
 what was *not* executed is marked **unverified**. Unit-test compilation is
 suspended (`AGENTS.md`), so no existing test was run for this document.

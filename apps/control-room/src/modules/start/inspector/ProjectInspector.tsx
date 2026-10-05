@@ -1,6 +1,6 @@
 import { BookOpen, Box, GraduationCap, Import, Info, LayoutGrid, Settings, type LucideIcon } from "lucide-react";
 
-import type { ScriptOpener } from "../model/scriptOpen";
+import type { ScriptSaver } from "../model/scriptOpen";
 import type { StartSection } from "../model/startScreenState";
 import { STUDY_TEMPLATES } from "../model/templates";
 import type { ComputeProbeState, ContinueSession, RecentEntry, RecentIndexState } from "../model/types";
@@ -26,12 +26,12 @@ const INSPECTOR_HINTS: Readonly<Record<StartSection, InspectorHint>> = {
   templates: {
     icon: LayoutGrid,
     title: "Pick a template",
-    body: "Select a template to see its model, the expected runtime and the reference it reproduces.",
+    body: "Select a template to see its model, the expected runtime and the reference it reproduces, then create a Python script from it.",
   },
   import: {
     icon: Import,
     title: "Nothing staged",
-    body: "Choose a file and Fullmag reports what maps cleanly and what needs a decision before anything is written.",
+    body: "Choose a file and Fullmag reports what maps cleanly and what needs a decision before anything is written. A translated .mx3 is saved as a Python script.",
   },
   docs: {
     icon: BookOpen,
@@ -69,8 +69,8 @@ export interface ProjectInspectorProps {
   /** The selected script; only the Home section has one. */
   readonly script?: WorkspaceItem | null;
   readonly scriptActions?: Omit<ScriptDetailsProps, "item"> | null;
-  /** Opens a template script as a project; null when this build cannot. */
-  readonly scriptOpener?: ScriptOpener | null;
+  /** Saves a template script as a new file; null where there is no desktop host. */
+  readonly scriptSaver?: ScriptSaver | null;
   readonly index?: RecentIndexState;
 }
 
@@ -83,7 +83,7 @@ export function ProjectInspector({
   entry,
   templateId,
   compute,
-  scriptOpener = null,
+  scriptSaver = null,
   script = null,
   scriptActions = null,
   index,
@@ -98,7 +98,7 @@ export function ProjectInspector({
       <TemplateDetails
         compute={compute}
         key={template.id}
-        scriptOpener={scriptOpener}
+        scriptSaver={scriptSaver}
         template={template}
       />
     );

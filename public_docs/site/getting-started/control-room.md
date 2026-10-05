@@ -11,7 +11,7 @@ owner: fullmag-public-docs
 
 The **FullMag Control Room** is the interactive web interface and authoring companion for the FullMag micromagnetics platform. It provides a visual control environment for setting up physical micromagnetic models, configuring materials and geometry, visualizing 3D vector fields, running simulations across FDM and FEM backends, and analyzing numerical observables in real time.
 
-All interactive changes in the Control Room lower directly to FullMag's canonical `ProblemIR` and round-trip cleanly with the embedded Python DSL.
+Model edits update canonical authored resources and lower through the study/`ProblemIR` pipeline. Layout, selection and display preferences are UI state. Python export preserves the supported authored model; the capability register lists options that do not have an equivalent UI editor.
 
 ---
 
@@ -52,7 +52,7 @@ The **Geometry Tab** provides tools for building and transforming physical simul
 ```
 
 - **Primitive Objects**: Add standard geometric shapes including **Box**, **Cylinder**, **Sphere**, and **Ellipsoid**.
-- **CAD & STL Import**: Import STEP, IGES, or STL boundary representations for finite-element discretization.
+- **Imported geometry**: Consult {doc}`/python-api/geometry/imported-geometry` for supported formats and the Python route. This guide does not establish a STEP/IGES import transaction in the Geometry panel.
 - **Transformations**: Translate, rotate, and scale selected geometry objects in global or local coordinate frames.
 - **Boolean Operations**: Perform CSG operations (**Union**, **Difference**, **Intersection**) between overlapping geometry objects.
 
@@ -70,7 +70,7 @@ The **Physics Tab** enables physical interactions and external drive fields.
 - **Demagnetization**: Configure magnetostatic field calculations via FDM FFT convolution or FEM Poisson airbox/BEM solvers.
 - **Zeeman Field**: Apply uniform or spatially varying bias magnetic fields $\mathbf{H}_{\text{ext}}(t)$.
 - **Anisotropy**: Configure uniaxial ($\mathbf{u}_K$) or cubic crystalline anisotropy constants ($K_1, K_2$).
-- **Dzyaloshinskii–Moriya (DMI)**: Enable interfacial or bulk DMI vectors ($D$).
+- **Dzyaloshinskii–Moriya (DMI)**: Configure the supported interfacial or bulk interaction; $D$ is the coupling coefficient, with units and directional conventions given on the DMI pages.
 - **Spin Torque & Transport**: Add Spin-Transfer Torque (STT), Spin-Orbit Torque (SOT), and Oersted field excitations.
 
 ---
@@ -111,7 +111,7 @@ The **3D Viewport** (`.fm-viewport-3d`) is a Three.js / WebGL rendering canvas t
 
 ### Key Viewport Features
 
-- **Vector Field Glyphs**: Render vector fields ($\mathbf{m}, \mathbf{H}_{\text{eff}}, \mathbf{H}_{\text{demag}}$) using arrows, cones, or stream ribbons scaled by magnitude.
+- **Vector Field Glyphs**: Render vector fields ($\mathbf{m}, \mathbf{H}_{\text{eff}}, \mathbf{H}_{\text{demag}}$) using the supported glyph and coloring modes. Available quantities depend on the published field resources.
 - **Colormaps & Components**: Colorize fields using standard scientific colormaps (**viridis**, **plasma**, **coolwarm**, **hsv**) mapped to vector components ($m_x, m_y, m_z$) or norm $|\mathbf{m}|$.
 - **Surface Projection Modes**: For thin films and multi-layer structures, switch between:
   - **Raw Nodal**: Direct node-based field interpolation.
@@ -144,7 +144,7 @@ To prevent accidental simulation state corruption during live execution, the Ins
 
 - **Material Parameters**: Saturation magnetization $M_{\text{s}}$, exchange constant $A_{\text{ex}}$, damping $\alpha$, gyromagnetic ratio $\gamma$.
 - **Excitation Parameters**: Pulse rise time, frequency $f$, current density $\mathbf{J}$, bias field components.
-- **Numerical Controls**: Integrator selection (`rk4`, `rk23`, `adaptive_heun`), error tolerances (`tolT`, `tolA`), maximum timestep $\Delta t_{\max}$.
+- **Numerical Controls**: Overdamped-relaxation integrator selection (`rk23`, `rk45`, `heun`), error tolerances (`tolT`, `tolA`), maximum timestep $\Delta t_{\max}$.
 
 ---
 
@@ -161,7 +161,7 @@ The **Status Bar** (`.fm-status-bar`) at the bottom footer of the window provide
 - **Session Connectivity**: Indicates live HTTP/WebSocket connection to the backend runtime.
 - **Active Engine & Device**: Displays active solver engine (**FDM** or **FEM**) and hardware lane (**CPU** or **GPU**).
 - **Execution Progress**: Displays stage execution percentage, current step count, physical time $t$ (in picoseconds/nanoseconds), and solver speed (steps/sec).
-- **Memory Footprint**: Monitors GPU VRAM and system RAM allocation for mesh topologies and field buffers.
+- **Diagnostics**: Inspect the metrics actually published by the selected runtime. A displayed allocation or mesh size is not a measurement of total GPU VRAM or system RAM usage.
 
 ---
 
@@ -171,19 +171,23 @@ Press **`Ctrl + K`** (or **`Cmd + K`** on macOS) anywhere in the workspace to la
 
 - Search for commands by name (e.g., *"Add Box Geometry"*, *"Save canonical copy as…"*, *"Toggle Wireframe"*).
 - Switch workspace themes between **Catppuccin Mocha** (dark theme) and **Catppuccin Latte** (light theme).
-- Trigger camera framing (**`F`**) or reset camera view (**`R`**).
+- Use the registered camera-framing and view commands; their current bindings are shown in the command UI.
 ## Control Room crosswalk
 
 Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
 
 ## Python/API crosswalk
 
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked `{doc}``/python-api/index` page rather than duplicating an unverified signature.
+The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
 
 ## Physics, limitations, and bibliography
 
 Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
 ## Source-code index
 
-- No new implementation symbol is introduced by this guide. The exact Python source symbol is owned by the linked terminal API page and the runnable example.
+- `apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx` — `GeometryObjectPanel`: geometry drafts and separate geometry/transform Apply transactions.
+- `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx` — `StudyStageDraftEditor`: stage controls; the available integrators depend on stage and capability.
+- `apps/control-room/src/kernel/types.ts` — `ModuleManifest`: actual module layout contract.
+- {doc}`/frontend/capability-register`: named editors and the boundary between authoring and inspection.
 
+Screenshots illustrate the interface; they are not runtime or physics qualification evidence.

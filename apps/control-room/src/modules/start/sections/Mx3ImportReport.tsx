@@ -2,15 +2,16 @@ import { Copy, Download } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
 
-import { importOpenState, type ScriptOpener } from "../model/scriptOpen";
+import { importSaveState, type ScriptSaver } from "../model/scriptOpen";
 import type { Mx3Translation } from "../model/mx3Import";
 
 export interface Mx3ImportReportProps {
   readonly fileName: string;
   readonly translation: Mx3Translation;
-  readonly opener: ScriptOpener | null;
+  readonly saver: ScriptSaver | null;
   readonly busy: boolean;
-  readonly onOpen: () => void;
+  /** Opens the native Save dialog for the translated script. */
+  readonly onCreate: () => void;
   readonly onSave: () => void;
   readonly onCopy: () => void;
   readonly onDiscard: () => void;
@@ -26,15 +27,15 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 export function Mx3ImportReport({
   fileName,
   translation,
-  opener,
+  saver,
   busy,
-  onOpen,
+  onCreate,
   onSave,
   onCopy,
   onDiscard,
 }: Mx3ImportReportProps) {
   const { supported, unsupported } = translation;
-  const open = importOpenState(translation, opener);
+  const save = importSaveState(saver);
   return (
     <section aria-label="Import report" className="fm-start-report">
       <h2 className="fm-start-report__title">Import report: {fileName}</h2>
@@ -75,7 +76,7 @@ export function Mx3ImportReport({
 
       {!translation.runnable ? (
         <p className="fm-start-notice fm-start-notice--warning" role="alert">
-          The script is incomplete and stops when run: {translation.blockers.join("; ")}.
+          The script is incomplete and stops when run: {translation.blockers.join("; ")}. You can still save it and finish it by hand.
         </p>
       ) : null}
 
@@ -94,20 +95,16 @@ export function Mx3ImportReport({
 
       <div className="fm-start-report__actions">
         <Button
-          disabled={!open.available || busy}
-          onClick={onOpen}
-          title={open.reason ?? undefined}
+          disabled={!save.available || busy}
+          onClick={onCreate}
+          title={save.reason ?? undefined}
           type="button"
           variant="primary"
         >
-          {busy
-            ? "Opening…"
-            : unsupported.length > 0
-              ? `Open with ${plural(unsupported.length, "untranslated statement")}`
-              : "Open translated script"}
+          {busy ? "Waiting for the Save dialog…" : "Save translated script…"}
         </Button>
         <Button onClick={onSave} type="button" variant="secondary">
-          <Download aria-hidden="true" size={12} /> Save script
+          <Download aria-hidden="true" size={12} /> Download script
         </Button>
         <Button onClick={onCopy} type="button" variant="secondary">
           <Copy aria-hidden="true" size={12} /> Copy script
@@ -116,7 +113,11 @@ export function Mx3ImportReport({
           Discard
         </Button>
       </div>
-      {open.reason ? <p className="fm-start-inspector__note">{open.reason}</p> : null}
+      {save.reason ? <p className="fm-start-inspector__note">{save.reason}</p> : null}
+      <p className="fm-start-inspector__note">
+        Save translated script asks where to save the .py file, lists it under Recent scripts and
+        selects it. Nothing runs until you choose Run in new window.
+      </p>
     </section>
   );
 }

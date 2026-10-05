@@ -27,7 +27,7 @@ This page is the Control Room surface itself. The status is `partial` unless eve
 
 ## Python/API crosswalk
 
-Python remains the authoritative authoring contract. Use the linked `{doc}``/python-api/index` pages for exact constructors, functions, arguments, units, and failure semantics; this page must not invent a Python signature.
+Python remains the authoritative authoring contract. Use the linked {doc}`/python-api/index` pages for exact constructors, functions, arguments, units, and failure semantics; this page must not invent a Python signature.
 
 ## Physics and bibliography scope
 
