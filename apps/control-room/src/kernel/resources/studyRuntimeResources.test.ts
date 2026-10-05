@@ -287,18 +287,6 @@ function statusWith({
 }
 
 describe("study runtime command resource bundles", () => {
-  it("keeps periodic-pair timeout state degraded without a global failure toast", () => {
-    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
-    const hookStart = source.indexOf("export function useMeshPeriodicPairsResource");
-    const hookEnd = source.indexOf("export function useHysteresisStagePlanResource", hookStart);
-    const hookSource = source.slice(hookStart, hookEnd);
-
-    expect(hookSource).toContain("ignoreMissingResource<MeshPeriodicPairsResource>");
-    expect(hookSource).toContain("notifyOnError: shouldNotifyMeshPeriodicPairsFailure");
-    expect(hookSource).toContain('name === "TimeoutError"');
-    expect(hookSource).toContain("resourceKey: MESHING_PERIODIC_PAIRS_PATH");
-  });
-
   it("loads model readiness into both production command resource bundles", () => {
     const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
     const fullBundle = source.slice(

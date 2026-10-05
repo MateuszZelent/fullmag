@@ -417,7 +417,9 @@ describe("useResource loader callback", () => {
             <Harness />
           </KernelContext.Provider>,
         );
-        await vi.runOnlyPendingTimersAsync();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       expect(load).toHaveBeenCalledTimes(1);

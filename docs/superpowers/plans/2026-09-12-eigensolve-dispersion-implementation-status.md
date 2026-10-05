@@ -1,3 +1,30 @@
+<!-- ci-source-remediation-complete-checkpoint-20261005 -->
+## Bieżący checkpoint — poprawki wszystkich 15 przypadków CI przygotowane
+
+Przyrosty `ac7c23500c05537d9e3776e2e0cacf912391b7a3` i
+`80de0218aadd656eb031ae471eb50e9363cc7d40` obejmują guard statusu AppMenu,
+fixture'y Next/kolorów oraz kanoniczną dostępność pól modalnych. Pozostałe
+cztery testy zasobów mają poprawione warunki faktycznego wykonania żądań,
+pełne session/epoch/request_scope_epoch i odrębne asercje optional/required/
+session 404. Test źródłowego tekstu timeoutu zastąpiono wykonaniem hooka
+w fixture: timeout pozostaje błędem bez globalnego powiadomienia, zwykły
+błąd emituje powiadomienie. Produkcyjnych hooków nie zmieniono.
+
+Kontrole składni wszystkich 11 plików TS/TSX PASS; review obu przyrostów
+bez otwartych uwag. To źródłowa naprawa reproducerów, nie potwierdzone
+przejście suite. Lokalnych unit tests/typecheck nie wykonywano; wymagane
+ponowne GitHub Actions. Poprzednie anulowanie rust-contracts wyjaśnia
+annotation: hosted runner nie uzyskał przydziału. Nie jest to błąd
+kompilatora ani wynik PASS. Generated API i public docs dla merge PASS.
+
+#233 rzeczywiście rozpoczął native-build (install-cli-dev); procesy rustc,
+CMake i cc1plus potwierdzono w jego kontenerze. Obserwator zakończył się
+na limicie obserwacji z build_state=running, bez prób. Uruchomiono nową
+obserwację tego samego joba, zachowując poprzedni zapis i logi. Nie ponowiono
+buildu ani nie zmieniono jego kapsuły. Próby GMRES/FGMRES jeszcze nie ruszyły.
+Pełny zakres S00–S12 pozostaje aktywny; kwalifikacja FEM/science/GUI/COMSOL,
+signed sweep/parity/zbieżność, S09/provider i GPU nadal OPEN.
+
 <!-- ci-runtime233-checkpoint-20261005 -->
 ## Bieżący checkpoint — runtime #233 i naprawa bramki frontendu
 

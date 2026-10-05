@@ -16,7 +16,10 @@ import { DiagnosticRecorderController } from "../performance/diagnostic-recorder
 import { updateRealtimeCommunicationPolicy } from "../realtime/communicationPolicy";
 import { ResourceInvalidationController } from "./ResourceInvalidationController";
 import { resetSharedResourceRuntimeStoreForTests } from "./ResourceRuntimeStore";
-import { sessionScopedResourceKey } from "./sessionResourceIdentity";
+import {
+  sessionRequestScopeKey,
+  sessionScopedResourceKey,
+} from "./sessionResourceIdentity";
 import { useSimulationPreparation } from "./useSimulationPreparation";
 
 interface Deferred<TData> {
@@ -24,6 +27,17 @@ interface Deferred<TData> {
   reject: (reason?: unknown) => void;
   resolve: (value: TData) => void;
 }
+
+const SESSION_IDENTITY = {
+  requestScopeEpoch: "api-instance:1",
+  sessionEpoch: "session-1@1700000000000",
+  sessionId: "session-1",
+} as const;
+const SCOPED_PREPARATION_RESOURCE_KEY = sessionScopedResourceKey(
+  SESSION_IDENTITY,
+  SIMULATION_PREPARATION_PATH,
+);
+const PREPARATION_SESSION_SCOPE_KEY = sessionRequestScopeKey(SESSION_IDENTITY)!;
 
 type PreparationResult = ReturnType<typeof useSimulationPreparation>;
 
@@ -68,9 +82,11 @@ function preparationFixture(revision: number): SimulationPreparationResource {
   };
 }
 
-function statusFixture(): LiveStatusResource {
+function statusFixture(simulationPreparationRevision = 0): LiveStatusResource {
   return {
-    resources: { simulation_preparation_revision: 0 },
+    resources: {
+      simulation_preparation_revision: simulationPreparationRevision,
+    },
     session: {
       session_epoch: "session-1@1700000000000",
       session_id: "session-1",
@@ -81,7 +97,10 @@ function statusFixture(): LiveStatusResource {
 }
 
 function makeKernel(
-  preparation: (options?: { signal?: AbortSignal }) => Promise<SimulationPreparationResource>,
+  preparation: (
+    options?: { sessionScopeKey?: string; signal?: AbortSignal },
+  ) => Promise<SimulationPreparationResource>,
+  status: LiveStatusResource = statusFixture(),
 ) {
   const bus = new EventBus<KernelEventMap>();
   const resources = new ResourceInvalidationController(bus);
@@ -89,7 +108,7 @@ function makeKernel(
     kernel: {
       api: {
         sessions: {
-          current: { status: async () => statusFixture() },
+          current: { status: async () => status },
           // Session identity is confirmed against the session collection.
           list: async () => ({
             schema_version: "2.0.0",
@@ -158,7 +177,7 @@ describe("useSimulationPreparation", () => {
         new ControlRoomApiError("simulation preparation unavailable", 404),
       ),
     );
-    const { bus, kernel, resources } = makeKernel(load);
+    const { bus, kernel, resources } = makeKernel(load, statusFixture(1));
     const failures: KernelEventMap["resource:load-failed"][] = [];
     const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
       failures.push(event);
@@ -166,7 +185,7 @@ describe("useSimulationPreparation", () => {
     const observations: PreparationResult[] = [];
     const dom = installTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
-    resources.invalidate(SIMULATION_PREPARATION_PATH, 1);
+    resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 1);
 
     try {
       await act(async () => {
@@ -182,6 +201,11 @@ describe("useSimulationPreparation", () => {
       );
 
       expect(load).toHaveBeenCalledTimes(1);
+      expect(load).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionScopeKey: PREPARATION_SESSION_SCOPE_KEY,
+        }),
+      );
       expect(resultSnapshot(observations.at(-1)!)).toEqual({
         data: null,
         error: null,
@@ -202,7 +226,7 @@ describe("useSimulationPreparation", () => {
         new ControlRoomApiError("simulation preparation unavailable", 404),
       ),
     );
-    const { bus, kernel, resources } = makeKernel(load);
+    const { bus, kernel, resources } = makeKernel(load, statusFixture(8));
     const failures: KernelEventMap["resource:load-failed"][] = [];
     const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
       failures.push(event);
@@ -210,7 +234,7 @@ describe("useSimulationPreparation", () => {
     const observations: PreparationResult[] = [];
     const dom = installTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
-    resources.invalidate(SIMULATION_PREPARATION_PATH, 8);
+    resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 8);
 
     try {
       await act(async () => {
@@ -233,9 +257,15 @@ describe("useSimulationPreparation", () => {
         revision: 8,
         status: "error",
       });
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(load).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionScopeKey: PREPARATION_SESSION_SCOPE_KEY,
+        }),
+      );
       expect(failures).toEqual([
         expect.objectContaining({
-          resourceKey: SIMULATION_PREPARATION_PATH,
+          resourceKey: SCOPED_PREPARATION_RESOURCE_KEY,
           revision: 8,
           status: 404,
         }),
@@ -253,17 +283,21 @@ describe("useSimulationPreparation", () => {
         new ControlRoomApiError("no active local live workspace", 404),
       ),
     );
-    const { kernel, resources } = makeKernel(load);
+    const { bus, kernel, resources } = makeKernel(load, statusFixture());
+    const failures: KernelEventMap["resource:load-failed"][] = [];
+    const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
+      failures.push(event);
+    });
     const observations: PreparationResult[] = [];
     const dom = installTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
-    resources.invalidate(SIMULATION_PREPARATION_PATH, 1);
+    resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 1);
 
     try {
       await act(async () => {
         root.render(
           <KernelContext.Provider value={kernel}>
-            <Probe observations={observations} />
+            <Probe observations={observations} requiredRevision={1} />
           </KernelContext.Provider>,
         );
       });
@@ -280,7 +314,21 @@ describe("useSimulationPreparation", () => {
         revision: 1,
         status: "error",
       });
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(load).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionScopeKey: PREPARATION_SESSION_SCOPE_KEY,
+        }),
+      );
+      expect(failures).toEqual([
+        expect.objectContaining({
+          resourceKey: SCOPED_PREPARATION_RESOURCE_KEY,
+          revision: 1,
+          status: 404,
+        }),
+      ]);
     } finally {
+      unsubscribeFailure();
       await act(async () => root.unmount());
       dom.restore();
     }
@@ -293,11 +341,11 @@ describe("useSimulationPreparation", () => {
       .fn()
       .mockRejectedValueOnce(new ControlRoomApiError("upstream unavailable", 502))
       .mockResolvedValueOnce(preparationFixture(8));
-    const { kernel, resources } = makeKernel(load);
+    const { kernel, resources } = makeKernel(load, statusFixture(8));
     const observations: PreparationResult[] = [];
     const dom = installTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
-    resources.invalidate(SIMULATION_PREPARATION_PATH, 8);
+    resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 8);
 
     try {
       await act(async () => {
@@ -358,7 +406,7 @@ describe("useSimulationPreparation", () => {
     const observations: PreparationResult[] = [];
     const dom = installTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
-    resources.invalidate(SIMULATION_PREPARATION_PATH, 1);
+    resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 1);
 
     await act(async () => {
       root.render(
@@ -402,7 +450,7 @@ describe("useSimulationPreparation", () => {
     const observations: PreparationResult[] = [];
     const dom = installTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
-    resources.invalidate(SIMULATION_PREPARATION_PATH, 7);
+    resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 7);
 
     await act(async () => {
       root.render(
@@ -434,7 +482,7 @@ describe("useSimulationPreparation", () => {
 
     now.mockReturnValue(2_000);
     await act(async () => {
-      resources.invalidate(SIMULATION_PREPARATION_PATH, 8);
+      resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 8);
     });
     const staleRevision8 = resultSnapshot(observations.at(-1)!);
     await waitFor(() => load.mock.calls.length === 2, "revision 8 did not load");
@@ -456,7 +504,7 @@ describe("useSimulationPreparation", () => {
       failures.push(event);
     });
     await act(async () => {
-      resources.invalidate(SIMULATION_PREPARATION_PATH, 9);
+      resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 9);
     });
     const staleRevision9 = resultSnapshot(observations.at(-1)!);
     await waitFor(() => load.mock.calls.length === 3, "revision 9 did not load");
@@ -539,7 +587,7 @@ describe("useSimulationPreparation", () => {
       return pending.promise;
     });
     const { kernel, resources } = makeKernel(load);
-    resources.invalidate(SIMULATION_PREPARATION_PATH, 11);
+    resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 11);
     const serverObservations: PreparationResult[] = [];
     renderToStaticMarkup(
       <KernelContext.Provider value={kernel}>

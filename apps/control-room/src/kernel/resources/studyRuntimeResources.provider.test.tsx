@@ -2,7 +2,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { MODEL_READINESS_PATH, MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import {
+  MESHING_PERIODIC_PAIRS_PATH,
+  MODEL_READINESS_PATH,
+  MODEL_SCENE_PATH,
+} from "@/kernel/api/apiPaths";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
@@ -26,6 +30,7 @@ import {
   runtimeCommandControlSessionStatusEquals,
   selectRuntimeCommandControlSessionStatus,
   useCurrentRunResource,
+  useMeshPeriodicPairsResource,
   useModelReadinessResource,
   useRuntimeCommandControlResourceData,
 } from "./studyRuntimeResources";
@@ -42,12 +47,18 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function statusAt(sceneRevision: number) {
+const SCRATCH_SESSION_SCOPE_KEY =
+  "session=scratch-session&epoch=scratch-session%401700000000000&request_scope_epoch=api-instance%3Ascratch";
+
+function statusAt(
+  sceneRevision: number,
+  run: { run_id: string } | null = null,
+) {
   return {
     capabilities: { binary_fields: true },
     domain: { discretization: "fdm" },
     resources: { scene_revision: sceneRevision },
-    run: null,
+    run,
     session: {
       request_scope_epoch: "api-instance:scratch",
       session_epoch: "scratch-session@1700000000000",
@@ -162,8 +173,9 @@ describe("production runtime command resource provider", () => {
   });
 
   it("treats an absent current run as an empty resource without emitting a load failure", async () => {
-    const currentRunLoad = vi.fn(() =>
-      Promise.reject(new ControlRoomApiError("no active run", 404)),
+    const currentRunLoad = vi.fn(
+      (_options?: { sessionScopeKey?: string; signal?: AbortSignal }) =>
+        Promise.reject(new ControlRoomApiError("no active run", 404)),
     );
     const bus = new EventBus<KernelEventMap>();
     const failures: KernelEventMap["resource:load-failed"][] = [];
@@ -172,7 +184,15 @@ describe("production runtime command resource provider", () => {
     });
     const resources = new ResourceInvalidationController(bus);
     const kernel = {
-      api: { simulation: { currentRun: currentRunLoad } },
+      api: {
+        sessions: {
+          ...sessionsApi,
+          current: {
+            status: async () => statusAt(0, { run_id: "run-1" }),
+          },
+        },
+        simulation: { currentRun: currentRunLoad },
+      },
       bus,
       diagnosticRecorder: new DiagnosticRecorderController({
         config: { enabled: false },
@@ -202,6 +222,11 @@ describe("production runtime command resource provider", () => {
         expect(currentRunLoad).toHaveBeenCalledTimes(1);
         expect(latest.current?.status).toBe("ready");
       });
+      expect(currentRunLoad).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionScopeKey: SCRATCH_SESSION_SCOPE_KEY,
+        }),
+      );
       expect(latest.current?.data).toBeNull();
       expect(latest.current?.error).toBeNull();
       expect(failures).toEqual([]);
@@ -210,6 +235,89 @@ describe("production runtime command resource provider", () => {
       dom.restore();
     }
   });
+
+  it.each([
+    { label: "timeout", errorName: "TimeoutError", notify: false },
+    { label: "non-timeout failure", errorName: "Error", notify: true },
+  ])(
+    "keeps periodic-pair $label state and applies its notification policy",
+    async ({ errorName, notify }) => {
+      const failure = new Error("periodic-pair load failed");
+      failure.name = errorName;
+      const periodicPairsLoad = vi.fn(
+        (_options?: { sessionScopeKey?: string; signal?: AbortSignal }) =>
+          Promise.reject(failure),
+      );
+      const bus = new EventBus<KernelEventMap>();
+      const failures: KernelEventMap["resource:load-failed"][] = [];
+      const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
+        failures.push(event);
+      });
+      const resources = new ResourceInvalidationController(bus);
+      const kernel = {
+        api: {
+          meshing: { periodicPairs: periodicPairsLoad },
+          sessions: {
+            ...sessionsApi,
+            current: { status: async () => statusAt(0) },
+          },
+        },
+        bus,
+        diagnosticRecorder: new DiagnosticRecorderController({
+          config: { enabled: false },
+        }),
+        resources,
+      } as unknown as KernelApi;
+      const dom = installSimulationPreparationTestDom();
+      const container = dom.document.createElement("div");
+      dom.document.body.appendChild(container);
+      const root = createRoot(container as unknown as Element);
+      const latest: {
+        current: ReturnType<typeof useMeshPeriodicPairsResource> | null;
+      } = { current: null };
+
+      function Harness() {
+        latest.current = useMeshPeriodicPairsResource();
+        return null;
+      }
+
+      try {
+        await act(async () => {
+          root.render(
+            <KernelContext.Provider value={kernel}>
+              <Harness />
+            </KernelContext.Provider>,
+          );
+        });
+        await vi.waitFor(() => {
+          expect(periodicPairsLoad).toHaveBeenCalledTimes(1);
+          expect(latest.current?.status).toBe("error");
+        });
+
+        expect(periodicPairsLoad).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionScopeKey: SCRATCH_SESSION_SCOPE_KEY,
+          }),
+        );
+        expect(latest.current?.error).toBe(failure);
+        const expectedResourceKey =
+          `${SCRATCH_SESSION_SCOPE_KEY}|${MESHING_PERIODIC_PAIRS_PATH}`;
+        if (notify) {
+          expect(failures).toEqual([
+            expect.objectContaining({
+              resourceKey: expectedResourceKey,
+            }),
+          ]);
+        } else {
+          expect(failures).toEqual([]);
+        }
+      } finally {
+        unsubscribeFailure();
+        await act(async () => root.unmount());
+        dom.restore();
+      }
+    },
+  );
 
   it("refetches status and readiness from the final preset ACK before Run recovers without realtime", async () => {
     updateRealtimeCommunicationPolicy({ status_refresh_ms: 1 });
