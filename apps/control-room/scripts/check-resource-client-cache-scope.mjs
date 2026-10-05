@@ -306,7 +306,7 @@ const visualizationPublisher = readFileSync("src/kernel/visualization/Visualizat
 assert.match(visualizationPublisher, /updateObservedData\([\s\S]*?resourceRuntimeKeyForClientScope\(/);
 assert.match(
   readFileSync("src/kernel/KernelProvider.tsx", "utf8"),
-  /createCommandSessionScopeSource\([\s\S]*?api\.resourceCacheScope\)/,
+  /createCommandSessionScopeSource\([\s\S]*?api\.resourceCacheScope,?\s*\)/,
 );
 for (const path of [
   "src/kernel/authoring/AuthoringHistoryController.ts",
@@ -332,10 +332,44 @@ const fieldPausePolicy = readFileSync(
 );
 assert.match(fieldPausePolicy, /resourceKey\.includes\("\/data\/fields\/"\)/);
 
+const simulationAvailability = productionModule(
+  "src/kernel/resources/simulationResourceAvailability.ts",
+);
+await simulationAvailability.link(() => {
+  throw new Error("Unexpected simulation-availability dependency");
+});
+await simulationAvailability.evaluate();
+const { hasCurrentSimulationRun, hasSimulationPreparation } = simulationAvailability.namespace;
+const emptySimulation = {
+  session: { session_id: "new-session" },
+  run: null,
+  resources: { simulation_preparation_revision: 0 },
+};
+assert.equal(hasCurrentSimulationRun(null), false);
+assert.equal(hasSimulationPreparation(null, 7), false);
+assert.equal(hasCurrentSimulationRun(emptySimulation), false);
+assert.equal(hasSimulationPreparation(emptySimulation), false);
+assert.equal(hasSimulationPreparation(emptySimulation, 0), false);
+assert.equal(hasSimulationPreparation(emptySimulation, 7), true);
+assert.equal(hasSimulationPreparation({
+  ...emptySimulation, resources: { simulation_preparation_revision: 8 },
+}), true);
+for (const status of ["running", "completed", "failed"]) {
+  assert.equal(hasCurrentSimulationRun({
+    ...emptySimulation, run: { run_id: "run-1", status },
+  }), true);
+}
+assert.equal(hasCurrentSimulationRun({
+  ...emptySimulation, session: null, run: { run_id: "old-run" },
+}), false);
+assert.equal(hasSimulationPreparation({
+  ...emptySimulation, session: null, resources: { simulation_preparation_revision: 8 },
+}, 8), false);
+
 sharedResourceRuntimeStore.resetForTests();
 console.log(JSON.stringify({
   check: "resource-client-cache-scope",
-  groups: 9,
+  groups: 10,
   passed: true,
   emitted_code: false,
 }));

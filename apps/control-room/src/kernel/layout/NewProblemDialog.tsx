@@ -168,12 +168,12 @@ export function NewProblemDialog({
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!pending && !browsing) onOpenChange(nextOpen); }}>
-      <DialogContent className="fm-new-problem" aria-describedby="fm-new-problem-description">
+      <DialogContent className="fm-new-problem">
         <DialogHeader className="fm-new-problem__header">
           <div className="fm-new-problem__heading-icon" aria-hidden="true"><Layers size={20} /></div>
           <div>
             <DialogTitle>New simulation</DialogTitle>
-            <DialogDescription id="fm-new-problem-description">Set up your model and choose where its results will live.</DialogDescription>
+            <DialogDescription>Set up your model and choose where its results will live.</DialogDescription>
           </div>
           <span className="fm-new-problem__profile">CPU · Double precision</span>
         </DialogHeader>
