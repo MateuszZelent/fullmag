@@ -19,6 +19,7 @@ const workspace = (over: Partial<WorkspaceItemsController> = {}): WorkspaceItems
   scan: vi.fn(async () => ({ failure: "x" })),
   addByPath: vi.fn(async () => ({ failure: "x" })),
   thumbnailUrl: (id: string) => id,
+  archiveUrl: (id: string) => id,
   scanning: false,
   ...over,
 });

@@ -140,7 +140,7 @@ describe("ScriptInspector detail from the backend", () => {
     const html = render({ detail: ready({ syntax: { ok: true }, imports: { unresolved: ["scipy"] } }) });
     expect(html).toContain("Checks");
     expect(html).toContain("No syntax errors");
-    expect(html).toMatch(/Unresolved imports<\/dt><dd>.*scipy/);
+    expect(html).toMatch(/Imports not found<\/dt><dd>.*scipy/);
     expect(html).toMatch(/Environment reads<\/dt><dd>.*FULLMAG_DEVICE/);
     expect(html).toContain("utf-8");
     expect(html).toContain("e4f5a6b7c8d9");
@@ -344,12 +344,37 @@ describe("scriptFacts and scriptChecks", () => {
     expect(scriptFacts(item, undefined).map((r) => r.label)).not.toContain("SHA-256");
   });
 
+  it("reads the API's own shape: unresolved_imports at the top level, careful wording", () => {
+    const checked = scriptChecks(
+      detail({ syntax: { ok: true }, syntax_checked: true, unresolved_imports: ["scipy"], imports: ["numpy", "scipy"], env_reads: [] }),
+    );
+    expect(checked.map((r) => r.label)).toEqual(["Syntax", "Imports not found", "Environment reads"]);
+    expect(checked[0]?.value).toBe("No syntax errors");
+    const none = scriptChecks(detail({ syntax: { ok: true }, syntax_checked: true, unresolved_imports: [], env_reads: [] }));
+    expect(none[1]?.value).toBe("All found by the interpreter");
+  });
+
+  it("says 'not checked' and names the line scan when Python did not check the file", () => {
+    const rows = scriptChecks(
+      detail({
+        syntax: undefined,
+        syntax_checked: false,
+        degraded: true,
+        degraded_reason: "static line scan; no Python interpreter",
+        imports: ["numpy"],
+        env_reads: [],
+      }),
+    );
+    expect(rows.map((r) => r.label)).toEqual(["Syntax", "Imports (line scan)", "Environment reads", "Checked by"]);
+    expect(rows[0]?.value).toBe("not checked");
+  });
+
   it("reads each check, with 'unavailable' for the ones not sent", () => {
     const all = scriptChecks(detail({ syntax: { ok: false, line: 3, message: "bad" }, imports: { unresolved: ["a"] }, env_reads: [] }));
-    expect(all.map((r) => r.label)).toEqual(["Syntax", "Unresolved imports", "Environment reads"]);
+    expect(all.map((r) => r.label)).toEqual(["Syntax", "Imports not found", "Environment reads"]);
     expect(all[0]?.value).toBe("Error at line 3: bad");
     expect(all[2]?.value).toBe("None");
     expect(scriptChecks(detail({})).map((r) => r.value)).toEqual(["unavailable", "unavailable", "unavailable"]);
-    expect(scriptChecks(detail({ imports: { unresolved: [] } }))[1]?.value).toBe("All resolve");
+    expect(scriptChecks(detail({ imports: { unresolved: [] } }))[1]?.value).toBe("All found by the interpreter");
   });
 });

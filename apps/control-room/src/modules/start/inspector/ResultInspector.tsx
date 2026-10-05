@@ -1,11 +1,12 @@
 "use client";
 
-import { Copy, FileCode2, FolderSearch, Trash2 } from "lucide-react";
+import { Copy, Download, FileCode2, FolderSearch, Trash2 } from "lucide-react";
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 
 import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 
 import { selectResultBanner } from "../model/bannerModel";
+import { RESULTS_DOWNLOAD_FOLDER_MISSING, RESULTS_DOWNLOAD_NO_BACKEND, startDownload } from "../model/downloadUrl";
 import { formatSimTime } from "../model/continueModel";
 import { formatBytes, formatOpened } from "../model/recentIndex";
 import { resultChip, resultSourceName, stageLabel } from "../model/resultModel";
@@ -78,6 +79,8 @@ export interface ResultInspectorProps {
   /** The database is from a newer Fullmag: pins and removals cannot be saved. */
   readonly readOnly: boolean;
   readonly thumbnailUrl?: (id: string) => string;
+  /** URL that downloads this folder as a zip; omitted, the download says it needs a backend. */
+  readonly archiveUrl?: (id: string) => string;
   readonly onTogglePin: (id: string, pinned: boolean) => Promise<string | null>;
   readonly onForget: (id: string) => void;
   /** Selects the source script or project in the list. */
@@ -94,6 +97,25 @@ function resultDetailOf(detail: WorkspaceItemDetailState): ResultDetail | undefi
   return detail.kind === "ready" && detail.answer.detail?.kind === "result"
     ? detail.answer.detail
     : undefined;
+}
+
+/** Why "Download as zip" is off for this folder; null when it can run. */
+export function downloadReason(
+  item: Pick<ApiWorkspaceItem, "status">,
+  archiveUrl: ((id: string) => string) | undefined,
+): string | null {
+  if (item.status === "missing") return RESULTS_DOWNLOAD_FOLDER_MISSING;
+  return archiveUrl ? null : RESULTS_DOWNLOAD_NO_BACKEND;
+}
+
+/** What the preview image is, or why there is none; a result is never rendered as an image here. */
+export function previewNote(item: ApiWorkspaceItem): string {
+  if (!item.hasThumbnail) {
+    return "none: the folder holds no image and its source project has no stored preview";
+  }
+  return item.thumbnailOrigin === "source_project"
+    ? "stored preview of the source project, not a render of this result"
+    : "stored preview";
 }
 
 export function resultFacts(item: ApiWorkspaceItem, result: ResultDetail | undefined): KvRow[][] {
@@ -126,6 +148,7 @@ export function resultFacts(item: ApiWorkspaceItem, result: ResultDetail | undef
       : []),
   ];
   const where: KvRow[] = [
+    ...kvRow("Preview", previewNote(item)),
     ...kvRow("Modified", item.modifiedAt ? formatOpened(item.modifiedAt) : undefined),
     ...kvRow("First seen", item.firstSeenAt ? formatOpened(item.firstSeenAt) : undefined),
   ];
@@ -195,6 +218,7 @@ export function ResultInspector({
   detail,
   readOnly,
   thumbnailUrl,
+  archiveUrl,
   onTogglePin,
   onForget,
   onSelectSource,
@@ -265,6 +289,15 @@ export function ResultInspector({
         void copyText(path).then((ok) => report(ok ? "Path copied." : "Could not copy the path to the clipboard.")),
     },
     {
+      id: "download-result",
+      label: "Download as zip",
+      icon: <Download aria-hidden="true" size={14} />,
+      onSelect: () => {
+        if (archiveUrl) startDownload(archiveUrl(item.id));
+      },
+      disabledReason: downloadReason(item, archiveUrl),
+    },
+    {
       id: "reveal-result",
       label: "Reveal in file manager",
       icon: <FolderSearch aria-hidden="true" size={14} />,
@@ -315,7 +348,9 @@ export function ResultInspector({
         className="fm-start-preview"
         role={previewSrc ? "img" : undefined}
       >
-        <span className="fm-start-preview__label">Last result</span>
+        <span className="fm-start-preview__label">
+          {item.thumbnailOrigin === "source_project" ? "Last result · project preview" : "Last result"}
+        </span>
         <ProjectThumb eager size="preview" src={previewSrc} status={missing ? "missing" : "ready"} />
       </div>
 

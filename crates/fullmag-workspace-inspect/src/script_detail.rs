@@ -13,7 +13,7 @@ use std::path::Path;
 
 use fullmag_workspace::{hash_file, script_meta_from_text, MAX_HASHED_BYTES, MAX_SCRIPT_BYTES};
 
-use crate::detail::ScriptDetail;
+use crate::detail::{ScriptDetail, ScriptSyntax};
 
 const DEGRADED_REASON: &str =
     "static line scan; no Python interpreter was used and the script was not executed";
@@ -31,6 +31,8 @@ pub fn inspect_script(path: &Path) -> ScriptDetail {
         uses_fullmag: None,
         imports: None,
         env_reads: None,
+        syntax: None,
+        unresolved_imports: None,
         syntax_checked: false,
         degraded: true,
         degraded_reason: Some(DEGRADED_REASON.to_string()),
@@ -92,6 +94,80 @@ pub fn inspect_script(path: &Path) -> ScriptDetail {
     detail.imports = Some(top_level_imports(text));
     detail.env_reads = Some(literal_env_reads(text));
     detail
+}
+
+/// Fill `detail` from a `fullmag.script_inspect.v1` document that the Python
+/// helper `inspect-script` produced (`ast` and `find_spec` only; the script is
+/// never executed). The document must describe the same bytes as `detail`;
+/// otherwise nothing is changed and the reason is returned.
+///
+/// A syntax error is a valid answer: it sets `syntax` and keeps the static
+/// scan for the other facts, with `degraded` still true. A clean parse
+/// replaces imports, unresolved imports and environment reads and clears
+/// `degraded`.
+pub fn apply_python_inspection(
+    detail: &mut ScriptDetail,
+    document: &serde_json::Value,
+) -> Result<(), String> {
+    if document.get("schema").and_then(|value| value.as_str()) != Some("fullmag.script_inspect.v1") {
+        return Err("the Python helper did not return a fullmag.script_inspect.v1 document".into());
+    }
+    let digest = document.get("sha256").and_then(|value| value.as_str());
+    match (digest, detail.sha256.as_deref()) {
+        (Some(reported), Some(own)) if reported.eq_ignore_ascii_case(own) => {}
+        _ => return Err("the Python helper read different bytes than the static scan".into()),
+    }
+    let syntax = document
+        .get("syntax")
+        .and_then(|value| value.as_object())
+        .ok_or("the Python helper reported no syntax result")?;
+    let ok = syntax
+        .get("ok")
+        .and_then(|value| value.as_bool())
+        .ok_or("the Python helper reported no syntax verdict")?;
+    detail.syntax = Some(ScriptSyntax {
+        ok,
+        line: syntax.get("line").and_then(|value| value.as_u64()),
+        column: syntax.get("column").and_then(|value| value.as_u64()),
+        message: syntax
+            .get("message")
+            .and_then(|value| value.as_str())
+            .map(|text| text.chars().take(300).collect()),
+    });
+    detail.syntax_checked = true;
+    if !ok {
+        detail.degraded = true;
+        detail.degraded_reason = Some(
+            "the script does not parse; imports and environment reads come from a line scan".into(),
+        );
+        return Ok(());
+    }
+    let strings = |value: Option<&serde_json::Value>| -> Option<Vec<String>> {
+        value.and_then(|value| value.as_array()).map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+    };
+    if let Some(summary) = document.get("summary") {
+        detail.summary = summary.as_str().map(str::to_string);
+    }
+    let imports = document.get("imports");
+    if let Some(top_level) = strings(imports.and_then(|value| value.get("top_level"))) {
+        detail.imports = Some(top_level);
+    }
+    detail.uses_fullmag = imports
+        .and_then(|value| value.get("fullmag"))
+        .and_then(|value| value.as_bool())
+        .or(detail.uses_fullmag);
+    detail.unresolved_imports = strings(imports.and_then(|value| value.get("unresolved")));
+    if let Some(reads) = strings(document.get("env_reads")) {
+        detail.env_reads = Some(reads);
+    }
+    detail.degraded = false;
+    detail.degraded_reason = None;
+    Ok(())
 }
 
 /// `("utf-8" | "utf-8-bom" | "other", decoded text if UTF-8)`. A multi-byte

@@ -347,6 +347,7 @@ export function StartScreen({ kernel }: ModuleProps) {
         entry={selectedEntry}
         onOpenResults={openResults}
         onSelectResult={(id) => startScreenStore.setSelectedResult(id)}
+        archiveUrl={workspaceApi.archiveUrl}
         onForget={(projectId) => {
           startScreenStore.setSelectedProject(null);
           void recent.forget(projectId);
@@ -358,6 +359,7 @@ export function StartScreen({ kernel }: ModuleProps) {
         resultActions={{
           readOnly: scripts.readOnly,
           thumbnailUrl: workspaceApi.thumbnailUrl,
+          archiveUrl: workspaceApi.archiveUrl,
           onTogglePin: results.pin,
           onForget: (id) => {
             startScreenStore.setSelectedResult(null);

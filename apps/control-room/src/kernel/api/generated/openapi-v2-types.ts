@@ -4395,6 +4395,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/workspace/items/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_archive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/workspace/items/{id}/forget": {
         parameters: {
             query?: never;
@@ -11156,8 +11172,12 @@ export interface components {
         RunSource: {
             /** @description `script` or `project`. */
             kind: string;
-            /** @description Absolute path as the user would type it (no `\\?\` prefix). */
-            path: string;
+            /**
+             * @description Absolute path as the user would type it (no `\\?\` prefix). Empty when
+             *     the producer does not know the file (accepted project runs record the
+             *     project id and revision instead).
+             */
+            path?: string;
             /** @description Stable project id (projects only). */
             project_id?: string | null;
             /**
@@ -12132,10 +12152,17 @@ export interface components {
             sha256?: string | null;
             /** @description First line of the module docstring. */
             summary?: string | null;
-            /** @description Python syntax is not checked by this reader: always `false`. */
+            syntax?: null | components["schemas"]["ScriptSyntax"];
+            /** @description Python's parser checked the syntax (`ast`, never executed). */
             syntax_checked: boolean;
             /** @description Only the first 1 MiB was scanned for the facts below. */
             truncated: boolean;
+            /**
+             * @description Top-level imports that `importlib.util.find_spec` did not find in
+             *     the chosen interpreter (nor next to the script); `null` when not
+             *     checked. This says nothing about the interpreter a run would use.
+             */
+            unresolved_imports?: string[] | null;
             uses_fullmag?: boolean | null;
         };
         ScriptSourceResponse: {
@@ -12176,6 +12203,18 @@ export interface components {
              *     storage) or `script` (the session's managed script was written).
              */
             written_to?: string;
+        };
+        /** @description Outcome of parsing a script with Python's `ast` (never executed). */
+        ScriptSyntax: {
+            /** Format: int64 */
+            column?: number | null;
+            /**
+             * Format: int64
+             * @description 1-based line of the first syntax error.
+             */
+            line?: number | null;
+            message?: string | null;
+            ok: boolean;
         };
         SelectionBoundaryMembershipSchema: {
             /** Format: double */
@@ -14430,6 +14469,7 @@ export interface components {
             /** Format: int64 */
             size_bytes?: number | null;
             status: components["schemas"]["WorkspaceItemStatus"];
+            thumbnail_origin?: null | components["schemas"]["WorkspaceThumbnailOrigin"];
             /** Format: int64 */
             use_count: number;
         };
@@ -14546,6 +14586,8 @@ export interface components {
             left_dock?: string | null;
             right_dock?: string | null;
         };
+        /** @enum {string} */
+        WorkspaceThumbnailOrigin: "item" | "source_project";
         /** @enum {string} */
         ZhangLiFormulaVersion: "zhang_li.fullmag.v1" | "zhang_li.mumax3.v1" | "zhang_li.legacy_fullmag.v0";
         /** @enum {string} */
@@ -27858,6 +27900,57 @@ export interface operations {
             };
             /** @description Unknown or forgotten item */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_archive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Zip of the result folder, streamed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
+                };
+            };
+            /** @description The item is not a result folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown, forgotten or missing item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The folder contains a link or a name that cannot be archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The folder exceeds the archive size or file limit */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

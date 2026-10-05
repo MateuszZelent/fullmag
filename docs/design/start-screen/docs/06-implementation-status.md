@@ -6,8 +6,16 @@ Updated on 2026-10-05, after the merges of PR #128 (workspace UI) and #129
 anything not named there was **not** verified.
 
 Standing limitations: building Rust unit tests is suspended by `AGENTS.md`, so
-the Rust tests written for the workspace database and the desktop host are
-**uncompiled and unrun** (only `cargo check` ran). The frontend unit tests
+the Rust tests written for the workspace database and the desktop host were
+**uncompiled and unrun** when this status was written. The follow-up work of
+2026-10-05 (manifests of project runs, result thumbnails, syntax check, archive;
+branch `codex/ws-finish-20261005`) was explicitly asked to run its Rust tests and
+did: `cargo test -p fullmag-workspace-inspect -p fullmag-workspace` (48 + 30
+passed), `cargo test -p fullmag-api --bin fullmag-api router_v2` (938 passed,
+0 failed, 2 ignored, `FULLMAG_PYTHON` set), the `accepted_project_storage`,
+`script_check` and `workspace_archive` tests (11 passed), `cargo check -p
+fullmag-cli -p fullmag-desktop` clean; vitest `src/modules/start src/kernel`
+(2497 passed, 13 skipped), typecheck and eslint clean. The frontend unit tests
 (vitest) do run and are listed in section 2. Browser checks used mocked hosts or
 the real built stylesheets; no check ran inside a packaged desktop application
 against real project archives.
@@ -21,7 +29,7 @@ against real project archives.
 | 1 | Shell, rail, launch tiles | Done | typecheck, lint, browser |
 | 2 | Recent index (list, search, filter, sort, grouping, virtualisation) | Done, front + host. The host list is a view of the per-user workspace database (section 5); projects and scripts share one list with a kind switch and unified sorting | typecheck, lint, vitest, browser against mocked host; `cargo check` |
 | 3 | Inspector: header, chips, context banner, Overview | Done | typecheck, lint, browser (five banner states) |
-| 4 | Thumbnails, card grid, result preview, LRU | Done in the renderer | typecheck, lint, browser. **No frame scrubber** (host provides no frames). The thumbnail is now written: a finished run records its outcome and a viewport thumbnail into the open project (`project_record_outcome`, `project/preview/thumb.png`, a PNG up to 256 kB) and the index reads it. Writer verified by `cargo check` and a mocked-host browser check, **not** in a packaged app |
+| 4 | Thumbnails, card grid, result preview, LRU | Done in the renderer | typecheck, lint, browser. **No frame scrubber**: not built, see section 3 for the exact reason. Result folders show the stored preview of their source project (labelled "project preview"), never a render of the result. The thumbnail is now written: a finished run records its outcome and a viewport thumbnail into the open project (`project_record_outcome`, `project/preview/thumb.png`, a PNG up to 256 kB) and the index reads it. Writer verified by `cargo check` and a mocked-host browser check, **not** in a packaged app |
 | 5 | Authors, History, Runs, BibTeX | Done: read side and writer | browser (three tabs, mocked host); `cargo check`. Writer records edit saves only, see §3 |
 | 6 | Continue card | Done in the renderer | browser (resumable / not / host error). `resume_run`, `discard_checkpoint` do not exist |
 | 7 | Compute environment | Rozbudowany widget i szczegóły Settings; istniejące zasoby runtime v2 | Przeglądarka: rzeczywisty RTX 4080 SUPER, 48 wątków CPU i 10 kontroli stanów/motywów/układu. Lint zmiany i kontrole API/architektury: PASS. Pełna kontrola typów/lint: błędy poza zakresem; szczegóły w [09-compute-environment.md](09-compute-environment.md) |
@@ -81,9 +89,40 @@ walker; they are unrelated to the start screen and are not fixed here.
 Host (needs work outside the renderer):
 
 - **Thumbnails** exist only for projects that finished a run since the writer
-  landed; others show a placeholder. Scripts have no thumbnail.
-- **Checkpoints:** `discard_checkpoint` does not exist; the Continue card shows
-  it disabled.
+  landed; others show a placeholder. Scripts have no thumbnail. A result folder
+  has one only when its run manifest names a project that has a stored preview
+  (the project's image, `thumbnail_origin: source_project`); results of script
+  runs have none.
+- **Run manifests of project runs** (2026-10-05, branch `codex/ws-finish-20261005`):
+  accepted project runs write `fullmag-run.json` into their user-facing results
+  leaf (`running` at reservation, then `completed`/`failed`/`cancelled`).
+  `source.path` is empty because the accepted run does not know the `.fms` path;
+  the link to the project item is by `project_id`. Runs without an
+  `output_storage` policy have no leaf and no manifest. Verified by
+  `accepted_project_storage::tests` (3) and a scanner link test; **not**
+  exercised through a real solver run.
+- **Script syntax check:** the script detail now uses Python's parser through
+  the never-executing helper when an interpreter resolves (5 s deadline, cached).
+  "Imports not found" is relative to that interpreter, not to the one a run will
+  use. Verified with the interpreter of this machine (`FULLMAG_PYTHON`), not on
+  a packaged install; without an interpreter the inspector says "not checked".
+- **Download results:** `GET /v2/workspace/items/{id}/archive` streams a result
+  folder as a zip (cap 2 GiB / 60 000 files, links refused). The result
+  inspector ("Download as zip" in its menu) and the Runs tab of a project (newest
+  linked, non-missing folder) use it. Verified by Rust tests (zip content, caps,
+  links, route) and vitest; **not** exercised in a browser with a real
+  multi-gigabyte folder.
+- **Frame scrubber: not built, and why.** A result folder exposes only the
+  *number* of field frames (`field_sample_count` in the autosave stage manifests,
+  `field_snapshots` in `metadata.json`); no file that can be read without opening
+  array chunks lists the time or step of each frame, and the workspace has no
+  endpoint that renders a field frame of a bare folder (the viewer is the Results
+  module of the owning project). A scrubber would have to open Zarr chunks or
+  invent frame labels, which the metadata-only readers (section 13.1 of `07`)
+  deliberately do not do.
+- **Checkpoints:** `discard_checkpoint` does not exist and stays out of scope:
+  the runtime has no route to discard a checkpoint, so the Continue card shows
+  the action disabled.
 - **Provenance writer** records only a generic "Saved revision N" entry when a
   save to an existing file changes its content. It does not record the first
   write of a new file or what changed, and is **unverified in a running
@@ -93,7 +132,7 @@ Host (needs work outside the renderer):
 - **Disabled, with their reason shown:** creating or saving a script from a
   template or a translated `.mx3` outside the desktop host (browser build);
   importers other than `.fms` and the `.mx3` subset; discarding a checkpoint;
-  the result frame scrubber.
+  the result frame scrubber (not built, see above).
 - **Not built:** turning script text into a *project* (the API still has no
   such operation); templates therefore create scripts, never projects. The
   Save dialog's own replacement prompt is the only overwrite confirmation, and

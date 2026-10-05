@@ -8,7 +8,7 @@
 //! renderer sends is read or executed except `POST /items` and
 //! `PUT /roots`, which are explicit user actions on an absolute path.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -26,13 +26,14 @@ use fullmag_workspace_inspect::scanner::{
 };
 use fullmag_workspace_inspect::{display_path, inspect_item, link};
 
+use super::workspace_archive as archive;
 use crate::error::ApiError;
 use crate::schemas::workspace_items::{
     WorkspaceAddRequest, WorkspaceEvent, WorkspaceForgetResult, WorkspaceHistory,
     WorkspaceHistoryQuery, WorkspaceItem, WorkspaceItemDetail, WorkspaceItemKind, WorkspaceItemList,
     WorkspaceItemStatus, WorkspaceItemsQuery, WorkspaceOpenState, WorkspaceOutcome,
     WorkspacePinRequest, WorkspaceRoot, WorkspaceRoots, WorkspaceRootsRequest,
-    WorkspaceRootsSource, WorkspaceScanReport, WorkspaceScanRequest,
+    WorkspaceRootsSource, WorkspaceScanReport, WorkspaceScanRequest, WorkspaceThumbnailOrigin,
 };
 
 const DEFAULT_LIMIT: usize = 200;
@@ -120,6 +121,35 @@ pub async fn get_item_thumbnail(
         header::CACHE_CONTROL,
         "private, max-age=0, must-revalidate".parse().expect("static"),
     );
+    Ok(response)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/workspace/items/{id}/archive",
+    params(("id" = String, Path, description = "Result item id (decimal string)")),
+    responses(
+        (status = 200, description = "Zip of the result folder, streamed", content_type = "application/zip"),
+        (status = 400, description = "The item is not a result folder"),
+        (status = 404, description = "Unknown, forgotten or missing item"),
+        (status = 409, description = "The folder contains a link or a name that cannot be archived"),
+        (status = 413, description = "The folder exceeds the archive size or file limit"),
+    ),
+    tag = "workspace_items"
+)]
+pub async fn get_item_archive(AxumPath(id): AxumPath<String>) -> Result<Response, ApiError> {
+    let (plan, file_name) = run(move |db| archive_plan_at(db, &id)).await?;
+    let body = archive::archive_body(plan, archive::MAX_ARCHIVE_BYTES);
+    let mut response = Response::new(body);
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, "application/zip".parse().expect("static"));
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{file_name}\"")
+            .parse()
+            .expect("the download name is ASCII"),
+    );
+    headers.insert(header::CACHE_CONTROL, "no-store".parse().expect("static"));
     Ok(response)
 }
 
@@ -379,7 +409,40 @@ fn live_status(item: &Item) -> ItemStatus {
     }
 }
 
-fn item_dto(item: &Item, thumbnails: &HashSet<i64>) -> WorkspaceItem {
+/// Which items have a preview image, and where a result folder gets one.
+///
+/// A project owns its stored preview (`project/preview/thumb.png`). A result
+/// folder has no image of its own: it shows the stored preview of the project
+/// named in its run manifest, and only that; a script run or a folder without
+/// a manifest has none, and nothing is rendered in its place.
+pub(crate) struct Thumbnails {
+    own: HashSet<i64>,
+    /// Stored preview owner by stable project id.
+    project_by_id: HashMap<String, i64>,
+}
+
+impl Thumbnails {
+    /// The item whose stored PNG `item` shows, and whether it is its own.
+    fn target(&self, item: &Item) -> Option<(i64, WorkspaceThumbnailOrigin)> {
+        if self.own.contains(&item.id) {
+            return Some((item.id, WorkspaceThumbnailOrigin::Item));
+        }
+        if item.kind != ItemKind::Result {
+            return None;
+        }
+        let source = item.meta.get("source")?;
+        if source.get("kind").and_then(|kind| kind.as_str()) != Some("project") {
+            return None;
+        }
+        let project_id = source.get("project_id").and_then(|id| id.as_str())?;
+        self.project_by_id
+            .get(project_id)
+            .map(|id| (*id, WorkspaceThumbnailOrigin::SourceProject))
+    }
+}
+
+fn item_dto(item: &Item, thumbnails: &Thumbnails) -> WorkspaceItem {
+    let target = thumbnails.target(item);
     WorkspaceItem {
         id: item.id.to_string(),
         kind: kind_dto(item.kind),
@@ -394,7 +457,8 @@ fn item_dto(item: &Item, thumbnails: &HashSet<i64>) -> WorkspaceItem {
         size_bytes: item.size_bytes,
         modified_at: item.modified_at.clone(),
         meta: item.meta.clone(),
-        has_thumbnail: thumbnails.contains(&item.id),
+        has_thumbnail: target.is_some(),
+        thumbnail_origin: target.map(|(_, origin)| origin),
     }
 }
 
@@ -408,8 +472,26 @@ fn event_dto(event: &fullmag_workspace::Event) -> WorkspaceEvent {
     }
 }
 
-fn thumbnails_of(workspace: &Workspace) -> Result<HashSet<i64>, ApiError> {
-    workspace.thumbnail_item_ids().map_err(map_error)
+fn thumbnails_of(workspace: &Workspace) -> Result<Thumbnails, ApiError> {
+    let own = workspace.thumbnail_item_ids().map_err(map_error)?;
+    let mut project_by_id = HashMap::new();
+    if !own.is_empty() {
+        let projects = workspace
+            .list(&DbQuery {
+                kind: Some(ItemKind::Project),
+                limit: 100_000,
+                ..DbQuery::default()
+            })
+            .map_err(map_error)?;
+        for project in projects {
+            if let Some(project_id) = project.project_id.clone() {
+                if own.contains(&project.id) {
+                    project_by_id.entry(project_id).or_insert(project.id);
+                }
+            }
+        }
+    }
+    Ok(Thumbnails { own, project_by_id })
 }
 
 fn items_dto(workspace: &Workspace, items: &[Item]) -> Result<Vec<WorkspaceItem>, ApiError> {
@@ -480,7 +562,12 @@ pub(crate) fn get_item_at(db: &Path, id: &str) -> Result<WorkspaceItemDetail, Ap
             item = fresh;
         }
     }
-    let detail = inspect_item(&item);
+    let mut detail = inspect_item(&item);
+    if let fullmag_workspace_inspect::ItemDetail::Script(script) = &mut detail {
+        // Parser-backed facts when an interpreter resolves; the static scan
+        // (with its reason) otherwise. The script is never executed.
+        crate::script_check::apply_script_check(Path::new(&item.path), script);
+    }
     let events = workspace.history(id, DETAIL_EVENTS).map_err(map_error)?;
     let linked_results = link::linked_results(&workspace, &item).map_err(map_error)?;
     let linked_source = if item.kind == ItemKind::Result {
@@ -505,11 +592,41 @@ pub(crate) fn get_item_at(db: &Path, id: &str) -> Result<WorkspaceItemDetail, Ap
 pub(crate) fn thumbnail_at(db: &Path, id: &str) -> Result<fullmag_workspace::Thumbnail, ApiError> {
     let id = parse_id(id)?;
     let (workspace, _) = open(db)?;
-    require_visible(&workspace, id)?;
+    let item = require_visible(&workspace, id)?;
+    let (owner, _) = thumbnails_of(&workspace)?
+        .target(&item)
+        .ok_or_else(|| ApiError::not_found(format!("workspace item {id} has no preview")))?;
     workspace
-        .get_thumbnail(id)
+        .get_thumbnail(owner)
         .map_err(map_error)?
         .ok_or_else(|| ApiError::not_found(format!("workspace item {id} has no preview")))
+}
+
+/// The files of a result folder that `GET .../archive` would stream, checked
+/// before any byte is sent. Only result folders are archived.
+pub(crate) fn archive_plan_at(
+    db: &Path,
+    id: &str,
+) -> Result<(archive::ArchivePlan, String), ApiError> {
+    let id = parse_id(id)?;
+    let (workspace, _) = open(db)?;
+    let item = require_visible(&workspace, id)?;
+    if item.kind != ItemKind::Result {
+        return Err(ApiError::bad_request(
+            "only result folders can be downloaded as an archive",
+        ));
+    }
+    if live_status(&item) == ItemStatus::Missing {
+        return Err(ApiError::not_found(format!(
+            "the folder of workspace item {id} is missing"
+        )));
+    }
+    let plan = archive::plan_archive(
+        Path::new(&item.path),
+        archive::MAX_ARCHIVE_BYTES,
+        archive::MAX_ARCHIVE_FILES,
+    )?;
+    Ok((plan, archive::download_name(&item.name)))
 }
 
 pub(crate) fn pin_item_at(db: &Path, id: &str, pinned: bool) -> Result<WorkspaceItem, ApiError> {

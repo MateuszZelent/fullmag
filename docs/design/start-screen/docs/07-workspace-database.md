@@ -499,10 +499,27 @@ results folder exists (interpreter, syntax, changed script) writes none.
 | `outputs` | `[{path, kind}]` relative paths (`metadata`, `table`, `field`, `zarr_store`, `autosave_manifest`, ...) |
 | `fullmag_version`, `launched_by` | build version; `cli`, `desktop`, `python` |
 
-Project runs: the API's project run path has no results directory of its own
-(runs are accepted into the runtime store and executed by workers), so the
-manifest is **not** written there yet; `source.kind = project` is part of the
-schema for when it does.
+Project runs (accepted runs of `fullmag-api`): the worker that reserves the
+user-facing results leaf (`<output_dir>/<run_id>/<step>-attempt-<epoch>`,
+`accepted_project_storage.rs`) writes the same manifest into **that leaf only**,
+atomically: `status: running` as soon as the leaf is reserved (before the solver
+starts), then `completed`, `failed` or `cancelled` with stages and outputs read
+from the leaf after publication and after the storage receipt is final. The
+write is best effort (a failure is logged and never changes the run's outcome);
+runs without an `output_storage` policy (legacy accepted runs) have no leaf and
+no manifest. Fields for this producer:
+
+| Field | Project-run value |
+|---|---|
+| `source` | `{kind: "project", path: "", sha256: <SHA-256 of the accepted definition bytes>, project_id, revision: <definition revision>}`. `path` is empty: the accepted run knows the project id and revision, not the `.fms` file it was opened from. |
+| `run_spec_sha256` | the accepted run specification fingerprint (project runs only; additive field of v1) |
+| `requested` | the accepted `RequestedExecution` as recorded (`backend`, `device`, `precision`, `mode`; `auto` preserved) |
+| `resolved` | `{backend: <resolved backend of the accepted plan>, device: <kind of the claimed resource lease: cpu or gpu>, precision, mode}` |
+| `launched_by`, `run_id` | `api`; `<accepted run id>-<ownership epoch>` |
+
+`exit_code` stays `null` (a worker step is not a process of this API); a
+manifest is never `running` after the step ended. The scanner links such a
+folder to its project by `source.project_id` (a path-less source is valid).
 
 ### 13.3 Scanner
 
@@ -518,6 +535,16 @@ one `edit` event), and items under a root whose file is gone become `missing`.
 Results link to their source by manifest `source.path`, else script digest
 (`meta.sha256`), else project id; the link is derived (`link.rs`), never stored.
 
+**Thumbnails of result folders.** A result has no image of its own and none is
+rendered. `has_thumbnail` is true for a result only when its manifest names a
+project (`source.kind = project`, `source.project_id`) and a listed project item
+with that id has a stored preview (`project/preview/thumb.png` in the thumbnail
+table); `GET .../items/{id}/thumbnail` then serves that project's PNG and the
+item says `thumbnail_origin: "source_project"` (the inspector labels it
+"Last result - project preview"; a project's own preview is `item`). Results of
+script runs, folders without a manifest and results of projects without a
+stored preview have no thumbnail and answer 404.
+
 ### 13.4 HTTP API
 
 `/v2/workspace/...` in `fullmag-api` (`router_v2/handlers/workspace_items.rs`,
@@ -528,6 +555,35 @@ file reads run on the blocking pool; every reader failure is `read_error` inside
 (`workspace_read_only`) to writes. No renderer-provided path is read or
 executed except `POST /items` and `PUT /roots`/`POST /scan` with explicit roots.
 
+**Script syntax check.** The script detail starts as the static scan (13.4).
+When a Python interpreter resolves (`fullmag_runtime_control::python_runtime`,
+the resolver `fullmag script inspect` uses) the API runs the never-executing
+helper `python -m fullmag.runtime.helper inspect-script` (`ast` and
+`importlib.util.find_spec` of top-level names only) with a 5 second deadline and
+fills `syntax {ok, line, column, message}`, `unresolved_imports`, `imports`
+(top-level names) and `env_reads` from it, with `syntax_checked: true` and
+`degraded: false`. The helper's digest must equal the static scan's, otherwise
+its answer is discarded. A syntax error is an answer: `syntax.ok = false`,
+`syntax_checked: true`, the line-scan imports and `degraded: true` stay.
+`unresolved_imports` means "not found by the chosen interpreter (nor next to the
+script)", not "missing for the interpreter a run will use". Any failure (no
+interpreter, timeout, bad output) keeps the static scan, `syntax_checked: false`
+and a `degraded_reason`. Answers are cached for the life of the process by
+content digest and folder (failures for 30 s). The script is never imported,
+compiled for execution or run.
+
+**Archive of a result folder.** `GET /v2/workspace/items/{id}/archive` streams
+the folder as a zip (stored, data descriptors, no seeking; `application/zip`,
+`Content-Disposition: attachment`, no `Content-Length`). Only result items;
+the folder is walked once first: any symbolic link, junction or reparse point
+anywhere inside (409 `workspace_archive_link`), a non-UTF-8 name, more than
+2 GiB of data or 60 000 files (413 `workspace_archive_too_large`) refuses the
+whole download before the first byte. Entries are relative to the folder, so
+nothing outside the item root can enter; a file that changes into a link,
+vanishes or outgrows the cap while streaming aborts the connection (a broken
+download, never a short archive that looks complete). The writer's lock file is
+skipped.
+
 ### 13.5 Gate coverage
 
 Rust `fullmag-workspace` (`tests_v3`): migration 2 to 3 keeps rows, events,
@@ -537,5 +593,9 @@ file); roots round trip; line counting. `fullmag-workspace-inspect`: project,
 script, results-folder readers on fixtures, manifest round trip, scanner (skip
 directories, caps, depth, kinds, no execution, forgotten, edits, missing),
 `classify_path`, links. `fullmag-api` `router_v2::tests::workspace_items`:
-every route, status codes, ETag/304, read-only, quarantine, OpenAPI. CLI
+every route, status codes, ETag/304, read-only, quarantine, OpenAPI, result
+thumbnails (project preview only), syntax result with a real interpreter,
+archive route; `accepted_project_storage::tests` (manifest content, running to
+completed/failed/cancelled, only the leaf is written), `script_check::tests`,
+`workspace_archive::tests` (zip content, caps, links). CLI
 `run_manifest::tests`. Python: v3 DDL parity and 2 to 3 migration.

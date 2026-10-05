@@ -39,6 +39,15 @@ describe("ResultRow", () => {
     expect(html).toContain('aria-selected="false"');
   });
 
+  it("shows the source project's stored preview in the thumbnail slot, and the glyph without one", () => {
+    const withPreview = render({
+      item: { ...item, hasThumbnail: true, thumbnailOrigin: "source_project" },
+      thumbnailUrl: (id) => `/thumb/${id}`,
+    });
+    expect(withPreview).toContain('src="/thumb/r1?v=2026-10-03T10%3A00%3A00Z"');
+    expect(render({ thumbnailUrl: (id) => `/thumb/${id}` })).not.toContain("<img");
+  });
+
   it("shows the folder's path, shortened, when no source is recorded", () => {
     const html = render({ item: { ...item, meta: {} } });
     expect(html).not.toContain("from ");

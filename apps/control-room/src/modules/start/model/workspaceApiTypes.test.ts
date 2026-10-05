@@ -34,6 +34,12 @@ describe("parseApiWorkspaceItem", () => {
     });
   });
 
+  it("reads whose image a thumbnail is, and ignores an unknown origin", () => {
+    const base = { id: "a", kind: "result", path: "/r.zarr", name: "r", has_thumbnail: true };
+    expect(parseApiWorkspaceItem({ ...base, thumbnail_origin: "source_project" })?.thumbnailOrigin).toBe("source_project");
+    expect(parseApiWorkspaceItem({ ...base, thumbnail_origin: "elsewhere" })?.thumbnailOrigin).toBeUndefined();
+  });
+
   it("defaults what may be absent instead of rejecting the item", () => {
     const item = parseApiWorkspaceItem({ id: "a", kind: "result", path: "/r.zarr", name: "r" });
     expect(item).toMatchObject({

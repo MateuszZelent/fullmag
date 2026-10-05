@@ -27086,7 +27086,7 @@
             "type": "string"
           },
           "path": {
-            "description": "Absolute path as the user would type it (no `\\\\?\\` prefix).",
+            "description": "Absolute path as the user would type it (no `\\\\?\\` prefix). Empty when\nthe producer does not know the file (accepted project runs record the\nproject id and revision instead).",
             "type": "string"
           },
           "project_id": {
@@ -27114,8 +27114,7 @@
           }
         },
         "required": [
-          "kind",
-          "path"
+          "kind"
         ],
         "type": "object"
       },
@@ -30976,13 +30975,34 @@
               "null"
             ]
           },
+          "syntax": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScriptSyntax",
+                "description": "Result of `ast.parse` in the chosen interpreter; `null` when no\ninterpreter checked the file."
+              }
+            ]
+          },
           "syntax_checked": {
-            "description": "Python syntax is not checked by this reader: always `false`.",
+            "description": "Python's parser checked the syntax (`ast`, never executed).",
             "type": "boolean"
           },
           "truncated": {
             "description": "Only the first 1 MiB was scanned for the facts below.",
             "type": "boolean"
+          },
+          "unresolved_imports": {
+            "description": "Top-level imports that `importlib.util.find_spec` did not find in\nthe chosen interpreter (nor next to the script); `null` when not\nchecked. This says nothing about the interpreter a run would use.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "uses_fullmag": {
             "type": [
@@ -31076,6 +31096,41 @@
           "entrypoint_kind",
           "written",
           "bytes_written"
+        ],
+        "type": "object"
+      },
+      "ScriptSyntax": {
+        "description": "Outcome of parsing a script with Python's `ast` (never executed).",
+        "properties": {
+          "column": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "1-based line of the first syntax error.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
         ],
         "type": "object"
       },
@@ -40071,6 +40126,17 @@
           "status": {
             "$ref": "#/components/schemas/WorkspaceItemStatus"
           },
+          "thumbnail_origin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkspaceThumbnailOrigin",
+                "description": "Whose image the thumbnail is; absent without one. A result folder only\never shows `source_project`: the stored preview of the project its run\nmanifest names (a project preview, not a render of the result)."
+              }
+            ]
+          },
           "use_count": {
             "format": "int64",
             "type": "integer"
@@ -40541,6 +40607,13 @@
           }
         },
         "type": "object"
+      },
+      "WorkspaceThumbnailOrigin": {
+        "enum": [
+          "item",
+          "source_project"
+        ],
+        "type": "string"
       },
       "ZhangLiFormulaVersion": {
         "enum": [
@@ -59746,6 +59819,45 @@
           },
           "404": {
             "description": "Unknown or forgotten item"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/archive": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_archive",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Zip of the result folder, streamed"
+          },
+          "400": {
+            "description": "The item is not a result folder"
+          },
+          "404": {
+            "description": "Unknown, forgotten or missing item"
+          },
+          "409": {
+            "description": "The folder contains a link or a name that cannot be archived"
+          },
+          "413": {
+            "description": "The folder exceeds the archive size or file limit"
           }
         },
         "tags": [

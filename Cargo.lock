@@ -1143,6 +1143,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "crc32fast",
  "fontdue",
  "fullmag-application",
  "fullmag-authoring",
@@ -1173,6 +1174,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid",
  "windows-sys 0.61.2",
+ "zip",
 ]
 
 [[package]]
