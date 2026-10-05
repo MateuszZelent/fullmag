@@ -306,6 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 apply_ir_runtime_device_selection(stage_ir, authored_stage_device)
             if action_device is not None:
                 script_device_override = action_device
+            stage_action = _runtime_stage_action(stage.action, stage_ir=stage_ir)
             stages.append(
                 {
                     "ir": _compact_stage_ir(
@@ -314,7 +315,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                     "default_until_seconds": stage.default_until_seconds,
                     "entrypoint_kind": stage.entrypoint_kind,
-                    "action": stage.action,
+                    "action": stage_action,
                 }
             )
             if stage.default_until_seconds is not None:
@@ -536,6 +537,32 @@ def _requires_analytic_fdm_transport_grid(ir: dict[str, object]) -> bool:
         and module.get("activation") == "active"
         for module in modules
     )
+
+
+def _runtime_stage_action(
+    action: dict[str, object] | None, *, stage_ir: dict[str, object],
+) -> dict[str, object] | None:
+    if not isinstance(action, dict) or action.get("kind") != "antenna_field_solve":
+        return action
+    definition = action.get("definition")
+    if not isinstance(definition, dict):
+        raise ValueError("antenna_field_solve action requires a serialized field-solve definition")
+    # Captured authoring state precedes the action. Materialize only this
+    # definition, without importing future stage definitions from the root IR.
+    definitions = stage_ir["antenna_field_solve_stages"]
+    for existing in definitions:
+        if existing["id"] == definition["id"]:
+            if existing != definition:
+                raise ValueError(f"conflicting antenna field solve id {definition['id']!r}")
+            break
+    else:
+        definitions.append(copy.deepcopy(definition))
+    # Runtime resolves the full definition from ProblemIR, not from the action.
+    return {
+        "kind": "antenna_field_solve",
+        "stage_id": definition["id"],
+        "port_mode_ids": copy.deepcopy(definition["port_mode_ids"]),
+    }
 
 
 def _change_device_action_device(action: dict[str, object] | None) -> str | None:
