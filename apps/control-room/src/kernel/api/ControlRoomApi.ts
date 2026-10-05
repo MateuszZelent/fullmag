@@ -208,10 +208,12 @@ import {
   PLATFORM_DEVELOPMENT_BACKEND_PATH,
   WORKSPACE_ITEMS_PATH,
   WORKSPACE_ITEM_FORGET_PATH,
+  WORKSPACE_ITEM_FRAMES_PATH,
   WORKSPACE_ITEM_HISTORY_PATH,
   WORKSPACE_ITEM_PATH,
   WORKSPACE_ITEM_PIN_PATH,
   WORKSPACE_ROOTS_PATH,
+  WORKSPACE_SETTING_PATH,
   WORKSPACE_SCAN_PATH,
   workspaceItemArchiveUrl,
   workspaceItemThumbnailUrl,
@@ -1104,6 +1106,22 @@ export class ControlRoomApi {
         path: { id },
         query: limit === undefined ? {} : { limit },
       }),
+    /** One page of the saved-frame index (`frames.json`) of a result folder. */
+    frames: (id: string, from: number, limit: number, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEM_FRAMES_PATH, options, {
+        path: { id },
+        query: { from, limit },
+      }),
+    /** An allow-listed per-user setting (`telemetry.enabled`, `update.available`). */
+    setting: (key: string, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_SETTING_PATH, options, { path: { key } }),
+    saveSetting: (key: string, value: boolean, options?: RequestOptions) =>
+      this.putJson<unknown, { value: boolean }>(
+        WORKSPACE_SETTING_PATH,
+        { value },
+        options,
+        { path: { key } },
+      ),
     thumbnailUrl: (id: string) => workspaceItemThumbnailUrl(this.baseUrl, id),
     archiveUrl: (id: string) => workspaceItemArchiveUrl(this.baseUrl, id),
     setPinned: (id: string, pinned: boolean, options?: RequestOptions) =>

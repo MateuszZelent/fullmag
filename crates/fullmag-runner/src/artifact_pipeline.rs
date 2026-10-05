@@ -1717,6 +1717,12 @@ fn writer_loop(
         ..ArtifactPipelineSummary::default()
     };
     let mut scalar_writer: Option<BufWriter<File>> = None;
+    let mut frames_index = crate::frames_index::FramesIndexWriter::new(
+        output_dir,
+        stage_autosave_config
+            .as_ref()
+            .map(|config| config.stage_id.clone()),
+    );
     let mut stage_autosave = stage_autosave_config
         .map(|config| StageAutosaveRuntime::new(autosave_root, config))
         .transpose()?;
@@ -1797,6 +1803,21 @@ fn writer_loop(
                                 snapshot.name, snapshot.step, error
                             )
                         })?;
+                        let relative = crate::frames_index::snapshot_relative_path(
+                            &snapshot.name,
+                            snapshot.step,
+                            true,
+                        );
+                        let bytes = fs::metadata(output_dir.join(&relative))
+                            .ok()
+                            .map(|meta| meta.len());
+                        frames_index.record(
+                            &snapshot.name,
+                            snapshot.step,
+                            snapshot.time,
+                            relative,
+                            bytes,
+                        )?;
                     }
                     FieldArtifactStorage::Zarr => {
                         #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
@@ -1820,6 +1841,17 @@ fn writer_loop(
                                 )?,
                             );
                             writer.append_field_snapshot(&snapshot)?;
+                            frames_index.record(
+                                &snapshot.name,
+                                snapshot.step,
+                                snapshot.time,
+                                crate::frames_index::snapshot_relative_path(
+                                    &snapshot.name,
+                                    snapshot.step,
+                                    false,
+                                ),
+                                None,
+                            )?;
                         }
                         #[cfg(not(any(feature = "cuda", feature = "fem-gpu")))]
                         {
@@ -1878,6 +1910,13 @@ fn writer_loop(
                     )?,
                 );
                 writer.append_fdm_snapshot(&mut snapshot)?;
+                frames_index.record(
+                    &snapshot.name,
+                    snapshot.step,
+                    snapshot.time,
+                    crate::frames_index::snapshot_relative_path(&snapshot.name, snapshot.step, false),
+                    None,
+                )?;
                 if let Some(runtime) = stage_autosave.as_mut() {
                     let values = writer.last_chunk_values_f64()?;
                     runtime.append_field_values(
@@ -1921,6 +1960,13 @@ fn writer_loop(
                     )?,
                 );
                 writer.append_fem_snapshot(&mut snapshot)?;
+                frames_index.record(
+                    &snapshot.name,
+                    snapshot.step,
+                    snapshot.time,
+                    crate::frames_index::snapshot_relative_path(&snapshot.name, snapshot.step, false),
+                    None,
+                )?;
                 if let Some(runtime) = stage_autosave.as_mut() {
                     let values = writer.last_chunk_values_f64()?;
                     runtime.append_field_values(
@@ -1998,6 +2044,7 @@ fn writer_loop(
         })?;
     }
 
+    frames_index.finish()?;
     if let Some(runtime) = stage_autosave {
         runtime.finish()?;
     }

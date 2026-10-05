@@ -840,6 +840,15 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::workspace_items::get_item_history),
         )
         .route(
+            "/v2/workspace/items/:id/frames",
+            get(handlers::workspace_items::get_item_frames),
+        )
+        .route(
+            "/v2/workspace/settings/:key",
+            get(handlers::workspace_items::get_setting)
+                .put(handlers::workspace_items::put_setting),
+        )
+        .route(
             "/v2/workspace/roots",
             get(handlers::workspace_items::get_roots).put(handlers::workspace_items::put_roots),
         )

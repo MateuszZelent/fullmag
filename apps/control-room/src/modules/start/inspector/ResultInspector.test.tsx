@@ -300,3 +300,46 @@ describe("resultFacts", () => {
     expect(data.find((r) => r.label === "Size")?.value).toBe("2 kB");
   });
 });
+
+describe("ResultInspector frame index", () => {
+  const index = {
+    schema: "fullmag.frames_index.v1",
+    count: 12,
+    first_step: 0,
+    last_step: 110,
+    first_time_s: 0,
+    last_time_s: 1.1e-11,
+    truncated: false,
+    stages: [{ stage_id: "relax", count: 12 }],
+  };
+  const withIndex = (over: Record<string, unknown> = {}) =>
+    ready({ detail: { ...RAW_API_RESULT_DETAIL, frames_index: index, ...over } });
+
+  it("shows the scrubber and a range row when the run wrote an index and the backend can page it", () => {
+    const html = render({ detail: withIndex(), loadFrames: vi.fn() });
+    expect(html).toContain("Saved frames");
+    expect(html).toContain('type="range"');
+    expect(html).toContain('max="11"');
+    expect(html).toContain("frame 1 of 12");
+    expect(html).toMatch(/Frame index<\/dt><dd>12 frames · 0 ns to 0.011 ns</);
+    expect(html).toContain("No image is rendered per frame");
+  });
+
+  it("offers no scrubber without a pager and says why", () => {
+    const html = render({ detail: withIndex() });
+    expect(html).not.toContain('type="range"');
+    expect(html).toContain("frame index is available from a Fullmag backend");
+  });
+
+  it("says a folder without an index keeps only counts, and never fakes frames", () => {
+    const html = render({ loadFrames: vi.fn() });
+    expect(html).not.toContain('type="range"');
+    expect(html).toContain("400 frames are saved, but this folder has no frame index");
+  });
+
+  it("parses the summary from the wire detail", () => {
+    const parsed = parseApiItemDetail({ ...RAW_API_RESULT_DETAIL, frames_index: index }) as ResultDetail;
+    expect(parsed.framesIndex).toMatchObject({ count: 12, lastStep: 110, truncated: false });
+    expect((parseApiItemDetail(RAW_API_RESULT_DETAIL) as ResultDetail).framesIndex).toBeUndefined();
+  });
+});

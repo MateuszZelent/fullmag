@@ -4427,6 +4427,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/workspace/items/{id}/frames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_frames"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/workspace/items/{id}/history": {
         parameters: {
             query?: never;
@@ -4501,6 +4517,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["workspace_items_post_workspace_scan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/settings/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_settings_key"];
+        put: operations["workspace_items_put_workspace_settings_key"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6810,6 +6842,63 @@ export interface components {
         };
         /** @enum {string} */
         FixedSolverIntegratorRequest: "auto" | "heun" | "rk4" | "rk23" | "rk45" | "abm3";
+        /** @description One saved frame of a results folder (an entry of `frames.json`). */
+        FrameEntry: {
+            /** Format: int64 */
+            bytes?: number | null;
+            /**
+             * Format: int64
+             * @description Position over the whole folder, across stages, from 0.
+             */
+            index: number;
+            /** @description Location of the snapshot relative to the results folder. */
+            path: string;
+            quantity_ids: string[];
+            stage_id?: string | null;
+            /** Format: int64 */
+            step: number;
+            /** Format: double */
+            time_s: number;
+        };
+        /** @description A page of the frame index. */
+        FramesPage: {
+            frames: components["schemas"]["FrameEntry"][];
+            /** Format: int64 */
+            from: number;
+            /** @description The folder has a frame index; false lists nothing and means no index was written. */
+            indexed: boolean;
+            /**
+             * Format: int64
+             * @description Frames in the whole index.
+             */
+            total: number;
+            truncated: boolean;
+        };
+        /** @description Frames saved per stage, in folder order. */
+        FramesStageCount: {
+            /** Format: int64 */
+            count: number;
+            stage_id: string;
+        };
+        /** @description What `frames.json` says without listing every frame. */
+        FramesSummary: {
+            /** Format: int64 */
+            count: number;
+            /** Format: int64 */
+            first_step?: number | null;
+            /** Format: double */
+            first_time_s?: number | null;
+            /** Format: int64 */
+            last_step?: number | null;
+            /** Format: double */
+            last_time_s?: number | null;
+            /** @description Why part of the index was not read (unknown schema, unreadable file). */
+            note?: string | null;
+            schema: string;
+            stages: components["schemas"]["FramesStageCount"][];
+            /** @description The index reached its entry limit: later frames are not listed. */
+            truncated: boolean;
+        };
         FrequencyDomainArtifactExtras: {
             [key: string]: unknown;
         };
@@ -11133,6 +11222,7 @@ export interface components {
             format?: string | null;
             /** Format: int64 */
             frames?: number | null;
+            frames_index?: null | components["schemas"]["FramesSummary"];
             grid?: null | components["schemas"]["ResultGrid"];
             /** @description The folder carries a `fullmag-run.json`. */
             has_manifest: boolean;
@@ -14579,6 +14669,23 @@ export interface components {
             selected_entity_id?: string | null;
             selected_node_id?: string | null;
             selected_object_id?: string | null;
+        };
+        /** @description One allow-listed setting of the per-user workspace database (`kv`). */
+        WorkspaceSetting: {
+            /** @description Nothing is stored under the key: `value` is the default. */
+            is_default: boolean;
+            /** @description `telemetry.enabled` or `update.available`. */
+            key: string;
+            /** @description The stored value, or the default (`false` / `null`) when unset. */
+            value: Record<string, never>;
+            /**
+             * @description The API accepts `PUT` for the key. `update.available` is written by an
+             *     updater, never by the renderer.
+             */
+            writable: boolean;
+        };
+        WorkspaceSettingRequest: {
+            value: Record<string, never>;
         };
         WorkspaceStageLayout: {
             bottom_dock?: string | null;
@@ -27995,6 +28102,48 @@ export interface operations {
             };
         };
     };
+    workspace_items_get_workspace_items_id_frames: {
+        parameters: {
+            query?: {
+                /** @description Index of the first frame (default 0). */
+                from?: number | null;
+                /** @description Frames per page (default 200, at most 1000). */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the saved-frame index (`frames.json`); `indexed` is false when the run wrote none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FramesPage"];
+                };
+            };
+            /** @description The item is not a result folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown, forgotten or missing item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     workspace_items_get_workspace_items_id_history: {
         parameters: {
             query?: {
@@ -28195,6 +28344,84 @@ export interface operations {
                 content?: never;
             };
             /** @description A scan is already running, or the database is read-only */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_settings_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `telemetry.enabled` or `update.available` */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored value, or the default when unset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSetting"];
+                };
+            };
+            /** @description The key is not an allow-listed setting */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_put_workspace_settings_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `telemetry.enabled` */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceSettingRequest"];
+            };
+        };
+        responses: {
+            /** @description Setting saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSetting"];
+                };
+            };
+            /** @description The value has the wrong type, or the key is not writable through the API */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The key is not an allow-listed setting */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The database is read-only (newer schema) */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -259,6 +259,10 @@ schema_type! {
         pub quantities: Vec<String>,
         pub grid: Option<ResultGrid>,
         pub frames: Option<u64>,
+        /// Summary of the per-frame index (`frames.json`) the run wrote; absent
+        /// for a folder written before the index existed. Frames themselves
+        /// are paged from `GET /v2/workspace/items/{id}/frames`.
+        pub frames_index: Option<FramesSummary>,
         pub total_bytes: Option<u64>,
         /// The walk stopped at a limit: `total_bytes` is a lower bound.
         pub total_bytes_truncated: bool,
@@ -276,5 +280,58 @@ schema_type! {
         pub n_nodes: Option<u64>,
         pub n_elements: Option<u64>,
         pub hmax: Option<f64>,
+    }
+}
+
+schema_type! {
+    /// One saved frame of a results folder (an entry of `frames.json`).
+    pub struct FrameEntry {
+        /// Position over the whole folder, across stages, from 0.
+        pub index: u64,
+        pub step: u64,
+        pub time_s: f64,
+        pub stage_id: Option<String>,
+        pub quantity_ids: Vec<String>,
+        pub bytes: Option<u64>,
+        /// Location of the snapshot relative to the results folder.
+        pub path: String,
+    }
+}
+
+schema_type! {
+    /// Frames saved per stage, in folder order.
+    pub struct FramesStageCount {
+        pub stage_id: String,
+        pub count: u64,
+    }
+}
+
+schema_type! {
+    /// What `frames.json` says without listing every frame.
+    pub struct FramesSummary {
+        pub schema: String,
+        pub count: u64,
+        pub first_step: Option<u64>,
+        pub last_step: Option<u64>,
+        pub first_time_s: Option<f64>,
+        pub last_time_s: Option<f64>,
+        /// The index reached its entry limit: later frames are not listed.
+        pub truncated: bool,
+        pub stages: Vec<FramesStageCount>,
+        /// Why part of the index was not read (unknown schema, unreadable file).
+        pub note: Option<String>,
+    }
+}
+
+schema_type! {
+    /// A page of the frame index.
+    pub struct FramesPage {
+        /// The folder has a frame index; false lists nothing and means no index was written.
+        pub indexed: bool,
+        /// Frames in the whole index.
+        pub total: u64,
+        pub from: u64,
+        pub frames: Vec<FrameEntry>,
+        pub truncated: bool,
     }
 }

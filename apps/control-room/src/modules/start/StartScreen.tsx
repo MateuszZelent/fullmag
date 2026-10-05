@@ -26,6 +26,7 @@ import { startScreenStore, type StartScreenHost } from "./model/startScreenState
 import { startSettings } from "./model/startSettings";
 import type { RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
+import { useStartPreferences } from "./model/useStartPreferences";
 import { StartStatusBar } from "./ui/StartStatusBar";
 import { AboutSection } from "./sections/AboutSection";
 import { DocsSection } from "./sections/DocsSection";
@@ -54,6 +55,7 @@ export function StartScreen({ kernel }: ModuleProps) {
   // it; the desktop host's own data is the fallback, and still serves dialogs,
   // reading and running scripts and revealing files.
   const workspaceApi = useWorkspaceItems();
+  const preferences = useStartPreferences();
   const desktopRecent = useRecentIndex();
   const desktopScripts = useWorkspaceScripts();
   const source = useWorkspaceSource(workspaceApi, desktopRecent, desktopScripts);
@@ -360,6 +362,7 @@ export function StartScreen({ kernel }: ModuleProps) {
           readOnly: scripts.readOnly,
           thumbnailUrl: workspaceApi.thumbnailUrl,
           archiveUrl: workspaceApi.archiveUrl,
+          loadFrames: workspaceApi.loadFrames,
           onTogglePin: results.pin,
           onForget: (id) => {
             startScreenStore.setSelectedResult(null);
@@ -398,7 +401,7 @@ export function StartScreen({ kernel }: ModuleProps) {
         session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
         index={recent.state}
       />
-      <StartStatusBar compute={compute} index={recent.state} />
+      <StartStatusBar compute={compute} index={recent.state} preferences={preferences} />
     </div>
   );
 }
