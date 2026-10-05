@@ -164,6 +164,10 @@ verify-windows-development-restart-consumer:
 verify-windows-development-consumer-readiness:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --consumer-readiness-only
 
+# Exercise the B consumer pump with an independently verified A API bundle.
+verify-windows-development-consumer-pump owner_bundle:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --consumer-pump-owner-bundle "{{owner_bundle}}"
+
 # Native request transport proof; no unit-test compilation or user-session restart.
 verify-windows-development-restart-transport:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-transport-only
