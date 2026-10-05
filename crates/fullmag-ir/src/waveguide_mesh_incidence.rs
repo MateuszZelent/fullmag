@@ -149,9 +149,16 @@ impl Error for WaveguideMeshIncidenceError {}
 pub struct WaveguideMeshIncidenceReport {
     scalar_mesh_component_count: usize,
     external_air_edge_counts_by_component: Vec<usize>,
+    scalar_component_by_triangle: Vec<usize>,
 }
 
 impl WaveguideMeshIncidenceReport {
+    /// Return the checked scalar component for each input triangle, in input order.
+    /// This lookup does not select a Dirichlet contour or certify anchoring.
+    pub fn scalar_component_by_triangle(&self) -> &[usize] {
+        &self.scalar_component_by_triangle
+    }
+
     /// Return the number of connected components of the whole scalar mesh.
     pub const fn scalar_mesh_component_count(&self) -> usize {
         self.scalar_mesh_component_count
@@ -550,12 +557,13 @@ pub fn validate_waveguide_mesh_incidence(
         &exterior_edge_count_by_node,
     )?;
 
-    let (scalar_mesh_component_count, external_air_edge_counts_by_component) =
+    let (scalar_mesh_component_count, external_air_edge_counts_by_component, scalar_component_by_triangle) =
         summarize_scalar_components(&triangle_neighbors, &external_air_edge_owners);
 
     Ok(WaveguideMeshIncidenceReport {
         scalar_mesh_component_count,
         external_air_edge_counts_by_component,
+        scalar_component_by_triangle,
     })
 }
 
@@ -939,7 +947,7 @@ fn validate_vertex_stars(
 fn summarize_scalar_components(
     triangle_neighbors: &[Vec<usize>],
     external_air_edge_owners: &[usize],
-) -> (usize, Vec<usize>) {
+) -> (usize, Vec<usize>, Vec<usize>) {
     let mut component_by_triangle = vec![usize::MAX; triangle_neighbors.len()];
     let mut component_count = 0usize;
     let mut stack = Vec::<usize>::new();
@@ -966,7 +974,7 @@ fn summarize_scalar_components(
     for triangle_index in external_air_edge_owners {
         external_air_edge_counts[component_by_triangle[*triangle_index]] += 1;
     }
-    (component_count, external_air_edge_counts)
+    (component_count, external_air_edge_counts, component_by_triangle)
 }
 
 #[cfg(test)]
@@ -1117,6 +1125,61 @@ mod tests {
 
         assert_eq!(report.scalar_mesh_component_count(), 1);
         assert_eq!(report.external_air_edge_counts_by_component(), &[12]);
+        assert_eq!(report.scalar_component_by_triangle(), vec![0; mesh.triangles.len()]);
+    }
+
+    #[test]
+    fn disconnected_scalar_components_preserve_triangle_membership_and_distinct_air_boundaries() {
+        let mut mesh = fixture_mesh();
+        let mut second = mesh.clone();
+        let node_offset = mesh.nodes_uv_m.len() as u64;
+        let triangle_offset = mesh.triangles.len() as u64;
+        let first_triangle_count = mesh.triangles.len();
+        for node in &mut second.nodes_uv_m {
+            node[0] += 1.0e-6;
+        }
+        for triangle in &mut second.triangles {
+            for node in &mut triangle.nodes { *node += node_offset; }
+            triangle.region_id.push_str("-second");
+        }
+        for edge in &mut second.edges {
+            for node in &mut edge.nodes { *node += node_offset; }
+            for side in &mut edge.incidences { side.triangle_index += triangle_offset; }
+        }
+        // In the second disconnected domain, air is an enclosed island; its
+        // scalar component must not inherit the first domain's external air.
+        second.regions = second.regions.into_iter().map(|region| match region {
+            WaveguideCrossSectionRegionIR::Magnetic { region_id, object_id, .. } =>
+                WaveguideCrossSectionRegionIR::Air {
+                    region_id: format!("{region_id}-second"), object_id,
+                },
+            WaveguideCrossSectionRegionIR::Air { region_id, object_id } =>
+                WaveguideCrossSectionRegionIR::Magnetic {
+                    region_id: format!("{region_id}-second"), object_id,
+                    material_id: "second-surrounding-magnet".into(),
+                },
+        }).collect();
+        for boundary in &mut second.boundary_components {
+            boundary.boundary_component_id.push_str("-second");
+            boundary.region_id.push_str("-second");
+            for side in &mut boundary.half_edges { side.triangle_index += triangle_offset; }
+        }
+        mesh.nodes_uv_m.extend(second.nodes_uv_m);
+        mesh.triangles.extend(second.triangles);
+        mesh.edges.extend(second.edges);
+        mesh.regions.extend(second.regions);
+        mesh.boundary_components.extend(second.boundary_components);
+        let report = validate_waveguide_mesh_incidence(&mesh)
+            .expect("two disjoint conforming scalar domains must remain distinguishable");
+        assert_eq!(report.scalar_mesh_component_count(), 2);
+        assert_eq!(report.external_air_edge_counts_by_component(), &[12, 0]);
+        assert_eq!(&report.scalar_component_by_triangle()[..first_triangle_count],
+            vec![0; first_triangle_count]);
+        assert_eq!(&report.scalar_component_by_triangle()[first_triangle_count..],
+            vec![1; first_triangle_count]);
+        let encoded = serde_json::to_value(&report).expect("descriptive report serialization");
+        assert_eq!(encoded["scalar_component_by_triangle"],
+            serde_json::to_value(report.scalar_component_by_triangle()).unwrap());
     }
 
     #[test]

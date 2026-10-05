@@ -175,3 +175,20 @@ Prepared Rust regression checks nie są wykonywane ani kompilowane w okresie
 obowiązywania zakazu. Source review, parser i dokładny oracle wejściowy nie
 zastępują produkcyjnego wykonania MFEM, testów Rust ani walidacji naukowej.
 S09 pozostaje OPEN.
+
+
+### Sprawdzona przynależność trójkątów do komponentów skalarnych
+
+`WaveguideMeshIncidenceReport::scalar_component_by_triangle()` zachowuje wynik
+istniejącego traversal adjacency, w kolejności wejściowych trójkątów. Indeks
+komponentu jest deterministyczny według jego najmniejszego indeksu trójkąta
+(i zależy od kolejności mesha); ma jednostkę1. Dane są serializowalne w raporcie
+wyjściowym, bez możliwości jego deserializacji/utworzenia przez użytkownika.
+
+To mapa topologiczna potrzebna przyszłemu sprawdzeniu wybranych konturów
+Dirichleta. Nie wybiera essential nodes i nie dowodzi anchoring. Dwa rozłączne
+komponenty mogą mieć różne liczniki exterior air, w szczególności[12,0], gdy
+w drugim air jest zamkniętą wyspą. Wybrany brzeg musi zostać osobno powiązany
+z konkretnymi one-owner half-edges/komponentami i rejestrami modelu.
+Regresja obejmuje pełną kompozycję incidence na dwóch takich domenach;
+parser/source checks nie zastępują wykonania CI ani produkcyjnego MFEM2D.

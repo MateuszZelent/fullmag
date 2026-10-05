@@ -7599,3 +7599,16 @@ oraz przedwczesny cleanup blokowanego observera. AST i diff PASS, niezależne
 source review bez istotnych uwag. Regresje i dokładny OCC test oczekują na CI;
 źródłowa naprawa nie jest kwalifikacją siatki ani dyspersji. Dodatkowa diagnostyka
 faulthandler w następnym CI ma zachować stos ewentualnej awarii.
+
+
+### S09 — zachowanie sprawdzonej mapy komponentów
+
+`WaveguideMeshIncidenceReport` zachowuje scalar_component_by_triangle z
+istniejącego traversal, zamiast wyrzucać tę mapę. Getter/serialized report
+nie nadają BC/admission. Nowa regresja waliduje pełną incidence dwóch
+rozłącznych domen: membership0/1, exterior-air counts[12,0] oraz serializację;
+druga domena zawiera zamkniętą wyspę air. Parser Rust i niezależne review PASS,
+bez lokalnych testów/kompilacji. Wykonanie regresji w GitHub Actions otwarte.
+To prerequisite registry/Dirichlet bindings, nie ukończony descriptor ani S09.
+Wybranie/powiązanie essential nodes, registry target mapping, fingerprint,
+structural/equilibrium certificates oraz MFEM2D nadal wymagają implementacji.
