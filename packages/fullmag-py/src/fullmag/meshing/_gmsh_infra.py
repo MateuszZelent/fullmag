@@ -257,6 +257,12 @@ def _gmsh_heartbeat_interval(elapsed_s: float, base_interval_s: float) -> float:
 
 
 class _GmshProgressLogger:
+    """Emit Python-only heartbeats while the owner executes native meshing.
+
+    Gmsh's logger buffer cannot be read concurrently with native writers.
+    Drain it on the owner after the operation, before stopping the logger.
+    """
+
     def __init__(
         self,
         gmsh: Any,
@@ -288,23 +294,28 @@ class _GmshProgressLogger:
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=max(0.5, self._poll_interval_s * 4))
-        self._flush()
+            # Match the progress phase lifecycle: no observer may outlive its
+            # owner, even when the progress sink temporarily blocks.
+            self._thread.join()
         try:
-            self._gmsh.logger.stop()
-        except Exception:
-            pass
+            self._flush()
+        finally:
+            try:
+                self._gmsh.logger.stop()
+            except Exception:
+                pass
 
     def _poll(self) -> None:
         while not self._stop.wait(self._poll_interval_s):
-            emitted = self._flush()
+            # Do not call any Gmsh API from the observer. logger.get() races
+            # the native apiMsg writer even with a Python-side lock.
             now = time.monotonic()
             elapsed = now - self._started_at
             heartbeat_interval = _gmsh_heartbeat_interval(
                 elapsed,
                 self._heartbeat_interval_s,
             )
-            if not emitted and now - self._last_emit_at >= heartbeat_interval:
+            if now - self._last_emit_at >= heartbeat_interval:
                 backend_idle = now - self._last_detail_at
                 emit_progress(
                     _format_gmsh_heartbeat(

@@ -7573,3 +7573,29 @@ wybranego anchoring. Descriptor pozostaje prywatny, z niepodrabialnym validated
 wynikiem i fingerprintem dokładnych danych/frame/polityki. Nie jest certyfikatem
 structural invariance ani dostępnością providera. Typed V04/routing, fields/BC,
 accepted equilibrium, MFEM2D i wszystkie bramki naukowe nadal są wymagane.
+
+
+### Bezpieczeństwo loggera Gmsh — 2026-10-06
+
+CI37388197050 (HEAD469f964414) potwierdziło Control Room i browser fixture PASS.
+Python meshing suite zakończyło się SIGSEGV139 w
+`test_multi_object_sizing_cylinder_and_waveguide`; nie zapisano native stack.
+Oba porównywane CI używały Gmsh4.15.2, więc nie potwierdzono driftu zależności.
+
+Przegląd odkrył konkretny wyścig: `_GmshProgressLogger._poll` odczytywał
+logger.get podczas mesh.generate, a timed join pozwalał zatrzymać/finalizować
+logger z wciąż żywym observerem. Oficjalny [kod Gmsh4.15.2](https://github.com/gmsh-project/gmsh/blob/gmsh_4_15_2/src/common/gmsh.cpp)
+chroni writer apiMsg przez critical, lecz kopia _log w get nie używa tej samej
+synchronizacji. To uzasadnia naprawę wyścigu; nie dowodzi, że właśnie on wywołał
+zaobserwowany crash bez stosu.
+
+Observer emituje teraz tylko Python heartbeat z rzeczywistym elapsed time,
+bez wywołań Gmsh i bez wymyślonego procentu. Owner czeka na zakończenie observera,
+czyta log po natywnej fazie i zawsze wykonuje logger.stop w finally. Trwale
+zablokowany progress sink może opóźnić cleanup; nie wolno wtedy finalizować
+wokół żywego observera. Parametry/algorytmy/quality assertions siatki nie zmienione.
+Dwie znaczące regresje wykrywają foreign-thread/native read podczas generowania
+oraz przedwczesny cleanup blokowanego observera. AST i diff PASS, niezależne
+source review bez istotnych uwag. Regresje i dokładny OCC test oczekują na CI;
+źródłowa naprawa nie jest kwalifikacją siatki ani dyspersji. Dodatkowa diagnostyka
+faulthandler w następnym CI ma zachować stos ewentualnej awarii.

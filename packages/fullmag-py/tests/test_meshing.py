@@ -5,6 +5,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -7743,6 +7744,89 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(_gmsh_heartbeat_interval(30.0, 5.0), 15.0)
         self.assertEqual(_gmsh_heartbeat_interval(120.0, 5.0), 30.0)
         self.assertEqual(_gmsh_heartbeat_interval(300.0, 60.0), 60.0)
+
+    def test_gmsh_progress_logger_reads_native_log_only_after_generation_on_owner(self) -> None:
+        owner = threading.get_ident()
+        active = threading.Event()
+        heartbeat = threading.Event()
+        calls: list[tuple[str, int, bool]] = []
+
+        class _FakeLogger:
+            def start(self) -> None:
+                calls.append(("start", threading.get_ident(), active.is_set()))
+
+            def get(self) -> list[str]:
+                calls.append(("get", threading.get_ident(), active.is_set()))
+                return []
+
+            def stop(self) -> None:
+                calls.append(("stop", threading.get_ident(), active.is_set()))
+
+        progress = _GmshProgressLogger(
+            SimpleNamespace(logger=_FakeLogger()),
+            poll_interval_s=0.01,
+            heartbeat_interval_s=0.01,
+        )
+        with patch("fullmag.meshing._gmsh_infra.emit_progress", side_effect=lambda _: heartbeat.set()):
+            with progress:
+                active.set()
+                try:
+                    self.assertTrue(heartbeat.wait(5), "Python heartbeat must run during native generation")
+                finally:
+                    active.clear()
+        self.assertEqual([call[0] for call in calls], ["start", "get", "stop"])
+        self.assertTrue(all(thread_id == owner and not generating for _, thread_id, generating in calls))
+        self.assertFalse(progress._thread.is_alive())
+
+    def test_gmsh_progress_logger_waits_for_blocked_observer_before_native_cleanup(self) -> None:
+        emitting = threading.Event()
+        release = threading.Event()
+        stopped = threading.Event()
+        cleanup_observations: list[bool] = []
+
+        class _FakeLogger:
+            def start(self) -> None:
+                pass
+
+            def get(self) -> list[str]:
+                return []
+
+            def stop(self) -> None:
+                stopped.set()
+
+        progress = _GmshProgressLogger(
+            SimpleNamespace(logger=_FakeLogger()),
+            poll_interval_s=0.01,
+            heartbeat_interval_s=0.01,
+        )
+
+        def blocked_sink(_: str) -> None:
+            emitting.set()
+            if not release.wait(5):
+                raise RuntimeError("test heartbeat release timed out")
+
+        def unblock_after_cleanup_check() -> None:
+            try:
+                if progress._stop.wait(5):
+                    # Longer than the historical minimum join timeout (0.5s).
+                    cleanup_observations.append(stopped.wait(0.75))
+            finally:
+                release.set()
+
+        releaser = threading.Thread(target=unblock_after_cleanup_check)
+        releaser.start()
+        try:
+            with patch("fullmag.meshing._gmsh_infra.emit_progress", side_effect=blocked_sink):
+                with progress:
+                    self.assertTrue(emitting.wait(5), "observer must reach the blocked sink")
+        finally:
+            release.set()
+            progress._stop.set()
+            releaser.join(timeout=5)
+        self.assertEqual(cleanup_observations, [False])
+        self.assertTrue(stopped.is_set())
+        self.assertFalse(progress._thread.is_alive())
+        self.assertFalse(releaser.is_alive())
 
     def test_gmsh_progress_logger_does_not_age_last_detail_from_filtered_noise(self) -> None:
         class _FakeLogger:
