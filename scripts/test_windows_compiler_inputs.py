@@ -263,6 +263,31 @@ class CompilerInputsChecks(unittest.TestCase):
         )
         self.assertEqual(json.loads(verified.stdout), result)
 
+    def test_single_call_scan_reuse_and_binding_publication_readback(self):
+        metadata = self.make()
+        with patch.object(build_snapshot, "verify_snapshot", wraps=build_snapshot.verify_snapshot) as snapshot_check, \
+                patch.object(compiler_inputs, "_verify_tree", wraps=compiler_inputs._verify_tree) as tree_check:
+            result = self.materialize(metadata)
+        self.assertEqual(snapshot_check.call_count, 1)
+        self.assertEqual(tree_check.call_count, 1)
+
+        with patch.object(build_snapshot, "verify_snapshot", wraps=build_snapshot.verify_snapshot) as snapshot_check, \
+                patch.object(compiler_inputs, "_verify_tree", wraps=compiler_inputs._verify_tree) as tree_check:
+            compiler_inputs.verify(metadata["record_path"], self.build)
+        self.assertEqual(snapshot_check.call_count, 1)
+        self.assertEqual(tree_check.call_count, 1)
+
+        publish = compiler_inputs._publish_binding
+
+        def mutate_after_publish(root, binding_path, value):
+            publish(root, binding_path, value)
+            binding_path.write_bytes(b"{}")
+
+        with patch.object(compiler_inputs, "_publish_binding", side_effect=mutate_after_publish):
+            with self.assertRaises(compiler_inputs.CompilerInputsError):
+                self.materialize(metadata)
+        self.assertTrue(Path(result["source_root"]).is_dir())
+
 
 if __name__ == "__main__":
     unittest.main()

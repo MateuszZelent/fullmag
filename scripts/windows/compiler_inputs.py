@@ -128,7 +128,7 @@ def _binding_value(metadata, record):
     }
 
 
-def _read_binding(root, binding_path, build_root):
+def _read_binding(root, binding_path, build_root, verified_record=None):
     """Validate the previous publication and prove its mirror before updates."""
     _directory(root, "Compiler-input root")
     _regular_file(binding_path, "Compiler-input binding")
@@ -160,7 +160,11 @@ def _read_binding(root, binding_path, build_root):
     if _sha(_json_bytes(value["inventory"])) != value["inventory_sha256"]:
         raise CompilerInputsError("Compiler-input binding inventory digest mismatch")
 
-    old_metadata, old_record = _read_verified_record(value["record_path"], build_root)
+    if (verified_record is not None
+            and value["record_path"] == verified_record[0]["record_path"]):
+        old_metadata, old_record = verified_record
+    else:
+        old_metadata, old_record = _read_verified_record(value["record_path"], build_root)
     expected = _binding_value(old_metadata, old_record)
     if value != expected:
         raise CompilerInputsError("Compiler-input binding differs from its sealed snapshot")
@@ -290,6 +294,25 @@ def _publish_binding(root, binding_path, value):
         raise CompilerInputsError("Compiler-input binding could not be published atomically") from error
 
 
+def _read_published_binding(root, binding_path, value):
+    """Read back only the small atomic binding after its inventory was proven."""
+    _directory(root, "Compiler-input root")
+    try:
+        names = {item.name for item in root.iterdir()}
+    except OSError as error:
+        raise CompilerInputsError("Published compiler-input root cannot be inventoried") from error
+    if names != {"source", "record.json"}:
+        raise CompilerInputsError("Published compiler-input root contains an unknown entry")
+    _directory(root / "source", "Compiler-input source root")
+    _regular_file(binding_path, "Published compiler-input binding")
+    try:
+        _, raw = build_snapshot._read_regular_file_stable(binding_path, "published compiler-input binding")
+    except OSError as error:
+        raise CompilerInputsError("Published compiler-input binding could not be read back") from error
+    if raw != _json_bytes(value):
+        raise CompilerInputsError("Published compiler-input binding differs from its verified value")
+
+
 def _result(metadata, source, binding_path):
     result = dict(metadata)
     result["snapshot_source_root"] = result["source_root"]
@@ -304,10 +327,9 @@ def verify(record_path, build_root):
     build, root, source, binding_path = _paths(build_root)
     if _lstat(root) is None:
         raise CompilerInputsError("Compiler-input mirror has not been materialized")
-    value, _ = _read_binding(root, binding_path, build)
+    value, _ = _read_binding(root, binding_path, build, verified_record=(metadata, record))
     if value != _binding_value(metadata, record):
         raise CompilerInputsError("Compiler-input mirror is bound to a different snapshot")
-    _verify_tree(source, record["inventory"])
     return _result(metadata, source, binding_path)
 
 
@@ -335,7 +357,7 @@ def materialize(record_path, build_root):
         # A pre-existing unbound tree, including an empty one, is not ours.
         if _lstat(binding_path) is None:
             raise CompilerInputsError("Existing compiler-input root has no valid ownership binding")
-        previous, _ = _read_binding(root, binding_path, build)
+        previous, _ = _read_binding(root, binding_path, build, verified_record=(metadata, record))
         previous_inventory = {entry["path"]: entry for entry in previous["inventory"]}
 
     old_paths = set(previous_inventory)
@@ -392,7 +414,8 @@ def materialize(record_path, build_root):
     _verify_tree(source, new_inventory)
     value = _binding_value(metadata, record)
     _publish_binding(root, binding_path, value)
-    return verify(record_path, build)
+    _read_published_binding(root, binding_path, value)
+    return _result(metadata, source, binding_path)
 
 
 def main():
