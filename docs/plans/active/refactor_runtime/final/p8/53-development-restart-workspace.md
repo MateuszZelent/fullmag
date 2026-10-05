@@ -6,8 +6,9 @@ krok 17 ms, odnowienie i wygaśnięcie lease, reuse kandydata, odebrane własne
 procesy. Realny build z UI zakończył się Ready bez restartu workspace.
 [P8-53AW](53aw-candidate-preparation-fault-gates.md) zamyka rzeczywiste
 fault gates helpera: 10/10 kontroli oraz 13/13 regresji pompy na poprawionym
-pakiecie. [P8-53AX](53ax-owner-scope-loss-during-preparation.md) sprawdza
-utratę scope podczas pracy rzeczywistego selektora; native NOT VERIFIED.
+pakiecie. [P8-53AX](53ax-owner-scope-loss-during-preparation.md) potwierdza
+utratę owner scope podczas pracy rzeczywistego selektora: 18/18 kontroli,
+terminalne PID/kody oraz brak przejęcia spóźnionego wyniku i replacement.
 Pełny restart z niepustym modelem i
 publiczne udostępnienie nadal pozostają otwarte. Poniżej wcześniejsze stany.
 
