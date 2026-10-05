@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { webcrypto } from "node:crypto";
 import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
+import { runMaterialAssignmentDraftCheck } from "./check-material-assignment-draft.mjs";
 
 // Interpret the production service, controller, and Host. Owner and typed API
 // protocols are controlled fixtures; this is not browser or native qualification.
@@ -630,6 +631,7 @@ for (const fresh of [
   groups += 1;
 }
 
+console.log(JSON.stringify(await runMaterialAssignmentDraftCheck()));
 console.log(JSON.stringify({
   check: "development-restart-action",
   groups,

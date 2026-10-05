@@ -213,6 +213,60 @@ export interface MagneticParametersDraft extends MaterialAssignmentDraft {
   ms: string;
 }
 
+export interface AcknowledgedAssignmentBaseOverride {
+  baseDraft: MagneticParametersDraft;
+  baseKey: string;
+  identityKey: string;
+  materialId: string;
+  objectId: string;
+  sceneRevision: number | null;
+  scopeKey: string;
+  scopeToken: symbol;
+}
+
+export function sceneResourceRevision(
+  scene: Pick<SceneResource, "revision" | "scene_revision"> | null | undefined,
+): number | null {
+  const revision = scene?.scene_revision ?? scene?.revision;
+  return typeof revision === "number" && Number.isFinite(revision) ? revision : null;
+}
+
+export function acknowledgedAssignmentBaseDecision({
+  override,
+  currentSceneBaseKey,
+  currentResourceBaseKey,
+  currentMaterialId,
+  currentObjectId,
+  currentSceneRevision,
+  currentScopeKey,
+  currentScopeToken,
+}: {
+  override: AcknowledgedAssignmentBaseOverride;
+  currentSceneBaseKey: string | null;
+  currentResourceBaseKey: string;
+  currentMaterialId: string | null;
+  currentObjectId: string;
+  currentSceneRevision: number | null;
+  currentScopeKey: string;
+  currentScopeToken: symbol;
+}): "use" | "rebase" | "discard" {
+  if (override.scopeKey !== currentScopeKey || override.scopeToken !== currentScopeToken ||
+    override.objectId !== currentObjectId) {
+    return "discard";
+  }
+  if (override.sceneRevision === null || currentSceneRevision === null ||
+    currentSceneRevision < override.sceneRevision) {
+    return "use";
+  }
+  if (override.materialId !== currentMaterialId) return "discard";
+  if (!currentSceneBaseKey) return "use";
+  if (currentSceneRevision > override.sceneRevision ||
+    currentSceneBaseKey !== override.baseKey || currentResourceBaseKey === currentSceneBaseKey) {
+    return "rebase";
+  }
+  return "use";
+}
+
 export function normalizeMaterialRef(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed || trimmed === "unassigned") return null;
@@ -283,7 +337,109 @@ export function magneticParametersDraftDirty(
   );
 }
 
+const MAGNETIC_PARAMETER_DRAFT_FIELDS = [
+  "aex",
+  "alpha",
+  "dbulk",
+  "dind",
+  "materialName",
+  "materialRef",
+  "ms",
+] as const satisfies readonly (keyof MagneticParametersDraft)[];
+
+/** Validate scene material data into the resource shape used by the material hook. */
+export function magneticParameterMaterialResourceFromSceneResource(
+  materialId: string,
+  scene: Pick<SceneResource, "materials" | "revision" | "scene_revision">,
+): MaterialResource | null {
+  const material = scene.materials?.find((candidate) => candidate.id === materialId);
+  if (!material || !material.id || typeof material.name !== "string") return null;
+  const properties = material.properties;
+  const aex = properties.Aex;
+  const dbulk = properties.Dbulk;
+  const dind = properties.Dind;
+  const ms = properties.Ms;
+  const alpha = properties.alpha;
+  if (!isOptionalFiniteNumber(aex) || !isOptionalFiniteNumber(dbulk)
+    || !isOptionalFiniteNumber(dind) || !isOptionalFiniteNumber(ms)
+    || typeof alpha !== "number" || !Number.isFinite(alpha)) {
+    return null;
+  }
+  const resource: MaterialResource = {
+    id: material.id,
+    name: material.name,
+    properties: {
+      Aex: aex,
+      Dbulk: dbulk,
+      Dind: dind,
+      Ms: ms,
+      alpha,
+    },
+    scene_revision: scene.scene_revision ?? scene.revision ?? 0,
+  };
+  return resource;
+}
+
+/** Read the material values from an acknowledged scene mutation response. */
+export function magneticParametersDraftFromSceneResource(
+  materialId: string,
+  scene: Pick<SceneResource, "materials" | "revision" | "scene_revision">,
+): MagneticParametersDraft | null {
+  const material = magneticParameterMaterialResourceFromSceneResource(materialId, scene);
+  return material ? magneticParametersDraftFromResource(materialId, material) : null;
+}
+
+/**
+ * Rebase a completed assignment onto the committed material while retaining
+ * only real pre-existing edits and fields edited since the operation began.
+ */
+export function rebaseMagneticParametersDraftAfterAssignment({
+  previousBaseDraft,
+  draftAtStart,
+  currentDraft,
+  committedBaseDraft,
+  startingRevisions,
+  currentRevisions,
+}: {
+  previousBaseDraft: MagneticParametersDraft;
+  draftAtStart: MagneticParametersDraft;
+  currentDraft: MagneticParametersDraft;
+  committedBaseDraft: MagneticParametersDraft;
+  startingRevisions: ReadonlyMap<keyof MagneticParametersDraft, number>;
+  currentRevisions: ReadonlyMap<keyof MagneticParametersDraft, number>;
+}): MagneticParametersDraft {
+  const rebased = { ...committedBaseDraft };
+  for (const field of MAGNETIC_PARAMETER_DRAFT_FIELDS) {
+    const dirtyBefore = magneticParameterFieldDirty(
+      field,
+      draftAtStart[field],
+      previousBaseDraft[field],
+    );
+    const changedDuring = (currentRevisions.get(field) ?? 0)
+      !== (startingRevisions.get(field) ?? 0);
+    if (dirtyBefore || changedDuring) {
+      Object.assign(rebased, { [field]: currentDraft[field] });
+    }
+  }
+  return rebased;
+}
+
+function magneticParameterFieldDirty(
+  field: keyof MagneticParametersDraft,
+  value: string,
+  baseValue: string,
+): boolean {
+  if (field === "materialName" || field === "materialRef") return value !== baseValue;
+  return numericTextDirty(value, baseValue);
+}
+
+function isOptionalFiniteNumber(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null
+    || (typeof value === "number" && Number.isFinite(value));
+}
+
 function numericTextDirty(value: string, baseValue: string): boolean {
+  if (!value.trim() || !baseValue.trim()) return value.trim() !== baseValue.trim();
   const parsed = Number(value);
   const baseParsed = Number(baseValue);
   if (Number.isFinite(parsed) && Number.isFinite(baseParsed)) {
