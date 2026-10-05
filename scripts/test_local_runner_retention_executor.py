@@ -91,6 +91,29 @@ class ExecutionCleanupTests(unittest.TestCase):
         self.assertTrue(self.execution.is_dir())
         return result
 
+    def test_succeeded_historical_build_removes_execution_preserves_archive(self):
+        from test_local_runner_archive_receipt import ArchiveReceiptTests
+        fixture = ArchiveReceiptTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.job.update(state='succeeded', profile=fixture.job['profile'])
+        self.job['payload']['native_source_identity'] = fixture.job['payload']['native_source_identity']
+        self.journal.update(state='succeeded', exit_code=0, image_digest=fixture.journal['image_digest'])
+        for name in ('coordinator.json', 'receipt.json'):
+            (self.run / name).write_text(json.dumps(self.journal))
+        fixture.receipt.update(job_id=self.job['job_id'], source_digest=self.job['source_digest'])
+        fixture.save()
+        import shutil
+        shutil.copytree(fixture.root, self.run / 'artifacts', dirs_exist_ok=True)
+        before = (self.run / 'artifacts/build-receipt.json').read_bytes()
+        self.make_plan()
+        result = self.apply()
+        self.assertTrue(result['applied'], result)
+        self.assertFalse(self.execution.exists())
+        self.assertEqual((self.run / 'artifacts/build-receipt.json').read_bytes(), before)
+        self.assertTrue((self.run / 'results/frequency.csv').is_file())
+        self.assertTrue((self.source / 'manifest.json').is_file())
+
     def test_removes_only_private_tree_and_replays_receipt(self):
         result = self.apply()
         self.assertTrue(result['applied'])

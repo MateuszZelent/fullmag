@@ -144,7 +144,7 @@ def _guard_owners(storage, worktree_id):
             raise CleanupBlocked('active_or_unknown_storage_owner:' + path.name)
 
 
-def _guard_evidence(storage, job, run_root, journal):
+def _guard_terminal_evidence(storage, job, run_root, journal):
     if journal.get('phase') != 'terminal':
         raise CleanupBlocked('nonterminal_journal')
     receipt = _json(retention._checked_child(run_root, ('receipt.json',), kind='file'))
@@ -160,7 +160,22 @@ def _guard_evidence(storage, job, run_root, journal):
     verify_source(source, job['source_digest'])
     if job['state'] == 'succeeded':
         artifacts = retention._checked_child(run_root, ('artifacts',), kind='directory')
+        return artifacts
+    return None
+
+
+def _guard_evidence(storage, job, run_root, journal):
+    # Runtime package removal retains current-profile compatibility checks.
+    artifacts = _guard_terminal_evidence(storage, job, run_root, journal)
+    if artifacts is not None:
         validate_build_receipt(artifacts, job, journal)
+
+
+def _guard_archive_evidence(storage, job, run_root, journal):
+    from local_runner.archive_receipt import validate_archive_receipt
+    artifacts = _guard_terminal_evidence(storage, job, run_root, journal)
+    if artifacts is not None:
+        validate_archive_receipt(artifacts, job, journal)
 
 
 def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
@@ -235,7 +250,7 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                     run_root = target.parent
                     _guard_pins(storage, run_root, job)
                     journal = _json(run_root / 'coordinator.json')
-                    _guard_evidence(storage, job, run_root, journal)
+                    _guard_archive_evidence(storage, job, run_root, journal)
                     item['container_cleanup'] = guard_containers(layout, job, journal, target, call)
                     atomic_json(result_path, result)
                     # Recheck after potentially slow hashing and Docker calls.

@@ -188,3 +188,20 @@ sprzątania produkcyjnego storage.
   gate. Po stop ponowna atestacja i walidacja metadanych. Domyślna odmowa
   replacement podczas mutacji pozostaje. Wyjątek nie jest generic force.
   Użycie na produkcji oraz właściwy cleanup: nadal NOT VERIFIED.
+
+
+### Pierwsza partia wykonania i historyczny kontrakt — 2026-10-05
+
+- Preview `plan-58fa7f7d0242487eb1266a414a5fca19` wskazał tylko wygasłe
+  execution #187/#188, 879 901 764 bajtów logicznych. Apply zakończył się
+  `partial`: oba katalogi retained, 0 bajtów usuniętych. Manifesty i receipty:
+  cztery SHA256 przed/po zgodne. Delta wolnego dysku nie jest odzyskiem tej operacji.
+- Przyczyna: dawne runtime-v2 miało `FULLMAG_ENABLE_FEM_GPU=ON`; aktualny
+  profil wymaga OFF i nowych attestacji ABI. Użycie walidacji dzisiejszego
+  profilu do oceny integralności archiwum trwale blokuje sprzątanie starych buildów.
+- Korekta: oddzielny walidator archiwum wyłącznie dla execution; runtime
+  nadal korzysta ze ścisłej walidacji. Regresje: archive 4/4, execution 18/18,
+  runtime retention 10/10 PASS. Test historycznego succeeded buildu potwierdza
+  usunięcie wyłącznie execution i zachowanie źródeł/receiptu/wyników w fixture.
+- Faktyczne ponowne sprzątanie wymaga wdrożenia korekty i nowego planu;
+  poprzedniej operacji nie odtwarzamy ani nie nadpisujemy.

@@ -75,3 +75,17 @@ Wymagane są regresje odmowy przy aktywnym użyciu, błędach metadanych, pinach
 linkach poza drzewo i zmianach pomiędzy planem i wykonaniem, testy deduplikacji
 oraz kontrola zachowania danych naukowych. Wdrożenie musi przejść rzeczywisty
 przebieg przez istniejący koordynator i jego UI.
+
+
+## Integralność archiwum a zgodność runtime — korekta 2026-10-05
+
+Usuwanie prywatnego `execution` zakończonego buildu wymaga zgodności
+terminalnych metadanych, zachowanych źródeł oraz integralności archiwalnego
+receiptu i wszystkich wymienionych artefaktów. Walidator archiwalny sprawdza
+schemat, tożsamość joba/obrazu/źródeł, udane etapy, regularne bezpieczne ścieżki,
+unikalność wpisów, rozmiary i SHA256. Nie interpretuje historycznej konfiguracji
+CMake według dzisiejszego profilu. Archiwalnych plików nie wykonuje.
+
+To nie kwalifikuje starego runtime ani fizyki. Walidacja zakończenia nowego
+buildu, dopuszczenie runtime i retencja pakietów runtime zachowują aktualne,
+ścisłe wymagania. Kompakcja źródeł nadal ma własną weryfikację kapsuły.
