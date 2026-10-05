@@ -227,6 +227,7 @@ pub fn migrate_legacy_thumbnails(workspace: &Workspace) -> usize {
         search: None,
         limit: usize::MAX,
         include_missing: true,
+        include_results: false,
     }) else {
         return 0;
     };
@@ -452,6 +453,7 @@ pub fn list_items(
         search: query.search.clone(),
         limit,
         include_missing: query.include_missing.unwrap_or(true),
+        include_results: false,
     };
     let mut items = workspace.list(&db_query).map_err(db_error)?;
     let mut changed = false;

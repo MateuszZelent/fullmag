@@ -80,6 +80,17 @@ impl Workspace {
             .optional()?)
     }
 
+    /// Ids of every item that has a preview, in one query (no image bytes).
+    pub fn thumbnail_item_ids(&self) -> Result<std::collections::HashSet<i64>> {
+        let mut statement = self.conn.prepare("SELECT item_id FROM thumbnails")?;
+        let rows = statement.query_map([], |row| row.get::<_, i64>(0))?;
+        let mut ids = std::collections::HashSet::new();
+        for row in rows {
+            ids.insert(row?);
+        }
+        Ok(ids)
+    }
+
     /// Drop the preview of an item; a no-op when there is none.
     pub fn remove_thumbnail<'a>(&self, item: impl Into<ItemRef<'a>>) -> Result<()> {
         let (found, _) = self.require(item.into())?;

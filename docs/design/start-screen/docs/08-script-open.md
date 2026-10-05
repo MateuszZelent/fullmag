@@ -489,6 +489,17 @@ reconciled from `<state>/script-runs/*/receipt.json` after a crash. A hash misma
 between `script.sha256` and `ids.problem_ir_source_hash` is surfaced in the
 History view.
 
+**Run manifest in the results folder (2026-10-05).** The receipt lives with the
+launching host and exists only for managed runs. Every script run, managed or
+plain `fullmag script.py`, additionally leaves `fullmag-run.json`
+(`fullmag.run_manifest.v1`) inside its results folder (`results.dir` above):
+written atomically as `running` once the folder is known and rewritten with the
+outcome, stages and outputs at the end; never next to the script. It repeats
+the receipt's `requested`, `resolved`, ids and outcome next to
+`source {kind, path, sha256}`, so the workspace scanner and the browser
+inspector can link a results folder to its script without the receipt. Layout,
+fields and the HTTP readers: `07-workspace-database.md` section 13.
+
 ### 6.4 API (Phase 0b only; additive)
 
 - `GET /v2/sessions/current` and `GET /v2/sessions/current/status`
