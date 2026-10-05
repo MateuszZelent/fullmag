@@ -15,7 +15,7 @@ const KEY_GROUPS: readonly KeyGroup[] = [
       { action: "Browse templates", keys: "Ctrl T" },
       { action: "Import model", keys: "Ctrl I" },
       { action: "Settings", keys: "Ctrl ," },
-      { action: "Sections Home, Templates, Import, Learn", keys: "Ctrl 1 … Ctrl 4" },
+      { action: "Sections Overview, Templates, Import, Learn", keys: "Ctrl 1 … Ctrl 4" },
     ],
   },
   {

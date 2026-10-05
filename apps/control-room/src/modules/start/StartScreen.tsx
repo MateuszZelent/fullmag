@@ -6,6 +6,7 @@ import { createCommandContext } from "@/kernel/commands/commandContext";
 import { homeView } from "@/kernel/layout/homeView";
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
 import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
+import { useSessionResourceIdentity, useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ModuleProps } from "@/kernel/types";
 
 import { HomeSection } from "./home/HomeSection";
@@ -44,6 +45,8 @@ const SESSION_UNCONFIRMED =
  */
 export function StartScreen({ kernel }: ModuleProps) {
   const sessions = useSessionCollection();
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionName = useSessionStatusSelector((status) => status.data?.session?.name ?? null);
   // Subscribing re-renders the tiles when the project controller changes the
   // enablement of workspace.open-project.
   useProjectDocumentSnapshot();
@@ -310,7 +313,8 @@ export function StartScreen({ kernel }: ModuleProps) {
         session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
         index={recent.state}
       />
-      <StartStatusBar compute={compute} index={recent.state} />
+      <StartStatusBar compute={compute} index={recent.state}
+        sessionLabel={sessionIdentity ? `Simulation open: ${sessionName ?? "Untitled simulation"}` : "No active session"} />
     </div>
   );
 }

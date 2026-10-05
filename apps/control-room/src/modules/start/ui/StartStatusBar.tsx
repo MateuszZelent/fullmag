@@ -26,6 +26,7 @@ export function describeIndexCount(index: RecentIndexState): string | null {
 export interface StartStatusBarProps {
   readonly compute: ComputeProbeState;
   readonly index: RecentIndexState;
+  readonly sessionLabel?: string;
 }
 
 /**
@@ -33,9 +34,9 @@ export interface StartStatusBarProps {
  * mockup's build number, update notice and telemetry switch are left out until
  * the host exposes them, so nothing here is decoration.
  */
-export function StartStatusBar({ compute, index }: StartStatusBarProps) {
+export function StartStatusBar({ compute, index, sessionLabel = "No active session" }: StartStatusBarProps) {
   const items = [
-    "No active session",
+    sessionLabel,
     describeCompute(compute),
     describeIndexCount(index),
   ].filter((item): item is string => item !== null);

@@ -366,10 +366,56 @@ assert.equal(hasSimulationPreparation({
   ...emptySimulation, session: null, resources: { simulation_preparation_revision: 8 },
 }, 8), false);
 
+const navigationDependencies = new vm.SyntheticModule(
+  ["useSyncExternalStore", "requestThemeToggle", "applyAuthoringHistoryWorkspaceTransition", "pickProjectArchive"],
+  function () {
+    for (const name of ["useSyncExternalStore", "requestThemeToggle", "applyAuthoringHistoryWorkspaceTransition", "pickProjectArchive"]) {
+      this.setExport(name, () => { throw new Error(`Unexpected navigation dependency call: ${name}`); });
+    }
+  },
+  { context },
+);
+await navigationDependencies.link(() => { throw new Error("Unexpected navigation dependency"); });
+await navigationDependencies.evaluate();
+const homeViewModule = productionModule("src/kernel/layout/homeView.ts");
+await homeViewModule.link((specifier) => {
+  assert.equal(specifier, "react");
+  return navigationDependencies;
+});
+await homeViewModule.evaluate();
+const shellCommandsModule = productionModule("src/kernel/layout/shellCommands.ts");
+await shellCommandsModule.link((specifier) => {
+  if (specifier === "./homeView") return homeViewModule;
+  assert.ok([
+    "@/design/theme/themeEvents",
+    "../authoring/authoringHistoryWorkspaceRestore",
+    "../persistence/ProjectDocumentController",
+  ].includes(specifier), `Unexpected shell command dependency: ${specifier}`);
+  return navigationDependencies;
+});
+await shellCommandsModule.evaluate();
+const navigationState = homeViewModule.namespace.homeView;
+const openStart = shellCommandsModule.namespace.SHELL_COMMANDS.find(command => command.id === "workspace.home");
+const returnToWorkspace = shellCommandsModule.namespace.SHELL_COMMANDS.find(command => command.id === "workspace.return-to-workspace");
+let navigationNotifications = 0;
+const unsubscribeNavigation = navigationState.subscribe(() => { navigationNotifications += 1; });
+assert.equal(returnToWorkspace.isEnabled(), false);
+assert.equal(openStart.run({}).status, "completed");
+assert.equal(openStart.run({}).status, "completed");
+assert.equal(navigationState.isOpen(), true);
+assert.equal(navigationNotifications, 1);
+assert.equal(returnToWorkspace.isEnabled(), true);
+assert.equal(returnToWorkspace.run({}).status, "completed");
+assert.equal(navigationState.isOpen(), false);
+assert.equal(returnToWorkspace.isEnabled(), false);
+assert.equal(navigationNotifications, 2);
+unsubscribeNavigation();
+navigationState.resetForTests();
+
 sharedResourceRuntimeStore.resetForTests();
 console.log(JSON.stringify({
   check: "resource-client-cache-scope",
-  groups: 10,
+  groups: 11,
   passed: true,
   emitted_code: false,
 }));
