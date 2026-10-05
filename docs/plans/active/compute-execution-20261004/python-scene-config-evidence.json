@@ -1,0 +1,25 @@
+{
+  "schema": "python_scene_config_source_evidence.v1",
+  "date": "2026-10-05",
+  "scope": "Interpreted Python capture and compatibility regressions; not managed solver/runtime qualification",
+  "tests": [
+    { "files": ["packages/fullmag-py/tests/test_scene_execution_config.py"], "passed": 9, "exit_code": 0, "seconds": 2.60, "final_asset_light_check": true },
+    { "files": ["packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py", "packages/fullmag-py/tests/test_scene_document_problem_ir.py"], "passed": 63, "exit_code": 0, "seconds": 4.77, "warnings": 4, "note": "Repo-local basetemp retry after AppData os.replace WinError 5; unchanged legacy routes after final asset-light follow-up" },
+    { "files": ["packages/fullmag-py/tests/test_api.py"], "selector": "test_helper_exports_run_config_with_flat_stage_sequence or test_helper_exports_run_config_with_stage_actions or run_config_geometry_assets or compact_stage_ir or test_helper_exports_scene_execution_config_with_same_capture_arguments", "passed": 7, "deselected": 298, "exit_code": 0, "seconds": 2.87, "warnings": 1, "note": "Legacy helper/source paths unchanged by final scene-only asset-light follow-up" }
+  ],
+  "options": ["PYTHONDONTWRITEBYTECODE=1", "PYTHONPATH=packages/fullmag-py/src", "python -B -m pytest -q -p no:cacheprovider"],
+  "source_sha256": {
+    "packages/fullmag-py/src/fullmag/runtime/scene_document_ir.py": "b77a2a32cbfdd3c9454e02ec6123a9a93bc06b8f20be10f96bf4549616baa264",
+    "packages/fullmag-py/src/fullmag/runtime/helper.py": "19c414d92adce322f2d806906d42cfb612b193633c7faae85547500979b9764f",
+    "packages/fullmag-py/src/fullmag/runtime/run_config_export.py": "50c31f95c0bd5b11c880f16fe7f0e60a2736a11c014a1bc3689a61dd8169bb87",
+    "packages/fullmag-py/src/fullmag/runtime/script_builder.py": "931f92a0a39642d978db0e3f9d6770f8799efc1b1b2ed699f245d2d262b990a4",
+    "packages/fullmag-py/tests/test_scene_execution_config.py": "ac039e01531c27b72cd5d45e0236fa241a49d27b9c7f4ff1b6a67d9b560c38c2",
+    "packages/fullmag-py/tests/test_scene_document_problem_ir.py": "1004df4438e52a08021858160630ab880e7bf500331fe50f6724d2e0089219a6"
+  },
+  "proven": ["shared legacy run-config exporter", "actual concrete stage IR/order/IDs/time offsets", "nonempty pipeline remains owned by shared Rust producer", "complete Run solver payload", "profile/layers and input scene preserved", "repeat capture stable with no temporary source path leakage", "asset builder never called for pipeline or concrete Scene preview capture", "base/stage/shared generated assets omitted; geometry recipe retained"],
+  "explicit_python_renderer_limits": ["pipeline macros require shared Rust materialization", "export actions lack public Python DSL representation", "advanced hysteresis policies", "eigen bias-field sweeps", "custom change_device stage IDs", "rich action-only table/autosave fields", "nonempty run sampling/spin-wave-response payloads"],
+  "ruff_format": "NOT VERIFIED: No module named ruff",
+  "compiled_unit_tests": false,
+  "solver_runs": false,
+  "goal_complete": false
+}

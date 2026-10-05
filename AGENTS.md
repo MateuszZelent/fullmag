@@ -73,20 +73,21 @@ FEM/MFEM ani dowolny ręczny `cargo`, `cmake` lub Docker.
 
 | Polecenie | Działanie |
 |---|---|
-| `just windows-ui dev` | Uruchamia pusty workspace na porcie 3197, frontend Next.js z HMR i jeden automatyczny watcher backendu. Brakujący lub nieaktualny pakiet buduje przed startem. |
+| `just windows-ui dev` | Uruchamia pusty workspace na porcie 3197, frontend Next.js z HMR i odbiornik jawnych żądań buildu backendu. Brakujący lub nieaktualny pakiet buduje przed startem. |
 | `just windows-ui dev 3197 auto dev` | Jawnie wybiera ten sam tryb: automatyczny wybór buildu i backendowy profil dev. |
 | `just windows-workspace-build dev dev 3197 auto` | Buduje brakujący lub nieaktualny pakiet dev bez uruchamiania UI. |
 | `just windows-runtime-recover 3197` | Odzyskuje niepotwierdzony owner record dopiero po sprawdzeniu braku procesów i zamkniętego portu; zachowuje oryginalny zapis. Nie zatrzymuje procesów ani nie odtwarza modelu. |
-| `just windows-backend-dev 3197` | Osobny watcher dla już uruchomionego workspace; nie uruchamiaj go obok watchera automatycznie utworzonego przez `windows-ui dev`. |
+| `just windows-backend-dev 3197` | Jednorazowo buduje backend dev na żądanie, bez restartu workspace. Nie uruchamia drugiego watchera. |
 | `just windows-ui static` | Uruchamia workspace z produkcyjnie zbudowanym frontendem i backendem release; brakujący lub nieaktualny pakiet buduje przed startem. |
 
-- Frontend reaguje na zapis plików przez HMR. Zmiany backendu watcher scala
-  i buduje przyrostowo w profilu Cargo `backend-dev`, zachowując cache.
-  Domyślnie czeka 120 sekund bez zmian źródeł backendu; każdy kolejny zapis
-  rozpoczyna odliczanie od nowa. `FULLMAG_BACKEND_DEV_DEBOUNCE_SECONDS`
-  pozwala ustawić 1–300 sekund przed uruchomieniem workspace. Zmiana źródeł
-  podczas kompilacji odrzuca wynik i rozpoczyna pełne okno oczekiwania.
-  Nie usuwaj `target` ani współdzielonych cache dla zwykłej iteracji.
+- Frontend reaguje na zapis plików przez HMR. Backend buduje się wyłącznie
+  na jawne żądanie (przycisk **Build backend** lub zarządzane polecenie),
+  z utrwalonej kopii źródeł. Późniejsze edycje checkoutu nie odrzucają wyniku
+  ani nie uruchamiają następnego buildu. Decyzja użytkownika z 05.10.2026
+  zastępuje wcześniejsze automatyczne odliczanie 120 sekund.
+  Profil Cargo `backend-dev` zachowuje target/cache; nie usuwaj ich dla
+  zwykłej iteracji. Zmiany zależności działającego workspace nadal wymagają
+  bezpiecznego zamknięcia, zgodnie z kontrolą `assert_frozen_dependencies`.
 - `build=auto` w receptach oznacza sprawdzenie tożsamości źródeł i pakietu;
   `true` wymusza build, a `false` dopuszcza wyłącznie istniejący, zgodny pakiet.
   Przyrostowy build nie oznacza ponownej kompilacji wszystkich zależności.
@@ -104,7 +105,8 @@ FEM/MFEM ani dowolny ręczny `cargo`, `cmake` lub Docker.
 
 Szczegóły i dowody:
 [Windows-first development](docs/guides/windows-first-development.md),
-[P8-52 — przyrostowy backend dev](docs/plans/active/refactor_runtime/final/p8/52-native-backend-dev.md).
+[P8-52 — przyrostowy backend dev](docs/plans/active/refactor_runtime/final/p8/52-native-backend-dev.md),
+[P8-54 — build na żądanie](docs/plans/active/refactor_runtime/final/p8/54-manual-native-build-snapshot.md).
 
 ## Szczegółowe reguły — ładuj według zakresu
 

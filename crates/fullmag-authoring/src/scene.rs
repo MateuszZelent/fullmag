@@ -367,6 +367,10 @@ pub struct SceneStudyState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_storage: Option<fullmag_ir::OutputStorageIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_profile: Option<fullmag_ir::ExecutionProfileIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub execution_layers: Vec<fullmag_ir::ExecutionRequestLayerIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<ScriptBuilderInitialState>,
 }
 
@@ -830,6 +834,7 @@ fn default_solver() -> ScriptBuilderSolverState {
         max_err: String::new(),
         adaptive_timestep: None,
         demag_interval_s: String::new(),
+        gamma: String::new(),
         relax_algorithm: String::new(),
         torque_tolerance: String::new(),
         energy_tolerance: String::new(),

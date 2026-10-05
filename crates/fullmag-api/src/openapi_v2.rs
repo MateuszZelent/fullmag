@@ -6,6 +6,9 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::router_v2::handlers::platform::compute_profiles::get_compute_profiles,
+        crate::router_v2::handlers::platform::compute_profiles::post_compute_profile,
+        crate::router_v2::handlers::platform::compute_preview::post_compute_preview,
         crate::router_v2::handlers::platform::realtime::get_asyncapi_document,
         crate::router_v2::handlers::platform::realtime::get_asyncapi_docs,
         crate::router_v2::handlers::platform::realtime::get_communication_policy,
@@ -339,6 +342,8 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::system::get_health,
         crate::router_v2::handlers::platform::runtime_service::get_runtime_service,
         crate::router_v2::handlers::platform::development_backend::get_development_backend,
+        crate::router_v2::handlers::platform::development_backend_build_request::post_development_backend_build_request,
+        crate::router_v2::handlers::platform::development_backend_build_request::get_development_backend_build_request,
         crate::router_v2::handlers::platform::output_storage::get_output_storage_defaults,
         crate::router_v2::handlers::platform::output_storage::put_output_storage_defaults,
         crate::router_v2::handlers::platform::development_restart_request::post_development_restart_request,
@@ -350,6 +355,9 @@ use utoipa::OpenApi;
         crate::schemas::development_backend::DevelopmentBackendReason,
         crate::schemas::development_backend::DevelopmentBuildIdentity,
         crate::schemas::development_backend::DevelopmentBackendWorkspaceIdentity,
+        crate::schemas::development_backend_build_request::DevelopmentBackendBuildRequest,
+        crate::schemas::development_backend_build_request::DevelopmentBackendBuildRequestResource,
+        crate::schemas::development_backend_build_request::DevelopmentBackendBuildRequestState,
         crate::schemas::development_restart_request::DevelopmentRestartRequest,
         crate::schemas::development_restart_request::DevelopmentRestartResource,
         crate::schemas::development_restart_request::DevelopmentRestartState,

@@ -1911,6 +1911,8 @@ mod tests {
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 3,
+            execution_profile: None,
+            execution_layers: vec![],
             backend: None,
             requested_backend: None,
             requested_device: None,

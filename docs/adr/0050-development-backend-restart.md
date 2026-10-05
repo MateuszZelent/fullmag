@@ -8,6 +8,35 @@ NOT VERIFIED. Utrata ACK wymaga potwierdzonego exit własnego API i zgodnego
 trwałego rekordu; nie upoważnia do ponowienia commit ani zwolnienia fence.
 Data: 03.10.2026.
 
+### Asynchroniczne przygotowanie kandydata — P8-53AV
+
+Pierwsza selekcja obejmuje pełną weryfikację utrwalonych źródeł i kopiowanie
+binariów. Pojedyncza kontrola snapshotu 7494 plików zajęła na tym hoście
+15,254 s, więc wymagane kontrole przed i po przygotowaniu nie mieszczą się
+w dotychczasowym limicie 20 s acquisition. Nie zwiększamy tego ogólnego
+limitu ani nie skracamy kontroli integralności.
+
+Pompa uruchamia osobne, odpytywane zadanie przygotowania z limitem 120 s.
+Zadanie należy do właściciela procesu; jest przypięte do API, worktree,
+generacji, buildu i źródła. Pending nie jest terminalnym wynikiem selekcji.
+Zmiana scope lub obserwowanej gotowej wersji unieważnia wynik, anuluje
+własne zadanie i wymaga potwierdzonego odebrania jego procesu i transportów.
+Nierozstrzygnięty cleanup nie pozwala na nowe przejęcie lub restart.
+Weryfikacja ownera zachowuje dotychczasowy limit 20 s. Odnowienie readiness
+następuje dopiero po pełnym przygotowaniu i świeżej kontroli bieżącego scope.
+Cache przejmuje zweryfikowany pakiet przed renewal; lost ACK nie powoduje
+ponownego kopiowania. Konsumpcja restartu korzysta z tego pakietu i nie
+wywołuje ponownie kosztownej selekcji w krótkim kroku handoffu.
+
+W ramach jednego wywołania selektora można ponownie użyć zweryfikowanych
+metadanych tego samego rekordu i jego dokładnych bajtów. Pełna kontrola
+źródeł przed i po przygotowaniu pozostaje obowiązkowa; reuse nie przechodzi
+między wywołaniami. Nie omija to sprawdzeń manifestu ani hashów binariów.
+Rollback wyłącza dostępność kontrolowanego restartu, zachowując działający
+workspace i dowody niepotwierdzonych procesów. Publiczna flaga nadal
+pozostaje `false` do zaliczenia native/browser flow i pozostałych bramek.
+Implementacja i wymagane dowody: [P8-53AV](../plans/active/refactor_runtime/final/p8/53av-asynchronous-candidate-preparation.md).
+
 ### Prywatne potwierdzenie konsumenta — P8-53AU
 
 Gotowości konsumenta nie wyprowadzamy z konfiguracji transportu ani heartbeat
@@ -138,8 +167,9 @@ runtime; import FMS `resume` zwraca `checkpoint_restore_unsupported`.
 
 ## Decyzja
 
-Kompilacja i zastosowanie wersji są odrębnymi operacjami. Watcher buduje
-nową wersję, a działające procesy używają zweryfikowanej kopii EXE.
+Kompilacja i zastosowanie wersji są odrębnymi operacjami. Odbiornik buduje
+nową wersję wyłącznie na jawne żądanie z UI lub zarządzanego polecenia,
+z utrwalonej kopii źródeł (P8-54). Działające procesy używają zweryfikowanej kopii EXE.
 UI pokazuje stan kompilacji i komendę „Uruchom nową wersję”. Sam zakończony
 build nie wywołuje restartu.
 

@@ -1,4 +1,4 @@
-import type { components } from "./generated/openapi-v2-types";
+import type { components, paths } from "./generated/openapi-v2-types";
 
 export type ResourceRevision = string | number;
 type JsonPrimitive = boolean | null | number | string;
@@ -212,7 +212,17 @@ export type GeometryRealizationResource =
 export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
 export type HealthResource = components["schemas"]["HealthResponse"];
-export type DevelopmentBackendResource = components["schemas"]["DevelopmentBackendResource"];
+export type DevelopmentBackendResource =
+  components["schemas"]["DevelopmentBackendResource"];
+export type DevelopmentBackendBuildRequest =
+  components["schemas"]["DevelopmentBackendBuildRequest"] & {
+    schema: "fullmag.development-backend-build-request.v1";
+  };
+export type DevelopmentBackendBuildRequestResource =
+  components["schemas"]["DevelopmentBackendBuildRequestResource"] & {
+    ready_build_id: string | null;
+    ready_source_sha256: string | null;
+  };
 export type DevelopmentRestartRequest =
   components["schemas"]["DevelopmentRestartRequest"];
 export type DevelopmentRestartResource =
@@ -545,6 +555,7 @@ export type StudyRuntimePatchRequest =
 export type StudyRuntimeResource =
   components["schemas"]["StudyRuntimeResource"];
 export type AuthoringTransactionRequest =
+  | { base_revision: number; kind: "assign_study_execution"; execution_profile: ExecutionProfile; execution_layers: ExecutionRequestLayer[] }
   | { base_revision?: number | null; kind: "replace_scene"; scene: JsonObject }
   | (BaseAuthoringTransaction & {
       kind: "merge_patch";
@@ -1044,6 +1055,15 @@ export function isOptionalObjectInteractionKind(
 }
 
 export type OutputStorageDefaultsResource = components["schemas"]["OutputStorageDefaultsResource"];
+export type ExecutionProfileCatalogResource = components["schemas"]["ExecutionProfileCatalogResource"];
+export type ComputePreviewRequest = components["schemas"]["ComputePreviewRequest"];
+export type ExecutionRequestLayer = components["schemas"]["ExecutionLayerSchema"];
+export type ComputePreviewResource = components["schemas"]["ComputePreviewResource"];
+export type ExecutionProfileVersionResource = components["schemas"]["ExecutionProfileVersionResource"];
+export type ExecutionProfile = ExecutionProfileVersionResource["profile"];
+export type PublishExecutionProfileRequest = components["schemas"]["PublishExecutionProfileRequest"];
+export type PublishExecutionProfileResource = components["schemas"]["PublishExecutionProfileResource"];
+export type ExecutionProfileCatalogQuery = NonNullable<paths["/v2/platform/compute/profiles"]["get"]["parameters"]["query"]>;
 export type OutputStorageDefaultsRequest = components["schemas"]["OutputStorageDefaultsRequest"];
 export type OutputStorageSettings = components["schemas"]["OutputStorageSettingsSchema"];
 

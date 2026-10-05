@@ -173,7 +173,9 @@ def test_windows_launcher_supports_build_false_without_rebuilding() -> None:
     assert "BuildMode" in launcher
     assert '"false"' in launcher
     assert "build-manifest.json" in launcher
-    assert "release\\fullmag.exe" in launcher
+    assert "$FullmagExe = $ArtifactPaths.binary" in launcher
+    assert "$ArtifactPaths = Get-WindowsWorkspaceArtifactPaths" in launcher
+    assert '-CompilerProfile $CargoCompilerProfile' in launcher
 
 
 def test_native_auto_reuses_cpu_storage_profile_without_changing_request() -> None:
@@ -200,13 +202,31 @@ def test_windows_simulation_launchers_forward_explicit_output_directory() -> Non
         assert '"--output-dir"' in launcher
 
 
-def test_windows_launcher_builds_cli_and_api_as_sibling_release_binaries() -> None:
+def test_windows_launcher_builds_cli_and_api_in_the_selected_profile() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
 
     assert '"-p", "fullmag-cli", "-p", "fullmag-api"' in launcher
-    assert '$FullmagApiExe = Join-Path $TargetRoot "$TargetTriple\\release\\fullmag-api.exe"' in launcher
+    assert '$FullmagApiExe = $ArtifactPaths.api_binary' in launcher
+    assert '$CargoCompilerProfile = if ($SelectedBackendProfile -eq "dev") { "backend-dev" } else { "release" }' in launcher
     assert "Native Fullmag API binary was not produced" in launcher
     assert "Native Windows Fullmag API binary is missing" in launcher
+
+
+def test_frozen_build_uses_stable_cargo_inputs_and_verifies_before_publication() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    materialize = launcher.index('"compiler_inputs.py") materialize')
+    cargo_root = launcher.index("Push-Location $CompilerSourceRoot")
+    cargo = launcher.index('Invoke-External "cargo" $cargoArguments', cargo_root)
+    desktop = launcher.index('Invoke-External "cargo" $desktopCargoArguments', cargo)
+    verify = launcher.index('"compiler_inputs.py") verify', cargo_root)
+    publish = launcher.index("$manifest = [ordered]@{", verify)
+    assert materialize < cargo_root < cargo < desktop < verify < publish
+    # Runtime/staging provenance must continue to refer to immutable sources.
+    assert '$BuildSourceRoot = [string]$BuildSnapshot.source_root' in launcher
+    assert 'snapshot_source_root -ne $BuildSourceRoot' in launcher
+    assert 'source_root = $BuildSourceRoot' in launcher
+    assert 'if ($BuildSnapshot) { return (Join-Path $BuildSourceRoot "scripts\\windows") }' in launcher
+    assert '(Join-Path (Get-WindowsBuildToolsRoot) "compiler_inputs.py")' in launcher
 
 
 def test_native_windows_control_room_uses_windows_command_lookup_and_opener() -> None:

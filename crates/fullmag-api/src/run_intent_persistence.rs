@@ -218,6 +218,14 @@ fn commit_validated_run_intent_with_optional_backlog_limit(
             );
         }
     }
+    // Every store mutation below (CAS blobs, intent publication, replay
+    // verification) must belong to ONE writer lease.  The lease is re-entrant
+    // on this thread, but separate short leases let two concurrent identical
+    // submits interleave and make each other fail with `StoreWriterBusy`, so
+    // that neither is accepted.  Holding one lease serializes the whole
+    // publication: exactly one submit wins and the other observes either the
+    // busy conflict or the committed intent as an idempotent replay.
+    let _publication_lease = store.write_transaction()?;
     let definition_object_ref = store.store_blob(definition.raw_definition.raw_bytes())?;
     if definition_object_ref != intent.specification.snapshot.definition_sha256 {
         bail!("stored definition object differs from run snapshot digest");
@@ -813,5 +821,153 @@ mod tests {
         );
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A competing writer must never be able to wedge in between the CAS blob
+    /// writes and the intent publication of one Submit.  A busy result is only
+    /// legitimate before the submission has published anything.
+    #[test]
+    fn submit_publication_is_one_writer_lease_under_competing_writer() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let definition =
+            ProjectEnvelope::blank(ProjectId::parse("project-lease").unwrap(), "Lease").unwrap();
+        let study = StudyPlan::from_pipeline(
+            "study-lease",
+            1,
+            &StudyPipelineDocument {
+                version: "study_pipeline.v2".into(),
+                nodes: vec![StudyPipelineNode::Primitive(PrimitiveStageNode {
+                    id: "step:run".into(),
+                    label: "Run".into(),
+                    enabled: true,
+                    notes: None,
+                    source: Some(StudyPipelineNodeSource::UiAuthored),
+                    stage_kind: StudyPrimitiveStageKind::Run,
+                    payload: [("until_seconds".into(), json!("1e-9"))]
+                        .into_iter()
+                        .collect(),
+                })],
+            },
+            &StudyPlanMigrationDefaults {
+                model: StudyModelReference {
+                    model_id: "model:one".into(),
+                    version: "v1".into(),
+                },
+                solver_config: StudySolverConfigReference {
+                    preset_id: "solver:default".into(),
+                    version: "v1".into(),
+                },
+                discretization: StudyDiscretizationReference {
+                    recipe_id: "mesh:default".into(),
+                    version: "v1".into(),
+                },
+                execution_profile: StudyExecutionProfileReference {
+                    profile_id: "exec:auto".into(),
+                    version: "v1".into(),
+                },
+            },
+        )
+        .unwrap();
+        let catalog = StudyProblemCatalog::from_entries(
+            &study,
+            vec![StudyProblemCatalogEntry::from_step(
+                &study.steps[0],
+                ProblemIR::bootstrap_example(),
+            )],
+        )
+        .unwrap();
+        let catalog_value = serde_json::to_value(&catalog).unwrap();
+        let specification = RunSpecification::new(
+            ProjectSnapshot::from_envelope(&definition).unwrap(),
+            StudyReference {
+                study_id: StudyId::parse("study-lease").unwrap(),
+                plan_version: STUDY_PLAN_SCHEMA_VERSION.into(),
+                plan_sha256: study.canonical_sha256().unwrap(),
+            },
+            fullmag_session::canonical_json_sha256(&catalog_value),
+            json!({}),
+            RequestedExecution {
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                mode: "strict".into(),
+                minimum_resources: Some(fullmag_application::RequestedResourceBudget {
+                    cpu_millis: 100,
+                    memory_bytes: 1,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 1,
+                }),
+            },
+        );
+        let intent = RunIntent::new("submit-lease", specification);
+        let definition_ref = intent.specification.snapshot.definition_sha256.clone();
+        let mut accepted_count = 0;
+        for attempt in 0..60u64 {
+            let root = std::env::temp_dir().join(format!(
+                "fullmag-run-intent-lease-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            let store = SessionStore::open(&root).unwrap();
+            let rival = SessionStore::open_existing(&root).unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let rival_stop = stop.clone();
+            let hammer = std::thread::spawn(move || {
+                // Sweep the rival's first acquisition across the submit so
+                // that it lands in different phases of the publication.
+                let offset = std::time::Instant::now()
+                    + std::time::Duration::from_micros(attempt * 700);
+                while std::time::Instant::now() < offset {
+                    std::hint::spin_loop();
+                }
+                while !rival_stop.load(Ordering::Relaxed) {
+                    // Spin instead of sleeping: coarse OS timers would hold the
+                    // lease for whole scheduler quanta.
+                    let spin = |micros: u64| {
+                        let until = std::time::Instant::now()
+                            + std::time::Duration::from_micros(micros);
+                        while std::time::Instant::now() < until {
+                            std::hint::spin_loop();
+                        }
+                    };
+                    if let Ok(lease) = rival.write_transaction() {
+                        spin(0);
+                        drop(lease);
+                    }
+                    spin(30000);
+                }
+            });
+            let result = commit_validated_run_intent(
+                &store,
+                &intent,
+                &definition,
+                &study,
+                &catalog,
+                &BTreeMap::new(),
+            );
+            stop.store(true, Ordering::Relaxed);
+            hammer.join().unwrap();
+            match result {
+                Ok(receipt) => {
+                    assert_eq!(receipt.disposition, SubmitDisposition::Accepted);
+                    accepted_count += 1;
+                }
+                Err(error) => {
+                    assert!(
+                        error.is::<fullmag_session::StoreWriterBusy>(),
+                        "unexpected error: {error:#}"
+                    );
+                    assert!(
+                        store.cas().get(&definition_ref).unwrap().is_none(),
+                        "busy submit left partial publication behind"
+                    );
+                    assert!(store.find_run_intent("submit-lease").unwrap().is_none());
+                }
+            }
+            drop(store);
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        assert!(accepted_count > 0, "no submit ever won the writer lease");
     }
 }

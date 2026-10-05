@@ -2373,7 +2373,19 @@ function inspectorSessionStatus(fixture) {
       visualization_state_revision: fixture.visualization.revision,
       workspace_revision: 1,
     },
-    run: null,
+    // The app reads /simulation/runs/current only when status advertises a run.
+    run: {
+      requested_device: "cpu",
+      resolved_device: "cpu",
+      run_id: "inspector-run",
+      selection_reason: "fixture",
+      solver_steps: 1,
+      solver_time: 0,
+      stage_count: 1,
+      stage_index: 0,
+      stage_label: "frequency-domain",
+      started_at: "2026-08-11T12:00:00Z",
+    },
     runtime_bundle_version: "inspector-routing-smoke",
     session: {
       created_at: "2026-08-11T00:00:00.000Z",

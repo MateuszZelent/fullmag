@@ -320,6 +320,16 @@ impl ExecutionProfileIR {
     }
 }
 
+/// Identify an immutable IR JSON snapshot with the same sorted-key, UTF-8
+/// encoding used by execution profiles. Arrays retain their authored order;
+/// this identifies serialized inputs rather than physical equivalence.
+pub fn canonical_ir_json_sha256(value: &Value) -> Result<String, serde_json::Error> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(canonical_json_bytes(value)?)
+    ))
+}
+
 fn validate_profile_identity(value: &str, field: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > 256

@@ -31,7 +31,7 @@ interface RailEntry {
 }
 
 export const RAIL_SECTIONS: readonly RailEntry[] = [
-  { commandId: "start.section.home", icon: House, id: "home", keys: "Control+1", label: "Home", shortcut: "Ctrl 1" },
+  { commandId: "start.section.home", icon: House, id: "home", keys: "Control+1", label: "Overview", shortcut: "Ctrl 1" },
   { commandId: "start.section.templates", icon: LayoutGrid, id: "templates", keys: "Control+2", label: "Templates", shortcut: "Ctrl 2", count: STUDY_TEMPLATES.length },
   { commandId: "start.section.import", icon: Import, id: "import", keys: "Control+3", label: "Import", shortcut: "Ctrl 3" },
   { commandId: "start.section.learn", icon: GraduationCap, id: "learn", keys: "Control+4", label: "Learn", shortcut: "Ctrl 4" },

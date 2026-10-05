@@ -2,9 +2,12 @@ pub mod analysis_extensions;
 pub mod authoring;
 pub mod commands;
 pub mod common;
+pub mod compute_profiles;
+pub mod compute_preview;
 #[allow(dead_code)]
 pub mod decimal_u64;
 pub mod development_backend;
+pub mod development_backend_build_request;
 pub mod development_restart_request;
 pub mod diagnostics;
 pub mod display;

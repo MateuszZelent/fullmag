@@ -1,3 +1,33 @@
+<!-- merge-resolution-checkpoint-20261005 -->
+## Bieżący checkpoint — konflikty rozwiązane, regresje skierowane do CI
+
+Scalenie mastera `3a3368cf2b8ef9909c9ca9ed6aa90bdd3e00bf72`
+zostało rozpoczęte; rozwiązano wszystkie 10 konfliktów. Zachowano profile
+wykonania i równoległość, kanoniczną materializację etapów oraz ustawienia
+non-k0: wektor k, Floquet, tolerancje solvera i selektory modów/pasm.
+Poprawiono walidację adaptacyjnej równoległości przy zadeklarowanym profilu:
+korzysta z żądanej ścieżki CPU/FEM, nie z nieaktywnych pól legacy. GPU i jawne
+auto nie są po cichu zmieniane na CPU. Pełna materializacja pozostaje po
+stronie wspólnego bindera Rust.
+
+Review rozwiązań nie wykazało otwartych uwag. Kontrole składni Python,
+Rust, TypeScript i PowerShell oraz staged whitespace przeszły; nie są
+dowodem poprawnego typowania ani wykonania. Dodano jawne bramki GitHub
+Actions dla regresji sceny/profilu, selektorów eigensolve i Windows RAM-dysku.
+Testy jednostkowe lokalnie nie były wykonywane; wyniki CI pozostają
+NOT VERIFIED. Commit fixture’ów: `d2902fd6f62962ef32906ae7bbc4a2d5a2a6c2e2`.
+
+Użytkownik zatwierdził koordynację z wątkiem „Scal audyty i plan
+refaktoryzacji”. Wysłano wspólny kontrakt: jeden klucz
+`FULLMAG_WINDOWS_VOLATILE_ROOT`, helper Windows i R: wyłącznie dla natywnych
+buildów. Nie zmieniono storage ani mountów Dockera.
+
+Ostatni odczyt runnera wykazał około 1 GB wolnego durable storage przy progu
+8 GiB; nowy build FEM wymaga ponownego sprawdzenia miejsca. Nie usunięto
+danych. Nowych punktów dyspersji w tym etapie nie obliczono. GMRES/FGMRES
+runtime, wspólny signed sweep/parity, zbieżność, GUI, COMSOL A1, S09/provider,
+GPU i pełna integracja pozostają OPEN; pełny cel S00–S12 trwa.
+
 <!-- frontend-fixture-source-remediation-20261005 -->
 ## Bieżący checkpoint — fixture’y źródłowo naprawione, integracja i FEM otwarte
 

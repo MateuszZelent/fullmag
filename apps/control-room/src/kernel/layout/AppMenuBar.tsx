@@ -2,7 +2,7 @@
 
 import { isProjectWorkspaceCommand } from "../commands/projectWorkspaceCommandPolicy";
 
-import { House, Search } from "lucide-react";
+import { ArrowLeft, House, Search } from "lucide-react";
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
@@ -209,26 +209,30 @@ function HeaderBrand({ subtitle }: { readonly subtitle: string }) {
 }
 
 /** First entry of the main menu: brings the start screen back over a workspace. */
-function HomeNavItem({
+function StartNavItem({
   active,
   onCommand,
+  returnLabel,
 }: {
   readonly active: boolean;
   readonly onCommand: () => void;
+  readonly returnLabel?: string;
 }) {
+  const returning = active && Boolean(returnLabel);
+  const label = returning ? returnLabel : "Start";
   return (
     <Button
-      aria-current={active ? "page" : undefined}
+      aria-current={active && !returning ? "page" : undefined}
       className="fm-header__nav-item"
       data-active={active ? "true" : undefined}
       size="sm"
-      title="Home"
+      title={label}
       type="button"
       variant="ghost"
       onClick={onCommand}
     >
-      <House aria-hidden="true" size={14} />
-      Home
+      {returning ? <ArrowLeft aria-hidden="true" size={14} /> : <House aria-hidden="true" size={14} />}
+      {label}
     </Button>
   );
 }
@@ -457,11 +461,13 @@ function NoSessionAppMenuBar({
         }
       />
       <nav className="fm-header__nav" aria-label="Main menu">
-        <HomeNavItem
+        <StartNavItem
           active={homeVisible}
+          returnLabel={project.state === "ready" ? "Back to project" : undefined}
           onCommand={() =>
-            // With no project open Home is already the page: return to its front section.
-            runCommand(project.state === "ready" ? "workspace.home" : "start.section.home")
+            runCommand(project.state === "ready"
+              ? homeOpen ? "workspace.return-to-workspace" : "workspace.home"
+              : "start.section.home")
           }
         />
         {MAIN_MENUS.map((menu) => (
@@ -637,7 +643,8 @@ function SessionAppMenuBar() {
       <HeaderBrand subtitle={sessionDisplay.subtitle} />
 
       <nav className="fm-header__nav" aria-label="Main menu">
-        <HomeNavItem active={homeOpen} onCommand={() => runCommand("workspace.home")} />
+        <StartNavItem active={homeOpen} returnLabel="Back to simulation"
+          onCommand={() => runCommand(homeOpen ? "workspace.return-to-workspace" : "workspace.home")} />
         {MAIN_MENUS.map((menu) => (
           <HeaderDropdown
             key={menu.id}

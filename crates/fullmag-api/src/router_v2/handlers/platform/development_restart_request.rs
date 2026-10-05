@@ -70,12 +70,54 @@ fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     Some(value)
 }
 
-fn status_token_hash(headers: &HeaderMap) -> Result<String, ApiError> {
+fn unique_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>, ()> {
+    let mut values = headers.get_all(name).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    let value = value.to_str().map_err(|_| ())?;
+    if values.next().is_some() {
+        return Err(());
+    }
+    Ok(Some(value))
+}
+
+pub(crate) fn status_token_hash(headers: &HeaderMap) -> Result<String, ApiError> {
     let token = single_header(headers, header::AUTHORIZATION.as_str())
         .and_then(|value| value.strip_prefix("Bearer "))
         .filter(|value| hex(value, 32))
         .ok_or_else(|| ApiError::not_found("development restart request unavailable"))?;
     Ok(fullmag_session::hex_sha256(token.as_bytes()))
+}
+
+/// Validate the exact launcher UI origin and immutable API process pin.
+/// Same-origin GET fetches do not consistently carry the browser-controlled Origin header,
+/// so the build-status endpoint may accept an explicit echo header from its own facade.
+pub(crate) fn validate_ui_origin_and_api_instance(
+    state: &AppState,
+    headers: &HeaderMap,
+    allow_origin_echo: bool,
+) -> Result<(), ApiError> {
+    let expected_origin = state
+        .development_restart_transport
+        .ui_origin
+        .as_deref()
+        .ok_or_else(unavailable)?;
+    let origin = unique_header(headers, header::ORIGIN.as_str())
+        .map_err(|_| unavailable())?;
+    let origin_echo = unique_header(headers, "x-fullmag-ui-origin")
+        .map_err(|_| unavailable())?;
+    let origin_matches = origin == Some(expected_origin)
+        || (allow_origin_echo && origin_echo == Some(expected_origin));
+    if !origin_matches
+        || origin.is_some_and(|value| value != expected_origin)
+        || origin_echo.is_some_and(|value| value != expected_origin)
+        || single_header(headers, "x-fullmag-api-instance")
+            != Some(state.request_scope_instance_id.as_str())
+    {
+        return Err(unavailable());
+    }
+    Ok(())
 }
 
 fn managed_scope(state: &AppState) -> Result<(PathBuf, String, String), ApiError> {
@@ -118,17 +160,7 @@ pub async fn post_development_restart_request(
     headers: HeaderMap,
     Json(input): Json<DevelopmentRestartRequest>,
 ) -> Result<Response, ApiError> {
-    let expected_origin = state
-        .development_restart_transport
-        .ui_origin
-        .as_deref()
-        .ok_or_else(unavailable)?;
-    if single_header(&headers, header::ORIGIN.as_str()) != Some(expected_origin)
-        || single_header(&headers, "x-fullmag-api-instance")
-            != Some(state.request_scope_instance_id.as_str())
-    {
-        return Err(unavailable());
-    }
+    validate_ui_origin_and_api_instance(&state, &headers, false)?;
     let token_hash = status_token_hash(&headers)?;
     if input.schema != "fullmag.development-ui-restart-request.v1"
         || !input.editor.is_object()

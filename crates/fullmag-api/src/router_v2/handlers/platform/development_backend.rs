@@ -151,6 +151,8 @@ impl DevelopmentBackendConfig {
             state: BuildState::Unknown,
             current_build: None,
             ready_build: None,
+            build_available: false,
+            build_request_id: None,
             workspace_identity: None,
             restart_available: false,
             reason: Reason::ConfigurationInvalid,
@@ -195,6 +197,10 @@ impl DevelopmentBackendConfig {
             || &frame.worktree_id != worktree
             || frame.revision == 0
             || !hex(&frame.source_sha256, 64)
+            || frame
+                .request_id
+                .as_deref()
+                .is_some_and(|request_id| !canonical_uuid(request_id))
             || (frame.state == PrivateState::Ready
                 && (!frame
                     .ready_build_id
@@ -230,6 +236,7 @@ impl DevelopmentBackendConfig {
                 source_sha256: frame.source_sha256,
             });
         }
+        result.build_request_id = frame.request_id;
         result
     }
 
@@ -257,6 +264,10 @@ fn hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn canonical_uuid(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|id| !id.is_nil() && id.to_string() == value)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrivateFrame {
@@ -267,6 +278,8 @@ struct PrivateFrame {
     source_sha256: String,
     revision: u64,
     updated_unix_ms: u64,
+    #[serde(default)]
+    request_id: Option<String>,
     ready_build_id: Option<String>,
     ready_source_sha256: Option<String>,
 }
@@ -294,6 +307,8 @@ pub async fn get_development_backend(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let config = state.development_backend.clone();
+    let build_transport_configured = matches!(&config, DevelopmentBackendConfig::Managed { .. })
+        && state.development_restart_transport.is_configured();
     let workspace_identity = if matches!(&config, DevelopmentBackendConfig::Managed { .. }) {
         let _transition = state.current_live_session_transition.lock().await;
         let current = state.current_live_state.read().await;
@@ -317,6 +332,12 @@ pub async fn get_development_backend(
     .await
     .map_err(|_| ApiError::internal("development observer task failed"))?;
     body.workspace_identity = workspace_identity;
+    body.build_available = build_transport_configured
+        && body.configured
+        && matches!(
+            body.state,
+            BuildState::Waiting | BuildState::Building | BuildState::Ready | BuildState::Failed
+        );
     let bytes = serde_json::to_vec(&body)
         .map_err(|_| ApiError::internal("development observer serialization failed"))?;
     let etag = stable_strong_etag(&format!("development-backend:{:x}", Sha256::digest(bytes)));

@@ -12,6 +12,7 @@ import type { ComputeProbeState, ScannedLocation } from "../model/types";
 
 import { ComputeEnvironmentSettings } from "./ComputeEnvironmentSettings";
 import { IndexedLocations } from "./IndexedLocations";
+import { ExecutionProfilesSettings } from "./ExecutionProfilesSettings";
 
 const VIEW_OPTIONS = [
   { label: "List", value: "list" },
@@ -51,7 +52,7 @@ export function SettingsSection({
       <div className="fm-start-page-head">
         <div className="fm-start-page-head__copy">
           <h1>Settings</h1>
-          <p>What the start screen needs. Changes apply immediately.</p>
+          <p>Compute preferences and start screen appearance.</p>
         </div>
       </div>
 
@@ -62,6 +63,8 @@ export function SettingsSection({
         refreshing={refreshing}
         stale={stale}
       />
+
+      <ExecutionProfilesSettings />
 
       <section aria-labelledby="fm-start-set-appearance" className="fm-start-section">
         <h2 className="fm-start-section__title" id="fm-start-set-appearance">

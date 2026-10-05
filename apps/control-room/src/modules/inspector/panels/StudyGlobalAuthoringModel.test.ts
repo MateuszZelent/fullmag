@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { JsonObject, JsonValue } from "@/kernel/api/apiTypes";
+import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 
 import {
@@ -629,6 +630,30 @@ describe("StudyGlobalAuthoringModel", () => {
       },
     });
   });
+
+  it.each(["cpu", "gpu"])(
+    "uses the bound profile lane for adaptive eigen execution on %s",
+    (device) => {
+      const draft = createStudyGlobalDraft({ study: {
+        requested_backend: device === "cpu" ? "fdm" : "fem",
+        requested_device: device === "cpu" ? "gpu" : "cpu",
+        parallel_execution: { mode: "adaptive" },
+      } });
+      const lane = activeLaneCapabilityFixture();
+      lane.requested = { ...lane.requested, backend: "fem", discretization: "fem", device };
+      lane.resolved = { ...lane.requested };
+      const messages = validateStudyGlobalDraft(draft, {
+        activeLane: lane, executionProfileBound: true,
+      }).map((issue) => issue.message);
+      const cpuOnlyMessage = "Adaptive parallel execution requires an explicit FEM CPU lane for independent eigen k execution.";
+      expect(messages.includes(cpuOnlyMessage)).toBe(device !== "cpu");
+      const request = buildStudyGlobalMergePatch(draft, { executionProfileBound: true });
+      if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+      const study = requireJsonObject(request.merge_patch.study);
+      expect(study.requested_cpu_threads).toBeUndefined();
+      expect(requireJsonObject(study.parallel_execution).mode).toBe("adaptive");
+    },
+  );
 
   it("round-trips adaptive parallel execution settings through the study patch", () => {
     const draft = createStudyGlobalDraft({

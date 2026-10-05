@@ -100,7 +100,7 @@ case "${recipe}" in
   *"scripts/verify_control_room_sources.py"*)
     # Never execute the recipe text: accept only the fixed argument shape and
     # invoke the trusted helper from this checkout with the selected route.
-    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint|openapi-import-check|react-doctor|development-restart-check|resource-client-cache-check|development-kernel-host-check|development-transport-pause-check|development-run-outcome-handoff-check|development-run-outcome-handoff-lint|development-restart-action-check|development-restart-action-lint) --repo-root "[^"]+"( --dependency-workspace "([^"]+)")?[[:space:]]*$'
+    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint|openapi-import-check|react-doctor|development-restart-check|resource-client-cache-check|development-kernel-host-check|development-transport-pause-check|development-run-outcome-handoff-check|development-run-outcome-handoff-lint|development-restart-action-check|development-restart-action-lint|development-backend-build-action-check) --repo-root "[^"]+"( --dependency-workspace "([^"]+)")?[[:space:]]*$'
     if [[ ! "${recipe}" =~ ${source_recipe_pattern} ]]; then
       echo "[fullmag just] invalid lightweight frontend recipe" >&2
       exit 2
@@ -127,6 +127,14 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
     ;;
     *"scripts/verify_development_backend_api.py"*)
+      candidate_preparation_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --candidate-preparation-only$'
+      if [[ "${recipe}" =~ ${candidate_preparation_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --candidate-preparation-only
+      fi
+      consumer_pump_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --consumer-pump-owner-bundle "([0-9a-f]{32})"$'
+      if [[ "${recipe}" =~ ${consumer_pump_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --consumer-pump-owner-bundle "${BASH_REMATCH[1]}"
+      fi
       consumer_readiness_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --consumer-readiness-only$'
       if [[ "${recipe}" =~ ${consumer_readiness_pattern} ]]; then
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --consumer-readiness-only
@@ -258,6 +266,10 @@ case "${recipe}" in
     project_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3251 --scenario project-document-handoff$'
     if [[ "${recipe}" =~ ${project_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3251 --scenario project-document-handoff
+    fi
+    study_profile_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3256 --scenario study-execution-profile$'
+    if [[ "${recipe}" =~ ${study_profile_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3256 --scenario study-execution-profile
     fi
     browser_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+"$'
     if [[ ! "${recipe}" =~ ${browser_recipe_pattern} ]]; then

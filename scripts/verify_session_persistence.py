@@ -177,6 +177,20 @@ ROUTES = {
         source_paths=API_SOURCE_PATHS,
         local_dependency_manifest="crates/fullmag-api/Cargo.toml",
     ),
+    "api-service-source-check": RouteSpec(
+        name="api-service-source-check",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_service_source_check_v1",
+        command=(
+            "cargo", "check", "--locked", "-p", "fullmag-api",
+            "--bin", "fullmag-api",
+            "--bin", "fullmag-runtime-service",
+            "--bin", "fullmag-api-accepted-scheduler",
+            "--bin", "fullmag-api-accepted-fem-preparation-scheduler",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
     "api-resource-pool-check": RouteSpec(
         name="api-resource-pool-check",
         profile="windows-api-source-check",

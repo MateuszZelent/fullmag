@@ -205,6 +205,8 @@ import {
   PROJECT_RUN_TASK_CANCELLATION_PATH,
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_OUTPUT_STORAGE_PATH,
+  PLATFORM_COMPUTE_PROFILES_PATH,
+  PLATFORM_COMPUTE_PREVIEW_PATH,
   PLATFORM_HEALTH_PATH,
   PLATFORM_DEVELOPMENT_BACKEND_PATH,
   WORKSPACE_ITEMS_PATH,
@@ -218,6 +220,9 @@ import {
   WORKSPACE_SCAN_PATH,
   workspaceItemArchiveUrl,
   workspaceItemThumbnailUrl,
+  PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUESTS_PATH,
+  PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUEST_PATH,
+  developmentBackendBuildRequestPathParams,
   PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH,
   PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH,
   developmentRestartRequestPathParams,
@@ -260,6 +265,11 @@ import {
   storedFieldQuantityId,
 } from "./quantityIds";
 import type { OutputStorageDefaultsResource, OutputStorageDefaultsRequest } from "./apiTypes";
+import type {
+  ExecutionProfileCatalogQuery, ExecutionProfileCatalogResource,
+  ComputePreviewRequest, ComputePreviewResource,
+  PublishExecutionProfileRequest, PublishExecutionProfileResource,
+} from "./apiTypes";
 import type {
   BinaryRequestOptions,
   BinaryResourceResult,
@@ -342,6 +352,8 @@ import type {
   DevelopmentBackendResource,
   WorkspaceItemsQuery,
   WorkspaceRootWire,
+  DevelopmentBackendBuildRequest,
+  DevelopmentBackendBuildRequestResource,
   ImportSessionAssetRequest,
   JsonObject,
   LiveStatusResource,
@@ -1161,12 +1173,38 @@ export class ControlRoomApi {
   };
 
   readonly platform = {
+    computeExecutionPreview: (input: ComputePreviewRequest, options?: RequestOptions) =>
+      this.postJson<ComputePreviewResource, ComputePreviewRequest>(PLATFORM_COMPUTE_PREVIEW_PATH, input, options),
+    computeProfiles: (query: ExecutionProfileCatalogQuery = {}, options?: RequestOptions) =>
+      this.requestJson<ExecutionProfileCatalogResource>(PLATFORM_COMPUTE_PROFILES_PATH, options, { query }),
+    publishComputeProfile: (input: PublishExecutionProfileRequest, options?: RequestOptions) =>
+      this.postJson<PublishExecutionProfileResource, PublishExecutionProfileRequest>(PLATFORM_COMPUTE_PROFILES_PATH, input, options),
     outputStorageDefaults: (options?: RequestOptions) =>
       this.requestJson<OutputStorageDefaultsResource>(PLATFORM_OUTPUT_STORAGE_PATH, options),
     saveOutputStorageDefaults: (input: OutputStorageDefaultsRequest, options?: RequestOptions) =>
       this.putJson<OutputStorageDefaultsResource, OutputStorageDefaultsRequest>(PLATFORM_OUTPUT_STORAGE_PATH, input, options),
     developmentBackend: (options?: RequestOptions) =>
       this.requestJson<DevelopmentBackendResource>(PLATFORM_DEVELOPMENT_BACKEND_PATH, options),
+    submitDevelopmentBackendBuildRequest: (
+      request: DevelopmentBackendBuildRequest,
+      acknowledgementToken: string,
+      options?: RequestOptions,
+    ) =>
+      this.submitDevelopmentBackendBuildRequest(
+        request,
+        acknowledgementToken,
+        options,
+      ),
+    developmentBackendBuildRequest: (
+      requestId: string,
+      acknowledgementToken: string,
+      options?: RequestOptions,
+    ) =>
+      this.developmentBackendBuildRequest(
+        requestId,
+        acknowledgementToken,
+        options,
+      ),
     submitDevelopmentRestartRequest: (
       request: DevelopmentRestartRequest,
       acknowledgementToken: string,
@@ -3923,6 +3961,56 @@ export class ControlRoomApi {
     );
     this.requireApiInstanceCurrent();
     return readOpenApiResult<DevelopmentRestartResource>(result);
+  }
+
+  private async submitDevelopmentBackendBuildRequest(
+    request: DevelopmentBackendBuildRequest,
+    acknowledgementToken: string,
+    options: RequestOptions = {},
+  ): Promise<DevelopmentBackendBuildRequestResource> {
+    const result = await this.transport.POST(
+      PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUESTS_PATH as never,
+      {
+        body: request,
+        cache: "no-store",
+        headers: {
+          Authorization: developmentRestartAuthorization(acknowledgementToken),
+        },
+        signal: options.signal,
+      } as never,
+    );
+    this.requireApiInstanceCurrent();
+    return readOpenApiResult<DevelopmentBackendBuildRequestResource>(result);
+  }
+
+  private async developmentBackendBuildRequest(
+    requestId: string,
+    acknowledgementToken: string,
+    options: RequestOptions = {},
+  ): Promise<DevelopmentBackendBuildRequestResource> {
+    assertNonEmptyId("development backend build request id", requestId);
+    if (typeof window === "undefined" || !window.location.origin) {
+      throw new ControlRoomApiError(
+        "Development backend build status requires a browser UI origin",
+        0,
+        null,
+        "DEVELOPMENT_BACKEND_BUILD_ORIGIN_UNAVAILABLE",
+      );
+    }
+    const result = await this.transport.GET(
+      PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUEST_PATH as never,
+      {
+        cache: "no-store",
+        headers: {
+          Authorization: developmentRestartAuthorization(acknowledgementToken),
+          "x-fullmag-ui-origin": window.location.origin,
+        },
+        params: developmentBackendBuildRequestPathParams(requestId),
+        signal: options.signal,
+      } as never,
+    );
+    this.requireApiInstanceCurrent();
+    return readOpenApiResult<DevelopmentBackendBuildRequestResource>(result);
   }
 
   private async developmentRestartRequest(

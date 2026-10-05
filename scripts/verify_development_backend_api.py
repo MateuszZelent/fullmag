@@ -27,7 +27,24 @@ from windows.workspace_backend_identity import fingerprint
 
 def run(repo_root: str, cross_build_bundle: str = "", project_document_only: bool = False,
         restart_transport_only: bool = False, observer_pause_only: bool = False,
-        restart_consumer_only: bool = False, consumer_readiness_only: bool = False) -> int:
+        restart_consumer_only: bool = False, consumer_readiness_only: bool = False,
+        consumer_pump_owner_bundle: str | None = None,
+        candidate_preparation_only: bool = False) -> int:
+    if candidate_preparation_only and (
+        cross_build_bundle or project_document_only or restart_transport_only
+        or observer_pause_only or restart_consumer_only or consumer_readiness_only
+        or consumer_pump_owner_bundle is not None
+    ):
+        raise storage.StorageError("Candidate preparation faults are a separate verification scope")
+    if consumer_pump_owner_bundle is not None and (
+        cross_build_bundle or project_document_only or restart_transport_only
+        or observer_pause_only or restart_consumer_only or consumer_readiness_only
+    ):
+        raise storage.StorageError("Consumer pump is a separate verification scope")
+    if consumer_pump_owner_bundle is not None and not re.fullmatch(
+        r"[0-9a-f]{32}", consumer_pump_owner_bundle
+    ):
+        raise storage.StorageError("Consumer pump owner must be a canonical bundle ID")
     if consumer_readiness_only and (cross_build_bundle or project_document_only or restart_transport_only
                                    or observer_pause_only or restart_consumer_only):
         raise storage.StorageError("Consumer readiness is a separate verification scope")
@@ -57,7 +74,13 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         preflight_started = storage.now()
         try:
             manifest_path = storage.validate_path(Path(native["build_root"]) / "windows-runtime/build-manifest.json", layout["storage_root"], "native build manifest")
-            verified = verified_build_identity(native["build_root"], native["runtime_root"], manifest_path, source_before)
+            verified = verified_build_identity(
+                native["build_root"], native["runtime_root"], manifest_path,
+                None if consumer_pump_owner_bundle is not None or candidate_preparation_only else source_before,
+            )
+            checkout_source_before = source_before
+            if consumer_pump_owner_bundle is not None or candidate_preparation_only:
+                source_before = verified["ready_source_sha256"]
             raw_manifest = manifest_path.read_bytes()
             if hashlib.sha256(raw_manifest).hexdigest() != verified["ready_build_id"]:
                 raise storage.StorageError("Native build manifest changed after verification")
@@ -109,6 +132,16 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             receipt["scope"] = "owned native API durable restart consumer, UI payload restoration, fresh API identity, stale-pin rejection and authoring editability; no solver or release qualification"
         if consumer_readiness_only:
             receipt["scope"] = "private owner-authenticated expiring readiness lease in owned native APIs with controlled watcher and candidate pins; no selector, cross-build, UI availability, hydration, solver or release qualification"
+        if consumer_pump_owner_bundle is not None:
+            receipt["consumer_pump_owner_bundle"] = consumer_pump_owner_bundle
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = "B native CLI consumer pump readiness against an independently verified A API bundle and real B ready candidate; no production launcher, public UI availability, hydration, solver or release qualification"
+        if candidate_preparation_only:
+            receipt["candidate_preparation_only"] = True
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = "real candidate helper completion, transport failures, timeout and cancellation; no API, restart, UI, solver or release qualification"
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -142,16 +175,25 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             binary_hash = hashlib.sha256(api.read_bytes()).hexdigest()
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
-            if observer_pause_only:
+            if candidate_preparation_only:
+                from windows.verify_candidate_preparation import exercise as exercise_candidate_preparation
+                exercise_candidate_preparation(repo, run_root, manifest, receipt, api.parent)
+            elif observer_pause_only:
                 exercise_observer_pause(repo, receipt, api.parent)
             elif restart_consumer_only:
                 exercise_restart_consumer(repo, run_root, manifest, receipt, api.parent)
+            elif consumer_pump_owner_bundle is not None:
+                from windows.verify_consumer_pump import exercise as exercise_consumer_pump
+                exercise_consumer_pump(
+                    repo, run_root, manifest, receipt, api.parent, consumer_pump_owner_bundle
+                )
             else:
                 exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
                          restart_transport_only=restart_transport_only,
                          consumer_readiness_only=consumer_readiness_only)
             if (not project_document_only and not restart_transport_only and not observer_pause_only
-                    and not restart_consumer_only and not consumer_readiness_only):
+                    and not restart_consumer_only and not consumer_readiness_only
+                    and consumer_pump_owner_bundle is None and not candidate_preparation_only):
                 exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
@@ -170,7 +212,15 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             storage.atomic_json(run_root / "openapi-v2.json", spec)
             receipt["openapi_sha256"] = hashlib.sha256((run_root / "openapi-v2.json").read_bytes()).hexdigest()
             receipt["checks"].append("canonical-codegen-identity")
-            after = fingerprint(repo)["sha256"]
+            if consumer_pump_owner_bundle is not None or candidate_preparation_only:
+                receipt["checkout_source_sha256_after"] = fingerprint(repo)["sha256"]
+                final_identity = verified_build_identity(
+                    native["build_root"], native["runtime_root"], manifest_path,
+                    None, verified["ready_build_id"],
+                )
+                after = final_identity["ready_source_sha256"]
+            else:
+                after = fingerprint(repo)["sha256"]
             receipt["source_sha256_after"] = after
             if after != source_before:
                 raise storage.StorageError("Native sources changed during API verification")
@@ -2055,11 +2105,14 @@ if __name__ == "__main__":
     parser.add_argument("--observer-pause-only", action="store_true")
     parser.add_argument("--restart-consumer-only", action="store_true")
     parser.add_argument("--consumer-readiness-only", action="store_true")
+    parser.add_argument("--consumer-pump-owner-bundle")
+    parser.add_argument("--candidate-preparation-only", action="store_true")
     args = parser.parse_args()
     try:
         raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only,
                              args.restart_transport_only, args.observer_pause_only,
-                             args.restart_consumer_only, args.consumer_readiness_only))
+                             args.restart_consumer_only, args.consumer_readiness_only,
+                             args.consumer_pump_owner_bundle, args.candidate_preparation_only))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

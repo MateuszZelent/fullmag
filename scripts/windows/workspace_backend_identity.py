@@ -15,11 +15,18 @@ DEPENDENCY_INPUTS = ("packages/fullmag-py", "package.json", "pnpm-lock.yaml",
 INPUTS += DEPENDENCY_INPUTS
 
 
+def is_native_workspace_input(relative):
+    # Setuptools packages only src/. Test edits do not replace the installed
+    # Python environment or compiled runtime, but remain in frozen inventories.
+    return not relative.replace("\\", "/").startswith("packages/fullmag-py/tests/")
+
+
 def fingerprint(repo, inputs=INPUTS):
     repo = Path(repo).resolve()
     names = subprocess.check_output(["git", "ls-files", "-z", "--cached", "--others",
                                      "--exclude-standard", "--", *inputs], cwd=repo)
-    paths = sorted(set(name.decode("utf-8") for name in names.split(b"\0") if name))
+    paths = sorted({name.decode("utf-8") for name in names.split(b"\0")
+                    if name and is_native_workspace_input(name.decode("utf-8"))})
     result = hashlib.sha256()
     for relative in paths:
         path = repo / relative

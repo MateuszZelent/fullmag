@@ -1,0 +1,465 @@
+//! Compatibility wire types for historical Python-helper stage capture and
+//! CLI stage records. They do not define a second canonical StudyPlan or
+//! ProblemIR contract and have no runtime, solver, or operating-system layer.
+
+use fullmag_ir::{GeometryAssetsIR, OutputIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
+fn default_study_pipeline_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StudyPipelineDocument {
+    pub version: String,
+    #[serde(default)]
+    pub nodes: Vec<StudyPipelineNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
+#[serde(tag = "node_kind", rename_all = "snake_case")]
+pub enum StudyPipelineNode {
+    Primitive {
+        id: String,
+        label: String,
+        #[serde(default = "default_study_pipeline_enabled")]
+        enabled: bool,
+        #[serde(default)]
+        notes: Option<String>,
+        #[serde(default)]
+        source: Option<String>,
+        stage_kind: String,
+        #[serde(default)]
+        payload: BTreeMap<String, Value>,
+    },
+    Macro {
+        id: String,
+        label: String,
+        #[serde(default = "default_study_pipeline_enabled")]
+        enabled: bool,
+        #[serde(default)]
+        notes: Option<String>,
+        #[serde(default)]
+        source: Option<String>,
+        macro_kind: String,
+        #[serde(default)]
+        config: BTreeMap<String, Value>,
+    },
+    Group {
+        id: String,
+        label: String,
+        #[serde(default = "default_study_pipeline_enabled")]
+        enabled: bool,
+        #[serde(default)]
+        notes: Option<String>,
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        collapsed: bool,
+        #[serde(default)]
+        children: Vec<StudyPipelineNode>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScriptExecutionConfig {
+    pub ir: ProblemIR,
+    #[serde(default)]
+    pub shared_geometry_assets: Option<GeometryAssetsIR>,
+    pub default_until_seconds: Option<f64>,
+    #[serde(default)]
+    pub study_pipeline: Option<StudyPipelineDocument>,
+    #[serde(default)]
+    pub stages: Vec<ScriptExecutionStage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScriptExecutionStageAction {
+    SaveState {
+        #[serde(default = "default_stage_action_artifact_name")]
+        artifact_name: String,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        dataset: Option<String>,
+    },
+    LoadState {
+        #[serde(default)]
+        artifact_name: Option<String>,
+        #[serde(default)]
+        state_path: Option<String>,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        dataset: Option<String>,
+        #[serde(default)]
+        sample_index: Option<i64>,
+    },
+    Export {
+        #[serde(default)]
+        artifact_name: Option<String>,
+        quantity: String,
+        format: String,
+        #[serde(default)]
+        dataset: Option<String>,
+    },
+    ChangeDevice {
+        device: String,
+    },
+    AddFieldDrive {
+        drive: RegionalFieldDriveIR,
+    },
+    RemoveFieldDrive {
+        drive_id: String,
+    },
+    TableAutosave {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        table_autosave: Option<TableAutosaveIR>,
+    },
+    Autosave {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        quantity: Option<String>,
+        #[serde(default)]
+        output: Option<OutputIR>,
+    },
+    FftResponse {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        request: Option<Value>,
+    },
+    SetTransportCurrent {
+        module_id: String,
+        #[serde(rename = "terminal_outward_current_density_Apm2")]
+        terminal_outward_current_density_apm2: BTreeMap<String, f64>,
+    },
+    SetSpinTorqueEnabled {
+        module_id: String,
+        enabled: bool,
+    },
+}
+
+fn default_stage_action_artifact_name() -> String {
+    "state_snapshot".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScriptExecutionStage {
+    pub ir: ProblemIR,
+    pub default_until_seconds: Option<f64>,
+    pub entrypoint_kind: String,
+    #[serde(default)]
+    pub action: Option<ScriptExecutionStageAction>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResolvedScriptStageAction {
+    SaveState {
+        artifact_name: String,
+        format: Option<String>,
+        dataset: Option<String>,
+    },
+    LoadState {
+        artifact_name: Option<String>,
+        state_path: Option<String>,
+        format: Option<String>,
+        dataset: Option<String>,
+        sample_index: Option<i64>,
+    },
+    Export {
+        artifact_name: Option<String>,
+        quantity: String,
+        format: String,
+        dataset: Option<String>,
+    },
+    ChangeDevice {
+        device: String,
+    },
+    AddFieldDrive {
+        drive: RegionalFieldDriveIR,
+    },
+    RemoveFieldDrive {
+        drive_id: String,
+    },
+    TableAutosave {
+        enabled: bool,
+        table_autosave: Option<TableAutosaveIR>,
+    },
+    Autosave {
+        enabled: bool,
+        quantity: Option<String>,
+        output: Option<OutputIR>,
+    },
+    FftResponse {
+        enabled: bool,
+        request: Option<Value>,
+    },
+    SetTransportCurrent {
+        module_id: String,
+        terminal_outward_current_density_apm2: BTreeMap<String, f64>,
+    },
+    SetSpinTorqueEnabled {
+        module_id: String,
+        enabled: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageTransitionKind {
+    ContinueInPlace,
+    TransferState,
+    RemeshTransfer,
+    BackendTransfer,
+    LoadState,
+    SaveCheckpoint,
+    ExportOnly,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageTransitionReason {
+    SameRuntimeContext,
+    ExplicitRemesh,
+    BackendChange,
+    MeshGenerationChanged,
+    ObjectTopologyChanged,
+    MaterialTopologyChanged,
+    DeviceChange,
+    CheckpointLoad,
+    UserExport,
+    IncompatibleImplicitState,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StateTransferOperatorKind {
+    IdentityCopy,
+    FemToFdmGridResample,
+    FdmToFemMeshResample,
+    MeshToMeshInterpolation,
+    CheckpointLoad,
+    SampledFieldImport,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageTransitionUiPresentation {
+    SmoothArrow,
+    BoundaryBar,
+    ErrorBoundary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StageTransitionMetadata {
+    pub kind: StageTransitionKind,
+    pub reason: StageTransitionReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer_operator: Option<StateTransferOperatorKind>,
+    pub ui_presentation: StageTransitionUiPresentation,
+}
+
+impl StageTransitionMetadata {
+    pub fn continue_in_place() -> Self {
+        Self {
+            kind: StageTransitionKind::ContinueInPlace,
+            reason: StageTransitionReason::SameRuntimeContext,
+            transfer_operator: None,
+            ui_presentation: StageTransitionUiPresentation::SmoothArrow,
+        }
+    }
+
+    pub fn boundary(
+        kind: StageTransitionKind,
+        reason: StageTransitionReason,
+        transfer_operator: Option<StateTransferOperatorKind>,
+    ) -> Self {
+        Self {
+            kind,
+            reason,
+            transfer_operator,
+            ui_presentation: StageTransitionUiPresentation::BoundaryBar,
+        }
+    }
+
+    pub fn unsupported(reason: StageTransitionReason) -> Self {
+        Self {
+            kind: StageTransitionKind::Unsupported,
+            reason,
+            transfer_operator: None,
+            ui_presentation: StageTransitionUiPresentation::ErrorBoundary,
+        }
+    }
+
+    pub fn legacy_state_transition_label(&self) -> &'static str {
+        if self.reason == StageTransitionReason::DeviceChange {
+            return "Change device";
+        }
+        match self.kind {
+            StageTransitionKind::ContinueInPlace => "continues",
+            StageTransitionKind::SaveCheckpoint => "preserved",
+            StageTransitionKind::LoadState => "restored",
+            StageTransitionKind::ExportOnly => "exported",
+            StageTransitionKind::TransferState
+            | StageTransitionKind::RemeshTransfer
+            | StageTransitionKind::BackendTransfer => "transferred",
+            StageTransitionKind::Unsupported => "unsupported",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedScriptStage {
+    pub ir: ProblemIR,
+    pub until_seconds: f64,
+    pub entrypoint_kind: String,
+    pub action: Option<ResolvedScriptStageAction>,
+    pub incoming_transition: Option<StageTransitionMetadata>,
+}
+
+impl ResolvedScriptStage {
+    pub fn solver(ir: ProblemIR, until_seconds: f64, entrypoint_kind: impl Into<String>) -> Self {
+        Self {
+            ir,
+            until_seconds,
+            entrypoint_kind: entrypoint_kind.into(),
+            action: None,
+            incoming_transition: None,
+        }
+    }
+
+    pub fn synthetic(
+        ir: ProblemIR,
+        entrypoint_kind: impl Into<String>,
+        action: ResolvedScriptStageAction,
+    ) -> Self {
+        Self {
+            ir,
+            until_seconds: 0.0,
+            entrypoint_kind: entrypoint_kind.into(),
+            action: Some(action),
+            incoming_transition: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_wire_field_and_legacy_defaults_are_preserved() {
+        let action: ScriptExecutionStageAction = serde_json::from_value(serde_json::json!({
+            "kind": "set_transport_current",
+            "module_id": "transport-a",
+            "terminal_outward_current_density_Apm2": {"lead_a": 2.5}
+        }))
+        .expect("canonical current action should deserialize");
+        match action {
+            ScriptExecutionStageAction::SetTransportCurrent {
+                module_id,
+                terminal_outward_current_density_apm2,
+            } => {
+                assert_eq!(module_id, "transport-a");
+                assert_eq!(
+                    terminal_outward_current_density_apm2.get("lead_a"),
+                    Some(&2.5)
+                );
+            }
+            _ => panic!("expected set_transport_current action"),
+        }
+
+        let save: ScriptExecutionStageAction =
+            serde_json::from_value(serde_json::json!({"kind": "save_state"}))
+                .expect("save_state should retain its default artifact name");
+        assert!(matches!(
+            save,
+            ScriptExecutionStageAction::SaveState { artifact_name, .. }
+                if artifact_name == "state_snapshot"
+        ));
+
+        let table: ScriptExecutionStageAction =
+            serde_json::from_value(serde_json::json!({"kind": "table_autosave"}))
+                .expect("table_autosave should default enabled");
+        assert!(matches!(
+            table,
+            ScriptExecutionStageAction::TableAutosave { enabled: true, .. }
+        ));
+
+        let autosave: ScriptExecutionStageAction =
+            serde_json::from_value(serde_json::json!({"kind": "autosave"}))
+                .expect("autosave should default enabled");
+        assert!(matches!(
+            autosave,
+            ScriptExecutionStageAction::Autosave { enabled: true, .. }
+        ));
+
+        let fft: ScriptExecutionStageAction =
+            serde_json::from_value(serde_json::json!({"kind": "fft_response"}))
+                .expect("fft_response should default enabled");
+        assert!(matches!(
+            fft,
+            ScriptExecutionStageAction::FftResponse { enabled: true, .. }
+        ));
+    }
+
+    #[test]
+    fn compatibility_pipeline_retains_unknown_kind_and_source_strings() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "legacy-pipeline-v9",
+            "nodes": [{
+                "node_kind": "primitive",
+                "id": "stage-a",
+                "label": "Stage A",
+                "source": "future_source",
+                "stage_kind": "future_stage"
+            }]
+        }))
+        .expect("legacy wire fields remain untyped strings");
+
+        match &document.nodes[0] {
+            StudyPipelineNode::Primitive {
+                enabled,
+                source,
+                stage_kind,
+                ..
+            } => {
+                assert!(*enabled, "omitted pipeline enabled defaults to true");
+                assert_eq!(source.as_deref(), Some("future_source"));
+                assert_eq!(stage_kind, "future_stage");
+            }
+            _ => panic!("expected primitive compatibility node"),
+        }
+        let serialized = serde_json::to_value(document).expect("pipeline should serialize");
+        assert_eq!(serialized["version"], "legacy-pipeline-v9");
+        assert_eq!(serialized["nodes"][0]["source"], "future_source");
+        assert_eq!(serialized["nodes"][0]["stage_kind"], "future_stage");
+    }
+
+    #[test]
+    fn stage_transition_wire_serialization_is_unchanged() {
+        let serialized = serde_json::to_value(StageTransitionMetadata::continue_in_place())
+            .expect("transition should serialize");
+
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "kind": "continue_in_place",
+                "reason": "same_runtime_context",
+                "ui_presentation": "smooth_arrow"
+            })
+        );
+    }
+}

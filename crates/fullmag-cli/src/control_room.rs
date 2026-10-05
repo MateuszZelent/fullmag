@@ -13,6 +13,8 @@ use crate::live_workspace::LocalLiveWorkspace;
 use crate::terminal_logs::{terminal_logger, TerminalLogSource};
 use crate::types::*;
 
+mod development_consumer_probe;
+
 pub(crate) const LOCALHOST_HTTP_HOST: &str = "localhost";
 pub(crate) const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
 
@@ -323,9 +325,22 @@ pub(crate) struct DevelopmentRestartInput<'a> {
 }
 
 pub(crate) enum DevelopmentRestartProgress {
-    HandoffStaged { helper_pid: u32 },
-    OldApiExited { pid: u32, exit_code: Option<i32> },
-    RestorePreparationHelperWaited { helper_pid: u32 },
+    CandidatePreparationStarted {
+        helper_pid: u32,
+        api_instance_id: String,
+        ready_build_id: String,
+        ready_source_sha256: String,
+    },
+    HandoffStaged {
+        helper_pid: u32,
+    },
+    OldApiExited {
+        pid: u32,
+        exit_code: Option<i32>,
+    },
+    RestorePreparationHelperWaited {
+        helper_pid: u32,
+    },
     Replacement(crate::development_api_replacement::ReplacementLaunchEvent),
 }
 
@@ -531,6 +546,25 @@ fn emit_replacement_probe_progress(
 
 fn emit_development_restart_probe_progress(event: DevelopmentRestartProgress) {
     match event {
+        DevelopmentRestartProgress::CandidatePreparationStarted {
+            helper_pid,
+            api_instance_id,
+            ready_build_id,
+            ready_source_sha256,
+        } => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema":"fullmag.development-cli-candidate-preparation-progress.v1",
+                    "event":"started",
+                    "helper_pid":helper_pid,
+                    "api_instance_id":api_instance_id,
+                    "ready_build_id":ready_build_id,
+                    "ready_source_sha256":ready_source_sha256,
+                })
+            );
+            let _ = std::io::stdout().flush();
+        }
         DevelopmentRestartProgress::HandoffStaged { .. } => {}
         DevelopmentRestartProgress::OldApiExited { pid, exit_code } => println!(
             "{}",
@@ -635,18 +669,71 @@ impl ControlRoomGuard {
         }
     }
 
-    pub(crate) fn select_ready_development_candidate(
+    pub(crate) fn start_development_candidate_preparation(
         &self,
         root: &Path,
-    ) -> Result<crate::development_api_owner::SelectedDevelopmentCandidate> {
+        identity: crate::development_api_owner::CandidatePreparationIdentity,
+    ) -> Result<crate::development_api_owner::CandidatePreparationJob> {
         match self.api_child.as_ref() {
             Some(GuardedApiProcess::Development(supervisor))
                 if supervisor.state()
                     == crate::development_api_supervisor::DevelopmentApiSupervisorState::Running =>
             {
-                supervisor.owner().select_ready_candidate(root)
+                supervisor
+                    .owner()
+                    .start_candidate_preparation(root, identity)
             }
-            _ => bail!("ready candidate selection requires the running owned API"),
+            _ => bail!("candidate preparation requires the running owned API"),
+        }
+    }
+
+    pub(crate) fn poll_development_candidate_preparation(
+        &self,
+        root: &Path,
+        job: &mut crate::development_api_owner::CandidatePreparationJob,
+    ) -> crate::development_api_owner::CandidatePreparationPoll {
+        match self.api_child.as_ref() {
+            Some(GuardedApiProcess::Development(supervisor))
+                if supervisor.state()
+                    == crate::development_api_supervisor::DevelopmentApiSupervisorState::Running
+                    && supervisor.owner().api_instance_id() == job.identity.api_instance_id =>
+            {
+                supervisor.owner().poll_candidate_preparation(root, job)
+            }
+            _ => {
+                job.cancel();
+                match job.drain_after_cancel() {
+                    Ok(true) => {
+                        crate::development_api_owner::CandidatePreparationPoll::Unavailable {
+                            helper_pid: job.helper_pid(),
+                        }
+                    }
+                    Ok(false) if job.cleanup_unconfirmed() => match job.helper_pid() {
+                        Some(helper_pid) => {
+                            crate::development_api_owner::CandidatePreparationPoll::Unconfirmed {
+                                helper_pid,
+                            }
+                        }
+                        None => {
+                            crate::development_api_owner::CandidatePreparationPoll::Unavailable {
+                                helper_pid: None,
+                            }
+                        }
+                    },
+                    Ok(false) | Err(_) => match job.helper_pid() {
+                        Some(helper_pid) => {
+                            crate::development_api_owner::CandidatePreparationPoll::Pending {
+                                helper_pid,
+                            }
+                        }
+                        None => {
+                            crate::development_api_owner::CandidatePreparationPoll::Unavailable {
+                                helper_pid: None,
+                            }
+                        }
+                    },
+                }
+            }
         }
     }
 
@@ -1956,7 +2043,9 @@ pub(crate) fn spawn_control_room(
             .map_err(anyhow::Error::from)
             .and_then(|binding| open_in_tauri(&ready, "workspace", binding.api_instance_id()));
             if let Err(error) = opened {
-                eprintln!("[fullmag] could not open the desktop window ({error:#}); opening the browser");
+                eprintln!(
+                    "[fullmag] could not open the desktop window ({error:#}); opening the browser"
+                );
                 open_in_browser(&ready);
             }
         }
@@ -3296,6 +3385,10 @@ pub(crate) fn verify_development_completion_owner() -> Result<()> {
 pub(crate) fn verify_development_restart_consumer() -> Result<()> {
     match std::env::var("FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE").as_deref() {
         Ok("empty" | "scene") => verify_development_api_owner(),
+        Ok("readiness") => development_consumer_probe::verify(),
+        Ok("preparation-faults") => {
+            crate::development_api_owner::verify_candidate_preparation_faults(&repo_root())
+        }
         _ => bail!("native restart consumer requires an explicit managed case"),
     }
 }

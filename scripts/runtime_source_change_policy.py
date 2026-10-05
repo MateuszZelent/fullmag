@@ -33,6 +33,8 @@ NON_RUNTIME_PREFIXES = (
     "docs/",
     "public_docs/",
     "scripts/test_",
+    # Match capture_source_snapshot_identity.py and src-only wheel discovery.
+    "packages/fullmag-py/tests/",
 )
 NON_RUNTIME_FILES = {
     "AGENTS.md",

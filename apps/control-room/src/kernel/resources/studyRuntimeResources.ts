@@ -166,6 +166,7 @@ import type { ResourceResult } from "./resourceTypes";
 import type { ResourceRetryPolicy } from "./ResourceRuntimeStore";
 import { useResource } from "./useResource";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
+import { hasCurrentSimulationRun } from "./simulationResourceAvailability";
 
 /** Browser trace state is bounded and mutates only on sampled profile events. */
 export const solverTraceObserver = createSolverTraceObserver();
@@ -755,6 +756,10 @@ export function useCurrentRunResource({
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     SIMULATION_RUN_CURRENT_PATH,
   );
+  const runAvailable = useSessionStatusSelector(
+    (status) => hasCurrentSimulationRun(status.data),
+    { enabled: sessionIdentity !== null },
+  );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation
@@ -764,7 +769,7 @@ export function useCurrentRunResource({
   );
 
   return useResource<CurrentRunResource | null>({
-    enabled: enabled && sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null && runAvailable,
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,

@@ -81,7 +81,7 @@ class VolatileStorageChecks(unittest.TestCase):
     def test_launcher_restores_temporary_environment_after_compiler_failure(self):
         source = (Path(__file__).parent / "windows/run_fullmag.ps1").read_text(encoding="utf-8-sig")
         start = source.index("  $useVolatileTemp =")
-        end = source.index("\n  if (-not (Test-Path -LiteralPath $FullmagExe", start)
+        end = source.index("\n  if ($BuildSnapshot) {", start)
         temp = str(self.base).replace("'", "''")
         prefix = """
 $ErrorActionPreference='Stop'

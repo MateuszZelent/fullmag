@@ -1315,7 +1315,7 @@ fn scene_semantic_section(
 }
 
 fn execution_semantic_section(snapshot: &SessionStateResponse) -> serde_json::Value {
-    serde_json::json!({
+    let mut section = serde_json::json!({
         "requested_backend": snapshot.session.requested_backend,
         "authored_requested_device": snapshot.session.authored_requested_device,
         "requested_device": snapshot.session.requested_device,
@@ -1329,7 +1329,16 @@ fn execution_semantic_section(snapshot: &SessionStateResponse) -> serde_json::Va
         "resolved_engine_id": snapshot.session.resolved_engine_id,
         "plan_summary": snapshot.session.plan_summary,
         "runtime_status": snapshot.runtime_status,
-    })
+    });
+    if let Some(scene) = snapshot.scene_document.as_ref() {
+        if scene.study.execution_profile.is_some() || !scene.study.execution_layers.is_empty() {
+            section["authored_execution"] = serde_json::json!({
+                "execution_profile": scene.study.execution_profile,
+                "execution_layers": scene.study.execution_layers,
+            });
+        }
+    }
+    section
 }
 
 fn problem_ir_semantic_section(snapshot: &SessionStateResponse) -> Option<serde_json::Value> {
@@ -3930,6 +3939,94 @@ mod terminal_field_generation_persistence_tests {
     use super::*;
     use crate::session::{apply_current_live_field_frame, default_current_live_state};
     use crate::types::{CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest};
+
+    #[test]
+    fn restore_execution_compatibility_includes_authored_profile_and_layers() {
+        let request: CurrentLiveSnapshotRequest =
+            serde_json::from_value(serde_json::json!({"session_id": "profile-restore"})).unwrap();
+        let mut original = default_current_live_state(&request);
+        let builder: fullmag_authoring::ScriptBuilderState =
+            serde_json::from_value(serde_json::json!({
+                "revision": 1,
+                "solver": {
+                    "integrator": "rk45",
+                    "fixed_timestep": "",
+                    "relax_algorithm": "llg_overdamped",
+                    "torque_tolerance": "1e-4",
+                    "energy_tolerance": "",
+                    "max_relax_steps": "1000"
+                },
+                "mesh": {
+                    "algorithm_2d": 6,
+                    "algorithm_3d": 1,
+                    "hmax": "",
+                    "hmin": "",
+                    "size_factor": 1.0,
+                    "size_from_curvature": 0,
+                    "smoothing_steps": 1,
+                    "optimize": "",
+                    "optimize_iterations": 1,
+                    "compute_quality": false,
+                    "per_element_quality": false
+                },
+                "geometries": []
+            }))
+            .expect("minimal builder state should deserialize");
+        original.scene_document = Some(fullmag_authoring::scene_document_from_script_builder(
+            &builder,
+        ));
+        assert!(execution_semantic_section(&original)
+            .get("authored_execution")
+            .is_none());
+        let mut changed = original.clone();
+        changed
+            .scene_document
+            .as_mut()
+            .unwrap()
+            .study
+            .execution_profile = Some(fullmag_ir::ExecutionProfileIR {
+            profile_id: "exec:restore".into(),
+            version: "1".into(),
+            ..Default::default()
+        });
+        assert!(!session_restore_compatibility(Some(&original), &changed)
+            .execution
+            .differences
+            .is_empty());
+        original = changed.clone();
+        changed
+            .scene_document
+            .as_mut()
+            .unwrap()
+            .study
+            .execution_profile
+            .as_mut()
+            .unwrap()
+            .version = "2".into();
+        assert!(!session_restore_compatibility(Some(&original), &changed)
+            .execution
+            .differences
+            .is_empty());
+        changed = original.clone();
+        changed
+            .scene_document
+            .as_mut()
+            .unwrap()
+            .study
+            .execution_layers = serde_json::from_value(serde_json::json!([{
+            "origin": {"kind": "study", "location": "scene.study"},
+            "request": {"device": "auto"}
+        }]))
+        .unwrap();
+        assert!(!session_restore_compatibility(Some(&original), &changed)
+            .execution
+            .differences
+            .is_empty());
+        assert!(session_restore_compatibility(Some(&original), &original)
+            .execution
+            .differences
+            .is_empty());
+    }
 
     fn terminal_frame(run_id: &str, sequence: u64) -> CurrentLiveFieldFrameRequest {
         serde_json::from_value(serde_json::json!({
