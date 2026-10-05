@@ -841,22 +841,27 @@ describe("frequencyDomainChartModels", () => {
                 frequency_imag_hz: -1e6,
                 frequency_real_hz: 1.2e9,
                 mode_field_id: "analysis:eigen:sample-0000:mode-0003",
+                mode_id: "sample-0000/mode-0003",
                 overlap_prev: null,
                 raw_mode_index: 3,
                 residual_norm: 1e-7,
+                sample_id: "k-path-sample-0000",
                 sample_index: 0,
                 tracking_confidence: 1,
               },
               {
                 frequency_imag_hz: -1.5e6,
                 frequency_real_hz: 1.5e9,
+                mode_field_id: "analysis:eigen:sample-0001:mode-0002",
                 mode_field_resource_key: fieldVectorResourceKey(
                   "analysis:eigen:sample-0001:mode-0002",
                   "component=full&scope_kind=full",
                 ),
+                mode_id: "sample-0001/mode-0002",
                 overlap_prev: 0.93,
                 raw_mode_index: 2,
                 residual_norm: 2e-7,
+                sample_id: "k-path-sample-0001",
                 sample_index: 1,
                 tracking_confidence: 0.95,
               },
@@ -876,25 +881,101 @@ describe("frequencyDomainChartModels", () => {
         label: "acoustic",
         points: [
           expect.objectContaining({
+            frequencyImagHz: -1e6,
+            frequencyRealHz: 1.2e9,
+            modeFieldAvailable: true,
             modeFieldId: "analysis:eigen:sample-0000:mode-0003",
             modeFieldResourceKey: fieldVectorResourceKey("analysis:eigen:sample-0000:mode-0003"),
+            modeId: "sample-0000/mode-0003",
+            overlapPrev: null,
+            rawModeIndex: 3,
             residualNorm: 1e-7,
+            sampleId: "k-path-sample-0000",
+            sampleIndex: 0,
+            trackingConfidence: 1,
           }),
           expect.objectContaining({
-            modeFieldId: null,
+            frequencyImagHz: -1.5e6,
+            frequencyRealHz: 1.5e9,
+            modeFieldAvailable: true,
+            modeFieldId: "analysis:eigen:sample-0001:mode-0002",
             modeFieldResourceKey: fieldVectorResourceKey(
               "analysis:eigen:sample-0001:mode-0002",
               "component=full&scope_kind=full",
             ),
+            modeId: "sample-0001/mode-0002",
+            overlapPrev: 0.93,
+            rawModeIndex: 2,
             residualNorm: 2e-7,
+            sampleId: "k-path-sample-0001",
+            sampleIndex: 1,
+            trackingConfidence: 0.95,
           }),
         ],
+        overlapPrevMean: 0.93,
         overlapPrevMin: 0.93,
+        sampleGapCount: 0,
+        sampleGapMax: null,
         sampleMax: 1,
         sampleMin: 0,
         trackingConfidenceMin: 0.95,
+        warnings: [],
       }),
     ]);
+  });
+
+  it("does not create a branch mode field handoff from a key-only artifact", () => {
+    const model = buildEigenBranchesModel(
+      jsonResource({
+        branches: [
+          {
+            branch_id: "acoustic",
+            points: [
+              {
+                frequency_real_hz: 1.2e9,
+                mode_field_resource_key: fieldVectorResourceKey(
+                  "analysis:eigen:sample-0000:mode-0002",
+                ),
+                mode_id: "sample-0000/mode-0002",
+                overlap_prev: null,
+                raw_mode_index: 2,
+                residual_norm: 1.2e-7,
+                sample_id: "k-path-sample-0000",
+                sample_index: 0,
+                tracking_confidence: 1,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const point = model.branches[0]!.points[0]!;
+
+    expect(point).toMatchObject({
+      frequencyRealHz: 1.2e9,
+      modeFieldAvailable: false,
+      modeFieldId: null,
+      modeFieldResourceKey: null,
+      modeId: "sample-0000/mode-0002",
+      overlapPrev: null,
+      rawModeIndex: 2,
+      residualNorm: 1.2e-7,
+      sampleId: "k-path-sample-0000",
+      sampleIndex: 0,
+      trackingConfidence: 1,
+    });
+    const selection = buildEigenBranchPointModeSelectionRef("acoustic", point);
+    expect(selection).not.toHaveProperty("fieldId");
+    expect(selection).not.toHaveProperty("resourceRef");
+    expect(selection).toMatchObject({
+      branchId: "acoustic",
+      kind: "results.eigen.mode",
+      modeId: "sample-0000/mode-0002",
+      modeIndex: 2,
+      nodeId: "results:eigen:sample:0:mode:2",
+      sampleId: "k-path-sample-0000",
+      sampleIndex: 0,
+    });
   });
 
   it("builds canonical frequency-domain selection refs for eigen branches", () => {
@@ -975,11 +1056,16 @@ describe("frequencyDomainChartModels", () => {
         {
           frequencyImagHz: -1.2e7,
           frequencyRealHz: 12.5e9,
+          modeFieldAvailable: true,
           modeFieldId: "analysis:eigen:sample-0000:mode-0002",
-          modeFieldResourceKey: null,
+          modeFieldResourceKey: fieldVectorResourceKey(
+            "analysis:eigen:sample-0000:mode-0002",
+          ),
+          modeId: "sample-0000/mode-0002",
           overlapPrev: null,
           rawModeIndex: 2,
           residualNorm: 1.2e-7,
+          sampleId: "k-path-sample-0000",
           sampleIndex: 0,
           trackingConfidence: 1,
         },
@@ -991,11 +1077,13 @@ describe("frequencyDomainChartModels", () => {
       calculationMode: "dispersion_modal",
       fieldId: "analysis:eigen:sample-0000:mode-0002",
       kind: "results.eigen.mode",
+      modeId: "sample-0000/mode-0002",
       modeIndex: 2,
       nodeId: "results:eigen:sample:0:mode:2",
       resourceRef: fieldVectorResourceKey(
         "analysis:eigen:sample-0000:mode-0002",
       ),
+      sampleId: "k-path-sample-0000",
       sampleIndex: 0,
       type: "frequency-domain",
     });

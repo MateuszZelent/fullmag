@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
+import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import { describe, expect, it } from "vitest";
 import {
   frequencySeriesRenderModel,
@@ -64,8 +65,12 @@ describe("FrequencyDomainCharts", () => {
               displayModeIndex: 1,
               frequencyHz: 750e6,
               imaginaryFrequencyHz: null,
+              modeFieldAvailable: true,
               modeFieldId: "analysis:eigen:sample-0000:mode-0001",
-              modeFieldResourceKey: null,
+              modeFieldResourceKey: fieldVectorResourceKey(
+                "analysis:eigen:sample-0000:mode-0001",
+                { phase_rad: 0, view: "phase_rotated_real" },
+              ),
               modeId: null,
               rawModeIndex: 1,
               residualNorm: 1e-8,
@@ -118,6 +123,7 @@ describe("FrequencyDomainCharts", () => {
     expect(html).toContain("mode 1: 750 MHz");
     expect(html).toContain("mode 6: 900 MHz");
     expect(html).toContain("Select mode 1 at 750 MHz, 3D field available");
+    expect(html).not.toContain('aria-label="Load mode 1 in 3D" disabled=""');
     expect(html).toContain("Select mode 2 at 800 MHz, 3D field missing");
     expect(html).toContain("3D ready");
     expect(html).toContain("field missing");
