@@ -208,9 +208,11 @@ fn control_room_bootstrap_disabled() -> bool {
 }
 
 fn attached_wait_for_solve_enabled() -> bool {
-    std::env::var("FULLMAG_ATTACHED_WAIT_FOR_SOLVE")
-        .ok()
-        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes"))
+    // `--wait-for-solve` is the flag form of the same gate.
+    crate::script_launch::wait_for_solve_flag()
+        || std::env::var("FULLMAG_ATTACHED_WAIT_FOR_SOLVE")
+            .ok()
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes"))
 }
 
 fn frozen_spins_checkpoint_from_stage_artifacts(
@@ -6071,6 +6073,8 @@ pub(crate) fn build_session_manifest(
     finished_at_unix_ms: u128,
     plan_summary: serde_json::Value,
 ) -> SessionManifest {
+    // A managed run's receipt reports the latest requested/resolved selection.
+    crate::script_launch::note_runtime(runtime);
     SessionManifest {
         session_id: session_id.to_string(),
         run_id: run_id.to_string(),
@@ -7131,11 +7135,23 @@ fn resolve_rayon_cpu_threads(
 }
 
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
-    let args = ScriptCli::parse_from(raw_args);
+    let mut args = ScriptCli::parse_from(raw_args);
+    let ui_plan = crate::script_launch::ui_plan(&args);
+    if ui_plan == crate::script_launch::UiPlan::None {
+        // `--ui none` is the headless web side.
+        args.headless = true;
+    }
+    if let Some(port) = args.api_port {
+        // `--api-port` replaces the FULLMAG_API_PORT convention for this run.
+        std::env::set_var("FULLMAG_API_PORT", port.to_string());
+    }
     if args.headless {
         init_headless_api_port()?;
     } else {
         init_api_port()?;
+    }
+    if crate::script_launch::is_managed_run() && api_port() != 0 {
+        crate::script_launch::note_api_port(api_port());
     }
 
     // Eagerly configure the global Rayon pool used by Rust-side control-plane
@@ -7195,7 +7211,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         .script
         .canonicalize()
         .with_context(|| format!("failed to resolve script path {}", args.script.display()))?;
-    check_script_syntax_via_python(&script_path)?;
+    if let Err(error) = check_script_syntax_via_python(&script_path) {
+        crate::script_launch::mark_failure(crate::script_launch::ExitKind::Syntax);
+        return Err(error);
+    }
+    crate::script_launch::note_stage(crate::script_launch::Stage::Materializing);
     eprintln!("fullmag syntax check passed");
     eprintln!("- script: {}", script_path.display());
     let requested_backend_name = args
@@ -7217,6 +7237,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         std::process::id()
     ));
     let run_id = format!("run-{}", session_id);
+    crate::script_launch::note_ids(&session_id, &run_id);
     let default_session_root = runtime_state_root(&repo_root())
         .join("local-live")
         .join("history");
@@ -7434,7 +7455,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             &live_workspace,
             "control_room_bootstrap_failed",
             "Control Room bootstrap failed",
-            spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace).with_context(
+            spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace, ui_plan)
+                .with_context(
                 || {
                     format!(
                         "failed to bootstrap control room for workspace {}",
@@ -7444,6 +7466,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             ),
         )?;
         eprintln!("fullmag control room bootstrap verified");
+        crate::script_launch::note_ui_ready();
         live_workspace.push_log("system", "Control room bootstrap verified");
         _control_room_guard = ControlRoomGuard::active(web_port, child, frontend_child);
         let failed_workspace = live_workspace.clone();
@@ -7681,6 +7704,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let (mut storage_lease, storage_settings, resolved_storage) =
         prepare_script_output_storage(&mut script_config, &args, &script_path, &run_id)?;
     workspace_dir = storage_lease.resolved().output_dir.clone();
+    crate::script_launch::note_results_dir(&workspace_dir);
+    crate::script_launch::note_source_hash(script_config.ir.problem_meta.source_hash.as_deref());
     artifact_dir = workspace_dir.join("artifacts");
     output_paths = ScriptOutputPaths {
         workspace_dir: workspace_dir.clone(),
@@ -8409,6 +8434,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let wait_message = wait_for_solve_prompt(&initial_execution_plan.backend_plan);
         eprintln!("[fullmag] {}", wait_message.to_lowercase());
         live_workspace.push_log("system", wait_message);
+        crate::script_launch::note_stage(crate::script_launch::Stage::WaitingForSolve);
         // Switch to slow publish mode — solver loop will produce its own cadenced updates.
         live_workspace.set_publish_fast_mode(false);
         live_workspace.update(|state| {
@@ -9072,6 +9098,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
                 WaitForSolveCommandAction::Stop => {
                     eprintln!("[fullmag] aborted by user during wait_for_solve");
+                    crate::script_launch::mark_failure(crate::script_launch::ExitKind::Stopped);
                     live_workspace.push_log("system", "Aborted by user");
                     live_workspace.update(|state| {
                         state.session.status = "stopped".to_string();
@@ -9102,6 +9129,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
     }
 
+    crate::script_launch::note_stage(crate::script_launch::Stage::Running);
     for (stage_index, (mut stage, materialized_execution_plan)) in stages
         .into_iter()
         .zip(stage_execution_plans.into_iter())
@@ -17323,6 +17351,13 @@ mod tests {
             dev: false,
             json: true,
             web_port: None,
+            ui: None,
+            api_port: None,
+            wait_for_solve: false,
+            expect_script_sha256: None,
+            receipt: None,
+            launched_by: None,
+            python: None,
         };
 
         let loaded =

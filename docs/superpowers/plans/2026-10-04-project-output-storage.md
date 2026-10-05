@@ -25,9 +25,63 @@ Właściciele zmian: rodzic — filesystem lease/safety, formularz, facade, doku
 - Jawna dyspozycja użytkownika: po bieżących operacjach merge na master, następnie praca
   na masterze. Nie zakładamy kolejnego worktree dla kontynuacji.
 - Python multi-stage chroni istniejący root i manifest przez exclusive creation;
-  obsługę `timestamp` dla całego root należy domknąć na masterze przed uznaniem pełnej
-  zgodności polityki wieloetapowej. Native CLI używa wspólnego lease dla całego projektu.
+  na masterze domknięto `timestamp` dla całego root, zachowanie wcześniejszych danych
+  oraz odmowę `..` przed zapisem. Interpretowany regression check przeszedł.
+  Commit: `80e2b612e9075035ee386ac8dd89d3a809bbf6c9`.
+  Native CLI używa wspólnego lease dla całego projektu.
 
 - Końcowy produkcyjny API source check: exit 0, `state=passed`, bez kompilowania testów.
   Receipt: `storage/builds/new-simulation-form-20261004-31aa3b4f873195d6/windows-api-source-check/api-source-check/77f0fe1001e9493b9697e0fb522b980e/receipt.json`.
-  Kompilacja CLI/PyCore/desktop oraz próba zapisu rzeczywistych wyników pozostają do weryfikacji na masterze.
+  Próba zapisu rzeczywistych wyników pozostaje osobną bramką runtime.
+
+- Lokalna integracja: commit `ea53fab1b8f7b03465074c9a97603022bbf08045`, merge na master
+  `eae25cc2b393f78e7ff0e9da727344f08c62ee41`. Dalsze zmiany wykonujemy w głównym checkoutcie.
+  Nie wykonano push ani integracji remote.
+- Produkcyjna kontrola CLI/PyCore/desktop na masterze: exit 0, `state=passed`,
+  `source_changed_during_run=false`; nie kompilowano testów jednostkowych.
+  Receipt: `storage/builds/fullmag-0950f4dca4ffe38f/windows-project-entrypoint-check/project-entrypoint-check/9787e4eb166343978927e0e6d4309413/receipt.json`.
+
+## Naprawa uruchomienia Windows
+
+- Odtworzono błąd `ENOENT` ze zgłoszonego logu: wcześniejsza publikacja kopii źródeł
+  usuwała importowany plik przed ponowną próbą podmiany. Nowa publikacja zachowuje
+  poprzedni plik podczas przejściowej blokady Windows. Nie usuwa też pliku, który
+  powrócił w źródłach po wykonaniu snapshotu.
+- Interpretowana bramka odtworzyła lukę na wcześniejszej wersji i przeszła cztery
+  kontrole poprawki: krótka i trwała blokada, nieaktualny snapshot usunięcia oraz
+  aktualizacja po zwolnieniu blokady. Bez kompilowania unit tests.
+  Kontrola składni Node i ESLint zmienionego modułu także zakończyły się kodem 0.
+  Dowody: `storage/tmp/dev-source-publication/5c773979c66b445fb5526f7e078675f9/baseline.json`
+  i `publication.json` w tym samym katalogu.
+- Guard zmienionych zależności Python wymaga zamknięcia poprzedniego workspace
+  i nowego buildu; nie obchodzimy zamrożonej tożsamości zależności.
+- `windows-runtime-recover 3197` odmówił działania z powodu wcześniejszego API
+  PID 249132, bundle `3ce0f1a6852543eabc545bbc08da369b`. Solver jest bezczynny,
+  model sesji `session-18db45d639cc30f00003cd2c` ma revision 3 i został zachowany
+  wraz z digestami w `storage/runs/diagnostics/native-recovery/3cbcebd24c384428b1341c98a77452a6`.
+  Użytkownik zatwierdził zatrzymanie tego procesu. Przed zakończeniem ponownie
+  sprawdzono PID, czas utworzenia, ścieżkę EXE, bezczynność solvera i zgodność
+  zachowanego modelu. Potwierdzono recovery z archiwizacją poprzedniego zapisu:
+  `native-runtime-prior-fff4efc399d04177aa78ea655667267b.json` w runtime root głównego checkoutu.
+- Lokalny pakiet natywny został zbudowany, a kolejne wywołanie `windows-ui dev 3197 auto dev`
+  skompilowało CLI/API i desktop. Publikację kolejnego pakietu odrzucił guard zmienionych
+  źródeł backendu. Współdzielony master otrzymał równolegle zmiany Python, IR i plannera;
+  fingerprint pozostawał niestabilny przez osobną obserwację 40 sekund. Nie uruchamiamy
+  tego niepotwierdzonego pakietu ani równoległego ciężkiego buildu.
+- Nasz zintegrowany worktree i lokalny branch usunięto po potwierdzeniu czystości,
+  zerowej liczby unikalnych commitów, braku procesów oraz braku mountów w 16 kontenerach.
+  Dowody buildów i przeglądarki pozostały w storage. Rejestr zachowuje stan `review`,
+  ponieważ próba zapisu rzeczywistych wyników i nowy start UI nadal są `NOT VERIFIED`.
+- Przygotowano niezmieniony istniejący przykład `fdm_cpu_relax_smoke.py` w kanonicznym
+  `storage/runs/verification/project-output-storage/1079e50fd49b474ba39576322540cd7f`.
+  Ma posłużyć do pomiaru zapisu Zarr i finalizacji prywatnego tmp po stabilnym buildzie;
+  nie jest walidacją fizyki ani kwalifikacją FEM/GPU/HDF5.
+- Użytkownik wybrał oczekiwanie na zakończenie pozostałych aktywnych czatów, bez
+  wysyłania do nich próśb o wstrzymanie zmian. Próba rozpoczęta po obserwacji stabilnego
+  fingerprintu może się zakończyć; następne próby po zmianie źródeł odraczamy do końca
+  równoległych prac. Nie obchodzimy guardów ani nie modyfikujemy cudzych zmian.
+- Ta rozpoczęta próba zakończyła się kodem 1: produkcyjny build API zgłosił `E0432`
+  dla importu `DevelopmentBackendState` w `development_consumer_readiness.rs` oraz
+  `E0505` dla przeniesienia pożyczonego `state` w `development_owner_control.rs`.
+  Są to pliki aktualnie rozwijanego przez inny czat kontraktu restartu. Pozostawiamy
+  je jego właścicielowi do zakończenia pracy, a potem sprawdzimy połączone źródła.

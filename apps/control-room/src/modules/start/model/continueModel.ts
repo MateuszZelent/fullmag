@@ -38,13 +38,24 @@ export function continueLabels(session: ContinueSession): ContinueLabels {
 }
 
 /** The line under the greeting says what is worth knowing, then stops. */
-export function homeSubline(state: RecentIndexState): string {
+export function homeSubline(state: RecentIndexState, scriptCount: number | null = null): string {
   const fallback = "Start from an empty FDM or FEM problem, or open a project archive.";
-  if (state.kind !== "ready") return fallback;
+  // `scriptCount` is null unless the list shows scripts too (kind All, host available).
+  const scripts = scriptCount !== null && scriptCount > 0 ? scriptCount : 0;
+  if (state.kind !== "ready") {
+    return scripts > 0
+      ? `${plural(scripts, "script is", "scripts are")} recorded on this machine.`
+      : fallback;
+  }
   const { continue: session, entries } = state.index;
-  const count = `${entries.length} ${entries.length === 1 ? "project is" : "projects are"} indexed on this machine.`;
+  const count =
+    scripts > 0
+      ? `${plural(entries.length, "project", "projects")} and ${plural(scripts, "script", "scripts")} are recorded on this machine.`
+      : `${plural(entries.length, "project is", "projects are")} indexed on this machine.`;
   return session ? `One run is paused and waiting. ${count}` : count;
 }
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /* ── Resume: what this machine can actually do right now ─────────────────── */
 
@@ -68,6 +79,11 @@ export interface LiveRunFacts {
   readonly resolvedDevice?: string | null;
   readonly resolvedRuntimeFamily?: string | null;
   readonly totalSteps?: number | null;
+  /**
+   * Checkpoints a stage of the open run was restored from. The runtime refuses
+   * to delete them (409); knowing it here keeps the button honest.
+   */
+  readonly restoreSourceCheckpointIds?: readonly string[];
 }
 
 export interface ContinueLiveInput {
@@ -98,9 +114,27 @@ export type ResumeAction =
   | { readonly kind: "disabled"; readonly reason: string }
   | { readonly kind: "hidden" };
 
+/**
+ * Deleting the run's latest checkpoint. Only the open session's runtime can do
+ * it (`DELETE /v2/sessions/current/persistence/checkpoints/{id}`), so with no
+ * matching open session the action is `hidden`: the desktop host has no
+ * `discard_checkpoint` route for a project that is not open.
+ */
+export type DiscardAction =
+  | {
+      readonly kind: "enabled";
+      readonly checkpointId: string;
+      /** Shown in the inline confirmation; the point being thrown away. */
+      readonly step: number;
+      readonly createdAt: string;
+    }
+  | { readonly kind: "disabled"; readonly reason: string }
+  | { readonly kind: "hidden" };
+
 export interface ContinueResolution {
   readonly status: ContinueStatus;
   readonly resume: ResumeAction;
+  readonly discard: DiscardAction;
   /** Shown in place of the ETA whenever resume is not enabled. */
   readonly reason: string | null;
   /** The session with `resumable` computed here and live progress applied. */
@@ -111,6 +145,9 @@ export const REASON_PROJECT_CLOSED =
   "Open this project to resume the run. A checkpoint is restored into the open session.";
 export const REASON_LOADING = "Reading the run's checkpoints from the runtime.";
 export const REASON_RESTORING = "Restoring the checkpoint into the open session.";
+export const REASON_DISCARD_RESTORING = "Wait until the checkpoint is restored before discarding it.";
+export const REASON_DISCARD_RESTORE_SOURCE =
+  "This checkpoint is the restore source of the open run and cannot be discarded.";
 export const REASON_NO_CHECKPOINT = "The runtime holds no checkpoint for this run.";
 export const REASON_NO_GPU =
   "This run requires a GPU and none is available here. Fullmag does not fall back to the CPU.";
@@ -171,6 +208,34 @@ function withLiveProgress(
   };
 }
 
+/** What Discard offers, from the live catalogue only; never from the index file. */
+export function resolveDiscard(
+  session: ContinueSession,
+  live: ContinueLiveInput | null,
+): DiscardAction {
+  if (live === null || live.run === null || live.run.runId !== session.runId) {
+    return { kind: "hidden" };
+  }
+  if (live.restoring) return { kind: "disabled", reason: REASON_DISCARD_RESTORING };
+  if (live.catalog.kind === "idle" || live.catalog.kind === "loading") {
+    return { kind: "disabled", reason: REASON_LOADING };
+  }
+  if (live.catalog.kind === "error") {
+    return { kind: "disabled", reason: `Could not read the checkpoints: ${live.catalog.message}` };
+  }
+  const checkpoint = latestCheckpoint(live.catalog.checkpoints, session.runId);
+  if (checkpoint === null) return { kind: "hidden" };
+  if (live.run.restoreSourceCheckpointIds?.includes(checkpoint.checkpoint_id)) {
+    return { kind: "disabled", reason: REASON_DISCARD_RESTORE_SOURCE };
+  }
+  return {
+    kind: "enabled",
+    checkpointId: checkpoint.checkpoint_id,
+    step: checkpoint.step,
+    createdAt: checkpoint.created_at,
+  };
+}
+
 /**
  * Decide what the Continue card offers. Pure: the caller supplies the live
  * resources. With no matching open session the card stays on the index
@@ -180,6 +245,7 @@ export function resolveContinue(
   session: ContinueSession,
   live: ContinueLiveInput | null,
 ): ContinueResolution {
+  const discard = resolveDiscard(session, live);
   const settle = (
     status: ContinueStatus,
     resume: ResumeAction,
@@ -188,6 +254,7 @@ export function resolveContinue(
   ): ContinueResolution => ({
     status,
     resume,
+    discard,
     reason,
     session: {
       ...next,
@@ -201,6 +268,7 @@ export function resolveContinue(
     return {
       status: "index-not-resumable",
       resume: { kind: "hidden" },
+      discard,
       reason: session.notResumableReason ?? "This checkpoint cannot be resumed by this build.",
       session,
     };
@@ -254,7 +322,8 @@ export function resolveContinue(
       );
     }
     // `null` means this host cannot probe; the open session already holds its device.
-    if (live.compute !== null && live.compute.gpus.length === 0) {
+    if (live.compute !== null && live.compute.gpuProbeStatus !== "unavailable" &&
+      live.compute.gpus.length === 0) {
       return settle("device-unavailable", { kind: "hidden" }, REASON_NO_GPU, progressed);
     }
   }

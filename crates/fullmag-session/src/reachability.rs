@@ -597,15 +597,25 @@ impl StoreWalker {
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             let relative = format!("project/{name}");
-            self.read_file(&entry.path(), &relative)?;
-            if !KNOWN_LEAFS.contains(&name.as_str()) {
+            let data = self.read_file(&entry.path(), &relative)?;
+            if name == "current_live_snapshot.json" {
+                match crate::typed_documents::inspect_live_snapshot(&data) {
+                    crate::typed_documents::TypedInspection::Typed { object_refs } => {
+                        for object_ref in object_refs {
+                            self.follow_store_object_ref(&object_ref, &relative, "live snapshot")?;
+                        }
+                    }
+                    crate::typed_documents::TypedInspection::Untyped(reason) => {
+                        self.report.mark_opaque_project_document(format!(
+                            "project document `{relative}` has untyped object references ({reason}); conservative GC required"
+                        ));
+                    }
+                }
+            } else if !KNOWN_LEAFS.contains(&name.as_str()) {
                 self.report.mark_blocking_incomplete(format!(
                     "unknown project document `{relative}` requires conservative GC"
                 ));
-            } else if matches!(
-                name.as_str(),
-                "asset_index.json" | "current_live_snapshot.json"
-            ) {
+            } else if name == "asset_index.json" {
                 self.report.mark_opaque_project_document(format!(
                     "project document `{relative}` has untyped object references; conservative GC required"
                 ));
@@ -2242,7 +2252,7 @@ impl StoreWalker {
             ReferenceKind::BackendState => {
                 if validate_restart_payload(data, kind, source)? {
                     self.report.conservative(format!(
-                        "opaque backend restart state `{source}` requires conservative retention"
+                        "opaque backend restart state `{source}` in backend_state payload requires conservative retention"
                     ));
                 }
             }
@@ -2389,6 +2399,7 @@ impl<'a> ArchiveWalker<'a> {
 
     fn walk_archive(&mut self) -> Result<ReachabilityReport> {
         self.validate_archive_namespace()?;
+        self.walk_archive_live_snapshot()?;
         self.walk_archive_solutions()?;
         if let Some(data) = self.documents.read("manifest/session.json")? {
             let session: FmsSessionManifest = parse_json(&data, "manifest/session.json")?;
@@ -2604,6 +2615,27 @@ impl<'a> ArchiveWalker<'a> {
         }
     }
 
+    fn walk_archive_live_snapshot(&mut self) -> Result<()> {
+        const NAME: &str = "project/current_live_snapshot.json";
+        let Some(data) = self.documents.read(NAME)? else {
+            return Ok(());
+        };
+        match crate::typed_documents::inspect_live_snapshot(&data) {
+            crate::typed_documents::TypedInspection::Typed { object_refs } => {
+                self.report.file_refs.insert(NAME.to_string());
+                for object_ref in object_refs {
+                    self.add_archive_payload(&object_ref, NAME, None)?;
+                }
+            }
+            crate::typed_documents::TypedInspection::Untyped(reason) => {
+                self.report.mark_opaque_project_document(format!(
+                    "archive project document `{NAME}` has untyped object references ({reason}); conservative retention required"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_archive_namespace(&mut self) -> Result<()> {
         const KNOWN_PROJECT_LEAFS: &[&str] = &[
             "main.py",
@@ -2636,8 +2668,7 @@ impl<'a> ArchiveWalker<'a> {
                         self.report.mark_blocking_incomplete(format!(
                             "unknown archive project document `{name}` requires conservative retention"
                         ));
-                    } else if matches!(remainder, "asset_index.json" | "current_live_snapshot.json")
-                    {
+                    } else if remainder == "asset_index.json" {
                         self.report.mark_opaque_project_document(format!(
                             "archive project document `{name}` has untyped object references; conservative retention required"
                         ));
@@ -3821,7 +3852,7 @@ impl<'a> ArchiveWalker<'a> {
             ReferenceKind::BackendState => {
                 if validate_restart_payload(data, kind, source)? {
                     self.report.conservative(format!(
-                        "opaque backend restart state `{source}` requires conservative retention"
+                        "opaque backend restart state `{source}` in backend_state payload requires conservative retention"
                     ));
                 }
             }
@@ -4006,11 +4037,18 @@ fn validate_restart_payload(data: &[u8], kind: ReferenceKind, source: &str) -> R
             {
                 bail!("backend restart payload `{source}` has no material state")
             }
-            Ok(payload
+            let carries_state = payload
                 .integrator_state
                 .as_ref()
                 .is_some_and(is_nonempty_json)
-                || is_nonempty_json(&payload.extra))
+                || is_nonempty_json(&payload.extra);
+            // A known, inline checkpoint schema is a typed payload with no
+            // hidden references; everything else stays opaque (fail closed).
+            Ok(carries_state
+                && !matches!(
+                    crate::typed_documents::inspect_backend_state(&payload),
+                    crate::typed_documents::TypedInspection::Typed { .. }
+                ))
         }
         ReferenceKind::IntegratorPayload => {
             let value: serde_json::Value = parse_json(data, source)?;

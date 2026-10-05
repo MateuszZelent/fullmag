@@ -1644,11 +1644,9 @@ pub(crate) async fn import_session_commit_with_context(
     // Publishing an imported workspace replaces the mutable `current` root.
     // Revalidate the request identity after preflight and keep the transition
     // fence until the replacement and its realtime publication are complete.
-    let _transition = if request_context.is_some() {
-        Some(state.current_live_session_transition.lock().await)
-    } else {
-        None
-    };
+    // An import into an empty workspace has no request context to validate,
+    // but it still must be serialized against other session transitions.
+    let _transition = state.current_live_session_transition.lock().await;
     if let Some(context) = request_context {
         crate::validate_current_live_request_context(&state, context).await?;
     }
@@ -1915,6 +1913,99 @@ pub(crate) async fn create_checkpoint_with_context(
     Ok(Json(CheckpointCreateResponse {
         checkpoint: checkpoint_entry(capture.checkpoint, &context, req.reason),
     }))
+}
+
+/// `DELETE /v2/sessions/current/persistence/checkpoints/{checkpoint_id}`
+///
+/// Removes one checkpoint of the current session's run. Fail-closed: a
+/// checkpoint that a stage record uses as restore source or loaded state, or
+/// that the run manifest names as its latest checkpoint, is refused with 409.
+/// Only the checkpoint-owned files go; CAS objects are reclaimed by the
+/// store's reviewed GC, never here.
+pub(crate) async fn delete_checkpoint_with_context(
+    State(state): State<Arc<AppState>>,
+    checkpoint_id: String,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let _transition = if context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
+    if let Some(context) = context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
+    let store = open_store(&state)?;
+
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard
+        .as_mut()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if let Some(context) = context {
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
+    let run_id = snapshot.session.run_id.clone();
+    let checkpoint = read_checkpoint_for_run(&store, &run_id, &checkpoint_id)?;
+
+    if let Some(stage_execution) = snapshot.stage_execution.as_ref() {
+        for (index, record) in stage_execution.stages.iter().enumerate() {
+            let restore_source = record.resume_from_checkpoint_ref.as_deref()
+                == Some(checkpoint_id.as_str());
+            let loaded_state = record.loaded_state_ref.as_deref()
+                == Some(checkpoint.common_state_ref.as_str());
+            if restore_source || loaded_state {
+                return Err(ApiError::conflict(format!(
+                    "checkpoint_delete_referenced: checkpoint {checkpoint_id} is the restore source of {}",
+                    stage_id_for_index(index)
+                )));
+            }
+        }
+    }
+
+    match store.delete_checkpoint(&run_id, &checkpoint_id) {
+        Ok(true) => {}
+        // Removed by a concurrent writer between the read and the lease.
+        Ok(false) => return Err(ApiError::not_found("checkpoint not found")),
+        Err(error) => {
+            return Err(
+                if error
+                    .downcast_ref::<fullmag_session::CheckpointStillReferenced>()
+                    .is_some()
+                {
+                    ApiError::conflict(format!("checkpoint_delete_referenced: {error}"))
+                } else {
+                    ApiError::internal(format!("deleting checkpoint: {error}"))
+                },
+            );
+        }
+    }
+
+    // The stage that saved the checkpoint no longer has a file to point at.
+    if let Some(stage_execution) = snapshot.stage_execution.as_mut() {
+        for record in &mut stage_execution.stages {
+            if record.checkpoint_ref.as_deref() == Some(checkpoint_id.as_str()) {
+                record.checkpoint_ref = None;
+                record
+                    .artifact_refs
+                    .retain(|artifact| artifact != &checkpoint.common_state_ref);
+                if record.state_transition_kind.as_deref() == Some("save_checkpoint") {
+                    record.state_transition = None;
+                    record.state_transition_kind = None;
+                    record.state_transition_reason = None;
+                    record.state_transition_ui_presentation = None;
+                }
+            }
+        }
+    }
+    // The catalogue's revision: clients refetch when the session state advances.
+    snapshot.state_version = snapshot.state_version.saturating_add(1);
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// `POST /v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore`
@@ -3531,9 +3622,7 @@ fn convert_field_state_with_python(
         python_path_value.push(existing);
     }
 
-    let python_exe = crate::script::python_executable(repo_root);
-    let mut command = std::process::Command::new(&python_exe);
-    crate::script::configure_python_command(repo_root, &mut command)
+    let mut command = crate::script::python_command(repo_root)
         .map_err(|error| format!("configuring Python field-state loader failed: {error}"))?;
     command
         .arg("-m")
@@ -3583,9 +3672,7 @@ fn write_field_state_with_python(
         python_path_value.push(existing);
     }
 
-    let python_exe = crate::script::python_executable(repo_root);
-    let mut command = std::process::Command::new(&python_exe);
-    let output = crate::script::configure_python_command(repo_root, &mut command).and_then(|_| {
+    let output = crate::script::python_command(repo_root).and_then(|mut command| {
         command
             .arg("-m")
             .arg("fullmag.init.field_state_cli")

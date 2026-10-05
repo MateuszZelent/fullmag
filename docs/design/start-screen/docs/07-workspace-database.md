@@ -7,13 +7,18 @@ Fullmag front end on the machine: the desktop application, the CLI and, read
 and write, Python.
 
 Status: **specification** (2026-10-04), **store layer implemented** (same
-day). Implemented: the Rust crate `crates/fullmag-workspace` (schema, state
-directory, identity, record/list/pin/forget/status/kv/history, quarantine,
+day), **desktop host wired** (same day), **schema 3, scanner, run manifest and
+the local runtime HTTP API added** (2026-10-05, section 13). Implemented: the Rust crate
+`crates/fullmag-workspace` (schema version 2, state directory, identity,
+record/observe/list/pin/forget/status/kv/history, thumbnails, quarantine,
 read-only newer schema, legacy import, script metadata), the Python reader
-and writer `fullmag.workspace`, and best-effort CLI recording. **Not
-implemented:** the desktop host wrappers and commands (section 8) and the
-start-screen changes (section 9); the gates of section 10 are covered at
-the store level only (section 12). Sections below carry their own
+and writer `fullmag.workspace`, best-effort CLI recording, and the Tauri
+commands of section 8 with the project mirror and the database-backed
+recent-project list. **Not implemented:** the start-screen changes of
+section 9 (renderer); the gates of section 10 are covered at the store level
+and by host-level tests that were written but **not run** (unit-test
+compilation is suspended by `AGENTS.md`); nothing was exercised in a running
+desktop application (section 12). Sections below carry their own
 *Implemented* / *Not implemented* notes.
 
 ---
@@ -68,9 +73,13 @@ It is not part of `storage/` (builds, runs, caches) governed by
 
 ---
 
-## 3. Schema (version 1)
+## 3. Schema (version 3)
 
-`PRAGMA user_version` carries the schema version. Migrations are forward-only,
+Version 1 (`items`, `events`, `kv`) is `schema/v1.sql`; version 2 adds
+`thumbnails` (`schema/v2.sql`, section 3.3); version 3 allows result folders
+and `edit` events (`schema/v3.sql`, section 3.5). The `CREATE TABLE` below is
+the version 1 shape; version 3 widens the two `CHECK` lists. `PRAGMA user_version` carries the
+schema version. Migrations are forward-only,
 run inside one transaction on open, and refuse to open a database from a newer
 version (read-only fallback with a visible reason).
 
@@ -153,6 +162,71 @@ normalised on import. `meta.args` is written only by the CLI, with the value of
 secret-looking options redacted (`fullmag_workspace::redact_args`); a
 `clear_history()` call drops all events and `meta.last_run` / `meta.args`.
 
+### 3.3 `thumbnails` (version 2)
+
+```sql
+CREATE TABLE thumbnails (
+  item_id  INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+  sha256   TEXT NOT NULL,     -- hex digest of png, supplied by the caller
+  png      BLOB NOT NULL      -- a PNG of at most 256 kB
+);
+```
+
+The preview of a project (the host reads `project/preview/thumb.png` from the
+archive). It is a separate table so that listing items never carries image
+bytes and `items.meta` never holds a data URI. `Workspace::set_thumbnail`
+refuses anything that is not a PNG or exceeds 256 kB (`MAX_THUMBNAIL_BYTES`),
+and leaves the row alone when the digest is unchanged; `get_thumbnail` and
+`remove_thumbnail` complete the set. The host turns the blob back into the data
+URI the renderer already reads. A database at version 1 migrates forward on
+first open (`OpenOutcome::Migrated`). **Consequence:** a build that only knows
+version 1 (an older CLI or `fullmag.workspace`) opens a version-2 database
+read-only; the Python module was moved to version 2 together with the crate.
+
+### 3.4 Scanned files
+
+`Workspace::observe` records a file found by a folder scan rather than used by
+a person: a new item starts with `use_count = 0`, `last_used_at` set to the
+file's modification time and an `import` event with `{"source": "scan"}`; an
+existing item only has its name, project id, size, modified time, `status` and
+`meta` refreshed. Counters, pin, forgotten flag and `last_used_at` are never
+touched, so a scan does not resurrect a forgotten item.
+
+### 3.5 Schema version 3: results, edits, roots
+
+`items.kind` gains `result` (a Fullmag results folder) and `events.kind` gains
+`edit`. SQLite cannot alter a `CHECK`, so `schema/v3.sql` rebuilds `items` and
+`events` (create new, copy, drop, rename, recreate indexes). Dropping a table
+that others reference would cascade while foreign keys are enforced, so
+`migrate` switches `foreign_keys` off around the transaction (the pragma is a
+no-op inside one), runs `PRAGMA foreign_key_check` before the commit and
+switches it back on. Events and thumbnails survive; the migration is
+forward-only and a version-2 build opens a version-3 file read-only, as for any
+newer schema. `fullmag.workspace` moved to version 3 with the crate and is
+checked against `v3.sql` by a test.
+
+- **`result` items.** `path` is the folder; `size_bytes` is the folder total
+  (computed by the scan, kept by `refresh_file_state`), `modified_at` the newest
+  file time. `meta` carries `source {kind, path, sha256, project_id}` (from the
+  run manifest, section 13.2), `run_id`, `status`, `format`, `frames`, `stages`,
+  `has_manifest`. `Query` returns them only for `kind = result` or with
+  `include_results`, so the recent list of projects and scripts that the
+  desktop and Python read is unchanged.
+- **Script versions.** `Workspace::observe_file` (called by
+  `refresh_file_state` when a script's size or mtime changed, and by the
+  scanner) hashes the file (streamed, at most 16 MiB) and compares with
+  `meta.sha256` stored at the last observation. The first observation stores
+  `sha256`, `bytes`, `lines`; a different digest appends one `edit` event with
+  `{sha256_before, sha256_after, lines_before, lines_after, bytes_before,
+  bytes_after}` and replaces the facts. An edit is not a use. The text is never
+  stored.
+- **Roots.** `kv` key `workspace.roots`: a JSON array of
+  `{path, kinds[], recursive, enabled}` (`Workspace::roots` / `set_roots`).
+  Empty `kinds` means all three kinds.
+- `SeenItem` gained `actor`, `size_bytes`, `modified_at` (a folder states its
+  own) and `explicit` (a person added the file: counts as a use, un-forgets,
+  records `{"source": "add"}`).
+
 ---
 
 ## 4. What records an event
@@ -174,8 +248,18 @@ database is logged and skipped.
 `meta.last_run` `started`, updated to `ok` or `failed` with the duration when
 the command returns; `fullmag project open` and `fullmag session open` record
 `open`) and the Python row. A run that is killed before it returns keeps
-`last_run.status = "started"`. *Not implemented:* the Desktop and Start-screen
-rows. Use events (`open`, `run`, `save`, `create`, `import`) bump `use_count`
+`last_run.status = "started"`. The desktop host records `open` for a project
+(`open_project_path`, `open_project_dialog`, `open_project_archive_dialog`,
+`open_project_archive_path`; `detail` carries `revision` and `mode`), `save`
+for `save_project_archive` (`revision`, `save_as`), `run` for
+`project_record_outcome` (`run_id`, `status`, `revision`; `meta.last_run`
+`{run_id,status,at}`), `open` for a script (`workspace_open_script_dialog`,
+`workspace_open_script`) and `pin`, `unpin` and `forget` for
+`workspace_pin` / `workspace_forget` and the `recent_index_pin` /
+`recent_index_forget` wrappers. Project recording is best effort and never
+fails the command. *Not implemented:* `create` and `import` from templates or
+importers (the legacy import and a folder scan write `import` events with
+`source`). Use events (`open`, `run`, `save`, `create`, `import`) bump `use_count`
 and `last_used_at` and bring a forgotten item back; `pin`, `unpin` and `forget`
 only set their flag.
 
@@ -239,8 +323,16 @@ counters and values and only gain what they lack (a legacy pin is never lost);
 entries with a relative path are skipped. The legacy `running` and `draft`
 statuses are transient and become `ready`. Imported rows start with
 `use_count = 0`. `scanned_locations` and `continue` of the old index are not
-imported; the desktop host owns the roots and the Continue card. Nothing calls
-this yet: the desktop host must invoke it once on first open.
+imported; the desktop host owns the roots (now kept in `kv` key
+`recent_scanned_locations`) and the Continue card.
+
+*Implemented in the desktop host:* the first command that needs the database
+runs the import against `recent-index.json` in Tauri's old app-data directory
+(`app_data_dir`), unless the database is read-only; a missing or unreadable
+legacy file is logged and skipped. The legacy `thumbnail` of an entry arrives as
+`meta.thumbnail_ref`, which may be a whole data URI: after an import the host
+moves such previews into `thumbnails` and removes the reference, so `meta`
+carries no image bytes. The JSON file is no longer written.
 
 ---
 
@@ -250,23 +342,40 @@ this yet: the desktop host must invoke it once on first open.
   `record`, `list`, `pin`, `forget`, `set_kv`/`get_kv`, `import_legacy_recent_index`,
   `state_dir()`. The CLI links it directly. SQLite is bundled
   (`rusqlite` with the `bundled` feature) so no system library is required.
-- **Desktop host:** thin Tauri wrappers over the crate —
-  `workspace_recent`, `workspace_record_open`, `workspace_pin`, `workspace_forget`,
-  `workspace_pick_script` (file dialog filtered to `.py`, records and returns the
-  text). `recent_index_*` commands become wrappers over the same store; the
-  renderer contract of the project list does not change.
+- **Desktop host:** thin Tauri wrappers over the crate, in
+  `apps/desktop/src-tauri/src/workspace_commands.rs` (all async, database work
+  in `spawn_blocking`, errors as strings): `workspace_list`, `workspace_pin`,
+  `workspace_forget`, `workspace_history`, `workspace_open_script_dialog`,
+  `workspace_open_script`, `workspace_reveal` and `workspace_read_script_text`
+  (these replace the earlier names `workspace_recent`, `workspace_record_open`
+  and `workspace_pick_script`). The renderer never sends a path for scripts:
+  they are addressed by item id and the host reads the stored path. The
+  `recent_index_*` commands are wrappers over the same store; the renderer
+  contract of the project list does not change.
 - **Python:** `fullmag.workspace` (stdlib `sqlite3`): `recent(kind=..., sort=...)`
   and `record(path, kind, event, **detail)`, same schema, same state-directory
   resolution, same newer-schema refusal.
-- **Browser (no desktop host):** the web build has no filesystem authority and
-  keeps showing an empty list with the existing explanation. The database is
-  not exposed through the runtime HTTP API.
+- **Browser (no desktop host):** the local runtime API process runs on the
+  user's machine and reads the same database; see section 13.4
+  (`/v2/workspace/...`). Desktop-only actions (native dialogs, run, save)
+  stay in Tauri.
 
 *Implemented:* the Rust crate (no Tauri dependency; the extra `RecordEvent`
 fields `project_id` and `name` carry the stable project id and the display
-name), `fullmag.workspace` for Python, and the CLI link
-(`crates/fullmag-cli/src/workspace_usage.rs`). *Not implemented:* the Tauri
-wrappers listed above.
+name), `fullmag.workspace` for Python, the CLI link
+(`crates/fullmag-cli/src/workspace_usage.rs`) and the Tauri wrappers listed
+above. The desktop host opens the database through `fullmag_workspace`'s
+default state directory, once, lazily, in one cached handle in Tauri managed
+state (`Mutex` around the single connection; every write is a short crate
+transaction). `workspace_list` returns `{items, outcome}` where `outcome` is
+`{state, detail?}` with `state` one of `ready`, `created`, `migrated`,
+`quarantined`, `read_only_newer_schema`; scripts are re-stat'ed first, so a
+deleted file reads as `missing`. The project list (`recent_index_read`) is a
+view of the `project` items: rich fields come from `meta`, the preview from
+`thumbnails`, a rebuild scans the configured roots and upserts items
+(`observe`), re-checks rows whose file was not found and keeps pins, counters
+and forgotten rows. *Not implemented:* surfacing `outcome` in the Settings page
+and any renderer use of these commands.
 
 ---
 
@@ -308,8 +417,8 @@ wrappers listed above.
    arguments can contain paths or tokens). Default: store it, redact values for
    arguments whose name looks like a secret, and offer *Clear history*.
 2. A retention limit for `events` (default: 500 per item, oldest dropped).
-3. Whether the web build should read the database through the runtime API in a
-   later step (not planned).
+3. ~~Whether the web build should read the database through the runtime API~~
+   Decided yes on 2026-10-05: section 13.4.
 
 ---
 
@@ -325,5 +434,201 @@ wrappers listed above.
 | Migration | `legacy_index_imports_once_and_not_twice` and two companions |
 | Python parity | `RustParityTests` read a database written by the Rust test when `FULLMAG_WORKSPACE_PARITY_DB` is set (otherwise skipped) |
 | Privacy | `database_holds_no_file_contents_or_environment_values` (file contents; the crate never reads environment values into the database) |
+| Schema 1 to 2 | `tests_v2::a_version_1_database_migrates_to_the_current_schema_keeping_its_items` (Rust); Python `test_a_version_1_database_is_migrated_to_the_current_schema` |
+| Thumbnails | `tests_v2::thumbnails_round_trip_replace_and_remove`, `thumbnails_are_validated_and_capped`, `a_read_only_database_refuses_thumbnail_writes` |
+| Scan recording | `tests_v2::observing_*` |
+
+Host level (`workspace_commands::tests`, `recent_index::tests`): script list,
+sorts, search and missing-file marking; open-script recording; project
+`open` / `save` / `run` mirror events; legacy import on first use (once, with
+thumbnails moved out of `meta`); thumbnails round trip through a rebuild; the
+outcome mapping of a damaged and of a newer-schema database.
 
 The gates are not yet exercised end to end through the desktop application.
+The host-level tests and the new crate tests were written but not compiled or
+run: building unit tests is suspended by `AGENTS.md`. The crate and the
+desktop binary were type-checked with `cargo check` only; the Python tests
+(`python -m unittest tests.test_workspace`) ran green (30 tests, 4 skipped).
+
+---
+
+## 13. Result folders, run manifest, scanner and HTTP API (2026-10-05)
+
+Crates: `fullmag-workspace` (schema 3), the new `fullmag-workspace-inspect`
+(read-only inspectors, scanner, links, run manifest; no Tauri, no HTTP) used by
+the desktop host, the CLI and `fullmag-api`.
+
+### 13.1 Results folder layout
+
+Written by `fullmag-cli` (`step_utils.rs`) and `fullmag-runner`
+(`project_storage.rs`, `autosave_*.rs`); the readers touch metadata only:
+
+```text
+<name>.zarr/                    Zarr v2 group (`.results` for HDF5 output)
+  .zgroup  .zattrs              {"fullmag_schema": "fullmag.script_results.v1", "script_path": ...}
+                                or {"schema_version": "fullmag.project_results.v1"}
+  output-storage.json           fullmag.output_storage.resolved.v1 (run id, data format, state)
+  fullmag-run.json              fullmag.run_manifest.v1 (13.2)
+  sequence_manifest.json        optional: {kind, stages:[{index, entrypoint_kind, until_seconds}]}
+  artifacts/                    final stage: metadata.json, scalars.csv, m_final.json,
+                                <target>.autosave.json, <target>.zarr/stages/stage_0000_<id>/
+  stages/stage_NN_<kind>/       earlier stages, same contents as artifacts/
+```
+
+A folder is recognised as a results folder when it holds `fullmag-run.json`,
+an `output-storage.json` of the Fullmag schema, a `.zattrs` with a `fullmag.*`
+schema marker, a `*.autosave.json`, or `stages/stage_*/manifest.json`. Only
+JSON files of at most 8 MiB, the header and last line of `scalars.csv`, and
+file sizes are read; array chunks and field files are never opened.
+
+### 13.2 `fullmag-run.json` (`fullmag.run_manifest.v1`)
+
+Written by `fullmag script ...` for every script run (desktop-launched, CLI
+managed, and plain `fullmag script.py`) into the results folder, atomically:
+`status: running` as soon as the folder is known, then the final status with
+stages and outputs. Never next to or into the `.py`. A run that fails before a
+results folder exists (interpreter, syntax, changed script) writes none.
+
+| Field | Content |
+|---|---|
+| `schema`, `run_id`, `session_id` | `fullmag.run_manifest.v1`; the orchestrator's ids |
+| `source` | `{kind: script, path, sha256}`; `project_id`, `revision` for projects |
+| `requested`, `resolved` | as in the script-run receipt: requested keeps `as_authored`/`auto`; resolved has backend, device, precision, mode, runtime family, worker, fallback (`null` until the runtime is selected) |
+| `started_at`, `finished_at`, `status` | `running`, `completed`, `failed`, `cancelled`; `exit_code`, `error` |
+| `stages` | `[{id, kind, steps, time_s}]` read from the folder at the end |
+| `outputs` | `[{path, kind}]` relative paths (`metadata`, `table`, `field`, `zarr_store`, `autosave_manifest`, ...) |
+| `fullmag_version`, `launched_by` | build version; `cli`, `desktop`, `python` |
+
+Project runs (accepted runs of `fullmag-api`): the worker that reserves the
+user-facing results leaf (`<output_dir>/<run_id>/<step>-attempt-<epoch>`,
+`accepted_project_storage.rs`) writes the same manifest into **that leaf only**,
+atomically: `status: running` as soon as the leaf is reserved (before the solver
+starts), then `completed`, `failed` or `cancelled` with stages and outputs read
+from the leaf after publication and after the storage receipt is final. The
+write is best effort (a failure is logged and never changes the run's outcome);
+runs without an `output_storage` policy (legacy accepted runs) have no leaf and
+no manifest. Fields for this producer:
+
+| Field | Project-run value |
+|---|---|
+| `source` | `{kind: "project", path: "", sha256: <SHA-256 of the accepted definition bytes>, project_id, revision: <definition revision>}`. `path` is empty: the accepted run knows the project id and revision, not the `.fms` file it was opened from. |
+| `run_spec_sha256` | the accepted run specification fingerprint (project runs only; additive field of v1) |
+| `requested` | the accepted `RequestedExecution` as recorded (`backend`, `device`, `precision`, `mode`; `auto` preserved) |
+| `resolved` | `{backend: <resolved backend of the accepted plan>, device: <kind of the claimed resource lease: cpu or gpu>, precision, mode}` |
+| `launched_by`, `run_id` | `api`; `<accepted run id>-<ownership epoch>` |
+
+`exit_code` stays `null` (a worker step is not a process of this API); a
+manifest is never `running` after the step ended. The scanner links such a
+folder to its project by `source.project_id` (a path-less source is valid).
+
+### 13.3 Scanner
+
+`fullmag_workspace_inspect::scanner::scan_roots` over `workspace.roots`: finds
+`.fms`, `.py` that import `fullmag` (first 64 KiB read, at most 4 MiB files)
+and results folders. It never executes anything and never follows a symbolic
+link or junction; it skips `.venv`, `venv`, `site-packages`, `node_modules`,
+`.git`, `__pycache__`, `target`, `dist`; defaults: depth 8, 20 000 entries,
+8 s (a limit stops the scan with a warning). Items are upserted with `observe`
+semantics (no use count, forgotten stays forgotten, `import` event
+`{"source": "scan"}`), scripts get `observe_file` (so an edit between scans is
+one `edit` event), and items under a root whose file is gone become `missing`.
+Results link to their source by manifest `source.path`, else script digest
+(`meta.sha256`), else project id; the link is derived (`link.rs`), never stored.
+
+**Thumbnails of result folders.** A result has no image of its own and none is
+rendered. `has_thumbnail` is true for a result only when its manifest names a
+project (`source.kind = project`, `source.project_id`) and a listed project item
+with that id has a stored preview (`project/preview/thumb.png` in the thumbnail
+table); `GET .../items/{id}/thumbnail` then serves that project's PNG and the
+item says `thumbnail_origin: "source_project"` (the inspector labels it
+"Last result - project preview"; a project's own preview is `item`). Results of
+script runs, folders without a manifest and results of projects without a
+stored preview have no thumbnail and answer 404.
+
+### 13.1a Frame index (`frames.json`)
+
+Each results leaf (`artifacts/`, `stages/stage_NN_<kind>/`, or the folder
+itself) may hold `frames.json`, written by `fullmag-runner`
+(`frames_index.rs`, called from the artifact writer thread and the non-streamed
+artifact path):
+
+```json
+{"schema": "fullmag.frames_index.v1", "truncated": false,
+ "frames": [{"index": 0, "step": 0, "time_s": 0.0, "stage_id": "run",
+             "quantity_ids": ["m"], "bytes": 4096,
+             "path": "fields/m/step_000000.json"}]}
+```
+
+One entry per saved step (quantities saved at the same step and time share an
+entry; `path` is then `fields`). Step and time come from the snapshot the
+writer already holds; no chunk is read back. The file is replaced atomically
+and capped at 100 000 entries (`truncated: true` afterwards). The inspect crate
+(`frames.rs`) reads the leaves in stage order, prefixes `path` with the leaf,
+renumbers `index` over the folder and rejects an unknown schema (reported in
+`note`). Folders without the file have no index.
+
+### 13.4 HTTP API
+
+`/v2/workspace/...` in `fullmag-api` (`router_v2/handlers/workspace_items.rs`,
+OpenAPI tag `workspace_items`), reference in
+`docs/specs/control-room-api-endpoint-reference-v1.md` section 17. SQLite and
+file reads run on the blocking pool; every reader failure is `read_error` inside
+`detail`, never an HTTP error; a newer-schema database lists but answers 409
+(`workspace_read_only`) to writes. No renderer-provided path is read or
+executed except `POST /items` and `PUT /roots`/`POST /scan` with explicit roots.
+
+**Script syntax check.** The script detail starts as the static scan (13.4).
+When a Python interpreter resolves (`fullmag_runtime_control::python_runtime`,
+the resolver `fullmag script inspect` uses) the API runs the never-executing
+helper `python -m fullmag.runtime.helper inspect-script` (`ast` and
+`importlib.util.find_spec` of top-level names only) with a 5 second deadline and
+fills `syntax {ok, line, column, message}`, `unresolved_imports`, `imports`
+(top-level names) and `env_reads` from it, with `syntax_checked: true` and
+`degraded: false`. The helper's digest must equal the static scan's, otherwise
+its answer is discarded. A syntax error is an answer: `syntax.ok = false`,
+`syntax_checked: true`, the line-scan imports and `degraded: true` stay.
+`unresolved_imports` means "not found by the chosen interpreter (nor next to the
+script)", not "missing for the interpreter a run will use". Any failure (no
+interpreter, timeout, bad output) keeps the static scan, `syntax_checked: false`
+and a `degraded_reason`. Answers are cached for the life of the process by
+content digest and folder (failures for 30 s). The script is never imported,
+compiled for execution or run.
+
+**Archive of a result folder.** `GET /v2/workspace/items/{id}/archive` streams
+the folder as a zip (stored, data descriptors, no seeking; `application/zip`,
+`Content-Disposition: attachment`, no `Content-Length`). Only result items;
+the folder is walked once first: any symbolic link, junction or reparse point
+anywhere inside (409 `workspace_archive_link`), a non-UTF-8 name, more than
+2 GiB of data or 60 000 files (413 `workspace_archive_too_large`) refuses the
+whole download before the first byte. Entries are relative to the folder, so
+nothing outside the item root can enter; a file that changes into a link,
+vanishes or outgrows the cap while streaming aborts the connection (a broken
+download, never a short archive that looks complete). The writer's lock file is
+skipped.
+
+**Frames and settings.** `GET /v2/workspace/items/{id}/frames?from&limit`
+returns `{indexed, total, from, frames[], truncated}` for a result item
+(`indexed: false` and no frames when the run wrote no index; 400 for other
+kinds, 404 for a missing folder). The result detail's `frames_index` is the
+summary only. `GET|PUT /v2/workspace/settings/{key}` serves an allow-list of
+two `kv` keys: `telemetry.enabled` (boolean, default `false`, writable) and
+`update.available` (default `null`, read-only through the API because a future
+updater writes it); other keys answer 404, a wrong type or a read-only key 400,
+a newer-schema database 409. The answer is `{key, value, is_default,
+writable}`; a stored value of the wrong type reads as unset.
+
+### 13.5 Gate coverage
+
+Rust `fullmag-workspace` (`tests_v3`): migration 2 to 3 keeps rows, events,
+thumbnails and re-enables foreign keys; result items and `include_results`;
+`edit` event with before/after on a hash change (and none for an unchanged
+file); roots round trip; line counting. `fullmag-workspace-inspect`: project,
+script, results-folder readers on fixtures, manifest round trip, scanner (skip
+directories, caps, depth, kinds, no execution, forgotten, edits, missing),
+`classify_path`, links. `fullmag-api` `router_v2::tests::workspace_items`:
+every route, status codes, ETag/304, read-only, quarantine, OpenAPI, result
+thumbnails (project preview only), syntax result with a real interpreter,
+archive route, frame paging and the settings routes; `accepted_project_storage::tests` (manifest content, running to
+completed/failed/cancelled, only the leaf is written), `script_check::tests`,
+`workspace_archive::tests` (zip content, caps, links). CLI
+`run_manifest::tests`. Python: v3 DDL parity and 2 to 3 migration.

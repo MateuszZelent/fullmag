@@ -45,6 +45,7 @@ mod build_info;
 mod coordinator_persistence;
 mod development_handoff_validation;
 mod development_owner_control;
+mod development_consumer_readiness;
 mod error;
 mod fdm_planar_grid_overlay;
 mod feature_flags;
@@ -71,6 +72,7 @@ mod router_v2;
 mod run_intent_persistence;
 mod schemas;
 mod script;
+mod script_check;
 mod session;
 mod session_persistence;
 mod types;
@@ -2451,6 +2453,7 @@ async fn main() {
         development_restored_authoring: Default::default(),
         development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),
         development_restart_transport: router_v2::handlers::platform::development_restart_request::DevelopmentRestartTransportConfig::from_environment(),
+        development_consumer_readiness: Default::default(),
         repo_root: repo_root.clone(),
         submit_store_root: run_intent_persistence::configured_submit_store_root(
             &repo_root,
@@ -4520,6 +4523,19 @@ pub(crate) async fn capture_current_live_request_context(
         session_epoch,
         request_scope_epoch,
     })
+}
+
+/// Like [`capture_current_live_request_context`], but an empty workspace
+/// yields `None` instead of a 404. Used by operations that legitimately start
+/// from no active workspace (for example importing a saved archive after a
+/// restart); there is no live session identity to fence against in that case.
+pub(crate) async fn capture_optional_current_live_request_context(
+    state: &Arc<AppState>,
+) -> Result<Option<CurrentLiveRequestContext>, ApiError> {
+    if state.current_live_state.read().await.is_none() {
+        return Ok(None);
+    }
+    capture_current_live_request_context(state).await.map(Some)
 }
 
 fn non_empty_identity(value: &str) -> Option<String> {

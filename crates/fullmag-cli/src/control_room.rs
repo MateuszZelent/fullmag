@@ -650,6 +650,35 @@ impl ControlRoomGuard {
         }
     }
 
+    pub(crate) fn development_consumer_status(
+        &self,
+    ) -> Result<crate::development_api_owner::ConsumerReadinessStatus> {
+        match self.api_child.as_ref() {
+            Some(GuardedApiProcess::Development(supervisor))
+                if supervisor.state()
+                    == crate::development_api_supervisor::DevelopmentApiSupervisorState::Running =>
+            {
+                supervisor.owner().consumer_status()
+            }
+            _ => bail!("consumer readiness requires the running owned API"),
+        }
+    }
+
+    pub(crate) fn confirm_development_consumer_readiness(
+        &self,
+        candidate: Option<&crate::development_api_owner::SelectedDevelopmentCandidate>,
+    ) -> Result<crate::development_api_owner::ConsumerReadinessStatus> {
+        match self.api_child.as_ref() {
+            Some(GuardedApiProcess::Development(supervisor))
+                if supervisor.state()
+                    == crate::development_api_supervisor::DevelopmentApiSupervisorState::Running =>
+            {
+                supervisor.owner().confirm_consumer_readiness(candidate)
+            }
+            _ => bail!("consumer readiness requires the running owned API"),
+        }
+    }
+
     pub(crate) fn restart_failure_is_precommit(&self, old_api_instance_id: &str) -> bool {
         match self.api_child.as_ref() {
             Some(GuardedApiProcess::Development(supervisor)) => {
@@ -969,6 +998,7 @@ impl ControlRoomGuard {
             frontend_child,
             terminal_failure_lifetime: None,
             stop_frontend_on_drop: false,
+            development_restart_origin: None,
         }
     }
 }
@@ -1903,14 +1933,34 @@ pub(crate) fn spawn_control_room(
     dev_mode: bool,
     requested_port: Option<u16>,
     live_workspace: &LocalLiveWorkspace,
+    ui_plan: crate::script_launch::UiPlan,
 ) -> Result<(
     u16,
     Option<std::process::Child>,
     Option<std::process::Child>,
 )> {
+    use crate::script_launch::UiPlan;
     let ready =
         bootstrap_control_plane(session_id, dev_mode, requested_port, Some(live_workspace))?;
-    open_in_browser(&ready);
+    match ui_plan {
+        UiPlan::Browser | UiPlan::None => open_in_browser(&ready),
+        // The launching host opens its own window for this API.
+        UiPlan::DesktopHost => {}
+        UiPlan::DesktopSelf => {
+            let root = repo_root();
+            let opened = fullmag_runtime_control::application_attach::prepare_for_authoring(
+                &root,
+                &runtime_state_root(&root),
+                ready.api_port,
+            )
+            .map_err(anyhow::Error::from)
+            .and_then(|binding| open_in_tauri(&ready, "workspace", binding.api_instance_id()));
+            if let Err(error) = opened {
+                eprintln!("[fullmag] could not open the desktop window ({error:#}); opening the browser");
+                open_in_browser(&ready);
+            }
+        }
+    }
     Ok((ready.web_port, ready.api_child, ready.frontend_child))
 }
 

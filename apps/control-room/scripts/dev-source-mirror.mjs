@@ -209,6 +209,37 @@ async function removeTreeNoFollow(path, label) {
   }
 }
 
+async function replaceStagedFile(temporary, target) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      // Node/libuv uses replace-existing rename on Windows. Keep the old
+      // source readable while Next/antivirus briefly holds a sharing lock.
+      await fs.rename(temporary, target);
+      return;
+    } catch (error) {
+      if (!["EEXIST", "EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].includes(error?.code)) {
+        throw error;
+      }
+      try {
+        const existing = await lstatNoFollow(target, "staged file");
+        if (!existing.isFile()) {
+          throw new DevSourceMirrorError(`Staged target is not a regular file: ${target}`);
+        }
+      } catch (inspection) {
+        if (!(inspection instanceof DevSourceMirrorError && isMissing(inspection.cause))) {
+          throw inspection;
+        }
+      }
+      if (attempt === 7) {
+        throw new DevSourceMirrorError(`Staged file is busy; prior source retained: ${target}`, {
+          cause: { code: "EAGAIN", originalCode: error.code },
+        });
+      }
+      await new Promise((resume) => setTimeout(resume, Math.min(10 * 2 ** attempt, 80)));
+    }
+  }
+}
+
 async function publishFile(source, target) {
   const parent = dirname(target);
   await requireDirectory(parent, "staged parent directory");
@@ -228,22 +259,7 @@ async function publishFile(source, target) {
       ) {
         continue;
       }
-      try {
-        await fs.rename(temporary, target);
-      } catch (error) {
-        if (!["EEXIST", "EPERM", "ENOTEMPTY"].includes(error?.code)) {
-          throw error;
-        }
-        // Windows versions differ in whether rename replaces an existing
-        // file.  Remove only an already-validated regular staged file before
-        // retrying; a link or directory remains a hard failure.
-        const existing = await lstatNoFollow(target, "staged file");
-        if (!existing.isFile()) {
-          throw new DevSourceMirrorError(`Staged target is not a regular file: ${target}`);
-        }
-        await fs.unlink(target);
-        await fs.rename(temporary, target);
-      }
+      await replaceStagedFile(temporary, target);
       return;
     } catch (error) {
       if (isMissing(error)) {
@@ -254,6 +270,7 @@ async function publishFile(source, target) {
       if (error instanceof DevSourceMirrorError && isMissing(error.cause)) {
         continue;
       }
+      if (error instanceof DevSourceMirrorError) throw error;
       throw new DevSourceMirrorError(`Cannot mirror source file ${source} -> ${target}`, { cause: error });
     } finally {
       try {
@@ -351,6 +368,13 @@ export class DevSourceMirror {
       .filter((key) => !sourceEntries.has(key))
       .sort((left, right) => right.length - left.length || right.localeCompare(left));
     for (const key of stale) {
+      try {
+        await lstatNoFollow(join(this.sourceRoot, key), "source deletion confirmation");
+        this.pending = true;
+        continue;
+      } catch (error) {
+        if (!(error instanceof DevSourceMirrorError && isMissing(error.cause))) throw error;
+      }
       await removeTreeNoFollow(join(this.targetRoot, key), "staged mirror entry");
       this.published.delete(key);
     }

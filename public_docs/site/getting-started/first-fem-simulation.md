@@ -24,6 +24,7 @@ conjugate-gradient method and an algebraic multigrid preconditioner.
 ## Author the study
 
 ```python
+# %% Author the study
 import fullmag as fm
 
 nm = 1.0e-9
@@ -45,6 +46,7 @@ film.alpha = 0.1
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh(maximum_element_size=4 * nm, order=1)
 
+study.exchange()
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1.0e-10, max_iterations=500)
 study.build_domain_mesh()
@@ -88,7 +90,8 @@ just fem-managed-headless cpu first_fem_simulation.py
 ```
 
 The managed runtime records the resolved backend, device, and precision in the result. To request the
-FEM GPU lane instead, pass `gpu` as the execution mode to the same recipe and verify the device
+FEM GPU lane instead, change the script to `study.device("gpu", precision="double")`,
+pass `gpu` as the execution mode to the same recipe, and verify the device
 identity in the produced provenance.
 
 ## Reading the result
@@ -98,6 +101,11 @@ while `e_ex`, `e_demag` and `e_total` are the exchange, demagnetization and tota
 tables are scalar time series; mesh and field snapshots are separate artifacts.
 
 ## Limits of this example
+
+The finite Robin airbox approximates the exterior magnetostatic problem. This small
+onboarding domain is not an airbox-convergence study and is not numerically identical
+to open-boundary FDM convolution. Compare results only after separate mesh and
+airbox-size convergence checks.
 
 Unstructured-mesh relaxation has stricter tolerance and meshing regimes than the small onboarding
 grid shown here. μMAG Standard Problem 4 and the analytical validation pages provide the
@@ -109,12 +117,15 @@ Use the authoring path stated in this guide, normally `Model Explorer -> Objects
 
 ## Python/API crosswalk
 
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked `{doc}``/python-api/index` page rather than duplicating an unverified signature.
+The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
 
 ## Physics, limitations, and bibliography
 
 Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
 ## Source-code index
 
-- No new implementation symbol is introduced by this guide. The exact Python source symbol is owned by the linked terminal API page and the runnable example.
+- `packages/fullmag-py/src/fullmag/world.py` — `StudyBuilder`, `StudyStagesBuilder`: stage-first authoring and capture.
+- `packages/fullmag-py/src/fullmag/model/problem.py` — `Problem.to_ir`: canonical serialization and validation.
+- `justfile` — `run-headless` (FDM), `fem-managed-headless` (FEM): launcher recipes and execution-mode selection.
 
+Authoring and IR validation do not establish mesh convergence, solver execution, or GPU parity.

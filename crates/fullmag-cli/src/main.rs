@@ -25,9 +25,12 @@ mod live_workspace;
 mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
+mod run_manifest;
 mod runtime_service_client;
 mod runtime_supervisor;
 mod saved_fem_snapshot_gate;
+mod script_inspect;
+mod script_launch;
 mod scratch_runtime;
 mod simulation_preparation;
 mod solver_profile_persistence;
@@ -52,17 +55,19 @@ fn main() -> Result<()> {
         let script_mode = std::thread::Builder::new()
             .name("fullmag-script-mode".to_string())
             .stack_size(SCRIPT_MODE_STACK_SIZE_BYTES)
-            .spawn(move || {
-                // Usage history is best effort and never changes the run.
-                let usage = workspace_usage::begin_script_run(&raw_args);
-                let result = orchestrator::run_script_mode(raw_args);
-                workspace_usage::finish_script_run(usage, &result);
-                result
-            })
+            .spawn(move || script_launch::run_script_entry(raw_args))
             .context("failed to spawn script-mode worker")?;
-        return script_mode
+        let (result, exit_code) = script_mode
             .join()
             .map_err(|_| anyhow!("script-mode worker panicked"))?;
+        // Host-managed runs report the documented exit codes (08-script-open.md 6.2).
+        if let Some(code) = exit_code.filter(|code| *code != 0) {
+            if let Err(error) = &result {
+                eprintln!("Error: {error:?}");
+            }
+            std::process::exit(code);
+        }
+        return result;
     }
 
     #[cfg(windows)]
@@ -412,6 +417,7 @@ fn main() -> Result<()> {
                 .map_err(|error| anyhow!(error.message))?;
         }
         Command::Project(cmd) => handle_project(cmd)?,
+        Command::Script(cmd) => script_inspect::handle_script(cmd)?,
         Command::Session(cmd) => handle_session(cmd)?,
     }
 
@@ -893,8 +899,16 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "__eigen-k-worker",
         "session",
         "project",
+        "script",
     ];
-    const FLAG_ONLY: &[&str] = &["-i", "--interactive", "--headless", "--dev", "--json"];
+    const FLAG_ONLY: &[&str] = &[
+        "-i",
+        "--interactive",
+        "--headless",
+        "--dev",
+        "--json",
+        "--wait-for-solve",
+    ];
     const VALUE_FLAGS: &[&str] = &[
         "--backend",
         "--mode",
@@ -906,6 +920,12 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "--initial-magnetization-state-sample-index",
         "--workspace-root",
         "--web-port",
+        "--ui",
+        "--api-port",
+        "--expect-script-sha256",
+        "--receipt",
+        "--launched-by",
+        "--python",
     ];
 
     let mut index = 1usize;

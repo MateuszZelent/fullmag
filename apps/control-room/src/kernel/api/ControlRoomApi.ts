@@ -187,6 +187,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECT_AUTHORING_PATH,
+  PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
   PERSISTENCE_PROJECTS_PATH,
   PROJECT_MATERIALIZED_DATASET_PATH,
   PROJECT_MATERIALIZED_DATASET_SLICE_PATH,
@@ -206,6 +207,17 @@ import {
   PLATFORM_OUTPUT_STORAGE_PATH,
   PLATFORM_HEALTH_PATH,
   PLATFORM_DEVELOPMENT_BACKEND_PATH,
+  WORKSPACE_ITEMS_PATH,
+  WORKSPACE_ITEM_FORGET_PATH,
+  WORKSPACE_ITEM_FRAMES_PATH,
+  WORKSPACE_ITEM_HISTORY_PATH,
+  WORKSPACE_ITEM_PATH,
+  WORKSPACE_ITEM_PIN_PATH,
+  WORKSPACE_ROOTS_PATH,
+  WORKSPACE_SETTING_PATH,
+  WORKSPACE_SCAN_PATH,
+  workspaceItemArchiveUrl,
+  workspaceItemThumbnailUrl,
   PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH,
   PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH,
   developmentRestartRequestPathParams,
@@ -328,6 +340,8 @@ import type {
   GpuTelemetryResource,
   HealthResource,
   DevelopmentBackendResource,
+  WorkspaceItemsQuery,
+  WorkspaceRootWire,
   ImportSessionAssetRequest,
   JsonObject,
   LiveStatusResource,
@@ -468,6 +482,8 @@ import type {
   SessionImportInspectResponse,
   ProjectArchiveRequest,
   ProjectAuthoringUpdateRequest,
+  ProjectFromScriptRequest,
+  ProjectFromScriptResource,
   ProjectCreateRequest,
   ProjectDocumentResource,
   ProjectRunSubmitRequest,
@@ -955,6 +971,16 @@ function normalizeSolutionSetPageQuery<
   };
 }
 
+function workspaceQueryParams(query: WorkspaceItemsQuery): Record<string, unknown> {
+  const wire: Record<string, unknown> = {};
+  if (query.kind) wire.kind = query.kind;
+  if (query.sort) wire.sort = query.sort;
+  if (query.search) wire.search = query.search;
+  if (query.limit !== undefined) wire.limit = query.limit;
+  if (query.includeMissing !== undefined) wire.include_missing = query.includeMissing;
+  return wire;
+}
+
 function sessionScopeHeaders(options: RequestOptions): Record<string, string> {
   return options.sessionScopeKey
     ? { "x-fullmag-session-scope": options.sessionScopeKey }
@@ -1064,6 +1090,74 @@ export class ControlRoomApi {
       status: (options?: RequestOptions) =>
         this.requestJson<LiveStatusResource>(SESSION_STATUS_PATH, options),
     },
+  };
+
+  /**
+   * The workspace database (projects, scripts, result folders) as the start
+   * screen reads it. Answers are `unknown` on purpose: the caller validates
+   * them (modules/start/model/workspaceApiTypes.ts) until generated types exist.
+   */
+  readonly workspace = {
+    items: (query: WorkspaceItemsQuery = {}, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEMS_PATH, options, {
+        query: workspaceQueryParams(query),
+      }),
+    item: (id: string, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEM_PATH, options, { path: { id } }),
+    history: (id: string, limit?: number, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEM_HISTORY_PATH, options, {
+        path: { id },
+        query: limit === undefined ? {} : { limit },
+      }),
+    /** One page of the saved-frame index (`frames.json`) of a result folder. */
+    frames: (id: string, from: number, limit: number, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEM_FRAMES_PATH, options, {
+        path: { id },
+        query: { from, limit },
+      }),
+    /** An allow-listed per-user setting (`telemetry.enabled`, `update.available`). */
+    setting: (key: string, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_SETTING_PATH, options, { path: { key } }),
+    saveSetting: (key: string, value: boolean, options?: RequestOptions) =>
+      this.putJson<unknown, { value: boolean }>(
+        WORKSPACE_SETTING_PATH,
+        { value },
+        options,
+        { path: { key } },
+      ),
+    thumbnailUrl: (id: string) => workspaceItemThumbnailUrl(this.baseUrl, id),
+    archiveUrl: (id: string) => workspaceItemArchiveUrl(this.baseUrl, id),
+    setPinned: (id: string, pinned: boolean, options?: RequestOptions) =>
+      this.postJson<unknown, { pinned: boolean }>(
+        WORKSPACE_ITEM_PIN_PATH,
+        { pinned },
+        options,
+        { path: { id } },
+      ),
+    forget: (id: string, options?: RequestOptions) =>
+      this.postJson<unknown, Record<string, never>>(WORKSPACE_ITEM_FORGET_PATH, {}, options, {
+        path: { id },
+      }),
+    roots: (options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ROOTS_PATH, options),
+    saveRoots: (roots: readonly WorkspaceRootWire[], options?: RequestOptions) =>
+      this.putJson<unknown, { roots: readonly WorkspaceRootWire[] }>(
+        WORKSPACE_ROOTS_PATH,
+        { roots },
+        options,
+      ),
+    scan: (roots?: readonly string[], options?: RequestOptions) =>
+      this.postJson<unknown, { roots?: readonly string[] }>(
+        WORKSPACE_SCAN_PATH,
+        roots ? { roots } : {},
+        options,
+      ),
+    addItem: (path: string, kind?: "project" | "script" | "result", options?: RequestOptions) =>
+      this.postJson<unknown, { path: string; kind?: string }>(
+        WORKSPACE_ITEMS_PATH,
+        kind ? { path, kind } : { path },
+        options,
+      ),
   };
 
   readonly platform = {
@@ -2835,6 +2929,11 @@ export class ControlRoomApi {
           request,
           options,
         ),
+      /** 204 on success; 404 for an unknown id; 409 while still referenced. */
+      delete: (checkpointId: string, options?: RequestOptions) =>
+        this.deleteJson<void>(PERSISTENCE_CHECKPOINT_PATH, options, {
+          path: { checkpoint_id: checkpointId },
+        }),
       detail: (checkpointId: string, options?: RequestOptions) =>
         this.requestJson<CheckpointEntry>(
           PERSISTENCE_CHECKPOINT_PATH,
@@ -3174,6 +3273,17 @@ export class ControlRoomApi {
       open: (request: ProjectArchiveRequest, options?: RequestOptions) =>
         this.postJson<ProjectDocumentResource, ProjectArchiveRequest>(
           PERSISTENCE_PROJECT_OPEN_PATH,
+          request,
+          options,
+        ),
+      /**
+       * Executes the supplied script in the Python helper (the request must
+       * carry `consent.executed_by_user: true`) and returns a project with the
+       * script embedded plus a fidelity verdict.
+       */
+      fromScript: (request: ProjectFromScriptRequest, options?: RequestOptions) =>
+        this.postJson<ProjectFromScriptResource, ProjectFromScriptRequest>(
+          PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
           request,
           options,
         ),
@@ -3580,6 +3690,7 @@ export class ControlRoomApi {
     const groups: Array<[string, Record<string, unknown>]> = [
       ["sessions", this.sessions],
       ["platform", this.platform],
+      ["workspace", this.workspace],
       ["events", this.events],
       ["commands", this.commands],
       ["analysis", this.analysis],

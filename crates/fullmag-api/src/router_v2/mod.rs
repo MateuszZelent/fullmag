@@ -812,6 +812,51 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .put(handlers::workspace::replace_workspace_active_node),
         )
         .route(
+            "/v2/workspace/items",
+            get(handlers::workspace_items::list_items).post(handlers::workspace_items::post_item),
+        )
+        .route(
+            "/v2/workspace/items/:id",
+            get(handlers::workspace_items::get_item),
+        )
+        .route(
+            "/v2/workspace/items/:id/thumbnail",
+            get(handlers::workspace_items::get_item_thumbnail),
+        )
+        .route(
+            "/v2/workspace/items/:id/archive",
+            get(handlers::workspace_items::get_item_archive),
+        )
+        .route(
+            "/v2/workspace/items/:id/pin",
+            post(handlers::workspace_items::pin_item),
+        )
+        .route(
+            "/v2/workspace/items/:id/forget",
+            post(handlers::workspace_items::forget_item),
+        )
+        .route(
+            "/v2/workspace/items/:id/history",
+            get(handlers::workspace_items::get_item_history),
+        )
+        .route(
+            "/v2/workspace/items/:id/frames",
+            get(handlers::workspace_items::get_item_frames),
+        )
+        .route(
+            "/v2/workspace/settings/:key",
+            get(handlers::workspace_items::get_setting)
+                .put(handlers::workspace_items::put_setting),
+        )
+        .route(
+            "/v2/workspace/roots",
+            get(handlers::workspace_items::get_roots).put(handlers::workspace_items::put_roots),
+        )
+        .route(
+            "/v2/workspace/scan",
+            post(handlers::workspace_items::post_scan),
+        )
+        .route(
             "/v2/sessions/current/analysis/eigenmodes/spectrum",
             get(handlers::analysis::get_spectrum),
         )
@@ -1038,7 +1083,8 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints/:checkpoint_id",
-            get(handlers::persistence::get_checkpoint),
+            get(handlers::persistence::get_checkpoint)
+                .delete(handlers::persistence::delete_checkpoint),
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints/:checkpoint_id/restore",
@@ -1083,6 +1129,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/authoring",
             post(handlers::persistence::projects::authoring_update),
+        )
+        .route(
+            "/v2/persistence/projects/from-script",
+            post(handlers::persistence::script_project::from_script),
         )
         .route(
             "/v2/persistence/projects/:project_id/runs",
@@ -1259,12 +1309,18 @@ async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let script = crate::script::session_script_summary(
+        state.current_workspace_root.as_path(),
+        &snapshot.session.script_path,
+        true,
+    );
     Ok(Json(json!({
         "schema_version": "2.0.0",
         "session_id": snapshot.session.session_id,
         "name": snapshot.session.problem_name,
         "status": snapshot.session.status,
         "script_path": snapshot.session.script_path,
+        "script": script,
         "current": true,
     })))
 }

@@ -37,7 +37,7 @@ macro_rules! text_enum {
 
 text_enum! {
     /// What an item is.
-    ItemKind { Project => "project", Script => "script" }
+    ItemKind { Project => "project", Script => "script", Result => "result" }
 }
 
 text_enum! {
@@ -51,6 +51,7 @@ text_enum! {
         Pin => "pin",
         Unpin => "unpin",
         Forget => "forget",
+        Edit => "edit",
     }
 }
 
@@ -180,6 +181,49 @@ impl RecordEvent {
     }
 }
 
+/// A file found by a scan rather than used by a person; see
+/// [`crate::Workspace::observe`].
+#[derive(Debug, Clone)]
+pub struct SeenItem {
+    pub kind: ItemKind,
+    pub path: PathBuf,
+    /// Display name; defaults to the file stem for a new item.
+    pub name: Option<String>,
+    /// Stable project id of a `.fms`; lets a moved project keep its row.
+    pub project_id: Option<String>,
+    /// State of the file as the scan read it. `missing` is derived from the
+    /// file system and never taken from here.
+    pub status: ItemStatus,
+    /// JSON merge patch (RFC 7396) applied to the item's `meta`.
+    pub meta_patch: Option<Value>,
+    /// Which front end ran the scan; attributed on the `import` event of a
+    /// new item. Defaults to the desktop.
+    pub actor: Actor,
+    /// File size to store instead of the `stat` length (a results folder).
+    pub size_bytes: Option<i64>,
+    /// Modified time to store instead of the file's own (RFC 3339).
+    pub modified_at: Option<String>,
+    /// A person explicitly added this file: count it as a use. Default false.
+    pub explicit: bool,
+}
+
+impl SeenItem {
+    pub fn new(kind: ItemKind, path: impl Into<PathBuf>) -> Self {
+        Self {
+            kind,
+            path: path.into(),
+            name: None,
+            project_id: None,
+            status: ItemStatus::Ready,
+            meta_patch: None,
+            actor: Actor::Desktop,
+            size_bytes: None,
+            modified_at: None,
+            explicit: false,
+        }
+    }
+}
+
 /// What [`crate::Workspace::record`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordReceipt {
@@ -200,6 +244,10 @@ pub struct Query {
     pub limit: usize,
     /// Keep items whose file is missing (flagged by `status`). Default true.
     pub include_missing: bool,
+    /// With `kind: None`, also return `result` items. Default false, so the
+    /// recent list of projects and scripts is unchanged by scanned results;
+    /// `kind: Some(ItemKind::Result)` always returns them.
+    pub include_results: bool,
 }
 
 impl Default for Query {
@@ -210,6 +258,7 @@ impl Default for Query {
             search: None,
             limit: 200,
             include_missing: true,
+            include_results: false,
         }
     }
 }
@@ -264,4 +313,32 @@ pub struct LegacyImportReport {
     pub file_missing: bool,
     pub imported: usize,
     pub skipped: usize,
+}
+
+/// One folder the scanner looks through (`kv` key [`crate::WORKSPACE_ROOTS_KEY`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceRoot {
+    /// Absolute directory.
+    pub path: String,
+    /// Which kinds of item to look for there; empty means every kind.
+    #[serde(default)]
+    pub kinds: Vec<ItemKind>,
+    #[serde(default = "default_true")]
+    pub recursive: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// What [`crate::Workspace::observe_file`] saw in a script file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileObservation {
+    pub sha256: String,
+    pub bytes: u64,
+    pub lines: u64,
+    /// The recorded digest differed, so an `edit` event was appended.
+    pub edited: bool,
 }

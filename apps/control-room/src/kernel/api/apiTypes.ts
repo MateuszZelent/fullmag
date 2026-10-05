@@ -828,6 +828,14 @@ export type ProjectAuthoringUpdateRequest =
   components["schemas"]["ProjectAuthoringUpdateRequest"];
 export type ProjectDocumentResource =
   components["schemas"]["ProjectDocumentResource"];
+export type ProjectFromScriptRequest =
+  components["schemas"]["ProjectFromScriptRequest"];
+export type ProjectFromScriptResource =
+  components["schemas"]["ProjectFromScriptResource"];
+export type ProjectScriptImportResource =
+  components["schemas"]["ProjectScriptImportResource"];
+export type ScriptFidelityResource =
+  components["schemas"]["ScriptFidelityResource"];
 export type ProjectRunSubmitRequest =
   components["schemas"]["ProjectRunSubmitRequest"];
 export type ProjectRunSubmitResource =
@@ -1038,3 +1046,23 @@ export function isOptionalObjectInteractionKind(
 export type OutputStorageDefaultsResource = components["schemas"]["OutputStorageDefaultsResource"];
 export type OutputStorageDefaultsRequest = components["schemas"]["OutputStorageDefaultsRequest"];
 export type OutputStorageSettings = components["schemas"]["OutputStorageSettingsSchema"];
+
+/**
+ * Request shapes of the workspace database routes. The answers are returned
+ * as `unknown` and validated by the start screen's parsers
+ * (modules/start/model/workspaceApiTypes.ts) until generated types replace both.
+ */
+export interface WorkspaceItemsQuery {
+  readonly kind?: "all" | "project" | "script" | "result";
+  readonly sort?: "last_used" | "name" | "modified" | "use_count";
+  readonly search?: string;
+  readonly limit?: number;
+  readonly includeMissing?: boolean;
+}
+
+export interface WorkspaceRootWire {
+  readonly path: string;
+  readonly kinds: readonly string[];
+  readonly recursive: boolean;
+  readonly enabled: boolean;
+}

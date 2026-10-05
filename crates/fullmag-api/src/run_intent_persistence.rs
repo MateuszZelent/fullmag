@@ -179,6 +179,26 @@ fn commit_validated_run_intent_with_optional_backlog_limit(
     catalog
         .validate_for(study)
         .context("validate immutable study problem catalog")?;
+    for entry in catalog.entries() {
+        if let Some(materialization) = entry.execution_materialization() {
+            fullmag_application::validate_execution_materialization(materialization)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| {
+                    format!(
+                        "study step `{}` has invalid execution profile provenance",
+                        entry.step_id()
+                    )
+                })?;
+        }
+    }
+    let execution_plan = fullmag_plan::lower_study_plan_with_catalog(study, catalog)
+        .context("lower immutable submission through the canonical planner")?;
+    fullmag_runtime_control::validate_requested_execution(
+        &intent.specification,
+        catalog,
+        &execution_plan,
+    )
+    .context("validate execution requests before publishing the run")?;
     let catalog_value = serde_json::to_value(catalog)?;
     let catalog_digest = fullmag_session::canonical_json_sha256(&catalog_value);
     if intent.specification.study_catalog_sha256 != catalog_digest {
@@ -687,6 +707,21 @@ mod tests {
         mismatched_execution.requested_execution = intent.specification.requested_execution.clone();
         mismatched_execution.requested_execution.mode = "extended".into();
         assert!(validate_requested_execution(&mismatched_execution, &catalog, &lowered).is_err());
+        let conflicting_intent = RunIntent::new("submit-execution-conflict", mismatched_execution);
+        let error = commit_archived_run_intent(
+            &reopened,
+            &conflicting_intent,
+            &archive,
+            &study,
+            &catalog,
+            &asset_paths,
+        )
+        .expect_err("execution conflicts must be rejected before durable publication");
+        assert!(format!("{error:#}").contains("mode"));
+        assert!(reopened
+            .find_run_intent("submit-execution-conflict")
+            .unwrap()
+            .is_none());
         let persisted = reopened
             .read_run_intent(accepted.run_id.as_str())
             .unwrap()

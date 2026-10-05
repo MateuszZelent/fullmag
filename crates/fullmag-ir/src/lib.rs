@@ -3,9 +3,11 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod constraint;
+pub mod compute_resources;
 pub mod eigen_contract;
 pub mod execution;
 pub mod parallel_execution;
+pub mod execution_profile;
 pub mod frequency_response_contract;
 pub mod mechanics;
 pub mod mesh_assets;
@@ -32,9 +34,11 @@ pub mod waveguide_mesh_incidence;
 mod floating_point_guard;
 mod validation;
 pub use constraint::*;
+pub use compute_resources::*;
 pub use eigen_contract::*;
 pub use execution::*;
 pub use parallel_execution::*;
+pub use execution_profile::*;
 pub use frequency_response_contract::*;
 pub use mechanics::*;
 pub use mesh_assets::*;
@@ -792,6 +796,18 @@ impl ProblemIR {
             }
         }
         validate_runtime_selection(self, &mut errors);
+        match ComputeResourcesIR::from_problem(self) {
+            Ok(Some(resources)) => {
+                if let Err(resource_errors) = resources.validate() {
+                    errors.extend(resource_errors);
+                }
+                if let Err(conflicts) = resources.validate_legacy_selection(self) {
+                    errors.extend(conflicts);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => errors.push(error),
+        }
         validate_problem_magnetization_constraints(self, &mut errors);
         if self.geometry.entries.is_empty() {
             errors.push("at least one geometry entry is required".to_string());

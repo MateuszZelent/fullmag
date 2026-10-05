@@ -974,7 +974,14 @@ pub(crate) fn execute_accepted_worker_start(
     }
 
     let specification = &accepted.run.specification;
-    let request = &specification.requested_execution;
+    let immutable_problem = accepted.catalog.entries().iter()
+        .find(|entry| entry.step_id() == accepted_step.step_id)
+        .context("accepted worker step has no immutable catalog entry")?
+        .problem();
+    accepted_step.resolved_input
+        .validate_execution_for_problem(specification, immutable_problem)
+        .context("validate accepted task execution before dispatch")?;
+    let request = &accepted_step.resolved_input.requested_execution;
     if request.backend == "fem" {
         crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
             .context("validate accepted FEM output contract before recovery or reservation")?;
@@ -1067,14 +1074,19 @@ pub(crate) fn execute_accepted_worker_start(
         Err(error) if is_not_found_error(&error) => {}
         Err(error) => return Err(error).context("inspect existing accepted FDM attempt"),
     }
-    // RunSpec is the accepted source for requested device/precision. Project
-    // that explicit device request into the runner's runtime-selection metadata;
+    // The verified task input is the accepted device/precision intent. Project
+    // that request into the runner adapter while retaining other authored fields;
     // the environment guard above prevents a managed override from changing it.
     let mut problem = accepted_step.problem.clone();
-    problem.problem_meta.runtime_metadata.insert(
-        "runtime_selection".into(),
-        serde_json::json!({"device": request.device, "precision": "double"}),
-    );
+    let selection = problem
+        .problem_meta
+        .runtime_metadata
+        .entry("runtime_selection".into())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .context("accepted runtime_selection must be an object")?;
+    selection.insert("device".into(), serde_json::json!(request.device));
+    selection.insert("precision".into(), serde_json::json!(request.precision));
     crate::accepted_project_storage::AcceptedProjectStorage::preflight(
         &problem,
         store,
@@ -1117,6 +1129,7 @@ pub(crate) fn execute_accepted_worker_start(
     let mut storage = prepare_accepted_project_storage(
         &problem,
         store,
+        &accepted,
         accepted_step,
         &receipt_identity,
         &attempt_output_dir,
@@ -1209,6 +1222,13 @@ pub(crate) fn execute_accepted_worker_start(
         let success = execution
             .as_ref()
             .is_ok_and(|result| result.status == RunStatus::Completed);
+        match &execution {
+            Ok(result) if result.status == RunStatus::Cancelled => {
+                storage.note_outcome("cancelled", None)
+            }
+            Err(error) => storage.note_outcome("failed", Some(format!("{error:#}"))),
+            _ => {}
+        }
         storage.finish(success, &storage_attempt_dir)?;
     }
     execution
@@ -1292,6 +1312,7 @@ fn execute_accepted_fem_worker_start(
     let mut storage = prepare_accepted_project_storage(
         &prepared.problem,
         store,
+        accepted,
         accepted_step,
         &receipt_identity,
         &attempt_output_dir,
@@ -1356,6 +1377,13 @@ fn execute_accepted_fem_worker_start(
         let success = execution
             .as_ref()
             .is_ok_and(|result| result.status == RunStatus::Completed);
+        match &execution {
+            Ok(result) if result.status == RunStatus::Cancelled => {
+                storage.note_outcome("cancelled", None)
+            }
+            Err(error) => storage.note_outcome("failed", Some(format!("{error:#}"))),
+            _ => {}
+        }
         storage.finish(success, &storage_attempt_dir)?;
     }
     execution
@@ -1364,15 +1392,24 @@ fn execute_accepted_fem_worker_start(
 fn prepare_accepted_project_storage(
     problem: &fullmag_ir::ProblemIR,
     store: &SessionStore,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
     accepted_step: &AcceptedWorkerStep,
     identity: &WorkerExecutionReceiptIdentity,
     attempt: &Path,
 ) -> Result<Option<crate::accepted_project_storage::AcceptedProjectStorage>> {
+    let manifest = crate::accepted_project_storage::accepted_run_manifest(
+        &accepted.run.specification.snapshot,
+        &accepted_step.resolved_input.requested_execution,
+        &accepted_step.resolved_input.specification_fingerprint,
+        &accepted_step.claim,
+        accepted_step.execution_plan.common.resolved_backend,
+    );
     match crate::accepted_project_storage::AcceptedProjectStorage::prepare(
         problem,
         store,
         &accepted_step.claim,
         &accepted_step.step_id,
+        manifest,
     ) {
         Ok(storage) => Ok(storage),
         Err(error) => {

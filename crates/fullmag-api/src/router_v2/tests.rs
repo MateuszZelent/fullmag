@@ -651,6 +651,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         development_restored_authoring: Default::default(),
         development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
         development_restart_transport: Default::default(),
+        development_consumer_readiness: Default::default(),
         repo_root: PathBuf::from("."),
         submit_store_root: None,
         submit_backlog_limit: std::num::NonZeroUsize::new(
@@ -2784,6 +2785,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         development_restored_authoring: Default::default(),
         development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
         development_restart_transport: Default::default(),
+        development_consumer_readiness: Default::default(),
         repo_root: repo_root.clone(),
         submit_store_root: Some(repo_root.join("submit-store")),
         submit_backlog_limit: std::num::NonZeroUsize::new(
@@ -16260,6 +16262,8 @@ study.run(1e-12)
     let json = body_json(response).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["written"], true);
+    assert_eq!(json["written_to"], "script");
+    assert_eq!(json["source_script_modified"], true);
     let rewritten = fs::read_to_string(&script_path).expect("script should be rewritten");
     assert!(rewritten.contains("body_ui_core_region = body.add_region(\"ui_core\""));
     assert!(rewritten.contains("region_id=\"body:ui-core\""));
@@ -16274,6 +16278,183 @@ study.run(1e-12)
     ));
 
     let _ = fs::remove_dir_all(&script_dir);
+}
+
+#[test]
+fn script_origin_classifies_managed_and_user_scripts() {
+    let root = std::env::temp_dir().join(format!(
+        "fullmag-api-script-origin-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    ));
+    let workspace = root.join("local-live").join("current");
+    let store = root.join("local-live").join("session-store");
+    fs::create_dir_all(&workspace).expect("workspace dir");
+    fs::create_dir_all(&store).expect("session store dir");
+    let user = root.join("user").join("model.py");
+    assert_eq!(crate::script::script_origin(&workspace, ""), "none");
+    assert_eq!(
+        crate::script::script_origin(&workspace, &user.display().to_string()),
+        "user_file"
+    );
+    assert_eq!(
+        crate::script::script_origin(
+            &workspace,
+            &workspace.join("scene_document.py").display().to_string()
+        ),
+        "generated"
+    );
+    assert_eq!(
+        crate::script::script_origin(
+            &workspace,
+            &store.join("imports").join("a.py").display().to_string()
+        ),
+        "generated"
+    );
+    assert_eq!(
+        crate::script::managed_export_copy_path(&workspace, &user),
+        workspace.join("exports").join("model.canonical.py")
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn authoring_script_sync_never_rewrites_user_file_and_writes_managed_copy() {
+    let mut state = test_app_state_with_live_session().await;
+    let unique = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    );
+    let root = std::env::temp_dir().join(format!("fullmag-api-user-script-sync-{unique}"));
+    let user_dir = root.join("user");
+    let workspace_dir = root.join("local-live").join("current");
+    fs::create_dir_all(&user_dir).expect("user dir");
+    fs::create_dir_all(&workspace_dir).expect("workspace dir");
+    let script_path = user_dir.join("my model.py");
+    let original = r#"
+# user comment that a canonical re-render would drop
+import os
+import fullmag as fm
+
+study = fm.study("user_owned")
+study.engine("fem")
+
+body = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.1
+body.m = fm.texture.uniform(1, 0, 0)
+
+study.run(1e-12)
+"#;
+    fs::write(&script_path, original).expect("failed to write user script");
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("test state should be uniquely owned");
+        state_mut.repo_root = crate::script::repo_root();
+        state_mut.current_workspace_root = workspace_dir.clone();
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path = script_path.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/syncs")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "user file sync response: {json:?}");
+    let copy_path = workspace_dir.join("exports").join("my model.canonical.py");
+    assert_eq!(json["written"], true);
+    assert_eq!(json["written_to"], "export_copy");
+    assert_eq!(json["source_script_modified"], false);
+    assert_eq!(json["script_path"], copy_path.display().to_string());
+    assert_eq!(json["managed_copy_path"], copy_path.display().to_string());
+    assert_eq!(
+        fs::read_to_string(&script_path).expect("user script readable"),
+        original,
+        "the user's own script must stay byte-identical"
+    );
+    assert!(
+        !user_dir.join("my model.py.fullmag.tmp").exists(),
+        "no temporary file may be created next to the user's script"
+    );
+    assert!(fs::read_to_string(&copy_path)
+        .expect("managed copy should exist")
+        .contains("study = fm.study"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/script")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["origin"], "user_file");
+    assert_eq!(json["script_path"], copy_path.display().to_string());
+    assert!(!json["source"]
+        .as_str()
+        .expect("source string")
+        .contains("user comment"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    assert_eq!(json["script"]["origin"], "user_file");
+    assert_eq!(json["script"]["writable"], false);
+    assert_eq!(
+        json["script"]["managed_copy_path"],
+        copy_path.display().to_string()
+    );
+    assert_eq!(json["script"]["sha256"].as_str().map(str::len), Some(64));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    assert_eq!(json["session"]["script"]["origin"], "user_file");
+    assert_eq!(json["session"]["script"]["writable"], false);
+
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[tokio::test]
@@ -28084,6 +28265,247 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let _ = fs::remove_dir_all(&repo_root);
 }
 
+async fn create_resume_checkpoint_for_delete_tests(app: &axum::Router) -> String {
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"profile": "resume"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    body_json(create).await["checkpoint"]["checkpoint_id"]
+        .as_str()
+        .expect("checkpoint id should be present")
+        .to_string()
+}
+
+async fn delete_checkpoint_request(
+    app: &axum::Router,
+    checkpoint_id: &str,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn listed_checkpoint_ids(app: &axum::Router) -> Vec<String> {
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    body_json(list).await["checkpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["checkpoint_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn checkpoint_delete_unknown_id_is_not_found() {
+    let (app, _state, repo_root) = test_router_with_session_store_state().await;
+    let response = delete_checkpoint_request(&app, "cp-does-not-exist").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn checkpoint_delete_removes_the_checkpoint_and_bumps_state_version() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let kept = create_resume_checkpoint_for_delete_tests(&app).await;
+    let removed = create_resume_checkpoint_for_delete_tests(&app).await;
+    assert_ne!(kept, removed);
+    let version_before = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .state_version;
+
+    let response = delete_checkpoint_request(&app, &removed).await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(body_bytes(response).await.is_empty());
+
+    let listed = listed_checkpoint_ids(&app).await;
+    assert!(listed.contains(&kept));
+    assert!(!listed.contains(&removed));
+    assert_eq!(
+        state
+            .current_live_state
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .state_version,
+        version_before + 1
+    );
+
+    // A second delete names a checkpoint that no longer exists.
+    let again = delete_checkpoint_request(&app, &removed).await;
+    assert_eq!(again.status(), StatusCode::NOT_FOUND);
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v2/sessions/current/persistence/checkpoints/{removed}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::NOT_FOUND);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn checkpoint_delete_refuses_the_restore_source_and_loaded_state() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    set_running_stage_execution(&state, 0).await;
+    let checkpoint_id = create_resume_checkpoint_for_delete_tests(&app).await;
+    let common_state_ref = format!("runs/test-run/checkpoints/{checkpoint_id}/common_state.json");
+
+    // Resume base of a stage.
+    {
+        let mut guard = state.current_live_state.write().await;
+        let record = &mut guard
+            .as_mut()
+            .unwrap()
+            .stage_execution
+            .as_mut()
+            .unwrap()
+            .stages[1];
+        record.resume_from_checkpoint_ref = Some(checkpoint_id.clone());
+    }
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = String::from_utf8(body_bytes(response).await.to_vec()).unwrap();
+    assert!(body.contains("checkpoint_delete_referenced"), "{body}");
+
+    // Loaded state of a stage, without the explicit resume pointer.
+    {
+        let mut guard = state.current_live_state.write().await;
+        let record = &mut guard
+            .as_mut()
+            .unwrap()
+            .stage_execution
+            .as_mut()
+            .unwrap()
+            .stages[1];
+        record.resume_from_checkpoint_ref = None;
+        record.loaded_state_ref = Some(common_state_ref);
+    }
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(listed_checkpoint_ids(&app).await.contains(&checkpoint_id));
+
+    // Released: the same checkpoint can now go.
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard
+            .as_mut()
+            .unwrap()
+            .stage_execution
+            .as_mut()
+            .unwrap()
+            .stages[1]
+            .loaded_state_ref = None;
+    }
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn checkpoint_delete_clears_the_saving_stage_link_instead_of_dangling() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    set_running_stage_execution(&state, 0).await;
+    let checkpoint_id = create_resume_checkpoint_for_delete_tests(&app).await;
+    {
+        let guard = state.current_live_state.read().await;
+        let record = &guard.as_ref().unwrap().stage_execution.as_ref().unwrap().stages[1];
+        assert_eq!(
+            record.checkpoint_ref.as_deref(),
+            Some(checkpoint_id.as_str())
+        );
+    }
+
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let guard = state.current_live_state.read().await;
+    let record = &guard.as_ref().unwrap().stage_execution.as_ref().unwrap().stages[1];
+    assert_eq!(record.checkpoint_ref, None);
+    assert_eq!(record.state_transition, None);
+    assert!(record
+        .artifact_refs
+        .iter()
+        .all(|artifact| !artifact.contains(&checkpoint_id)));
+    drop(guard);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn checkpoint_delete_refuses_the_run_manifests_latest_checkpoint() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let checkpoint_id = create_resume_checkpoint_for_delete_tests(&app).await;
+    let store = crate::session_persistence::open_store(&state).unwrap();
+    store
+        .commit_run(&fullmag_session::FmsRunManifest {
+            run_id: "test-run".into(),
+            status: fullmag_session::RunStatus::Running,
+            study_kind: "time_evolution".into(),
+            backend: "cpu".into(),
+            precision: "f64".into(),
+            started_at: chrono::Utc::now(),
+            finished_at: None,
+            total_steps: 0,
+            total_time_s: 0.0,
+            plan_ref: None,
+            live_state_ref: None,
+            latest_checkpoint_ref: Some(format!(
+                "runs/test-run/checkpoints/{checkpoint_id}/checkpoint.json"
+            )),
+            artifact_index_ref: None,
+        })
+        .unwrap();
+    drop(store);
+
+    let response = delete_checkpoint_request(&app, &checkpoint_id).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(listed_checkpoint_ids(&app).await.contains(&checkpoint_id));
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
 #[tokio::test]
 async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
     let (app, state, repo_root) = test_router_with_session_store_state().await;
@@ -28770,7 +29192,8 @@ async fn uploaded_h5_field_state_can_be_inspected_and_applied() {
         .canonicalize()
         .expect("workspace root should resolve");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python_exe = crate::script::python_executable(&workspace_root);
+    let python_exe = crate::script::python_executable(&workspace_root)
+        .expect("Python interpreter should resolve");
     let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(format!(
@@ -28895,7 +29318,8 @@ async fn uploaded_zarr_zip_field_state_can_be_inspected_and_applied() {
         .canonicalize()
         .expect("workspace root should resolve");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python_exe = crate::script::python_executable(&workspace_root);
+    let python_exe = crate::script::python_executable(&workspace_root)
+        .expect("Python interpreter should resolve");
     let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(format!(
@@ -29013,7 +29437,8 @@ async fn uploaded_airbox_h5_field_state_can_be_attached_without_apply_shape_chec
         .canonicalize()
         .expect("workspace root should resolve");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python_exe = crate::script::python_executable(&workspace_root);
+    let python_exe = crate::script::python_executable(&workspace_root)
+        .expect("Python interpreter should resolve");
     let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(format!(
@@ -32914,7 +33339,8 @@ fn export_problem_ir_from_python_script(script_name: &str, source: &str) -> serd
     let script_path = script_dir.join(script_name);
     fs::write(&script_path, source).expect("failed to write Python script test fixture");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python_exe = crate::script::python_executable(&workspace_root);
+    let python_exe = crate::script::python_executable(&workspace_root)
+        .expect("Python interpreter should resolve");
     let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(
@@ -42228,6 +42654,7 @@ fn openapi_v2_exposes_professional_session_tree() {
             "data",
             "visualization",
             "workspace",
+            "workspace_items",
             "analysis",
             "persistence",
             "diagnostics",
@@ -49993,3 +50420,6 @@ fn openapi_stage_execution_requires_explicit_snapshot_identity() {
 }
 #[path = "tests/session_scope.rs"]
 mod session_scope;
+
+#[path = "tests/workspace_items.rs"]
+mod workspace_items;

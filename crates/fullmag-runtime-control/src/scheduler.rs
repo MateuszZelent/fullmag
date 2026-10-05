@@ -8,8 +8,9 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::{
     CoordinatorError, CoordinatorMessage, DurableWorkerCoordinator, ExecutionError,
-    RequestedResourceBudget, ResourceKind, ResourceLease, RunId, TaskClaim, WorkerCommandEnvelope,
-    WorkerCoordinator, WorkerEvent, WorkerEventEnvelope, WORKER_PROTOCOL_SCHEMA,
+    RequestedExecution, RequestedResourceBudget, ResourceKind, ResourceLease, RunId, TaskClaim,
+    WorkerCommandEnvelope, WorkerCoordinator, WorkerEvent, WorkerEventEnvelope,
+    WORKER_PROTOCOL_SCHEMA,
 };
 use fullmag_authoring::StudyInputSource;
 use fullmag_session::{FmsTaskLifecycle, FmsTaskReadiness, SessionStore};
@@ -128,15 +129,6 @@ pub fn schedule_next_ready_accepted_task(
     }
     let accepted =
         crate::load_accepted_study_snapshot(store, run_id, &specification.snapshot.project_id)?;
-    if let Some(required) = specification.requested_execution.minimum_resources.as_ref() {
-        if !resource_offer_satisfies_requested_minimum(
-            &specification.requested_execution.device,
-            required,
-            &resource_offer,
-        ) {
-            return Ok(None);
-        }
-    }
 
     for study_step in &accepted.study.steps {
         let execution_step = accepted
@@ -157,6 +149,31 @@ pub fn schedule_next_ready_accepted_task(
                 fullmag_plan::StudyStepLoweringStatus::Planned
             )
         {
+            continue;
+        }
+
+        let catalog_entry = accepted
+            .catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.step_id() == study_step.step_id)
+            .with_context(|| {
+                format!(
+                    "accepted scheduler step `{}` has no immutable ProblemIR",
+                    study_step.step_id
+                )
+            })?;
+        let task_request = specification
+            .requested_execution
+            .for_problem(catalog_entry.problem())
+            .map_err(anyhow::Error::msg)
+            .with_context(|| {
+                format!(
+                    "accepted scheduler step `{}` execution request is invalid",
+                    study_step.step_id
+                )
+            })?;
+        if !resource_offer_satisfies_requested_minimum(&task_request, &resource_offer) {
             continue;
         }
 
@@ -296,21 +313,22 @@ pub fn schedule_next_ready_accepted_task(
 }
 
 fn resource_offer_satisfies_requested_minimum(
-    requested_device: &str,
-    required: &RequestedResourceBudget,
+    requested: &RequestedExecution,
     offer: &ResourceLease,
 ) -> bool {
-    let device_matches = match requested_device {
+    let device_matches = match requested.device.as_str() {
         "cpu" => offer.kind == ResourceKind::Cpu,
         "gpu" => offer.kind == ResourceKind::Gpu,
         "auto" => matches!(offer.kind, ResourceKind::Cpu | ResourceKind::Gpu),
         _ => false,
     };
-    device_matches
-        && offer.budget.cpu_millis >= required.cpu_millis
-        && offer.budget.memory_bytes >= required.memory_bytes
-        && offer.budget.gpu_memory_bytes >= required.gpu_memory_bytes
-        && offer.budget.storage_bytes >= required.storage_bytes
+    let budget_matches = requested.minimum_resources.as_ref().is_none_or(|required| {
+        offer.budget.cpu_millis >= required.cpu_millis
+            && offer.budget.memory_bytes >= required.memory_bytes
+            && offer.budget.gpu_memory_bytes >= required.gpu_memory_bytes
+            && offer.budget.storage_bytes >= required.storage_bytes
+    });
+    device_matches && budget_matches
 }
 
 fn retry_store_writer_busy<T>(mut action: impl FnMut() -> Result<T>) -> Result<T> {

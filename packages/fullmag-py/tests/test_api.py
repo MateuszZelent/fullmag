@@ -9727,7 +9727,7 @@ class ProblemApiTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def fake_run_problem_json(ir, until_seconds, output_dir):
+        def fake_run_problem_json(ir, until_seconds, output_dir, **_storage):
             captured["ir"] = ir
             captured["until_seconds"] = until_seconds
             captured["output_dir"] = output_dir
@@ -9797,7 +9797,7 @@ class ProblemApiTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def fake_run_problem_json(ir, until_seconds, output_dir):
+        def fake_run_problem_json(ir, until_seconds, output_dir, **_storage):
             captured["until_seconds"] = until_seconds
             captured["entrypoint_kind"] = ir["problem_meta"]["entrypoint_kind"]
             return {
@@ -9840,7 +9840,7 @@ class ProblemApiTests(unittest.TestCase):
 
         calls: list[tuple[dict[str, object], float, str | None]] = []
 
-        def fake_run_problem_json(ir, until_seconds, output_dir):
+        def fake_run_problem_json(ir, until_seconds, output_dir, **_storage):
             calls.append((ir, until_seconds, output_dir))
             return {
                 "status": "completed",
@@ -9888,16 +9888,16 @@ class ProblemApiTests(unittest.TestCase):
         )
         self.assertEqual(
             calls[0][2],
-            str(output_dir / "stage_01_flat_relax"),
+            str(output_dir / "stage_01_flat_relax.zarr"),
         )
         self.assertEqual(
             calls[1][2],
-            str(output_dir / "stage_02_flat_run"),
+            str(output_dir / "stage_02_flat_run.zarr"),
         )
         self.assertEqual(manifest["kind"], "flat_sequence")
         self.assertEqual(len(manifest["stages"]), 2)
-        self.assertEqual(manifest["stages"][0]["output_dir"], str(output_dir / "stage_01_flat_relax"))
-        self.assertEqual(manifest["stages"][1]["output_dir"], str(output_dir / "stage_02_flat_run"))
+        self.assertEqual(manifest["stages"][0]["output_dir"], str(output_dir / "stage_01_flat_relax.zarr"))
+        self.assertEqual(manifest["stages"][1]["output_dir"], str(output_dir / "stage_02_flat_run.zarr"))
 
     def test_cli_json_mode_prints_machine_readable_summary(self) -> None:
         script = """
@@ -9971,7 +9971,7 @@ class ProblemApiTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def fake_run_problem_json(ir, until_seconds, output_dir):
+        def fake_run_problem_json(ir, until_seconds, output_dir, **_storage):
             captured["until_seconds"] = until_seconds
             return {
                 "status": "completed",
@@ -10018,7 +10018,7 @@ class ProblemApiTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def fake_run_problem_json(ir, until_seconds, output_dir):
+        def fake_run_problem_json(ir, until_seconds, output_dir, **_storage):
             captured["until_seconds"] = until_seconds
             return {
                 "status": "completed",
@@ -10068,7 +10068,7 @@ class ProblemApiTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def fake_run_problem_json(ir, until_seconds, output_dir):
+        def fake_run_problem_json(ir, until_seconds, output_dir, **_storage):
             captured["until_seconds"] = until_seconds
             return {
                 "status": "completed",

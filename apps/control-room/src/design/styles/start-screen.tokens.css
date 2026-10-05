@@ -104,6 +104,9 @@
      a render of the 3D viewport and must not be re-tinted by the UI theme. */
   --fm-start-thumb-bg: var(--fm-bg-viewport);
   --fm-start-thumb-border: var(--fm-border-subtle);
+  /* Text laid over a thumbnail ("Last result"): the frame is dark in both
+     themes, so the text is Mocha subtext0 in both (7.9:1 on #11111b). */
+  --fm-start-thumb-text: #a6adc8;
 }
 
 [data-theme="light"] {

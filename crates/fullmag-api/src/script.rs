@@ -56,6 +56,100 @@ pub(crate) fn state_root(repo_root: &Path) -> Result<PathBuf, ApiError> {
         })
 }
 
+pub(crate) const SCRIPT_ORIGIN_USER_FILE: &str = "user_file";
+pub(crate) const SCRIPT_ORIGIN_GENERATED: &str = "generated";
+pub(crate) const SCRIPT_ORIGIN_NONE: &str = "none";
+
+/// Canonicalize the longest existing ancestor and re-append the missing tail,
+/// so a path that does not exist yet still compares against canonical roots
+/// (Windows canonical paths carry a `\\?\` prefix).
+fn comparable_path(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut tail = Vec::new();
+    loop {
+        if let Ok(canonical) = fs::canonicalize(existing) {
+            return tail
+                .iter()
+                .rev()
+                .fold(canonical, |joined, part| joined.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+                tail.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// Classify the session script. A script inside the live workspace or the
+/// session store is Fullmag-managed (`generated`); any other file is the
+/// user's own (`user_file`) and must never be written by the application.
+pub(crate) fn script_origin(workspace_root: &Path, script_path: &str) -> &'static str {
+    let script_path = script_path.trim();
+    if script_path.is_empty() {
+        return SCRIPT_ORIGIN_NONE;
+    }
+    let script = comparable_path(Path::new(script_path));
+    let mut managed_roots = vec![comparable_path(workspace_root)];
+    if let Some(parent) = workspace_root.parent() {
+        managed_roots.push(comparable_path(&parent.join("session-store")));
+    }
+    if managed_roots.iter().any(|root| script.starts_with(root)) {
+        SCRIPT_ORIGIN_GENERATED
+    } else {
+        SCRIPT_ORIGIN_USER_FILE
+    }
+}
+
+/// Managed export copy for a user script: `<workspace_root>/exports/<stem>.canonical.py`.
+pub(crate) fn managed_export_copy_path(workspace_root: &Path, script_path: &Path) -> PathBuf {
+    let stem = script_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("script");
+    workspace_root
+        .join("exports")
+        .join(format!("{stem}.canonical.py"))
+}
+
+pub(crate) fn session_script_summary(
+    workspace_root: &Path,
+    script_path: &str,
+    include_hash: bool,
+) -> Option<SessionScriptSummary> {
+    let origin = script_origin(workspace_root, script_path);
+    if origin == SCRIPT_ORIGIN_NONE {
+        return None;
+    }
+    let script_path = script_path.trim();
+    let user_file = origin == SCRIPT_ORIGIN_USER_FILE;
+    let sha256 = if include_hash {
+        use sha2::{Digest, Sha256};
+        fs::read(script_path).ok().map(|bytes| {
+            Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        })
+    } else {
+        None
+    };
+    Some(SessionScriptSummary {
+        origin: origin.to_string(),
+        path: script_path.to_string(),
+        writable: !user_file,
+        managed_copy_path: user_file.then(|| {
+            managed_export_copy_path(workspace_root, Path::new(script_path))
+                .display()
+                .to_string()
+        }),
+        sha256,
+    })
+}
+
 pub(crate) async fn sync_current_live_script_with_request(
     state: &Arc<AppState>,
     req: ScriptSyncRequest,
@@ -84,7 +178,11 @@ pub(crate) async fn sync_current_live_script_with_request(
         "[fullmag-api] RX <- frontend script sync {}",
         script_path.display()
     );
-    let response = if has_input_script {
+    let user_file = has_input_script
+        && script_origin(&workspace_root, &script_path.to_string_lossy())
+            == SCRIPT_ORIGIN_USER_FILE;
+    let managed_copy = user_file.then(|| managed_export_copy_path(&workspace_root, &script_path));
+    let mut response = if has_input_script {
         if !script_path.is_file() {
             return Err(ApiError::bad_request(format!(
                 "script path does not exist: {}",
@@ -101,12 +199,14 @@ pub(crate) async fn sync_current_live_script_with_request(
         let repo_root = state.repo_root.clone();
         let workspace_root = workspace_root.clone();
         let script_path_for_helper = script_path.clone();
+        let managed_copy_for_helper = managed_copy.clone();
         run_blocking_script_operation(move || {
             rewrite_script_via_python_helper(
                 &repo_root,
                 &workspace_root,
                 &script_path_for_helper,
                 overrides.as_ref(),
+                managed_copy_for_helper.as_deref(),
             )
         })
         .await?
@@ -130,6 +230,16 @@ pub(crate) async fn sync_current_live_script_with_request(
         })
         .await?
     };
+    if let Some(copy) = managed_copy.as_ref() {
+        // The helper wrote the canonical copy; the user's script was only read.
+        response.script_path = copy.display().to_string();
+        response.written_to = "export_copy".to_string();
+        response.source_script_modified = false;
+        response.managed_copy_path = Some(copy.display().to_string());
+    } else {
+        response.written_to = "script".to_string();
+        response.source_script_modified = has_input_script;
+    }
     if !has_input_script {
         let mut current = state.current_live_state.write().await;
         if let Some(snapshot) = current.as_mut() {
@@ -161,6 +271,23 @@ pub(crate) async fn get_current_live_script_source(
         }
         PathBuf::from(script_path)
     };
+    let origin = script_origin(
+        &state.current_workspace_root,
+        &script_path.to_string_lossy(),
+    );
+    let mut managed_copy_path = None;
+    let script_path = if origin == SCRIPT_ORIGIN_USER_FILE {
+        let copy = managed_export_copy_path(&state.current_workspace_root, &script_path);
+        managed_copy_path = Some(copy.display().to_string());
+        // Prefer the canonical copy; without one the original is only read.
+        if copy.is_file() {
+            copy
+        } else {
+            script_path
+        }
+    } else {
+        script_path
+    };
 
     if !script_path.is_file() {
         return Err(ApiError::bad_request(format!(
@@ -186,6 +313,8 @@ pub(crate) async fn get_current_live_script_source(
         script_path: script_display,
         bytes: source.len(),
         source,
+        origin: origin.to_string(),
+        managed_copy_path,
     })
 }
 
@@ -204,6 +333,7 @@ pub(crate) fn rewrite_script_via_python_helper(
     workspace_root: &Path,
     script_path: &Path,
     overrides: Option<&Value>,
+    export_copy: Option<&Path>,
 ) -> Result<ScriptSyncResponse, ApiError> {
     let mut helper_args = vec![
         "-m".to_string(),
@@ -211,8 +341,16 @@ pub(crate) fn rewrite_script_via_python_helper(
         "rewrite-script".to_string(),
         "--script".to_string(),
         script_path.display().to_string(),
-        "--write".to_string(),
     ];
+    // A user-owned script is never rewritten: the canonical script goes to the
+    // managed export copy instead (`--output` leaves the source untouched).
+    match export_copy {
+        Some(copy) => {
+            helper_args.push("--output".to_string());
+            helper_args.push(copy.display().to_string());
+        }
+        None => helper_args.push("--write".to_string()),
+    }
 
     let overrides_path = if let Some(overrides) = overrides {
         std::fs::create_dir_all(workspace_root).map_err(|error| {
@@ -452,23 +590,32 @@ pub(crate) fn scene_document_overrides(scene_document: &SceneDocument) -> Result
         .rewrite_overrides)
 }
 
-pub(crate) fn python_executable(repo_root: &Path) -> String {
+/// Resolve the one Fullmag Python interpreter for `repo_root` (see
+/// `fullmag_runtime_control::python_runtime::resolve_interpreter`).
+pub(crate) fn resolve_python(
+    repo_root: &Path,
+) -> Result<fullmag_runtime_control::python_runtime::ResolvedInterpreter, ApiError> {
     let real_root = python_workspace_root(repo_root);
-    if let Some(candidate) =
-        fullmag_runtime_control::python_runtime::packaged_windows_python(&real_root)
-    {
-        return candidate.display().to_string();
-    }
-    if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
-        return preferred;
-    }
-    if let Some(candidate) = python_path_candidates(&real_root)
-        .into_iter()
-        .find(|candidate| candidate.is_file())
-    {
-        return candidate.display().to_string();
-    }
-    "python3".to_string()
+    fullmag_runtime_control::python_runtime::resolve_interpreter(&real_root)
+        .map_err(|error| ApiError::internal(error.to_string()))
+}
+
+#[cfg(test)]
+pub(crate) fn python_executable(repo_root: &Path) -> Result<String, ApiError> {
+    Ok(resolve_python(repo_root)?.path.display().to_string())
+}
+
+/// A command for the resolved interpreter, already carrying its flags, the
+/// UTF-8 switch and (for the packaged bundle) the isolation environment.
+pub(crate) fn python_command(repo_root: &Path) -> Result<ProcessCommand, ApiError> {
+    let real_root = python_workspace_root(repo_root);
+    resolve_python(repo_root)?
+        .command(&real_root)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "bundled Python runtime is incomplete or invalid: {error}"
+            ))
+        })
 }
 
 pub(crate) fn python_workspace_root(root: &Path) -> PathBuf {
@@ -481,22 +628,6 @@ pub(crate) fn python_workspace_root(root: &Path) -> PathBuf {
     }
 }
 
-pub(crate) fn configure_python_command(
-    root: &Path,
-    command: &mut ProcessCommand,
-) -> Result<(), ApiError> {
-    let root = python_workspace_root(root);
-    if fullmag_runtime_control::python_runtime::packaged_windows_python(&root).is_some() {
-        fullmag_runtime_control::python_runtime::configure_packaged_python(command, &root)
-            .map_err(|error| {
-                ApiError::internal(format!(
-                    "bundled Python runtime is incomplete or invalid: {error}"
-                ))
-            })?;
-    }
-    Ok(())
-}
-
 #[derive(Clone, Copy)]
 enum PythonHelperOutputPolicy<'a> {
     Capture,
@@ -507,33 +638,28 @@ pub(crate) fn run_python_helper(repo_root: &Path, args: &[String]) -> Result<Out
     run_python_helper_with_policy(repo_root, args, PythonHelperOutputPolicy::Capture)
 }
 
+/// Run a helper command with file-backed bounded output and the 30 second
+/// deadline. `workspace_root` is a private directory that receives the logs.
+pub(crate) fn run_python_helper_bounded(
+    repo_root: &Path,
+    workspace_root: &Path,
+    args: &[String],
+) -> Result<Output, ApiError> {
+    run_python_helper_with_policy(
+        repo_root,
+        args,
+        PythonHelperOutputPolicy::Bounded { workspace_root },
+    )
+}
+
 fn run_python_helper_with_policy(
     repo_root: &Path,
     args: &[String],
     policy: PythonHelperOutputPolicy<'_>,
 ) -> Result<Output, ApiError> {
     let real_root = python_workspace_root(repo_root);
-    let mut candidates = Vec::new();
-    let bundled_python =
-        fullmag_runtime_control::python_runtime::packaged_windows_python(&real_root);
-    let uses_bundle = bundled_python.is_some();
-
-    if let Some(bundled_python) = bundled_python {
-        candidates.push(bundled_python.display().to_string());
-    } else if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
-        candidates.push(preferred);
-    } else {
-        for candidate in python_path_candidates(&real_root) {
-            if candidate.is_file() {
-                candidates.push(candidate.display().to_string());
-            }
-        }
-    }
-    for fallback in ["python3", "python"] {
-        if !uses_bundle && !candidates.iter().any(|candidate| candidate == fallback) {
-            candidates.push(fallback.to_string());
-        }
-    }
+    let interpreter = resolve_python(repo_root)?;
+    let uses_bundle = interpreter.isolated;
 
     let pythonpath = real_root.join("packages").join("fullmag-py").join("src");
     let packaged_site_packages = real_root.join("python").join("site-packages");
@@ -543,11 +669,8 @@ fn run_python_helper_with_policy(
         .join("cache")
         .join("fem_mesh_assets");
     let inherited_pythonpath = std::env::var("PYTHONPATH").ok();
-    let mut last_error = None;
-
-    for candidate in candidates {
-        let mut command = ProcessCommand::new(&candidate);
-        configure_python_command(&real_root, &mut command)?;
+    {
+        let mut command = python_command(repo_root)?;
         command.args(args);
         command.env("PYTHONUNBUFFERED", "1");
         command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir);
@@ -574,28 +697,24 @@ fn run_python_helper_with_policy(
         }
 
         match policy {
-            PythonHelperOutputPolicy::Capture => match command.output() {
-                Ok(output) => return Ok(output),
-                Err(error) => {
-                    last_error = Some(format!("{}: {}", candidate, error));
-                }
-            },
+            PythonHelperOutputPolicy::Capture => command.output().map_err(|error| {
+                ApiError::internal(format!(
+                    "failed to spawn python helper ({}): {error}",
+                    interpreter.path.display()
+                ))
+            }),
             PythonHelperOutputPolicy::Bounded { workspace_root } => {
                 match run_bounded_python_helper(command, workspace_root) {
-                    Ok(output) => return Ok(output),
-                    Err(BoundedHelperError::Spawn(error)) => {
-                        last_error = Some(format!("{}: {}", candidate, error));
-                    }
-                    Err(BoundedHelperError::Started(error)) => return Err(error),
+                    Ok(output) => Ok(output),
+                    Err(BoundedHelperError::Spawn(error)) => Err(ApiError::internal(format!(
+                        "failed to spawn python helper ({}): {error}",
+                        interpreter.path.display()
+                    ))),
+                    Err(BoundedHelperError::Started(error)) => Err(error),
                 }
             }
         }
     }
-
-    Err(ApiError::internal(format!(
-        "failed to spawn python helper ({})",
-        last_error.unwrap_or_else(|| "unknown error".to_string())
-    )))
 }
 
 enum BoundedHelperError {
@@ -814,38 +933,6 @@ fn combine_bounded_error<E: std::fmt::Display>(
             "{message}: {error}; process cleanup failed: {cleanup}"
         )),
     }
-}
-
-fn python_path_candidates(repo_root: &Path) -> Vec<PathBuf> {
-    vec![
-        repo_root
-            .join(".fullmag")
-            .join("local")
-            .join("python")
-            .join("bin")
-            .join("python"),
-        repo_root
-            .join(".fullmag")
-            .join("local")
-            .join("python")
-            .join("python.exe"),
-        repo_root.join(".venv").join("bin").join("python"),
-        repo_root.join(".venv").join("Scripts").join("python.exe"),
-        repo_root
-            .join("packages")
-            .join("fullmag-py")
-            .join(".venv")
-            .join("bin")
-            .join("python"),
-        repo_root
-            .join("packages")
-            .join("fullmag-py")
-            .join(".venv")
-            .join("Scripts")
-            .join("python.exe"),
-        repo_root.join("python").join("python.exe"),
-        repo_root.join("python").join("Scripts").join("python.exe"),
-    ]
 }
 
 #[cfg(test)]

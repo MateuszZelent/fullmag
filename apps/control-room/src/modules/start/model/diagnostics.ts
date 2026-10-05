@@ -31,7 +31,7 @@ function describeCompute(compute: ComputeProbeState): string[] {
           `  GPU: ${g.name}${g.cudaVersion ? `, CUDA ${g.cudaVersion}` : ""}, ` +
           `${Math.round(g.vramFreeBytes / 1e6)} / ${Math.round(g.vramTotalBytes / 1e6)} MB free`,
       )
-    : ["  GPU: none detected"];
+    : [compute.gpuProbeStatus === "unavailable" ? "  GPU: telemetry unavailable" : "  GPU: none detected"];
   return [
     `Compute: preferred ${compute.preferredBackend}, ${compute.cpuThreads} CPU threads`,
     ...gpus,

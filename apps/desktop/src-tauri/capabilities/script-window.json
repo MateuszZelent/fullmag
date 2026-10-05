@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "script-window-capability",
+  "description": "Capability for the Fullmag window of one desktop-launched script run. It has no shell access.",
+  "windows": ["script-run-*"],
+  "remote": {
+    "urls": [
+      "http://localhost:*",
+      "http://127.0.0.1:*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "dialog:default"
+  ]
+}

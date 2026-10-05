@@ -1,5 +1,36 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AU, 05.10.2026: [prywatne potwierdzenie konsumenta](p8/53au-private-consumer-readiness.md).
+Przygotowano uwierzytelniony stan w pamięci API z ważnością 5 sekund,
+odnowienie w pompie i ochronę przed powtarzaniem selekcji tego samego pakietu.
+Review i fokusowane sprawdzenia źródeł PASS. Pierwszy build zablokował
+równoległy import IR; kolejny skompilował wszystkie fazy, ale został odrzucony
+po aktualizacji mastera podczas buildu. Terminalna odmowa preflight i brak
+uruchomienia API potwierdzone. Dokładnie 18 plików zadania skopiowano do
+zarejestrowanej izolacji `p8-readiness-20261005`; build tej kopii jest w toku.
+Prywatny driver i aktualna pompa pozostają NOT VERIFIED do prób runtime.
+Publiczne `restart_available=false`, procenty P0–P8 bez awansu.
+
+Checkpoint P8-53AT, 04.10.2026: [jawna akcja restartu](p8/53at-development-restart-action.md).
+Trwały serwis hosta podłącza baner do pojedynczego intentu, sprawdza kandydata
+pod guardami i zachowuje niepotwierdzone cleanup. Regresja akcji 25 grup,
+kontroler 41 grup, Host 6 grup, lint własnych 10 plików, API hygiene oraz
+izolowany browser 12/12 PASS. Poprawka wymaganego P2 potwierdzona w źródłach
+i przeglądarce. Wspólne produkcyjne typowanie nadal ma 5 diagnostyk Start/About;
+pełny lint i natywny Windows/browser restart z niepustą sceną pozostają otwarte.
+`restart_available=false`; procenty całego planu bez awansu.
+
+Dalszy checkpoint P8-53AT: po identyfikacji i zakończeniu osieroconego API
+nieudanej własnej próby zarządzane recovery i aktualny build Windows PASS.
+Natywny konsument: 39 kontroli PASS, wszystkie 20 własnych procesów odebrane.
+Ponowne typowanie nadal zgłasza 5 błędów Start/About; pełny lint po zakończeniu
+odrębnego ownera wykazał 9 ostrzeżeń nieużywanych importów w równoległych
+AboutInspector/AboutSection (exit 1 przy `--max-warnings=0`), bez diagnostyk
+P8-53AT. Odczyt dostępności wykazał brak potwierdzenia
+liveness konsumenta w API. Wygasające potwierdzenie przez prywatny kanał ownera
+i pełny własny browser/native flow pozostają następnym krokiem. Flaga nadal
+`false`, procenty bez awansu; stary wynik próby `unknown` i jej dane zachowano.
+
 Checkpoint P8-53AS, 04.10.2026: [wynik runu podczas restartu](p8/53as-run-outcome-handoff.md).
 Rezerwacja opóźnionego recordera i ochrona queued/flushing outcomes mają
 5 grup regresji, browser 9/9, lint 6 plików i wspólną API hygiene PASS.

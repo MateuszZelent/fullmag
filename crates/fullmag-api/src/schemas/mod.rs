@@ -38,6 +38,7 @@ pub mod status;
 pub mod tables;
 pub mod visualization_state;
 pub mod workspace;
+pub mod workspace_items;
 
 pub use authoring::{ParallelExecutionModeResource, ParallelExecutionResource};
 pub use frozen_spins::*;

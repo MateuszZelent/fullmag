@@ -26,6 +26,9 @@ describe("startScreenStore", () => {
       host: null,
       section: "home",
       selectedProjectId: null,
+      selectedScriptId: null,
+      selectedResultId: null,
+      openScriptNonce: 0,
       selectedTemplateId: null,
       searchFocusNonce: 0,
       rebuildNonce: 0,
@@ -59,6 +62,62 @@ describe("startScreenStore", () => {
     expect(listener).toHaveBeenCalledOnce();
   });
 
+  it("keeps one selected item: a project and a script exclude each other", () => {
+    startScreenStore.setSelectedProject("p1");
+    startScreenStore.setSelectedScript(7);
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      selectedProjectId: null,
+      selectedScriptId: 7,
+    });
+
+    startScreenStore.setSelectedProject("p2");
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      selectedProjectId: "p2",
+      selectedScriptId: null,
+    });
+
+    // Clearing one kind does not clear the other.
+    startScreenStore.setSelectedScript(9);
+    startScreenStore.setSelectedProject(null);
+    expect(startScreenStore.getSnapshot().selectedScriptId).toBe(9);
+  });
+
+  it("lets a result folder join the one-selection rule, and a script id be a string", () => {
+    startScreenStore.setSelectedScript("script-abc");
+    expect(startScreenStore.getSnapshot().selectedScriptId).toBe("script-abc");
+
+    startScreenStore.setSelectedResult("res-1");
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      selectedProjectId: null,
+      selectedScriptId: null,
+      selectedResultId: "res-1",
+    });
+
+    startScreenStore.setSelectedProject("p1");
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      selectedProjectId: "p1",
+      selectedResultId: null,
+    });
+
+    startScreenStore.setSelectedResult("res-2");
+    startScreenStore.setSelectedScript(3);
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      selectedScriptId: 3,
+      selectedResultId: null,
+    });
+
+    // Clearing one kind does not clear the others.
+    startScreenStore.setSelectedResult("res-3");
+    startScreenStore.setSelectedProject(null);
+    expect(startScreenStore.getSnapshot().selectedResultId).toBe("res-3");
+  });
+
+  it("makes every open-script request distinct", () => {
+    startScreenStore.requestOpenScript();
+    startScreenStore.requestOpenScript();
+    expect(startScreenStore.getSnapshot().openScriptNonce).toBe(2);
+  });
+
   it("renders Home on the server", () => {
     startScreenStore.attach(fakeHost());
     startScreenStore.setSection("about");
@@ -67,6 +126,9 @@ describe("startScreenStore", () => {
       host: null,
       section: "home",
       selectedProjectId: null,
+      selectedScriptId: null,
+      selectedResultId: null,
+      openScriptNonce: 0,
       selectedTemplateId: null,
       searchFocusNonce: 0,
       rebuildNonce: 0,

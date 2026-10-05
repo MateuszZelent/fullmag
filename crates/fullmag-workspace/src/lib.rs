@@ -1,7 +1,8 @@
 //! Per-user Fullmag workspace database.
 //!
 //! One SQLite file (`workspace.db` in [`state_dir`]) records what a person has
-//! opened, saved and run with Fullmag: projects (`.fms`) and Python scripts.
+//! opened, saved and run with Fullmag: projects (`.fms`), Python scripts and
+//! result folders found by a scan.
 //! The desktop application, the CLI and Python share it. The contract is
 //! `docs/design/start-screen/docs/07-workspace-database.md`.
 //!
@@ -28,7 +29,9 @@ mod error;
 mod legacy;
 mod paths;
 mod script_meta;
+mod seen;
 mod store;
+mod thumbnail;
 mod timefmt;
 mod types;
 
@@ -40,13 +43,16 @@ pub use paths::{
 };
 pub use script_meta::{script_meta, script_meta_from_text, MAX_SCRIPT_BYTES};
 pub use store::{
-    log_outcome, merge_patch, record_best_effort, Workspace, MAX_EVENTS_PER_ITEM, SCHEMA_V1_SQL,
-    SCHEMA_VERSION,
+    hash_file, log_outcome, merge_patch, record_best_effort, Workspace, MAX_EVENTS_PER_ITEM,
+    MAX_HASHED_BYTES, SCHEMA_V1_SQL, SCHEMA_V2_SQL, SCHEMA_V3_SQL, SCHEMA_VERSION,
+    WORKSPACE_ROOTS_KEY,
 };
+pub use thumbnail::{Thumbnail, MAX_THUMBNAIL_BYTES, PNG_SIGNATURE};
 pub use timefmt::{now_rfc3339, parse_rfc3339, rfc3339_millis};
 pub use types::{
-    Actor, Event, EventKind, Item, ItemKind, ItemRef, ItemStatus, LegacyImportReport, OpenOutcome,
-    Query, RecordEvent, RecordReceipt, Sort,
+    Actor, Event, EventKind, FileObservation, Item, ItemKind, ItemRef, ItemStatus,
+    LegacyImportReport, OpenOutcome, Query, RecordEvent, RecordReceipt, SeenItem, Sort,
+    WorkspaceRoot,
 };
 
 /// Redact command-line arguments before they are stored as `meta.args`
@@ -95,3 +101,7 @@ pub fn redact_args<S: AsRef<str>>(args: &[S]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_v2;
+#[cfg(test)]
+mod tests_v3;

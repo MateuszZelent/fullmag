@@ -4,7 +4,33 @@ How a person opens a Fullmag Python script (`.py`) from the desktop start screen
 what the repository does today, four candidate architectures, a recommendation
 with phases, the exact new contracts, gates and the decisions still open.
 
-Status: **design** (2026-10-04). Nothing here is implemented. Every claim about
+Status: **design** (2026-10-04); **Phase 0a and 0c are implemented** (2026-10-05):
+one interpreter resolver in `fullmag-runtime-control::python_runtime`
+(`resolve_interpreter`, used by the CLI and the API; probe-based, Store alias
+rejected, `-X utf8` for helper children) and `fullmag script inspect <path>
+--json [--python <abs>]` backed by the never-executing helper command
+`inspect-script`. Deviations from 6.5: an explicit `FULLMAG_PYTHON`/`--python`
+that fails the probe is an error, never a fallthrough; discovered interpreters
+that lack numpy/zarr/h5py are rejected with that reason; the probe timeout is
+5 s. **Phase 1 (architecture A) is implemented** (2026-10-05): the script-mode
+flags and exit codes of 6.2 (`crates/fullmag-cli/src/script_launch.rs`), the host
+commands of 6.1 (`apps/desktop/src-tauri/src/script_run*.rs`) and the inspector
+flow in `apps/control-room/src/modules/start`. Deviations: `--ui desktop` with
+`--launched-by desktop` makes the host (not the CLI) open the window, pinned to
+the API instance; the CLI also writes `progress.json` next to the receipt and
+stops when `stop-request` appears there; the host adds the `consent` block and
+the literal request to the receipt; extra refusal codes `ticket`, `busy`,
+`confirm_required`, `storage`; exit code 14 is chosen from the error text when
+the runtime reports no code. Not verified on a packaged install or through the
+UI. **Phase 0b is implemented** (2026-10-05): see "Phase 0b as built" in
+6.4. **Templates and translated `.mx3` (2026-10-05):** "Create script from
+template…" and "Save translated script…" use the host command `script_save_new`
+(`apps/desktop/src-tauri/src/script_save.rs`): native Save dialog, no overwrite
+unless that dialog confirmed it, atomic UTF-8 write, `create`/`import` + `open`
+events; the new script is selected on Home with Run in new window (consent
+still native). Not exercised in a running desktop app. **Phase 3 is
+implemented in a reduced form** (2026-10-05): see "Phase 3 as built" in 6.4.
+Everything else here is not implemented. Every claim about
 current behaviour was read in the source of this worktree (commit `688f1f23c`);
 what was *not* executed is marked **unverified**. Unit-test compilation is
 suspended (`AGENTS.md`), so no existing test was run for this document.
@@ -332,7 +358,8 @@ waiting for COMPUTE, with the run recorded in the workspace database.
 and the handshake gate passes, run list on the start screen.
 
 **Phase 3.** C: *Import script as project* with manifest and assets, re-run from
-a frozen script, provenance in `project/provenance.json`.
+a frozen script, provenance in `project/provenance.json`. Built without the
+asset manifest and without a re-run action; see "Phase 3 as built" in 6.4.
 
 **Phase 4 (research, no commitment).** D: fidelity survey of `examples/` against
 the existing scene/script helpers; publish the pass rate; decide only then.
@@ -464,18 +491,131 @@ reconciled from `<state>/script-runs/*/receipt.json` after a crash. A hash misma
 between `script.sha256` and `ids.problem_ir_source_hash` is surfaced in the
 History view.
 
+**Run manifest in the results folder (2026-10-05).** The receipt lives with the
+launching host and exists only for managed runs. Every script run, managed or
+plain `fullmag script.py`, additionally leaves `fullmag-run.json`
+(`fullmag.run_manifest.v1`) inside its results folder (`results.dir` above):
+written atomically as `running` once the folder is known and rewritten with the
+outcome, stages and outputs at the end; never next to the script. It repeats
+the receipt's `requested`, `resolved`, ids and outcome next to
+`source {kind, path, sha256}`, so the workspace scanner and the browser
+inspector can link a results folder to its script without the receipt. Layout,
+fields and the HTTP readers: `07-workspace-database.md` section 13.
+
 ### 6.4 API (Phase 0b only; additive)
 
-- `GET /v2/sessions/current` and the session status resource gain
-  `script: { origin: "user_file" | "generated" | "none", path, sha256, writable }`.
+- `GET /v2/sessions/current` and `GET /v2/sessions/current/status`
+  (`session.script`) gain `script: { origin: "user_file" | "generated", path,
+  writable, managed_copy_path?, sha256? }`; the field is absent for a session
+  with no script (`origin: "none"` is never serialized). `sha256` is only
+  computed on `GET /v2/sessions/current`.
 - `POST /v2/sessions/current/model/syncs` for `origin == "user_file"` writes
   `<workspace_root>/exports/<name>.canonical.py` and returns
-  `{ script_path, written_to: "export_copy", source_script_modified: false }`;
-  `GET .../model/script` returns that copy. `rewrite-script --write` never
-  targets a user file again.
+  `{ script_path (= the copy), written_to: "export_copy",
+  source_script_modified: false, managed_copy_path }`;
+  `GET .../model/script` returns that copy (and the original, read-only, until a
+  copy exists) with `origin` and `managed_copy_path`. `rewrite-script --write`
+  never targets a user file again.
 - No operation that starts executing a file. Executing user code stays a host
   action behind native consent (R1, R2, fact 13). The API only reads/derives after
   a run was started by the host.
+
+**Phase 0b as built.**
+- `origin` is derived by the API, not stored in the manifest: a script path
+  inside the live workspace (`<state>/local-live/current`) or the session store
+  (`<state>/local-live/session-store`) is `generated` (managed, still rewritten
+  in place, `writable: true`); anything else is `user_file` (`writable:
+  false`). Scratch sessions render `scene_document.py` inside the workspace and
+  are unchanged.
+- The managed copy lives at `<workspace_root>/exports/<stem>.canonical.py`
+  (`workspace_root` is the API's `current_workspace_root`, resolved from
+  `FULLMAG_STATE_ROOT`/packaged state, never a hard-coded path). It is replaced
+  by each sync; one copy per script stem per session workspace.
+- The Python helper `rewrite-script` gained `--output <path>` (atomic write to
+  another file, source untouched; mutually exclusive with `--write`). The API
+  passes `--output` for `user_file` and keeps `--write` only for `generated`.
+- Control Room: command `workspace.export-python` keeps its id, is titled "Save
+  canonical copy as…" (File menu, command palette) and downloads
+  `<name>.canonical.py` built from the managed copy; the texture/region panels'
+  best-effort sync reaches the same endpoint, so it can only update the managed
+  copy.
+- Remaining limit: producing a sync still executes the user's script in the
+  helper (as before); a host dialog for the save location is not wired (the
+  browser download flow is kept).
+
+**Phase 3 as built (2026-10-05): script to project over the API.** This is the
+scene-export variant of architecture C, not the manifest-and-assets variant: it
+stores one script, not a closure.
+
+- `POST /v2/persistence/projects/from-script`, body `{ source: { name, text },
+  project_name?, origin?, consent: { executed_by_user: true } }`. `source.text`
+  is at most 1 MiB of UTF-8 (413 `script_too_large`); a request without
+  `consent.executed_by_user: true` is 400 `consent_required` and runs nothing;
+  `script_item_id` is refused (400 `script_item_unsupported`): the API cannot
+  resolve workspace items, so the renderer sends the text it read. `origin`
+  (default `script`) is recorded as given (`template:<id>`, `mx3:<file>`,
+  `script_file`).
+- The handler writes the text to a private directory under
+  `current_workspace_root` (`.fullmag-script-import-<uuid>/<stem>.py`),
+  EXECUTES it through the resolved interpreter with `export-scene-document`
+  (bounded file-backed output, 30 s deadline, the same trust model as a script
+  run, which is why consent is part of the request) and removes the directory
+  afterwards. Any failure (non-zero exit, deadline, helper output over 1 MiB,
+  an answer that is not `scene.v2`) is a typed 422 (`script_export_failed`,
+  `script_export_timeout`, `script_export_too_large`) with the helper's own
+  message; nothing is kept.
+- On success the response has the shape of `projects.create`/`open`
+  (`ProjectDocumentResource`, `archive_base64`, `memory_only` durability) plus
+  `script_import { name, sha256, origin, exported_at, script_path, fidelity }`.
+  The archive carries the exported `scene.v2`, the original script byte for byte
+  as the opaque document `project/source/script.py`, `project/source/script.json`
+  (`fullmag.script_source.v1`: `sha256`, `name`, `origin`, `exported_at`,
+  `fidelity`) and `project/provenance.json` with one history entry
+  `{ kind: "import", summary: "Created from script <name> (<sha12>)" }`.
+  The script lives next to, not in, the `project/source.py` slot that authoring
+  updates regenerate: `POST /v2/persistence/projects/authoring`, open and save
+  keep it unchanged (covered by an API test), and the desktop Save appends its
+  own history to the same provenance document.
+- `fidelity = { scene_exported: true, round_trip: "verified" | "failed" |
+  "not_checked", notes: [] }`. The API renders the exported scene back to Python
+  (`render-scene-document`) and lowers both the original script and the
+  re-rendered one with `export-run-config --skip-geometry-assets`; geometry
+  entries, materials (names ignored), the FDM cell, `study.kind`,
+  `study.dynamics` and the stage list (`default_until_seconds`, `action`, study
+  kind) are compared with a relative tolerance of 1e-9. `verified` means those
+  fields agree; it does not mean the scene is the script. `failed` carries one
+  note per differing field, or the exception line of the helper that could not
+  render or load the re-rendered script, and the project is kept. `not_checked`
+  means the original script could not be lowered, so there was nothing to compare
+  with. The exported scene also has to pass authoring validation; a failure is
+  appended to the notes (it does not change `round_trip`). The study pipeline
+  document is not compared (it carries import metadata that a scene-derived
+  script never has).
+- The embedded script is the source of truth for "Run from script"; the API never
+  rewrites it and scene edits are separate. A "Run from script" action for an
+  opened project, and re-opening the stored script as a workspace script item,
+  are not built.
+- Control Room: **Create project...** in the template inspector and in the `.mx3`
+  import report (browser and desktop; the Save-dialog "Create script..." actions
+  stay). The click opens a consent dialog that says the script runs, names the
+  file, the first 12 hex digits of its SHA-256 and the size; confirming calls
+  `ControlRoomApi.persistence.projects.fromScript`, which
+  `ProjectDocumentController.createFromScript` wraps. The new document becomes
+  the open project like an opened archive (Home closes) and a banner in the
+  workspace shows the fidelity verdict (green only for `verified`) with the
+  notes; it stays until dismissed or another project replaces it. A 422 keeps the
+  dialog open with the helper's message.
+- Limits: one file, no asset closure (the helper does not run with the script's
+  directory as working directory, so a script that reads sibling files fails to
+  export with the helper's error); no manifest; on success the original script runs twice (scene
+  export, and its lowering for the comparison) and the scene-derived re-rendered
+  script runs once more; the 64 MiB archive cap applies.
+- Survey (2026-10-05, commands and results in section 8): see there for the
+  per-file verdicts. The typical `failed` reasons are that the scene renderer
+  writes a fixed time step where the script has none, drops the stage list of a
+  flat `study.run`, combines FEM mesh controls with `cell_size`, writes a
+  gyromagnetic ratio that differs from the script, or does not support a
+  geometry kind (`difference`). The banner says so instead of hiding it.
 
 ### 6.5 Interpreter resolver (`fullmag-runtime-control::python_runtime`)
 
@@ -559,7 +699,7 @@ should still be written and left unrun, as for the rest of the start screen.
 | 0a | resolver probe on this host (`fullmag runtime python --json`, new) | resolves `python` (Miniconda 3.12.2) or `py`, never the Store alias; `tried` lists the alias as rejected |
 | 0a | source check (extend `scripts/verify_control_room_sources.py`-style script) | no `"python3"` fallback literal outside the resolver; CLI and API call it |
 | 0a | bundle fixture | a bundle marker with a missing `python.exe` returns `BundleBroken`, not a PATH fallback |
-| 0b | managed fixture: open a script-backed session, call `model/syncs` | source file bytes identical before/after; export copy exists and parses |
+| 0b | managed fixture: open a script-backed session, call `model/syncs` | source file bytes identical before/after; export copy exists and parses (covered by API test `authoring_script_sync_never_rewrites_user_file_and_writes_managed_copy`) |
 | 0b | browser fixture | "Export Python DSL" on a user-file session produces a download from the copy and a file unchanged on disk |
 | 0c | `inspect` on 5 examples incl. `mumax_standard_problem_5_fdm.py`, a syntax error, a BOM file | JSON schema valid; no marker file created by a script that writes on import (canary script) |
 | 1 | consent | renderer cannot start a run without the native dialog; `script_run` with an unknown ticket is `refused`; changed bytes after consent give exit 11 and no Python process |
@@ -570,8 +710,43 @@ should still be written and left unrun, as for the rest of the start screen.
 | 1 | browser (AGENTS viewport rule) | in the new window: visible canvas, WebGL context alive, non-zero drawing buffer, state `waiting_for_solve` reached |
 | 1 | DB | after pick, run, crash: exactly one `open` and one `run` event, `use_count` +1, actor `desktop` |
 | 2 | loader | file replaced between hash and exec: the executed bytes equal the hashed bytes |
-| 3 | `.fms` | script document survives load/save unchanged; manifest hash matches; project open runs nothing |
+| 3 | `.fms` | script document survives load/save unchanged; manifest hash matches; project open runs nothing. Covered by API tests `from_script_*` (success with embedded script, `script.json` hash, provenance entry, open and authoring keep the documents; 422 with the helper message and nothing kept; 400 without consent and no marker file written by the script; 413 above 1 MiB). No asset manifest exists |
 | 4 | survey | pass-rate table over `examples/*.py` committed with the commands that produced it |
+
+**Phase 3 survey (2026-10-05, development host, Miniconda Python 3.12.2, repository
+Python package).** Each file went through the real endpoint with the ignored test
+fixture below; `FULLMAG_FROM_SCRIPT_SURVEY` lists the files separated by `;`.
+
+```
+FULLMAG_FROM_SCRIPT_SURVEY="<file>;<file>;..." RUST_MIN_STACK=16777216 \
+FULLMAG_PYTHON=C:/Users/Mateusz/miniconda3/python.exe \
+cargo test -p fullmag-api --bin fullmag-api from_script_survey -- --ignored --nocapture
+```
+
+27 scripts: the 8 template scripts, one minimal FEM box, and 18 files of
+`examples/`. Result: 2 `verified`, 21 `failed` (project created, fidelity
+reported), 4 export refused with 422 (nothing kept).
+
+| File | Verdict | First reason |
+|---|---|---|
+| `examples/fem_exchange_zeeman.py` | verified | |
+| `examples/fem_exchange_demag_zeeman.py` | verified | |
+| `examples/mumax_standard_problem_5_fdm.py` | failed | scene renders `fix_dt` together with adaptive controls |
+| `examples/exchange_relax.py`, `exchange_demag_zeeman.py`, `dw_track.py`, `py_layer_relax.py` | failed | re-rendered script combines FEM mesh controls with `cell_size` and does not load |
+| `examples/basic_fem.py` | failed | scene renders `fix_dt` together with adaptive controls |
+| `examples/two_object_couplings.py`, `region_owned_gradient_ms.py` | failed | re-render adds `fixed_timestep = 1e-13` where the script has none |
+| `examples/fdm_cpu_relax_smoke.py`, `viewport_2d_default_slice_fdm_smoke.py` | failed | re-render uses gamma 221100 instead of the script's 233728.48 |
+| `examples/fdm_hysteresis_smoke.py` | failed | re-render has no hysteresis stage |
+| `examples/py_layer_hole_relax_150nm.py` | failed | geometry kind `difference` is not supported by the scene renderer |
+| `examples/permalloy_box_relax_300x1000x10nm_fdm.py`, `relaxation_qualification_case.py`, `permalloy_film_relax_1000x500x10nm.py` | 422 | the script itself: LLG relaxation requires an explicit timestep policy |
+| `examples/topological_charge_runtime.py` | 422 | the script reads the required environment variable `FULLMAG_RELAXATION_ALGORITHM` |
+| templates `umag-sp1`, `umag-sp4`, `spin-wave-dispersion`, `skyrmion-phase-diagram`, `domain-wall-motion` | failed | scene renders `fix_dt` together with adaptive controls |
+| templates `broadband-fmr` | failed | scene renders solver controls that are valid only for `llg_overdamped` |
+| templates `magnonic-crystal-bands`, `vortex-gyration`, minimal FEM box | failed | re-render adds a fixed time step or drops stages |
+
+Verified here means only that the compared fields agree in the lowered
+ProblemIR; no solver ran. A script that is run-only today keeps working because
+the project embeds it unchanged.
 
 Anything not executed on a real packaged Windows install stays `NOT VERIFIED`.
 

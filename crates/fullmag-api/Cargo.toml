@@ -84,6 +84,7 @@ axum.workspace = true
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures-core = "0.3"
+crc32fast = "1"
 fullmag-build-info.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
@@ -100,6 +101,7 @@ fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-runner = { path = "../fullmag-runner" }
 fullmag-session = { path = "../fullmag-session" }
 fullmag-workspace = { path = "../fullmag-workspace" }
+fullmag-workspace-inspect = { path = "../fullmag-workspace-inspect", features = ["utoipa"] }
 fullmag-runtime-control = { path = "../fullmag-runtime-control" }
 png = "0.17"
 tiny-skia = "0.11"
@@ -117,3 +119,5 @@ libc = "0.2"
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
+rusqlite = "0.37"
+zip = { version = "2", default-features = false, features = ["deflate"] }

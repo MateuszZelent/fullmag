@@ -3,7 +3,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
@@ -24,6 +24,18 @@ struct ResultPublication {
     result: RestartResult,
 }
 
+struct ConsumerReadinessCandidate {
+    api_instance_id: String,
+    candidate: crate::development_api_owner::SelectedDevelopmentCandidate,
+}
+
+#[derive(PartialEq, Eq)]
+struct ConsumerSelectionIdentity {
+    api_instance_id: String,
+    ready_build_id: String,
+    ready_source_sha256: String,
+}
+
 #[derive(Default)]
 pub(crate) struct NativeRestartPump {
     attempted_api: Option<String>,
@@ -32,6 +44,9 @@ pub(crate) struct NativeRestartPump {
     suspended: bool,
     known_closed_before_commit: bool,
     pending_attach_resume: Option<String>,
+    readiness_candidate: Option<ConsumerReadinessCandidate>,
+    readiness_selection_attempt: Option<ConsumerSelectionIdentity>,
+    last_readiness_attempt: Option<Instant>,
     pub(crate) last_execution: Option<serde_json::Value>,
 }
 
@@ -79,6 +94,7 @@ impl NativeRestartPump {
         let Some(request) =
             transport::read_pending_request(&root, &worktree, &old_api, &generation)?
         else {
+            self.refresh_consumer_readiness(repo_root, guard, &old_api)?;
             return Ok(());
         };
         if transport::read_result(
@@ -89,9 +105,15 @@ impl NativeRestartPump {
         )?
         .is_some()
         {
+            self.readiness_candidate = None;
+            guard.confirm_development_consumer_readiness(None)?;
             self.attempted_api = Some(old_api);
             return Ok(());
         }
+        // Stop advertising before beginning any capture or process handoff.
+        // A failed withdrawal is retryable here because no attempt was claimed.
+        self.readiness_candidate = None;
+        guard.confirm_development_consumer_readiness(None)?;
         // Set the in-process claim before any helper, observer or commit.
         self.attempted_api = Some(old_api.clone());
         let result = self.consume(repo_root, guard, runtime_attach, scratch, &request, observe);
@@ -140,6 +162,68 @@ impl NativeRestartPump {
             .context("native restart result publication remains unconfirmed")?;
         }
         self.pending_result = None;
+        Ok(())
+    }
+
+    fn refresh_consumer_readiness(
+        &mut self,
+        repo_root: &Path,
+        guard: &ControlRoomGuard,
+        api_instance_id: &str,
+    ) -> Result<()> {
+        if self
+            .last_readiness_attempt
+            .is_some_and(|last| last.elapsed() < Duration::from_secs(1))
+        {
+            return Ok(());
+        }
+        self.last_readiness_attempt = Some(Instant::now());
+        let status = guard.development_consumer_status()?;
+        let (Some(build), Some(source)) = (status.ready_build_id, status.ready_source_sha256)
+        else {
+            self.readiness_candidate = None;
+            self.readiness_selection_attempt = None;
+            // A status read cannot prolong a previously issued lease.
+            guard.confirm_development_consumer_readiness(None)?;
+            return Ok(());
+        };
+        let matches = self.readiness_candidate.as_ref().is_some_and(|selected| {
+            selected.api_instance_id == api_instance_id
+                && selected.candidate.ready_build_id == build
+                && selected.candidate.ready_source_sha256 == source
+        });
+        if !matches {
+            let selection_identity = ConsumerSelectionIdentity {
+                api_instance_id: api_instance_id.to_owned(),
+                ready_build_id: build.clone(),
+                ready_source_sha256: source.clone(),
+            };
+            if self.readiness_selection_attempt.as_ref() == Some(&selection_identity) {
+                // A selector failure may already have sealed a bundle. Do not
+                // repeatedly create copies for one unchanged ready observation.
+                return Ok(());
+            }
+            self.readiness_candidate = None;
+            guard.confirm_development_consumer_readiness(None)?;
+            self.readiness_selection_attempt = Some(selection_identity);
+            let candidate = guard.select_ready_development_candidate(repo_root)?;
+            if candidate.ready_build_id != build || candidate.ready_source_sha256 != source {
+                bail!("ready candidate changed during consumer readiness selection");
+            }
+            self.readiness_candidate = Some(ConsumerReadinessCandidate {
+                api_instance_id: api_instance_id.to_owned(),
+                candidate,
+            });
+            // Retain the validated bundle before sending renewal. A lost ACK
+            // retries this candidate rather than sealing another copy.
+            let selected = self
+                .readiness_candidate
+                .as_ref()
+                .context("selected consumer readiness candidate custody is missing")?;
+            guard.confirm_development_consumer_readiness(Some(&selected.candidate))?;
+        } else if let Some(selected) = self.readiness_candidate.as_ref() {
+            guard.confirm_development_consumer_readiness(Some(&selected.candidate))?;
+        }
         Ok(())
     }
 

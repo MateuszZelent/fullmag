@@ -1,0 +1,33 @@
+{
+  "schema_version": "compute_resources.v1",
+  "target": {
+    "kind": "pool",
+    "id": "gpu-pool"
+  },
+  "cpu": {
+    "threads": 8,
+    "core_policy": "physical_first",
+    "affinity": "numa",
+    "numa_node": 0,
+    "native_threads": 4,
+    "blas_threads": 2
+  },
+  "gpu": {
+    "selector": "allow_list",
+    "device_uuids": ["GPU-1", "GPU-2"],
+    "devices_per_task": 2,
+    "vram_per_device_bytes": 2147483648
+  },
+  "ram": {
+    "reservation_bytes": 8589934592
+  },
+  "scratch": {},
+  "parallelism": {
+    "kind": "distributed",
+    "ranks": 2,
+    "threads_per_rank": 8,
+    "ranks_per_node": 2,
+    "gpus_per_rank": 1
+  },
+  "placement": "throughput"
+}

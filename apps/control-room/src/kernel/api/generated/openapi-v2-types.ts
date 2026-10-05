@@ -68,6 +68,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/from-script": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_from_script"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/open": {
         parameters: {
             query?: never;
@@ -3797,7 +3813,7 @@ export interface paths {
         get: operations["persistence_get_sessions_current_persistence_checkpoints_checkpoint_id"];
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["persistence_delete_sessions_current_persistence_checkpoints_checkpoint_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4363,6 +4379,182 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/workspace/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items"];
+        put?: never;
+        post: operations["workspace_items_post_workspace_items"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_archive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/forget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["workspace_items_post_workspace_items_id_forget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/frames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_frames"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_history"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["workspace_items_post_workspace_items_id_pin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_thumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/roots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_roots"];
+        put: operations["workspace_items_put_workspace_roots"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["workspace_items_post_workspace_scan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/settings/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_settings_key"];
+        put: operations["workspace_items_put_workspace_settings_key"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4870,6 +5062,13 @@ export interface components {
             region_owned_provenance?: null | components["schemas"]["RegionOwnedArtifactProvenance"];
             stage_autosave?: null | components["schemas"]["StageAutosaveArtifactMetadata"];
         };
+        Author: {
+            affiliation?: string | null;
+            email?: string | null;
+            name: string;
+            orcid?: string | null;
+            role: string;
+        };
         AuthoringTransactionRequest: {
             /** Format: int64 */
             base_revision?: number | null;
@@ -5156,6 +5355,12 @@ export interface components {
             study_kind: string;
             /** Format: double */
             time_s: number;
+        };
+        Citation: {
+            doi?: string | null;
+            license?: string | null;
+            preferred_bibtex?: string | null;
+            url?: string | null;
         };
         /** @enum {string} */
         ClipAxis: "x" | "y" | "z";
@@ -5751,6 +5956,12 @@ export interface components {
             /** Format: int64 */
             revision: number;
             total: number;
+        };
+        ExecutionSummary: {
+            /** @description External field and enabled field drives, in words. */
+            excitation?: string | null;
+            integrator?: string | null;
+            tolerance?: string | null;
         };
         /** @enum {string} */
         ExistingOutputSchema: "timestamp" | "error";
@@ -6647,6 +6858,63 @@ export interface components {
         };
         /** @enum {string} */
         FixedSolverIntegratorRequest: "auto" | "heun" | "rk4" | "rk23" | "rk45" | "abm3";
+        /** @description One saved frame of a results folder (an entry of `frames.json`). */
+        FrameEntry: {
+            /** Format: int64 */
+            bytes?: number | null;
+            /**
+             * Format: int64
+             * @description Position over the whole folder, across stages, from 0.
+             */
+            index: number;
+            /** @description Location of the snapshot relative to the results folder. */
+            path: string;
+            quantity_ids: string[];
+            stage_id?: string | null;
+            /** Format: int64 */
+            step: number;
+            /** Format: double */
+            time_s: number;
+        };
+        /** @description A page of the frame index. */
+        FramesPage: {
+            frames: components["schemas"]["FrameEntry"][];
+            /** Format: int64 */
+            from: number;
+            /** @description The folder has a frame index; false lists nothing and means no index was written. */
+            indexed: boolean;
+            /**
+             * Format: int64
+             * @description Frames in the whole index.
+             */
+            total: number;
+            truncated: boolean;
+        };
+        /** @description Frames saved per stage, in folder order. */
+        FramesStageCount: {
+            /** Format: int64 */
+            count: number;
+            stage_id: string;
+        };
+        /** @description What `frames.json` says without listing every frame. */
+        FramesSummary: {
+            /** Format: int64 */
+            count: number;
+            /** Format: int64 */
+            first_step?: number | null;
+            /** Format: double */
+            first_time_s?: number | null;
+            /** Format: int64 */
+            last_step?: number | null;
+            /** Format: double */
+            last_time_s?: number | null;
+            /** @description Why part of the index was not read (unknown schema, unreadable file). */
+            note?: string | null;
+            schema: string;
+            stages: components["schemas"]["FramesStageCount"][];
+            /** @description The index reached its entry limit: later frames are not listed. */
+            truncated: boolean;
+        };
         FrequencyDomainArtifactExtras: {
             [key: string]: unknown;
         };
@@ -7487,6 +7755,17 @@ export interface components {
             /** Format: int64 */
             uptime_seconds: number;
         };
+        HistoryEntry: {
+            at: string;
+            by?: string | null;
+            changes?: string[];
+            kind: string;
+            restorable?: boolean | null;
+            /** Format: int64 */
+            revision: number;
+            run_id?: string | null;
+            summary: string;
+        };
         HostEngineEntry: {
             backend: string;
             device: string;
@@ -8029,6 +8308,17 @@ export interface components {
         };
         /** @enum {string} */
         InactiveSelectionPolicySchema: "warn_and_intersect" | "error";
+        /** @description Inspector document of one workspace item. */
+        ItemDetail: (components["schemas"]["ProjectDetail"] & {
+            /** @enum {string} */
+            kind: "project";
+        }) | (components["schemas"]["ScriptDetail"] & {
+            /** @enum {string} */
+            kind: "script";
+        }) | (components["schemas"]["ResultDetail"] & {
+            /** @enum {string} */
+            kind: "result";
+        });
         KnownSceneCurrentTransport: {
             boundaries?: components["schemas"]["SceneChargeBoundary"][];
             /** Format: double */
@@ -9555,6 +9845,19 @@ export interface components {
             /** Format: int64 */
             scene_revision: number;
         };
+        ModelSummary: {
+            aex?: string | null;
+            alpha?: string | null;
+            /** @description Cell size in nm (FDM). */
+            cell_size?: string | null;
+            /** @description Cell counts `nx x ny x nz` (FDM). */
+            discretisation?: string | null;
+            interactions?: string[] | null;
+            materials?: string[] | null;
+            ms?: string | null;
+            /** @description The scene has no periodicity field yet, so this is always `null`. */
+            periodicity?: string | null;
+        };
         NullableF64PatchValue: number | null;
         NullableStringPatchValue: string | null;
         NullableU32PatchValue: number | null;
@@ -9753,6 +10056,13 @@ export interface components {
             output_dir: string | null;
             /** @default null */
             temp_dir: string | null;
+        };
+        /** @description Outputs of the latest recorded run. */
+        OutputsSummary: {
+            /** Format: int64 */
+            frames?: number | null;
+            /** Format: int64 */
+            size_bytes?: number | null;
         };
         /** @enum {string} */
         ParallelExecutionModeResource: "serial" | "adaptive";
@@ -10335,6 +10645,12 @@ export interface components {
         PrescribedSotFormulaVersion: "prescribed_sot.fullmag.v1" | "prescribed_sot.legacy_fullmag.v0";
         /** @enum {string} */
         PrescribedSotSchemaVersion: "prescribed_sot.v1";
+        /** @description How the stored preview image was coloured. */
+        PreviewInfo: {
+            at?: string | null;
+            colouring: string;
+            run_id?: string | null;
+        };
         PrimitiveGeometryCapability: {
             boolean: boolean;
             category: string;
@@ -10382,6 +10698,34 @@ export interface components {
              */
             name: string;
         };
+        /** @description Facts of a `.fms` project read from its archive. */
+        ProjectDetail: {
+            authors: components["schemas"]["Author"][];
+            can_write?: boolean | null;
+            citation?: null | components["schemas"]["Citation"];
+            history: components["schemas"]["HistoryEntry"][];
+            /** @description The archive was written by an older schema and is migrated in memory. */
+            migrated?: boolean | null;
+            /** @description `read_write` or `read_only`. */
+            mode?: string | null;
+            mode_reason?: string | null;
+            name?: string | null;
+            preview?: null | components["schemas"]["PreviewInfo"];
+            project_id?: string | null;
+            /** @description The provenance document exists; false for a project that predates tracking. */
+            provenance_recorded: boolean;
+            /** @description Why the archive could not be read; every other field is then empty. */
+            read_error?: string | null;
+            /** Format: int64 */
+            revision?: number | null;
+            runs: components["schemas"]["ProjectRun"][];
+            /** @description Schema of the stored archive as `major.minor`. */
+            schema_version?: string | null;
+            /** @description `fdm` or `fem`. */
+            solver?: string | null;
+            summary?: null | components["schemas"]["ProjectSummary"];
+            warnings: string[];
+        };
         ProjectDocumentMode: {
             /** @enum {string} */
             kind: "read_write";
@@ -10407,6 +10751,42 @@ export interface components {
             schema_version: string;
             source_hash?: string | null;
         };
+        /** @description Explicit statement that the person agreed to run the script. */
+        ProjectFromScriptConsent: {
+            /** @description Must be `true`: the operation executes the script in the Python helper. */
+            executed_by_user: boolean;
+        };
+        /**
+         * @description Turns a Python script into a project. The operation EXECUTES the script in
+         *     the Python helper (same trust model as a script run), so the request must
+         *     carry explicit consent.
+         */
+        ProjectFromScriptRequest: {
+            consent?: null | components["schemas"]["ProjectFromScriptConsent"];
+            /**
+             * @description Where the script came from (for example `template:umag-sp1`,
+             *     `mx3:model.mx3`, `script_file`); recorded in `script.json`.
+             */
+            origin?: string | null;
+            /** @description Project name; defaults to the script file stem. */
+            project_name?: string | null;
+            /**
+             * @description Workspace script item. Not supported by the API; the host reads the
+             *     file and sends its text as `source`. A request that sets it is refused.
+             */
+            script_item_id?: string | null;
+            source?: null | components["schemas"]["ProjectFromScriptSource"];
+        };
+        /** @description The created project (same fields as create/open) plus what was imported. */
+        ProjectFromScriptResource: components["schemas"]["ProjectDocumentResource"] & {
+            script_import: components["schemas"]["ProjectScriptImportResource"];
+        };
+        ProjectFromScriptSource: {
+            /** @description File name shown in provenance; it is not a filesystem path. */
+            name: string;
+            /** @description UTF-8 Python source, at most 1 MiB. */
+            text: string;
+        };
         ProjectMigrationResource: {
             can_write: boolean;
             migrated: boolean;
@@ -10414,6 +10794,24 @@ export interface components {
             source_schema: string;
             target_schema: string;
             warnings: string[];
+        };
+        /** @description A run recorded in the project's provenance. */
+        ProjectRun: {
+            backend?: string | null;
+            device?: string | null;
+            /** Format: double */
+            duration_seconds?: number | null;
+            error?: string | null;
+            finished_at?: string | null;
+            /** Format: int64 */
+            frames?: number | null;
+            /** Format: int64 */
+            output_bytes?: number | null;
+            /** Format: int64 */
+            revision?: number | null;
+            run_id: string;
+            started_at: string;
+            status: string;
         };
         /** @enum {string} */
         ProjectRunCatalogState: "pending_materialization" | "materialized";
@@ -10493,7 +10891,7 @@ export interface components {
             study_plan: {
                 [key: string]: unknown;
             };
-            /** @description Versioned `study_problem_catalog.v1` object bound to the exact study digest. */
+            /** @description Immutable study catalog: legacy v1, or v2 with pinned execution profiles and field origins. */
             study_problem_catalog: {
                 [key: string]: unknown;
             };
@@ -10556,6 +10954,20 @@ export interface components {
             resolved_input_fingerprint?: string | null;
             resource_id?: string | null;
             task_id: string;
+        };
+        ProjectScriptImportResource: {
+            exported_at: string;
+            fidelity: components["schemas"]["ScriptFidelityResource"];
+            name: string;
+            origin: string;
+            /** @description Archive path of the embedded original script. */
+            script_path: string;
+            sha256: string;
+        };
+        ProjectSummary: {
+            execution: components["schemas"]["ExecutionSummary"];
+            model: components["schemas"]["ModelSummary"];
+            outputs: components["schemas"]["OutputsSummary"];
         };
         QuantityCatalogEntry: {
             /** @description Capability of the resolved backend/plan, independent of field cache. */
@@ -10923,6 +11335,69 @@ export interface components {
          * @enum {string}
          */
         RestoreClass: "exact_resume" | "logical_resume" | "initial_condition_import" | "config_only";
+        /** @description Facts of a Fullmag results folder, read from metadata files only. */
+        ResultDetail: {
+            finished_at?: string | null;
+            /** @description `zarr`, `hdf5` or `unknown`. */
+            format?: string | null;
+            /** Format: int64 */
+            frames?: number | null;
+            frames_index?: null | components["schemas"]["FramesSummary"];
+            grid?: null | components["schemas"]["ResultGrid"];
+            /** @description The folder carries a `fullmag-run.json`. */
+            has_manifest: boolean;
+            modified_at?: string | null;
+            outputs: components["schemas"]["RunOutput"][];
+            quantities: string[];
+            read_error?: string | null;
+            run_id?: string | null;
+            source?: null | components["schemas"]["RunSource"];
+            stages: components["schemas"]["StageSummary"][];
+            started_at?: string | null;
+            /** @description Status from the manifest, or from `metadata.json` of the final stage. */
+            status?: string | null;
+            /** Format: int64 */
+            total_bytes?: number | null;
+            /** @description The walk stopped at a limit: `total_bytes` is a lower bound. */
+            total_bytes_truncated: boolean;
+        };
+        /** @description Mesh or grid of the run, from `metadata.json` `artifact_layout`. */
+        ResultGrid: {
+            backend?: string | null;
+            /** @description Cell counts of an FDM grid. */
+            cells?: number[] | null;
+            /** Format: double */
+            hmax?: number | null;
+            /** Format: int64 */
+            n_elements?: number | null;
+            /** Format: int64 */
+            n_nodes?: number | null;
+        };
+        /** @description One output the run produced, relative to the results folder. */
+        RunOutput: {
+            kind: string;
+            path: string;
+        };
+        /** @description What produced the results. */
+        RunSource: {
+            /** @description `script` or `project`. */
+            kind: string;
+            /**
+             * @description Absolute path as the user would type it (no `\\?\` prefix). Empty when
+             *     the producer does not know the file (accepted project runs record the
+             *     project id and revision instead).
+             */
+            path?: string;
+            /** @description Stable project id (projects only). */
+            project_id?: string | null;
+            /**
+             * Format: int64
+             * @description Definition revision that was run (projects only).
+             */
+            revision?: number | null;
+            /** @description SHA-256 of the script bytes (or of the archive) when known. */
+            sha256?: string | null;
+        };
         RunSummary: {
             calibration_id?: string | null;
             requested_device: string;
@@ -11862,8 +12337,61 @@ export interface components {
             fallback: string | null;
             requested_execution: components["schemas"]["SessionExecutionResource"];
         };
+        /**
+         * @description Static facts of a Python script. Nothing is executed: the file is read
+         *     (at most 16 MiB), hashed and scanned line by line.
+         */
+        ScriptDetail: {
+            /** Format: int64 */
+            bytes?: number | null;
+            /** @description The facts come from a static line scan, not from Python's parser. */
+            degraded: boolean;
+            degraded_reason?: string | null;
+            /** @description `utf-8`, `utf-8-bom` or `other`. */
+            encoding?: string | null;
+            /**
+             * @description Names read through a literal `os.environ[...]`, `os.environ.get(...)`
+             *     or `os.getenv(...)`; never values.
+             */
+            env_reads?: string[] | null;
+            /** @description Top-level module names imported at any indentation. */
+            imports?: string[] | null;
+            /** Format: int64 */
+            lines?: number | null;
+            read_error?: string | null;
+            sha256?: string | null;
+            /** @description First line of the module docstring. */
+            summary?: string | null;
+            syntax?: null | components["schemas"]["ScriptSyntax"];
+            /** @description Python's parser checked the syntax (`ast`, never executed). */
+            syntax_checked: boolean;
+            /** @description Only the first 1 MiB was scanned for the facts below. */
+            truncated: boolean;
+            /**
+             * @description Top-level imports that `importlib.util.find_spec` did not find in
+             *     the chosen interpreter (nor next to the script); `null` when not
+             *     checked. This says nothing about the interpreter a run would use.
+             */
+            unresolved_imports?: string[] | null;
+            uses_fullmag?: boolean | null;
+        };
+        ScriptFidelityResource: {
+            notes: string[];
+            round_trip: components["schemas"]["ScriptRoundTripState"];
+            /** @description The helper exported a SceneDocument from the script. */
+            scene_exported: boolean;
+        };
+        /** @enum {string} */
+        ScriptRoundTripState: "verified" | "failed" | "not_checked";
         ScriptSourceResponse: {
             bytes: number;
+            /**
+             * @description Managed export copy path for `user_file` sessions (the response
+             *     carries the copy when it exists, otherwise the read-only original).
+             */
+            managed_copy_path?: string | null;
+            /** @description Script origin of the session: `user_file`, `generated` or `none`. */
+            origin?: string;
             script_path: string;
             source: string;
         };
@@ -11873,9 +12401,38 @@ export interface components {
         ScriptSyncResponse: {
             bytes_written: number;
             entrypoint_kind: string;
+            /** @description Managed export copy path for `user_file` sessions. */
+            managed_copy_path?: string | null;
+            /**
+             * @description Path of the file that received the canonical script. For a
+             *     `user_file` session this is the managed export copy, never the
+             *     user's own script.
+             */
             script_path: string;
             source_kind: string;
+            /**
+             * @description True only when the session's own source script file was rewritten.
+             *     Always false for `user_file` sessions.
+             */
+            source_script_modified?: boolean;
             written: boolean;
+            /**
+             * @description `export_copy` (user file left untouched, copy written to managed
+             *     storage) or `script` (the session's managed script was written).
+             */
+            written_to?: string;
+        };
+        /** @description Outcome of parsing a script with Python's `ast` (never executed). */
+        ScriptSyntax: {
+            /** Format: int64 */
+            column?: number | null;
+            /**
+             * Format: int64
+             * @description 1-based line of the first syntax error.
+             */
+            line?: number | null;
+            message?: string | null;
+            ok: boolean;
         };
         SelectionBoundaryMembershipSchema: {
             /** Format: double */
@@ -12191,11 +12748,32 @@ export interface components {
          * @enum {string}
          */
         SessionRestoreMode: "visualization_only" | "replace_project" | "resume";
+        /**
+         * @description Where the current session's Python script comes from and whether Fullmag
+         *     may write to it.
+         */
+        SessionScriptSummary: {
+            managed_copy_path?: string | null;
+            /**
+             * @description `user_file` (a file the user owns; Fullmag never writes it),
+             *     `generated` (a script inside Fullmag-managed storage) or `none`.
+             */
+            origin: string;
+            path: string;
+            /**
+             * @description Content hash of the script at the time of the request; only present on
+             *     `GET /v2/sessions/current`.
+             */
+            sha256?: string | null;
+            /** @description False for `user_file`: syncs go to `managed_copy_path` instead. */
+            writable: boolean;
+        };
         SessionSummary: {
             created_at: string;
             name: string;
             /** @description API-instance and transition identity for current-session HTTP/cache ownership. */
             request_scope_epoch: string;
+            script?: null | components["schemas"]["SessionScriptSummary"];
             /** @description Scientific session identity shared with observation frames. */
             session_epoch: string;
             session_id: string;
@@ -13145,6 +13723,15 @@ export interface components {
         StageMetricUnit: "A/m" | "J" | "s" | "1";
         /** @enum {string} */
         StageStopReason: "torque" | "energy" | "max_steps" | "max_pseudotime" | "max_physical_time" | "user_cancelled" | "backend_error" | "gradient";
+        /** @description One stage of a run. */
+        StageSummary: {
+            id: string;
+            kind?: string | null;
+            /** Format: int64 */
+            steps?: number | null;
+            /** Format: double */
+            time_s?: number | null;
+        };
         StageTableAutosaveResource: {
             /** Format: int64 */
             every_steps?: number | null;
@@ -14066,6 +14653,71 @@ export interface components {
             /** Format: int64 */
             revision: number;
         };
+        WorkspaceAddRequest: {
+            kind?: null | components["schemas"]["WorkspaceItemKind"];
+            /** @description Absolute path of an existing `.fms`, `.py` or results folder. */
+            path: string;
+        };
+        WorkspaceEvent: {
+            /** @description `desktop`, `cli`, `python` or `web`. */
+            actor: string;
+            at: string;
+            detail: Record<string, never>;
+            /** @description Row id as a decimal string. */
+            id: string;
+            /** @description `open`, `save`, `run`, `create`, `import`, `pin`, `unpin`, `forget` or `edit`. */
+            kind: string;
+        };
+        WorkspaceForgetResult: {
+            forgotten: boolean;
+            id: string;
+        };
+        WorkspaceHistory: {
+            events: components["schemas"]["WorkspaceEvent"][];
+        };
+        WorkspaceItem: {
+            first_seen_at: string;
+            /** @description `GET .../items/{id}/thumbnail` returns a PNG. */
+            has_thumbnail: boolean;
+            /** @description Row id as a decimal string. */
+            id: string;
+            kind: components["schemas"]["WorkspaceItemKind"];
+            last_used_at: string;
+            /** @description Per-kind facts written by Fullmag front ends; unknown keys are kept. */
+            meta: Record<string, never>;
+            modified_at?: string | null;
+            name: string;
+            /** @description Absolute path as the person would type it (no `\\?\` prefix). */
+            path: string;
+            pinned: boolean;
+            /** @description Stable project id (projects only). */
+            project_id?: string | null;
+            /** Format: int64 */
+            size_bytes?: number | null;
+            status: components["schemas"]["WorkspaceItemStatus"];
+            thumbnail_origin?: null | components["schemas"]["WorkspaceThumbnailOrigin"];
+            /** Format: int64 */
+            use_count: number;
+        };
+        WorkspaceItemDetail: {
+            /** @description Facts read from the file now; a reader failure is `read_error` inside. */
+            detail: components["schemas"]["ItemDetail"];
+            /** @description The last 30 events, newest first. */
+            events: components["schemas"]["WorkspaceEvent"][];
+            item: components["schemas"]["WorkspaceItem"];
+            /** @description Result folders whose run manifest names this script or project. */
+            linked_results: components["schemas"]["WorkspaceItem"][];
+            linked_source?: null | components["schemas"]["WorkspaceItem"];
+            read_at: string;
+        };
+        /** @enum {string} */
+        WorkspaceItemKind: "project" | "script" | "result";
+        WorkspaceItemList: {
+            items: components["schemas"]["WorkspaceItem"][];
+            outcome: components["schemas"]["WorkspaceOutcome"];
+        };
+        /** @enum {string} */
+        WorkspaceItemStatus: "ready" | "missing" | "failed" | "migrate" | "readonly";
         WorkspaceLayoutReplaceRequest: {
             active_workspace_tab_by_stage: {
                 [key: string]: string | null;
@@ -14086,6 +14738,16 @@ export interface components {
                 [key: string]: components["schemas"]["WorkspaceStageLayout"];
             };
         };
+        /** @enum {string} */
+        WorkspaceOpenState: "ready" | "created" | "migrated" | "quarantined" | "read_only_newer_schema";
+        /** @description How the database was obtained for this request. */
+        WorkspaceOutcome: {
+            detail?: string | null;
+            state: components["schemas"]["WorkspaceOpenState"];
+        };
+        WorkspacePinRequest: {
+            pinned: boolean;
+        };
         WorkspaceRibbonReplaceRequest: {
             active_contextual_tab?: string | null;
             active_core_tab: string;
@@ -14097,6 +14759,40 @@ export interface components {
             /** Format: int64 */
             revision: number;
             workspace_mode: string;
+        };
+        WorkspaceRoot: {
+            enabled?: boolean;
+            /** @description Kinds to look for; empty means all three. */
+            kinds?: components["schemas"]["WorkspaceItemKind"][];
+            /** @description Absolute directory. */
+            path: string;
+            recursive?: boolean;
+        };
+        WorkspaceRoots: {
+            roots: components["schemas"]["WorkspaceRoot"][];
+            source: components["schemas"]["WorkspaceRootsSource"];
+        };
+        WorkspaceRootsRequest: {
+            roots: components["schemas"]["WorkspaceRoot"][];
+        };
+        /** @enum {string} */
+        WorkspaceRootsSource: "configured" | "legacy" | "none";
+        WorkspaceScanReport: {
+            /** Format: int64 */
+            added: number;
+            /** Format: int64 */
+            missing: number;
+            /** Format: int64 */
+            scanned: number;
+            /** Format: int64 */
+            skipped: number;
+            /** Format: int64 */
+            updated: number;
+            warnings: string[];
+        };
+        WorkspaceScanRequest: {
+            /** @description Roots to scan once instead of the saved ones; they are not saved. */
+            roots?: components["schemas"]["WorkspaceRoot"][] | null;
         };
         WorkspaceSelectionReplaceRequest: {
             selected_entity_id?: string | null;
@@ -14110,12 +14806,31 @@ export interface components {
             selected_node_id?: string | null;
             selected_object_id?: string | null;
         };
+        /** @description One allow-listed setting of the per-user workspace database (`kv`). */
+        WorkspaceSetting: {
+            /** @description Nothing is stored under the key: `value` is the default. */
+            is_default: boolean;
+            /** @description `telemetry.enabled` or `update.available`. */
+            key: string;
+            /** @description The stored value, or the default (`false` / `null`) when unset. */
+            value: Record<string, never>;
+            /**
+             * @description The API accepts `PUT` for the key. `update.available` is written by an
+             *     updater, never by the renderer.
+             */
+            writable: boolean;
+        };
+        WorkspaceSettingRequest: {
+            value: Record<string, never>;
+        };
         WorkspaceStageLayout: {
             bottom_dock?: string | null;
             center_dock?: string | null;
             left_dock?: string | null;
             right_dock?: string | null;
         };
+        /** @enum {string} */
+        WorkspaceThumbnailOrigin: "item" | "source_project";
         /** @enum {string} */
         ZhangLiFormulaVersion: "zhang_li.fullmag.v1" | "zhang_li.mumax3.v1" | "zhang_li.legacy_fullmag.v0";
         /** @enum {string} */
@@ -14250,6 +14965,51 @@ export interface operations {
             };
             /** @description Canonical source rendering failed */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_from_script: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectFromScriptRequest"];
+            };
+        };
+        responses: {
+            /** @description Project created from the script, with the original script embedded and a fidelity verdict */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectFromScriptResource"];
+                };
+            };
+            /** @description Missing consent, missing source, invalid name or unsupported script_item_id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Script text exceeds 1 MiB */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The helper could not export a scene document from the script; nothing is kept */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -25763,6 +26523,44 @@ export interface operations {
             };
         };
     };
+    persistence_delete_sessions_current_persistence_checkpoints_checkpoint_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Checkpoint id */
+                checkpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Checkpoint deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or checkpoint not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Checkpoint is still referenced as a restore source or by the run manifest */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     persistence_post_sessions_current_persistence_checkpoints_checkpoint_id_restore: {
         parameters: {
             query?: never;
@@ -27315,6 +28113,535 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items: {
+        parameters: {
+            query?: {
+                /** @description `all` (default; every kind), `project`, `script` or `result`. */
+                kind?: string | null;
+                /** @description `last_used` (default), `name`, `modified` or `use_count`; pinned first. */
+                sort?: string | null;
+                /** @description Case-insensitive substring over name, path and authors. */
+                search?: string | null;
+                /** @description 1 to 1000; default 200. */
+                limit?: number | null;
+                /** @description Default true; false drops items whose file is gone. */
+                include_missing?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent projects, scripts and result folders */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceItemList"];
+                };
+            };
+            /** @description Unknown kind or sort */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The workspace database could not be opened */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_post_workspace_items: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceAddRequest"];
+            };
+        };
+        responses: {
+            /** @description The added (or refreshed) item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceItem"];
+                };
+            };
+            /** @description The path cannot be added */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The database is read-only (newer schema) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Item with the facts read from its file now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceItemDetail"];
+                };
+            };
+            /** @description Unknown or forgotten item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_archive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Zip of the result folder, streamed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
+                };
+            };
+            /** @description The item is not a result folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown, forgotten or missing item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The folder contains a link or a name that cannot be archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The folder exceeds the archive size or file limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_post_workspace_items_id_forget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item no longer appears in lists; its file is untouched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceForgetResult"];
+                };
+            };
+            /** @description Unknown item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The database is read-only (newer schema) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_frames: {
+        parameters: {
+            query?: {
+                /** @description Index of the first frame (default 0). */
+                from?: number | null;
+                /** @description Frames per page (default 200, at most 1000). */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the saved-frame index (`frames.json`); `indexed` is false when the run wrote none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FramesPage"];
+                };
+            };
+            /** @description The item is not a result folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown, forgotten or missing item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_history: {
+        parameters: {
+            query?: {
+                /** @description 1 to 500; default 100. */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Events of the item, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHistory"];
+                };
+            };
+            /** @description Unknown item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_post_workspace_items_id_pin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspacePinRequest"];
+            };
+        };
+        responses: {
+            /** @description The item with its new pin state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceItem"];
+                };
+            };
+            /** @description Unknown item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The database is read-only (newer schema) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_thumbnail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description PNG preview of the item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": unknown;
+                };
+            };
+            /** @description The preview did not change (ETag matched) */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The item has no preview */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_roots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Folders the scanner looks through */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceRoots"];
+                };
+            };
+        };
+    };
+    workspace_items_put_workspace_roots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceRootsRequest"];
+            };
+        };
+        responses: {
+            /** @description Roots saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceRoots"];
+                };
+            };
+            /** @description A root is not an absolute existing folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The database is read-only (newer schema) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_post_workspace_scan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Optional; an empty body scans the saved roots */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceScanRequest"];
+            };
+        };
+        responses: {
+            /** @description What the scan found */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceScanReport"];
+                };
+            };
+            /** @description Invalid roots or body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A scan is already running, or the database is read-only */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_settings_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `telemetry.enabled` or `update.available` */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored value, or the default when unset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSetting"];
+                };
+            };
+            /** @description The key is not an allow-listed setting */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_put_workspace_settings_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `telemetry.enabled` */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceSettingRequest"];
+            };
+        };
+        responses: {
+            /** @description Setting saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSetting"];
+                };
+            };
+            /** @description The value has the wrong type, or the key is not writable through the API */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The key is not an allow-listed setting */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The database is read-only (newer schema) */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

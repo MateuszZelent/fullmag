@@ -9,7 +9,8 @@ import { cn } from "@/shared/utils/className";
 import { IMPORT_ACCEPT, IMPORT_FORMATS, classifyImportFile } from "../model/importFormats";
 import { translateMx3, type Mx3Translation } from "../model/mx3Import";
 import { copyScript, saveScriptFile } from "../model/scriptExport";
-import { buildImportOpenRequest, openTranslatedMx3, type ScriptOpener } from "../model/scriptOpen";
+import type { ProjectCreator } from "../model/scriptProject";
+import { buildImportSaveRequest, saveTranslatedMx3, type ScriptSaver } from "../model/scriptOpen";
 
 import { Mx3ImportReport } from "./Mx3ImportReport";
 
@@ -17,8 +18,10 @@ export interface ImportSectionProps {
   /** Resolves to why the file did not open, or null on success. */
   readonly onOpenFile: (file: File) => Promise<string | null>;
   readonly openDisabledReason: string | null;
-  /** Opens a translated script as a project; null when this build cannot. */
-  readonly onOpenScript?: ScriptOpener | null;
+  /** Saves a translated script as a new file; null where there is no desktop host. */
+  readonly scriptSaver?: ScriptSaver | null;
+  /** Creates a project from the translated script after consent; null without a project document service. */
+  readonly projectCreator?: ProjectCreator | null;
 }
 
 interface StagedImport {
@@ -29,7 +32,12 @@ interface StagedImport {
 const studyNameFor = (fileName: string): string =>
   fileName.replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9_-]+/g, "_") || "mx3_import";
 
-export function ImportSection({ onOpenFile, openDisabledReason, onOpenScript = null }: ImportSectionProps) {
+export function ImportSection({
+  onOpenFile,
+  openDisabledReason,
+  scriptSaver = null,
+  projectCreator = null,
+}: ImportSectionProps) {
   const [dragging, setDragging] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -67,19 +75,19 @@ export function ImportSection({ onOpenFile, openDisabledReason, onOpenScript = n
     setBusy(false);
   };
 
-  const openStaged = async () => {
+  const createStaged = async () => {
     if (!staged) return;
     setBusy(true);
-    const failure = await openTranslatedMx3(staged.fileName, staged.translation, onOpenScript);
+    const failure = await saveTranslatedMx3(staged.fileName, staged.translation, scriptSaver);
     setMessage(failure);
-    if (failure === null) setStaged(null);
+    // A cancelled dialog is not a failure: the report stays so the person can try again.
     setBusy(false);
   };
 
   const saveStaged = () => {
     if (!staged) return;
-    const request = buildImportOpenRequest(staged.fileName, staged.translation);
-    setMessage(saveScriptFile(request.fileName, request.source) ? null : "Saving a file is not available here.");
+    const request = buildImportSaveRequest(staged.fileName, staged.translation);
+    setMessage(saveScriptFile(request.suggestedName, request.text) ? null : "Saving a file is not available here.");
   };
 
   const copyStaged = async () => {
@@ -100,7 +108,7 @@ export function ImportSection({ onOpenFile, openDisabledReason, onOpenScript = n
           <h1>Import</h1>
           <p>
             Fullmag reads models from the common micromagnetic packages. What cannot be mapped is
-            reported before anything is written.
+            reported before anything is written. A .mx3 file is translated into a Python script you can review and save.
           </p>
         </div>
       </div>
@@ -151,9 +159,10 @@ export function ImportSection({ onOpenFile, openDisabledReason, onOpenScript = n
             setStaged(null);
             setMessage(null);
           }}
-          onOpen={() => void openStaged()}
+          onCreate={() => void createStaged()}
           onSave={saveStaged}
-          opener={onOpenScript}
+          projectCreator={projectCreator}
+          saver={scriptSaver}
           translation={staged.translation}
         />
       ) : null}

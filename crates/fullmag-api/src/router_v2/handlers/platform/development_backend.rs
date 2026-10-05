@@ -48,6 +48,14 @@ pub(crate) enum DevelopmentBackendConfig {
     },
 }
 
+/// Internal watcher view with the immutable generation/worktree scope retained for private checks.
+#[derive(Debug, Clone)]
+pub(crate) struct DevelopmentBackendObservation {
+    pub(crate) resource: DevelopmentBackendResource,
+    pub(crate) generation_id: Option<String>,
+    pub(crate) worktree_id: Option<String>,
+}
+
 impl DevelopmentBackendConfig {
     pub(crate) fn from_environment() -> Self {
         let values = ENV_KEYS.map(std::env::var_os);
@@ -135,7 +143,7 @@ impl DevelopmentBackendConfig {
         }
     }
 
-    fn observe(&self, now_ms: u64) -> DevelopmentBackendResource {
+    pub(crate) fn observe(&self, now_ms: u64) -> DevelopmentBackendResource {
         let mut result = DevelopmentBackendResource {
             schema_version: "1.0.0".into(),
             configured: !matches!(self, Self::Disabled),
@@ -223,6 +231,22 @@ impl DevelopmentBackendConfig {
             });
         }
         result
+    }
+
+    pub(crate) fn observe_for_consumer(&self, now_ms: u64) -> DevelopmentBackendObservation {
+        let (generation_id, worktree_id) = match self {
+            Self::Managed {
+                generation,
+                worktree,
+                ..
+            } => (Some(generation.clone()), Some(worktree.clone())),
+            Self::Disabled | Self::Invalid => (None, None),
+        };
+        DevelopmentBackendObservation {
+            resource: self.observe(now_ms),
+            generation_id,
+            worktree_id,
+        }
     }
 }
 

@@ -5,11 +5,11 @@ use std::{
     net::Ipv4Addr,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::{
@@ -22,9 +22,10 @@ use tokio::{
 
 use crate::{
     router_v2::handlers::platform::{
-        development_backend::DevelopmentBackendConfig,
+        development_backend::{DevelopmentBackendConfig, DevelopmentBackendObservation},
         development_restart::{acquire_workspace_for_restart, RestartableWorkspace},
     },
+    development_consumer_readiness::CandidateReadiness,
     types::AppState,
 };
 
@@ -32,6 +33,7 @@ const CONTROL_SCHEMA: &str = "fullmag.development-api-control.v1";
 const CONFIRM_SCHEMA: &str = "fullmag.development-api-confirm.v1";
 const MAX_REQUEST_BYTES: usize = 4096;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CONSUMER_RESPONSE_BYTES: usize = 2048;
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 const ACQUISITION_TIMEOUT: Duration = Duration::from_secs(5);
 const HOLD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -42,6 +44,9 @@ pub(crate) struct PreparedOwnerControl {
     owner_token: String,
     storage_root: PathBuf,
     relative_ready: String,
+    worktree_id: String,
+    generation_id: String,
+    runtime_service_config_absent: bool,
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -67,6 +72,7 @@ pub(crate) fn prepare(
     let DevelopmentBackendConfig::Managed {
         storage_root,
         worktree,
+        generation,
         ..
     } = &state.development_backend
     else {
@@ -89,12 +95,17 @@ pub(crate) fn prepare(
     }
     let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
     listener.set_nonblocking(true)?;
+    let worktree_id = worktree.clone();
+    let generation_id = generation.clone();
     Ok(Some(PreparedOwnerControl {
         state,
         listener: TcpListener::from_std(listener)?,
         owner_token,
         storage_root: root,
         relative_ready,
+        worktree_id,
+        generation_id,
+        runtime_service_config_absent: std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").is_none(),
         shutdown: Mutex::new(Some(shutdown)),
     }))
 }
@@ -143,18 +154,27 @@ impl PreparedOwnerControl {
     }
 
     async fn handle(&self, stream: &mut TcpStream) -> Result<()> {
-        let started = std::time::Instant::now();
         let request = match read_request(stream, READ_TIMEOUT).await {
-            Ok(request)
-                if self.authenticated(&request)
-                    && request.command == Command::Acquire
-                    && request.handoff.is_none()
-                    && request.completion.is_none() =>
-            {
-                request
-            }
+            Ok(request) if self.authenticated(&request) => request,
             _ => return reject(stream).await,
         };
+        match request.command {
+            Command::ConsumerStatus => return self.consumer_status(stream, request).await,
+            Command::ConsumerReadiness => return self.consumer_readiness(stream, request).await,
+            Command::Acquire => {}
+            Command::Confirm
+            | Command::Abort
+            | Command::CommitCold
+            | Command::CompleteCold => return reject(stream).await,
+        }
+        if request.handoff.is_some()
+            || request.completion.is_some()
+            || has_readiness_value(&request)
+        {
+            return reject(stream).await;
+        }
+
+        let started = Instant::now();
         let acquisition = match timeout(
             ACQUISITION_TIMEOUT,
             acquire_workspace_for_restart(&self.state),
@@ -203,7 +223,11 @@ impl PreparedOwnerControl {
         write_bytes(stream, &response).await?;
         loop {
             let control = match read_request(stream, HOLD_TIMEOUT).await {
-                Ok(control) if self.authenticated(&control) && control.nonce == request.nonce => {
+                Ok(control)
+                    if self.authenticated(&control)
+                        && control.nonce == request.nonce
+                        && !has_readiness_value(&control) =>
+                {
                     control
                 }
                 _ => {
@@ -244,6 +268,10 @@ impl PreparedOwnerControl {
                     .await;
                 }
                 Command::Acquire => {
+                    drop(acquisition);
+                    return reject(stream).await;
+                }
+                Command::ConsumerStatus | Command::ConsumerReadiness => {
                     drop(acquisition);
                     return reject(stream).await;
                 }
@@ -372,6 +400,155 @@ impl PreparedOwnerControl {
         }
     }
 
+    async fn consumer_status(
+        &self,
+        stream: &mut TcpStream,
+        request: ControlRequest,
+    ) -> Result<()> {
+        if request.handoff.is_some()
+            || request.completion.is_some()
+            || has_readiness_value(&request)
+        {
+            return reject(stream).await;
+        }
+        let observation = self.observe_backend().await.ok();
+        let eligible = observation
+            .as_ref()
+            .and_then(|observation| self.eligible_candidate(observation));
+        let valid_lease = match observation.as_ref() {
+            Some(observation) => {
+                self.state.development_consumer_readiness.is_ready(
+                    observation,
+                    &self.state.request_scope_instance_id,
+                )
+            }
+            None => {
+                self.state.development_consumer_readiness.revoke();
+                false
+            }
+        };
+        let confirmed = eligible.is_some() && valid_lease;
+        self.write_consumer_status(stream, &request.nonce, eligible, confirmed)
+            .await
+    }
+
+    async fn consumer_readiness(
+        &self,
+        stream: &mut TcpStream,
+        request: ControlRequest,
+    ) -> Result<()> {
+        if request.handoff.is_some() || request.completion.is_some() {
+            return reject(stream).await;
+        }
+        let Some(readiness) = request.readiness else {
+            return reject(stream).await;
+        };
+        match readiness {
+            None => {
+                // Authorization is checked before this method; revoke remains available when
+                // the watcher or the restart transport is not currently eligible.
+                if !self.state.development_consumer_readiness.revoke() {
+                    return reject(stream).await;
+                }
+                let observation = self.observe_backend().await.ok();
+                let eligible = observation
+                    .as_ref()
+                    .and_then(|observation| self.eligible_candidate(observation));
+                self.write_consumer_status(stream, &request.nonce, eligible, false)
+                    .await
+            }
+            Some(readiness) => {
+                let Some(observation) = self.observe_backend().await.ok() else {
+                    return reject(stream).await;
+                };
+                if self.eligible_candidate(&observation).is_none()
+                    || !self.state.development_consumer_readiness.renew(
+                        &readiness,
+                        &observation,
+                        &self.state.request_scope_instance_id,
+                    )
+                {
+                    return reject(stream).await;
+                }
+                let eligible = self.eligible_candidate(&observation);
+                let confirmed = eligible.is_some()
+                    && self.state.development_consumer_readiness.is_ready(
+                        &observation,
+                        &self.state.request_scope_instance_id,
+                    );
+                if !confirmed {
+                    return reject(stream).await;
+                }
+                self.write_consumer_status(stream, &request.nonce, eligible, true)
+                    .await
+            }
+        }
+    }
+
+    async fn observe_backend(&self) -> Result<DevelopmentBackendObservation> {
+        let config = self.state.development_backend.clone();
+        tokio::task::spawn_blocking(move || config.observe_for_consumer(unix_time_ms()))
+            .await
+            .context("development consumer observation task failed")
+    }
+
+    fn eligible_candidate(
+        &self,
+        observation: &DevelopmentBackendObservation,
+    ) -> Option<EligibleCandidate> {
+        if !self.runtime_service_config_absent
+            || !self.state.development_restart_transport.is_configured()
+            || observation.generation_id.as_deref() != Some(self.generation_id.as_str())
+            || observation.worktree_id.as_deref() != Some(self.worktree_id.as_str())
+        {
+            return None;
+        }
+        let resource = &observation.resource;
+        if !resource.configured
+            || resource.state
+                != crate::schemas::development_backend::DevelopmentBackendState::Ready
+        {
+            return None;
+        }
+        let (Some(current), Some(ready)) = (&resource.current_build, &resource.ready_build) else {
+            return None;
+        };
+        if current.source_sha256 == ready.source_sha256 {
+            return None;
+        }
+        Some(EligibleCandidate {
+            ready_build_id: ready.id.clone(),
+            ready_source_sha256: ready.source_sha256.clone(),
+        })
+    }
+
+    async fn write_consumer_status(
+        &self,
+        stream: &mut TcpStream,
+        nonce: &str,
+        candidate: Option<EligibleCandidate>,
+        readiness_confirmed: bool,
+    ) -> Result<()> {
+        let response = ConsumerReadinessResponse {
+            schema: "fullmag.development-consumer-readiness.v1",
+            nonce,
+            api_instance_id: &self.state.request_scope_instance_id,
+            worktree_id: Some(&self.worktree_id),
+            generation_id: Some(&self.generation_id),
+            ready_build_id: candidate.as_ref().map(|candidate| candidate.ready_build_id.as_str()),
+            ready_source_sha256: candidate
+                .as_ref()
+                .map(|candidate| candidate.ready_source_sha256.as_str()),
+            readiness_confirmed,
+        };
+        let mut bytes = serde_json::to_vec(&response)?;
+        if bytes.len() >= MAX_CONSUMER_RESPONSE_BYTES {
+            return reject(stream).await;
+        }
+        bytes.push(b'\n');
+        write_bytes(stream, &bytes).await
+    }
+
     fn authenticated(&self, request: &ControlRequest) -> bool {
         request.schema == CONTROL_SCHEMA
             && token_matches(&request.owner_token, &self.owner_token)
@@ -392,9 +569,29 @@ struct ControlRequest {
     handoff: Option<crate::development_handoff_validation::ColdCommitRequest>,
     #[serde(default)]
     completion: Option<crate::development_handoff_validation::ColdCompletionRequest>,
+    #[serde(default, deserialize_with = "deserialize_readiness")]
+    readiness: Option<Option<CandidateReadiness>>,
 }
 
-#[derive(Deserialize, PartialEq, Eq)]
+#[derive(Serialize)]
+struct ConsumerReadinessResponse<'a> {
+    schema: &'static str,
+    nonce: &'a str,
+    api_instance_id: &'a str,
+    worktree_id: Option<&'a str>,
+    generation_id: Option<&'a str>,
+    ready_build_id: Option<&'a str>,
+    ready_source_sha256: Option<&'a str>,
+    readiness_confirmed: bool,
+}
+
+#[derive(Debug)]
+struct EligibleCandidate {
+    ready_build_id: String,
+    ready_source_sha256: String,
+}
+
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Command {
     Acquire,
@@ -402,6 +599,8 @@ enum Command {
     Abort,
     CommitCold,
     CompleteCold,
+    ConsumerStatus,
+    ConsumerReadiness,
 }
 
 struct ShutdownAfterCommit<'a>(&'a Mutex<Option<oneshot::Sender<()>>>);
@@ -417,6 +616,29 @@ impl Drop for ShutdownAfterCommit<'_> {
 
 fn canonical_uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok_and(|id| !id.is_nil() && id.to_string() == value)
+}
+
+fn has_readiness_value(request: &ControlRequest) -> bool {
+    request
+        .readiness
+        .as_ref()
+        .is_some_and(Option::is_some)
+}
+
+fn deserialize_readiness<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<CandidateReadiness>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<CandidateReadiness>::deserialize(deserializer).map(Some)
+}
+
+fn unix_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
 }
 
 fn token_matches(candidate: &str, expected: &str) -> bool {

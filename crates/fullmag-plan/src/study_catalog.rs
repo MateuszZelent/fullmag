@@ -9,13 +9,14 @@ use fullmag_authoring::{
     StudyDiscretizationReference, StudyExecutionProfileReference, StudyModelReference, StudyPlan,
     StudySolverConfigReference, StudyStep,
 };
-use fullmag_ir::ProblemIR;
+use fullmag_ir::{ComputeResourcesIR, ExecutionDevice, MaterializedExecutionRequestIR, ProblemIR};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 use super::study_lowering::{lower_study_plan, StudyExecutionPlan, StudyLoweringError};
 
-pub const STUDY_PROBLEM_CATALOG_SCHEMA: &str = "study_problem_catalog.v1";
+pub const STUDY_PROBLEM_CATALOG_SCHEMA_V1: &str = "study_problem_catalog.v1";
+pub const STUDY_PROBLEM_CATALOG_SCHEMA: &str = "study_problem_catalog.v2";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StudyCatalogError {
@@ -81,6 +82,8 @@ pub struct StudyProblemCatalogEntry {
     discretization: StudyDiscretizationReference,
     execution_profile: StudyExecutionProfileReference,
     problem: ProblemIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_materialization: Option<MaterializedExecutionRequestIR>,
 }
 
 impl StudyProblemCatalogEntry {
@@ -92,7 +95,21 @@ impl StudyProblemCatalogEntry {
             discretization: step.discretization.clone(),
             execution_profile: step.execution_profile.clone(),
             problem,
+            execution_materialization: None,
         }
+    }
+
+    /// Capture a profile snapshot produced by the application resolver.
+    /// Catalog validation binds it to this step and its effective ProblemIR;
+    /// the application replays it before accepting or loading a run.
+    pub fn from_materialized_step(
+        step: &StudyStep,
+        problem: ProblemIR,
+        execution_materialization: MaterializedExecutionRequestIR,
+    ) -> Self {
+        let mut entry = Self::from_step(step, problem);
+        entry.execution_materialization = Some(execution_materialization);
+        entry
     }
 
     pub fn step_id(&self) -> &str {
@@ -101,6 +118,91 @@ impl StudyProblemCatalogEntry {
 
     pub fn problem(&self) -> &ProblemIR {
         &self.problem
+    }
+
+    pub fn execution_materialization(&self) -> Option<&MaterializedExecutionRequestIR> {
+        self.execution_materialization.as_ref()
+    }
+
+    fn validate_execution_materialization(&self, schema: &str) -> Result<(), StudyCatalogError> {
+        let mismatch = |reason: &str| {
+            StudyCatalogError::Contract(format!(
+                "study step `{}` execution materialization: {reason}",
+                self.step_id
+            ))
+        };
+        let Some(snapshot) = &self.execution_materialization else {
+            return if schema == STUDY_PROBLEM_CATALOG_SCHEMA_V1 {
+                Ok(())
+            } else {
+                Err(mismatch(
+                    "v2 requires a pinned profile snapshot for every step",
+                ))
+            };
+        };
+        if schema != STUDY_PROBLEM_CATALOG_SCHEMA {
+            return Err(mismatch("v1 cannot carry v2 execution provenance"));
+        }
+        snapshot
+            .validate_shape()
+            .map_err(|reason| mismatch(&reason))?;
+        let profile = snapshot
+            .profile
+            .as_ref()
+            .ok_or_else(|| mismatch("profile snapshot is missing"))?;
+        profile.validate().map_err(|reason| mismatch(&reason))?;
+        let profile_sha256 = profile
+            .canonical_sha256()
+            .map_err(|reason| mismatch(&reason))?;
+        if snapshot.profile_sha256.as_deref() != Some(profile_sha256.as_str()) {
+            return Err(mismatch("profile content differs from its pinned hash"));
+        }
+        if profile.profile_id != self.execution_profile.profile_id
+            || profile.version != self.execution_profile.version
+        {
+            return Err(mismatch(
+                "profile id/version differs from the step reference",
+            ));
+        }
+        let requested = &snapshot.requested;
+        if requested.backend != self.problem.backend_policy.requested_backend
+            || requested.precision != self.problem.backend_policy.execution_precision
+            || requested.mode != self.problem.validation_profile.execution_mode
+        {
+            return Err(mismatch(
+                "backend/precision/mode differs from immutable ProblemIR",
+            ));
+        }
+        let selection = self
+            .problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_selection");
+        let device = match selection {
+            None => ExecutionDevice::Auto,
+            Some(value) => {
+                let object = value
+                    .as_object()
+                    .ok_or_else(|| mismatch("runtime_selection must be an object"))?;
+                match object.get("device").and_then(serde_json::Value::as_str) {
+                    None if !object.contains_key("device") => ExecutionDevice::Auto,
+                    Some("auto") => ExecutionDevice::Auto,
+                    Some("cpu") => ExecutionDevice::Cpu,
+                    Some("gpu" | "cuda") => ExecutionDevice::Gpu,
+                    _ => return Err(mismatch("runtime_selection.device is invalid")),
+                }
+            }
+        };
+        if requested.device != device {
+            return Err(mismatch("device differs from immutable ProblemIR"));
+        }
+        let resources = ComputeResourcesIR::from_problem(&self.problem)
+            .map_err(|reason| mismatch(&reason))?
+            .ok_or_else(|| mismatch("ProblemIR has no materialized compute_resources"))?;
+        if requested.resources != resources {
+            return Err(mismatch("resources differ from immutable ProblemIR"));
+        }
+        Ok(())
     }
 }
 
@@ -124,7 +226,15 @@ impl StudyProblemCatalog {
         entries: Vec<StudyProblemCatalogEntry>,
     ) -> Result<Self, StudyCatalogError> {
         let catalog = Self {
-            schema_version: STUDY_PROBLEM_CATALOG_SCHEMA.to_string(),
+            schema_version: if entries
+                .iter()
+                .any(|entry| entry.execution_materialization.is_some())
+            {
+                STUDY_PROBLEM_CATALOG_SCHEMA
+            } else {
+                STUDY_PROBLEM_CATALOG_SCHEMA_V1
+            }
+            .to_string(),
             study_id: study.study_id.clone(),
             study_revision: study.revision,
             study_plan_sha256: study
@@ -146,9 +256,11 @@ impl StudyProblemCatalog {
         study
             .validate_for_execution()
             .map_err(|error| StudyCatalogError::Contract(error.to_string()))?;
-        if self.schema_version != STUDY_PROBLEM_CATALOG_SCHEMA {
+        if self.schema_version != STUDY_PROBLEM_CATALOG_SCHEMA
+            && self.schema_version != STUDY_PROBLEM_CATALOG_SCHEMA_V1
+        {
             return Err(StudyCatalogError::Contract(format!(
-                "schema_version must be {STUDY_PROBLEM_CATALOG_SCHEMA}"
+                "schema_version must be {STUDY_PROBLEM_CATALOG_SCHEMA_V1} or {STUDY_PROBLEM_CATALOG_SCHEMA}"
             )));
         }
         let expected_digest = study
@@ -206,6 +318,7 @@ impl StudyProblemCatalog {
                 &entry.execution_profile,
                 &step.execution_profile,
             )?;
+            entry.validate_execution_materialization(&self.schema_version)?;
             if let Err(reasons) = entry.problem.validate() {
                 return Err(StudyCatalogError::InvalidProblem {
                     step_id: entry.step_id.clone(),
@@ -345,6 +458,21 @@ mod tests {
         let lowered = lower_study_plan_with_catalog(&study, &catalog).unwrap();
         assert_eq!(lowered.study_plan_sha256, study.canonical_sha256().unwrap());
         assert!(lowered.steps[0].execution_plan.is_some());
+        assert_eq!(catalog.schema_version, STUDY_PROBLEM_CATALOG_SCHEMA_V1);
+        let legacy_value = serde_json::to_value(&catalog).unwrap();
+        assert!(legacy_value["entries"][0]
+            .get("execution_materialization")
+            .is_none());
+        let decoded: StudyProblemCatalog = serde_json::from_value(legacy_value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), legacy_value);
+
+        let mut unmaterialized_v2 = catalog;
+        unmaterialized_v2.schema_version = STUDY_PROBLEM_CATALOG_SCHEMA.into();
+        assert!(unmaterialized_v2
+            .validate_for(&study)
+            .unwrap_err()
+            .to_string()
+            .contains("v2 requires"));
     }
 
     #[test]

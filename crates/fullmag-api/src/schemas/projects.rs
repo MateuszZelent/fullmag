@@ -57,7 +57,7 @@ pub(crate) struct ProjectRunSubmitRequest {
     pub run_intent: BTreeMap<String, serde_json::Value>,
     /// Versioned `study_plan.v2` object with typed steps, references and runner controls.
     pub study_plan: BTreeMap<String, serde_json::Value>,
-    /// Versioned `study_problem_catalog.v1` object bound to the exact study digest.
+    /// Immutable study catalog: legacy v1, or v2 with pinned execution profiles and field origins.
     pub study_problem_catalog: BTreeMap<String, serde_json::Value>,
     /// Explicit immutable asset ID to path inside `project/assets/`.
     pub asset_paths: BTreeMap<String, String>,
@@ -304,4 +304,78 @@ pub(crate) struct ProjectDocumentResource {
     pub archive_base64: String,
     /// Bytes-only transport never claims filesystem or power-loss durability.
     pub durability: ProjectArchiveDurability,
+}
+
+/// Largest script text accepted by `POST /v2/persistence/projects/from-script`.
+pub(crate) const SCRIPT_IMPORT_MAX_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub(crate) struct ProjectFromScriptSource {
+    /// File name shown in provenance; it is not a filesystem path.
+    pub name: String,
+    /// UTF-8 Python source, at most 1 MiB.
+    pub text: String,
+}
+
+/// Explicit statement that the person agreed to run the script.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub(crate) struct ProjectFromScriptConsent {
+    /// Must be `true`: the operation executes the script in the Python helper.
+    pub executed_by_user: bool,
+}
+
+/// Turns a Python script into a project. The operation EXECUTES the script in
+/// the Python helper (same trust model as a script run), so the request must
+/// carry explicit consent.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub(crate) struct ProjectFromScriptRequest {
+    /// The script text. Required: the API cannot resolve workspace items.
+    pub source: Option<ProjectFromScriptSource>,
+    /// Workspace script item. Not supported by the API; the host reads the
+    /// file and sends its text as `source`. A request that sets it is refused.
+    pub script_item_id: Option<String>,
+    /// Project name; defaults to the script file stem.
+    pub project_name: Option<String>,
+    /// Where the script came from (for example `template:umag-sp1`,
+    /// `mx3:model.mx3`, `script_file`); recorded in `script.json`.
+    pub origin: Option<String>,
+    pub consent: Option<ProjectFromScriptConsent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScriptRoundTripState {
+    /// The scene re-rendered to Python lowers to the same key physics fields.
+    Verified,
+    /// The re-rendered script differs or does not lower; the notes say how.
+    Failed,
+    /// The comparison could not run; the notes say why.
+    NotChecked,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ScriptFidelityResource {
+    /// The helper exported a SceneDocument from the script.
+    pub scene_exported: bool,
+    pub round_trip: ScriptRoundTripState,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectScriptImportResource {
+    pub name: String,
+    pub sha256: String,
+    pub origin: String,
+    pub exported_at: String,
+    /// Archive path of the embedded original script.
+    pub script_path: String,
+    pub fidelity: ScriptFidelityResource,
+}
+
+/// The created project (same fields as create/open) plus what was imported.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectFromScriptResource {
+    #[serde(flatten)]
+    pub project: ProjectDocumentResource,
+    pub script_import: ProjectScriptImportResource,
 }

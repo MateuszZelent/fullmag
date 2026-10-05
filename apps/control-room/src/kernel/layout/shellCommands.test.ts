@@ -104,7 +104,7 @@ describe("SHELL_COMMANDS", () => {
     expect(setFocusedSlot).not.toHaveBeenCalled();
   });
 
-  it("exports the canonical Python source through the model API", async () => {
+  it("saves a canonical copy through the model API", async () => {
     const command = SHELL_COMMANDS.find(
       (candidate) => candidate.id === "workspace.export-python",
     );
@@ -113,7 +113,9 @@ describe("SHELL_COMMANDS", () => {
       entrypoint_kind: "flat_workspace",
       script_path: "/tmp/example.py",
       source_kind: "canonical",
+      source_script_modified: true,
       written: true,
+      written_to: "script",
     }));
     const authoringScript = vi.fn(async () => ({
       bytes: 81,
@@ -136,9 +138,44 @@ describe("SHELL_COMMANDS", () => {
     expect(syncAuthoringScript).toHaveBeenCalledWith({}, undefined);
     expect(authoringScript).toHaveBeenCalledWith(undefined);
     expect(result).toEqual({
-      message: "Canonical Python exported from /tmp/example.py.",
+      message: "Canonical Python saved from /tmp/example.py.",
       status: "completed",
     });
+  });
+
+  it("keeps the command id but labels it as a canonical copy that never touches a user script", async () => {
+    const command = SHELL_COMMANDS.find(
+      (candidate) => candidate.id === "workspace.export-python",
+    );
+    expect(command?.title).toBe("Save canonical copy as…");
+    const syncAuthoringScript = vi.fn(async () => ({
+      bytes_written: 81,
+      entrypoint_kind: "flat_workspace",
+      managed_copy_path: "/state/exports/model.canonical.py",
+      script_path: "/state/exports/model.canonical.py",
+      source_kind: "canonical",
+      source_script_modified: false,
+      written: true,
+      written_to: "export_copy",
+    }));
+    const authoringScript = vi.fn(async () => ({
+      bytes: 81,
+      managed_copy_path: "/state/exports/model.canonical.py",
+      origin: "user_file",
+      script_path: "/state/exports/model.canonical.py",
+      source: "study = fm.study('x')",
+    }));
+
+    const result = await command?.run({
+      api: {
+        model: { authoringScript, syncAuthoringScript },
+      } as unknown as CommandContext["api"],
+      source: "test",
+    });
+
+    expect(result?.status).toBe("completed");
+    expect(result?.message).toContain("your script was not modified");
+    expect(result?.message).toContain("/state/exports/model.canonical.py");
   });
 
   it("connects New/Open/Save to the shared project document controller", async () => {

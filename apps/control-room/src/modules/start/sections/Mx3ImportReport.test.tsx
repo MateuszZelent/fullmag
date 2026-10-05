@@ -4,23 +4,23 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { translateMx3 } from "../model/mx3Import";
-import { SCRIPT_OPEN_UNAVAILABLE } from "../model/scriptOpen";
+import { SCRIPT_SAVE_NEEDS_DESKTOP } from "../model/scriptOpen";
 
 import { Mx3ImportReport } from "./Mx3ImportReport";
 
 const source = (name: string) =>
   readFileSync(new URL(`../model/__fixtures__/mx3/${name}.mx3`, import.meta.url), "utf8");
 
-const render = (name: string, opener: Parameters<typeof Mx3ImportReport>[0]["opener"] = null) =>
+const render = (name: string, saver: Parameters<typeof Mx3ImportReport>[0]["saver"] = null) =>
   renderToStaticMarkup(
     <Mx3ImportReport
       busy={false}
       fileName={`${name}.mx3`}
       onCopy={vi.fn()}
       onDiscard={vi.fn()}
-      onOpen={vi.fn()}
+      onCreate={vi.fn()}
       onSave={vi.fn()}
-      opener={opener}
+      saver={saver}
       translation={translateMx3(source(name))}
     />,
   );
@@ -34,26 +34,47 @@ describe("Mx3ImportReport", () => {
     expect(html).toContain("Xi = 0.05");
     expect(html).toContain("spin-transfer torque");
     expect(html).toContain("ext_makegrains(40e-9, 256, 0)");
-    expect(html).toContain("Open with 10 untranslated statements");
-  });
+      });
 
   it("says plainly when everything was translated", () => {
     const html = render("anisotropic_film");
     expect(html).toContain("Every statement in the source was translated.");
     expect(html).not.toContain("fm-start-report__unsupported");
-    expect(html).toContain("Open translated script");
+    expect(html).toContain("Save translated script…");
   });
 
-  it("disables Open with the real reason when no script opener is bound, and still offers the file", () => {
+  it("disables Save with the real reason outside the desktop host, and still offers the file", () => {
     const html = render("standardproblem4");
-    expect(/<button[^>]* disabled=""[^>]*>[\s\S]*?Open with 1 untranslated statement/.test(html)).toBe(true);
-    expect(html).toContain(SCRIPT_OPEN_UNAVAILABLE);
-    expect(html).toContain("Save script");
+    expect(/<button[^>]* disabled=""[^>]*>[\s\S]*?Save translated script…/.test(html)).toBe(true);
+    expect(html).toContain(SCRIPT_SAVE_NEEDS_DESKTOP);
+    expect(html).toContain("Download script");
     expect(html).toContain("Copy script");
   });
 
-  it("enables Open when an opener exists and the translation is complete", () => {
+  it("enables Save when a saver exists, even with untranslated statements, and keeps the report visible", () => {
     const html = render("standardproblem4", vi.fn());
-    expect(/<button[^>]* disabled=""[^>]*>[\s\S]*?Open with 1 untranslated statement/.test(html)).toBe(false);
+    expect(/<button[^>]* disabled=""[^>]*>[\s\S]*?Save translated script…/.test(html)).toBe(false);
+    expect(html).toContain("not translated");
+    expect(html).toContain("Nothing runs until you choose Run in new window");
+  });
+
+  it("offers Create project with the translated script, enabled only with a project creator", () => {
+    const withCreator = renderToStaticMarkup(
+      <Mx3ImportReport
+        busy={false}
+        fileName="standardproblem4.mx3"
+        onCopy={vi.fn()}
+        onCreate={vi.fn()}
+        onDiscard={vi.fn()}
+        onSave={vi.fn()}
+        projectCreator={vi.fn()}
+        saver={null}
+        translation={translateMx3(source("standardproblem4"))}
+      />,
+    );
+    expect(/<button[^>]*>Create project…<\/button>/.exec(withCreator)?.[0]).not.toContain(' disabled=""');
+    expect(withCreator).toContain("Create project runs the translated script once");
+    const without = render("standardproblem4");
+    expect(/<button[^>]*>Create project…<\/button>/.exec(without)?.[0]).toContain(' disabled=""');
   });
 });

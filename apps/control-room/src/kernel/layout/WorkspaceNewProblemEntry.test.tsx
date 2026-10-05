@@ -273,6 +273,18 @@ function makeKernel(): KernelApi {
   modules.register({ ...startScreenManifest, component: async () => ({ default: StartScreen }) });
   return {
     api: {
+      diagnostics: {
+        cpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },
+        gpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },
+      },
+      platform: {
+        capabilities: async () => { throw new Error("capabilities are not served in this test"); },
+      },
+      workspace: {
+        item: async () => { throw new Error("the workspace database is not served in this test"); },
+        items: async () => { throw new Error("the workspace database is not served in this test"); },
+        thumbnailUrl: (id: string) => `/thumbnail/${id}`,
+      },
       sessions: {
         create: vi.fn(),
         current: { status: vi.fn() },

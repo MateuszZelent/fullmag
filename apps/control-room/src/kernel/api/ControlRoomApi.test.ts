@@ -23,6 +23,7 @@ import type {
   LivePreparationMaterializationResource,
   SimulationPreparationResource,
   AnalysisResultPageQuery,
+  OutputStorageSettings,
 } from "./apiTypes";
 import {
   ANALYSIS_RESULT_BRANCH_POINTS_PATH,
@@ -1113,6 +1114,7 @@ describe("ControlRoomApi", () => {
       backend: "fdm" | "fem";
       device: "cpu";
       name: string;
+      output_storage?: OutputStorageSettings | null;
       precision: "double";
       replace_current?: boolean;
     }>();
@@ -3264,6 +3266,46 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("deletes a checkpoint with DELETE and surfaces a 409 refusal with its message", async () => {
+    const calls: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        calls.push({ method: init?.method, url: String(url) });
+        if (String(url).endsWith("/cp-busy")) {
+          return jsonResponse(
+            {
+              code: "conflict",
+              message: "checkpoint_delete_referenced: checkpoint cp-busy is the restore source",
+            },
+            { status: 409 },
+          );
+        }
+        return new Response(null, {
+          status: 204,
+          headers: { "x-api-contract-version": "1.0.0" },
+        });
+      },
+      retryDelayMs: 0,
+    });
+
+    await expect(api.persistence.checkpoints.delete("cp-000042")).resolves.toBeUndefined();
+    await expect(api.persistence.checkpoints.delete("cp-busy")).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining("checkpoint_delete_referenced"),
+    });
+    expect(calls).toEqual([
+      {
+        method: "DELETE",
+        url: "http://127.0.0.1:8765/v2/sessions/current/persistence/checkpoints/cp-000042",
+      },
+      {
+        method: "DELETE",
+        url: "http://127.0.0.1:8765/v2/sessions/current/persistence/checkpoints/cp-busy",
+      },
+    ]);
+  });
+
   it("loads selected object metrics through the v2 simulation object resource", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
@@ -4955,6 +4997,46 @@ describe("ControlRoomApi", () => {
       method: "POST",
       url: "http://127.0.0.1:8765/v2/persistence/projects/project-1/runs/run-1/materialization",
     }]);
+  });
+
+  it("posts the script to the from-script resource with explicit consent and surfaces a typed 422", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    let respondWithFailure = false;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        if (respondWithFailure) {
+          return jsonResponse(
+            { code: "script_export_failed", message: "script_export_failed: boom" },
+            { status: 422 },
+          );
+        }
+        return jsonResponse({ project_id: "project-1", name: "demo" });
+      },
+    });
+    const request = {
+      source: { name: "demo.py", text: "import fullmag as fm\n" },
+      project_name: "demo",
+      consent: { executed_by_user: true },
+    };
+
+    await api.persistence.projects.fromScript(request);
+    expect(requests).toEqual([{
+      body: request,
+      method: "POST",
+      url: "http://127.0.0.1:8765/v2/persistence/projects/from-script",
+    }]);
+
+    respondWithFailure = true;
+    await expect(api.persistence.projects.fromScript(request)).rejects.toMatchObject({
+      status: 422,
+      code: "script_export_failed",
+    });
   });
 
   it("requests durable cancellation for the exact project run task", async () => {

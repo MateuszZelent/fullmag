@@ -168,11 +168,14 @@ const vram = (gb: number) => `${gb % 1 === 0 ? gb : gb.toFixed(1)} GB VRAM`;
  */
 export function estimateFor(template: StudyTemplate, compute: ComputeProbeState): EstimateLabel {
   const { gpuMinutes, vramGb, cpuMinutes } = template.estimate;
-  if (!compute) {
+  if (!compute || (compute.gpus.length === 0 &&
+    (compute.gpuProbeStatus === "unavailable" || compute.cpuThreads < 1))) {
     return {
       text: `${duration(gpuMinutes)} · ${vram(vramGb)}`,
       basis: "reference",
-      note: "Reference figure on an RTX 4090; this machine has not been probed.",
+      note: compute
+        ? "Reference figure on an RTX 4090; GPU availability on this host has not been confirmed."
+        : "Reference figure on an RTX 4090; this machine has not been probed.",
     };
   }
   const gpu = compute.gpus[0];

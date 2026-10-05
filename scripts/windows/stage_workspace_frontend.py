@@ -24,11 +24,14 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
 from typing import Iterable, Sequence
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 SCHEMA = "fullmag.native-workspace-frontend-source.v1"
@@ -310,6 +313,9 @@ def _copy_regular_file(source: Path, destination: Path) -> None:
     shutil.copyfile(source, destination, follow_symlinks=False)
     try:
         shutil.copystat(source, destination, follow_symlinks=False)
+        # Native build snapshots are read-only. Next and the HMR relay own
+        # this separate working copy and must be able to replace its files.
+        destination.chmod(destination.stat().st_mode | stat.S_IWUSR)
     except OSError as error:
         raise StageError(f"Cannot preserve staged file metadata: {destination}") from error
 
@@ -489,6 +495,7 @@ def stage_workspace_frontend(
     *,
     mode: str = "static",
     web_port: int | str | None = None,
+    source_snapshot_record: str | os.PathLike[str] | None = None,
 ) -> dict[str, object]:
     """Create and describe one fresh isolated frontend staging root."""
 
@@ -496,7 +503,19 @@ def stage_workspace_frontend(
         raise StageError("Frontend staging mode must be static or dev")
     source_root = _resolve_existing_directory(repo_root, "repository root")
     canonical_build_root = _resolve_existing_directory(build_root, "canonical build root")
-    if _same_or_inside(canonical_build_root, source_root) or _same_or_inside(source_root, canonical_build_root):
+    snapshot = None
+    if source_snapshot_record is not None:
+        from windows.build_snapshot import SnapshotError, verify_snapshot
+
+        try:
+            snapshot = verify_snapshot(source_snapshot_record, canonical_build_root)
+        except (OSError, ValueError, SnapshotError) as error:
+            raise StageError(f"Invalid frontend source snapshot: {error}") from error
+        if Path(snapshot["source_root"]) != source_root:
+            raise StageError("Snapshot record does not identify the requested frontend source root")
+    if _same_or_inside(canonical_build_root, source_root) or (
+        _same_or_inside(source_root, canonical_build_root) and snapshot is None
+    ):
         raise StageError("Canonical build root must be outside the repository root")
     port = _validate_port(web_port, mode=mode)
 
@@ -607,6 +626,11 @@ def stage_workspace_frontend(
         "source_inventory_sha256": source_inventory_sha256,
         "source_files": before,
     }
+    if snapshot is not None:
+        manifest["source_selection"] = "verified-frozen-snapshot-selected-inputs"
+        manifest["build_source_snapshot"] = {
+            key: snapshot[key] for key in ("record_path", "inventory_sha256", "source_root")
+        }
     manifest_path = stage_root / "frontend-source-manifest.json"
     manifest_bytes = (json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True) + "\n").encode(
         "utf-8"
@@ -652,6 +676,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--build-root", required=True)
     parser.add_argument("--mode", "--frontend-mode", choices=("static", "dev"), default="static")
     parser.add_argument("--web-port", type=int)
+    parser.add_argument("--source-snapshot-record")
     args = parser.parse_args(argv)
     try:
         result = stage_workspace_frontend(
@@ -659,6 +684,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.build_root,
             mode=args.mode,
             web_port=args.web_port,
+            source_snapshot_record=args.source_snapshot_record,
         )
     except (OSError, StageError, ValueError) as error:
         print(f"[fullmag frontend staging] {error}", file=sys.stderr)

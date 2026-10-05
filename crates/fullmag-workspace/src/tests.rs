@@ -55,6 +55,7 @@ fn schema_is_identical_on_create_reopen_and_migration_from_empty_file() {
     assert!(first.iter().any(|r| r.1 == "items"));
     assert!(first.iter().any(|r| r.1 == "events"));
     assert!(first.iter().any(|r| r.1 == "kv"));
+    assert!(first.iter().any(|r| r.1 == "thumbnails"));
     assert!(first.iter().any(|r| r.1 == "items_recent"));
     assert!(first.iter().any(|r| r.1 == "items_project_id"));
     assert!(first.iter().any(|r| r.1 == "events_item"));
@@ -223,7 +224,7 @@ fn newer_schema_opens_read_only_and_refuses_writes() {
         error,
         WorkspaceError::ReadOnly {
             found: 99,
-            supported: 1
+            supported: SCHEMA_VERSION
         }
     ));
     assert!(!workspace.record_best_effort(&event(ItemKind::Script, &script, EventKind::Open)));

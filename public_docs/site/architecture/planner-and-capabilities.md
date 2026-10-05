@@ -31,8 +31,8 @@ Unsupported and planned lanes are reported explicitly rather than overclaimed.
 
 ## Where the policy is enforced
 
-- Python `Problem` validation and lowering: `packages/fullmag-py/src/fullmag/model/problem.py`.
-- Capability and routing decisions: the Rust planner behind the native runner.
+- Python `Problem` validation and lowering: `packages/fullmag-py/src/fullmag/model/problem.py` — `Problem.to_ir`.
+- Capability and routing decisions: `crates/fullmag-plan/src/lib.rs` — `plan`.
 - Public capability statuses: {doc}`../validation/qualification-status`.
 
 The planner is a product boundary: a supported identifier does not prove executability, and an
@@ -50,5 +50,8 @@ This page documents architecture rather than a standalone Python callable. Exact
 No independent physical model is introduced here. Scientific equations are owned by the applicable physics or numerical-methods page. Bibliography: not applicable to this architecture overview; implementation ownership is recorded in the source-code references on the terminal page.
 ## Source-code index
 
-- No standalone Python callable is introduced by this architecture page. Use the exact source symbol named by the linked API or implementation page; architecture terms alone are not public functions.
-
+| Repository path | Stable symbol | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/problem.py` | `Problem.to_ir` | Python validation and lowering |
+| `crates/fullmag-plan/src/lib.rs` | `plan` | backend selection and rejected-combination reasons |
+| `crates/fullmag-ir/src/plan.rs` | `ExecutionPlanIR` | resolved backend plan, output plan and provenance |

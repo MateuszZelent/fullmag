@@ -15,8 +15,9 @@ const pin = source("src/kernel/api/apiInstancePin.ts");
 const commandScope = source("src/kernel/commands/commandSessionScope.ts");
 const commandsModule = source("src/kernel/commands/CommandRegistry.ts");
 const ownerAdapter = new vm.SourceTextModule("export function createDevelopmentKernelOwners(_kernel, options) { return options; }", { context });
+const restartAction = new vm.SourceTextModule("export class DevelopmentRestartActionService { constructor(_host) {} }", { context });
 const paths = new vm.SourceTextModule('export const PLATFORM_DEVELOPMENT_BACKEND_PATH = "/v2/platform/development-backend";', { context });
-for (const leafModule of [state, scope, pin, commandScope, ownerAdapter, paths]) {
+for (const leafModule of [state, scope, pin, commandScope, ownerAdapter, restartAction, paths]) {
   await leafModule.link(() => { throw new Error("Unexpected leaf dependency"); });
   await leafModule.evaluate();
 }
@@ -29,6 +30,7 @@ modules.set("../api/apiPaths", paths);
 modules.set("../resources/ResourceRuntimeStore", storeModule);
 modules.set("../resources/resourceClientScope", scope);
 modules.set("./DevelopmentKernelOwners", ownerAdapter);
+modules.set("./DevelopmentRestartActionService", restartAction);
 const hostModule = source("src/kernel/development/DevelopmentKernelHost.ts");
 await hostModule.link((specifier) => { assert.ok(modules.has(specifier)); return modules.get(specifier); });
 await hostModule.evaluate();

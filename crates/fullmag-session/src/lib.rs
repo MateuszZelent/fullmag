@@ -38,6 +38,7 @@ pub mod solution_tensor_field;
 pub mod solution_tensor_source;
 pub mod store;
 pub mod types;
+mod typed_documents;
 mod worker_inbox;
 mod writer;
 pub use worker_inbox::FmsWorkerInboxRecord;
@@ -63,6 +64,6 @@ pub use fms::{
     unpack_fms, unpack_fms_for_visualization, unpack_fms_staged, FmsPreflight,
     FmsStagedPreflight, PackOptions,
 };
-pub use store::{GcPlan, RunBacklogFull, SessionStore};
+pub use store::{CheckpointStillReferenced, GcPlan, RunBacklogFull, SessionStore};
 pub use types::*;
 pub use writer::{StoreWriterBusy, WriteTransaction};
