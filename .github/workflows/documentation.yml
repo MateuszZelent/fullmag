@@ -237,7 +237,7 @@ jobs:
               "$DMI_URL" --output "$dmi_page" \
               && grep --fixed-strings --quiet "Dzyaloshinskii" "$dmi_page" \
               && grep --fixed-strings --quiet \
-                "Fullmag distinguishes interfacial and bulk" "$dmi_page"; then
+                "Fullmag exposes three distinct" "$dmi_page"; then
               dmi_ok=true
             fi
 
