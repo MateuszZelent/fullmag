@@ -7462,3 +7462,39 @@ Po jawnym zleceniu operatora usunięto wyłącznie execution nieudanych jobów #
 ### Korekta powiązania obserwatora wykresu z kampanią
 
 Obserwator11268 śledził historyczny signed15-controller-v2.json, zamiast aktualnego v4; nie wykryłby terminalnego błędu obecnej kampanii. Po potwierdzeniu dokładnego procesu54376, stanu waiting_for_actual_result i braku run-result/renderu zatrzymano wyłącznie ten własny obserwator. Uchwyt11268 potwierdził terminal exit1. Nowy obserwator55231 czyta signed15-controller-v4.json; AST i kontrola zachowania samego wyjścia oraz wymogu completed_unqualified/return0 PASS. Generator, tolerancje, job/digest, solver i FIFO bez zmian. Kontroler64900 pozostaje live; #219 nadal queued za live #218 (frontend-dependencies, odczyt CPU15,03%). Nie powstał nowy wykres ani nowe punkty solvera.
+
+
+## Aktualny checkpoint S06/S05/S12 — 2026-10-06
+
+Historyczne P2 przy sekcji „S06/S09 — spójna skala pól sprzężonego modu” jest
+**zamknięte źródłowo** przez commit `81cb6bcb475112aa1abe8bcc9e5e9128e5486351`.
+`eigen_normalization_metric.rs` sumuje rzeczywiste wkłady dense/sparse i rozszerza
+przedziały po każdej operacji przez next_down/next_up. Consumer wymaga dodatniej
+dolnej granicy normy i przedziału części urojonej zawierającego zero. Nie stosuje
+arbitralnego epsilon; overflow, FTZ/DAZ i niepewny znak są odrzucane. Wspólna
+skala q/phi oraz różne jednostki norm 2D/3D pozostają zachowane. Regresje Rust
+oraz dokładny oracle Fraction są zapisane; ten checkpoint nie jest sam w sobie
+dowodem ich wykonania ani poprawności całej macierzy assembly.
+
+Managed runtime #233 dał dwa zaakceptowane punkty DE dla ±10 rad/µm:
+11.205285324453774 i 11.205285254423218 GHz. Różnica wynosi około 70.03 Hz;
+odchylenie od referencji thickness-oracle N32 wynosi około -0.205%. Residuale
+magnetyczne/potencjału przeszły niezmienione bramki. Są to wybrane mody,
+`completed_unqualified`; dwa punkty nie zamykają dyspersji, zbieżności ani GUI.
+
+Pierwszy adaptacyjny sweep #233 odrzucono na kontroli digestu workera. Commit
+`888be1c223d851aa4af1f1365f1e7cf3fc3106b9` kanonizuje kolejność kluczy map
+w digestach rodzica i workera, zachowując kontrolę integralności planu i stanu.
+Regresje workerów przeszły GitHub Actions 37385900573. Build #234 ma ten dokładny
+SHA i digest kapsuły a8aa1b32c194a44fe54b26008d2c04a4a9d0584341f164c161a1862a71e68370.
+Kontener zakończył się exit0; przy obserwacji 23:11 UTC koordynator nadal wskazuje
+running, dlatego dispatch signed15 czeka na terminalny sukces oraz walidację
+receiptu. Nie ponowiono ani nie anulowano joba.
+
+Branch zawiera master `1bdb48274050e66aabcb490b52873c5b9cc02f98` przez merge
+`5e2d2e205feb089f7d62290b8013895412eeea98`, wypchnięty na remote. CI ma zielone
+Python/API/browser-fixture/Windows-volatile/FDM; Control Room ma jeden błąd
+ScratchAuthoringInspectorStability po ACK materiału (odczyt undefined.Aex).
+Trwa diagnoza kontraktu odpowiedzi; Rust jeszcze wykonywany. PR #97 pozostaje
+bez merge. Pełne S00–S12, signed15, serial/adaptive, DE/BV/convergence, COMSOL A1,
+GUI, produkcyjny provider S09 i kwalifikacja GPU pozostają otwarte.
