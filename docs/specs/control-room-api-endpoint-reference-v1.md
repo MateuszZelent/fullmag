@@ -2258,6 +2258,67 @@ resource-first architecture.
 | `command_status` | future command-status read model | target-only |
 | `step_update_v2` | derived internal bridge or future explicit runtime-step resource | unresolved cutover detail |
 
+## 17. v2 Workspace Database Endpoints (`/v2/workspace/...`)
+
+Status: canonical, v2 (added 2026-10-05). These are not session resources: the
+API process runs on the user's machine and serves the per-user workspace
+database (`workspace.db` in the Fullmag state directory, shared with the
+desktop host and the CLI; `docs/design/start-screen/docs/07-workspace-database.md`
+section 13) so the browser build shows the same recent projects, scripts and
+result folders. OpenAPI tag `workspace_items`. Ids are decimal strings,
+counters are numbers, Windows paths never carry the `\\?\` prefix.
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v2/workspace/items?kind=all\|project\|script\|result&sort=last_used\|name\|modified\|use_count&search=&limit=&include_missing=` | list; `all` is every kind; limit 1 to 1000 (default 200); pinned first |
+| `GET /v2/workspace/items/{id}` | item plus the facts read from its file now |
+| `GET /v2/workspace/items/{id}/thumbnail` | `image/png`, `ETag`, `304` on `If-None-Match`, `404` without a preview |
+| `POST /v2/workspace/items/{id}/pin` `{pinned}` | returns the item |
+| `POST /v2/workspace/items/{id}/forget` | `{id, forgotten: true}`; the file is untouched |
+| `GET /v2/workspace/items/{id}/history?limit=` | events, newest first (limit 1 to 500, default 100) |
+| `GET /v2/workspace/roots`, `PUT /v2/workspace/roots` | scan roots `{roots: [{path, kinds[], recursive, enabled}], source: configured\|legacy\|none}`; `legacy` offers the project folders the desktop host last scanned until roots are saved; `PUT` needs absolute existing folders without `..` (400 otherwise), at most 64 |
+| `POST /v2/workspace/scan` `{roots?}` | `{scanned, added, updated, missing, skipped, warnings}`; no body scans the saved roots; explicit roots are scanned once and not saved; 409 while another scan runs |
+| `POST /v2/workspace/items` `{path, kind?}` | add one existing absolute `.fms`, `.py` or results folder (no `..`, not a symlink or junction); counts as a use, records `import` `{"source":"add"}` actor `web`; returns the item |
+
+`WorkspaceItem`: `{id, kind: project|script|result, path, name, project_id?,
+first_seen_at, last_used_at, use_count, pinned, status:
+ready|missing|failed|migrate|readonly, size_bytes?, modified_at?, meta,
+has_thumbnail}`. `status` is checked against the file system on every request,
+so a deleted file reads `missing` without a database write.
+
+List response: `{items, outcome: {state: ready|created|migrated|quarantined|
+read_only_newer_schema, detail?}}`.
+
+Detail response: `{item, detail, events, read_at, linked_results[],
+linked_source?}`. `events` are the last 30; `linked_results` are result folders
+whose run manifest names this script or project; `linked_source` is the script
+or project of a result folder. `detail` is a union tagged by `kind`:
+
+- `project`: `read_error?`, `name`, `project_id`, `schema_version`, `revision`,
+  `solver`, `migrated`, `can_write`, `mode`, `mode_reason`, `warnings[]`,
+  `summary {model {discretisation, cell_size, periodicity, materials, ms, aex,
+  alpha, interactions}, execution {integrator, tolerance, excitation}, outputs
+  {frames, size_bytes}}` (unavailable fields `null`; `periodicity` is always
+  `null` until the scene carries it; outputs come from the latest recorded
+  run), `authors[]`, `citation`, `history[]`, `runs[]`, `provenance_recorded`,
+  `preview {colouring, run_id?, at?}`.
+- `script`: `read_error?`, `sha256`, `bytes`, `lines`, `encoding`
+  (`utf-8|utf-8-bom|other`), `truncated`, `summary`, `uses_fullmag`, `imports[]`
+  (top-level names), `env_reads[]` (literal names, never values),
+  `syntax_checked: false`, `degraded: true`, `degraded_reason`. This is a
+  bounded static scan, not `fullmag script inspect` (which needs a Python
+  interpreter and lives in a binary crate); nothing is executed.
+- `result`: `read_error?`, `format`, `has_manifest`, `run_id`, `status`,
+  `source {kind, path, sha256?, project_id?, revision?}`, `started_at`,
+  `finished_at`, `stages[{id, kind, steps, time_s}]`, `quantities[]`, `grid
+  {backend, cells, n_nodes, n_elements, hmax}`, `frames`, `total_bytes`,
+  `total_bytes_truncated`, `modified_at`, `outputs[{path, kind}]`.
+
+Viewing a script that changed since the last observation records one `edit`
+event (actor `web`). Errors: 400 invalid id/kind/sort/path, 404 unknown or
+forgotten item, 409 `workspace_read_only` (database from a newer schema, writes
+refused) or `workspace_scan_running`, 500 when the database cannot be opened.
+
 ## 16. Immediate Documentation Rule
 
 When adding or changing a currently mounted local control-room endpoint:

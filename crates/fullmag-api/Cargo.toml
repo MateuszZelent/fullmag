@@ -100,6 +100,7 @@ fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-runner = { path = "../fullmag-runner" }
 fullmag-session = { path = "../fullmag-session" }
 fullmag-workspace = { path = "../fullmag-workspace" }
+fullmag-workspace-inspect = { path = "../fullmag-workspace-inspect", features = ["utoipa"] }
 fullmag-runtime-control = { path = "../fullmag-runtime-control" }
 png = "0.17"
 tiny-skia = "0.11"
@@ -117,3 +118,4 @@ libc = "0.2"
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
+rusqlite = "0.37"

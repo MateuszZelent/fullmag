@@ -13,20 +13,27 @@ use crate::error::{Result, WorkspaceError};
 use crate::paths::{default_database_path, identity, Identity};
 use crate::timefmt::rfc3339_millis;
 use crate::types::{
-    Actor, Event, EventKind, Item, ItemKind, ItemRef, ItemStatus, OpenOutcome, Query, RecordEvent,
-    RecordReceipt, Sort,
+    Actor, Event, EventKind, FileObservation, Item, ItemKind, ItemRef, ItemStatus, OpenOutcome,
+    Query, RecordEvent, RecordReceipt, Sort, WorkspaceRoot,
 };
 
 /// Schema version this build reads and writes.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
+
+/// `kv` key of the scan roots, a JSON array of [`WorkspaceRoot`].
+pub const WORKSPACE_ROOTS_KEY: &str = "workspace.roots";
+
+/// Scripts larger than this are not hashed by [`Workspace::observe_file`].
+pub const MAX_HASHED_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Events kept per item; the oldest are dropped first (spec section 11.2).
 pub const MAX_EVENTS_PER_ITEM: usize = 500;
 
 /// Forward-only migrations; entry `i` upgrades version `i` to `i + 1`.
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     include_str!("../schema/v1.sql"),
     include_str!("../schema/v2.sql"),
+    include_str!("../schema/v3.sql"),
 ];
 
 /// The DDL of schema version 1, for tools that must build the same schema.
@@ -34,6 +41,11 @@ pub const SCHEMA_V1_SQL: &str = MIGRATIONS[0];
 
 /// The DDL that upgrades version 1 to version 2 (the `thumbnails` table).
 pub const SCHEMA_V2_SQL: &str = MIGRATIONS[1];
+
+/// The DDL that upgrades version 2 to version 3: `items.kind` gains `result`
+/// and `events.kind` gains `edit` (both tables are rebuilt, because SQLite
+/// cannot alter a CHECK constraint). Must run with foreign keys off.
+pub const SCHEMA_V3_SQL: &str = MIGRATIONS[2];
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
 
@@ -428,8 +440,19 @@ impl Workspace {
 
     /// Re-stat the file behind an item: refresh size and modified time, and
     /// flip `status` between `missing` and `ready`. Other statuses are kept
-    /// while the file exists.
+    /// while the file exists. For a script whose file changed on disk (or was
+    /// never hashed) the content digest is also observed, see
+    /// [`Self::observe_file`]; the `edit` event is attributed to the desktop.
     pub fn refresh_file_state<'a>(&self, item: impl Into<ItemRef<'a>>) -> Result<Item> {
+        self.refresh_file_state_as(item, Actor::Desktop)
+    }
+
+    /// [`Self::refresh_file_state`] attributing a detected edit to `actor`.
+    pub fn refresh_file_state_as<'a>(
+        &self,
+        item: impl Into<ItemRef<'a>>,
+        actor: Actor,
+    ) -> Result<Item> {
         let found = self.require(item.into())?;
         let file = file_state(Path::new(&found.0.path));
         let status = match (&file, found.0.status) {
@@ -437,12 +460,19 @@ impl Workspace {
             (Some(_), ItemStatus::Missing) => ItemStatus::Ready,
             (Some(_), other) => other,
         };
+        // A directory's own `len()` says nothing: a results folder keeps the
+        // size its scan computed and only follows the modified time.
+        let is_folder = found.0.kind == ItemKind::Result;
+        let stored_size = |size: i64| if is_folder { None } else { Some(size) };
+        let stat_changed = file.as_ref().is_some_and(|(size, modified)| {
+            (!is_folder && found.0.size_bytes != Some(*size)) || found.0.modified_at != *modified
+        });
         self.with_write_txn(|c| {
             c.execute(
                 "UPDATE items SET size_bytes = COALESCE(?1, size_bytes), \
                  modified_at = COALESCE(?2, modified_at), status = ?3 WHERE id = ?4",
                 params![
-                    file.as_ref().map(|f| f.0),
+                    file.as_ref().and_then(|f| stored_size(f.0)),
                     file.as_ref().and_then(|f| f.1.clone()),
                     status.as_str(),
                     found.0.id
@@ -450,8 +480,82 @@ impl Workspace {
             )?;
             Ok(())
         })?;
+        let never_hashed = found.0.meta.get("sha256").and_then(Value::as_str).is_none();
+        if found.0.kind == ItemKind::Script && file.is_some() && (stat_changed || never_hashed) {
+            // A script that cannot be read (permissions, a race with a save)
+            // keeps its refreshed stat; the digest is observed next time.
+            let _ = self.observe_file(found.0.id, actor);
+        }
         self.find(ItemRef::Id(found.0.id))?
             .ok_or_else(|| WorkspaceError::NotFound(format!("item {}", found.0.id)))
+    }
+
+    /// Hash the file behind a script item (up to [`MAX_HASHED_BYTES`]) and
+    /// compare with the digest stored in `meta.sha256` at the last observation.
+    ///
+    /// The first observation only stores `meta.sha256`, `meta.bytes` and
+    /// `meta.lines`. When the stored digest differs, an `edit` event with
+    /// `{sha256_before, sha256_after, lines_before, lines_after, bytes_before,
+    /// bytes_after}` is appended and the facts are replaced. An edit does not
+    /// count as use. Never executes or keeps the text of the file.
+    pub fn observe_file<'a>(
+        &self,
+        item: impl Into<ItemRef<'a>>,
+        actor: Actor,
+    ) -> Result<FileObservation> {
+        self.ensure_writable()?;
+        let (found, _) = self.require(item.into())?;
+        let observed = hash_file(Path::new(&found.path))?;
+        let before = found
+            .meta
+            .get("sha256")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if before.as_deref() == Some(observed.sha256.as_str()) {
+            return Ok(observed);
+        }
+        let edited = before.is_some();
+        let patch = json!({
+            "sha256": observed.sha256,
+            "bytes": observed.bytes,
+            "lines": observed.lines,
+        });
+        let detail = edited.then(|| {
+            json!({
+                "sha256_before": before,
+                "sha256_after": observed.sha256,
+                "lines_before": found.meta.get("lines").cloned().unwrap_or(Value::Null),
+                "lines_after": observed.lines,
+                "bytes_before": found.meta.get("bytes").cloned().unwrap_or(Value::Null),
+                "bytes_after": observed.bytes,
+            })
+        });
+        self.with_write_txn(|c| {
+            let mut meta = match found.meta.clone() {
+                Value::Object(map) => Value::Object(map),
+                _ => Value::Object(Map::new()),
+            };
+            merge_patch(&mut meta, &patch);
+            c.execute(
+                "UPDATE items SET meta = ?1 WHERE id = ?2",
+                params![serde_json::to_string(&meta)?, found.id],
+            )?;
+            if let Some(detail) = &detail {
+                c.execute(
+                    "INSERT INTO events (item_id, at, kind, actor, detail) \
+                     VALUES (?1, ?2, 'edit', ?3, ?4)",
+                    params![
+                        found.id,
+                        rfc3339_millis(SystemTime::now()),
+                        actor.as_str(),
+                        serde_json::to_string(detail)?
+                    ],
+                )?;
+                trim_events(c, found.id)?;
+            }
+            Ok(())
+        })?;
+        Ok(FileObservation { edited, ..observed })
     }
 
     /// Drop all events and the per-item `last_run` / `args` memory. Pins,
@@ -477,6 +581,9 @@ impl Workspace {
         if let Some(kind) = query.kind {
             args.push(SqlValue::Text(kind.as_str().into()));
             sql.push_str(&format!(" AND kind = ?{}", args.len()));
+        }
+        if query.kind.is_none() && !query.include_results {
+            sql.push_str(" AND kind != 'result'");
         }
         if !query.include_missing {
             sql.push_str(" AND status != 'missing'");
@@ -608,6 +715,20 @@ impl Workspace {
         })
     }
 
+    /// The folders the scanner looks through (`kv` key
+    /// [`WORKSPACE_ROOTS_KEY`]); empty when none were configured.
+    pub fn roots(&self) -> Result<Vec<WorkspaceRoot>> {
+        match self.get_kv(WORKSPACE_ROOTS_KEY)? {
+            Some(value) => Ok(serde_json::from_value(value).unwrap_or_default()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Replace the configured scan roots.
+    pub fn set_roots(&self, roots: &[WorkspaceRoot]) -> Result<()> {
+        self.set_kv(WORKSPACE_ROOTS_KEY, &serde_json::to_value(roots)?)
+    }
+
     pub fn remove_kv(&self, key: &str) -> Result<()> {
         self.with_write_txn(|c| {
             c.execute("DELETE FROM kv WHERE key = ?1", [key])?;
@@ -665,7 +786,23 @@ fn user_version(conn: &Connection) -> Result<u32> {
 
 /// Apply pending migrations in one transaction. Returns the version the
 /// database had before, or `None` when another process migrated it first.
+///
+/// Version 3 rebuilds `items` and `events`; dropping a table that other tables
+/// reference would cascade-delete their rows while foreign keys are enforced,
+/// so enforcement is switched off around the transaction (the pragma is a
+/// no-op inside one) and the result is verified with `foreign_key_check`
+/// before it commits.
 fn migrate(conn: &Connection) -> Result<Option<u32>> {
+    let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+    conn.pragma_update(None, "foreign_keys", false)?;
+    let outcome = migrate_in_transaction(conn);
+    let restored = conn.pragma_update(None, "foreign_keys", foreign_keys != 0);
+    let value = outcome?;
+    restored?;
+    Ok(value)
+}
+
+fn migrate_in_transaction(conn: &Connection) -> Result<Option<u32>> {
     conn.execute_batch("BEGIN IMMEDIATE")?;
     let outcome = (|| -> Result<Option<u32>> {
         let from = user_version(conn)?;
@@ -674,6 +811,15 @@ fn migrate(conn: &Connection) -> Result<Option<u32>> {
         }
         for step in &MIGRATIONS[from as usize..SCHEMA_VERSION as usize] {
             conn.execute_batch(step)?;
+        }
+        let violations: i64 =
+            conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })?;
+        if violations > 0 {
+            return Err(WorkspaceError::Corrupt(format!(
+                "migration left {violations} dangling foreign keys"
+            )));
         }
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
         Ok(Some(from))
@@ -767,6 +913,41 @@ fn quarantine(path: &Path) -> Result<PathBuf> {
         let _ = std::fs::rename(PathBuf::from(from), PathBuf::from(to));
     }
     Ok(target)
+}
+
+/// SHA-256, size and line count of a file, streamed (never held in memory).
+/// Refuses files larger than [`MAX_HASHED_BYTES`].
+pub fn hash_file(path: &Path) -> Result<FileObservation> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let (mut bytes, mut newlines, mut last) = (0_u64, 0_u64, b'\n');
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        bytes += read as u64;
+        if bytes > MAX_HASHED_BYTES {
+            return Err(WorkspaceError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "file is too large to hash",
+            )));
+        }
+        hasher.update(&buffer[..read]);
+        newlines += buffer[..read].iter().filter(|b| **b == b'\n').count() as u64;
+        last = buffer[read - 1];
+    }
+    // A final line without a newline still counts, as `str::lines` does.
+    let lines = newlines + u64::from(bytes > 0 && last != b'\n');
+    Ok(FileObservation {
+        sha256: format!("{:x}", hasher.finalize()),
+        bytes,
+        lines,
+        edited: false,
+    })
 }
 
 pub(crate) fn file_state(path: &Path) -> Option<(i64, Option<String>)> {
