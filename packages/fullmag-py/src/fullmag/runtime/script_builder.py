@@ -288,6 +288,13 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
                 if base_dynamics is not None and base_dynamics.field_refresh is not None
                 else None
             ),
+            "gamma": _text_number(
+                base_dynamics.gamma
+                if base_dynamics is not None
+                and base_dynamics.gamma is not None
+                and abs(base_dynamics.gamma - DEFAULT_GAMMA) > 1e-12
+                else None
+            ),
             "relax_algorithm": relax_stage.algorithm if relax_stage is not None else "llg_overdamped",
             "torque_tolerance": _text_number(
                 relax_stage.torque_tolerance
@@ -359,6 +366,8 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     solver_draft = draft["solver"]
     if base_dynamics is None or base_dynamics.fixed_timestep is None:
         solver_draft.pop("fixed_timestep", None)
+    if not solver_draft.get("gamma"):
+        solver_draft.pop("gamma", None)
     if not exact_max_err:
         for key in ("dt_initial", "dt_min", "dt_max", "max_err"):
             solver_draft.pop(key, None)
@@ -659,6 +668,14 @@ def _omit_scene_mesh_editor_defaults(overrides: dict[str, object]) -> None:
         "algorithm_3d": 1,
         "compute_quality": True,
         "per_element_quality": True,
+        # Editor-state values that equal the DSL constructor defaults of
+        # ``MeshDefaults`` (world.py). Writing them out would count as
+        # explicit FEM mesh controls and make an FDM ``cell_size`` unloadable.
+        "size_factor": 1.0,
+        "size_from_curvature": 0,
+        "narrow_regions": 0,
+        "smoothing_steps": 1,
+        "optimize_iterations": 1,
     }
 
     def omit(config: object) -> None:
@@ -666,7 +683,9 @@ def _omit_scene_mesh_editor_defaults(overrides: dict[str, object]) -> None:
             return
         for key, default in defaults.items():
             value = config.get(key)
-            if type(value) is type(default) and value == default:
+            if isinstance(value, bool) != isinstance(default, bool):
+                continue
+            if isinstance(value, (bool, int, float)) and value == default:
                 config[key] = None
 
     omit(overrides.get("mesh"))
@@ -730,12 +749,16 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
         for key, value in (
             ("fixed_timestep", "fix_dt"),
             ("dt_initial", "dt_initial"),
+            ("dt_min", "dt_min"),
             ("dt_max", "dt_max"),
             ("max_err", "max_err"),
         ):
             numeric = _finite_number(solver.get(key))
             if numeric is not None:
                 solver_kwargs[value] = numeric
+        gamma = _finite_number(solver.get("gamma"))
+        if gamma is not None:
+            solver_kwargs["gamma"] = gamma
         if solver_kwargs:
             lines.append(f"study.solver({_python_keyword_args(solver_kwargs)})")
 
@@ -893,9 +916,66 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
             lines.append(f"study.universe.mesh({_python_keyword_args(universe_mesh_kwargs)})")
 
     for stage in builder.get("stages") or []:
-        if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
+        if not isinstance(stage, Mapping):
             continue
-        kwargs: dict[str, object] = {"stage_id": str(stage.get("stage_id") or "relax")}
+        stage_call = _render_bootstrap_stage_call(stage, solver)
+        if stage_call:
+            lines.append(stage_call)
+
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _number_list(value: object) -> list[float] | None:
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+    elif isinstance(value, str) and value.strip():
+        items = [item for item in value.split(",") if item.strip()]
+    else:
+        return None
+    numbers = [_finite_number(item) for item in items]
+    if not numbers or any(number is None for number in numbers):
+        return None
+    return [float(number) for number in numbers if number is not None]
+
+
+def _bootstrap_text_kwargs(
+    stage: Mapping[str, object], keys: tuple[tuple[str, str], ...]
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, name in keys:
+        value = stage.get(key)
+        if isinstance(value, str) and value.strip():
+            result[name] = value
+    return result
+
+
+def _bootstrap_bc_kwargs(
+    stage: Mapping[str, object], prefix: str
+) -> dict[str, object]:
+    config = stage.get(f"{prefix}_spin_wave_bc_config")
+    kind = stage.get(f"{prefix}_spin_wave_bc")
+    if isinstance(config, Mapping) and config:
+        return {"bc": dict(config)}
+    if isinstance(kind, str) and kind.strip():
+        return {"bc": kind}
+    return {}
+
+
+def _render_bootstrap_stage_call(stage: Mapping[str, object], solver: object) -> str:
+    """Create the typed stage that the canonical renderer later re-renders.
+
+    One scene stage yields exactly one loaded stage, so per-stage overrides
+    keep their positions. A stage kind that cannot be realized fails loudly
+    instead of being dropped from the rendered script.
+    """
+    kind = str(stage.get("kind") or "relax")
+    stage_id = stage.get("stage_id")
+    id_kwargs: dict[str, object] = (
+        {"stage_id": str(stage_id)} if isinstance(stage_id, str) and stage_id.strip() else {}
+    )
+    if kind == "relax":
+        kwargs: dict[str, object] = {"stage_id": str(stage_id or "relax")}
         algorithm = stage.get("algorithm")
         if isinstance(algorithm, str) and algorithm.strip():
             kwargs["algorithm"] = algorithm
@@ -905,15 +985,156 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
         tolerance = _finite_number(stage.get("torque_tolerance"))
         if tolerance is not None:
             kwargs["tolA"] = tolerance
-        fixed_timestep = _finite_number(stage.get("fixed_timestep"))
-        if fixed_timestep is None and isinstance(solver, Mapping):
-            fixed_timestep = _finite_number(solver.get("fixed_timestep"))
-        if fixed_timestep is not None:
-            kwargs["dt"] = fixed_timestep
-        lines.append(f"study.stages.add_relax({_python_keyword_args(kwargs)})")
+        kwargs.update(_relax_stage_timestep_kwargs(stage, solver))
+        return f"study.stages.add_relax({_python_keyword_args(kwargs)})"
+    if kind == "run":
+        until = _finite_number(stage.get("until_seconds"))
+        if until is None and not str(stage.get("entrypoint_kind") or "").startswith("flat_"):
+            # A legacy ``build()`` script receives its end time from the caller
+            # (``--until``); there is no stage to carry over.
+            return ""
+        if until is None:
+            raise ValueError(
+                f"SceneDocument run stage '{stage_id or 'run'}' requires a finite until_seconds."
+            )
+        return f"study.stages.add_run({_python_keyword_args({'until': until, **id_kwargs})})"
+    if kind == "eigenmodes":
+        kwargs = {}
+        count = _positive_int(stage.get("eigen_count"))
+        if count is not None:
+            kwargs["count"] = count
+        kwargs.update(
+            _bootstrap_text_kwargs(
+                stage,
+                (
+                    ("eigen_target", "target"),
+                    ("eigen_operator", "operator"),
+                    ("eigen_equilibrium_source", "equilibrium_source"),
+                    ("eigen_equilibrium_artifact", "equilibrium_artifact"),
+                    ("eigen_normalization", "normalization"),
+                    ("eigen_damping_policy", "damping_policy"),
+                    ("eigen_magnetostatic_bc", "magnetostatic_bc"),
+                ),
+            )
+        )
+        for key, name in (
+            ("eigen_target_frequency", "target_frequency"),
+            ("eigen_frequency_min", "frequency_min"),
+            ("eigen_frequency_max", "frequency_max"),
+        ):
+            numeric = _finite_number(stage.get(key))
+            if numeric is not None:
+                kwargs[name] = numeric
+        if isinstance(stage.get("eigen_include_demag"), bool):
+            kwargs["include_demag"] = stage["eigen_include_demag"]
+        kwargs.update(_bootstrap_bc_kwargs(stage, "eigen"))
+        k_vector = _number_list(stage.get("eigen_k_vector"))
+        if k_vector is not None and len(k_vector) == 3:
+            kwargs["k_vector"] = tuple(k_vector)
+        return f"study.stages.add_eigenmodes({_python_keyword_args(kwargs)})"
+    if kind == "frequency_response":
+        frequencies = _number_list(stage.get("frequency_values_hz"))
+        if frequencies is None:
+            raise ValueError(
+                "SceneDocument frequency_response stage requires frequency_values_hz."
+            )
+        kwargs = {"frequencies_hz": frequencies}
+        excitation = _number_list(stage.get("frequency_excitation_field_au_per_m"))
+        if excitation is not None and len(excitation) == 3:
+            kwargs["excitation_field_au_per_m"] = tuple(excitation)
+        phase = _finite_number(stage.get("frequency_excitation_phase_rad"))
+        if phase is not None:
+            kwargs["excitation_phase_rad"] = phase
+        if isinstance(stage.get("frequency_include_demag"), bool):
+            kwargs["include_demag"] = stage["frequency_include_demag"]
+        kwargs.update(
+            _bootstrap_text_kwargs(
+                stage,
+                (
+                    ("frequency_equilibrium_source", "equilibrium_source"),
+                    ("frequency_equilibrium_artifact", "equilibrium_artifact"),
+                    ("frequency_normalization", "normalization"),
+                    ("frequency_damping_policy", "damping_policy"),
+                    ("frequency_magnetostatic_bc", "magnetostatic_bc"),
+                ),
+            )
+        )
+        kwargs.update(_bootstrap_bc_kwargs(stage, "frequency"))
+        k_vector = _number_list(stage.get("frequency_k_vector"))
+        if k_vector is not None and len(k_vector) == 3:
+            kwargs["k_vector"] = tuple(k_vector)
+        return f"study.stages.add_frequency_response({_python_keyword_args(kwargs)})"
+    if kind == "hysteresis":
+        return (
+            "study.stages.add_hysteresis_sweep("
+            + ", ".join(_render_hysteresis_payload_args(stage))
+            + ")"
+        )
+    raise ValueError(f"SceneDocument export does not support stage kind '{kind}'.")
 
-    lines.append("")
-    return "\n".join(lines) + "\n"
+
+def _relax_stage_timestep_kwargs(
+    stage: Mapping[str, object], solver: object
+) -> dict[str, object]:
+    """Express the stage's own timestep policy in ``add_relax`` keywords.
+
+    The stage wins over the study-level solver. Exactly one policy is emitted
+    (fixed step, ``max_err`` convenience, or an advanced ``AdaptiveTimestep``),
+    never a fixed step next to adaptive controls.
+    """
+    solver_map = solver if isinstance(solver, Mapping) else {}
+    result: dict[str, object] = {}
+    integrator = stage.get("integrator")
+    if (
+        isinstance(integrator, str)
+        and integrator.strip()
+        and integrator != "auto"
+        and integrator != solver_map.get("integrator")
+    ):
+        result["solver"] = integrator
+    for source in (stage, solver_map):
+        fixed = _finite_number(source.get("fixed_timestep"))
+        if fixed is not None:
+            result["dt"] = fixed
+            return result
+        advanced = source.get("adaptive_timestep")
+        if isinstance(advanced, Mapping):
+            mode = advanced.get("tolerance_mode")
+            numbers = {
+                key: _finite_number(advanced.get(key))
+                for key in (
+                    "atol", "rtol", "dt_initial", "dt_min", "dt_max", "safety",
+                    "growth_limit", "shrink_limit", "max_spin_rotation",
+                    "norm_tolerance",
+                )
+            }
+            if mode == "max_error" and numbers["atol"] is not None:
+                result["max_err"] = numbers["atol"]
+                for key in ("dt_initial", "dt_min", "dt_max"):
+                    if numbers[key] is not None:
+                        result[key] = numbers[key]
+            elif numbers["atol"] is not None and numbers["rtol"] is not None:
+                result["adaptive_timestep"] = _RawExpression(
+                    "fm.AdaptiveTimestep("
+                    + ", ".join(
+                        f"{key}={_python_literal(value)}"
+                        for key, value in numbers.items()
+                        if value is not None
+                    )
+                    + ")"
+                )
+            else:
+                continue
+            return result
+        max_err = _finite_number(source.get("max_err"))
+        if max_err is not None:
+            result["max_err"] = max_err
+            for key in ("dt_initial", "dt_min", "dt_max"):
+                value = _finite_number(source.get(key))
+                if value is not None:
+                    result[key] = value
+            return result
+    return result
 
 
 def _render_shape_expression(entry: Mapping[str, object]) -> str:
@@ -951,6 +1172,16 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         if any(value is None for value in values):
             raise ValueError("ArchWaveguide geometry requires finite dimensions.")
         expression = f"fm.ArchWaveguide{_python_literal(tuple(values))}"
+    elif kind in {"difference", "union", "intersection"}:
+        operands = ("base", "tool") if kind == "difference" else ("a", "b")
+        operator = {"difference": "-", "union": "+", "intersection": "&"}[kind]
+        rendered_operands: list[str] = []
+        for operand in operands:
+            child = params.get(operand)
+            if not isinstance(child, Mapping):
+                raise ValueError(f"{kind} geometry requires a '{operand}' operand.")
+            rendered_operands.append("(" + _render_shape_expression(child) + ")")
+        expression = f"({rendered_operands[0]} {operator} {rendered_operands[1]})"
     else:
         raise ValueError(f"SceneDocument export does not support geometry kind '{kind}'.")
     translation = params.get("translation")
@@ -1084,6 +1315,16 @@ def _render_universe_mesh_kwargs(mesh: Mapping[str, object], *, backend: str) ->
 
 def _python_keyword_args(values: Mapping[str, object]) -> str:
     return ", ".join(f"{key}={_python_literal(value)}" for key, value in values.items())
+
+
+class _RawExpression:
+    """Python source that ``_python_literal`` must emit verbatim."""
+
+    def __init__(self, source: str) -> None:
+        self._source = source
+
+    def __repr__(self) -> str:
+        return self._source
 
 
 def _python_literal(value: object) -> str:
@@ -1786,8 +2027,18 @@ def _render_runtime(
 
     fdm = _fdm_from_overrides(problem, overrides)
     if isinstance(fdm, FDM):
+        # ``study.objects.mesh.defaults(cell_size=...)`` cannot be combined with
+        # FEM mesh controls in the same study, so a problem that carries both
+        # grids keeps its FDM cell on ``study.fdm(default_cell=...)``.
+        carries_fem_mesh_controls = not _is_pure_fdm_problem(problem) and bool(
+            _render_mesh_kwargs(
+                _study_global_mesh_config(problem, overrides), source_root=Path(".")
+            )
+        )
         canonical_mesh_authoring = (
-            surface == "study" and _uses_canonical_fdm_mesh_authoring(fdm)
+            surface == "study"
+            and not carries_fem_mesh_controls
+            and _uses_canonical_fdm_mesh_authoring(fdm)
         )
         if canonical_mesh_authoring:
             if fdm.default_cell is not None:
@@ -6339,7 +6590,10 @@ def _render_field_autosave(field_policy: object) -> str:
 
 
 def _render_hysteresis_stage_args(study: Hysteresis) -> list[str]:
-    payload = study.to_ir()
+    return _render_hysteresis_payload_args(study.to_ir())
+
+
+def _render_hysteresis_payload_args(payload: Mapping[str, object]) -> list[str]:
     args: list[str] = []
     for key in ("field_min_mT", "field_max_mT", "field_step_mT"):
         if key in payload:
@@ -8293,6 +8547,14 @@ def _override_bool(value: object, fallback: bool) -> bool:
 
 def _export_demag_realization(problem: Problem) -> str | None:
     realization = _problem_demag_realization(problem)
+    if (
+        problem.runtime.backend_target.value == "fdm"
+        and isinstance(realization, str)
+        and realization.strip().lower() == "auto"
+    ):
+        # FDM demag strategy lives under ``study.fdm.demag``; the FEM-style
+        # ``auto`` realization default must not be exported for an FDM lane.
+        return None
     return str(realization) if isinstance(realization, str) and realization.strip() else None
 
 

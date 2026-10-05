@@ -540,51 +540,146 @@ fn mismatch(field: &str, original: &Value, rendered: &Value) -> String {
     )
 }
 
+/// Canonicalisation 1: a `translate` wrapper whose offset is the zero vector
+/// does not move anything, so it is replaced by its base geometry. The scene
+/// renderer writes geometries without such a no-op wrapper.
+fn strip_zero_translations(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let is_zero_translate = map.get("kind").and_then(Value::as_str) == Some("translate")
+                && map
+                    .get("by")
+                    .and_then(Value::as_array)
+                    .is_some_and(|by| by.iter().all(|item| item.as_f64() == Some(0.0)));
+            if is_zero_translate {
+                if let Some(base) = map.get("base") {
+                    return strip_zero_translations(base);
+                }
+            }
+            Value::Object(
+                map.iter()
+                    .map(|(key, item)| (key.clone(), strip_zero_translations(item)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(strip_zero_translations).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Canonicalisation 2: a Zeeman term with the zero field vector contributes no
+/// field and no energy, so it equals the absence of the term. A script that
+/// never sets an external field and a scene whose external field is zero must
+/// not be reported as different. Non-zero fields are always compared.
+fn without_zero_zeeman(terms: &Value) -> Value {
+    match terms.as_array() {
+        Some(items) => Value::Array(
+            items
+                .iter()
+                .filter(|term| {
+                    let is_zeeman = term.get("kind").and_then(Value::as_str) == Some("zeeman");
+                    let zero_field = term
+                        .get("B")
+                        .and_then(Value::as_array)
+                        .is_some_and(|b| b.iter().all(|item| item.as_f64() == Some(0.0)));
+                    !(is_zeeman && zero_field)
+                })
+                .cloned()
+                .collect(),
+        ),
+        None => terms.clone(),
+    }
+}
+
+fn stage_summary(stage: &Value) -> Value {
+    json!({
+        "default_until_seconds": stage.get("default_until_seconds"),
+        "action": stage.get("action"),
+        "study_kind": stage.pointer("/ir/study/kind"),
+        "study_dynamics": stage.pointer("/ir/study/dynamics"),
+        "energy_terms": without_zero_zeeman(pointer(stage, "/ir/energy_terms")),
+    })
+}
+
+fn stage_list(document: &Value) -> Vec<Value> {
+    pointer(document, "/stages")
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// Compare the key physics fields of two `export-run-config` documents.
 /// Returns one note per differing field; an empty list means they agree.
+///
+/// Documented canonicalisations, each equivalence-preserving:
+/// 1. no-op zero `translate` wrappers are dropped from geometries;
+/// 2. a zero-field Zeeman term equals no Zeeman term (top level and per stage);
+/// 3. a legacy script without a stage list (`Problem` with one study) equals
+///    the scene's single explicit stage: the original is compared as one stage
+///    built from its own study, energy terms and `default_until_seconds`.
 fn compare_lowered(original: &Value, rendered: &Value) -> Vec<String> {
     const NAME_KEYS: &[&str] = &["name"];
-    let fields: [(&str, &str, &[&str]); 5] = [
-        ("geometry", "/ir/geometry/entries", NAME_KEYS),
-        ("materials", "/ir/materials", NAME_KEYS),
-        (
-            "FDM grid cell",
-            "/ir/backend_policy/discretization_hints/fdm/cell",
-            &[],
-        ),
-        ("study kind", "/ir/study/kind", &[]),
-        ("study dynamics", "/ir/study/dynamics", &[]),
-    ];
+    let original_stages = stage_list(original);
+    let rendered_stages = stage_list(rendered);
+    let legacy_single_stage = original_stages.is_empty() && rendered_stages.len() == 1;
+
     let mut notes = Vec::new();
-    for (label, path, ignored) in fields {
-        let (a, b) = (pointer(original, path), pointer(rendered, path));
+    let mut check = |label: &str, a: &Value, b: &Value, ignored: &[&str]| {
         if !json_close(a, b, ignored) {
             notes.push(mismatch(label, a, b));
         }
-    }
-    let stage_summary = |document: &Value| -> Value {
-        Value::Array(
-            pointer(document, "/stages")
-                .as_array()
-                .map(|stages| {
-                    stages
-                        .iter()
-                        .map(|stage| {
-                            json!({
-                                "default_until_seconds": stage.get("default_until_seconds"),
-                                "action": stage.get("action"),
-                                "study_kind": stage.pointer("/ir/study/kind"),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-        )
     };
-    let (sa, sb) = (stage_summary(original), stage_summary(rendered));
-    if !json_close(&sa, &sb, &[]) {
-        notes.push(mismatch("study stages", &sa, &sb));
+    check(
+        "geometry",
+        &strip_zero_translations(pointer(original, "/ir/geometry/entries")),
+        &strip_zero_translations(pointer(rendered, "/ir/geometry/entries")),
+        NAME_KEYS,
+    );
+    check(
+        "materials",
+        pointer(original, "/ir/materials"),
+        pointer(rendered, "/ir/materials"),
+        NAME_KEYS,
+    );
+    check(
+        "FDM grid cell",
+        pointer(original, "/ir/backend_policy/discretization_hints/fdm/cell"),
+        pointer(rendered, "/ir/backend_policy/discretization_hints/fdm/cell"),
+        &[],
+    );
+    check(
+        "energy terms",
+        &without_zero_zeeman(pointer(original, "/ir/energy_terms")),
+        &without_zero_zeeman(pointer(rendered, "/ir/energy_terms")),
+        &[],
+    );
+    if !legacy_single_stage {
+        check(
+            "study kind",
+            pointer(original, "/ir/study/kind"),
+            pointer(rendered, "/ir/study/kind"),
+            &[],
+        );
+        check(
+            "study dynamics",
+            pointer(original, "/ir/study/dynamics"),
+            pointer(rendered, "/ir/study/dynamics"),
+            &[],
+        );
     }
+
+    let summaries = |stages: &[Value]| Value::Array(stages.iter().map(stage_summary).collect());
+    let original_summary = if legacy_single_stage {
+        Value::Array(vec![stage_summary(&json!({
+            "default_until_seconds": original.get("default_until_seconds"),
+            "action": Value::Null,
+            "ir": original.get("ir"),
+        }))])
+    } else {
+        summaries(&original_stages)
+    };
+    let rendered_summary = summaries(&rendered_stages);
+    check("study stages", &original_summary, &rendered_summary, &[]);
     notes
 }
 
@@ -639,5 +734,107 @@ ValueError: no fixed timestep
         assert_eq!(notes.len(), 2, "{notes:?}");
         assert!(notes[0].starts_with("study dynamics differs"));
         assert!(notes[1].starts_with("study stages differs"));
+    }
+
+    fn lowered_document(
+        geometry: Value,
+        energy_terms: Value,
+        stages: Value,
+        default_until: Value,
+    ) -> Value {
+        json!({
+            "ir": {
+                "geometry": {"entries": [geometry]},
+                "materials": [{"name": "m", "Ms": 8e5}],
+                "backend_policy": {"discretization_hints": {"fdm": {"cell": [3e-9, 3e-9, 2e-9]}}},
+                "energy_terms": energy_terms,
+                "study": {"kind": "time_evolution", "dynamics": {"integrator": "rk45"}}
+            },
+            "default_until_seconds": default_until,
+            "stages": stages
+        })
+    }
+
+    fn explicit_stage(kind: &str, until: Value, energy_terms: Value) -> Value {
+        json!({
+            "default_until_seconds": until,
+            "action": null,
+            "ir": {"energy_terms": energy_terms,
+                   "study": {"kind": kind, "dynamics": {"integrator": "rk45"}}}
+        })
+    }
+
+    #[test]
+    fn comparison_treats_a_zero_translate_wrapper_as_the_base_geometry() {
+        let base = json!({"name": "a", "kind": "cylinder", "radius": 5e-8, "height": 1e-8});
+        let wrapped = json!({"name": "a", "kind": "translate", "base": base, "by": [0.0, 0.0, 0.0]});
+        let moved = json!({"name": "a", "kind": "translate", "base": base, "by": [0.0, 1e-9, 0.0]});
+        let terms = json!([{"kind": "exchange"}]);
+        let plain = lowered_document(base.clone(), terms.clone(), json!([]), Value::Null);
+        let with_zero = lowered_document(wrapped, terms.clone(), json!([]), Value::Null);
+        let with_shift = lowered_document(moved, terms, json!([]), Value::Null);
+        assert!(compare_lowered(&with_zero, &plain).is_empty());
+        let notes = compare_lowered(&with_shift, &plain);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].starts_with("geometry differs"));
+    }
+
+    #[test]
+    fn comparison_treats_a_zero_zeeman_term_as_absent_but_not_a_real_field() {
+        let geometry = json!({"name": "a", "kind": "box"});
+        let none = json!([{"kind": "exchange"}]);
+        let zero = json!([{"kind": "exchange"}, {"kind": "zeeman", "B": [0.0, 0.0, 0.0]}]);
+        let real = json!([{"kind": "exchange"}, {"kind": "zeeman", "B": [2e-3, 0.0, 0.0]}]);
+        let stage = |terms: &Value| {
+            lowered_document(
+                geometry.clone(),
+                terms.clone(),
+                json!([explicit_stage("time_evolution", json!(1e-9), terms.clone())]),
+                Value::Null,
+            )
+        };
+        assert!(compare_lowered(&stage(&none), &stage(&zero)).is_empty());
+        let notes = compare_lowered(&stage(&real), &stage(&zero));
+        assert!(notes.iter().any(|note| note.starts_with("energy terms differ")), "{notes:?}");
+        assert!(notes.iter().any(|note| note.starts_with("study stages differ")), "{notes:?}");
+    }
+
+    #[test]
+    fn comparison_maps_a_legacy_single_study_script_onto_one_explicit_stage() {
+        let geometry = json!({"name": "a", "kind": "box"});
+        let terms = json!([{"kind": "exchange"}]);
+        let legacy = lowered_document(geometry.clone(), terms.clone(), json!([]), json!(5e-12));
+        let scene = lowered_document(
+            geometry.clone(),
+            terms.clone(),
+            json!([explicit_stage("time_evolution", json!(5e-12), terms.clone())]),
+            Value::Null,
+        );
+        assert!(compare_lowered(&legacy, &scene).is_empty());
+        // A different end time, study kind, or a second stage is still a difference.
+        let later = lowered_document(
+            geometry.clone(),
+            terms.clone(),
+            json!([explicit_stage("time_evolution", json!(9e-12), terms.clone())]),
+            Value::Null,
+        );
+        assert_eq!(compare_lowered(&legacy, &later).len(), 1);
+        let relax = lowered_document(
+            geometry.clone(),
+            terms.clone(),
+            json!([explicit_stage("relaxation", json!(5e-12), terms.clone())]),
+            Value::Null,
+        );
+        assert_eq!(compare_lowered(&legacy, &relax).len(), 1);
+        let two = lowered_document(
+            geometry,
+            terms.clone(),
+            json!([
+                explicit_stage("time_evolution", json!(5e-12), terms.clone()),
+                explicit_stage("time_evolution", json!(5e-12), terms)
+            ]),
+            Value::Null,
+        );
+        assert!(!compare_lowered(&legacy, &two).is_empty());
     }
 }

@@ -15,6 +15,7 @@ from fullmag.runtime.scene_document import (
 from fullmag.runtime.script_builder import (
     _requested_sampling_period_from_ir,
     export_builder_draft,
+    render_scene_document_as_script,
     rewrite_loaded_problem_script,
 )
 
@@ -1200,6 +1201,327 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 rewrite_loaded_problem_script(loaded, write=True, output_path=copy_path)
             self.assertEqual(source_path.read_bytes(), before)
+
+
+_SCENE_BODY = """
+f = study.geometry(fm.Box(size=(40e-9, 40e-9, 10e-9)), name="f")
+f.Ms = 8e5
+f.Aex = 1.3e-11
+f.alpha = 0.5
+f.m = fm.texture.uniform(1, 0, 0)
+"""
+# The scripts below indent their text by 16 spaces; keep one common margin.
+_SCENE_BODY = textwrap.indent(_SCENE_BODY, " " * 16)
+
+
+def _scene_round_trip(script: str, root: Path) -> tuple[object, object, str]:
+    """Script -> SceneDocument (as JSON) -> rendered script -> loaded again."""
+    loaded = _load_text(script, root, "original.py")
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    source = render_scene_document_as_script(json.loads(json.dumps(scene)))
+    return loaded, _load_text(source, root, "rendered.py"), source
+
+
+def _stage_study_ir(loaded: object) -> list[dict[str, object]]:
+    return [
+        stage.problem.study.to_ir()  # type: ignore[attr-defined]
+        for stage in loaded.stages  # type: ignore[attr-defined]
+        if stage.action is None
+    ]
+
+
+class SceneRoundTripFidelityTests(unittest.TestCase):
+    """The scene renderer must reproduce the physics the original script means."""
+
+    def assertStagesAgree(self, rendered: object, loaded: object) -> None:
+        def close(a: object, b: object, path: str) -> None:
+            if isinstance(a, dict) and isinstance(b, dict):
+                self.assertEqual(sorted(a), sorted(b), path)
+                for key in a:
+                    close(a[key], b[key], f"{path}/{key}")
+            elif isinstance(a, list) and isinstance(b, list):
+                self.assertEqual(len(a), len(b), path)
+                for index, (x, y) in enumerate(zip(a, b)):
+                    close(x, y, f"{path}[{index}]")
+            elif isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
+                self.assertAlmostEqual(a / b if b else a, 1.0 if b else 0.0, places=9, msg=path)
+            else:
+                self.assertEqual(a, b, path)
+
+        close(_stage_study_ir(rendered), _stage_study_ir(loaded), "stages")
+
+    def test_adaptive_solver_is_not_combined_with_a_fixed_step(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, source = _scene_round_trip(
+                """
+                import fullmag as fm
+                study = fm.study("adaptive")
+                study.engine("fdm")
+                study.cell(5e-9, 5e-9, 5e-9)
+                """
+                + _SCENE_BODY
+                + """
+                study.solver(integrator="rk45", max_err=1e-5, dt_initial=1e-15, dt_max=1e-11)
+                study.stages.add_relax(
+                    max_steps=10, tolT=1e-6, solver="rk45",
+                    max_err=1e-5, dt_min=1e-16, dt_max=1e-11,
+                )
+                study.stages.add_run(1e-11)
+                """,
+                Path(tmp_dir),
+            )
+        self.assertNotIn("fix_dt", source)
+        self.assertStagesAgree(rendered, loaded)
+        relax_dynamics = _stage_study_ir(rendered)[0]["dynamics"]
+        self.assertIsNone(relax_dynamics["fixed_timestep"])  # type: ignore[index]
+
+    def test_missing_fixed_step_is_not_invented(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, source = _scene_round_trip(
+                """
+                import fullmag as fm
+                study = fm.study("no_step")
+                study.engine("fem")
+                """
+                + _SCENE_BODY
+                + """
+                study.stages.add_eigenmodes(count=3, include_demag=False)
+                """,
+                Path(tmp_dir),
+            )
+        self.assertNotIn("fix_dt", source)
+        self.assertNotIn("dt=", source)
+        self.assertStagesAgree(rendered, loaded)
+
+    def test_custom_gamma_survives_the_scene(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, source = _scene_round_trip(
+                """
+                import fullmag as fm
+                study = fm.study("gamma")
+                study.engine("fdm")
+                study.cell(5e-9, 5e-9, 5e-9)
+                """
+                + _SCENE_BODY
+                + """
+                study.solver(fix_dt=1e-13, g=2.115)
+                study.stages.add_run(1e-11)
+                """,
+                Path(tmp_dir),
+            )
+        self.assertIn("gamma=", source)
+        original_gamma = _stage_study_ir(loaded)[0]["dynamics"]["gyromagnetic_ratio"]  # type: ignore[index]
+        rendered_gamma = _stage_study_ir(rendered)[0]["dynamics"]["gyromagnetic_ratio"]  # type: ignore[index]
+        self.assertAlmostEqual(rendered_gamma / original_gamma, 1.0, places=9)
+
+    def test_default_gamma_is_not_written_out(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            _, _, source = _scene_round_trip(
+                """
+                import fullmag as fm
+                study = fm.study("default_gamma")
+                study.engine("fdm")
+                study.cell(5e-9, 5e-9, 5e-9)
+                """
+                + _SCENE_BODY
+                + """
+                study.solver(fix_dt=1e-13)
+                study.stages.add_run(1e-11)
+                """,
+                Path(tmp_dir),
+            )
+        self.assertNotIn("gamma=", source)
+
+    def test_run_eigenmode_and_frequency_stages_are_kept_in_order(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, _ = _scene_round_trip(
+                """
+                import fullmag as fm
+                study = fm.study("stages")
+                study.engine("fem")
+                """
+                + _SCENE_BODY
+                + """
+                study.solver(fix_dt=1e-13)
+                study.stages.add_relax(stage_id="relax", max_steps=5, tolT=1e-6, dt=1e-13)
+                study.stages.add_run(2e-11, stage_id="pulse")
+                study.stages.add_frequency_response(
+                    frequencies_hz=[1e9, 2e9], excitation_field_au_per_m=(0.0, 1.0, 0.0),
+                    equilibrium_source="relax", magnetostatic_bc="open",
+                )
+                study.stages.add_eigenmodes(count=4, include_demag=False, equilibrium_source="relax")
+                """,
+                Path(tmp_dir),
+            )
+        original_kinds = [stage.problem.study.to_ir()["kind"] for stage in loaded.stages]  # type: ignore[attr-defined]
+        rendered_kinds = [stage.problem.study.to_ir()["kind"] for stage in rendered.stages]  # type: ignore[attr-defined]
+        self.assertEqual(rendered_kinds, original_kinds)
+        self.assertEqual(len(rendered_kinds), 4)
+        self.assertStagesAgree(rendered, loaded)
+        self.assertEqual(
+            [stage.default_until_seconds for stage in rendered.stages],  # type: ignore[attr-defined]
+            [stage.default_until_seconds for stage in loaded.stages],  # type: ignore[attr-defined]
+        )
+
+    def test_hysteresis_stage_is_kept(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, source = _scene_round_trip(
+                """
+                import fullmag as fm
+                study = fm.study("hysteresis")
+                study.engine("fdm")
+                study.cell(5e-9, 5e-9, 5e-9)
+                """
+                + _SCENE_BODY
+                + """
+                study.solver(fix_dt=1e-13)
+                study.stages.add_hysteresis_sweep(
+                    field_values_mT=[50.0, 0.0, -50.0],
+                    orientation=fm.FieldOrientation.preset("in_plane_y"),
+                    initial_protocol="as_authored",
+                )
+                """,
+                Path(tmp_dir),
+            )
+        self.assertIn("add_hysteresis_sweep(", source)
+        self.assertStagesAgree(rendered, loaded)
+
+    def test_fdm_cell_with_editor_mesh_defaults_still_loads(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, source = _scene_round_trip(
+                """
+                import fullmag as fm
+                study = fm.study("cell_only")
+                study.engine("auto")
+                study.cell(5e-9, 5e-9, 5e-9)
+                """
+                + _SCENE_BODY
+                + """
+                study.solver(fix_dt=1e-13)
+                study.stages.add_run(1e-11)
+                """,
+                Path(tmp_dir),
+            )
+        for editor_default in ("size_factor", "size_from_curvature", "smoothing_steps"):
+            self.assertNotIn(editor_default, source)
+        self.assertStagesAgree(rendered, loaded)
+
+    def test_fdm_lane_scene_has_no_demag_realization(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(
+                """
+                import fullmag as fm
+                study = fm.study("fdm_demag")
+                study.engine("fdm")
+                study.cell(5e-9, 5e-9, 5e-9)
+                """
+                + _SCENE_BODY
+                + """
+                study.demag()
+                study.solver(fix_dt=1e-13)
+                study.stages.add_run(1e-11)
+                """,
+                Path(tmp_dir),
+            )
+            draft = export_builder_draft(loaded)
+        self.assertIsNone(draft["demag_realization"])
+
+    def test_problem_with_fdm_cell_and_fem_controls_renders_loadable_script(self) -> None:
+        script = """
+        import fullmag as fm
+        DEFAULT_UNTIL = 1e-11
+        problem = fm.Problem(
+            name="both_grids",
+            magnets=[fm.Ferromagnet(
+                name="track",
+                geometry=fm.Box(size=(200e-9, 20e-9, 5e-9)),
+                material=fm.Material(name="Py", Ms=8e5, A=1.3e-11, alpha=0.01),
+                m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+            )],
+            energy=[fm.Exchange(), fm.Zeeman(B=(0.0, 0.0, 0.1))],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(fixed_timestep=1e-13),
+                outputs=[fm.SaveScalar("E_total", every=1e-11)],
+            ),
+            discretization=fm.DiscretizationHints(
+                fdm=fm.FDM(cell=(2e-9, 2e-9, 1e-9)),
+                fem=fm.FEM(order=1, maximum_element_size=2e-9),
+            ),
+        )
+        """
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir))
+        self.assertIn("study.cell(", source)
+        self.assertNotIn("cell_size=(2e-09, 2e-09, 1e-09)", source)
+        before = loaded.problem.to_ir(include_geometry_assets=False)
+        after = rendered.problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(
+            after["backend_policy"]["discretization_hints"],
+            before["backend_policy"]["discretization_hints"],
+        )
+
+    def test_boolean_geometry_round_trips_through_the_scene(self) -> None:
+        for expression in (
+            "fm.Box(size=(100e-9, 100e-9, 10e-9)) - fm.Cylinder(radius=15e-9, height=10e-9)",
+            "fm.Box(size=(100e-9, 40e-9, 10e-9)) + fm.Box(size=(40e-9, 100e-9, 10e-9))",
+            "fm.Box(size=(100e-9, 40e-9, 10e-9)) & fm.Cylinder(radius=30e-9, height=10e-9)",
+        ):
+            with self.subTest(expression=expression):
+                with TemporaryDirectory() as tmp_dir:
+                    loaded, rendered, source = _scene_round_trip(
+                        f"""
+                        import fullmag as fm
+                        study = fm.study("csg")
+                        study.engine("fdm")
+                        study.cell(5e-9, 5e-9, 5e-9)
+                        f = study.geometry({expression}, name="f")
+                        f.Ms = 8e5
+                        f.Aex = 1.3e-11
+                        f.alpha = 0.5
+                        f.m = fm.texture.uniform(1, 0, 0)
+                        study.solver(fix_dt=1e-13)
+                        study.stages.add_run(1e-11)
+                        """,
+                        Path(tmp_dir),
+                    )
+                self.assertNotIn("does not support", source)
+                before = loaded.problem.to_ir(include_geometry_assets=False)
+                after = rendered.problem.to_ir(include_geometry_assets=False)
+
+                def without_names(value: object) -> object:
+                    if isinstance(value, dict):
+                        return {k: without_names(v) for k, v in value.items() if k != "name"}
+                    if isinstance(value, list):
+                        return [without_names(item) for item in value]
+                    return value
+
+                self.assertEqual(
+                    without_names(after["geometry"]["entries"]),
+                    without_names(before["geometry"]["entries"]),
+                )
+
+    def test_unknown_stage_kind_fails_instead_of_being_dropped(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(
+                """
+                import fullmag as fm
+                study = fm.study("unknown_stage")
+                study.engine("fdm")
+                study.cell(5e-9, 5e-9, 5e-9)
+                """
+                + _SCENE_BODY
+                + """
+                study.solver(fix_dt=1e-13)
+                study.stages.add_run(1e-11)
+                """,
+                Path(tmp_dir),
+            )
+            scene = json.loads(
+                json.dumps(build_scene_document_from_builder(export_builder_draft(loaded)))
+            )
+        scene["study"]["stages"][0]["kind"] = "teleport"
+        with self.assertRaisesRegex(ValueError, "does not support stage kind 'teleport'"):
+            render_scene_document_as_script(scene)
 
 
 if __name__ == "__main__":
