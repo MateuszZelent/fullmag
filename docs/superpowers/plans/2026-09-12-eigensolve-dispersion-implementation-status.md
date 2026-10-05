@@ -1,3 +1,51 @@
+<!-- managed-session-artifact-handoff-20261005 -->
+## Checkpoint — właściwy katalog artefaktów i zakres certyfikatu
+
+Naprawa handoff obejmuje oba managed wrappery: DE pilot i benchmark COMSOL
+C0/C1/A1. Resolver czyta końcowy natywny report workspace_dir/artifact_dir,
+mapuje wyłącznie mount benchmark-output i sprawdza regularne komponenty
+ścieżek, manifest runu, SHA modelu, run_id oraz output-storage receipt.
+Wszystkie walidatory success używają tego samego przypiętego artifact root;
+nie ma newest-glob, kopiowania metadata ani nadpisywania historycznych wyników.
+Błędy walidacji po solver exit0 także uruchamiają reconciliation cleanup
+konkretnego kontenera. Prywatny temp cleanup pozostaje odrębnym dowodem.
+Regresje resolvera kierowane są wyłącznie do GitHub Actions.
+Review wykryło potrzebę obowiązkowych ID run/session oraz namespace case;
+uzupełniono zgodnie z producentem case-run_id-attempt (0..99). Oba rzeczywiste
+wyniki ±10 przeszły wzmocniony guard; dowód przypina hash dokładnego helpera.
+Opcjonalna diagnostyka Schur korzysta z resolved root w sukcesie i log root
+w błędzie; jej brak nie zmienia wyniku solvera ani nie przerywa zapisu receipt.
+Wygenerowano i wizualnie sprawdzono de-signed10-runtime233-comparison.png:
+2 punkty FEM na tle otwartego filmu N32 w zakresie -25..25 rad/um.
+
+CI #37375306477 job111982360215 potwierdziło nowy output-storage lowering
+contract PASS oraz eigensolve scene/profile merge contracts PASS.
+Rust i frontend nadal wymagają wyniku bieżącej bramki.
+
+floquet_geometric_bc_certified=false jest wymagane przez kontrakt
+frequency-domain-artifacts-v2.md (sekcja certyfikatu fizycznego), a nie
+wynikiem nieudanej propagacji flagi. C++ publikuje false, Rust odrzuca true.
+Certyfikacja descriptor/seam/gauge nie obejmuje outer-boundary flux ani
+mesh/airbox convergence. Flagi nie zmieniamy; odrębna kwalifikacja V9 OPEN.
+Próba #233 ma rzeczywisty phi_full na 6138 węzłach oraz H_demag=-grad(phi_full)
+na 30012 elementach, z manifestem physical_potential.v1.json.
+
+AST 4 plików i YAML PASS. Resolver + required-artifact contract odczytano
+na rzeczywistym poprzednim wyniku #233: 7 plików, 1 mod i pełny phi payload.
+Świeża para FGMRES +10/-10 na tym samym modelu i runtime: oba wrappery exit0,
+completed_unqualified. Przeszły row, KSP, physical potential, mesh L2,
+growth1.3, thickness3 i selected-only preflight. f(+10)=11.205285324453774GHz,
+f(-10)=11.205285254423218GHz, różnica70.0306Hz. Magnetic residualy
+1.82093e-13 i7.71593e-14; potential3.77517e-14 i3.94861e-14.
+Wyniki w runach0efe99d166a54c1185ce58577a677c93 i d7d3e55c869f4adeb7d3060c09f3572d;
+postsolve z hashami nearest233-bound-roots-signed10-postsolve.json w evidence.
+Sukces tej pary nie zamyka signed15/window/mesh/airbox/COMSOL/GUI/GPU.
+
+CI potwierdziło oba nowe Rust default autosave testy PASS. Późniejszy target
+API ma4 FAIL: trzy stare oczekiwania podwójnego revision bump i ostrzeżenie
+untyped dla obecnie typed current_live_snapshot. Frontend2 FAIL +9 unhandled;
+diagnoza/poprzedniego scope guard trwa. Pełne S00–S12 nadal OPEN.
+
 <!-- runtime233-fgmres-selected-mode-20261005 -->
 ## Checkpoint — FGMRES wyliczył mod DE +10 rad/um
 

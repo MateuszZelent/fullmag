@@ -16,6 +16,8 @@ sequentially so the output is easy to compare with the COMSOL guide.
 
 from __future__ import annotations
 
+from managed_runtime_artifact_root import resolve_runtime_artifact_root
+
 import argparse
 from dataclasses import dataclass
 import hashlib
@@ -1568,15 +1570,21 @@ def _execute(
     if return_code == 0 and not timed_out and not interrupted and execution_error is None:
         try:
             for case in cases:
-                artifact_result = _validate_case_artifacts(output_dir / case, case)
+                model_sha = _sha256_file(
+                    context.source_tree
+                    / "tests/standard_problems/mumag/comsol_nonzero_k_dispersion/problem.py"
+                )
+                case_dir, output_binding = resolve_runtime_artifact_root(output_dir, case, model_sha)
+                artifact_result = _validate_case_artifacts(case_dir, case)
+                artifact_result["runtime_output_binding"] = output_binding
                 _write_scientific_evidence(
-                    output_dir / case,
+                    case_dir,
                     case,
                     artifact_result,
                     scientific_evidence_root,
                 )
                 scientific_result = validate_scientific_case(
-                    output_dir / case,
+                    case_dir,
                     case,
                     parameters_path=Path(context.source_tree)
                     / "docs"
@@ -1599,6 +1607,11 @@ def _execute(
             scientific_gate = validate_requested_cases(scientific_case_results, cases)
         except (BenchmarkError, OSError, UnicodeError, ValueError) as error:
             artifact_error = str(error)
+    if artifact_error is not None and cleanup.get("status") == "not_requested":
+        try:
+            cleanup = _cleanup_benchmark_container(context, output_dir)
+        except (BenchmarkError, OSError, ValueError, TypeError, KeyboardInterrupt) as error:
+            cleanup = {"status": "blocked", "reason": f"postsolve container cleanup failed: {error}"}
     if (
         return_code == 0
         and not timed_out

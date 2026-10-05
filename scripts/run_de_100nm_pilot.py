@@ -22,6 +22,7 @@ import zipfile
 
 from control_room_port import is_bindable
 import run_comsol_dispersion_benchmark as managed
+from managed_runtime_artifact_root import resolve_runtime_artifact_root
 from runtime_source_change_policy import is_non_runtime_path
 from de_shifted_ksp_trial import validate_shifted_ksp_trial
 from de_gamma_krylov_trial import validate_gamma_krylov_trial
@@ -2036,6 +2037,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
         result["parallel_probe"] = request["parallel_probe"]
     if "parallel_campaign" in request:
         result["parallel_campaign"] = request["parallel_campaign"]
+    case_dir = None
     try:
         if model_identity:
             model_input.verify_model(output, model_identity)
@@ -2050,22 +2052,24 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                                        + managed.HOST_COMPOSE_GRACE_SECONDS)
         result["return_code"] = completed.returncode
         if completed.returncode == 0:
+            case_dir, output_binding = resolve_runtime_artifact_root(output, pilot, model_sha)
+            result["runtime_output_binding"] = output_binding
             # C1 artifact requirements include complex modes and full potential.
             # This reuses the artifact contract only, not C1 scientific parameters.
-            artifacts = managed._validate_case_artifacts(output / pilot, "c1")
+            artifacts = managed._validate_case_artifacts(case_dir, "c1")
             artifacts["case"] = pilot
             if air_growth_rate is not None:
                 growth_resolution = validate_air_growth_rate_metadata(
-                    output / pilot, air_growth_rate
+                    case_dir, air_growth_rate
                 )
                 artifacts["air_growth_rate_resolution"] = growth_resolution
                 result["air_growth_rate_resolution"] = growth_resolution
             if PILOTS[pilot][1] is not None:
                 row_args = (
-                    output / pilot / "eigen/dispersion.csv",
+                    case_dir / "eigen/dispersion.csv",
                     PILOTS[pilot][1],
-                    output / pilot / "eigen/diagnostics/solver.v1.json",
-                    output / pilot / "metadata.json",
+                    case_dir / "eigen/diagnostics/solver.v1.json",
+                    case_dir / "metadata.json",
                 )
                 artifacts["row_preflight"] = (
                     validate_rows(*row_args, selection_scope="selected_only")
@@ -2073,7 +2077,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                 )
                 if shifted_ksp_type is not None:
                     artifacts.update(_validate_krylov_trials(
-                        output / pilot,
+                        case_dir,
                         PILOTS[pilot][1],
                         shifted_ksp_type,
                         shifted_ksp_rtol,
@@ -2083,15 +2087,15 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                         target_frequency_hz=target_frequency_hz,
                     ))
                 artifacts["potential_reconstruction"] = validate_smoke_potential_fields(
-                    output / pilot, artifacts["row_preflight"]["sample_count"])
+                    case_dir, artifacts["row_preflight"]["sample_count"])
                 if _is_parallel_probe(pilot):
                     artifacts["parallel_probe_metadata"] = validate_parallel_probe_metadata(
-                        output / pilot / "metadata.json",
+                        case_dir / "metadata.json",
                         model_sha256=model_sha,
                         parallel_mode=parallel_mode,
                     )
                     artifacts["parallel_probe_solver_artifacts"] = validate_parallel_probe_solver_artifacts(
-                        output / pilot,
+                        case_dir,
                         requested_eps_prefilter=eps_prefilter,
                         requested_shifted_ksp_rtol=shifted_ksp_rtol,
                         requested_gmres_restart=gmres_restart,
@@ -2099,21 +2103,21 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                     )
                 if modal_target == "nearest":
                     artifacts["selected_only_preflight"] = validate_selected_only_metadata(
-                        output / pilot, target_frequency_hz, PILOTS[pilot][1])
+                        case_dir, target_frequency_hz, PILOTS[pilot][1])
             if parallel_mode == "adaptive" and (_is_parallel_probe(pilot) or pilot == SIGNED_FIFTEEN_PILOT):
                 policy = {"mode": "adaptive", **PARALLEL_PROBE_POLICY} if _is_parallel_probe(pilot) else {
                     key: request["parallel_campaign"][key] for key in (
                         "mode", "max_cpu_percent", "max_memory_percent", "memory_reserve_bytes",
                         "max_workers", "threads_per_worker")}
                 indices = range(len(PARALLEL_PROBE_VECTORS_RAD_PER_M)) if _is_parallel_probe(pilot) else range(1, 15)
-                bind_parallel_report(output / pilot, artifacts,
+                bind_parallel_report(case_dir, artifacts,
                                      expected_policy=policy, expected_indices=indices)
             if pilot == SIGNED_FIFTEEN_PILOT:
-                bind_signed_state_closure(output / pilot, artifacts)
+                bind_signed_state_closure(case_dir, artifacts)
             if mesh_level is not None:
-                artifacts["mesh_level_resolution"] = validate_mesh_level_metadata(output / pilot, mesh_level)
+                artifacts["mesh_level_resolution"] = validate_mesh_level_metadata(case_dir, mesh_level)
             if thickness_layers is not None:
-                artifacts["thickness_layers_resolution"] = validate_thickness_layers_metadata(output / pilot, thickness_layers)
+                artifacts["thickness_layers_resolution"] = validate_thickness_layers_metadata(case_dir, thickness_layers)
             if live_api_enabled:
                 receipt_path = output / f"{pilot}.fms.status.json"
                 try:
@@ -2125,7 +2129,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                 result["ui"]["archive"] = validate_fms_archive(
                     output / f"{pilot}.fms",
                     status_receipt=status_receipt,
-                    case_dir=output / pilot,
+                    case_dir=case_dir,
                     solver_exit_code=completed.returncode,
                 )
             result.update(status="completed_unqualified", artifacts=artifacts)
@@ -2142,7 +2146,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                 model_input.verify_model(output, model_identity)
             except (OSError, ValueError) as error:
                 result.update(status="failed", error=str(error))
-        if result["return_code"] != 0:
+        if result["return_code"] != 0 or result["status"] == "failed":
             try:
                 cleanup_mounts = _cleanup_extra_mounts(
                     output,
@@ -2164,9 +2168,20 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
             artifacts = result.get("artifacts")
             if not isinstance(artifacts, dict):
                 artifacts = {}
-            artifacts["floquet_schur_action_diagnostic"] = validate_schur_action_diagnostic(
-                output / pilot
-            )
+            try:
+                artifacts["floquet_schur_action_diagnostic"] = validate_schur_action_diagnostic(
+                    case_dir if case_dir is not None else output / pilot
+                )
+            except (OSError, ValueError, TypeError, RecursionError) as error:
+                # An optional observation never replaces the solve outcome.
+                artifacts["floquet_schur_action_diagnostic"] = {
+                    "schema": "fullmag.floquet-schur-action-diagnostic-report.v1",
+                    "qualification": "NOT VERIFIED",
+                    "physical_certificate": False,
+                    "status": "failed",
+                    "validation_status": "failed",
+                    "reason": f"schur_diagnostic_validation_failed: {error}",
+                }
             result["artifacts"] = artifacts
         result["finished_at_unix"] = time.time()
         managed._write_new_json(output / "run-result.json", result)
