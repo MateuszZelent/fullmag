@@ -140,10 +140,9 @@ windows-workspace-build backend_profile="dev" frontend="dev" web_port="3197" bui
 windows-runtime-recover port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/windows/recover_runtime.py" --repo-root "{{repo_root}}" --web-port "{{port}}"
 
-# Watch native backend inputs and build a new dev binary after edits. The
-# active workspace remains untouched until the user saves and restarts it.
+# Explicit one-shot backend rebuild; does not restart the active workspace.
 windows-backend-dev web_port="3197":
-    @{{storage_python}} "{{repo_root}}/scripts/windows/watch_backend.py" --repo-root "{{repo_root}}" --web-port "{{web_port}}"
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode "true" -Frontend "dev" -BackendProfile "dev" -RunMode workspace -WebPort "{{web_port}}" -BuildOnly
 
 # Fixed interpreted checks for development handoff persistence, without Cargo.
 verify-windows-development-handoff:
@@ -5720,6 +5719,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$r/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
       if [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; then \
+        case ",$seen_options," in *",web_port,"*) ;; *) web_port="3100" ;; esac; \
         exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$r/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
       if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "$r/.fullmag/local/python/bin/python" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi; \

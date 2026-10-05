@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -211,6 +212,22 @@ class WindowsRuntimeBundleTests(unittest.TestCase):
         self.write_source_manifest()
         with self.assertRaises(runtime_bundle.BundleError):
             self.build_bundle()
+
+    def test_direct_script_checks_frozen_binding_without_pythonpath(self) -> None:
+        self.source_manifest["build_source_snapshot"] = {}
+        self.write_source_manifest()
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, "-B", str(WINDOWS_SCRIPTS / "runtime_bundle.py"),
+             "--build-root", str(self.build_root), "--runtime-root", str(self.runtime_root),
+             "--manifest", str(self.manifest_path), "--profile", "dev"],
+            cwd=self.root, env=environment, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("runtime bundle error: Invalid frozen source binding", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse((self.runtime_root / "native-bundles").exists())
 
     def test_missing_required_worker_is_rejected(self) -> None:
         (self.profile_dir / "fullmag-api-accepted-worker.exe").unlink()

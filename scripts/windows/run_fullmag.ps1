@@ -38,6 +38,9 @@ param(
   [Alias("skip_local_changes")]
   [switch]$SkipLocalChanges,
 
+  # Internal build-to-launch handoff: pins a verified snapshot manifest.
+  [string]$ExpectedBuildId,
+
   [ValidateRange(1, 65535)]
   [int]$WebPort = 3100
 )
@@ -90,6 +93,17 @@ if ($RunMode -eq "workspace" -and $BuildOnly -and (
 }
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$BuildSourceRoot = $RepoRoot
+$BuildSnapshot = $null
+function Get-WindowsBuildToolsRoot {
+  if ($BuildSnapshot) { return (Join-Path $BuildSourceRoot "scripts\windows") }
+  return $PSScriptRoot
+}
+if ($ExpectedBuildId -and ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1" -or
+    $ExpectedBuildId -notmatch '^[0-9a-f]{64}$' -or $RunMode -ne "workspace" -or
+    $SelectedBackendProfile -ne "dev" -or $Frontend -ne "dev" -or $BuildMode -ne "false")) {
+  throw "ExpectedBuildId requires the managed native dev build-to-launch handoff"
+}
 $TargetTriple = "x86_64-pc-windows-msvc"
 
 $StorageAdapter = Join-Path $RepoRoot "scripts\windows\fullmag_storage.ps1"
@@ -336,7 +350,9 @@ function Ensure-ControlRoomDependencies {
   }
   $dependencyWorkspace = $RepoRoot
   if ($RunMode -eq "workspace") {
-    $stageOutput = (& python (Join-Path $PSScriptRoot "stage_workspace_frontend.py") --repo-root $RepoRoot --build-root $BuildRoot --mode $Frontend --web-port $WebPort 2>&1 | Out-String)
+    $stageArguments = @((Join-Path (Get-WindowsBuildToolsRoot) "stage_workspace_frontend.py"), "--repo-root", $BuildSourceRoot, "--build-root", $BuildRoot, "--mode", $Frontend, "--web-port", $WebPort)
+    if ($BuildSnapshot) { $stageArguments += @("--source-snapshot-record", [string]$BuildSnapshot.record_path) }
+    $stageOutput = (& python @stageArguments 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Native frontend staging failed: $stageOutput" }
     $stage = $stageOutput | ConvertFrom-Json
     $script:FrontendWorkspaceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$stage.workspace_root) -Label "native frontend workspace" -Parent $BuildRoot
@@ -425,6 +441,7 @@ function Ensure-NativeRustToolchain {
 }
 
 function Get-SourceIdentity {
+  if ($BuildSnapshot) { return $BuildSnapshot.source_identity }
   $identityPython = if (Test-Path -LiteralPath $PythonExe -PathType Leaf) { $PythonExe } else { "python" }
   $identityScript = Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py"
   $previousGitOptionalLocks = $env:GIT_OPTIONAL_LOCKS
@@ -475,6 +492,10 @@ function Write-JsonAtomic {
 
 function Get-WindowsBackendSourceDigest {
   param([switch]$FrontendSources, [switch]$Dependencies)
+  if ($BuildSnapshot -and -not $FrontendSources) {
+    if ($Dependencies) { return [string]$BuildSnapshot.dependency_source_sha256 }
+    return [string]$BuildSnapshot.backend_source_sha256
+  }
   $digestArguments = @("--repo-root", $RepoRoot)
   if ($FrontendSources) { $digestArguments += "--frontend" }
   if ($Dependencies) { $digestArguments += "--dependencies" }
@@ -483,6 +504,31 @@ function Get-WindowsBackendSourceDigest {
   $identity = $output | ConvertFrom-Json
   if ([string]$identity.sha256 -notmatch '^[0-9a-f]{64}$') { throw "Invalid native workspace source fingerprint" }
   return [string]$identity.sha256
+}
+
+function Read-BuildSnapshot {
+  param([string]$RecordPath)
+  $snapshotOutput = (& python -B (Join-Path (Get-WindowsBuildToolsRoot) "build_snapshot.py") verify --record $RecordPath --build-root $BuildRoot 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw "Frozen build source verification failed: $snapshotOutput" }
+  $snapshot = $snapshotOutput | ConvertFrom-Json
+  if ([string]$snapshot.origin_repo_root -ne $RepoRoot) { throw "Frozen build source belongs to another checkout" }
+  return $snapshot
+}
+
+function Install-FullmagPython {
+  if (-not $BuildSnapshot) {
+    Invoke-Uv @("pip", "install", "--python", $PythonExe, "--editable", (Join-Path $RepoRoot "packages\fullmag-py[meshing]"))
+    return
+  }
+  # Setuptools creates egg-info/build metadata. Give it a separate writable
+  # copy; immutable compiler sources and an active Python env stay untouched.
+  $packageStage = Join-Path $PythonRoot ("package-builds\" + [Guid]::NewGuid().ToString("N"))
+  $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $packageStage -Label "Python package build source" -Parent $PythonRoot
+  Ensure-Directory $packageStage
+  Copy-Item -LiteralPath (Join-Path $BuildSourceRoot "packages\fullmag-py") -Destination $packageStage -Recurse
+  $package = Join-Path $packageStage "fullmag-py"
+  Get-ChildItem -LiteralPath $package -File -Recurse | ForEach-Object { $_.IsReadOnly = $false }
+  Invoke-Uv @("pip", "install", "--python", $PythonExe, "$package[meshing]")
 }
 
 function Publish-NativeWorkspaceRuntime {
@@ -556,6 +602,7 @@ function Test-WindowsWorkspaceBuildRequired {
         [string]$candidate.source_snapshot_sha256 -notmatch '^[0-9a-f]{64}$' -or
         [string]$candidate.source_identity_check -ne "passed" -or
         [string]$candidate.local_changes_check -ne "enforced" -or
+        ($SelectedBackendProfile -eq "dev" -and $Frontend -eq "dev" -and -not $candidate.build_source_snapshot) -or
         -not $FrontendWorkspaceRoot -or -not $FrontendCacheRoot -or
         -not (Test-Path -LiteralPath (Join-Path $FrontendWorkspaceRoot "apps\control-room\node_modules\next\package.json") -PathType Leaf) -or
         [string]$candidate.build_version.schema -ne "fullmag.build-version.v1" -or
@@ -725,6 +772,33 @@ if ($BuildMode -eq "auto") {
   $BuildMode = if (Test-WindowsWorkspaceBuildRequired -BackendDigest $BackendSourceDigest) { "true" } else { "false" }
   Write-Host "Windows workspace automatic build selection: $BuildMode"
 }
+if ($BuildMode -eq "true" -and $RunMode -eq "workspace" -and
+    $SelectedBackendProfile -eq "dev" -and $Frontend -eq "dev") {
+  Write-Host "Capturing native backend sources for this build request"
+  $snapshotOutput = (& python -B (Join-Path $PSScriptRoot "build_snapshot.py") create --repo-root $RepoRoot --build-root $BuildRoot 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw "Native source snapshot failed: $snapshotOutput" }
+  $BuildSnapshot = $snapshotOutput | ConvertFrom-Json
+  if ($env:FULLMAG_NATIVE_RUNTIME_ACTIVE -eq "1" -and
+      ([string]$env:FULLMAG_NATIVE_ACTIVE_DEPENDENCY_SHA256 -notmatch '^[0-9a-f]{64}$' -or
+       [string]$BuildSnapshot.dependency_source_sha256 -ne $env:FULLMAG_NATIVE_ACTIVE_DEPENDENCY_SHA256)) {
+    throw "Captured dependencies differ from the active workspace; save and close it before rebuilding"
+  }
+  $BuildSourceRoot = [string]$BuildSnapshot.source_root
+  $BackendSourceDigest = [string]$BuildSnapshot.backend_source_sha256
+  Write-Host "Frozen source: $($BuildSnapshot.snapshot_id); later checkout edits belong to the next build"
+} elseif ($BuildMode -eq "false" -and $existingWorkspaceManifest.build_source_snapshot) {
+  if ($ExpectedBuildId -and (Get-Sha256File $ManifestPath) -ne $ExpectedBuildId) {
+    throw "The requested build manifest changed before launch; refusing a different build"
+  }
+  $BuildSnapshot = Read-BuildSnapshot -RecordPath ([string]$existingWorkspaceManifest.build_source_snapshot.record_path)
+  if ([string]$BuildSnapshot.inventory_sha256 -ne [string]$existingWorkspaceManifest.build_source_snapshot.inventory_sha256 -or
+      [string]$BuildSnapshot.backend_source_sha256 -ne [string]$existingWorkspaceManifest.backend_source_sha256) {
+    throw "Build manifest does not match its frozen sources"
+  }
+  $BuildSourceRoot = [string]$BuildSnapshot.source_root
+} elseif ($ExpectedBuildId) {
+  throw "The requested build has no verified frozen sources"
+}
 $needsControlRoomToolchain = $RunMode -eq "workspace" -or $Frontend -eq "static" -or
   (-not $BuildOnly -and $RunMode -in @("interactive", "workspace"))
 
@@ -771,7 +845,8 @@ $env:CARGO_INCREMENTAL = if ($SelectedBackendProfile -eq "dev" -or ($Frontend -e
 $env:FULLMAG_FDM_EXECUTION = $null
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $PythonRoot "managed"
 $env:UV_PYTHON_BIN_DIR = Join-Path $PythonRoot "bin"
-$env:PYTHONPATH = Join-Path $RepoRoot "packages\fullmag-py\src"
+$env:PYTHONPATH = Join-Path $BuildSourceRoot "packages\fullmag-py\src"
+$env:PYTHONDONTWRITEBYTECODE = "1"
 $env:FULLMAG_PYTHON = $PythonExe
 Add-NodePaths
 
@@ -810,8 +885,8 @@ $env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = $sourceSnapshotSha256
 if ($BuildMode -eq "true") {
   Write-JsonAtomic -Path $versionIdentityPath -Value $sourceIdentity
   Invoke-External $PythonExe @(
-    "-B", (Join-Path $RepoRoot "scripts\build_version.py"),
-    "--repo-root", $RepoRoot, "--source-identity", $versionIdentityPath,
+    "-B", (Join-Path $BuildSourceRoot "scripts\build_version.py"),
+    "--repo-root", $BuildSourceRoot, "--source-identity", $versionIdentityPath,
     "--output", $versionRecordPath
   )
   $buildVersion = Get-Content -LiteralPath $versionRecordPath -Raw | ConvertFrom-Json
@@ -828,7 +903,7 @@ if ($BuildMode -eq "true") {
   $env:TAURI_CONFIG = $tauriConfig | ConvertTo-Json -Depth 100 -Compress
   $PythonSyncRequired = $env:FULLMAG_NATIVE_RUNTIME_ACTIVE -eq "1"
   if (-not $PythonSyncRequired) {
-    Invoke-Uv @("pip", "install", "--python", $PythonExe, "--editable", (Join-Path $RepoRoot "packages\fullmag-py[meshing]"))
+    Install-FullmagPython
   } else {
     Write-Host "Keeping the active Python environment unchanged; version sync is deferred until restart"
   }
@@ -865,6 +940,21 @@ if ($BuildMode -eq "true") {
   Invoke-External "rustc" @("--version")
   Invoke-External "cargo" @("--version")
 
+  # Keep compiler paths stable while the immutable snapshot remains the
+  # authority for Python, frontend staging, versioning and provenance.
+  $CompilerSourceRoot = $BuildSourceRoot
+  if ($BuildSnapshot) {
+    $compilerInputsOutput = (& python -B (Join-Path (Get-WindowsBuildToolsRoot) "compiler_inputs.py") materialize --record ([string]$BuildSnapshot.record_path) --build-root $BuildRoot 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw "Compiler input materialization failed: $compilerInputsOutput" }
+    $CompilerInputs = $compilerInputsOutput | ConvertFrom-Json
+    if ([string]$CompilerInputs.snapshot_id -ne [string]$BuildSnapshot.snapshot_id -or
+        [string]$CompilerInputs.inventory_sha256 -ne [string]$BuildSnapshot.inventory_sha256 -or
+        [string]$CompilerInputs.snapshot_source_root -ne $BuildSourceRoot) {
+      throw "Compiler inputs do not match the frozen build source"
+    }
+    $CompilerSourceRoot = Assert-FullmagStoragePath -Layout $StorageLayout -Path ([string]$CompilerInputs.source_root) -Label "native compiler inputs" -Parent $BuildRoot
+  }
+
   $cargoProfileArguments = @(Get-WindowsCargoProfileArguments -CompilerProfile $CargoCompilerProfile)
   $cargoArguments = @(
     "build", "--locked"
@@ -877,7 +967,7 @@ if ($BuildMode -eq "true") {
   if ($useCuda) {
     $cargoArguments += @("--features", "cuda")
   }
-  Push-Location $RepoRoot
+  Push-Location $CompilerSourceRoot
   try {
     Invoke-External "cargo" $cargoArguments
     if ($needsControlRoomToolchain) {
@@ -891,6 +981,17 @@ if ($BuildMode -eq "true") {
   }
   finally {
     Pop-Location
+  }
+
+  if ($BuildSnapshot) {
+    $compilerInputsOutput = (& python -B (Join-Path (Get-WindowsBuildToolsRoot) "compiler_inputs.py") verify --record ([string]$BuildSnapshot.record_path) --build-root $BuildRoot 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw "Compiler inputs changed during compilation: $compilerInputsOutput" }
+    $verifiedCompilerInputs = $compilerInputsOutput | ConvertFrom-Json
+    if ([string]$verifiedCompilerInputs.source_root -ne $CompilerSourceRoot -or
+        [string]$verifiedCompilerInputs.snapshot_id -ne [string]$BuildSnapshot.snapshot_id -or
+        [string]$verifiedCompilerInputs.inventory_sha256 -ne [string]$BuildSnapshot.inventory_sha256) {
+      throw "Compiler input binding changed during compilation"
+    }
   }
 
   if (-not (Test-Path -LiteralPath $FullmagExe -PathType Leaf)) {
@@ -925,18 +1026,27 @@ if ($BuildMode -eq "true") {
   # Capture both ends of the build.  The default path refuses a binary built
   # from a different checkout snapshot; the explicit skip path preserves both
   # identities in the manifest and marks the receipt non-qualifying.
-  $finalSourceIdentity = Get-SourceIdentity
-  $sourceIdentityChanged = [string]$finalSourceIdentity.head_commit_full -ne $sourceCommit -or
+  if ($BuildSnapshot) {
+    $verifiedSnapshot = Read-BuildSnapshot -RecordPath ([string]$BuildSnapshot.record_path)
+    if ([string]$verifiedSnapshot.inventory_sha256 -ne [string]$BuildSnapshot.inventory_sha256) {
+      throw "Frozen build inventory changed during compilation"
+    }
+    $finalSourceIdentity = $verifiedSnapshot.source_identity
+    $sourceIdentityChanged = $false
+  } else {
+    $finalSourceIdentity = Get-SourceIdentity
+    $sourceIdentityChanged = [string]$finalSourceIdentity.head_commit_full -ne $sourceCommit -or
       [string]$finalSourceIdentity.source_snapshot_sha256 -ne $sourceSnapshotSha256
-  if ($RunMode -eq "workspace" -and $Frontend -eq "dev") {
-    $sourceIdentityChanged = (Get-WindowsBackendSourceDigest) -ne $BackendSourceDigest
+    if ($RunMode -eq "workspace" -and $Frontend -eq "dev") {
+      $sourceIdentityChanged = (Get-WindowsBackendSourceDigest) -ne $BackendSourceDigest
+    }
   }
   if ($sourceIdentityChanged -and -not $SkipLocalChanges) {
     throw "Fullmag source changed while the native runtime was building; rerun with build=True after the checkout is stable"
   }
   $workspaceExecutableHashes = [ordered]@{}
   if ($RunMode -eq "workspace") {
-    $bundleNamesOutput = (& python -c "import sys; sys.path.insert(0, sys.argv[1]); from runtime_bundle import BINARY_NAMES; print('\n'.join(BINARY_NAMES))" $PSScriptRoot | Out-String)
+    $bundleNamesOutput = (& python -c "import sys; sys.path.insert(0, sys.argv[1]); from runtime_bundle import BINARY_NAMES; print('\n'.join(BINARY_NAMES))" (Get-WindowsBuildToolsRoot) | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Native executable inventory failed" }
     foreach ($bundleName in ($bundleNamesOutput.Trim() -split '\r?\n')) {
       $workspaceExecutableHashes[$bundleName] = Get-Sha256File (Join-Path (Split-Path -Parent $FullmagExe) $bundleName)
@@ -968,6 +1078,11 @@ if ($BuildMode -eq "true") {
     executable_sha256 = $workspaceExecutableHashes
     dependency_source_sha256 = Get-WindowsBackendSourceDigest -Dependencies
     backend_source_sha256 = $BackendSourceDigest
+    build_source_snapshot = if ($BuildSnapshot) { [ordered]@{
+      record_path = [string]$BuildSnapshot.record_path
+      inventory_sha256 = [string]$BuildSnapshot.inventory_sha256
+      source_root = $BuildSourceRoot
+    } } else { $null }
     frontend_source_sha256 = $FrontendSourceDigest
     frontend_mode = $Frontend
     frontend_workspace_root = $FrontendWorkspaceRoot
@@ -1025,6 +1140,9 @@ else {
       [string]$manifest.source_snapshot_sha256 -ne $sourceSnapshotSha256
   if ($RunMode -eq "workspace" -and $Frontend -eq "dev") {
     $manifestSourceMismatch = [string]$manifest.backend_source_sha256 -ne $BackendSourceDigest
+  }
+  if ($ExpectedBuildId -and $BuildSnapshot -and (Get-Sha256File $ManifestPath) -eq $ExpectedBuildId) {
+    $manifestSourceMismatch = $false
   }
   if ($manifestStructureMismatch -or
       (-not $SkipLocalChanges -and $manifestSourceMismatch)) {
@@ -1097,7 +1215,7 @@ if ($RunMode -eq "workspace") {
   if ([bool]$manifest.python_sync_required) {
     $env:FULLMAG_BUILD_VERSION_FILE = [string]$manifest.build_version_file
     $env:FULLMAG_BUILD_VERSION = [string]$manifest.build_version.semver_version
-    Invoke-Uv @("pip", "install", "--python", $PythonExe, "--editable", (Join-Path $RepoRoot "packages\fullmag-py[meshing]"))
+    Install-FullmagPython
     $installedVersion = (& $PythonExe -c "from importlib.metadata import version; print(version('fullmag'))" | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $installedVersion -ne [string]$manifest.build_version.pep440_version) { throw "Deferred Python version sync failed" }
     $manifest.installed_python_version = $installedVersion
