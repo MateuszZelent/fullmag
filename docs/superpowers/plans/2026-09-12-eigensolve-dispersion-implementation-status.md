@@ -1,3 +1,34 @@
+<!-- runtime233-fgmres-selected-mode-20261005 -->
+## Checkpoint — FGMRES wyliczył mod DE +10 rad/um
+
+Runtime #233, model ba0045fef5978e67063047c5896384923d30960a:
+FGMRES native exit0, eigensolve completed, 1 mod. Częstotliwość
+11.205285324453773 GHz; magnetic full residual 1.8215819390878056e-13,
+potential full residual 3.7781853230175506e-14, threshold 1e-8.
+KSP true residual zmierzono dla 32/32 solve, 0 violations, max ratio
+0.9806801026128354 przy rtol1e-9; EPS reason1, KSP reason2.
+Geometric BC certification false pozostaje do oceny; nie promujemy samej
+certyfikacji descriptor/seam do pełnej kwalifikacji geometry/physics.
+
+Porównanie z istniejącym thin_film_thickness_oracle.py (otwarty film DE,
+Ms800kA/m, A13pJ/m, B0.1T, thickness10nm, gamma0=2.211e5):
+N=1 11.235414179GHz, różnica -0.26816%; N=32 11.228265979GHz,
+różnica -0.20467%. Jest to pojedynczy selected mode, nie pełny spectrum,
+signed sweep ani dowód zbieżności siatki/airboxu.
+
+Wrapper exit1 pomimo native exit0: szuka metadata.json w output/pilot,
+lecz publiczna polityka output storage kieruje wynik do jawnego katalogu
+sesji. Runtime summary wskazuje workspace_dir i artifact_dir; fullmag-run.json
+potwierdza completed/exit0 i SHA modelu, output-storage.json state succeeded.
+Naprawa musi używać jawnego reportu/provenance, bez newest-glob lub przenoszenia
+artefaktów. Stan wrappera pozostaje failed; historycznych receiptów nie zmieniono.
+Dowody z hashami: nearest233-fgmres-numeric-observation.json oraz
+nearest233-fgmres-analytic-comparison.json w preview-state-checkpoint.
+
+Commit 774f3e89bc488af0c4425c6936b17e8dbc641ad7 wypchnięty na remote;
+bootstrap #37375306477 queued przy odczycie. Default autosave runtime,
+artifact handoff, GUI/A1, signed sweep, parity/zbieżność, S09 i GPU nadal OPEN.
+
 <!-- canonical-autosave-producers-20261005 -->
 ## Checkpoint — trwała poprawka autosave i rzeczywista próba eigensolve
 
