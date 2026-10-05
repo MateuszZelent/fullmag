@@ -52,7 +52,7 @@ PATH_OVERRIDES = {
     "FULLMAG_WINDOWS_PNPM_ROOT": "cache_root",
 }
 MANAGED_VARIABLES = set(PATH_OVERRIDES) | {
-    "FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_PROJECT_SCRATCH_ROOT", "FULLMAG_STORAGE_PROFILE",
+    "FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_STORAGE_PROFILE",
     "FULLMAG_STORAGE_LOCK_TOKEN", "FULLMAG_STORAGE_LOCK_KEY",
     "FULLMAG_BUILD_STORAGE_ROOT", "FULLMAG_STORAGE_USE_MANAGED_EXT4",
     "FULLMAG_NATIVE_STORAGE_PROFILE", "FULLMAG_NATIVE_BUILD_IMAGE",
@@ -171,7 +171,7 @@ def storage_dotenv(main_repo):
     return values
 
 
-def resolve_layout(repo_root, profile=None, environ=None, *, include_scratch=True, durable_runtime=False):
+def resolve_layout(repo_root, profile=None, environ=None):
     env = os.environ if environ is None else environ
     repo = Path(git(repo_root, "rev-parse", "--show-toplevel")).resolve()
     if git(repo, "rev-parse", "--show-superproject-working-tree"):
@@ -183,12 +183,6 @@ def resolve_layout(repo_root, profile=None, environ=None, *, include_scratch=Tru
     profile = profile or env.get("FULLMAG_STORAGE_PROFILE") or ("windows-native" if os.name == "nt" else "linux-host")
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", profile):
         raise StorageError(f"Invalid storage profile: {profile!r}")
-    if durable_runtime:
-        if include_scratch or profile not in WINDOWS_WORKSPACE_STORAGE_PROFILES.values():
-            raise StorageError("Durable runtime resolution requires a fixed native Windows profile without build scratch")
-        # This compiler-only setting has no meaning when launching a sealed package.
-        env = dict(env)
-        env.pop("CARGO_BUILD_BUILD_DIR", None)
     root = absolute(env.get("FULLMAG_PROJECT_STORAGE_ROOT", str(project / "storage")), "FULLMAG_PROJECT_STORAGE_ROOT")
     if root == Path(root.anchor) or inside(project, root):
         raise StorageError(f"Storage cannot contain the project or be a filesystem root: {root}")
@@ -236,23 +230,13 @@ def resolve_layout(repo_root, profile=None, environ=None, *, include_scratch=Tru
         "runs_root": str(root / "runs" / wt),
         **infrastructure,
     }
-    scratch_value = env.get("FULLMAG_PROJECT_SCRATCH_ROOT") if include_scratch else None
-    if scratch_value:
-        from volatile_build_storage import resolve_scratch_root
-        scratch = resolve_scratch_root(root, Path(scratch_value), forbidden_roots=checkouts)
-        layout["scratch"] = scratch
-        layout["scratch_root"] = scratch["scratch_root"]
-        layout["scratch_build_root"] = str(Path(scratch["scratch_root"]) / "builds" / wt / profile)
-        layout["build_temp_root"] = str(Path(scratch["scratch_root"]) / "tmp" / wt / profile)
     if env.get("FULLMAG_BUILD_STORAGE_ROOT") and absolute(env["FULLMAG_BUILD_STORAGE_ROOT"], "FULLMAG_BUILD_STORAGE_ROOT") != build_storage:
         raise StorageError("FULLMAG_BUILD_STORAGE_ROOT must match the resolved host/managed build view")
     # An override can select a subdirectory, not another worktree's mutable
     # build or a second storage tree. Validate every override before creating.
     for name, field in PATH_OVERRIDES.items():
         if env.get(name):
-            candidate = (validate_cargo_build_directory(layout, env[name])
-                         if name == "CARGO_BUILD_BUILD_DIR"
-                         else validate_path(env[name], layout[field], name))
+            candidate = validate_path(env[name], layout[field], name)
             if name == "FULLMAG_FRONTEND_ROOT" and candidate != Path(layout[field]):
                 raise StorageError("FULLMAG_FRONTEND_ROOT is a stable worktree path and cannot be overridden")
             if name in {"FULLMAG_WINDOWS_BUILD_ROOT", "FULLMAG_BUILD_ROOT",
@@ -296,26 +280,12 @@ def resolve_layout(repo_root, profile=None, environ=None, *, include_scratch=Tru
     if profile in WINDOWS_WORKSPACE_STORAGE_PROFILES.values():
         # Reduce intermediate path length for the MSVC linker's legacy path limit.
         # Final artifacts remain in target; existing caches are never removed.
-        variables["CARGO_BUILD_BUILD_DIR"] = str(validate_cargo_build_directory(
-            layout, env.get("CARGO_BUILD_BUILD_DIR") or build / "b"))
+        variables["CARGO_BUILD_BUILD_DIR"] = str(validate_path(
+            env.get("CARGO_BUILD_BUILD_DIR") or build / "b", build, "CARGO_BUILD_BUILD_DIR"))
     elif env.get("CARGO_BUILD_BUILD_DIR"):
         variables["CARGO_BUILD_BUILD_DIR"] = env["CARGO_BUILD_BUILD_DIR"]
-    if layout.get("scratch_root"):
-        variables["FULLMAG_PROJECT_SCRATCH_ROOT"] = layout["scratch_root"]
     layout["env"] = variables
     return layout
-
-
-def validate_cargo_build_directory(layout, value):
-    roots = [layout["build_root"]]
-    if layout.get("profile") in WINDOWS_WORKSPACE_STORAGE_PROFILES.values() and layout.get("scratch_build_root"):
-        roots.append(layout["scratch_build_root"])
-    for root in roots:
-        try:
-            return validate_path(value, root, "CARGO_BUILD_BUILD_DIR")
-        except StorageError:
-            continue
-    raise StorageError("CARGO_BUILD_BUILD_DIR must stay inside this worktree/profile's build or enrolled scratch namespace")
 
 
 def worktree_records(repo):
@@ -369,20 +339,10 @@ def initialize(layout):
     build_storage = absolute(layout["build_storage_root"], "build storage root")
     validate_managed_view(layout)
     # Recheck paths at the mutation boundary, including existing markers.
-    if layout.get("scratch"):
-        from volatile_build_storage import resolve_scratch_root
-        current = resolve_scratch_root(root, Path(layout["scratch_root"]))
-        if current != layout["scratch"]:
-            raise StorageError("Scratch identity or generation changed before mutation")
-        scratch = Path(current["scratch_root"])
-        for field, category in (("scratch_build_root", "builds"), ("build_temp_root", "tmp")):
-            expected = scratch / category / layout["worktree_id"] / layout["profile"]
-            if validate_path(layout[field], expected, field) != expected:
-                raise StorageError(f"{field} must match the worktree/profile scratch namespace")
     for field in ("build_root", "cache_root", "temp_root", "runtime_root", "frontend_root"):
         validate_path(layout[field], build_storage, field)
     if layout["env"].get("CARGO_BUILD_BUILD_DIR"):
-        validate_cargo_build_directory(layout, layout["env"]["CARGO_BUILD_BUILD_DIR"])
+        validate_path(layout["env"]["CARGO_BUILD_BUILD_DIR"], layout["build_root"], "CARGO_BUILD_BUILD_DIR")
     validate_path(layout["runs_root"], root, "runs_root")
     for directory in ("index", "locks"):
         validate_path(root / directory, root, directory)
@@ -405,9 +365,6 @@ def initialize(layout):
         (root / directory).mkdir(exist_ok=True)
     for field in ("build_root", "cache_root", "temp_root", "runtime_root", "frontend_root", "runs_root"):
         Path(layout[field]).mkdir(parents=True, exist_ok=True)
-    if layout.get("scratch"):
-        for field in ("scratch_build_root", "build_temp_root"):
-            Path(layout[field]).mkdir(parents=True, exist_ok=True)
 
 
 def is_link(path):
@@ -794,13 +751,7 @@ def _run_managed_command(
     if execution_mode == "windows-workspace" and native_workspace_paths:
         from windows.runtime_lease import run_sealed_runtime
         return run_sealed_runtime(layout, command, {**os.environ, **layout["env"]}, workspace_backend_profile)
-    scratch_lease = nullcontext()
-    if layout.get("scratch"):
-        from volatile_build_storage import scratch_build_lease
-        scratch_lease = scratch_build_lease(Path(layout["storage_root"]), Path(layout["scratch_root"]), layout["scratch"])
-    with heavy_lock, build_lock(layout), scratch_lease:
-        # Admission must recheck generation after waiting for all build locks.
-        initialize(layout)
+    with heavy_lock, build_lock(layout):
         child_env = {**os.environ, **layout["env"]}
         if execution_mode == "windows-workspace-build" and native_user_build:
             from windows.runtime_lease import active_runtime, assert_frozen_dependencies, assert_no_independent_service
@@ -826,14 +777,10 @@ def _run_managed_command(
                  "state": "running", "executable": Path(command[0]).name,
                  "build_root": layout["build_root"], "frontend_root": layout["frontend_root"],
                  "runtime_root": layout["runtime_root"], "qualification": "not_assessed",
-                 "execution_mode": execution_mode, "volatile_build_scratch": layout.get("scratch")}
+                 "execution_mode": execution_mode}
         atomic_json(record, state)
         try:
             result = subprocess.run(command, cwd=layout["repo_root"], env=child_env)
-            if layout.get("scratch"):
-                from volatile_build_storage import resolve_scratch_root
-                if resolve_scratch_root(Path(layout["storage_root"]), Path(layout["scratch_root"])) != layout["scratch"]:
-                    raise StorageError("Scratch identity or generation changed during build")
             state.update(state="completed" if result.returncode == 0 else "failed", exit_code=result.returncode)
             return result.returncode
         except BaseException:
@@ -919,10 +866,8 @@ def run_windows_workspace(
         )
         if build_result != 0:
             return build_result
-    runtime_layout = (resolve_layout(layout["repo_root"], layout["profile"], include_scratch=False, durable_runtime=True)
-                      if layout.get("scratch") else layout)
     return _run_managed_command(
-        runtime_layout,
+        layout,
         runtime_command,
         acquire_heavy_slot=False,
         native_workspace_paths=True,
@@ -1017,12 +962,11 @@ def inventory(layout):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("resolve", "validate", "run", "run-windows-workspace", "run-windows-workspace-build", "register", "finish", "inventory", "prepare-links", "assert-lock", "register-scratch", "prepare-scratch"))
+    parser.add_argument("action", choices=("resolve", "validate", "run", "run-windows-workspace", "run-windows-workspace-build", "register", "finish", "inventory", "prepare-links", "assert-lock"))
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--profile")
     parser.add_argument("--format", choices=("json", "sh"), default="json")
     parser.add_argument("--create", action="store_true")
-    parser.add_argument("--without-scratch", action="store_true", help="Resolve durable runtime paths without preparing build scratch")
     parser.add_argument("--path")
     parser.add_argument("--frontend", action="store_true")
     parser.add_argument("--workspace-frontend", choices=("static", "dev"))
@@ -1043,28 +987,6 @@ def main(argv=None):
         args_list, command = args_list[:position], args_list[position + 1:]
     args = parser.parse_args(args_list)
     try:
-        if args.without_scratch and args.action not in ("resolve", "assert-lock"):
-            raise StorageError("--without-scratch is only supported for durable path resolution")
-        if args.action in ("register-scratch", "prepare-scratch"):
-            if args.action == "register-scratch" and not args.path:
-                raise StorageError("register-scratch requires an explicit --path")
-            # Enrollment/reset does not run a compiler. Ignore only its build-directory
-            # setting so a lost scratch generation remains repairable.
-            base = resolve_layout(args.repo_root, args.profile,
-                                  environ={**os.environ, "CARGO_BUILD_BUILD_DIR": ""}, include_scratch=False)
-            from volatile_build_storage import register_scratch_root
-            checkouts = [Path(record["worktree"]) for record in worktree_records(args.repo_root)]
-            if args.action == "register-scratch":
-                evidence = register_scratch_root(Path(base["storage_root"]), Path(args.path), checkouts)
-            else:
-                configured = {**storage_dotenv(checkouts[0]), **os.environ}.get("FULLMAG_PROJECT_SCRATCH_ROOT")
-                if not configured:
-                    raise StorageError("prepare-scratch requires FULLMAG_PROJECT_SCRATCH_ROOT in the operator configuration")
-                from volatile_build_storage import resolve_scratch_root
-                evidence = resolve_scratch_root(Path(base["storage_root"]), Path(configured),
-                                                initialize=True, forbidden_roots=checkouts)
-            print(json.dumps(evidence, indent=2))
-            return 0
         selected_workspace_profile = None
         selected_storage_profile = None
         if args.action == "run-windows-workspace":
@@ -1081,12 +1003,9 @@ def main(argv=None):
         if selected_storage_profile:
             if args.profile and args.profile != selected_storage_profile:
                 raise StorageError("Windows workspace storage profile does not match the selected compiler profile")
-            layout = resolve_layout(args.repo_root, selected_storage_profile,
-                                    include_scratch=not (args.action == "run-windows-workspace" and args.workspace_build_mode == "false"),
-                                    durable_runtime=(args.action == "run-windows-workspace" and args.workspace_build_mode == "false"))
+            layout = resolve_layout(args.repo_root, selected_storage_profile)
         else:
-            layout = resolve_layout(args.repo_root, args.profile, include_scratch=not args.without_scratch,
-                                    durable_runtime=args.without_scratch)
+            layout = resolve_layout(args.repo_root, args.profile)
         if args.action == "assert-lock":
             if not os.environ.get("FULLMAG_STORAGE_LOCK_TOKEN") or os.environ.get("FULLMAG_STORAGE_LOCK_KEY") != layout["worktree_id"]:
                 raise StorageError("No inherited managed lock; enter through the storage runner")

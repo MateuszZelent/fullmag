@@ -171,20 +171,13 @@ if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
   exit $managedExitCode
 }
 
-$StorageLayout = Resolve-FullmagStorageLayout -RepoRoot $RepoRoot -Profile $StorageProfile `
-  -DurableOnly:($RunMode -eq "workspace" -and -not $BuildOnly -and $BuildMode -eq "false")
+$StorageLayout = Resolve-FullmagStorageLayout -RepoRoot $RepoRoot -Profile $StorageProfile
 Set-FullmagStorageEnvironment -Layout $StorageLayout
 $WorkspaceNamespace = [string]$StorageLayout.worktree_id
 $CacheRoot = [string]$StorageLayout.cache_root
 $BuildRoot = [string]$StorageLayout.build_root
 $TargetRoot = [string]$StorageLayout.env.CARGO_TARGET_DIR
 $TempRoot = [string]$StorageLayout.temp_root
-if ($BuildOnly -and $StorageLayout.PSObject.Properties["build_temp_root"]) {
-  $TempRoot = [string]$StorageLayout.build_temp_root
-  foreach ($taskTempVariable in @("TMPDIR", "TEMP", "TMP")) {
-    [Environment]::SetEnvironmentVariable($taskTempVariable, $TempRoot, "Process")
-  }
-}
 
 function Resolve-AbsolutePath {
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -760,10 +753,6 @@ if ($RunMode -ne "workspace" -and (-not $SkipCompatibilityLinks -or $needsContro
   $null = Prepare-FullmagStorageLinks @prepareArguments
 }
 
-if ($BuildOnly -and $StorageLayout.PSObject.Properties["build_temp_root"]) {
-  $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $TempRoot `
-    -Label "volatile build temp" -Parent ([string]$StorageLayout.build_temp_root)
-}
 foreach ($directory in @(
   $CargoHome, $RustupHome, $PnpmHome, $PnpmStore, $NpmCache, $PipCache, $UvCache,
   $TempRoot, $CudaCache, $PlaywrightRoot, $PythonRoot,
@@ -967,9 +956,6 @@ if ($BuildMode -eq "true") {
     workspace_namespace = $WorkspaceNamespace
     cuda_bin = $cudaBin
     cargo_target_dir = $TargetRoot
-    cargo_intermediate_dir = [string]$StorageLayout.env.CARGO_BUILD_BUILD_DIR
-    build_temp_dir = $TempRoot
-    volatile_build_scratch = if ($BuildOnly -and $StorageLayout.PSObject.Properties["scratch"]) { $StorageLayout.scratch } else { $null }
     cache_root = $CacheRoot
     git_commit = $sourceCommit
     worktree_state = $sourceWorktreeState
