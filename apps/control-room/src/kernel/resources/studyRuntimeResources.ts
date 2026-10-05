@@ -874,16 +874,16 @@ export function stageExecutionMatchesSessionIdentity(
 export function useStageExecutionResource({
   enabled = true,
 }: RuntimeResourceOptions = {}): ResourceResult<StageExecutionResource | null> {
-  const sessionIdentity = useSessionStatusSelector(
-    selectStageExecutionSessionIdentity,
-    {
-      enabled,
-      isEqual: stageExecutionSessionIdentityEquals,
-    },
-  );
   const { api } = useKernel();
   const { resourceKey, sessionIdentity: resourceSessionIdentity } = useSessionScopedResourceKey(
     SIMULATION_STAGES_EXECUTION_PATH,
+  );
+  const sessionIdentity = useSessionStatusSelector(
+    selectStageExecutionSessionIdentity,
+    {
+      enabled: enabled && resourceSessionIdentity !== null,
+      isEqual: stageExecutionSessionIdentityEquals,
+    },
   );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>

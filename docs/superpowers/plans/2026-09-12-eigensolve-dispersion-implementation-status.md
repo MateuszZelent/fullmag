@@ -1,3 +1,22 @@
+<!-- stage-status-bootstrap-guard-20261005 -->
+## Checkpoint — consumer stages blokuje status do potwierdzenia sesji
+
+Źródło pozostałych 2 FAIL i9 unhandled TypeError w CI: StartScreen ->
+HomeSection -> useContinueLive -> useStageExecutionResource. Selector statusu
+był włączony przed scoped session identity, mimo późniejszego guardu stages.
+Przeniesiono pozyskanie scoped key przed selector; jego enabled wymaga
+resourceSessionIdentity !== null. Downstream session/epoch guards i fixtures
+not.toHaveBeenCalled pozostają bez zmian. Bootstrap identity niezależny.
+React Doctor --scope changed: exit0,80 plików, no issues found (score88/100).
+Review i parser tylko produkcyjnego TypeScript PASS; wykonanie regresji,
+cały typecheck i browser proof pozostają bramkami CI/runtime.
+
+Osobny commit ecf21cbc77f5e2325211493ecae935b51b535642 koryguje4 fixtures API:
+jedna revision mutacji plus kanoniczny demand, typed snapshot bez ostrzeżenia
+untyped. Nie zmienia produkcji ani guardów; oczekuje wykonania GitHub CI.
+Handoff commit7ab2a4f297c24b4c6dd007aa92746f668c121285 potwierdzony parą ±10.
+Pełny plan, podpisany sweep15, convergence, GUI/A1, S09 i GPU nadal OPEN.
+
 <!-- managed-session-artifact-handoff-20261005 -->
 ## Checkpoint — właściwy katalog artefaktów i zakres certyfikatu
 
