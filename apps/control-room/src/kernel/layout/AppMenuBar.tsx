@@ -536,6 +536,7 @@ function SessionAppMenuBar() {
     serverHydratedSnapshot,
   );
   const sessionStatus = useSessionStatusSelector(selectHeaderSessionSource, {
+    enabled: sessionIdentity !== null,
     isEqual: headerSessionSourceEquals,
   });
   const visibleSessionStatus = resolveHydrationSafeHeaderSessionSource(

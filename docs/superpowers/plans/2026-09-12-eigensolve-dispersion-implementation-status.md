@@ -1,3 +1,36 @@
+<!-- ci-runtime233-checkpoint-20261005 -->
+## Bieżący checkpoint — runtime #233 i naprawa bramki frontendu
+
+Merge `1f0e239a532954351250dce66c6a0d88da3d29b0` jest na remote;
+PR97 potwierdzono MERGEABLE. Build #233 (`9f2a5fa62a0541059447c88165156887`)
+w profilu `fem-cpu-slepc-runtime-v2` został przyjęty i ma stan running.
+Koordynator zweryfikował kapsułę 7870 plików i uruchomił kontener
+workera. Worker przygotowuje źródła; start kompilatora jeszcze niepotwierdzony.
+Capsule digest:
+`60f0093bb7d6eaebc86f3193b80617bc80b6f255b40445abfcfd98f5d6cad207`.
+Wolne miejsce przekroczyło 23 GiB. R: nadal nie jest używany przez Docker.
+
+Obserwator przygotowano i uruchomiono dla jednej pary nearest przy
+k=+10 rad/um: GMRES/FGMRES, L2, trzy warstwy, growth=1.3, target=11.2 GHz,
+EPS/KSP=1e-9, fizyczny próg=1e-8 i restart=8. Jedyna różnica żądanych
+parametrów to typ KSP. Przed próbami wymaga sukcesu buildu, walidacji receipt,
+eksportu OpenAPI i dry-run; po błędzie zatrzymuje wykonanie do diagnozy.
+Nie ma jeszcze nowych wyników solvera ani dowodu kwalifikacji.
+
+GitHub bootstrap #37363400830: generated-api-determinism, API hygiene,
+FDM relaxation i browser-fixture-smoke PASS. Control Room: 745 plików testowych
+PASS, 11 FAIL (15 przypadków). Rust, Python i Windows volatile zostały
+anulowane przed wykonaniem — NOT VERIFIED. Log zachowano w dowodach wątku.
+Analiza wykazała nieosłonięte pobranie statusu sesji przez AppMenu oraz stare
+oczekiwania fixture'ów: ścieżki typów Next, podwójna konwersja sRGB, zakres
+zasobów i aktualne pola/tabele częstotliwości. Guard statusu AppMenu i trzy korekty testów Next/kolorów mają parser
+4/4 PASS i review bez uwag. Pozostałe poprawki zasobów/wykresów są w toku;
+całość wymaga ponownego CI. Lokalnych unit tests nie wykonujemy.
+
+Pięć map naukowych związanych z przeniesionym step_utils i eksportem sceny
+przeszło validator. To dowód spójności dokumentacji, nie wykonania FEM.
+Pełne S00–S12, signed sweep/parity/zbieżność, GUI/A1, S09 i GPU pozostają OPEN.
+
 <!-- merge-resolution-checkpoint-20261005 -->
 ## Bieżący checkpoint — konflikty rozwiązane, regresje skierowane do CI
 
