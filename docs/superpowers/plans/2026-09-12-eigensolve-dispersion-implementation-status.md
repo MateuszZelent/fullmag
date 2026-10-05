@@ -1,3 +1,36 @@
+<!-- master816-native-link-checkpoint-20261005 -->
+## Aktualny checkpoint — merge mastera i diagnoza linkowania Windows
+
+Scalono mastera `81600790c3aad6d3b8f50cdbd33c9155ee7a0a43` do brancha
+zadania (HEAD przed merge `f50525638bc00dae17b605a031934eac4bcf0f5d`).
+Trzy konflikty rozwiązane; nie ma unmerged paths. Zachowano oba moduły IR,
+typed live snapshot i konserwatywną ochronę GC. 96 testów Python oraz
+24 podtesty PASS; parser Rust PASS. Merge commit: `a54ed087a9fa941477e8c7a15f700e3ace032df0`.
+Hook React Doctor 72/100, 38 ostrzeżeń w zmianach mastera; kontrola
+produkcyjnego frontendu i eksportu API nadal NOT VERIFIED.
+
+Zarządzany native Windows build zakończył się exit 1 przy linkowaniu
+backendu, LNK1104. Wskazany plik rlib istnieje, ścieżka ma 262 znaki.
+Resolver skraca katalog pośredni Cargo do `build_root/b` dla natywnych
+profili Windows, pozostawiając finalny target i istniejący cache.
+Override jest walidowany względem profilu, bez wyjścia poza storage.
+36 interpretowanych kontroli resolvera: OK, 2 pominięte. Review PASS;
+domyślne b i recheck initialize odrzucają junction poza profilem. Potwierdzenie
+poprawki: ponowiony zarządzany build zakończył kompilację i linkowanie
+fullmag-cli/fullmag-api sukcesem po 6 min 14 s. LNK1104 nie powrócił.
+Desktop również skompilował się w 3 min 16 s. Recepta zakończyła się
+exit 1: poprawka walidacji storage podczas próby zmieniła identity.
+Wymagane ponowienie na stabilnym źródle. Nie jest to dowód FEM.
+Zależności frontendu istnieją w native workspace, lecz source-check
+wskazuje dawny frontend root; nie rebindowano ani nie kopiowano ich.
+
+Live health API runnera: worker failed, OSError Errno 5 Input/output error,
+accepting_jobs=false, active_jobs=[]; ponad 50 GB wolnego. Dwie wcześniejsze
+sesje diagnostyczne Docker nadal oczekują bez wyniku.
+Nie uruchomiono ich duplikatów ani nowych punktów dyspersji. Export API,
+frontend, exact-runtime GMRES/FGMRES, signed sweep, zbieżność, GUI i COMSOL A1
+pozostają otwarte. Poniższe checkpointy opisują wcześniejsze stany.
+
 <!-- storage-production-and-master-d429-checkpoint-20261005 -->
 ## Aktualny checkpoint — cleanup PASS, kompakcja częściowa, nowy master
 
