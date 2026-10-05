@@ -1,3 +1,30 @@
+<!-- canonical-autosave-producers-20261005 -->
+## Checkpoint — trwała poprawka autosave i rzeczywista próba eigensolve
+
+Oba domyślne producenci emitują teraz m: Python output_storage_lowering.py
+(relaxation i time fallback), Rust project_output_policy.rs. Jawne polityki
+oraz autorskie nazwy pól pozostają zachowane. Regresje obejmują m, format,
+cadence i preservation; Rust ma oddzielne przypadki relax/time. Podłączono
+je do bootstrap GitHub Actions; lokalnych testów ani ich kompilacji nie wykonano.
+AST Python, parser Rust, YAML i source review PASS. Wykonanie regresji CI OPEN.
+
+Model ba0045fef5978e67063047c5896384923d30960a z jawnym m uruchomiono
+na gotowym runtime #233. Relaksacja native FEM zakończyła się po 3 krokach:
+max_torque_apm=4.7383e-11, próg 1 A/m. Eigensolve rzeczywiście wystartował.
+GMRES zgłosił residual recursion 5.9689e-16 wobec residual recomputed
+4.6044e-11 przy restart; stop floquet_slepc_solve_failed, wrapper exit1.
+Dynamic demag operator probe PASS: hermitian relative defect 5.8770e-16,
+potential residual y 1.6592e-13 i z 1.3599e-14. To dowód tego probe,
+nie kompletny dowód poprawności częstotliwości ani rekonstrukcji pola.
+Kontener GMRES verified_absent; logi i wszystkie artefakty zachowane.
+
+Uruchomiono pozostałą zaplanowaną próbę FGMRES: identyczny model k=+10 rad/um,
+L2, 3 warstwy, growth1.3, target11.2GHz, EPS/KSP1e-9, restart8,
+physical rtol1e-8. Zmieniony wyłącznie KSP type; bramki bez poluzowania.
+Stan solver rows/residual/frequency pozostaje NOT VERIFIED do zakończenia.
+Implicit default wymaga przyszłego runtime z poprawionymi producentami.
+Pełne S00–S12, signed sweep/parity/zbieżność, GUI/A1, S09/provider i GPU OPEN.
+
 <!-- canonical-autosave-model-retry-20261005 -->
 ## Checkpoint — jawny zapis kanonicznego pola przed ponowieniem k10
 

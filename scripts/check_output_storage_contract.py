@@ -124,6 +124,7 @@ study.storage()
         [{"kind": "relaxation"}], default.to_ir()
     )[0]["autosave"]
     require(relaxation["format"] == "zarr", "relaxation autosave format mismatch")
+    require(relaxation["fields"][0]["quantity"] == "m", "relaxation default quantity mismatch")
     require(relaxation["fields"][0]["every_steps"] == 100, "relaxation cadence mismatch")
 
     time_stage = configure_scene_stage_autosaves(
@@ -145,7 +146,26 @@ study.storage()
         OutputStorage(data_format="h5").to_ir(),
     )[0]["autosave"]
     require(time_stage["format"] == "hdf5", "hdf5 stage format mismatch")
+    require(time_stage["fields"][0]["quantity"] == "magnetization", "authored output quantity changed")
     require(time_stage["fields"][0]["every_seconds"] == 0.5, "authored output cadence changed")
+
+    time_fallback = configure_scene_stage_autosaves(
+        [
+            {
+                "kind": "time_evolution",
+                "until_seconds": 4.0,
+                "output_every_seconds": 0.5,
+            }
+        ],
+        OutputStorage(data_format="h5").to_ir(),
+    )[0]["autosave"]
+    require(time_fallback["format"] == "hdf5", "time fallback autosave format mismatch")
+    require(
+        len(time_fallback["fields"]) == 1
+        and time_fallback["fields"][0]["quantity"] == "m"
+        and time_fallback["fields"][0]["every_seconds"] == 0.5,
+        "time fallback default quantity or cadence mismatch",
+    )
 
     explicit = {
         "kind": "stage_autosave",
@@ -154,6 +174,13 @@ study.storage()
         "format": "zarr",
         "fields": [{"kind": "field_autosave", "quantity": "m", "every_steps": 7}],
     }
+    retained_explicit = configure_scene_stage_autosaves(
+        [{"kind": "relaxation", "autosave": explicit}], OutputStorage().to_ir()
+    )[0]["autosave"]
+    require(
+        retained_explicit["fields"] == explicit["fields"],
+        "explicit autosave quantity or cadence changed",
+    )
     try:
         configure_scene_stage_autosaves(
             [{"kind": "relaxation", "autosave": explicit}],

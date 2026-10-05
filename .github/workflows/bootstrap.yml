@@ -28,6 +28,9 @@ jobs:
       - name: Install Python runtime dependencies
         run: python -m pip install -e packages/fullmag-py
 
+      - name: Run canonical project autosave policy contracts
+        run: cargo test -p fullmag-ir project_output_policy --no-fail-fast
+
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
 
@@ -283,6 +286,9 @@ jobs:
           packages/fullmag-py/tests/test_scene_document_problem_ir.py
           packages/fullmag-py/tests/test_execution_profile_authoring_roundtrip.py
           packages/fullmag-py/tests/test_scene_execution_config.py
+
+      - name: Run output storage authoring and lowering contracts
+        run: python scripts/check_output_storage_contract.py
 
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
