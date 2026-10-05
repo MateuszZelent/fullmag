@@ -27,6 +27,11 @@ PLAN_SCHEMA = "fullmag.local-runner.runtime-reference-plan.v1"
 BUILD_RECEIPT_SCHEMA = "fullmag.local-runner.build-receipt.v1"
 RETENTION_TOMBSTONE_SCHEMA = "fullmag.runtime-package-retention.v1"
 MANAGED_BROWSER_SCHEMA = "fullmag.managed-browser.v1"
+_CONTROLLER_REFERENCE_SCHEMAS = {
+    "signed15-controller-v1.json": "fullmag.one-shot-campaign-controller.v1",
+    "signed15-plot-controller-v1.json": "fullmag.one-shot-plot-controller.v1",
+    "priority-k10-results.json": "fullmag.priority-signed-pilots.v1",
+}
 _KNOWN_REFERENCE_SCHEMAS = frozenset({
     "fullmag.comsol-dispersion-benchmark.request.v1",
     "fullmag.comsol-dispersion-benchmark.result.v1",
@@ -37,6 +42,7 @@ _KNOWN_REFERENCE_SCHEMAS = frozenset({
     "fullmag.de-smoke.v1",
     "fullmag.de-ui-model-preview.v1",
     "fullmag.managed-package-openapi.v1",
+    *_CONTROLLER_REFERENCE_SCHEMAS.values(),
     MANAGED_BROWSER_SCHEMA,
 })
 COORDINATOR_LABELS = {
@@ -62,6 +68,8 @@ _SKIP_STORAGE_METADATA_DIRS = _SKIP_REFERENCE_DIRS | frozenset((
 ))
 _REFERENCE_METADATA_FILENAMES = frozenset((
     "receipt.json", "proof.json", "run-request.json", "run-result.json",
+    *_CONTROLLER_REFERENCE_SCHEMAS.keys(),
+    "controller-config.json", "retry-provenance.json",
 ))
 
 
@@ -220,8 +228,74 @@ def _error(scope: str, code: str, path: str | None = None) -> dict[str, str]:
     if path is not None:
         result["path"] = path
     return result
-def _doc_ref_ids(document: Mapping[str, Any], *, external: bool) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+
+
+def _named_runtime_refs(
+    document: Mapping[str, Any], filename: str | None,
+) -> list[tuple[str, str]] | None:
+    """Apply narrow filename-specific contracts for legacy controller metadata."""
+    name = filename.casefold() if isinstance(filename, str) else ""
+    expected_schema = _CONTROLLER_REFERENCE_SCHEMAS.get(name)
+    # Versioned controller metadata may also be archived as a standard receipt.
+    # The schema still requires its job identity independently of the filename.
+    if (expected_schema is None and name not in ("controller-config.json", "retry-provenance.json")
+            and document.get("schema") in _CONTROLLER_REFERENCE_SCHEMAS.values()):
+        expected_schema = document["schema"]
+    if expected_schema is not None:
+        if document.get("schema") != expected_schema:
+            raise _PathProblem("unsupported_controller_metadata_schema:" + name)
+        job_id = document.get("job_id")
+        if not _valid_component(job_id):
+            raise _PathProblem("invalid_runtime_reference:controller.job_id")
+        return [(job_id, "controller.job_id")]
+
+    if name == "controller-config.json":
+        # The current producer historically writes this schema-less observer
+        # config; its job_id is the coordinator job observed by the controller.
+        if "schema" in document:
+            raise _PathProblem("unsupported_controller_config_schema")
+        job_id = document.get("job_id")
+        if not _valid_component(job_id):
+            raise _PathProblem("invalid_runtime_reference:controller.job_id")
+        return [(job_id, "controller.job_id")]
+
+    if name == "retry-provenance.json":
+        # The bounded legacy sample is schema-less and carries a predecessor
+        # and successor coordinator job. Unknown shape must block globally.
+        if "schema" in document:
+            raise _PathProblem("unsupported_retry_provenance_schema")
+        expected_fields = {
+            "predecessor_job_id", "successor_job_id", "reason", "solver_started",
+        }
+        if set(document) != expected_fields:
+            raise _PathProblem("unsupported_retry_provenance_fields")
+        predecessor = document.get("predecessor_job_id")
+        successor = document.get("successor_job_id")
+        if not _valid_component(predecessor):
+            raise _PathProblem("invalid_runtime_reference:lineage.predecessor_job_id")
+        if not _valid_component(successor):
+            raise _PathProblem("invalid_runtime_reference:lineage.successor_job_id")
+        reason = document.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise _PathProblem("invalid_retry_provenance_reason")
+        if not isinstance(document.get("solver_started"), bool):
+            raise _PathProblem("invalid_retry_provenance_solver_started")
+        return [
+            (predecessor, "lineage.predecessor_job_id"),
+            (successor, "lineage.successor_job_id"),
+        ]
+    return None
+
+
+def _doc_ref_ids(
+    document: Mapping[str, Any], *, external: bool, filename: str | None = None,
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Extract supported runtime/job IDs without treating producer receipts as consumers."""
+    named_refs = _named_runtime_refs(document, filename)
+    named_ref_set = set(named_refs or ())
+    named_root_job_ids = {
+        job_id for job_id, kind in named_ref_set if kind == "controller.job_id"
+    }
     refs: list[tuple[str, str]] = []
     roots: list[tuple[str, str]] = []
     schema = document.get("schema")
@@ -277,7 +351,14 @@ def _doc_ref_ids(document: Mapping[str, Any], *, external: bool) -> tuple[list[t
                     walk(child, location=f"{location}[{index}]")
 
     walk(document, location="$", root_level=True)
-    return refs, roots
+    # The filename contract already records a controller's root job_id. If a
+    # caller supplied this file as an external root, omit only that duplicate
+    # generic root reference while retaining all nested runtime references.
+    generic_refs = [
+        reference for reference in refs
+        if not (reference[1] == "job_id" and reference[0] in named_root_job_ids)
+    ]
+    return (named_refs or []) + generic_refs, roots
 
 
 def _artifact_root_target(value: str, candidates: Mapping[str, dict[str, Any]], storage: Path) -> str | None:
@@ -1126,7 +1207,9 @@ def plan_runtime_references(
         try:
             read_root = root if _within(path, root) else path.parent
             document = _read_json(read_root, path)
-            raw_refs, raw_roots = _doc_ref_ids(document, external=external)
+            raw_refs, raw_roots = _doc_ref_ids(
+                document, external=external, filename=path.name
+            )
         except _PathProblem as issue:
             errors.append(_error(default_scope, issue.reason, str(path)))
             if default_scope.startswith("job:"):

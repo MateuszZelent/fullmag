@@ -299,6 +299,174 @@ class RuntimeReferencePlanTests(unittest.TestCase):
         self.assertIn(("build-b", "frontend.job_id"), refs)
         self.assertIn(("build-c", "job.job_id"), refs)
 
+    def test_named_scientific_controller_metadata_protects_runtime_jobs(self):
+        batch = self.root / "runs" / "wt" / "scientific-batches" / "nonzero-k-validation"
+        documents = (
+            ("signed15-controller-v1.json", {
+                "schema": "fullmag.one-shot-campaign-controller.v1",
+                "job_id": "build-a",
+                "status": "build_failed",
+            }),
+            ("signed15-plot-controller-v1.json", {
+                "schema": "fullmag.one-shot-plot-controller.v1",
+                "job_id": "build-a",
+                "status": "upstream_failed_no_plot",
+            }),
+            ("controller-config.json", {"job_id": "build-b"}),
+            ("priority-k10-results.json", {
+                "schema": "fullmag.priority-signed-pilots.v1",
+                "job_id": "build-b",
+                "results": [],
+            }),
+            ("retry-provenance.json", {
+                "predecessor_job_id": "build-a",
+                "successor_job_id": "build-b",
+                "reason": "predecessor terminal before solver start",
+                "solver_started": False,
+            }),
+        )
+        for name, document in documents:
+            self._write_json(batch / name, document)
+
+        plan = self._plan(min_artifacts_to_keep=1)
+
+        self.assertTrue(plan["complete"], plan["errors"])
+        self.assertEqual(self._candidate_ids(plan), set())
+        retained = {item["job_id"]: item["reason"] for item in plan["retained"]}
+        self.assertTrue(retained["build-a"].startswith("reference:"))
+        self.assertEqual(retained["build-c"], "minimum_successful_builds")
+        referenced = {item["job_id"] for item in plan["references"]}
+        self.assertEqual(referenced, {"build-a", "build-b"})
+        kinds = {(item["job_id"], item["kind"]) for item in plan["references"]}
+        self.assertIn(("build-a", "lineage.predecessor_job_id"), kinds)
+        self.assertIn(("build-b", "lineage.successor_job_id"), kinds)
+
+    def test_named_controller_metadata_preserves_nested_generic_references(self):
+        self._add_build("build-d", updated=40)
+        path = (
+            self.root / "runs" / "wt" / "scientific-batches" /
+            "nonzero-k-validation" / "signed15-controller-v1.json"
+        )
+        self._write_json(path, {
+            "schema": "fullmag.one-shot-campaign-controller.v1",
+            "job_id": "build-a",
+            "frontend": {"job_id": "build-b"},
+            "runtime": {"runtime_job_id": "build-c"},
+        })
+
+        plan = self._plan(min_artifacts_to_keep=1)
+
+        self.assertTrue(plan["complete"], plan["errors"])
+        self.assertEqual(self._candidate_ids(plan), set())
+        refs = {(item["job_id"], item["kind"]) for item in plan["references"]}
+        self.assertIn(("build-a", "controller.job_id"), refs)
+        self.assertIn(("build-b", "frontend.job_id"), refs)
+        self.assertIn(("build-c", "runtime_job_id"), refs)
+        retained = {item["job_id"]: item["reason"] for item in plan["retained"]}
+        for job_id in ("build-a", "build-b", "build-c"):
+            self.assertTrue(retained[job_id].startswith("reference:"))
+        self.assertEqual(retained["build-d"], "minimum_successful_builds")
+
+    def test_versioned_controller_in_standard_receipt_requires_job_identity(self):
+        path = self.root / "runs" / "wt" / "scientific-batches" / "batch-1" / "receipt.json"
+        self._write_json(path, {"schema": "fullmag.one-shot-campaign-controller.v1"})
+        plan = self._plan()
+        self.assertFalse(plan["complete"])
+        self.assertTrue(plan["unknown_scope"])
+        self.assertEqual(self._candidate_ids(plan), set())
+        self._write_json(path, {"schema": "fullmag.one-shot-campaign-controller.v1", "job_id": "build-a"})
+        plan = self._plan()
+        self.assertTrue(plan["complete"], plan["errors"])
+        self.assertNotIn("build-a", self._candidate_ids(plan))
+
+    def test_malformed_controller_schema_and_lineage_fail_closed(self):
+        batch = self.root / "runs" / "wt" / "scientific-batches" / "nonzero-k-validation"
+        malformed = (
+            ("signed15-controller-v1.json", {
+                "schema": "fullmag.future-one-shot-controller.v9",
+                "job_id": "build-a",
+            }),
+            ("controller-config.json", {
+                "schema": "fullmag.future-controller-config.v1",
+                "job_id": "build-a",
+            }),
+            ("signed15-controller-v1.json", {
+                "schema": "fullmag.one-shot-campaign-controller.v1",
+                "job_id": "build-a",
+                "frontend": {"job_id": "invalid job id"},
+            }),
+            ("priority-k10-results.json", {
+                "schema": "fullmag.priority-signed-pilots.v1",
+                "job_id": None,
+            }),
+            ("retry-provenance.json", {
+                "predecessor_job_id": "build-a",
+                "successor_job_id": 42,
+                "reason": "retry",
+                "solver_started": False,
+            }),
+            ("retry-provenance.json", {
+                "predecessor_job_id": "build-a",
+                "successor_job_id": "build-b",
+                "reason": "retry",
+                "solver_started": False,
+                "unrecognized_lineage": "build-c",
+            }),
+            ("retry-provenance.json", {
+                "schema": "fullmag.future-retry-provenance.v2",
+                "predecessor_job_id": "build-a",
+                "successor_job_id": "build-b",
+                "reason": "retry",
+                "solver_started": False,
+            }),
+            ("retry-provenance.json", {
+                "predecessor_job_id": "build-a",
+                "successor_job_id": "build-b",
+                "reason": " ",
+                "solver_started": False,
+            }),
+            ("retry-provenance.json", {
+                "predecessor_job_id": "build-a",
+                "successor_job_id": "build-b",
+                "reason": "retry",
+                "solver_started": "false",
+            }),
+        )
+        for name, document in malformed:
+            with self.subTest(name=name, document=document):
+                path = batch / name
+                self._write_json(path, document)
+                plan = self._plan()
+                self.assertFalse(plan["complete"])
+                self.assertTrue(plan["unknown_scope"])
+                self.assertEqual(self._candidate_ids(plan), set())
+                self.assertTrue(any(error["scope"] == "global" for error in plan["errors"]))
+                path.unlink()
+
+    def test_unrelated_result_payload_json_is_not_scanned(self):
+        batch = self.root / "runs" / "wt" / "scientific-batches" / "batch-1"
+        self._write_json(batch / "unrelated-result.json", {
+            "schema": "fullmag.future-result.v9",
+            "runtime_job_id": "not-in-the-queue",
+        })
+        self._write_json(batch / "payload.json", {
+            "schema": "fullmag.future-payload.v1",
+            "runtime_job_id": "also-not-in-the-queue",
+        })
+        self._write_json(batch / "source" / "receipt.json", {
+            "schema": "fullmag.future-source-consumer.v1",
+            "runtime_job_id": "not-in-the-queue",
+        })
+        self._write_json(batch / "execution" / "run-result.json", {
+            "schema": "fullmag.future-execution-consumer.v1",
+            "runtime_job_id": "not-in-the-queue",
+        })
+
+        plan = self._plan()
+
+        self.assertTrue(plan["complete"], plan["errors"])
+        self.assertEqual(self._candidate_ids(plan), {"build-a", "build-b"})
+
     def test_unknown_external_reference_blocks_all_candidates(self):
         root = Path(self.temp.name) / "legacy-receipts"
         self._write_json(root / "artifacts" / "legacy" / "scientific-result.json", {

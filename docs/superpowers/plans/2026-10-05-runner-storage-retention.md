@@ -239,3 +239,24 @@ nowa próba wymaga wdrożenia i świeżego planu.
   odświeżenia timestampów PASS; nie dowodzi to pełnej kwalifikacji CAS/runtime.
 - Pakiet #232 przechodzi aktualną ścisłą walidację 29 artefaktów. To dowód
   integralności i kontraktu pakietu, bez nowych wyników numerycznych.
+
+
+### Historyczne metadane kontrolerów — źródłowe pokrycie R3
+
+Czytnik uwzględnia pięć jawnych nazw: signed15-controller-v1.json,
+signed15-plot-controller-v1.json, controller-config.json, priority-k10-results.json
+oraz retry-provenance.json. Trzy wersjonowane schematy wymagają job_id również
+w standardowym receipt.json; historyczna konfiguracja pozostaje schema-less.
+Retry wymaga obu ID, niepustego reason i boolean solver_started; oba końce
+lineage są chronione niezależnie od uruchomienia solvera.
+
+Nazwane kontrakty zachowują dotychczasowe zagnieżdżone odwołania do frontend,
+runtime i artifact_root. Nieprawidłowy kontrakt/ID lub brak joba blokuje globalnie.
+Pozostają limity, no-follow oraz pomijanie source/execution/payload; nie skanujemy
+arbitralnych JSON. Review zamknęło pominięcie nested refs i brak job_id w
+wersjonowanym standardowym receipcie. Planner 20/20 i runtime retention 10/10 PASS.
+Odczytowa próbka produkcyjna: pięć plików, sześć referencji, wszystkie joby istnieją.
+
+To nadal nie certyfikuje historycznej kompletności: rejestr odwołań nie istnieje,
+nie ustawiono legacy_inventory_complete i nie wykonano runtime prune.
+Kod oraz postęp validating wymagają następnego wdrożenia po terminalnym apply.
