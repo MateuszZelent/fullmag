@@ -7498,3 +7498,23 @@ ScratchAuthoringInspectorStability po ACK materiału (odczyt undefined.Aex).
 Trwa diagnoza kontraktu odpowiedzi; Rust jeszcze wykonywany. PR #97 pozostaje
 bez merge. Pełne S00–S12, signed15, serial/adaptive, DE/BV/convergence, COMSOL A1,
 GUI, produkcyjny provider S09 i kwalifikacja GPU pozostają otwarte.
+
+
+### Terminalny build #234 i rozpoczęcie signed15
+
+Koordynator potwierdził #234 `succeeded`, exit0. Kontroler 59878 zakończył
+export-runner-openapi i dry-run z kodem0 oraz uruchomił rzeczywisty signed15.
+Wyjście: `storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/4ea6f05931f045a3a644a3c424cc1da2/comsol-dispersion/097dc22ea59f4c2b89553cc0eba63fa3`.
+Kontener `fullmag-dispersion-5c8c23188a54738dd9ef9d50442f2733` jest live;
+proces fullmag-bin wykonuje natywny FEM CPU, a log potwierdza etap relaksacji.
+Brak jeszcze terminalnego rezultatu sweepa ani dowodu przyspieszenia.
+
+CI 37385900573 ukończone: API Rust 977 PASS / 0 FAIL / 3 ignored, w tym
+historyczny test coupled M3. Dwie pozostałe blokady mają konkretne przyczyny:
+(1) mock material ACK bez obowiązkowego `properties`, odczytywanego podczas
+rebase Inspectora; (2) fixture certyfikatu CLI bez nowego pola
+`max_h_anisotropy_difference_a_per_m`. Poprawki obejmują wyłącznie fixtures:
+pełne SI properties zgodne z edycją oraz None dla istniejącego certyfikatu v1
+bez Ku. Asercje stabilności/fokusu/scroll/draftów pozostają bez zmian.
+Kontrola diff i parser Rust PASS; wykonanie regresji wymaga następnego CI.
+Nie wykonywano lokalnych testów ani ich kompilacji.

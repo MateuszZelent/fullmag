@@ -16270,6 +16270,7 @@ mod tests {
             max_h_ex_difference_a_per_m: 0.0,
             max_h_demag_difference_a_per_m: 0.0,
             max_h_ext_difference_a_per_m: 0.0,
+            max_h_anisotropy_difference_a_per_m: None,
             max_h_eff_difference_a_per_m: 0.0,
             max_phi_difference_a: 0.0,
             field_absolute_tolerance_a_per_m: 1.0e-6,

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AuthoringTransactionResponse,
+  MaterialPropertiesResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
@@ -81,7 +82,15 @@ describe("scratch material Inspector stability", () => {
   it("hydrates with production resource hooks and keeps root, focus, scroll, drafts and requests bounded across both ACKs", async () => {
     let resolveAssignment!: (value: SceneResource) => void;
     const fixture = createFixture();
-    fixture.createMaterial.mockResolvedValue(createdMaterialAck());
+    fixture.createMaterial.mockResolvedValue(
+      createdMaterialAck("mat:cofeb", {
+        Aex: 1.3e-11,
+        Dbulk: null,
+        Dind: null,
+        Ms: 1.1e6,
+        alpha: 0.01,
+      }),
+    );
     fixture.patchObject.mockImplementation(
       () => new Promise<SceneResource>((resolve) => {
         resolveAssignment = resolve;
@@ -374,11 +383,20 @@ function sceneObject(id: string, name: string, materialRef: string | null = null
   };
 }
 
-function createdMaterialAck(materialId = "mat:cofeb"): AuthoringTransactionResponse {
+function createdMaterialAck(
+  materialId = "mat:cofeb",
+  properties: MaterialPropertiesResource = {
+    Aex: 1.3e-11,
+    Dbulk: null,
+    Dind: null,
+    Ms: 8e5,
+    alpha: 0.01,
+  },
+): AuthoringTransactionResponse {
   return {
     committed_scene: {
       ...scene(22),
-      materials: [{ id: materialId, name: "CoFeB" }],
+      materials: [{ id: materialId, name: "CoFeB", properties }],
       revision: 22,
     },
     scene_revision: 22,
