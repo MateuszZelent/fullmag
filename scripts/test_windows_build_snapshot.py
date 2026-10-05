@@ -1,5 +1,6 @@
 """Interpreted regression checks for frozen native Windows source inputs."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -81,6 +82,29 @@ class SnapshotChecks(unittest.TestCase):
         with patch.object(build_snapshot, "capture", side_effect=AssertionError("live capture")), \
              patch.object(build_snapshot, "fingerprint", side_effect=AssertionError("live fingerprint")):
             self.assertEqual(build_snapshot.verify_snapshot(metadata, self.build), metadata)
+
+    def test_unchanged_native_files_keep_mtime_across_different_snapshots(self):
+        timestamp = 1_600_000_000_123_456_700
+        os.utime(self.file, ns=(timestamp, timestamp))
+        origin_mtime = self.file.stat().st_mtime_ns
+        first = self.make()
+        docs = self.repo / "docs/cache-note.md"
+        docs.parent.mkdir()
+        docs.write_text("Documentation changed without changing native inputs.\n")
+        second = self.make()
+        self.assertNotEqual(first["snapshot_id"], second["snapshot_id"])
+        self.assertEqual(first["backend_source_sha256"], second["backend_source_sha256"])
+        for snapshot in (first, second):
+            copied = Path(snapshot["source_root"]) / "crates/demo/src/lib.rs"
+            self.assertEqual(copied.stat().st_mtime_ns, origin_mtime)
+            self.assertEqual(copied.read_bytes(), self.file.read_bytes())
+        self.file.write_bytes(b"pub const VALUE: u8 = 2;\n")
+        os.utime(self.file, ns=(timestamp + 1_000_000_000, timestamp + 1_000_000_000))
+        third = self.make()
+        copied = Path(third["source_root"]) / "crates/demo/src/lib.rs"
+        self.assertNotEqual(third["backend_source_sha256"], second["backend_source_sha256"])
+        self.assertEqual(copied.stat().st_mtime_ns, self.file.stat().st_mtime_ns)
+        self.assertEqual(copied.read_bytes(), self.file.read_bytes())
 
     def test_snapshot_modification_and_extra_file_rejected(self):
         metadata = self.make()

@@ -19,6 +19,19 @@ import sys
 import time
 import uuid
 
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    class _FileTime(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+    _set_file_time = ctypes.WinDLL("kernel32", use_last_error=True).SetFileTime
+    _set_file_time.argtypes = [wintypes.HANDLE, ctypes.c_void_p,
+                              ctypes.POINTER(_FileTime), ctypes.POINTER(_FileTime)]
+    _set_file_time.restype = wintypes.BOOL
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from capture_source_snapshot_identity import (
     EXCLUDED_COMMITTED_SOURCE_PATHS,
@@ -175,10 +188,31 @@ def _inventory(repo, paths):
 
 
 def _copy_file(source, destination):
-    entry, content = _file_entry(source, source.name)
+    _no_link(source)
+    if not stat.S_ISREG(source.lstat().st_mode):
+        raise SnapshotError(f"Source input must be a regular file: {source.name}")
+    metadata, content = _read_regular_file_stable(source, "snapshot source")
+    entry = {"path": source.name, "size": metadata.st_size, "sha256": _sha(content)}
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("xb") as stream:
         stream.write(content)
+        stream.flush()
+        # Keep the exact opened destination: Windows does not support utime
+        # with follow_symlinks=False, and a path fallback could follow a link.
+        if os.name == "nt":
+            def file_time(nanoseconds):
+                ticks = nanoseconds // 100 + 116444736000000000
+                if not 0 <= ticks < 2**64:
+                    raise SnapshotError("Source timestamp is outside the Windows FILETIME range")
+                return _FileTime(ticks & 0xffffffff, ticks >> 32)
+
+            accessed = file_time(metadata.st_atime_ns)
+            modified = file_time(metadata.st_mtime_ns)
+            if not _set_file_time(msvcrt.get_osfhandle(stream.fileno()), None,
+                                  ctypes.byref(accessed), ctypes.byref(modified)):
+                raise ctypes.WinError(ctypes.get_last_error())
+        else:
+            os.utime(stream.fileno(), ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
     return entry
 
 
