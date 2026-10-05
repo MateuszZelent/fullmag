@@ -1713,6 +1713,41 @@ mod tests {
     }
 
     fn spatial_preview_with_domain_quality() -> Value {
+        let fem_mesh = serde_json::json!({
+            "mesh_name": "preview",
+            "mesh_id": "mesh-1",
+            "nodes": [[0.0, 0.0, 0.0]],
+            "cells": {
+                "types": [],
+                "offsets": [],
+                "nodes": [],
+                "global_ordinals": [],
+                "mesh_parts": []
+            },
+            "facets": {
+                "types": [],
+                "roles": [],
+                "offsets": [],
+                "nodes": [],
+                "global_ordinals": []
+            },
+            "per_domain_quality": {
+                "1": {
+                    "n_elements": 1,
+                    "sicn_min": 0.1,
+                    "sicn_max": 0.9,
+                    "sicn_mean": 0.5,
+                    "sicn_p5": 0.2,
+                    "gamma_min": 0.3,
+                    "gamma_mean": 0.6,
+                    "volume_min": 1.0,
+                    "volume_max": 1.0,
+                    "volume_mean": 1.0,
+                    "volume_std": 0.0,
+                    "avg_quality": 0.5
+                }
+            }
+        });
         serde_json::json!({
             "kind": "spatial",
             "display_kind": "m",
@@ -1743,41 +1778,7 @@ mod tests {
             "auto_scale_enabled": true,
             "auto_downscaled": false,
             "preview_grid": [1, 1, 1],
-            "fem_mesh": {
-                "mesh_name": "preview",
-                "mesh_id": "mesh-1",
-                "nodes": [[0.0, 0.0, 0.0]],
-                "cells": {
-                    "types": [],
-                    "offsets": [],
-                    "nodes": [],
-                    "global_ordinals": [],
-                    "mesh_parts": []
-                },
-                "facets": {
-                    "types": [],
-                    "roles": [],
-                    "offsets": [],
-                    "nodes": [],
-                    "global_ordinals": []
-                },
-                "per_domain_quality": {
-                    "1": {
-                        "n_elements": 1,
-                        "sicn_min": 0.1,
-                        "sicn_max": 0.9,
-                        "sicn_mean": 0.5,
-                        "sicn_p5": 0.2,
-                        "gamma_min": 0.3,
-                        "gamma_mean": 0.6,
-                        "volume_min": 1.0,
-                        "volume_max": 1.0,
-                        "volume_mean": 1.0,
-                        "volume_std": 0.0,
-                        "avg_quality": 0.5
-                    }
-                }
-            }
+            "fem_mesh": fem_mesh
         })
     }
 

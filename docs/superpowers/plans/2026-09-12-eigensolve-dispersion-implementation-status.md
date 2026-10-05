@@ -1,3 +1,21 @@
+<!-- api-json-fixture-recursion-remediation-20261005 -->
+## Bieżący checkpoint — materializacja aplikacji PASS, fixture API podzielony
+
+CI #37369463128 potwierdziło kompletny krok fullmag-application, obejmujący
+59 unit tests, testy integracyjne i selektor eigensolve. Kolejna bramka Rust
+quantity/API/CLI zatrzymała się przy kompilacji types.rs: duży json! fixture
+preview z zagnieżdżonym fem_mesh przekroczył limit rekursji makra.
+
+Wyodrębniono fem_mesh do osobnego lokalnego Value i wstawiono do obiektu
+preview. Statyczny parser JSON potwierdził identyczne dane przed/po zmianie;
+parser Rust PASS. Zachowano numeric domain-quality keys i pełne asercje
+round-trip. Brak zmiany typów produkcyjnych i globalnego recursion_limit.
+Wykonanie poprawki oczekuje CI; lokalnych unit tests nie uruchamiano.
+
+#233 nadal native-build, nie ma nowych solver rows. Runtime/science/GUI,
+signed sweep/parity/zbieżność, COMSOL A1, S09/provider i GPU pozostają OPEN.
+Pełny zakres S00–S12 jest zachowany, nie oznaczamy celu ukończonym.
+
 <!-- scene-name-fixture-correction-20261005 -->
 ## Bieżący checkpoint — 102/103 regresje sceny/profilu PASS
 
