@@ -9311,9 +9311,16 @@ async fn display_put_replaces_full_selection() {
     assert_eq!(sel.selection.every_n, 25);
     assert_eq!(sel.selection.layer, 3);
     assert!(!sel.selection.auto_scale_enabled);
-    // One revision for the mutation and one for the observation-demand change
-    // from the empty default (synchronize_observation_quantities).
-    assert_eq!(sel.revision, 2);
+    // Reconcile observation demand under the same revision as the API mutation.
+    assert_eq!(sel.revision, 1);
+    assert_eq!(
+        sel.observation_quantities
+            .iter()
+            .filter(|quantity| quantity.as_str() == "H_eff")
+            .count(),
+        1,
+        "the active quantity must have exactly one canonical observation demand"
+    );
     assert_eq!(presentation.colormap, "plasma");
     assert_eq!(presentation.contrast_min, Some(-2.0));
     assert_eq!(presentation.contrast_max, Some(4.0));
@@ -9351,9 +9358,16 @@ async fn display_patch_updates_view_mode_and_field_component() {
 
     let sel = state.current_display_selection.read().await;
     assert_eq!(sel.selection.preview_component(), "z");
-    // One revision for the mutation and one for the observation-demand change
-    // from the empty default (synchronize_observation_quantities).
-    assert_eq!(sel.revision, 2);
+    // Reconcile observation demand under the same revision as the API mutation.
+    assert_eq!(sel.revision, 1);
+    assert_eq!(
+        sel.observation_quantities
+            .iter()
+            .filter(|quantity| quantity.as_str() == "m")
+            .count(),
+        1,
+        "the active quantity must have exactly one canonical observation demand"
+    );
 }
 
 #[tokio::test]
@@ -9391,9 +9405,16 @@ async fn display_patch_accepts_partial_update() {
     assert_eq!(sel.selection.max_points, 4096);
     assert_eq!(sel.selection.x_chosen_size, 32);
     assert_eq!(sel.selection.y_chosen_size, 16);
-    // One revision for the mutation and one for the observation-demand change
-    // from the empty default (synchronize_observation_quantities).
-    assert_eq!(sel.revision, 2);
+    // Reconcile observation demand under the same revision as the API mutation.
+    assert_eq!(sel.revision, 1);
+    assert_eq!(
+        sel.observation_quantities
+            .iter()
+            .filter(|quantity| quantity.as_str() == "H_demag")
+            .count(),
+        1,
+        "the active quantity must have exactly one canonical observation demand"
+    );
     assert_eq!(presentation.colormap, "viridis");
     assert!(!presentation.vector_glyphs);
 }
@@ -27781,9 +27802,8 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
     let inspection = body_json(inspect_response).await;
     assert_eq!(
         inspection["inspection"]["warnings"],
-        serde_json::json!([
-            "archive project document `project/current_live_snapshot.json` has untyped object references; conservative retention required"
-        ])
+        serde_json::json!([]),
+        "the API-generated live snapshot has a typed reachability schema"
     );
 
     fs::remove_dir_all(&source_artifact_dir)
