@@ -274,6 +274,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/workspace/tree/active-node",
   "/v2/workspace/items",
   "/v2/workspace/items/{id}",
+  "/v2/workspace/items/{id}/archive",
   "/v2/workspace/items/{id}/forget",
   "/v2/workspace/items/{id}/history",
   "/v2/workspace/items/{id}/pin",

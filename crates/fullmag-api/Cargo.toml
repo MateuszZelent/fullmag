@@ -84,6 +84,7 @@ axum.workspace = true
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures-core = "0.3"
+crc32fast = "1"
 fullmag-build-info.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -119,3 +120,4 @@ libc = "0.2"
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
 rusqlite = "0.37"
+zip = { version = "2", default-features = false, features = ["deflate"] }

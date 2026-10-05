@@ -213,6 +213,7 @@ import {
   WORKSPACE_ITEM_PIN_PATH,
   WORKSPACE_ROOTS_PATH,
   WORKSPACE_SCAN_PATH,
+  workspaceItemArchiveUrl,
   workspaceItemThumbnailUrl,
   PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH,
   PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH,
@@ -1104,6 +1105,7 @@ export class ControlRoomApi {
         query: limit === undefined ? {} : { limit },
       }),
     thumbnailUrl: (id: string) => workspaceItemThumbnailUrl(this.baseUrl, id),
+    archiveUrl: (id: string) => workspaceItemArchiveUrl(this.baseUrl, id),
     setPinned: (id: string, pinned: boolean, options?: RequestOptions) =>
       this.postJson<unknown, { pinned: boolean }>(
         WORKSPACE_ITEM_PIN_PATH,

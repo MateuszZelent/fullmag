@@ -824,6 +824,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::workspace_items::get_item_thumbnail),
         )
         .route(
+            "/v2/workspace/items/:id/archive",
+            get(handlers::workspace_items::get_item_archive),
+        )
+        .route(
             "/v2/workspace/items/:id/pin",
             post(handlers::workspace_items::pin_item),
         )

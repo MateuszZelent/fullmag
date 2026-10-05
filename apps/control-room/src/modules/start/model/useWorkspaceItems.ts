@@ -171,6 +171,8 @@ export interface WorkspaceItemsController {
     kind?: ApiItemKind,
   ) => Promise<{ readonly item: ApiWorkspaceItem } | { readonly failure: string }>;
   readonly thumbnailUrl: (id: string) => string;
+  /** URL that downloads a result folder as a zip; only result items have one. */
+  readonly archiveUrl: (id: string) => string;
   /** True while a scan is running. */
   readonly scanning: boolean;
 }
@@ -291,8 +293,9 @@ export function useWorkspaceItems(query: WorkspaceItemsQuery = ALL_ITEMS_QUERY):
   );
 
   const thumbnailUrl = useCallback((id: string) => api.workspace.thumbnailUrl(id), [api]);
+  const archiveUrl = useCallback((id: string) => api.workspace.archiveUrl(id), [api]);
 
-  return { state, announcement, refresh: refetch, pin, forget, scan, addByPath, thumbnailUrl, scanning };
+  return { state, announcement, refresh: refetch, pin, forget, scan, addByPath, thumbnailUrl, archiveUrl, scanning };
 }
 
 /**

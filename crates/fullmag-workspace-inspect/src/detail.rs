@@ -208,11 +208,34 @@ schema_type! {
         /// Names read through a literal `os.environ[...]`, `os.environ.get(...)`
         /// or `os.getenv(...)`; never values.
         pub env_reads: Option<Vec<String>>,
-        /// Python syntax is not checked by this reader: always `false`.
+        /// Result of `ast.parse` in the chosen interpreter; `null` when no
+        /// interpreter checked the file.
+        #[serde(default)]
+        pub syntax: Option<ScriptSyntax>,
+        /// Top-level imports that `importlib.util.find_spec` did not find in
+        /// the chosen interpreter (nor next to the script); `null` when not
+        /// checked. This says nothing about the interpreter a run would use.
+        #[serde(default)]
+        pub unresolved_imports: Option<Vec<String>>,
+        /// Python's parser checked the syntax (`ast`, never executed).
         pub syntax_checked: bool,
         /// The facts come from a static line scan, not from Python's parser.
         pub degraded: bool,
         pub degraded_reason: Option<String>,
+    }
+}
+
+schema_type! {
+    /// Outcome of parsing a script with Python's `ast` (never executed).
+    pub struct ScriptSyntax {
+        pub ok: bool,
+        /// 1-based line of the first syntax error.
+        #[serde(default)]
+        pub line: Option<u64>,
+        #[serde(default)]
+        pub column: Option<u64>,
+        #[serde(default)]
+        pub message: Option<String>,
     }
 }
 

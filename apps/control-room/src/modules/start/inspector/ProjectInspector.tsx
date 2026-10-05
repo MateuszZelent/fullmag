@@ -84,6 +84,8 @@ export interface ProjectInspectorProps {
   readonly onOpenResults?: (entry: RecentEntry) => Promise<string | null>;
   /** Selects a result folder in the list (a row of the project's Runs tab). */
   readonly onSelectResult?: (id: string) => void;
+  /** URL that downloads a result folder as a zip (the project's Runs tab). */
+  readonly archiveUrl?: (id: string) => string;
   /** What the HTTP workspace API read from the selected item; idle without it. */
   readonly detail?: WorkspaceItemDetailState;
   readonly onTogglePin: (projectId: string, pinned: boolean) => void;

@@ -1129,6 +1129,7 @@ pub(crate) fn execute_accepted_worker_start(
     let mut storage = prepare_accepted_project_storage(
         &problem,
         store,
+        &accepted,
         accepted_step,
         &receipt_identity,
         &attempt_output_dir,
@@ -1221,6 +1222,13 @@ pub(crate) fn execute_accepted_worker_start(
         let success = execution
             .as_ref()
             .is_ok_and(|result| result.status == RunStatus::Completed);
+        match &execution {
+            Ok(result) if result.status == RunStatus::Cancelled => {
+                storage.note_outcome("cancelled", None)
+            }
+            Err(error) => storage.note_outcome("failed", Some(format!("{error:#}"))),
+            _ => {}
+        }
         storage.finish(success, &storage_attempt_dir)?;
     }
     execution
@@ -1304,6 +1312,7 @@ fn execute_accepted_fem_worker_start(
     let mut storage = prepare_accepted_project_storage(
         &prepared.problem,
         store,
+        accepted,
         accepted_step,
         &receipt_identity,
         &attempt_output_dir,
@@ -1368,6 +1377,13 @@ fn execute_accepted_fem_worker_start(
         let success = execution
             .as_ref()
             .is_ok_and(|result| result.status == RunStatus::Completed);
+        match &execution {
+            Ok(result) if result.status == RunStatus::Cancelled => {
+                storage.note_outcome("cancelled", None)
+            }
+            Err(error) => storage.note_outcome("failed", Some(format!("{error:#}"))),
+            _ => {}
+        }
         storage.finish(success, &storage_attempt_dir)?;
     }
     execution
@@ -1376,15 +1392,24 @@ fn execute_accepted_fem_worker_start(
 fn prepare_accepted_project_storage(
     problem: &fullmag_ir::ProblemIR,
     store: &SessionStore,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
     accepted_step: &AcceptedWorkerStep,
     identity: &WorkerExecutionReceiptIdentity,
     attempt: &Path,
 ) -> Result<Option<crate::accepted_project_storage::AcceptedProjectStorage>> {
+    let manifest = crate::accepted_project_storage::accepted_run_manifest(
+        &accepted.run.specification.snapshot,
+        &accepted_step.resolved_input.requested_execution,
+        &accepted_step.resolved_input.specification_fingerprint,
+        &accepted_step.claim,
+        accepted_step.execution_plan.common.resolved_backend,
+    );
     match crate::accepted_project_storage::AcceptedProjectStorage::prepare(
         problem,
         store,
         &accepted_step.claim,
         &accepted_step.step_id,
+        manifest,
     ) {
         Ok(storage) => Ok(storage),
         Err(error) => {

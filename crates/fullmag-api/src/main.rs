@@ -72,6 +72,7 @@ mod router_v2;
 mod run_intent_persistence;
 mod schemas;
 mod script;
+mod script_check;
 mod session;
 mod session_persistence;
 mod types;

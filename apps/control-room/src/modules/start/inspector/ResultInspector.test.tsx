@@ -8,6 +8,7 @@ import {
   detailAnswer,
   parsedItem,
 } from "../model/__fixtures__/workspaceApi";
+import { RESULTS_DOWNLOAD_FOLDER_MISSING, RESULTS_DOWNLOAD_NO_BACKEND } from "../model/downloadUrl";
 import type { WorkspaceItemDetailState } from "../model/useWorkspaceItems";
 import { parseApiItemDetail, type ResultDetail } from "../model/workspaceApiTypes";
 
@@ -15,6 +16,7 @@ import {
   RESULTS_VIEWER_NEEDS_SOURCE,
   RESULTS_VIEWER_SOURCE_IS_SCRIPT,
   ResultInspector,
+  downloadReason,
   resultFacts,
   viewerRoute,
   type ResultInspectorProps,
@@ -256,6 +258,23 @@ describe("ResultInspector header", () => {
     expect(html).toContain('aria-label="Preview of run-0003"');
   });
 
+  it("labels a source project's preview as such and says what it is in the folder facts", () => {
+    const linked = { ...item, thumbnailOrigin: "source_project" as const };
+    const html = render({ item: linked, thumbnailUrl: (id) => `/t/${id}` });
+    expect(html).toContain("Last result · project preview");
+    expect(html).toContain("stored preview of the source project, not a render of this result");
+    const none = render({ item: { ...item, hasThumbnail: false }, thumbnailUrl: (id) => `/t/${id}` });
+    expect(none).toContain("none: the folder holds no image and its source project has no stored preview");
+    expect(none).not.toContain("project preview");
+  });
+
+  it("offers the folder as a zip, and says why not without a backend or for a missing folder", () => {
+    const archiveUrl = (id: string) => `/a/${id}`;
+    expect(downloadReason(item, archiveUrl)).toBeNull();
+    expect(downloadReason(item, undefined)).toBe(RESULTS_DOWNLOAD_NO_BACKEND);
+    expect(downloadReason({ status: "missing" }, archiveUrl)).toBe(RESULTS_DOWNLOAD_FOLDER_MISSING);
+  });
+
   it("has a placeholder, not a broken image, without a thumbnail", () => {
     const html = render({ item: { ...item, hasThumbnail: false }, thumbnailUrl: (id) => `/t/${id}` });
     expect(html).not.toContain("<img");
@@ -273,7 +292,7 @@ describe("resultFacts", () => {
     const [run, data, where] = resultFacts(apiItem({ id: "x", kind: "result", sizeBytes: 5 }), undefined);
     expect(run).toEqual([]);
     expect(data.map((r) => r.label)).toEqual(["Size"]);
-    expect(where.map((r) => r.label)).toEqual(["First seen"]);
+    expect(where.map((r) => r.label)).toEqual(["Preview", "First seen"]);
   });
 
   it("prefers the detail's total size over the row's", () => {

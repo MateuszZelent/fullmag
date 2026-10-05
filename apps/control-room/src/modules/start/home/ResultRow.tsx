@@ -9,6 +9,8 @@ import { formatBytes, formatOpened, shortenPath } from "../model/recentIndex";
 import { resultChip, resultSourceName } from "../model/resultModel";
 import { displayPath, folderOf } from "../model/scriptRowModel";
 import type { ApiWorkspaceItem } from "../model/workspaceApiTypes";
+import { thumbnailSource } from "../model/workspaceApiAdapters";
+import { ProjectThumb } from "../ui/ProjectThumb";
 import { StatusPill } from "../ui/StatusPill";
 
 export interface ResultRowProps {
@@ -16,6 +18,8 @@ export interface ResultRowProps {
   readonly selected: boolean;
   /** Set by the virtualiser so absolutely positioned rows stay accessible. */
   readonly position?: { readonly index: number; readonly count: number };
+  /** Builds the thumbnail URL; the image is the source project's stored preview, never a render of the result. */
+  readonly thumbnailUrl?: (id: string) => string;
   readonly onSelect: (id: string) => void;
   readonly onActivate: (id: string) => void;
   readonly onTogglePin: (id: string, pinned: boolean) => void;
@@ -25,13 +29,14 @@ export const resultRowDomId = (id: string) => `fm-start-result-${id}`;
 
 /**
  * A result folder in the recent list. It reuses the project row's grid: the
- * folder glyph takes the thumbnail slot, the `.zarr` badge the solver slot, the
+ * source project's stored preview (or, without one, the folder glyph) takes the thumbnail slot, the `.zarr` badge the solver slot, the
  * run status the status slot and the folder's size the size slot.
  */
-function ResultRowImpl({ item, selected, position, onSelect, onActivate, onTogglePin }: ResultRowProps) {
+function ResultRowImpl({ item, selected, position, thumbnailUrl, onSelect, onActivate, onTogglePin }: ResultRowProps) {
   const chip = resultChip(item);
   const path = displayPath(item.path);
   const source = resultSourceName(item);
+  const preview = thumbnailSource(item, thumbnailUrl);
   return (
     <div
       aria-posinset={position ? position.index + 1 : undefined}
@@ -45,9 +50,13 @@ function ResultRowImpl({ item, selected, position, onSelect, onActivate, onToggl
       onDoubleClick={() => onActivate(item.id)}
       role="option"
     >
-      <span aria-hidden="true" className="fm-start-thumb fm-start-thumb--row fm-start-thumb--script">
-        <FolderClosed size={16} />
-      </span>
+      {preview ? (
+        <ProjectThumb size="row" src={preview} status={item.status === "missing" ? "missing" : "ready"} />
+      ) : (
+        <span aria-hidden="true" className="fm-start-thumb fm-start-thumb--row fm-start-thumb--script">
+          <FolderClosed size={16} />
+        </span>
+      )}
       <span className="fm-start-row__main">
         <span className="fm-start-row__name">
           <span className="fm-start-row__name-text">{item.name}</span>

@@ -29,7 +29,7 @@ import {
   InspectorTabs,
   type MenuAction,
 } from "./InspectorParts";
-import { AuthorsPanel, HistoryPanel, RunsPanel } from "./ProvenancePanels";
+import { AuthorsPanel, HistoryPanel, RunsPanel, resultsDownload } from "./ProvenancePanels";
 
 const TABS: readonly { readonly id: InspectorTab; readonly label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -75,6 +75,8 @@ export interface ProjectDetailsProps {
   readonly onForget: (projectId: string) => void;
   /** Selects a result folder in the list (a row of the Runs tab). */
   readonly onSelectResult?: (id: string) => void;
+  /** URL that downloads a result folder as a zip; omitted, the Runs tab says why it cannot. */
+  readonly archiveUrl?: (id: string) => string;
   /** The tab shown first (a deep link, or a test); Overview by default. */
   readonly initialTab?: InspectorTab;
 }
@@ -91,6 +93,7 @@ export function ProjectDetails({
   onTogglePin,
   onForget,
   onSelectResult,
+  archiveUrl,
   initialTab = "overview",
 }: ProjectDetailsProps) {
   const [tab, setTab] = useState<InspectorTab>(initialTab);
@@ -253,7 +256,15 @@ export function ProjectDetails({
               linkedResults={linkedResults}
               onSelectResult={onSelectResult}
               provenance={provenance.provenance}
-              viewer={openResults ? { disabledReason: resultsReason, onOpen: openResults } : undefined}
+              viewer={
+                openResults
+                  ? {
+                      disabledReason: resultsReason,
+                      onOpen: openResults,
+                      download: resultsDownload(linkedResults, archiveUrl),
+                    }
+                  : undefined
+              }
             />
           )
         ) : (

@@ -577,6 +577,7 @@ export function RecentProjects({
         <ResultRow
           item={row.item}
           key={row.key}
+          thumbnailUrl={results.thumbnailUrl}
           onActivate={activateResult}
           onSelect={(id) => startScreenStore.setSelectedResult(id)}
           onTogglePin={(id, pinned) => void pinResult(id, pinned)}
