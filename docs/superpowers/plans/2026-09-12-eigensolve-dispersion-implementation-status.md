@@ -1,3 +1,33 @@
+<!-- runtime233-first-real-attempt-20261005 -->
+## Bieżący checkpoint — #233 PASS, pierwsza próba zatrzymana przed eigensolve
+
+#233 (`9f2a5fa62a0541059447c88165156887`) jest terminal succeeded/exit0;
+29 artefaktów i atestacja runtime-v2 zweryfikowane przez koordynatora.
+Native-build trwał około 37,5 minuty. Pierwszy eksport OpenAPI blokował
+justfile: master i branch zawierały 242 końcowe NUL. Zachowano oryginalne
+bajty w dowodach; usunięto tylko ten ogon, prefix identyczny, parser just PASS.
+Po naprawie managed OpenAPI PASS z input hashes i cleanup potwierdzonymi.
+
+Obie próby nearest GMRES/FGMRES k=+10 rad/um przeszły dry-run. Usunięto
+redundantny --solver-rtol, niedozwolony przez k2-only diagnostic gate;
+niezmienny model ma default1e-8. EPS/KSP1e-9, restart8, L2/trzy warstwy,
+growth1.3 i target11.2GHz zachowane; jedyna różnica to typ KSP.
+GMRES wrapper exit1: powstała siatka 6138 węzłów /30012 tetrahedrów i
+rozpoczęła się relaksacja FEM CPU native. Następnie runtime zgłosił
+unsupported quantity 'magnetization'. Eigensolve nie ruszył; nie ma
+częstotliwości. Kontener potwierdzono verified_absent, wyniki i log zachowane.
+FGMRES nie uruchomiono automatycznie. Trwa trace kontraktu pola, bez
+pomijania zapisu magnetyzacji ani zastępowania modelu prostszym przypadkiem.
+
+CI a86664b30: Python-contracts PASS, generated-api PASS, API hygiene i FDM
+relaxation PASS. Frontend:754 pliki PASS,4 przypadki FAIL oraz9 unhandled
+errors. Zlokalizowano drugi nieosłonięty consumer statusu w AppMenu runtime
+bundle; dodano ten sam guard identity. Dwa prep fixtures czekają teraz na
+potwierdzony scoped revision przed włączeniem loadera, zachowując SSR,
+stale refresh i abort. rDMI test wzmacnia baseline i obecny tekst odmowy.
+Parser/review PASS; wykonanie korekt oczekuje CI. Fizyczny guard bez zmian.
+Pełne S00–S12, shared signed sweep/parity/zbieżność, GUI/A1, S09 i GPU OPEN.
+
 <!-- api-json-fixture-recursion-remediation-20261005 -->
 ## Bieżący checkpoint — materializacja aplikacji PASS, fixture API podzielony
 
