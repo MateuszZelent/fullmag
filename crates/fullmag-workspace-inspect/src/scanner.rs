@@ -146,6 +146,8 @@ pub fn describe(path: &Path, kind: ItemKind) -> Described {
             );
             meta.insert("run_id".into(), json!(detail.run_id));
             meta.insert("status".into(), json!(detail.status));
+            meta.insert("started_at".into(), json!(detail.started_at));
+            meta.insert("finished_at".into(), json!(detail.finished_at));
             meta.insert("format".into(), json!(detail.format));
             meta.insert("frames".into(), json!(detail.frames));
             meta.insert("stages".into(), json!(detail.stages.len()));

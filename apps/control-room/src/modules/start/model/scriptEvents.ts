@@ -156,6 +156,14 @@ const shortTime = (iso: string): string => iso.replace("T", " ").slice(0, 16);
  * it. A folder that carries a run event's id replaces that event's row, so a
  * run is listed once and its row can open the folder.
  */
+
+function secondsBetween(start: string | undefined, end: string | undefined): number | undefined {
+  if (!start || !end) return undefined;
+  const from = Date.parse(start);
+  const to = Date.parse(end);
+  return Number.isFinite(from) && Number.isFinite(to) && to >= from ? (to - from) / 1000 : undefined;
+}
+
 export function scriptRunRows(
   events: readonly ApiWorkspaceEvent[],
   linkedResults: readonly ApiWorkspaceItem[],
@@ -175,7 +183,9 @@ export function scriptRunRows(
       status: chip?.status ?? "draft",
       statusWord: chip?.label || chip?.title || "Result folder",
       startedAt: metaString(item, "started_at") ?? item.firstSeenAt ?? item.modifiedAt,
-      durationSeconds: metaNumber(item, "duration_seconds"),
+      durationSeconds:
+        metaNumber(item, "duration_seconds") ??
+        secondsBetween(metaString(item, "started_at"), metaString(item, "finished_at")),
       outputBytes: item.sizeBytes,
       resultId: item.id,
     });
