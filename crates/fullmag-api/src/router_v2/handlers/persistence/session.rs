@@ -70,11 +70,11 @@ pub async fn commit_session(
     let request = request.map_err(|error| {
         ApiError::bad_request(format!("invalid_session_import_request: {error}"))
     })?;
-    let context = crate::capture_current_live_request_context(&state).await?;
+    let context = crate::capture_optional_current_live_request_context(&state).await?;
     crate::session_persistence::import_session_commit_with_context(
         State(state),
         request,
-        Some(&context),
+        context.as_ref(),
     )
     .await
 }

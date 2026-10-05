@@ -4509,6 +4509,19 @@ pub(crate) async fn capture_current_live_request_context(
     })
 }
 
+/// Like [`capture_current_live_request_context`], but an empty workspace
+/// yields `None` instead of a 404. Used by operations that legitimately start
+/// from no active workspace (for example importing a saved archive after a
+/// restart); there is no live session identity to fence against in that case.
+pub(crate) async fn capture_optional_current_live_request_context(
+    state: &Arc<AppState>,
+) -> Result<Option<CurrentLiveRequestContext>, ApiError> {
+    if state.current_live_state.read().await.is_none() {
+        return Ok(None);
+    }
+    capture_current_live_request_context(state).await.map(Some)
+}
+
 fn non_empty_identity(value: &str) -> Option<String> {
     (!value.trim().is_empty()).then(|| value.to_string())
 }

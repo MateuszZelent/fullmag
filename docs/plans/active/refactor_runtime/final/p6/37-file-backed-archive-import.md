@@ -47,10 +47,28 @@ odrzucane. Traversal katalogów jest iteracyjny, bez rekursji po głębokości
 artifact paths.
 
 Rekordy grafu, w tym nested task/artifact catalog entries, odrzucają nieznane
-pola. Nieprzejrzyste backend `extra`, `integrator_state` i payload integratora
-nie stanowią dowodu pełnego grafu; wymagają typowanego walkera. **Ich capture,
-export lub restore wymagające complete graph mogą być odrzucone.** Typed RNG
-pozostaje rozpoznawany. Pozytywne fixture używają typed RNG; osobna regresja
+pola. Typowane walkery (`typed_documents.rs`) obejmują dwa dokumenty inline:
+
+- `BackendStatePayload` jest typowany tylko, gdy `integrator_state.schema` to
+  znany schemat (`fullmag.fdm.coupled_m3_checkpoint.v1` albo
+  `fullmag.frozen_spins.checkpoint.v1`), `integrator_kind` zgadza się ze
+  schematem, `extra` zawiera wyłącznie marker `checkpoint_schema` tego samego
+  schematu, a drzewo stanu nie zawiera kluczy `ref`/`*_ref`/`*_refs` ani ścieżek
+  `objects/...`. Taki payload nie ma referencji CAS (stan jest inline), więc graf
+  jest kompletny; sam plik payloadu pozostaje retained przez `backend_state_ref`.
+  Nieznany schemat, niezgodny rodzaj, dodatkowy `extra` lub ukryta referencja
+  nadal dają niekompletny graf (fail closed).
+- `project/current_live_snapshot.json` (`PersistedCurrentLiveSnapshot`) jest
+  typowany, gdy ma znany zbiór kluczy najwyższego poziomu i wymagane klucze.
+  Klucze referencyjne (`*_ref`, `*_refs`) muszą wskazywać obiekty CAS, które są
+  wtedy retained i sprawdzane; inna referencja, nieznany klucz lub ścieżka
+  `objects/...` pozostawia graf niekompletny. Dzięki temu eksport Solved
+  przechodzi round-trip `publish_imported_session`/`unpack_fms_staged`.
+
+Nieprzejrzyste payloady integratora (`integrator_state.json`), `asset_index.json`
+i nieznane backend `extra` nadal nie stanowią dowodu pełnego grafu. **Ich
+capture, export lub restore wymagające complete graph mogą być odrzucone.**
+Typed RNG pozostaje rozpoznawany. Pozytywne fixture używają typed RNG; osobna regresja
 przechowuje ukrytą referencję w opaque stanie i oczekuje niekompletności,
 bez zgadywania znaczenia hash-like string.
 
@@ -93,8 +111,10 @@ Odebrać terminalny receipt oraz inventory przypiętego buildu. Następnie wykon
 kwalifikację realnego importu, private-store publication/recovery i peak RAM
 na dużych payloads, po odwołaniu zakazu — wymagane regresje. API upload oraz
 pozostali konsumenci StoreWalker/SolutionSet wymagają osobnego pomiaru.
-Typed restart payload walkers i trwała attestacja actual runtime dla FMR
-pozostają osobnymi otwartymi bramkami P6; nie zastąpiono ich etykietą engine/lane.
+Typowany walker restart payload obejmuje obecnie tylko dwa znane schematy
+inline (coupled M3 i Frozen Spins); osobny plik `integrator_state.json`, FEM/GPU
+payloady i `asset_index.json` pozostają otwarte. Trwała attestacja actual runtime
+dla FMR pozostaje osobną otwartą bramką P6; nie zastąpiono jej etykietą engine/lane.
 
 Rollback może przywrócić adapter pamięciowy z jawnym kosztem RAM, lecz nie może
 przywrócić ignorowania ukrytych referencji ani nadpisywania katalogu docelowego.

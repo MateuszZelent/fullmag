@@ -1644,11 +1644,9 @@ pub(crate) async fn import_session_commit_with_context(
     // Publishing an imported workspace replaces the mutable `current` root.
     // Revalidate the request identity after preflight and keep the transition
     // fence until the replacement and its realtime publication are complete.
-    let _transition = if request_context.is_some() {
-        Some(state.current_live_session_transition.lock().await)
-    } else {
-        None
-    };
+    // An import into an empty workspace has no request context to validate,
+    // but it still must be serialized against other session transitions.
+    let _transition = state.current_live_session_transition.lock().await;
     if let Some(context) = request_context {
         crate::validate_current_live_request_context(&state, context).await?;
     }
