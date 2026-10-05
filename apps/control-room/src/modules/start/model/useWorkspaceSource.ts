@@ -199,8 +199,8 @@ export function useWorkspaceSource(
         : origin === "pending"
           ? ({ kind: "loading" } as const)
           : ({ kind: "unavailable" } as const);
-    return { state, pin: apiPin, forget: apiForget };
-  }, [origin, apiList, apiPin, apiForget]);
+    return { state, pin: apiPin, forget: apiForget, thumbnailUrl };
+  }, [origin, apiList, apiPin, apiForget, thumbnailUrl]);
 
   const workspaceIdOfProject = useMemo(
     () => (projectId: string) => projectWorkspaceIds.get(projectId) ?? null,

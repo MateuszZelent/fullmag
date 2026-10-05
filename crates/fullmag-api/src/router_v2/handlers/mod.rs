@@ -10,4 +10,5 @@ pub mod shared;
 pub mod simulation;
 pub mod visualization;
 pub mod workspace;
+pub mod workspace_archive;
 pub mod workspace_items;

@@ -57,6 +57,20 @@ pub struct WorkspaceItem {
     pub meta: Value,
     /// `GET .../items/{id}/thumbnail` returns a PNG.
     pub has_thumbnail: bool,
+    /// Whose image the thumbnail is; absent without one. A result folder only
+    /// ever shows `source_project`: the stored preview of the project its run
+    /// manifest names (a project preview, not a render of the result).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_origin: Option<WorkspaceThumbnailOrigin>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceThumbnailOrigin {
+    /// The item's own stored preview.
+    Item,
+    /// The stored preview of the project that produced a result folder.
+    SourceProject,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

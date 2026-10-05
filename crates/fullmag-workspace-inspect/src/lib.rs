@@ -25,10 +25,11 @@ mod script_detail;
 pub use detail::{
     Author, Citation, ExecutionSummary, HistoryEntry, ItemDetail, ModelSummary, OutputsSummary,
     PreviewInfo, ProjectDetail, ProjectRun, ProjectSummary, ResultDetail, ResultGrid, ScriptDetail,
+    ScriptSyntax,
 };
 pub use project_detail::inspect_project;
 pub use result_detail::{display_path, inspect_result, is_result_dir, read_layout, Layout};
-pub use script_detail::inspect_script;
+pub use script_detail::{apply_python_inspection, inspect_script};
 
 use fullmag_workspace::{Item, ItemKind};
 

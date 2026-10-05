@@ -715,3 +715,49 @@ fn project_results_link_by_project_id() {
     assert_eq!(linked.len(), 1);
     assert_eq!(linked[0].name, "run1");
 }
+
+#[test]
+fn an_api_project_run_without_a_known_path_links_by_project_id_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("work");
+    let project = work.join("a.fms");
+    write_project(&project, "pid-api", false, None);
+    let other = work.join("b.fms");
+    write_project(&other, "pid-other", false, None);
+    let workspace = open(dir.path());
+    let item_of = |path: &Path| {
+        let receipt =
+            store_observed(&workspace, &describe(path, ItemKind::Project), Actor::Web, false).unwrap();
+        workspace.find(receipt.item_id).unwrap().unwrap()
+    };
+    let (project_item, other_item) = (item_of(&project), item_of(&other));
+    let folder = work.join("results/run-1/step-attempt-1");
+    write_results_folder(&folder, None);
+    let mut manifest = RunManifest::new(
+        "run-1-1",
+        RunSource {
+            kind: "project".into(),
+            path: String::new(),
+            sha256: Some("ab".repeat(32)),
+            project_id: Some("pid-api".into()),
+            revision: Some(4),
+        },
+        "0.1.0",
+        "2026-10-05T10:00:00.000Z",
+    );
+    manifest.launched_by = Some("api".into());
+    write_run_manifest(&folder, &manifest).unwrap();
+    store_observed(&workspace, &describe(&folder, ItemKind::Result), Actor::Web, false).unwrap();
+    assert_eq!(link::linked_results(&workspace, &project_item).unwrap().len(), 1);
+    assert!(link::linked_results(&workspace, &other_item).unwrap().is_empty());
+    let result = workspace
+        .list(&fullmag_workspace::Query {
+            kind: Some(ItemKind::Result),
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap()
+        .remove(0);
+    let source = link::linked_source(&workspace, &result).unwrap().unwrap();
+    assert_eq!(source.project_id.as_deref(), Some("pid-api"));
+}

@@ -24,6 +24,7 @@ use crate::router_v2::handlers::workspace_items::{
 use crate::schemas::workspace_items::{
     ItemDetail, WorkspaceAddRequest, WorkspaceHistoryQuery, WorkspaceItemKind, WorkspaceItemStatus,
     WorkspaceItemsQuery, WorkspaceOpenState, WorkspaceRoot, WorkspaceRootsSource,
+    WorkspaceThumbnailOrigin,
 };
 use fullmag_workspace_inspect::manifest::{write_run_manifest, RunManifest, RunSource};
 use fullmag_workspace_inspect::scanner::ScanOptions;
@@ -230,7 +231,16 @@ fn a_script_detail_carries_static_facts_events_and_linked_results() {
     assert_eq!(script_detail.read_error, None);
     assert_eq!(script_detail.uses_fullmag, Some(true));
     assert_eq!(script_detail.env_reads.as_deref(), Some(&["HOME_DIR".to_string()][..]));
-    assert!(script_detail.degraded && !script_detail.syntax_checked);
+    // Python's parser answers when an interpreter resolves; otherwise the
+    // static scan stays and says why. Either way the two flags agree.
+    if script_detail.syntax_checked {
+        assert!(!script_detail.degraded && script_detail.degraded_reason.is_none());
+        assert_eq!(script_detail.syntax.as_ref().map(|syntax| syntax.ok), Some(true));
+        assert_eq!(script_detail.unresolved_imports, Some(Vec::new()));
+    } else {
+        assert!(script_detail.degraded && script_detail.degraded_reason.is_some());
+        assert!(script_detail.syntax.is_none());
+    }
     assert_eq!(detail.linked_results.len(), 1);
     assert_eq!(detail.linked_results[0].id, result_item.id);
     assert!(detail.linked_source.is_none());
@@ -613,6 +623,7 @@ fn the_openapi_document_describes_every_workspace_route_and_its_detail_union() {
         ("/v2/workspace/items", vec!["get", "post"]),
         ("/v2/workspace/items/{id}", vec!["get"]),
         ("/v2/workspace/items/{id}/thumbnail", vec!["get"]),
+        ("/v2/workspace/items/{id}/archive", vec!["get"]),
         ("/v2/workspace/items/{id}/pin", vec!["post"]),
         ("/v2/workspace/items/{id}/forget", vec!["post"]),
         ("/v2/workspace/items/{id}/history", vec!["get"]),
@@ -633,4 +644,151 @@ fn the_openapi_document_describes_every_workspace_route_and_its_detail_union() {
     assert_eq!(detail["oneOf"].as_array().unwrap().len(), 3);
     // Binary thumbnail response.
     assert!(paths["/v2/workspace/items/{id}/thumbnail"]["get"]["responses"]["200"]["content"]["image/png"].is_object());
+}
+
+// ── result thumbnails ──────────────────────────────────────────────────────
+
+fn write_project_manifest(dir: &Path, project_id: &str) {
+    let mut manifest = RunManifest::new(
+        "run-api-1",
+        RunSource {
+            kind: "project".into(),
+            path: String::new(),
+            sha256: None,
+            project_id: Some(project_id.into()),
+            revision: Some(2),
+        },
+        "0.1.0",
+        "2026-10-05T10:00:00.000Z",
+    );
+    manifest.launched_by = Some("api".into());
+    write_run_manifest(dir, &manifest).unwrap();
+}
+
+#[test]
+fn a_result_shows_only_the_stored_preview_of_its_source_project() {
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    let project = work.join("wall.fms");
+    write_project(&project, "pid-wall", true);
+    let blank = work.join("blank.fms");
+    write_project(&blank, "pid-blank", false);
+    let script = work.join("a.py");
+    write_script(&script, "import fullmag\n");
+
+    let from_project = work.join("from-project.zarr");
+    write_results(&from_project, None);
+    write_project_manifest(&from_project, "pid-wall");
+    let from_blank = work.join("from-blank.zarr");
+    write_results(&from_blank, None);
+    write_project_manifest(&from_blank, "pid-blank");
+    let from_script = work.join("from-script.zarr");
+    write_results(&from_script, Some(&script));
+    let bare = work.join("bare.zarr");
+    write_results(&bare, None);
+
+    let project_item = add(&fixture, &project);
+    add(&fixture, &blank);
+    let linked = add(&fixture, &from_project);
+    let blank_result = add(&fixture, &from_blank);
+    let script_result = add(&fixture, &from_script);
+    let bare_result = add(&fixture, &bare);
+
+    assert!(project_item.has_thumbnail);
+    assert_eq!(project_item.thumbnail_origin, Some(WorkspaceThumbnailOrigin::Item));
+    assert!(linked.has_thumbnail);
+    assert_eq!(linked.thumbnail_origin, Some(WorkspaceThumbnailOrigin::SourceProject));
+    for result in [&blank_result, &script_result, &bare_result] {
+        assert!(!result.has_thumbnail && result.thumbnail_origin.is_none(), "{}", result.name);
+        assert_eq!(thumbnail_at(&fixture.db, &result.id).unwrap_err().status, StatusCode::NOT_FOUND);
+    }
+    assert_eq!(thumbnail_at(&fixture.db, &linked.id).unwrap().png, PNG.to_vec());
+
+    let list = list_items_at(&fixture.db, &query("result")).unwrap();
+    let flagged: Vec<(&str, bool)> = list
+        .items
+        .iter()
+        .map(|item| (item.name.as_str(), item.has_thumbnail))
+        .collect();
+    assert!(flagged.contains(&("from-project", true)));
+    assert!(flagged.contains(&("from-script", false)));
+}
+
+// ── syntax check and archive ───────────────────────────────────────────────
+
+#[test]
+fn a_script_detail_reports_syntax_and_unresolved_imports_from_the_parser() {
+    if fullmag_runtime_control::python_runtime::resolve_interpreter(&crate::script::repo_root()).is_err() {
+        eprintln!("no Python interpreter; skipped");
+        return;
+    }
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    let good = work.join("good.py");
+    write_script(&good, "import fullmag
+import no_such_module_for_the_check
+");
+    let bad = work.join("bad.py");
+    write_script(&bad, "import fullmag
+x = (
+");
+    let good_item = add(&fixture, &good);
+    let bad_item = add(&fixture, &bad);
+
+    let ItemDetail::Script(good_detail) = get_item_at(&fixture.db, &good_item.id).unwrap().detail else {
+        panic!("expected a script detail");
+    };
+    assert!(good_detail.syntax_checked && !good_detail.degraded);
+    assert_eq!(good_detail.unresolved_imports, Some(vec!["no_such_module_for_the_check".to_string()]));
+
+    let ItemDetail::Script(bad_detail) = get_item_at(&fixture.db, &bad_item.id).unwrap().detail else {
+        panic!("expected a script detail");
+    };
+    let syntax = bad_detail.syntax.expect("syntax result");
+    assert!(!syntax.ok && syntax.line.is_some());
+    assert!(bad_detail.syntax_checked && bad_detail.degraded);
+}
+
+#[tokio::test]
+async fn a_result_folder_downloads_as_a_zip_and_other_items_do_not() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    std::env::set_var("FULLMAG_STATE_DIR", fixture.dir.path().join("state"));
+    let results = work.join("wall.zarr");
+    write_results(&results, None);
+    let script = work.join("a.py");
+    write_script(&script, "import fullmag
+");
+    let result_item = add(&fixture, &results);
+    let script_item = add(&fixture, &script);
+    let app = build_v2_router().with_state(test_app_state());
+
+    let ok = call(&app, Method::GET, &format!("/v2/workspace/items/{}/archive", result_item.id), None, &[]).await;
+    assert_eq!(ok.status(), StatusCode::OK);
+    assert_eq!(ok.headers()[header::CONTENT_TYPE], "application/zip");
+    assert_eq!(
+        ok.headers()[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"wall.zip\""
+    );
+    let bytes = body_bytes(ok).await;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut names: Vec<String> = (0..archive.len())
+        .map(|index| archive.by_index(index).unwrap().name().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![".zattrs", ".zgroup", "artifacts/metadata.json", "artifacts/scalars.csv"]
+    );
+
+    let not_result = call(&app, Method::GET, &format!("/v2/workspace/items/{}/archive", script_item.id), None, &[]).await;
+    assert_eq!(not_result.status(), StatusCode::BAD_REQUEST);
+    let unknown = call(&app, Method::GET, "/v2/workspace/items/987654/archive", None, &[]).await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+
+    fs::remove_dir_all(&results).unwrap();
+    let missing = call(&app, Method::GET, &format!("/v2/workspace/items/{}/archive", result_item.id), None, &[]).await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    std::env::remove_var("FULLMAG_STATE_DIR");
 }

@@ -2272,7 +2272,8 @@ counters are numbers, Windows paths never carry the `\\?\` prefix.
 |---|---|
 | `GET /v2/workspace/items?kind=all\|project\|script\|result&sort=last_used\|name\|modified\|use_count&search=&limit=&include_missing=` | list; `all` is every kind; limit 1 to 1000 (default 200); pinned first |
 | `GET /v2/workspace/items/{id}` | item plus the facts read from its file now |
-| `GET /v2/workspace/items/{id}/thumbnail` | `image/png`, `ETag`, `304` on `If-None-Match`, `404` without a preview |
+| `GET /v2/workspace/items/{id}/thumbnail` | `image/png`, `ETag`, `304` on `If-None-Match`, `404` without a preview. A project serves its stored preview; a result serves the stored preview of the project named in its run manifest (`thumbnail_origin: source_project`), never a render of the result |
+| `GET /v2/workspace/items/{id}/archive` | result folders only: the folder as a streamed zip (`application/zip`, `Content-Disposition: attachment`, binary, no `Content-Length`). 400 not a result, 404 unknown/forgotten/missing, 409 `workspace_archive_link` (symlink, junction or non-UTF-8 name inside), 413 `workspace_archive_too_large` (over 2 GiB or 60 000 files); refusals come before the first byte, a failure mid-stream aborts the connection |
 | `POST /v2/workspace/items/{id}/pin` `{pinned}` | returns the item |
 | `POST /v2/workspace/items/{id}/forget` | `{id, forgotten: true}`; the file is untouched |
 | `GET /v2/workspace/items/{id}/history?limit=` | events, newest first (limit 1 to 500, default 100) |
@@ -2283,7 +2284,7 @@ counters are numbers, Windows paths never carry the `\\?\` prefix.
 `WorkspaceItem`: `{id, kind: project|script|result, path, name, project_id?,
 first_seen_at, last_used_at, use_count, pinned, status:
 ready|missing|failed|migrate|readonly, size_bytes?, modified_at?, meta,
-has_thumbnail}`. `status` is checked against the file system on every request,
+has_thumbnail, thumbnail_origin?: item|source_project}`. `status` is checked against the file system on every request,
 so a deleted file reads `missing` without a database write.
 
 List response: `{items, outcome: {state: ready|created|migrated|quarantined|
@@ -2305,9 +2306,16 @@ or project of a result folder. `detail` is a union tagged by `kind`:
 - `script`: `read_error?`, `sha256`, `bytes`, `lines`, `encoding`
   (`utf-8|utf-8-bom|other`), `truncated`, `summary`, `uses_fullmag`, `imports[]`
   (top-level names), `env_reads[]` (literal names, never values),
-  `syntax_checked: false`, `degraded: true`, `degraded_reason`. This is a
-  bounded static scan, not `fullmag script inspect` (which needs a Python
-  interpreter and lives in a binary crate); nothing is executed.
+  `syntax? {ok, line?, column?, message?}`, `unresolved_imports?[]`,
+  `syntax_checked`, `degraded`, `degraded_reason?`. It starts as a bounded
+  static scan (`syntax_checked: false`, `degraded: true`). When a Python
+  interpreter resolves (the one `fullmag script inspect` uses) the never-executing
+  helper `inspect-script` (`ast` and `find_spec` of top-level names) runs with a
+  5 second deadline and fills `syntax`, `unresolved_imports` (names not found by
+  that interpreter), `imports` and `env_reads`, with `syntax_checked: true`,
+  `degraded: false`; a syntax error keeps `degraded: true`. Any failure keeps
+  the static scan and says why in `degraded_reason`. The script is never
+  executed; results are cached by content digest and folder.
 - `result`: `read_error?`, `format`, `has_manifest`, `run_id`, `status`,
   `source {kind, path, sha256?, project_id?, revision?}`, `started_at`,
   `finished_at`, `stages[{id, kind, steps, time_s}]`, `quantities[]`, `grid

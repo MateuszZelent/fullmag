@@ -174,9 +174,10 @@ export function scriptChecks(script: ScriptDetail): KvRow[] {
       ? "No syntax errors"
       : `Error${script.syntax.line !== undefined ? ` at line ${script.syntax.line}` : ""}${script.syntax.message ? `: ${script.syntax.message}` : ""}`
     : undefined;
+  // "Not found" is relative to the interpreter the backend chose: a run may use another.
   const imports = script.unresolvedImports
     ? script.unresolvedImports.length === 0
-      ? "All resolve"
+      ? "All found by the interpreter"
       : chipList(script.unresolvedImports)
     : script.imports
       ? script.imports.length === 0
@@ -190,8 +191,14 @@ export function scriptChecks(script: ScriptDetail): KvRow[] {
     : undefined;
   return [
     ...kvRowOrUnavailable("Syntax", syntax),
-    ...kvRowOrUnavailable(script.unresolvedImports ? "Unresolved imports" : "Imports", imports),
+    ...kvRowOrUnavailable(
+      script.unresolvedImports ? "Imports not found" : script.syntaxChecked ? "Imports" : "Imports (line scan)",
+      imports,
+    ),
     ...kvRowOrUnavailable("Environment reads", env),
+    ...(script.degraded && script.degradedReason
+      ? [{ label: "Checked by", value: <span title={script.degradedReason}>line scan only</span> }]
+      : []),
   ];
 }
 

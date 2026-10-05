@@ -11,7 +11,7 @@ import type { ContinueSession } from "../model/types";
 import type { WorkspaceItemDetailState } from "../model/useWorkspaceItems";
 
 import { ProjectDetails, type ProjectDetailsProps } from "./ProjectDetails";
-import { RESULTS_DOWNLOAD_UNAVAILABLE } from "./ProvenancePanels";
+import { RESULTS_DOWNLOAD_NO_BACKEND, RESULTS_DOWNLOAD_NO_FOLDER } from "../model/downloadUrl";
 
 const rawProject = {
   ...RAW_API_ITEM,
@@ -228,14 +228,33 @@ describe("ProjectDetails Runs tab", () => {
     expect(html).not.toContain("same-run");
   });
 
-  it("offers Open results viewer beside a download button that says it is not available yet", () => {
-    const html = render({ detail: ready(), initialTab: "runs", onOpenResults: vi.fn() });
+  it("offers Open results viewer beside a download of the newest linked folder as a zip", () => {
+    const html = render({
+      detail: ready(),
+      initialTab: "runs",
+      onOpenResults: vi.fn(),
+      archiveUrl: (id) => `http://host/v2/workspace/items/${id}/archive`,
+    });
     const open = button(html, "open-results-viewer");
     expect(open).not.toContain(' disabled=""');
     const download = button(html, "download-results");
-    expect(download).toContain(' disabled=""');
-    expect(download).toContain(`title="${RESULTS_DOWNLOAD_UNAVAILABLE}"`);
+    expect(download).not.toContain(' disabled=""');
+    expect(download).toContain('title="Download the newest result folder as a zip"');
     expect(html).toContain('aria-label="Download results"');
+  });
+
+  it("says why the download is off: no backend, or no linked folder", () => {
+    const withoutBackend = render({ detail: ready(), initialTab: "runs", onOpenResults: vi.fn() });
+    const off = button(withoutBackend, "download-results");
+    expect(off).toContain(' disabled=""');
+    expect(off).toContain(`title="${RESULTS_DOWNLOAD_NO_BACKEND}"`);
+    const none = render({
+      detail: ready(RAW_API_PROJECT_DETAIL, []),
+      initialTab: "runs",
+      onOpenResults: vi.fn(),
+      archiveUrl: (id) => `http://host/archive/${id}`,
+    });
+    expect(button(none, "download-results")).toContain(`title="${RESULTS_DOWNLOAD_NO_FOLDER}"`);
   });
 
   it("disables the viewer, with the reason, when the project cannot be opened", () => {

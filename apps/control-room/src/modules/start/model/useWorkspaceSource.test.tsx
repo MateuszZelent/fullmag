@@ -41,6 +41,7 @@ function makeWorkspace(state: WorkspaceApiListState): WorkspaceItemsController {
     scan: vi.fn(async () => ({ report: { scanned: 1, added: 0, updated: 0, missing: 0, skipped: 0, warnings: [] } })),
     addByPath: vi.fn(async (path: string) => ({ item: apiItem({ id: "added", kind: "script", name: "added", path }) })),
     thumbnailUrl: (id: string) => `/thumb/${id}`,
+    archiveUrl: (id: string) => id,
     scanning: false,
   };
 }

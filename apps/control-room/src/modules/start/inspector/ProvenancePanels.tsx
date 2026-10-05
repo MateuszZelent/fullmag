@@ -5,6 +5,12 @@ import { useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
 
+import {
+  RESULTS_DOWNLOAD_FOLDER_MISSING,
+  RESULTS_DOWNLOAD_NO_BACKEND,
+  RESULTS_DOWNLOAD_NO_FOLDER,
+  startDownload,
+} from "../model/downloadUrl";
 import { formatBytes, formatOpened } from "../model/recentIndex";
 import { resultChip } from "../model/resultModel";
 import { metaNumber, metaString, type ApiWorkspaceItem } from "../model/workspaceApiTypes";
@@ -139,9 +145,30 @@ export interface RunsViewer {
   /** Why "Open results viewer" is disabled; null when it can run. */
   readonly disabledReason: string | null;
   readonly onOpen: () => void;
+  readonly download: RunsDownload;
 }
 
-export const RESULTS_DOWNLOAD_UNAVAILABLE = "Downloading results is not available yet";
+export interface RunsDownload {
+  /** The zip of the newest linked result folder; null with the reason it cannot be offered. */
+  readonly href: string | null;
+  readonly reason: string | null;
+}
+
+/**
+ * The download of a project's Runs tab is the newest linked result folder as a
+ * zip (`GET /v2/workspace/items/{id}/archive`); linked folders arrive newest
+ * first. A folder that is missing is skipped, not offered.
+ */
+export function resultsDownload(
+  linkedResults: readonly ApiWorkspaceItem[],
+  archiveUrl: ((id: string) => string) | undefined,
+): RunsDownload {
+  if (!archiveUrl) return { href: null, reason: RESULTS_DOWNLOAD_NO_BACKEND };
+  if (linkedResults.length === 0) return { href: null, reason: RESULTS_DOWNLOAD_NO_FOLDER };
+  const folder = linkedResults.find((item) => item.status !== "missing");
+  if (!folder) return { href: null, reason: RESULTS_DOWNLOAD_FOLDER_MISSING };
+  return { href: archiveUrl(folder.id), reason: null };
+}
 
 /**
  * The Runs tab of the sketch: Run | Started | Duration | Output, then Open
@@ -215,9 +242,12 @@ export function RunsPanel({
           <Button
             aria-label="Download results"
             data-action="download-results"
-            disabled
+            disabled={viewer.download.href === null}
+            onClick={() => {
+              if (viewer.download.href) startDownload(viewer.download.href);
+            }}
             size="icon"
-            title={RESULTS_DOWNLOAD_UNAVAILABLE}
+            title={viewer.download.reason ?? "Download the newest result folder as a zip"}
             type="button"
             variant="secondary"
           >

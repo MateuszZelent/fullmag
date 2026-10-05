@@ -75,6 +75,8 @@ export interface WorkspaceResultsView {
   readonly state: WorkspaceResultsState;
   readonly pin: (id: string, pinned: boolean) => Promise<string | null>;
   readonly forget: (id: string) => Promise<string | null>;
+  /** Builds a thumbnail URL; a result shows only its source project's stored preview. */
+  readonly thumbnailUrl?: (id: string) => string;
 }
 
 export const itemsOfKind = (

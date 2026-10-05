@@ -27,7 +27,10 @@ pub const MAX_RUN_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub struct RunSource {
     /// `script` or `project`.
     pub kind: String,
-    /// Absolute path as the user would type it (no `\\?\` prefix).
+    /// Absolute path as the user would type it (no `\\?\` prefix). Empty when
+    /// the producer does not know the file (accepted project runs record the
+    /// project id and revision instead).
+    #[serde(default)]
     pub path: String,
     /// SHA-256 of the script bytes (or of the archive) when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,6 +95,9 @@ pub struct RunManifest {
     pub launched_by: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Digest of the accepted run specification (project runs only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_spec_sha256: Option<String>,
 }
 
 impl RunManifest {
@@ -117,6 +123,7 @@ impl RunManifest {
             fullmag_version: fullmag_version.into(),
             launched_by: None,
             session_id: None,
+            run_spec_sha256: None,
         }
     }
 }

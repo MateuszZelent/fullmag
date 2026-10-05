@@ -46,7 +46,16 @@ export interface ApiWorkspaceItem {
   /** Kind specific facts; read through the accessors below, never assumed. */
   readonly meta: Readonly<Record<string, unknown>>;
   readonly hasThumbnail: boolean;
+  /**
+   * Whose image the thumbnail is. A result folder only ever shows
+   * `source_project`: the stored preview of the project that produced it, not
+   * a render of the result.
+   */
+  readonly thumbnailOrigin?: ApiThumbnailOrigin;
 }
+
+export type ApiThumbnailOrigin = "item" | "source_project";
+const THUMBNAIL_ORIGINS: readonly ApiThumbnailOrigin[] = ["item", "source_project"];
 
 export interface ApiWorkspaceList {
   readonly items: readonly ApiWorkspaceItem[];
@@ -121,6 +130,10 @@ export interface ScriptDetail {
   readonly imports?: readonly string[];
   /** False when the backend did not parse the script: syntax is then "not checked". */
   readonly syntaxChecked?: boolean;
+  /** The facts come from a line scan, not from Python's parser. */
+  readonly degraded?: boolean;
+  /** Why Python did not (fully) check the file; present only with `degraded`. */
+  readonly degradedReason?: string;
   readonly envReads?: readonly string[];
   readonly lastRun?: WorkspaceLastRun;
   readonly readError?: string;
@@ -247,6 +260,7 @@ export function parseApiWorkspaceItem(value: unknown): ApiWorkspaceItem | null {
     modifiedAt: str(value.modified_at),
     meta: isRecord(value.meta) ? value.meta : {},
     hasThumbnail: value.has_thumbnail === true,
+    thumbnailOrigin: THUMBNAIL_ORIGINS.find((origin) => origin === value.thumbnail_origin),
   };
 }
 
@@ -353,9 +367,12 @@ function parseScriptDetail(value: Raw): ScriptDetail {
     summary: str(value.summary),
     usesFullmag: bool(value.uses_fullmag),
     syntax,
-    unresolvedImports: strings(imports?.unresolved),
+    // The API sends `unresolved_imports`; the CLI inspect document nests it.
+    unresolvedImports: strings(value.unresolved_imports) ?? strings(imports?.unresolved),
     imports: Array.isArray(value.imports) ? strings(value.imports) : undefined,
     syntaxChecked: bool(value.syntax_checked),
+    degraded: bool(value.degraded),
+    degradedReason: str(value.degraded_reason),
     envReads: strings(value.env_reads),
     lastRun: parseLastRun(value.last_run),
     readError: str(value.read_error),
