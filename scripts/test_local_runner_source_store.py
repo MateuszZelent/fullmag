@@ -378,5 +378,23 @@ class LocalRunnerSourceStoreTests(unittest.TestCase):
                 self.assertEqual(first_metadata.st_mode & 0o777, 0o444)
 
 
+class SourceCopyDiagnosticsTests(unittest.TestCase):
+    def test_copy_failure_keeps_system_error_in_operator_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input"
+            source.write_bytes(b"immutable source")
+            original = source.read_bytes()
+            store = source_store.SourceContentStore(root / "store")
+            failure = OSError(5, "Input/output error")
+            with patch.object(source_store.os, "fsync", side_effect=failure):
+                with self.assertRaises(source_store.SourceContentStoreError) as raised:
+                    store._copy_to_temporary(source, root / "temporary", digest=hashlib.sha256(original).hexdigest(), size=len(original))
+            self.assertIn("errno=5", str(raised.exception))
+            self.assertIn("Input/output error", str(raised.exception))
+            self.assertIs(raised.exception.__cause__, failure)
+            self.assertEqual(source.read_bytes(), original)
+
+
 if __name__ == "__main__":
     unittest.main()

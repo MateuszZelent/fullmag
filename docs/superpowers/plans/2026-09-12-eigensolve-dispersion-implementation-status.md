@@ -1,3 +1,25 @@
+<!-- storage-production-and-master-d429-checkpoint-20261005 -->
+## Aktualny checkpoint — cleanup PASS, kompakcja częściowa, nowy master
+
+Execution #187/#188: terminalne succeeded, 879 901 764 bajtów logicznych
+usuniętych. Po operacji 28 artefaktów, manifesty/receipty i oba pełne logi
+przeszły kontrolę integralności; live UI potwierdza reload i disabled reapply.
+To postęp storage, bez nowych wyników solvera ani zamknięcia S00–S12.
+
+Kompakcja dwóch historycznych kapsuł zakończyła się partial po 545 konwersjach
+pierwszej kapsuły i timeoutcie Docker dla drugiej. Verify_source 14 991 plików
+oraz oba manifesty/digesty PASS. Przyczyna I/O pozostaje do diagnozy;
+SourceStore zachowuje teraz errno w komunikacie (10/10 regresji PASS).
+Wdrożono validating i czytnik metadanych; legacy runtime inventory NOT VERIFIED.
+
+Pobrano master d4292406e7ae3f8f3e8a82b0ece88df8e13dcd6c. PR97 jest
+OPEN/CONFLICTING. Preview merge-tree wskazał OpenAPI JSON, fullmag-ir/lib.rs
+oraz fullmag-session/reachability.rs; właściwego merge nie rozpoczęto.
+Następna integracja ma zachować parallel_execution i execution_profile,
+typed live snapshot i konserwatywną klasyfikację GC; generated API wymaga
+późniejszego managed eksportu. Diagnostyka storage, nauka, GUI/A1 i pozostałe
+bramki pozostają otwarte. Starsze checkpointy poniżej są historyczne.
+
 <!-- storage-retention-runtime232-checkpoint-20261005 -->
 ## Aktualny checkpoint — runtime #232 i naprawa retencji storage
 
@@ -3957,7 +3979,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
 | S10 — interakcje | W TRAKCIE | Ku tangent terms i canonical/raw artifact v8/v7 mają implementację źródłową; guard/runtime i pełna kwalifikacja nadal otwarte. DMI, surface terms, niejednorodność, seam transport i damping `include` wymagają odpowiednich implementacji i walidacji bez osłabiania capability guards. |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
-| S12 — kwalifikacja i integracja | W TRAKCIE | Master eae25cc scalony jako 79a9dcb8, poprawki PBC/nazwy wyników 3da4b53d wysłane. Runtime #232 succeeded/0; aktualna ścisła kontrola 29 artefaktów PASS. Poprawki retencji archiwów i tożsamości mountów wysłane i wdrożone w koordynatorze. PR97 pozostaje OPEN; science/browser, wymagane review/CI, merge PR, main fast-forward i kontrolowany cleanup nadal OPEN. |
+| S12 — kwalifikacja i integracja | W TRAKCIE | Master eae25cc scalony jako 79a9dcb8, poprawki PBC/nazwy wyników 3da4b53d wysłane. Runtime #232 succeeded/0; aktualna ścisła kontrola 29 artefaktów PASS. Poprawki retencji archiwów i tożsamości mountów wysłane i wdrożone w koordynatorze. PR97 pozostaje OPEN/CONFLICTING względem nowego mastera d4292406; preview wskazał trzy konflikty. Aktualna integracja, science/browser, wymagane review/CI, merge PR, main fast-forward i kontrolowany cleanup nadal OPEN. |
 
 ## Zweryfikowane warunki wykonania
 

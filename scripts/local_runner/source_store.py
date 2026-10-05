@@ -267,8 +267,11 @@ class SourceContentStore:
         except SourceContentStoreError:
             raise
         except OSError as error:
+            errno_detail = f", errno={error.errno}" if error.errno is not None else ""
+            detail = error.strerror or str(error)
             raise SourceContentStoreError(
-                f"cannot copy capture-stage file into content store: {source}"
+                f"cannot copy capture-stage file into content store: {source} "
+                f"({type(error).__name__}{errno_detail}: {detail})"
             ) from error
         if (
             _identity(source_metadata) != _identity(after)

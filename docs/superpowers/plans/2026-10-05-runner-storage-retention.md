@@ -1,6 +1,8 @@
 # Runner: retencja kopii roboczych, źródeł i runtime
 
-Status: implementacja rozpoczęta. Priorytet użytkownika z 2026-10-05 przed
+Status: wykonawcy wdrożeni; kontrolowana partia execution PASS. Historyczna
+kompakcja ma częściowy błąd; retencja runtime czeka na certyfikację odwołań.
+Priorytet użytkownika z 2026-10-05 przed
 dalszymi obliczeniami dyspersji. Bazowy commit:
 `3da4b53d16bf3bbf57c6dde3c0f7541e17e9442c`.
 
@@ -8,7 +10,7 @@ dalszymi obliczeniami dyspersji. Bazowy commit:
 
 Zatrzymać narastanie jednorazowych danych, zachowując wejścia, wyniki naukowe,
 manifesty, logi, receipty i runtime potrzebny do odtworzenia wyników.
-Pracujemy w istniejącym worktree eigensolve. Aktywny build #232 i jego kapsuła
+Pracujemy w istniejącym worktree eigensolve. Build #232 zakończył się succeeded; jego pakiet i kapsuła
 pozostają chronione. Zakaz kompilowania testów jednostkowych pozostaje w mocy;
 regresje tego etapu są interpretowanymi testami Pythona.
 
@@ -260,3 +262,31 @@ Odczytowa próbka produkcyjna: pięć plików, sześć referencji, wszystkie job
 To nadal nie certyfikuje historycznej kompletności: rejestr odwołań nie istnieje,
 nie ustawiono legacy_inventory_complete i nie wykonano runtime prune.
 Kod oraz postęp validating wymagają następnego wdrożenia po terminalnym apply.
+
+
+### Produkcyjny odbiór execution i częściowa kompakcja — 2026-10-05
+
+- Apply `plan-80a5b6851af941fbb2fd98ac2c417b08` zakończył się succeeded/applied.
+  Usunięto wyłącznie execution #187/#188: 879 901 764 bajtów logicznych.
+  Po operacji potwierdzono brak obu katalogów, 28 hashy artefaktów, cztery
+  niezmienione hashe manifestów/receiptów i dwa pełne logi. Fizycznego odzysku
+  nie przypisano na podstawie delty wolnego miejsca wspólnego dysku.
+- Live Chromium: wynik succeeded, oba deleted, reapply disabled, ten sam ID
+  po reload, brak page errors. To produkcyjny dowód R1 i części R4/R5;
+  szerokie partie i automatyczny soak pozostają osobnym etapem.
+- Wdrożono commit 9e30e185430957c24c8bf2c1470c72e922728968, obraz
+  sha256:69422110f29c0897e9872ae9f6227e9c9fc34e6d640774268c8e012b81cf0814.
+  Cztery moduły mają zgodne SHA256 w obrazie; zachowano siedem profili i kolejkę.
+- Source apply `plan-dcfc84d9c56a4d13a64906c1a6f3a815` zakończył się partial.
+  Pierwsza kapsuła przekonwertowała 545 plików, następnie zapisano partial_failure
+  po błędzie copy-to-CAS dla BottomUtilityDock.tsx (12 769 B). Drugą kapsułę
+  zachowano po timeoutcie Dockera. Nie ponowiono starego operation ID.
+- Reconciliation: pełny verify_source obu kapsuł, 14 991 plików PASS;
+  oba manifesty i digesty zgodne. Przyczyna I/O pozostaje nieustalona.
+  Odczyt hosta/runnera po operacji pokazał ok. 45,7 GB wolnego; nie dowodzi
+  to dostępnego miejsca w chwili wcześniejszego błędu.
+- SourceStore error zawiera teraz typ/errno/strerror przy zachowanej cause,
+  zamiast ukrywać powód za ogólnym copy error. Source store 10/10 PASS;
+  jest to poprawka diagnostyki, nie dowód naprawy produkcyjnego I/O.
+- Pojedynczy diagnostyczny copy probe na bind mouncie pozostaje obserwowany
+  przez uchwyt procesu; nie jest powtórzeniem source apply ani kwalifikacją.
