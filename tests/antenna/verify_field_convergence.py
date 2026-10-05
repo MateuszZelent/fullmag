@@ -32,15 +32,29 @@ def finite_wire_field(start, end, point):
     return tuple(factor * value for value in cross), math.sqrt(radius_squared)
 
 
-def read_vectors(root, reference, expected_unit):
+def is_link(path):
+    return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
+
+
+def read_vectors(directory, prefix, reference, expected_unit):
     if (reference.get("scalar_type"), reference.get("layout"), reference.get("unit")) != (
         "float64_le", "sample_xyz_interleaved", expected_unit
     ):
         raise ValueError("unexpected payload type, layout, or unit")
-    relative = Path(reference["path"])
-    path = (root / relative).resolve()
-    if relative.is_absolute() or not path.is_relative_to(root.resolve()):
-        raise ValueError("payload path escapes artifact root")
+    logical = reference["path"]
+    if not isinstance(logical, str) or "\\" in logical or ":" in logical:
+        raise ValueError("invalid payload path")
+    parts = logical.split("/")
+    if (len(parts) <= len(prefix) or tuple(parts[:len(prefix)]) != prefix
+            or any(part in ("", ".", "..") for part in parts)):
+        raise ValueError("payload path does not belong to the selected solution")
+    path = directory
+    for part in parts[len(prefix):]:
+        path /= part
+        if is_link(path):
+            raise ValueError("payload path contains a link")
+    if not path.resolve().is_relative_to(directory.resolve()):
+        raise ValueError("payload path escapes the selected revision")
     payload = path.read_bytes()
     if hashlib.sha256(payload).hexdigest() != reference["sha256"]:
         raise ValueError(f"payload hash mismatch: {path}")
@@ -54,12 +68,35 @@ def read_vectors(root, reference, expected_unit):
 
 
 def read_solution(manifest_path, port_mode_id):
-    manifest_path = Path(manifest_path).resolve()
+    manifest_path = Path(manifest_path).absolute()
+    directory = manifest_path.parent
+    if (directory.parent.name == "field_solutions"
+            and directory.parent.parent.name == "antenna"):
+        solution_directory = directory
+    elif (directory.parent.parent.name == "field_solutions"
+          and directory.parent.parent.parent.name == "antenna"):
+        solution_directory = directory.parent
+    else:
+        raise ValueError("unsupported antenna manifest layout")
+    if manifest_path.name != "manifest.v1.json":
+        raise ValueError("unsupported antenna manifest filename")
+    for path in (manifest_path, directory, solution_directory,
+                 solution_directory.parent, solution_directory.parent.parent):
+        if is_link(path):
+            raise ValueError("antenna manifest path contains a link")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != "antenna_field_solution.v1" or manifest.get("status") != "ready":
         raise ValueError(f"not a ready antenna field solution: {manifest_path}")
-    root = manifest_path.parents[3]
-    positions = read_vectors(root, manifest["sample_positions"], "m")
+    for key in ("solution_id", "asset_id"):
+        value = manifest.get(key)
+        if (not isinstance(value, str) or not value.strip() or value in (".", "..")
+                or any(character in value for character in ("/", "\\", ":"))):
+            raise ValueError(f"invalid manifest identity: {key}")
+    if (manifest["solution_id"] != solution_directory.name
+            or (directory != solution_directory and manifest["asset_id"] != directory.name)):
+        raise ValueError("manifest identity does not match the selected directory")
+    prefix = ("antenna", "field_solutions", manifest["solution_id"])
+    positions = read_vectors(directory, prefix, manifest["sample_positions"], "m")
     bases = [basis for basis in manifest["bases"] if basis["port_mode_id"] == port_mode_id]
     if len(bases) != 1 or bases[0].get("normalization_current_a") != 1.0:
         raise ValueError("expected exactly one basis normalized to 1 A")
@@ -71,7 +108,7 @@ def read_solution(manifest_path, port_mode_id):
             or not isinstance(diagnostics.get("maximum_pair_error_apm"), (int, float))
             or not math.isfinite(diagnostics["maximum_pair_error_apm"])):
         raise ValueError("field lacks a converged quadrature certificate")
-    field = read_vectors(root, basis["magnetic_field_per_ampere"], "A/m/A")
+    field = read_vectors(directory, prefix, basis["magnetic_field_per_ampere"], "A/m/A")
     if len(positions) != len(field):
         raise ValueError("field and sample positions have different lengths")
     return positions, field
