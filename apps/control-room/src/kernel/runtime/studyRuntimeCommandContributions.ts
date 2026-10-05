@@ -725,6 +725,15 @@ function restoreCheckpointDisabledReason(context: CommandContext): string | null
   return null;
 }
 
+/** Deleting is never implicit: the caller names the checkpoint to discard. */
+function discardCheckpointDisabledReason(context: CommandContext): string | null {
+  const apiReason = disabledWithoutApi(context);
+  if (apiReason) return apiReason;
+  return resolveCheckpointIdInput(context.input) === null
+    ? "No checkpoint is selected."
+    : null;
+}
+
 function exportStateDisabledReason(context: CommandContext): string | null {
   return disabledWithoutApi(context);
 }
@@ -2407,6 +2416,41 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
 
       return {
         message: "Checkpoint restored.",
+        status: "completed",
+      };
+    },
+  },
+  {
+    id: "study.discard-checkpoint",
+    title: "Discard Checkpoint",
+    category: "Study",
+    group: "study-recovery",
+    scope: "runtime",
+    isEnabled: (context) => discardCheckpointDisabledReason(context) === null,
+    disabledReason: discardCheckpointDisabledReason,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const checkpointId = resolveCheckpointIdInput(context.input);
+      if (!checkpointId) {
+        return { message: "No checkpoint is selected.", status: "failed" };
+      }
+
+      assertCurrentSessionScope(context);
+      await context.api.persistence.checkpoints.delete(
+        checkpointId,
+        sessionRequestOptions(context),
+      );
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      // The runtime may also have cleared the stage link that saved it.
+      const revision = `${checkpointId}:discarded`;
+      invalidateCheckpointResources(context, revision);
+      context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
+
+      return {
+        message: "Checkpoint discarded.",
         status: "completed",
       };
     },
