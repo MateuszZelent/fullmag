@@ -3834,7 +3834,7 @@ mod linearization_identity_sidecar_tests {
         sample_index: usize,
     ) -> super::super::eigen_equilibrium_contract::LinearizationIdentityV2 {
         let digest = format!("sha256:{}", "a".repeat(64));
-        let mut identity = serde_json::from_value(serde_json::json!({
+        let mut identity: super::super::eigen_equilibrium_contract::LinearizationIdentityV2 = serde_json::from_value(serde_json::json!({
             "schema_version": super::super::eigen_equilibrium_contract::LINEARIZATION_IDENTITY_V2,
             "sample_index": sample_index,
             "equilibrium_artifact_schema": "equilibrium_artifact.v8",

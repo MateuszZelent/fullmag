@@ -8355,7 +8355,7 @@ fn native_cpu_modal_window_rejects_floquet_airbox_demag_without_both_domain_pair
         .iter()
         .find(|pair| {
             let mut mesh = plan.mesh.clone();
-            mesh.periodic_node_pairs = vec![pair.clone()];
+            mesh.periodic_node_pairs = vec![(*pair).clone()];
             periodic_domain_pair_stats(&mesh)
                 .map(|stats| stats.magnetic_pair_count == 1 && stats.airbox_pair_count == 0)
                 .unwrap_or(false)
@@ -8368,7 +8368,7 @@ fn native_cpu_modal_window_rejects_floquet_airbox_demag_without_both_domain_pair
         .iter()
         .find(|pair| {
             let mut mesh = plan.mesh.clone();
-            mesh.periodic_node_pairs = vec![pair.clone()];
+            mesh.periodic_node_pairs = vec![(*pair).clone()];
             periodic_domain_pair_stats(&mesh)
                 .map(|stats| stats.magnetic_pair_count == 0 && stats.airbox_pair_count == 1)
                 .unwrap_or(false)

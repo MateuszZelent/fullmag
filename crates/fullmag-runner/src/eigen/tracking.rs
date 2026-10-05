@@ -1535,7 +1535,7 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eigen::types::{EigenSolverModel, KSampleDescriptor, SingleKSolveResult};
+    use crate::eigen::types::{ConsistentP1TrackingMetric, EigenSolverModel, KSampleDescriptor, SingleKSolveResult};
     use fullmag_ir::{ModeTrackingIR, ModeTrackingMethodIR};
 
     fn sample(index: usize, modes: Vec<SingleKModeResult>) -> SingleKSolveResult {
