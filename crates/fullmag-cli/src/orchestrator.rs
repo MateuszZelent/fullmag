@@ -9354,7 +9354,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         cmd.state_format.as_deref(),
                         cmd.state_dataset.as_deref(),
                         cmd.state_sample_index,
-                    ) {
+                    )
+                    .and_then(|loaded_state| {
+                        validate_imported_magnetization(&stages[0].ir, &loaded_state.values)?;
+                        Ok(loaded_state)
+                    }) {
                         Ok(loaded_state) => {
                             continuation_magnetization = Some(loaded_state.values.clone());
                             continuation_source = None; // loaded from file — unknown source backend

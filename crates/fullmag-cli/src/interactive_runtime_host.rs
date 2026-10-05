@@ -823,6 +823,7 @@ impl InteractiveRuntimeHost {
         magnetization: Vec<[f64; 3]>,
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
+        validate_imported_magnetization(&self.base_problem, &magnetization)?;
         let generation = if let Ok(mut preview_state) = self.preview_source.lock() {
             preview_state.status = InteractivePreviewStatus::AwaitingCommand;
             preview_state.continuation_magnetization = Some(magnetization.clone());

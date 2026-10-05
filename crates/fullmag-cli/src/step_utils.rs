@@ -4071,6 +4071,17 @@ fn linear_sweep_values(start: f64, stop: f64, steps: u64) -> Result<Vec<f64>> {
         .collect())
 }
 
+/// Validate a state import privately, without publishing or creating a runtime.
+pub(crate) fn validate_imported_magnetization(
+    base_problem: &ProblemIR,
+    magnetization: &[[f64; 3]],
+) -> Result<()> {
+    let mut candidate = base_problem.clone();
+    apply_continuation_initial_state(&mut candidate, magnetization)?;
+    fullmag_plan::plan(&candidate).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(())
+}
+
 pub(crate) fn apply_continuation_initial_state(
     problem: &mut ProblemIR,
     final_magnetization: &[[f64; 3]],
@@ -5737,6 +5748,27 @@ mod tests {
         assert_eq!(progress["percent"], 0.0);
         assert_eq!(progress["demag_enabled"], 1.0);
         assert_eq!(progress["demag_periodic_airbox_k0"], 1.0);
+    }
+
+    #[test]
+    fn imported_magnetization_validation_rejects_wrong_size_without_mutating_problem() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let before = serde_json::to_value(&problem).expect("problem should serialize");
+        let plan = fullmag_plan::plan(&problem).expect("bootstrap plan should resolve");
+        let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+            panic!("bootstrap import fixture requires FDM");
+        };
+        let expected = fdm.initial_magnetization.len();
+        assert!(expected > 1);
+        for count in [0, expected - 1, expected + 1] {
+            let error = validate_imported_magnetization(&problem, &vec![[1.0, 0.0, 0.0]; count])
+                .expect_err("mismatched carrier size must be rejected");
+            assert!(error.to_string().contains("length mismatch"));
+            assert_eq!(serde_json::to_value(&problem).unwrap(), before);
+        }
+        validate_imported_magnetization(&problem, &vec![[0.0, 1.0, 0.0]; expected])
+            .expect("matching sampled state should be accepted privately");
+        assert_eq!(serde_json::to_value(&problem).unwrap(), before);
     }
 
     #[test]

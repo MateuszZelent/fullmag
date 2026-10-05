@@ -32,6 +32,20 @@
   "equations": [],
   "sources": [
     {
+      "id": "antenna-import-private-preflight",
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "symbol": "validate_imported_magnetization",
+      "responsibility": "Prywatny kandydat IR i kanoniczny planner przed publikacja importu; bez runtime, source solve i zmiany zegarow.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-import-private-preflight-regression",
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "symbol": "imported_magnetization_validation_rejects_wrong_size_without_mutating_problem",
+      "responsibility": "Zapisane FDM scenariusze liczności i niezmiennosci IR; unit Rust niekompilowany i nieuruchomiony.",
+      "evidence_status": "source_only"
+    },
+    {
       "id": "source0",
       "path": "crates/fullmag-authoring/src/scene.rs",
       "symbol": "SceneDocument",

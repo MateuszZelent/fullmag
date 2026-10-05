@@ -670,6 +670,44 @@ Powyższy oracle uzupełnić testem rzeczywistego plannera: input 1000×10000 pr
 
 ## T12. Związać lifecycle, cache i anulowanie z wykonaniem
 
+### Checkpoint 2026-10-05 — prywatna walidacja importu przed publikacją
+
+`crates/fullmag-cli/src/step_utils.rs::validate_imported_magnetization`
+klonuje bazowe IR, stosuje istniejące `apply_continuation_initial_state`
+i uruchamia kanoniczny planner na prywatnym kandydacie. Błąd liczności lub
+planowania docelowego problemu wraca przed publikacją continuation.
+Helper nie tworzy runtime, nie ładuje bazy anteny, nie uruchamia solve/LLG
+i nie przepisuje zegara segmentu ani waveformu. Nie zmienia równań, jednostek,
+publicznego Python ani `ProblemIR`.
+
+`crates/fullmag-cli/src/orchestrator.rs::run_script_mode` wiąże walidację
+z odczytem importu przed pierwszym Solve: failure używa istniejącej gałęzi
+odmowy, bez zmiany magnetyzacji, cache i metadanych continuation.
+`crates/fullmag-cli/src/interactive_runtime_host.rs::load_state` wywołuje
+walidację także wtedy, gdy host nie zachowuje idle runtime; sprawdzenie
+poprzedza przygotowanie/upload, generation i publikację live state.
+
+Dowód produkcyjnych typów: `just check-cli-source`, receipt
+`2883cad87f2241f0afa8091c1d1fb24f`, **passed**, exit 0,
+HEAD `f5c23bbc9e9d043ee0ee63d34752387d76044ddc` z WIP, digest przed/po
+`96c6be6b7910be390e7cd82a48d563dc4519024d9ab3711a5126909a1dc65075`,
+`source_changed_during_run=false`. Receipt/log zachowano pod resolverowym
+`storage/builds/<worktree-id>/windows-api-source-check/cli-source-check/`.
+Kontrole routingu bieżącego WIP: RED trzech nowych oczekiwań → **23 PASS**;
+nie jest to wykonanie eventów importu ani solvera.
+
+`crates/fullmag-cli/src/step_utils.rs::imported_magnetization_validation_rejects_wrong_size_without_mutating_problem`
+zawiera scenariusze pustego, krótkiego, długiego i poprawnego FDM carrieru
+oraz porównanie pełnego IR przed/po. Test Rust **nie został skompilowany ani
+wykonany**, zgodnie z zakazem kompilowania unit testów.
+
+Granice: płaski stan bez metadanych siatki nie dowodzi zgodności przestrzennej
+dwóch carrierów o tej samej liczności i nie upoważnia do niejawnego resamplingu.
+To preflight wejścia, nie dowód atomowego uploadu GPU, rollbacku po błędzie
+urządzenia ani pełnego recovery. Nie zmienia kwalifikacji żadnej z czterech
+realizacji FDM/FEM CPU/GPU. Następne bramki: rzeczywisty import/static/sinusoidal
+consumer, RF resume, natywny przewodnik 3D, cztery lane i T18/PR.
+
 **Pliki:** `antenna_stage.rs`, native charge/field wrappers, CLI `orchestrator.rs` i nowy `antenna_workflow.rs`, standardowy stage execution read-model i artefakty.
 
 - [ ] Przenieść antenową orkiestrację z monolitu do `antenna_workflow.rs`; publiczne wywołanie przyjmuje plan, artifact store i callback postępu/anulowania. Nie przenosić przy tym innych workflows.
