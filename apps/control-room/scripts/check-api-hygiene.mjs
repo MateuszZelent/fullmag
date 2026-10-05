@@ -1,4 +1,22 @@
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import {
+  filterCanonicalComputePreviewMatchLines,
+  LEGACY_PATH_PATTERN,
+  shouldFailSearchCheck,
+} from "./api-hygiene-rules.mjs";
+
+const controlRoomDirectory = new URL("..", import.meta.url);
+const regressionTests = spawnSync(
+  process.execPath,
+  [
+    "--test",
+    fileURLToPath(
+      new URL("./check-api-hygiene-rules.node-test.mjs", import.meta.url),
+    ),
+  ],
+  { cwd: controlRoomDirectory, encoding: "utf8" },
+);
 
 const checks = [
   {
@@ -37,16 +55,26 @@ const checks = [
   {
     args: [
       "-i",
-      `/v1/live/current(?:/|["'])|\\bbootstrap\\b|\\bpoll\\b|["'][^"']*/preview(?:/|["'])`,
+      "--line-number",
+      "--no-heading",
+      LEGACY_PATH_PATTERN,
       "src",
       "--glob",
       "!src/kernel/api/generated/**",
     ],
     label: "legacy live/bootstrap/poll/preview path",
+    filterMatches: filterCanonicalComputePreviewMatchLines,
   },
 ];
 
-let failed = false;
+let failed = regressionTests.status !== 0;
+if (failed) {
+  console.error("API hygiene rule regressions failed");
+  console.error(
+    regressionTests.error?.message ||
+      [regressionTests.stderr, regressionTests.stdout].filter(Boolean).join("\n"),
+  );
+}
 
 for (const check of checks) {
   const result = spawnSync("rg", check.args, {
@@ -54,11 +82,17 @@ for (const check of checks) {
     encoding: "utf8",
   });
 
+  if (!shouldFailSearchCheck(result.status, result.stdout, check.filterMatches)) {
+    continue;
+  }
+
   if (result.status === 0) {
     failed = true;
     console.error(`API hygiene check failed: ${check.label}`);
-    console.error(result.stdout);
-  } else if (result.status !== 1) {
+    console.error(
+      check.filterMatches ? check.filterMatches(result.stdout) : result.stdout,
+    );
+  } else {
     failed = true;
     console.error(`API hygiene check errored: ${check.label}`);
     console.error(result.stderr || result.stdout);
