@@ -1,0 +1,22 @@
+[package]
+name = "fullmag-workspace-inspect"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Read-only inspectors and scanner for the per-user workspace: projects, scripts and result folders, shared by the desktop host and the local runtime API."
+
+[features]
+default = []
+# Derive `utoipa::ToSchema` on the detail types (enabled by fullmag-api).
+utoipa = ["dep:utoipa"]
+
+[dependencies]
+fullmag-application = { path = "../fullmag-application" }
+fullmag-workspace = { path = "../fullmag-workspace" }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+utoipa = { version = "5", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

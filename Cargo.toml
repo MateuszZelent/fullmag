@@ -19,6 +19,7 @@ members = [
   "crates/fullmag-runtime-control",
   "crates/fullmag-session",
   "crates/fullmag-workspace",
+  "crates/fullmag-workspace-inspect",
 ]
 resolver = "2"
 

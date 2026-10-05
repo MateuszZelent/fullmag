@@ -27,6 +27,7 @@ describe("startScreenStore", () => {
       section: "home",
       selectedProjectId: null,
       selectedScriptId: null,
+      selectedResultId: null,
       openScriptNonce: 0,
       selectedTemplateId: null,
       searchFocusNonce: 0,
@@ -81,6 +82,36 @@ describe("startScreenStore", () => {
     expect(startScreenStore.getSnapshot().selectedScriptId).toBe(9);
   });
 
+  it("lets a result folder join the one-selection rule, and a script id be a string", () => {
+    startScreenStore.setSelectedScript("script-abc");
+    expect(startScreenStore.getSnapshot().selectedScriptId).toBe("script-abc");
+
+    startScreenStore.setSelectedResult("res-1");
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      selectedProjectId: null,
+      selectedScriptId: null,
+      selectedResultId: "res-1",
+    });
+
+    startScreenStore.setSelectedProject("p1");
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      selectedProjectId: "p1",
+      selectedResultId: null,
+    });
+
+    startScreenStore.setSelectedResult("res-2");
+    startScreenStore.setSelectedScript(3);
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      selectedScriptId: 3,
+      selectedResultId: null,
+    });
+
+    // Clearing one kind does not clear the others.
+    startScreenStore.setSelectedResult("res-3");
+    startScreenStore.setSelectedProject(null);
+    expect(startScreenStore.getSnapshot().selectedResultId).toBe("res-3");
+  });
+
   it("makes every open-script request distinct", () => {
     startScreenStore.requestOpenScript();
     startScreenStore.requestOpenScript();
@@ -96,6 +127,7 @@ describe("startScreenStore", () => {
       section: "home",
       selectedProjectId: null,
       selectedScriptId: null,
+      selectedResultId: null,
       openScriptNonce: 0,
       selectedTemplateId: null,
       searchFocusNonce: 0,

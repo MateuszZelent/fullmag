@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { chromium } from "playwright";
 
+import { checkInspectors, loadInspectorMarkup } from "./lib/start-screen-inspector-check.mjs";
+
 // Start screen guard on the REAL stylesheets (no backend): the three-column
 // grid and its narrow-window fallback, the status strip, and WCAG AA contrast
 // of the semantic colour pairs in both themes. A rule-order or token
@@ -174,6 +176,14 @@ try {
       if (ratio < 4.5) failures.push(`${theme}: ${r.label} ${r.fg} on ${r.bg} = ${ratio.toFixed(2)}:1`);
     }
     console.log(`${theme}: ${results.length} contrast pairs checked`);
+  }
+
+  // ── The inspector of the sketch, on the real components ───────────────
+  const inspectors = await loadInspectorMarkup();
+  try {
+    await checkInspectors({ browser, styles, markup: inspectors.markup, failures });
+  } finally {
+    await inspectors.close();
   }
 } finally {
   await browser.close();

@@ -1,8 +1,8 @@
 import type { RecentEntry } from "../types";
-import type { WorkspaceItem } from "../workspaceItems";
+import type { WorkspaceItem, WorkspaceItemId } from "../workspaceItems";
 
 /** A script item with sensible defaults; tests override only what they assert on. */
-export function script(partial: Partial<WorkspaceItem> & { id: number }): WorkspaceItem {
+export function script(partial: Partial<WorkspaceItem> & { id: WorkspaceItemId }): WorkspaceItem {
   return {
     kind: "script",
     path: `/work/${partial.name ?? `s${partial.id}`}.py`,

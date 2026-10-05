@@ -280,6 +280,11 @@ function makeKernel(): KernelApi {
       platform: {
         capabilities: async () => { throw new Error("capabilities are not served in this test"); },
       },
+      workspace: {
+        item: async () => { throw new Error("the workspace database is not served in this test"); },
+        items: async () => { throw new Error("the workspace database is not served in this test"); },
+        thumbnailUrl: (id: string) => `/thumbnail/${id}`,
+      },
       sessions: {
         create: vi.fn(),
         current: { status: vi.fn() },

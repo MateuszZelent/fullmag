@@ -10,7 +10,16 @@ export interface BannerAction {
 }
 
 export interface BannerModel {
-  readonly id: "missing" | "running" | "failed" | "migrate" | "readonly";
+  readonly id:
+    | "missing"
+    | "running"
+    | "paused"
+    | "failed"
+    | "migrate"
+    | "readonly"
+    | "unreadable"
+    | "syntax"
+    | "incomplete";
   readonly tone: BannerTone;
   readonly icon: BannerIcon;
   readonly title: string;
@@ -24,6 +33,8 @@ export interface SelectBannerInput {
   readonly session?: ContinueSession;
   readonly migrationSteps?: readonly string[];
   readonly supportedSchemaVersion?: string;
+  /** Why the backend could not read the file's details; the row's facts still show. */
+  readonly readError?: string;
 }
 
 /**
@@ -67,6 +78,20 @@ export function selectBanner(input: SelectBannerInput): BannerModel | null {
     };
   }
 
+  // A checkpoint of this project is waiting and nothing is running: say so, and
+  // that opening the project is how it is resumed.
+  if (session && session.projectId === entry.projectId && entry.status !== "running") {
+    const pct = Math.round(session.progress.fraction * 100);
+    return {
+      id: "paused",
+      tone: "warning",
+      icon: "activity",
+      title: `Run paused — ${pct}%.`,
+      body: "A checkpoint is waiting. Open the project to resume the run from it.",
+      actions: [],
+    };
+  }
+
   if (entry.status === "failed" && entry.lastError) {
     return {
       id: "failed",
@@ -104,7 +129,108 @@ export function selectBanner(input: SelectBannerInput): BannerModel | null {
     };
   }
 
-  return null;
+  return input.readError ? unreadableBanner(input.readError) : null;
+}
+
+function unreadableBanner(reason: string): BannerModel {
+  return {
+    id: "unreadable",
+    tone: "warning",
+    icon: "alert",
+    title: "The file could not be read.",
+    body: "The facts from the list are shown; the details are not available.",
+    detail: reason,
+    actions: [],
+  };
+}
+
+export interface ScriptBannerInput {
+  readonly status: RecentEntry["status"];
+  readonly path: string;
+  readonly syntax?: { readonly ok: boolean; readonly line?: number; readonly message?: string };
+  readonly readError?: string;
+}
+
+/** A script's banner: the file is gone, it does not parse, or it could not be read. */
+export function selectScriptBanner(input: ScriptBannerInput): BannerModel | null {
+  if (input.status === "missing") {
+    return {
+      id: "missing",
+      tone: "warning",
+      icon: "alert",
+      title: "The file is missing.",
+      body: "It is no longer at this path. Remove it from recent, or move it back.",
+      detail: input.path,
+      actions: [],
+    };
+  }
+  if (input.syntax && !input.syntax.ok) {
+    const where = input.syntax.line !== undefined ? ` at line ${input.syntax.line}` : "";
+    return {
+      id: "syntax",
+      tone: "danger",
+      icon: "alert",
+      title: `Syntax error${where}.`,
+      // Verbatim from Python: the message is the diagnosis.
+      body: input.syntax.message ?? "Python could not parse the script, so a run would stop before it starts.",
+      actions: [],
+    };
+  }
+  return input.readError ? unreadableBanner(input.readError) : null;
+}
+
+export interface ResultBannerInput {
+  readonly status: RecentEntry["status"];
+  readonly path: string;
+  readonly runStatus?: string;
+  readonly readError?: string;
+}
+
+/** A result folder's banner: gone, still being written, failed, ended early, or unreadable. */
+export function selectResultBanner(input: ResultBannerInput): BannerModel | null {
+  if (input.status === "missing") {
+    return {
+      id: "missing",
+      tone: "danger",
+      icon: "alert",
+      title: "The folder is no longer at this path.",
+      body: "It may have been moved or deleted, or the drive may be disconnected.",
+      detail: input.path,
+      actions: [{ id: "forget", label: "Remove from recent" }],
+    };
+  }
+  const run = input.runStatus?.toLowerCase();
+  if (run === "running") {
+    return {
+      id: "running",
+      tone: "warning",
+      icon: "activity",
+      title: "A run is writing this folder.",
+      body: "Sizes and stages will change until it finishes.",
+      actions: [],
+    };
+  }
+  if (run === "failed" || run === "error" || input.status === "failed") {
+    return {
+      id: "failed",
+      tone: "danger",
+      icon: "alert",
+      title: "The run that wrote this folder failed.",
+      body: "What it wrote before stopping is still listed below.",
+      actions: [],
+    };
+  }
+  if (run === "partial" || run === "incomplete" || run === "cancelled" || run === "canceled") {
+    return {
+      id: "incomplete",
+      tone: "warning",
+      icon: "alert",
+      title: "The run ended before it finished.",
+      body: "Only the stages it completed are listed below.",
+      actions: [],
+    };
+  }
+  return input.readError ? unreadableBanner(input.readError) : null;
 }
 
 /** The primary button names what Open will really do for this project. */
