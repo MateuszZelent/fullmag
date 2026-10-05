@@ -1468,10 +1468,7 @@ impl AuthoringAcquisition {
             MAX_REQUEST_BYTES,
             "cold commit rejection",
         )?;
-        let result: Value = serde_json::from_slice(&bytes)?;
-        if result
-            != serde_json::json!({"schema":CONTROL_SCHEMA,"status":"rejected","reason":"development_owner_request_rejected"})
-        {
+        if !is_generic_commit_rejection(&bytes) {
             bail!("invalid cold commit was not rejected by the API");
         }
         Ok(())
@@ -1732,6 +1729,9 @@ impl AuthoringAcquisition {
             MAX_REQUEST_BYTES,
             "development API commit acknowledgement; outcome must be reconciled on error",
         )?;
+        if is_generic_commit_rejection(&response) {
+            bail!("development API rejected the cold commit; outcome remains unknown and requires durable reconciliation after the owned API exits");
+        }
         let committed: CommitResponse = serde_json::from_slice(&response)
             .context("development commit outcome is unknown: invalid acknowledgement")?;
         if committed.schema != "fullmag.development-api-commit.v1"
@@ -2437,6 +2437,23 @@ struct CommitResponse {
     snapshot_sha256: String,
     target_build_id: String,
     accepted_store_binding: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommitControlRejection {
+    schema: String,
+    status: String,
+    reason: String,
+}
+
+fn is_generic_commit_rejection(response: &[u8]) -> bool {
+    let Ok(rejection) = serde_json::from_slice::<CommitControlRejection>(response) else {
+        return false;
+    };
+    rejection.schema == CONTROL_SCHEMA
+        && rejection.status == "rejected"
+        && rejection.reason == "development_owner_request_rejected"
 }
 
 #[derive(Deserialize, Serialize)]

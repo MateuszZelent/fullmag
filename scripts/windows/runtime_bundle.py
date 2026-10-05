@@ -63,6 +63,29 @@ class BundleError(ValueError):
     """Input or bundle validation failed."""
 
 
+def _frozen_source_metadata(source: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate publisher provenance without opening or executing its paths."""
+    if "build_source_snapshot" not in source:
+        return None
+    frozen = source["build_source_snapshot"]
+    if not isinstance(frozen, dict) or set(frozen) != {"record_path", "inventory_sha256", "source_root"}:
+        raise BundleError("Invalid frozen source binding")
+    if not _is_sha256(frozen["inventory_sha256"]):
+        raise BundleError("Invalid frozen source inventory digest")
+    for name in ("record_path", "source_root"):
+        value = frozen[name]
+        if not isinstance(value, str) or not value or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+            raise BundleError("Invalid frozen source metadata location")
+    record = Path(frozen["record_path"])
+    source_root = Path(frozen["source_root"])
+    if (not record.is_absolute() or not source_root.is_absolute()
+            or record.name != "record.json" or source_root.name != "source"
+            or str(record.parent) != str(source_root.parent)
+            or ".." in record.parts or ".." in source_root.parts):
+        raise BundleError("Invalid frozen source metadata locations")
+    return frozen
+
+
 def _is_reparse_point(path: Path, info: os.stat_result | None = None) -> bool:
     if info is None:
         try:
@@ -236,11 +259,9 @@ def _load_source_manifest(
     ):
         raise BundleError("Build manifest build_version does not match its source identity")
 
-    frozen = manifest.get("build_source_snapshot")
+    frozen = _frozen_source_metadata(manifest)
     if frozen is not None:
         from windows.build_snapshot import verify_snapshot
-        if not isinstance(frozen, dict) or set(frozen) != {"record_path", "inventory_sha256", "source_root"}:
-            raise BundleError("Invalid frozen source binding")
         checked = verify_snapshot(frozen["record_path"], build_root)
         if (checked["inventory_sha256"] != frozen["inventory_sha256"]
                 or checked["source_root"] != frozen["source_root"]
@@ -483,6 +504,7 @@ def validate_bundle(
             raise BundleError(f"Runtime bundle source {field} is invalid")
     if not isinstance(source.get("workspace_namespace"), str) or not source["workspace_namespace"]:
         raise BundleError("Runtime bundle source workspace_namespace is missing")
+    _frozen_source_metadata(source)
     build_version = source.get("build_version")
     if (
         not isinstance(build_version, dict)
