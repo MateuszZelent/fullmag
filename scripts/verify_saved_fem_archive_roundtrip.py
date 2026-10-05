@@ -847,11 +847,12 @@ def copy_store(source: Path, destination: Path, expected: dict) -> None:
         raise ValueError("store changed during qualification copy")
 
 
-def check_stamp(stderr: str, commit: str, snapshot: str) -> None:
+def check_stamp(stderr: str, commit: str, snapshot: str, *, dirty: bool = False) -> None:
     stamps = [line for line in stderr.splitlines() if line.startswith("[fullmag] build:")]
     match = re.fullmatch(r"\[fullmag\] build: [^|\r\n]+ \| commit: ([0-9a-f]{40}) \| (clean|dirty) \| source snapshot: ([0-9a-f]{64})",
                          stamps[0]) if len(stamps) == 1 else None
-    if match is None or match.groups() != (commit, "clean", snapshot):
+    if type(dirty) is not bool or match is None \
+            or match.groups() != (commit, "dirty" if dirty else "clean", snapshot):
         raise ValueError("CLI startup identity differs from exact managed build")
 
 

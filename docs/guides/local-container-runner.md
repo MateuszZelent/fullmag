@@ -214,6 +214,17 @@ backend API i statyczny Control Room z terminalnego, udanego pakietu
 solvera. Wymaga zachowanej kapsuły źródeł, kompletnych artefaktów i lokalnego
 obrazu o digestcie zgodnym z receiptem buildu.
 
+Tryb `run-managed-browser` nadal wymaga clean commita i kapsuły `commit`.
+Dla dokładnego WIP użyj osobnej recepty:
+`just run-managed-browser-snapshot <pełny-job-id> <pełny-commit> <source-digest> <native-snapshot-sha256> 3104`.
+Digest kapsuły oraz snapshotu natywnego są dwoma różnymi hashami SHA-256
+(64 małe znaki hex, bez prefiksu); oba muszą zgadzać się z terminalnym
+receiptem. Commit jest pełnym bazowym SHA-1 (40 znaków), nie tożsamością WIP.
+Brak jednej z tożsamości, niezgodność, zły tryb kapsuły lub niezgodny
+clean/dirty startup stamp powoduje odmowę. Artefakty i trusted documents
+weryfikuje ten sam pełny validator, bez pomijania kontroli dla snapshotu.
+Ta dodatkowa trasa nie kwalifikuje storage 9p i nie uruchamia solvera.
+
 Launcher ponownie sprawdza kapsułę, trusted documents, wymagane artefakty,
 startup stamp i rzeczywiste mounty/port kontenera. Źródła oraz pakiet pozostają
 read-only. Świeży katalog stanu w storage zawiera również prywatny widok repo

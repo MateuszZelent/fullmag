@@ -30,6 +30,10 @@ storage-inventory:
 run-managed-browser job_id commit port="3104":
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_browser.py" --repo-root "{{repo_root}}" --job-id {{job_id}} --commit {{commit}} --port {{port}}
 
+# A WIP snapshot needs both content identities as well as its base commit.
+run-managed-browser-snapshot job_id commit source_digest native_snapshot_sha256 port="3104":
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_browser.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --port {{quote(port)}}
+
 storage-prepare:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" prepare-links --repo-root "{{repo_root}}" --compat --frontend
 
