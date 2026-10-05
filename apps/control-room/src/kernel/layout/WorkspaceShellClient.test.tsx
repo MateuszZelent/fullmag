@@ -148,7 +148,16 @@ function makeKernel(
   for (const command of SHELL_COMMANDS) commands.register(command);
   for (const command of startScreenManifest.contributes?.commands ?? []) commands.register(command);
   return {
-    api: { sessions: { list, current: { status: currentStatus } } },
+    api: {
+      diagnostics: {
+        cpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },
+        gpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },
+      },
+      platform: {
+        capabilities: async () => { throw new Error("capabilities are not served in this test"); },
+      },
+      sessions: { list, current: { status: currentStatus } },
+    },
     bus,
     commands,
     diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),

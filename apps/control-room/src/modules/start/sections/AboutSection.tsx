@@ -1,14 +1,11 @@
 "use client";
 
 import {
-  Activity,
-  ArrowRight,
   Award,
   BookOpen,
   Check,
   ChevronRight,
   Code2,
-  Compass,
   Copy,
   Cpu,
   ExternalLink,
@@ -17,8 +14,6 @@ import {
   Layers,
   Network,
   ShieldCheck,
-  Sparkles,
-  Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -26,14 +21,12 @@ import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
 import { Button } from "@/shared/ui/Button";
 
 import {
-  FULLMAG_AUTHORS,
   FULLMAG_BIBTEX,
   FULLMAG_CAPABILITY_MATRIX_URL,
   FULLMAG_CITATION,
   FULLMAG_CITATION_NOTE,
   FULLMAG_COORDINATION,
   FULLMAG_DOCS_URL,
-  FULLMAG_ENGINES,
   FULLMAG_PIPELINE_STAGES,
   FULLMAG_EXTENDED_AUTHORS,
   FULLMAG_EXTENDED_ENGINES,
@@ -43,7 +36,6 @@ import {
   FULLMAG_LICENSE,
   FULLMAG_OVERVIEW,
   FULLMAG_PHYSICS_MODULES,
-  FULLMAG_PYTHON_API_URL,
   FULLMAG_REPOSITORY_URL,
   FULLMAG_TAGLINE,
   FULLMAG_TOOLCHAIN_BADGES,
