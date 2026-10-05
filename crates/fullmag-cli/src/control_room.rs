@@ -3386,6 +3386,9 @@ pub(crate) fn verify_development_restart_consumer() -> Result<()> {
     match std::env::var("FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE").as_deref() {
         Ok("empty" | "scene") => verify_development_api_owner(),
         Ok("readiness") => development_consumer_probe::verify(),
+        Ok("preparation-faults") => {
+            crate::development_api_owner::verify_candidate_preparation_faults(&repo_root())
+        }
         _ => bail!("native restart consumer requires an explicit managed case"),
     }
 }

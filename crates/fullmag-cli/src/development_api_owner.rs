@@ -21,6 +21,8 @@ use serde_json::Value;
 
 #[path = "development_candidate_preparation.rs"]
 mod candidate_preparation;
+#[path = "development_candidate_preparation_probe.rs"]
+mod candidate_preparation_probe;
 
 use self::candidate_preparation::{CandidateHelperProcess, HelperPoll};
 
@@ -82,6 +84,31 @@ pub(crate) struct OwnerLaunch {
     expected_build_commit: String,
     expected_build_snapshot: String,
     owner_token: String,
+}
+
+pub(crate) fn verify_candidate_preparation_faults(repo_root: &Path) -> Result<()> {
+    if env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1")
+        || env::var("FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE").as_deref() != Ok("preparation-faults")
+        || env::var("FULLMAG_NATIVE_RUNTIME_ACTIVE").as_deref() != Ok("1")
+        || env::var("FULLMAG_STORAGE_PROFILE").as_deref() != Ok(NATIVE_DEV_PROFILE)
+    {
+        bail!("candidate preparation fault probe requires the managed probe gates");
+    }
+    let storage_root = validated_directory_root(
+        &required_environment_path("FULLMAG_PROJECT_STORAGE_ROOT")?,
+        "candidate preparation probe storage root",
+    )?;
+    let worktree = required_environment_value("FULLMAG_WORKTREE_ID")?;
+    fullmag_session::repository_path::validate_store_id(&worktree)
+        .context("candidate preparation probe worktree id is invalid")?;
+    let repo_root = validated_directory_root(repo_root, "candidate preparation probe repository")?;
+    let helper = checked_regular_file(
+        &repo_root,
+        "scripts/windows/candidate_helper_probe.py",
+        "candidate preparation fault helper",
+    )?;
+    let python = managed_development_python(&storage_root, &worktree)?;
+    candidate_preparation_probe::verify(&python, &helper, &repo_root, &worktree)
 }
 
 impl OwnerLaunch {
@@ -905,7 +932,9 @@ impl OwnedDevelopmentApi {
                             CandidatePreparationPoll::Pending { helper_pid }
                         }
                     }
-                    Ok(HelperPoll::Completed { helper_pid, output }) => {
+                    Ok(HelperPoll::Completed {
+                        helper_pid, output, ..
+                    }) => {
                         if job.cancel_requested {
                             return CandidatePreparationPoll::Unavailable {
                                 helper_pid: Some(helper_pid),
@@ -1006,7 +1035,9 @@ impl OwnedDevelopmentApi {
                             CandidatePreparationPoll::Pending { helper_pid }
                         }
                     }
-                    Ok(HelperPoll::Completed { helper_pid, output }) => {
+                    Ok(HelperPoll::Completed {
+                        helper_pid, output, ..
+                    }) => {
                         if job.cancel_requested {
                             return CandidatePreparationPoll::Unavailable {
                                 helper_pid: Some(helper_pid),

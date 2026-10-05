@@ -1,6 +1,13 @@
 # P8-55 — testy Python jako odrębne wejścia weryfikacji
 
-Data: 05.10.2026. Stan: trzy regresje źródłowe PASS; capture/build po korekcie otwarte.
+Data: 05.10.2026. Stan: regresje i rzeczywisty capture PASS; build po korekcie otwarty.
+
+Po lokalnym commicie `32c2d4431bbd249ff296d9cd330b21111bc5c9d5`
+rzeczywisty capture w zmieniającym się checkoutcie zaliczono:
+snapshot `ac1532e884648943361a15ce9c5f6fcdc13b6edf5c9050a90c92e48642256aee`,
+log `native-build-935539ea338c4991b7b4059eb4b4cc50.log`.
+Następny etap zainstalował zweryfikowany pakiet Python, ale odmówił przygotowania
+frontendu z `ENOSPC`. Nie nazywamy tego udanym buildem ani runtime proof.
 
 Kolejne próby capture odmawiały zgodności inventory/fingerprint podczas
 równoległych zmian. `DEPENDENCY_INPUTS` i native fingerprint obejmowały cały

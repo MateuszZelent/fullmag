@@ -16,13 +16,25 @@ const MAX_CANDIDATE_HELPER_OUTPUT_BYTES: usize = 16 * 1024;
 
 enum HelperEvent {
     InputWritten(bool),
-    OutputRead(std::result::Result<Vec<u8>, ()>),
+    OutputRead(BoundedOutput),
+    ProbeOutputChunk(Vec<u8>),
+    ProbeOutputFinished {
+        exceeded_limit: bool,
+        read_failed: bool,
+    },
+}
+
+struct BoundedOutput {
+    bytes: Vec<u8>,
+    exceeded_limit: bool,
+    read_failed: bool,
 }
 
 pub(crate) enum HelperPoll {
     Pending,
     Completed {
         helper_pid: u32,
+        exit_code: Option<i32>,
         output: Vec<u8>,
     },
     Unconfirmed {
@@ -32,6 +44,8 @@ pub(crate) enum HelperPoll {
     Failed {
         helper_pid: u32,
         exit_code: Option<i32>,
+        input_complete: bool,
+        output: Vec<u8>,
         reason: &'static str,
     },
 }
@@ -46,8 +60,11 @@ pub(crate) struct CandidateHelperProcess {
     helper_pid: u32,
     deadline: Instant,
     cleanup_deadline: Option<Instant>,
+    output_limit: usize,
+    probe_case: bool,
+    probe_tail_after_exit: Option<mpsc::SyncSender<()>>,
     input_complete: Option<bool>,
-    output: Option<Vec<u8>>,
+    output: Vec<u8>,
     output_complete: bool,
     exit_status: Option<ExitStatus>,
     failure: Option<&'static str>,
@@ -65,11 +82,78 @@ impl CandidateHelperProcess {
         deadline: Instant,
         name: &'static str,
     ) -> Result<Self> {
+        Self::spawn_with_probe_case(
+            python,
+            helper,
+            repo_root,
+            request,
+            output_limit,
+            deadline,
+            name,
+            None,
+        )
+    }
+
+    pub(crate) fn spawn_probe_case(
+        python: &Path,
+        helper: &Path,
+        repo_root: &Path,
+        request: Vec<u8>,
+        output_limit: usize,
+        deadline: Instant,
+        name: &'static str,
+        probe_case: &str,
+    ) -> Result<Self> {
+        Self::spawn_with_probe_case(
+            python,
+            helper,
+            repo_root,
+            request,
+            output_limit,
+            deadline,
+            name,
+            Some(probe_case),
+        )
+    }
+
+    fn spawn_with_probe_case(
+        python: &Path,
+        helper: &Path,
+        repo_root: &Path,
+        request: Vec<u8>,
+        output_limit: usize,
+        deadline: Instant,
+        name: &'static str,
+        probe_case: Option<&str>,
+    ) -> Result<Self> {
+        let probe_case_enabled = probe_case.is_some();
         if request.len() > MAX_CANDIDATE_HELPER_REQUEST_BYTES
             || output_limit > MAX_CANDIDATE_HELPER_OUTPUT_BYTES
         {
             bail!("candidate helper transport exceeds its byte limit");
         }
+        // This fixture forces a real broken pipe independently of Windows'
+        // pipe buffer size. Production input remains one write_all operation.
+        let incomplete_prefix = if probe_case == Some("incomplete_stdin") {
+            let marker = b"\"padding\":\"";
+            let offset = request
+                .windows(marker.len())
+                .position(|bytes| bytes == marker)
+                .context("incomplete stdin probe request has no padded prefix")?;
+            let prefix = offset + marker.len();
+            if prefix >= request.len() {
+                bail!("incomplete stdin probe request has no remaining payload");
+            }
+            Some(prefix)
+        } else {
+            None
+        };
+        let (tail_signal, tail_ready) = if incomplete_prefix.is_some() {
+            let (signal, ready) = mpsc::sync_channel::<()>(1);
+            (Some(signal), Some(ready))
+        } else {
+            (None, None)
+        };
         let mut command = Command::new(python);
         command
             .arg("-B")
@@ -81,6 +165,11 @@ impl CandidateHelperProcess {
             .stderr(Stdio::null())
             .env_remove("FULLMAG_DEVELOPMENT_OWNER_TOKEN")
             .env_remove("FULLMAG_DEVELOPMENT_OWNER_PROBE_TOKEN");
+        if let Some(probe_case) = probe_case {
+            command.env("FULLMAG_CANDIDATE_HELPER_PROBE_CASE", probe_case);
+        } else {
+            command.env_remove("FULLMAG_CANDIDATE_HELPER_PROBE_CASE");
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -104,7 +193,15 @@ impl CandidateHelperProcess {
                     .spawn(move || {
                         let written = {
                             let mut stdin = stdin;
-                            stdin.write_all(&request).is_ok()
+                            match (incomplete_prefix, tail_ready) {
+                                (Some(prefix), Some(ready)) => {
+                                    stdin.write_all(&request[..prefix]).is_ok()
+                                        && ready.recv_timeout(Duration::from_secs(3)).is_ok()
+                                        && stdin.write_all(&request[prefix..]).is_ok()
+                                }
+                                (None, None) => stdin.write_all(&request).is_ok(),
+                                _ => false,
+                            }
                         };
                         let _ = input_sender.send(HelperEvent::InputWritten(written));
                     }) {
@@ -129,8 +226,12 @@ impl CandidateHelperProcess {
                 match thread::Builder::new()
                     .name(format!("{name}-stdout"))
                     .spawn(move || {
-                        let output = read_bounded_output(stdout, output_limit);
-                        let _ = output_sender.send(HelperEvent::OutputRead(output));
+                        if probe_case_enabled {
+                            read_probe_output(stdout, output_limit, output_sender);
+                        } else {
+                            let output = read_bounded_output(stdout, output_limit);
+                            let _ = output_sender.send(HelperEvent::OutputRead(output));
+                        }
                     }) {
                     Ok(reader) => Some(reader),
                     Err(_) => {
@@ -158,8 +259,11 @@ impl CandidateHelperProcess {
             helper_pid,
             deadline,
             cleanup_deadline: None,
+            output_limit,
+            probe_case: probe_case_enabled,
+            probe_tail_after_exit: tail_signal,
             input_complete,
-            output: None,
+            output: Vec::new(),
             output_complete,
             exit_status: None,
             failure,
@@ -170,6 +274,14 @@ impl CandidateHelperProcess {
 
     pub(crate) fn helper_pid(&self) -> u32 {
         self.helper_pid
+    }
+
+    pub(crate) fn probe_output(&self) -> Option<&[u8]> {
+        self.probe_case.then_some(self.output.as_slice())
+    }
+
+    pub(crate) fn probe_input_complete(&self) -> Option<bool> {
+        self.probe_case.then_some(self.input_complete).flatten()
     }
 
     pub(crate) fn is_terminal(&self) -> bool {
@@ -237,6 +349,11 @@ impl CandidateHelperProcess {
             }
         }
         if self.exit_status.is_some() {
+            // Only the incomplete-input fixture delays its tail until actual
+            // process exit. An ACK alone races with failure-triggered kill.
+            if let Some(signal) = self.probe_tail_after_exit.take() {
+                let _ = signal.try_send(());
+            }
             self.cleanup_deadline
                 .get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
         }
@@ -255,7 +372,7 @@ impl CandidateHelperProcess {
         }
 
         let input_complete = self.input_complete == Some(true);
-        let output = self.output.take().unwrap_or_default();
+        let output = std::mem::take(&mut self.output);
         self.join_transports()?;
         self.child.take();
         self.terminal = true;
@@ -273,10 +390,13 @@ impl CandidateHelperProcess {
             Some(reason) => Ok(HelperPoll::Failed {
                 helper_pid: self.helper_pid,
                 exit_code: status.code(),
+                input_complete,
+                output,
                 reason,
             }),
             None => Ok(HelperPoll::Completed {
                 helper_pid: self.helper_pid,
+                exit_code: status.code(),
                 output,
             }),
         }
@@ -291,19 +411,65 @@ impl CandidateHelperProcess {
                             .get_or_insert("development candidate helper request transport failed");
                     }
                 }
-                Ok(HelperEvent::OutputRead(Ok(output))) => {
-                    self.output_complete = true;
-                    if self.output.replace(output).is_some() {
+                Ok(HelperEvent::OutputRead(output)) => {
+                    let BoundedOutput {
+                        bytes,
+                        exceeded_limit,
+                        read_failed,
+                    } = output;
+                    if self.output_complete {
                         self.failure.get_or_insert(
                             "development candidate helper output completed more than once",
                         );
                     }
-                }
-                Ok(HelperEvent::OutputRead(Err(()))) => {
                     self.output_complete = true;
-                    self.failure.get_or_insert(
-                        "development candidate helper output failed or exceeded its limit",
-                    );
+                    self.output = bytes;
+                    if exceeded_limit {
+                        self.failure.get_or_insert(
+                            "development candidate helper output exceeded its limit",
+                        );
+                    }
+                    if read_failed {
+                        self.failure
+                            .get_or_insert("development candidate helper output read failed");
+                    }
+                }
+                Ok(HelperEvent::ProbeOutputChunk(chunk)) => {
+                    if !self.probe_case {
+                        self.failure
+                            .get_or_insert("production helper received probe output progress");
+                    }
+                    let remaining = self
+                        .output_limit
+                        .saturating_add(1)
+                        .saturating_sub(self.output.len());
+                    if chunk.len() > remaining {
+                        self.failure.get_or_insert(
+                            "development candidate helper output exceeded its limit",
+                        );
+                    }
+                    self.output
+                        .extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                }
+                Ok(HelperEvent::ProbeOutputFinished {
+                    exceeded_limit,
+                    read_failed,
+                }) => {
+                    if !self.probe_case || self.output_complete {
+                        self.failure.get_or_insert(
+                            "development candidate helper probe output completed unexpectedly",
+                        );
+                    }
+                    self.output_complete = true;
+                    if exceeded_limit {
+                        self.failure.get_or_insert(
+                            "development candidate helper output exceeded its limit",
+                        );
+                    }
+                    if read_failed {
+                        self.failure
+                            .get_or_insert("development candidate helper output read failed");
+                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -445,14 +611,81 @@ impl Drop for CandidateHelperProcess {
     }
 }
 
-fn read_bounded_output(stdout: impl Read, output_limit: usize) -> std::result::Result<Vec<u8>, ()> {
-    let mut output = Vec::new();
-    stdout
-        .take((output_limit + 1) as u64)
-        .read_to_end(&mut output)
-        .map_err(|_| ())?;
-    if output.len() > output_limit {
-        return Err(());
+fn read_bounded_output(mut stdout: impl Read, output_limit: usize) -> BoundedOutput {
+    let mut bytes = Vec::new();
+    let mut exceeded_limit = false;
+    let mut read_failed = false;
+    let mut buffer = [0u8; 4096];
+    loop {
+        let remaining = output_limit.saturating_add(1).saturating_sub(bytes.len());
+        if remaining == 0 {
+            exceeded_limit = true;
+            break;
+        }
+        let read_limit = buffer.len().min(remaining);
+        match stdout.read(&mut buffer[..read_limit]) {
+            Ok(0) => break,
+            Ok(count) => {
+                bytes.extend_from_slice(&buffer[..count]);
+                if bytes.len() > output_limit {
+                    exceeded_limit = true;
+                    break;
+                }
+            }
+            Err(_) => {
+                read_failed = true;
+                break;
+            }
+        }
     }
-    Ok(output)
+    BoundedOutput {
+        bytes,
+        exceeded_limit,
+        read_failed,
+    }
+}
+
+fn read_probe_output(
+    mut stdout: impl Read,
+    output_limit: usize,
+    sender: mpsc::Sender<HelperEvent>,
+) {
+    let mut bytes_read = 0usize;
+    let mut exceeded_limit = false;
+    let mut read_failed = false;
+    let mut buffer = [0u8; 1024];
+    loop {
+        let remaining = output_limit.saturating_add(1).saturating_sub(bytes_read);
+        if remaining == 0 {
+            exceeded_limit = true;
+            break;
+        }
+        let read_limit = buffer.len().min(remaining);
+        match stdout.read(&mut buffer[..read_limit]) {
+            Ok(0) => break,
+            Ok(count) => {
+                bytes_read += count;
+                if sender
+                    .send(HelperEvent::ProbeOutputChunk(buffer[..count].to_vec()))
+                    .is_err()
+                {
+                    return;
+                }
+                // The incomplete-input fixture closes stdin before its ACK.
+                // Only then allow the writer to attempt the remaining bytes.
+                if bytes_read > output_limit {
+                    exceeded_limit = true;
+                    break;
+                }
+            }
+            Err(_) => {
+                read_failed = true;
+                break;
+            }
+        }
+    }
+    let _ = sender.send(HelperEvent::ProbeOutputFinished {
+        exceeded_limit,
+        read_failed,
+    });
 }

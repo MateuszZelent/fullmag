@@ -1,14 +1,64 @@
 # Status realizacji całego planu refaktoryzacji
 
+Aktualna bramka produkcyjnych typów Control Room, 05.10.2026:
+`just check-control-room-production-source` PASS, receipt
+`0a51bc82889b435aa2d781b6244b5c71`. Wcześniejsze diagnostyki Start/About
+opisane poniżej są historyczne; w tej próbie nie wystąpiły. Kontrola ma
+`noEmit` i wyklucza testy jednostkowe. Pełny lint również PASS, receipt
+`4b48e606f9b449cbb432d10e93120ca1`, exit 0, identyczny digest źródeł
+`6d1c959ed8598f83c434f953ba30c34666ae3b9d90b22f16aad77407724b93f0`
+w obu próbach. Są to bramki źródeł, nie browser/runtime/physics gates.
+
+Checkpoint P8-53AV, 05.10.2026: [asynchroniczne przygotowanie kandydata](p8/53av-asynchronous-candidate-preparation.md).
+Zarządzany cykl pompy `c10afae06a774ddcb1307842bbf87aab`: completed,
+exit 0, 13 kontroli. Pierwszy krok 17 ms z działającym helperem; potwierdzono
+odnowienie/wygaśnięcie readiness, reuse jednej kopii i terminalne odebranie
+własnych procesów. Wcześniejszy timeout opisany poniżej zachowano jako historię.
+Realny Build backend z UI `1a86350e-94dd-4194-b07d-7365d7ed11c1`:
+completed, exit 0, 9 min 11 s łącznie; ten sam API/workspace pozostał aktywny.
+Commity lokalne: `3a157b229eb2a1111440f641b1cca7fef566bb36` oraz
+`7f5c52459dd0697d976c5e41eedab24cbf7b3c7d`. Publiczny restart pozostaje
+niedostępny. [P8-53AW — rzeczywiste awarie helpera](p8/53aw-candidate-preparation-fault-gates.md)
+ma natywny PASS: receipt `cce9f225893f4fae97c3a3d15906641e`, exit 0,
+10/10 kontroli i potwierdzone zakończenie CLI oraz siedmiu helperów.
+Następne bramki: stale scope i native/browser restore niepustego modelu. Nie podnosimy
+procentów całego planu na podstawie tej wąskiej kontroli.
+
+Checkpoint P8-54, 05.10.2026: [build natywny na żądanie](p8/54-manual-native-build-snapshot.md).
+Zarządzany Windows workspace uruchomiono ponownie za zgodą użytkownika.
+Rzeczywisty przycisk **Build backend** zakończył żądanie
+`584e9cff-8802-4f81-90ea-d88284600c7d` receiptem `completed`, exit 0.
+Podczas buildu utworzono pusty model FDM; po zakończeniu model i ten sam
+API instance pozostały aktywne. Build nie restartuje runtime.
+Kontrole storage/lease/status/odbiornika: 90 PASS, 2 skipped, 16 subtests PASS;
+dodatkowa regresja anulowania podczas przygotowania logu: zestaw storage
+39 PASS, 2 skipped, 12 subtests PASS. To testy interpretowane.
+Stałe wejścia Cargo zapisano w `bf32fda48868f5bda4a0aa3a314c0f680307257d`,
+usunięcie podwójnych skanów w `be87c55061e346029536596d3190f719716c490d`,
+a natywną trasę na żądanie w `5fe31538e5e061df76a78a9ebb2c60644990e7fb`.
+Kolejny rzeczywisty intent UI `4428c9b0-f1b1-4855-8c17-e4d56c087f31`
+zakończył się `ready`: CLI/API 32,46 s, desktop 45,93 s, pełna zarządzana
+operacja 5 min 30 s. Między oboma snapshots nie zmieniły się pliki Rust;
+to dowód reuse w tym scenariuszu, a nie benchmark wszystkich zmian backendu.
+Zapis statusu toleruje krótką odmowę rename Windows; interpretowane zestawy
+storage/status mają 50 PASS, 2 skipped, 19 subtests PASS, helper 12/12 PASS.
+Kontrolowany restart z odtworzeniem modelu pozostaje otwarty. Próba pompy
+P8-53AU `3c7f86cd3a3d4adea54909c868f3d747` zakończyła się timeoutem
+acquisition helper przed kontrolami (0 zaliczonych). API oznaczone jako
+unknown sprawdzono jako nieobecne, bez potwierdzonego exit code; zachowano
+receipt i osobny `process-reconciliation.json`. Ten checkpoint nie podnosi
+kwalifikacji FEM ani procentów całego planu.
+
 Checkpoint P8-53AU, 05.10.2026: [prywatne potwierdzenie konsumenta](p8/53au-private-consumer-readiness.md).
 Przygotowano uwierzytelniony stan w pamięci API z ważnością 5 sekund,
 odnowienie w pompie i ochronę przed powtarzaniem selekcji tego samego pakietu.
-Review i fokusowane sprawdzenia źródeł PASS. Pierwszy build zablokował
-równoległy import IR; kolejny skompilował wszystkie fazy, ale został odrzucony
-po aktualizacji mastera podczas buildu. Terminalna odmowa preflight i brak
-uruchomienia API potwierdzone. Dokładnie 18 plików zadania skopiowano do
-zarejestrowanej izolacji `p8-readiness-20261005`; build tej kopii jest w toku.
-Prywatny driver i aktualna pompa pozostają NOT VERIFIED do prób runtime.
+Review i fokusowane sprawdzenia źródeł PASS. Po odmowie zmieniającego się
+mastera build izolacji `p8-readiness-20261005` PASS. Prywatny protokół:
+40 kontroli i 3/3 procesy odebrane; regresja konsumenta empty/scene:
+39 kontroli i 20/20 procesów odebranych. Dowody obejmują wskazaną bazę i 18
+plików AU, nie późniejsze równoległe zmiany mastera. Cykl gotowości pompy
+z dwoma różnymi buildami oraz pełny native/browser flow pozostają otwarte.
+Nowa kontrola typów mastera nie wystartowała z powodu zajętej blokady.
 Publiczne `restart_available=false`, procenty P0–P8 bez awansu.
 
 Checkpoint P8-53AT, 04.10.2026: [jawna akcja restartu](p8/53at-development-restart-action.md).
