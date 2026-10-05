@@ -1,3 +1,21 @@
+<!-- python-ci-assertion-remediation-20261005 -->
+## Bieżący checkpoint — CI potwierdza RAM-dysk, trzy korekty asercji Python
+
+Bootstrap #37367782823: windows-volatile-storage-contracts PASS, wraz z
+przywróceniem TEMP/TMP/TMPDIR po błędzie kompilatora. FDM relaxation i API
+hygiene PASS. W nowej suite sceny/profilu Python: 100 PASS, 3 FAIL.
+Dwa testy GPU/auto zostały prawidłowo odrzucone przez produkcyjny guard,
+lecz regex oczekiwał tekstu FEM CPU zamiast rzeczywistego kontraktu żądanej
+ścieżki. Trzeci fixture oczekiwał technicznego stem scene_document, sprzecznie
+z naprawionym i pokrytym innymi testami kontraktem nazwy modelu.
+
+Poprawiono wyłącznie asercje: dokładny wymagany backend/device w komunikacie,
+brak syntetycznego stem oraz zachowanie autorskiej study_name w ProblemIR.
+Pozostałe asercje niezmienione. Parser Python 2/2 PASS; wykonanie poprawki
+wymaga CI. Lokalnych unit tests nie wykonano. Produkcyjna fizyka i #233
+bez zmian. #233 nadal kompiluje/linkuje; resume1 jest aktywny. Nowych
+solver rows brak; pełny cel S00–S12 i bramki naukowe pozostają OPEN.
+
 <!-- application-ci-compile-remediation-20261005 -->
 ## Bieżący checkpoint — wykryte dwa błędy kompilacji testów materializacji
 

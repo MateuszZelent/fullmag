@@ -63,7 +63,10 @@ def test_profile_controls_parallel_lane_instead_of_inactive_legacy_fields(tmp_pa
         encoding="utf-8",
     )
     if device != "cpu":
-        with pytest.raises(ValueError, match="FEM CPU"):
+        with pytest.raises(
+            ValueError,
+            match=r"adaptive mode requires requested_backend='fem' and requested_device='cpu'",
+        ):
             load_problem_from_script(script, lightweight_assets=True)
         return
     loaded = load_problem_from_script(script, lightweight_assets=True)
