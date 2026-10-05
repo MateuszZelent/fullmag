@@ -1,6 +1,7 @@
 "use client";
 
 import { FolderOpen, Play, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
 
@@ -17,10 +18,10 @@ export interface ContinueCardProps {
   readonly onResume: (checkpointId: string) => void;
   readonly onOpen: () => void;
   /**
-   * Present only when the runtime can delete a checkpoint. Today it cannot, so
-   * the caller passes nothing and no Discard button is drawn.
+   * Deletes the named checkpoint in the open session's runtime. Without it no
+   * Discard button is drawn. The card asks twice before calling it.
    */
-  readonly onDiscard?: () => void;
+  readonly onDiscard?: (checkpointId: string) => void;
 }
 
 /**
@@ -41,6 +42,19 @@ export function ContinueCard({
   const { session, resume, reason, status } = resolution;
   const labels = continueLabels(session);
   const resumeEnabled = resume.kind === "enabled";
+  const { discard } = resolution;
+  // The confirmation belongs to one checkpoint: when the latest one changes
+  // (a new capture, or this one was deleted) it must be asked for again.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const confirmingNow =
+    discard.kind === "enabled" && confirming === discard.checkpointId ? discard : null;
+  // The question stays up, labelled busy, while the runtime works; once it
+  // answers (done or refused) the card returns to its resting state.
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (wasBusy.current && !busy) setConfirming(null);
+    wasBusy.current = busy;
+  }, [busy]);
   return (
     <section
       aria-labelledby="fm-continue-heading"
@@ -105,13 +119,64 @@ export function ContinueCard({
             <FolderOpen aria-hidden="true" size={14} />
             Open project
           </Button>
-          {onDiscard ? (
-            <Button disabled={busy} onClick={onDiscard} type="button" variant="ghost">
+          {onDiscard && discard.kind === "enabled" && !confirmingNow ? (
+            <Button
+              data-action="discard"
+              disabled={busy}
+              onClick={() => setConfirming(discard.checkpointId)}
+              type="button"
+              variant="ghost"
+            >
+              <Trash2 aria-hidden="true" size={14} />
+              Discard checkpoint
+            </Button>
+          ) : null}
+          {onDiscard && discard.kind === "disabled" ? (
+            <Button
+              aria-describedby="fm-continue-discard-reason"
+              data-action="discard"
+              disabled
+              title={discard.reason}
+              type="button"
+              variant="ghost"
+            >
               <Trash2 aria-hidden="true" size={14} />
               Discard checkpoint
             </Button>
           ) : null}
         </div>
+        {onDiscard && discard.kind === "disabled" ? (
+          <p className="fm-start-continue__reason" id="fm-continue-discard-reason">
+            {discard.reason}
+          </p>
+        ) : null}
+        {onDiscard && confirmingNow ? (
+          <div className="fm-start-continue__confirm" role="group" aria-label="Confirm discard">
+            <span id="fm-continue-discard-question">
+              Discard the checkpoint at step {confirmingNow.step}? It cannot be restored afterwards.
+            </span>
+            <Button
+              aria-describedby="fm-continue-discard-question"
+              data-action="discard-confirm"
+              disabled={busy}
+              onClick={() => onDiscard(confirmingNow.checkpointId)}
+              type="button"
+              variant="danger"
+            >
+              <Trash2 aria-hidden="true" size={14} />
+              {busy ? "Discarding…" : "Discard"}
+            </Button>
+            <Button
+              data-action="discard-cancel"
+              disabled={busy}
+              onClick={() => setConfirming(null)}
+              type="button"
+              variant="secondary"
+            >
+              Keep
+            </Button>
+          </div>
+        ) : null}
       </div>
     </section>
   );

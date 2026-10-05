@@ -50,6 +50,8 @@ export interface HomeSectionProps {
   readonly onOpenRecent: (entry: RecentEntry) => Promise<string | null>;
   /** Restores the checkpoint into the open session; resolves to a failure message. */
   readonly onResumeContinue: (checkpointId: string, entry: RecentEntry) => Promise<string | null>;
+  /** Deletes the checkpoint in the open session's runtime; resolves to a failure message. */
+  readonly onDiscardContinue: (checkpointId: string, entry: RecentEntry) => Promise<string | null>;
   readonly compute: ComputeProbeState;
   readonly onRunCommand: (commandId: string) => void;
 }
@@ -69,6 +71,7 @@ export function HomeSection({
   name,
   onOpenRecent,
   onResumeContinue,
+  onDiscardContinue,
   onRunCommand,
 }: HomeSectionProps) {
   const today = useToday();
@@ -119,6 +122,9 @@ export function HomeSection({
           <ContinueCard
             busy={continueBusy}
             entry={continueEntry}
+            onDiscard={(checkpointId) =>
+              void run(() => onDiscardContinue(checkpointId, continueEntry))
+            }
             onOpen={() => void run(() => onOpenRecent(continueEntry))}
             onResume={(checkpointId) => {
               setRestoring(true);
