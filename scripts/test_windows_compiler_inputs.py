@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -9,7 +10,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from windows import build_snapshot, compiler_inputs
+import fullmag_storage
+from windows import build_snapshot, compiler_inputs, volatile_build_storage
 
 
 class CompilerInputsChecks(unittest.TestCase):
@@ -43,8 +45,38 @@ class CompilerInputsChecks(unittest.TestCase):
         self.addCleanup(self.writable, Path(metadata["source_root"]).parent)
         return metadata
 
-    def materialize(self, metadata):
-        return compiler_inputs.materialize(metadata["record_path"], self.build)
+    def materialize(self, metadata, working_root=None):
+        return compiler_inputs.materialize(
+            metadata["record_path"], self.build, working_root=working_root
+        )
+
+    def make_working_root(self):
+        profile = "windows-native-fdm-cpu-dev"
+        storage_root = self.root / "storage"
+        layout = fullmag_storage.resolve_layout(
+            self.repo, profile, environ={"FULLMAG_PROJECT_STORAGE_ROOT": str(storage_root)}
+        )
+        self.build = Path(layout["build_root"])
+        self.build.mkdir(parents=True)
+        root = self.root.parent / f"{self.root.name}-ramdisk"
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        project_root = Path(layout["project_root"])
+        profile_root = root / "builds" / layout["worktree_id"] / profile
+        profile_root.mkdir(parents=True)
+        (root / ".fullmag-volatile-root.json").write_text(json.dumps({
+            "schema": volatile_build_storage.ROOT_SCHEMA,
+            "project_root": str(project_root),
+        }))
+        profile_marker = profile_root / volatile_build_storage.MARKER
+        profile_marker.write_text(json.dumps({
+            "schema": volatile_build_storage.PROFILE_SCHEMA,
+            "project_root": str(project_root),
+            "repo_root": layout["repo_root"],
+            "worktree_id": layout["worktree_id"],
+            "profile": profile,
+            "durable_build_root": layout["build_root"],
+        }))
+        return root, profile_root / "compiler-inputs", profile_marker, str(storage_root)
 
     @staticmethod
     def writable(root):
@@ -102,6 +134,66 @@ class CompilerInputsChecks(unittest.TestCase):
         compiler_inputs.materialize(second["record_path"], self.build)
         self.assertFalse(stale.exists())
         self.assertEqual((mirror / "crates/demo/src/lib.rs").read_bytes(), self.rust.read_bytes())
+
+    def test_external_working_root_keeps_snapshot_authority_and_stable_mtime(self):
+        timestamp = 1_600_000_000_123_456_700
+        os.utime(self.rust, ns=(timestamp, timestamp))
+        ram_root, working_root, _, storage_root = self.make_working_root()
+        first = self.make()
+        with patch.dict(os.environ, {
+            volatile_build_storage.ROOT_ENV: str(ram_root),
+            "FULLMAG_PROJECT_STORAGE_ROOT": storage_root,
+        }):
+            first_result = self.materialize(first, working_root)
+            mirror = working_root / "source"
+            rust_copy = mirror / "crates/demo/src/lib.rs"
+            original_mtime = rust_copy.stat().st_mtime_ns
+            self.assertEqual(Path(first_result["source_root"]), mirror)
+            self.assertEqual(first_result["snapshot_source_root"], first["source_root"])
+            self.assertEqual(Path(first_result["record_path"]), Path(first["record_path"]))
+            self.assertEqual(Path(first_result["compiler_input_binding"]), working_root / "record.json")
+
+            document = self.repo / "docs/ramdisk-update.md"
+            document.parent.mkdir()
+            document.write_text("new immutable snapshot\n")
+            second = self.make()
+            second_result = self.materialize(second, working_root)
+            self.assertEqual(Path(second_result["source_root"]), mirror)
+            self.assertEqual(rust_copy.stat().st_mtime_ns, original_mtime)
+            self.assertEqual(rust_copy.read_bytes(), self.rust.read_bytes())
+            self.assertEqual((mirror / "docs/ramdisk-update.md").read_bytes(), document.read_bytes())
+
+            command = [sys.executable, "-B", str(Path(compiler_inputs.__file__))]
+            verified = subprocess.run(
+                command + ["verify", "--record", second["record_path"], "--build-root", str(self.build),
+                           "--working-root", str(working_root)],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertEqual(json.loads(verified.stdout), second_result)
+            rematerialized = subprocess.run(
+                command + ["materialize", "--record", second["record_path"], "--build-root", str(self.build),
+                           "--working-root", str(working_root)],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertEqual(json.loads(rematerialized.stdout), second_result)
+
+    def test_external_working_root_and_marker_mismatch_refuse_before_write(self):
+        ram_root, working_root, profile_marker, storage_root = self.make_working_root()
+        metadata = self.make()
+        with patch.dict(os.environ, {
+            volatile_build_storage.ROOT_ENV: str(ram_root),
+            "FULLMAG_PROJECT_STORAGE_ROOT": storage_root,
+        }):
+            with self.assertRaises(compiler_inputs.CompilerInputsError):
+                self.materialize(metadata, self.root / "misplaced" / "compiler-inputs")
+            self.assertFalse(working_root.exists())
+
+            marker = json.loads(profile_marker.read_text())
+            marker["durable_build_root"] = str(self.root / "other-build")
+            profile_marker.write_text(json.dumps(marker))
+            with self.assertRaises(compiler_inputs.CompilerInputsError):
+                self.materialize(metadata, working_root)
+            self.assertFalse(working_root.exists())
 
     def test_existing_unbound_tree_is_not_claimed_or_reconciled(self):
         metadata = self.make()
