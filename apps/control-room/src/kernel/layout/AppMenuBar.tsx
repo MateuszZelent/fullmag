@@ -567,7 +567,9 @@ function SessionAppMenuBar() {
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
     dialogState.registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   );
-  const runtimeResourceData = useRuntimeCommandControlResourceData();
+  const runtimeResourceData = useRuntimeCommandControlResourceData({
+    enabled: sessionIdentity !== null,
+  });
   const sessionDisplay = resolveHeaderSessionDisplay(
     visibleSessionStatus,
     readDetailedRuntimeState(runtimeResourceData[SIMULATION_SOLVER_STATUS_PATH]),

@@ -446,7 +446,7 @@ describe("useSimulationPreparation", () => {
       .mockImplementationOnce(() => revision7.promise)
       .mockImplementationOnce(() => revision8.promise)
       .mockImplementation(() => revision9.promise);
-    const { bus, kernel, resources } = makeKernel(load);
+    const { bus, kernel, resources } = makeKernel(load, statusFixture(7));
     const observations: PreparationResult[] = [];
     const dom = installTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
@@ -455,15 +455,36 @@ describe("useSimulationPreparation", () => {
     await act(async () => {
       root.render(
         <KernelContext.Provider value={kernel}>
-        <Probe observations={observations} requiredRevision={7} />
+          <Probe
+            enabled={false}
+            observations={observations}
+            requiredRevision={7}
+          />
         </KernelContext.Provider>,
       );
     });
 
-    expect(resultSnapshot(observations[0]!)).toMatchObject({
+    await waitFor(
+      () =>
+        observations.some(
+          (observation) =>
+            observation.revision === 7 && observation.status === "idle",
+        ),
+      "session-scoped revision 7 did not become available while loading was paused",
+    );
+    expect(resultSnapshot(observations.at(-1)!)).toMatchObject({
       data: null,
       revision: 7,
       status: "idle",
+    });
+    expect(load).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <Probe observations={observations} requiredRevision={7} />
+        </KernelContext.Provider>,
+      );
     });
     await waitFor(() => load.mock.calls.length === 1, "revision 7 did not load");
     expect(
@@ -582,11 +603,13 @@ describe("useSimulationPreparation", () => {
   it("uses the deterministic server snapshot and client revision before aborting", async () => {
     const pending = deferred<SimulationPreparationResource>();
     let signal: AbortSignal | undefined;
-    const load = vi.fn((options?: { signal?: AbortSignal }) => {
-      signal = options?.signal;
-      return pending.promise;
-    });
-    const { kernel, resources } = makeKernel(load);
+    const load = vi.fn(
+      (options?: { sessionScopeKey?: string; signal?: AbortSignal }) => {
+        signal = options?.signal;
+        return pending.promise;
+      },
+    );
+    const { kernel, resources } = makeKernel(load, statusFixture(11));
     resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 11);
     const serverObservations: PreparationResult[] = [];
     renderToStaticMarkup(
@@ -602,7 +625,11 @@ describe("useSimulationPreparation", () => {
       await act(async () => {
         root.render(
           <KernelContext.Provider value={kernel}>
-          <Probe observations={clientObservations} requiredRevision={11} />
+            <Probe
+              enabled={false}
+              observations={clientObservations}
+              requiredRevision={11}
+            />
           </KernelContext.Provider>,
         );
       });
@@ -616,16 +643,43 @@ describe("useSimulationPreparation", () => {
       expect(resultSnapshot(clientObservations[0]!)).toEqual({
         data: null,
         error: null,
+        revision: null,
+        status: "idle",
+      });
+      await waitFor(
+        () =>
+          clientObservations.some(
+            (observation) =>
+              observation.revision === 11 && observation.status === "idle",
+          ),
+        "client did not adopt its scoped preparation revision",
+      );
+      expect(resultSnapshot(clientObservations.at(-1)!)).toMatchObject({
+        data: null,
         revision: 11,
         status: "idle",
       });
+      expect(load).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={clientObservations} requiredRevision={11} />
+          </KernelContext.Provider>,
+        );
+      });
       await waitFor(() => load.mock.calls.length === 1, "request did not start");
+      expect(load).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionScopeKey: PREPARATION_SESSION_SCOPE_KEY,
+        }),
+      );
       expect(signal?.aborted).toBe(false);
     } finally {
       await act(async () => root.unmount());
-      expect(signal?.aborted).toBe(true);
       dom.restore();
     }
+    expect(signal?.aborted).toBe(true);
   });
 });
 

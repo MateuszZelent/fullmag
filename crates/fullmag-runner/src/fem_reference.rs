@@ -2764,6 +2764,10 @@ mod tests {
     #[test]
     fn equilibrium_identity_rejects_rotated_dmi_source_plans() {
         let mut plan = make_test_plan(false);
+        crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
+            &plan,
+        )
+        .expect("the baseline exchange/demag plan must have a supported identity");
         plan.rotated_interfacial_dmi = Some(3e-3);
 
         let error =
@@ -2774,7 +2778,7 @@ mod tests {
         assert!(error
             .message
             .contains("equilibrium_identity_scope_unsupported"));
-        assert!(error.message.contains("DMI data"));
+        assert!(error.message.contains("DMI physics outside the certified"));
     }
 
     #[test]
