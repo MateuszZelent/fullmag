@@ -133,6 +133,7 @@ _SECRET_SUFFIXES = frozenset(
 _SOURCE_IDENTIFIER_PATHS = frozenset({
     "apps/control-room/src/design/styles/tokens.css",
     "apps/control-room/src/design/styles/start-screen.tokens.css",
+    "docs/design/start-screen/tokens/start-screen.tokens.css",
 })
 
 

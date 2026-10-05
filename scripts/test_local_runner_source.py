@@ -211,9 +211,12 @@ class LocalRunnerSourceTests(unittest.TestCase):
             allowed_paths = (
                 "apps/control-room/src/design/styles/tokens.css",
                 "apps/control-room/src/design/styles/start-screen.tokens.css",
+                "docs/design/start-screen/tokens/start-screen.tokens.css",
             )
             for relative in allowed_paths:
-                (repo / relative).write_text(":root { --space: 1px; }\n", encoding="utf-8")
+                candidate = repo / relative
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                candidate.write_text(":root { --space: 1px; }\n", encoding="utf-8")
             _git(repo, "add", *allowed_paths)
             _git(repo, "commit", "-qm", "design tokens")
             output = root / "capsule"
