@@ -241,7 +241,12 @@ study.runtime_metadata("de_smoke", {
 })
 study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
                        dt=RELAX_DT_S, relax_alpha=0.5,
-                       max_steps=RELAX_MAX_STEPS, tolA=1.0)
+                       max_steps=RELAX_MAX_STEPS, tolA=1.0).autosave(
+    fm.StageAutosave(
+        target="results", layout="separate", format="zarr",
+        fields=(fm.FieldAutosave("m", every_steps=100),),
+    )
+)
 study.stages.add_eigenmodes(
     count=REQUESTED_MODE_COUNT, target=MODAL_TARGET,
     target_frequency=TARGET_FREQUENCY_HZ if MODAL_TARGET == "nearest" else None,

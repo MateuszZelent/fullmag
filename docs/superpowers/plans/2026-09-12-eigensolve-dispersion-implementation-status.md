@@ -1,3 +1,26 @@
+<!-- canonical-autosave-model-retry-20261005 -->
+## Checkpoint — jawny zapis kanonicznego pola przed ponowieniem k10
+
+Próba #233 zatrzymała się przy początkowym autosave relaksacji, przed
+uruchomieniem eigensolve: unsupported quantity 'magnetization'. Trace prowadzi
+do domyślnych producentów w output_storage_lowering.py i project_output_policy.rs.
+Kanoniczne pole m jest zredukowaną magnetyzacją (wektor, jednostka 1);
+nie zastępujemy go fizycznym M = Ms m w A/m. Źródła kontraktu:
+crates/fullmag-quantities/src/catalog.rs oraz docs/specs/visualization-quantities-v1.md.
+
+Benchmark examples/fem_de_smoke_numeric.py jawnie deklaruje FieldAutosave('m',
+every_steps=100), target results, layout separate, format zarr. Zachowuje
+wcześniejszy format, cadence i docelową lokalizację; geometria, materiał,
+demag, warunki brzegowe, relaksacja i ustawienia eigenmodes są niezmienione.
+Publiczny DSL StageAutosave trafia do field_autosave.quantity w ProblemIR.
+Zmiana pozwala ponowić identyczny fizyczny przypadek na gotowym runtime #233.
+Nie kwalifikuje jeszcze naprawy implicit default: oba domyślne producenci
+wymagają osobnej regresji CI i późniejszego managed runtime z poprawką.
+
+Kontrola składni benchmarku AST i review diff: PASS. Nowe solver rows,
+residuale i wynik częstotliwości pozostają NOT VERIFIED do zakończenia próby.
+Zakres S00–S12 oraz signed sweep, parity, zbieżność, GUI/A1, S09 i GPU OPEN.
+
 <!-- runtime233-first-real-attempt-20261005 -->
 ## Bieżący checkpoint — #233 PASS, pierwsza próba zatrzymana przed eigensolve
 
