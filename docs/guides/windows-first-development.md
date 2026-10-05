@@ -49,6 +49,13 @@ Przed kompilacją powstaje utrwalona kopia źródeł. Dalsze edycje agentów nie
 unieważniają tego buildu i nie uruchamiają kolejnego. Zmiana utrwalonej kopii
 jest błędem integralności. Frontend zachowuje automatyczne HMR.
 
+Testy w `packages/fullmag-py/tests/` nie są częścią instalowanego pakietu
+Python (`setuptools` pakuje `src/`). Ich edycje nie unieważniają runtime ani
+aktywnego środowiska. Snapshot nadal kopiuje i sprawdza ich rzeczywiste bajty;
+pełna tożsamość źródeł i jawne `qualification_inputs` zachowują dowody testów.
+Zmiany produkcyjnego `src/` i zależności nadal wymagają właściwego buildu oraz
+bezpiecznego zamknięcia używanego środowiska. Szczegóły: [P8-55](../plans/active/refactor_runtime/final/p8/55-python-test-runtime-input-classification.md).
+
 Build nie restartuje działającego backendu ani symulacji. Powstaje nowy
 pakiet do późniejszego zastosowania; kontrolowany restart z odtworzeniem
 workspace pozostaje osobną bramką P8-53. Pełny log kompilatora trafia do

@@ -45,6 +45,8 @@ NON_RUNTIME_PREFIXES = (
     "docs/",
     "public_docs/",
     "scripts/test_",
+    # Package discovery is confined to src/; these are verification inputs.
+    "packages/fullmag-py/tests/",
 )
 NON_RUNTIME_FILES = {"AGENTS.md", "CHANGELOG.md", "README.md"}
 NON_RUNTIME_EXACT_PATHS = {

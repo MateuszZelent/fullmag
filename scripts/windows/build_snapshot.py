@@ -42,7 +42,9 @@ from capture_source_snapshot_identity import (
     SourceIdentityError, _is_non_runtime_path, _read_regular_file_stable, capture,
 )
 from fullmag_storage import identifier
-from windows.workspace_backend_identity import DEPENDENCY_INPUTS, INPUTS, fingerprint
+from windows.workspace_backend_identity import (
+    DEPENDENCY_INPUTS, INPUTS, fingerprint, is_native_workspace_input,
+)
 
 SCHEMA = "fullmag.windows-build-snapshot.v1"
 HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -146,7 +148,8 @@ def _git(repo, *arguments):
 
 def _paths(repo, inputs=()):
     raw = _git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *inputs)
-    return sorted({entry.decode("utf-8") for entry in raw.split(b"\0") if entry})
+    return sorted({entry.decode("utf-8") for entry in raw.split(b"\0")
+                   if entry and (not inputs or is_native_workspace_input(entry.decode("utf-8")))})
 
 
 def _gitlinks(repo):

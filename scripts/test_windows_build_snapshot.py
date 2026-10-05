@@ -13,6 +13,62 @@ from windows import build_snapshot
 
 
 class SnapshotChecks(unittest.TestCase):
+    def test_python_tests_do_not_invalidate_runtime_but_qualification_can_pin_them(self):
+        from capture_source_snapshot_identity import capture
+        from windows.workspace_backend_identity import DEPENDENCY_INPUTS, fingerprint
+        path = self.repo / "packages/fullmag-py/tests/test_runtime.py"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"before\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "test fixture")
+        before = fingerprint(self.repo)
+        dependencies = fingerprint(self.repo, DEPENDENCY_INPUTS)
+        runtime_identity = capture(self.repo, ignore_non_runtime_dirty=True)
+        qualified = capture(self.repo, ignore_non_runtime_dirty=True,
+                            qualification_inputs=[path.relative_to(self.repo).as_posix()])
+        path.write_bytes(b"after\n")
+        (path.parent / "new_test.py").write_bytes(b"new\n")
+        self.assertEqual(fingerprint(self.repo), before)
+        self.assertEqual(fingerprint(self.repo, DEPENDENCY_INPUTS), dependencies)
+        self.assertEqual(capture(self.repo, ignore_non_runtime_dirty=True), runtime_identity)
+        self.assertNotEqual(capture(self.repo, ignore_non_runtime_dirty=True,
+                                   qualification_inputs=[path.relative_to(self.repo).as_posix()]), qualified)
+        self.assertTrue(capture(self.repo)["source_snapshot_dirty"])
+        path.unlink()
+        self.assertEqual(fingerprint(self.repo), before)
+
+    def test_mutating_python_test_is_copied_and_remains_integrity_checked(self):
+        path = self.repo / "packages/fullmag-py/tests/test_runtime.py"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"before\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "test fixture")
+        original = build_snapshot._copy_file
+        def copy(source, destination):
+            if source == path:
+                path.write_bytes(b"changed during capture\n")
+            return original(source, destination)
+        with patch.object(build_snapshot, "_copy_file", side_effect=copy):
+            result = build_snapshot.create_snapshot(self.repo, self.build)
+        frozen = Path(result["source_root"]) / path.relative_to(self.repo)
+        self.assertEqual(frozen.read_bytes(), b"changed during capture\n")
+        build_snapshot.verify_snapshot(result, self.build)
+        frozen.chmod(0o600)
+        frozen.write_bytes(b"tampered\n")
+        with self.assertRaises(build_snapshot.SnapshotError):
+            build_snapshot.verify_snapshot(result, self.build)
+
+    def test_python_runtime_source_still_invalidates_dependencies(self):
+        from windows.workspace_backend_identity import DEPENDENCY_INPUTS, fingerprint
+        path = self.repo / "packages/fullmag-py/src/fullmag/runtime.py"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"VALUE = 1\n")
+        before = fingerprint(self.repo)
+        dependencies = fingerprint(self.repo, DEPENDENCY_INPUTS)
+        path.write_bytes(b"VALUE = 2\n")
+        self.assertNotEqual(fingerprint(self.repo), before)
+        self.assertNotEqual(fingerprint(self.repo, DEPENDENCY_INPUTS), dependencies)
+
     def test_capture_retries_only_source_races_and_is_bounded(self):
         with patch.object(build_snapshot, "create_snapshot", side_effect=[
             build_snapshot.SourceChangedSnapshot("race"), {"captured": True}
