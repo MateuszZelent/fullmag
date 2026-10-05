@@ -9,6 +9,8 @@ import { SettingsSection } from "./SettingsSection";
 
 const roots = vi.hoisted(() => ({ current: null as unknown as WorkspaceRootsController }));
 vi.mock("../model/useWorkspaceRoots", () => ({ useWorkspaceRoots: () => roots.current }));
+// The profile catalogue needs a kernel; it is covered where the kernel is provided.
+vi.mock("./ExecutionProfilesSettings", () => ({ ExecutionProfilesSettings: () => null }));
 
 const workspace = (over: Partial<WorkspaceItemsController> = {}): WorkspaceItemsController => ({
   state: { kind: "ready", list: { items: [], outcome: { state: "ready" }, skipped: 0 } },

@@ -3945,8 +3945,35 @@ mod terminal_field_generation_persistence_tests {
         let request: CurrentLiveSnapshotRequest =
             serde_json::from_value(serde_json::json!({"session_id": "profile-restore"})).unwrap();
         let mut original = default_current_live_state(&request);
+        let builder: fullmag_authoring::ScriptBuilderState =
+            serde_json::from_value(serde_json::json!({
+                "revision": 1,
+                "solver": {
+                    "integrator": "rk45",
+                    "fixed_timestep": "",
+                    "relax_algorithm": "llg_overdamped",
+                    "torque_tolerance": "1e-4",
+                    "energy_tolerance": "",
+                    "max_relax_steps": "1000"
+                },
+                "mesh": {
+                    "algorithm_2d": 6,
+                    "algorithm_3d": 1,
+                    "hmax": "",
+                    "hmin": "",
+                    "size_factor": 1.0,
+                    "size_from_curvature": 0,
+                    "smoothing_steps": 1,
+                    "optimize": "",
+                    "optimize_iterations": 1,
+                    "compute_quality": false,
+                    "per_element_quality": false
+                },
+                "geometries": []
+            }))
+            .expect("minimal builder state should deserialize");
         original.scene_document = Some(fullmag_authoring::scene_document_from_script_builder(
-            &fullmag_authoring::ScriptBuilderState::default(),
+            &builder,
         ));
         assert!(execution_semantic_section(&original)
             .get("authored_execution")

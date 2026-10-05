@@ -53,7 +53,18 @@ const PROFILE_OPTIONS: DiagnosticRecorderProfile[] = [
   "forensic",
 ];
 
-export function DiagnosticRecorderDialog({
+/**
+ * The recorder is read only while its dialog is open. Mounting the content
+ * subscribes to the recorder store and exports the full artifact on every
+ * record; doing that for a closed dialog re-rendered the menu bar for every
+ * performance entry and starved concurrent renders of the workspace.
+ */
+export function DiagnosticRecorderDialog(props: DiagnosticRecorderDialogProps) {
+  if (!props.open) return null;
+  return <DiagnosticRecorderDialogContent {...props} />;
+}
+
+function DiagnosticRecorderDialogContent({
   kernel,
   onOpenChange,
   open,
