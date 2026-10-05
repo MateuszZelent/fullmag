@@ -14,6 +14,11 @@ import { ProjectInspector } from "./inspector/ProjectInspector";
 import type { ApiWorkspaceItem } from "./model/workspaceApiTypes";
 import { readProjectArchiveAtPath } from "./model/recentIndexHost";
 import { scriptSaveAvailable, type ScriptSaver } from "./model/scriptOpen";
+import {
+  buildFromScriptRequest,
+  projectCreateFailureMessage,
+  type ProjectCreator,
+} from "./model/scriptProject";
 import { useAuthorName } from "./model/useAuthorName";
 import { useComputeProbe } from "./model/useComputeProbe";
 import { useRecentIndex } from "./model/useRecentIndex";
@@ -211,6 +216,28 @@ export function StartScreen({ kernel }: ModuleProps) {
       }
     : null;
 
+  // Create project: the consent prompt already ran (CreateProjectAction), so
+  // the controller may send `consent.executed_by_user`. The new document opens
+  // like an opened archive: Home closes and the workspace takes over, where the
+  // fidelity banner reports whether the exported scene matches the script.
+  const projectDocument = kernel.projectDocument;
+  const projectCreator: ProjectCreator | null = projectDocument
+    ? async (script) => {
+        try {
+          const response = await projectDocument.createFromScript(buildFromScriptRequest(script));
+          kernel.authoringHistory?.clear();
+          homeView.close();
+          return {
+            kind: "created",
+            projectName: response.name,
+            fidelity: response.script_import.fidelity,
+          };
+        } catch (error) {
+          return { kind: "failed", message: projectCreateFailureMessage(error) };
+        }
+      }
+    : null;
+
   // Opening a project and then its saved results: the Results module of the
   // open project is the saved-results viewer (SavedResultsBrowser).
   const openResults = async (entry: RecentEntry): Promise<string | null> => {
@@ -319,6 +346,7 @@ export function StartScreen({ kernel }: ModuleProps) {
           ) : section === "import" ? (
             <ImportSection
               onOpenFile={openFile}
+              projectCreator={projectCreator}
               scriptSaver={scriptSaver}
               openDisabledReason={browseDisabledReason}
             />
@@ -392,6 +420,7 @@ export function StartScreen({ kernel }: ModuleProps) {
             void scripts.forget(id);
           },
         }}
+        projectCreator={projectCreator}
         scriptSaver={scriptSaver}
         section={section}
         templateId={selectedTemplateId}

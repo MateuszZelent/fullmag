@@ -4959,6 +4959,46 @@ describe("ControlRoomApi", () => {
     }]);
   });
 
+  it("posts the script to the from-script resource with explicit consent and surfaces a typed 422", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    let respondWithFailure = false;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        if (respondWithFailure) {
+          return jsonResponse(
+            { code: "script_export_failed", message: "script_export_failed: boom" },
+            { status: 422 },
+          );
+        }
+        return jsonResponse({ project_id: "project-1", name: "demo" });
+      },
+    });
+    const request = {
+      source: { name: "demo.py", text: "import fullmag as fm\n" },
+      project_name: "demo",
+      consent: { executed_by_user: true },
+    };
+
+    await api.persistence.projects.fromScript(request);
+    expect(requests).toEqual([{
+      body: request,
+      method: "POST",
+      url: "http://127.0.0.1:8765/v2/persistence/projects/from-script",
+    }]);
+
+    respondWithFailure = true;
+    await expect(api.persistence.projects.fromScript(request)).rejects.toMatchObject({
+      status: 422,
+      code: "script_export_failed",
+    });
+  });
+
   it("requests durable cancellation for the exact project run task", async () => {
     const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({

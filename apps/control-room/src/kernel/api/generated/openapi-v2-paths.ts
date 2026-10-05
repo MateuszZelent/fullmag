@@ -4,6 +4,7 @@ export const openApiV2PathLiterals = [
   "/v2/persistence/imports/inspections",
   "/v2/persistence/projects",
   "/v2/persistence/projects/authoring",
+  "/v2/persistence/projects/from-script",
   "/v2/persistence/projects/open",
   "/v2/persistence/projects/{project_id}/runs",
   "/v2/persistence/projects/{project_id}/runs/{run_id}",

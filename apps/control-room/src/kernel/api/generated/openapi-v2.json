@@ -24833,6 +24833,103 @@
         ],
         "type": "object"
       },
+      "ProjectFromScriptConsent": {
+        "description": "Explicit statement that the person agreed to run the script.",
+        "properties": {
+          "executed_by_user": {
+            "description": "Must be `true`: the operation executes the script in the Python helper.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "executed_by_user"
+        ],
+        "type": "object"
+      },
+      "ProjectFromScriptRequest": {
+        "description": "Turns a Python script into a project. The operation EXECUTES the script in\nthe Python helper (same trust model as a script run), so the request must\ncarry explicit consent.",
+        "properties": {
+          "consent": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFromScriptConsent"
+              }
+            ]
+          },
+          "origin": {
+            "description": "Where the script came from (for example `template:umag-sp1`,\n`mx3:model.mx3`, `script_file`); recorded in `script.json`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_name": {
+            "description": "Project name; defaults to the script file stem.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "script_item_id": {
+            "description": "Workspace script item. Not supported by the API; the host reads the\nfile and sends its text as `source`. A request that sets it is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFromScriptSource",
+                "description": "The script text. Required: the API cannot resolve workspace items."
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ProjectFromScriptResource": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProjectDocumentResource"
+          },
+          {
+            "properties": {
+              "script_import": {
+                "$ref": "#/components/schemas/ProjectScriptImportResource"
+              }
+            },
+            "required": [
+              "script_import"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "The created project (same fields as create/open) plus what was imported."
+      },
+      "ProjectFromScriptSource": {
+        "properties": {
+          "name": {
+            "description": "File name shown in provenance; it is not a filesystem path.",
+            "type": "string"
+          },
+          "text": {
+            "description": "UTF-8 Python source, at most 1 MiB.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "text"
+        ],
+        "type": "object"
+      },
       "ProjectMigrationResource": {
         "properties": {
           "can_write": {
@@ -25458,6 +25555,38 @@
           "lifecycle",
           "readiness",
           "artifact_ids"
+        ],
+        "type": "object"
+      },
+      "ProjectScriptImportResource": {
+        "properties": {
+          "exported_at": {
+            "type": "string"
+          },
+          "fidelity": {
+            "$ref": "#/components/schemas/ScriptFidelityResource"
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "script_path": {
+            "description": "Archive path of the embedded original script.",
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sha256",
+          "origin",
+          "exported_at",
+          "script_path",
+          "fidelity"
         ],
         "type": "object"
       },
@@ -31017,6 +31146,37 @@
           "degraded"
         ],
         "type": "object"
+      },
+      "ScriptFidelityResource": {
+        "properties": {
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "round_trip": {
+            "$ref": "#/components/schemas/ScriptRoundTripState"
+          },
+          "scene_exported": {
+            "description": "The helper exported a SceneDocument from the script.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "scene_exported",
+          "round_trip",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "ScriptRoundTripState": {
+        "enum": [
+          "verified",
+          "failed",
+          "not_checked"
+        ],
+        "type": "string"
       },
       "ScriptSourceResponse": {
         "properties": {
@@ -40753,6 +40913,45 @@
           },
           "500": {
             "description": "Canonical source rendering failed"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/from-script": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_from_script",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectFromScriptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectFromScriptResource"
+                }
+              }
+            },
+            "description": "Project created from the script, with the original script embedded and a fidelity verdict"
+          },
+          "400": {
+            "description": "Missing consent, missing source, invalid name or unsupported script_item_id"
+          },
+          "413": {
+            "description": "Script text exceeds 1 MiB"
+          },
+          "422": {
+            "description": "The helper could not export a scene document from the script; nothing is kept"
           }
         },
         "tags": [

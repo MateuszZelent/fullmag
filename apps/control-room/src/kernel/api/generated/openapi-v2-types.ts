@@ -68,6 +68,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/from-script": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_from_script"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/open": {
         parameters: {
             query?: never;
@@ -10587,6 +10603,42 @@ export interface components {
             schema_version: string;
             source_hash?: string | null;
         };
+        /** @description Explicit statement that the person agreed to run the script. */
+        ProjectFromScriptConsent: {
+            /** @description Must be `true`: the operation executes the script in the Python helper. */
+            executed_by_user: boolean;
+        };
+        /**
+         * @description Turns a Python script into a project. The operation EXECUTES the script in
+         *     the Python helper (same trust model as a script run), so the request must
+         *     carry explicit consent.
+         */
+        ProjectFromScriptRequest: {
+            consent?: null | components["schemas"]["ProjectFromScriptConsent"];
+            /**
+             * @description Where the script came from (for example `template:umag-sp1`,
+             *     `mx3:model.mx3`, `script_file`); recorded in `script.json`.
+             */
+            origin?: string | null;
+            /** @description Project name; defaults to the script file stem. */
+            project_name?: string | null;
+            /**
+             * @description Workspace script item. Not supported by the API; the host reads the
+             *     file and sends its text as `source`. A request that sets it is refused.
+             */
+            script_item_id?: string | null;
+            source?: null | components["schemas"]["ProjectFromScriptSource"];
+        };
+        /** @description The created project (same fields as create/open) plus what was imported. */
+        ProjectFromScriptResource: components["schemas"]["ProjectDocumentResource"] & {
+            script_import: components["schemas"]["ProjectScriptImportResource"];
+        };
+        ProjectFromScriptSource: {
+            /** @description File name shown in provenance; it is not a filesystem path. */
+            name: string;
+            /** @description UTF-8 Python source, at most 1 MiB. */
+            text: string;
+        };
         ProjectMigrationResource: {
             can_write: boolean;
             migrated: boolean;
@@ -10754,6 +10806,15 @@ export interface components {
             resolved_input_fingerprint?: string | null;
             resource_id?: string | null;
             task_id: string;
+        };
+        ProjectScriptImportResource: {
+            exported_at: string;
+            fidelity: components["schemas"]["ScriptFidelityResource"];
+            name: string;
+            origin: string;
+            /** @description Archive path of the embedded original script. */
+            script_path: string;
+            sha256: string;
         };
         ProjectSummary: {
             execution: components["schemas"]["ExecutionSummary"];
@@ -12165,6 +12226,14 @@ export interface components {
             unresolved_imports?: string[] | null;
             uses_fullmag?: boolean | null;
         };
+        ScriptFidelityResource: {
+            notes: string[];
+            round_trip: components["schemas"]["ScriptRoundTripState"];
+            /** @description The helper exported a SceneDocument from the script. */
+            scene_exported: boolean;
+        };
+        /** @enum {string} */
+        ScriptRoundTripState: "verified" | "failed" | "not_checked";
         ScriptSourceResponse: {
             bytes: number;
             /**
@@ -14722,6 +14791,51 @@ export interface operations {
             };
             /** @description Canonical source rendering failed */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_from_script: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectFromScriptRequest"];
+            };
+        };
+        responses: {
+            /** @description Project created from the script, with the original script embedded and a fidelity verdict */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectFromScriptResource"];
+                };
+            };
+            /** @description Missing consent, missing source, invalid name or unsupported script_item_id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Script text exceeds 1 MiB */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The helper could not export a scene document from the script; nothing is kept */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

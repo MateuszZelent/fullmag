@@ -1068,7 +1068,7 @@ fn read_generated_source(path: &FsPath) -> Result<Vec<u8>, ApiError> {
     Ok(bytes)
 }
 
-fn map_authoring_application_error(
+pub(super) fn map_authoring_application_error(
     error: ApplicationError<fullmag_application::FileRepositoryError>,
 ) -> ApiError {
     match error {
@@ -1112,7 +1112,7 @@ fn decode_archive(request: &ProjectArchiveRequest) -> Result<Vec<u8>, ApiError> 
     Ok(bytes)
 }
 
-fn encode_current(
+pub(super) fn encode_current(
     application: &ProjectApplication<FileProjectRepository>,
 ) -> Result<Vec<u8>, ApiError> {
     let document = application
@@ -1123,7 +1123,7 @@ fn encode_current(
         .map_err(|error| ApiError::bad_request(format!("project archive is not writable: {error}")))
 }
 
-fn resource_from_application(
+pub(super) fn resource_from_application(
     application: &ProjectApplication<FileProjectRepository>,
     view: fullmag_application::DocumentView,
     archive: Vec<u8>,
