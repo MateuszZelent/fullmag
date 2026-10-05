@@ -7,7 +7,7 @@ import subprocess
 
 INPUTS = ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "crates",
           "backends", "native", "apps/desktop/src-tauri", "scripts/windows",
-          "scripts/fullmag_storage.py", "scripts/build_version.py", "scripts/rust",
+          "scripts/fullmag_storage.py", "scripts/volatile_build_storage.py", "scripts/build_version.py", "scripts/rust",
           "packages/fullmag-py")
 DEPENDENCY_INPUTS = ("packages/fullmag-py", "package.json", "pnpm-lock.yaml",
                      "pnpm-workspace.yaml", "apps/control-room/package.json",

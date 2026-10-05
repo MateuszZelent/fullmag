@@ -91,6 +91,99 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(Path(layout["storage_root"]), custom)
         self.assertNotEqual(layout["build_root"], self.resolve()["build_root"])
 
+    def test_enrolled_scratch_redirects_native_temp_not_reusable_compiler_cache(self):
+        from volatile_build_storage import register_scratch_root
+        base = self.resolve(profile="windows-native-fdm-cpu-dev")
+        storage.initialize(base)
+        scratch = self.project / "ramdisk"
+        register_scratch_root(Path(base["storage_root"]), scratch, [self.repo])
+        self.env["FULLMAG_PROJECT_SCRATCH_ROOT"] = str(scratch)
+        layout = self.resolve(profile="windows-native-fdm-cpu-dev")
+        self.assertEqual(layout["storage_root"], base["storage_root"])
+        self.assertEqual(layout["build_root"], base["build_root"])
+        self.assertEqual(layout["cache_root"], base["cache_root"])
+        self.assertEqual(layout["runtime_root"], base["runtime_root"])
+        self.assertEqual(layout["temp_root"], base["temp_root"])
+        self.assertTrue(storage.inside(Path(layout["build_temp_root"]), scratch))
+        self.assertEqual(Path(layout["env"]["CARGO_BUILD_BUILD_DIR"]), Path(base["build_root"]) / "b")
+        storage.initialize(layout)
+        self.assertTrue(Path(layout["build_temp_root"]).is_dir())
+        self.env["CARGO_BUILD_BUILD_DIR"] = str(scratch / "builds" / "another-worktree" / "b")
+        with self.assertRaises(storage.StorageError):
+            self.resolve(profile="windows-native-fdm-cpu-dev")
+
+    def test_scratch_generation_is_rechecked_before_mutation(self):
+        from volatile_build_storage import register_scratch_root
+        base = self.resolve(profile="windows-native-fdm-cpu-dev")
+        storage.initialize(base)
+        scratch = self.project / "ramdisk"
+        register_scratch_root(Path(base["storage_root"]), scratch, [self.repo])
+        self.env["FULLMAG_PROJECT_SCRATCH_ROOT"] = str(scratch)
+        layout = self.resolve(profile="windows-native-fdm-cpu-dev")
+        marker = scratch / ".fullmag-scratch.json"
+        data = json.loads(marker.read_text())
+        data["generation"] = "a" * 32 if data["generation"] != "a" * 32 else "b" * 32
+        marker.write_text(json.dumps(data))
+        with self.assertRaises(storage.StorageError):
+            storage.initialize(layout)
+        self.assertFalse(Path(layout["build_temp_root"]).exists())
+
+    def test_explicit_prepare_recreates_only_enrolled_empty_scratch(self):
+        from volatile_build_storage import register_scratch_root
+        from contextlib import redirect_stdout
+        import io
+        base = self.resolve(profile="windows-native-fdm-cpu-dev")
+        storage.initialize(base)
+        scratch = self.project / "ramdisk"
+        evidence = register_scratch_root(Path(base["storage_root"]), scratch, [self.repo])
+        (self.repo / ".env").write_text(f'FULLMAG_PROJECT_SCRATCH_ROOT="{scratch}"\n')
+        (scratch / ".fullmag-scratch.json").unlink()
+        with self.assertRaises(storage.StorageError):
+            self.resolve(profile="windows-native-fdm-cpu-dev")
+        durable = self.resolve(profile="windows-native-fdm-cpu-dev", include_scratch=False)
+        self.assertEqual(durable["runtime_root"], base["runtime_root"])
+        self.assertNotIn("scratch", durable)
+        self.assertFalse((scratch / ".fullmag-scratch.json").exists())
+        with redirect_stdout(io.StringIO()) as output:
+            code = storage.main(["prepare-scratch", "--repo-root", str(self.repo),
+                                 "--profile", "windows-native-fdm-cpu-dev"])
+        self.assertEqual(code, 0)
+        prepared = json.loads(output.getvalue())
+        self.assertNotEqual(evidence["generation"], prepared["generation"])
+        self.assertEqual(self.resolve(profile="windows-native-fdm-cpu-dev")["scratch"], prepared)
+
+    def test_durable_runtime_drops_only_compiler_override_even_after_ram_loss(self):
+        from volatile_build_storage import register_scratch_root
+        base = self.resolve(profile="windows-native-fdm-cpu-dev")
+        storage.initialize(base)
+        scratch = self.project / "ramdisk"
+        register_scratch_root(Path(base["storage_root"]), scratch, [self.repo])
+        self.env["FULLMAG_PROJECT_SCRATCH_ROOT"] = str(scratch)
+        build = self.resolve(profile="windows-native-fdm-cpu-dev")
+        self.env["CARGO_BUILD_BUILD_DIR"] = str(Path(build["scratch_build_root"]) / "custom-b")
+        self.assertEqual(self.resolve(profile="windows-native-fdm-cpu-dev")["env"]["CARGO_BUILD_BUILD_DIR"],
+                         self.env["CARGO_BUILD_BUILD_DIR"])
+        (scratch / ".fullmag-scratch.json").unlink()
+        with self.assertRaises(storage.StorageError):
+            self.resolve(profile="windows-native-fdm-cpu-dev")
+        runtime = self.resolve(profile="windows-native-fdm-cpu-dev", include_scratch=False, durable_runtime=True)
+        self.assertEqual(runtime["runtime_root"], base["runtime_root"])
+        self.assertEqual(Path(runtime["env"]["CARGO_BUILD_BUILD_DIR"]), Path(base["build_root"]) / "b")
+        self.assertNotIn("scratch", runtime)
+        self.assertFalse((scratch / ".fullmag-scratch.json").exists())
+        from contextlib import redirect_stdout
+        import io
+        (self.repo / ".env").write_text(
+            f'FULLMAG_PROJECT_SCRATCH_ROOT="{scratch}"\n'
+            f'CARGO_BUILD_BUILD_DIR="{self.env["CARGO_BUILD_BUILD_DIR"]}"\n')
+        with redirect_stdout(io.StringIO()):
+            code = storage.main(["prepare-scratch", "--repo-root", str(self.repo),
+                                 "--profile", "windows-native-fdm-cpu-dev"])
+        self.assertEqual(code, 0)
+        repaired = self.resolve(profile="windows-native-fdm-cpu-dev")
+        self.assertEqual(repaired["env"]["CARGO_BUILD_BUILD_DIR"], self.env["CARGO_BUILD_BUILD_DIR"])
+        self.assertNotEqual(build["scratch"]["generation"], repaired["scratch"]["generation"])
+
     def test_cargo_intermediate_override_cannot_escape_profile(self):
         self.env["CARGO_BUILD_BUILD_DIR"] = str(self.project / "outside")
         with self.assertRaises(storage.StorageError):

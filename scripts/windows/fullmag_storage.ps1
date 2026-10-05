@@ -9,7 +9,8 @@
 function Resolve-FullmagStorageLayout {
   param(
     [Parameter(Mandatory = $true)][string]$RepoRoot,
-    [Parameter(Mandatory = $true)][string]$Profile
+    [Parameter(Mandatory = $true)][string]$Profile,
+    [switch]$DurableOnly
   )
 
   $resolver = Join-Path $RepoRoot "scripts\fullmag_storage.py"
@@ -21,11 +22,12 @@ function Resolve-FullmagStorageLayout {
     throw "Python is required to resolve Fullmag project storage"
   }
 
+  $scratchArguments = if ($DurableOnly) { @("--without-scratch") } else { @() }
   if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -eq "1") {
     $lockOutput = (& $python.Source @(
         $resolver, "assert-lock", "--repo-root", $RepoRoot,
         "--profile", $Profile, "--format", "json"
-      ) 2>&1 | Out-String)
+      ) @scratchArguments 2>&1 | Out-String)
     $lockExitCode = $LASTEXITCODE
     if ($lockExitCode -ne 0) {
       throw "Fullmag storage lock assertion failed with exit code ${lockExitCode}: $lockOutput"
@@ -39,7 +41,7 @@ function Resolve-FullmagStorageLayout {
     $resolver, "resolve", "--repo-root", $RepoRoot,
     "--profile", $Profile, "--format", "json", "--create"
   )
-  $output = (& $python.Source @resolverArguments 2>&1 | Out-String)
+  $output = (& $python.Source @resolverArguments @scratchArguments 2>&1 | Out-String)
   $exitCode = $LASTEXITCODE
   if ($exitCode -ne 0) {
     throw "Fullmag storage resolution failed with exit code ${exitCode}: $output"
@@ -331,9 +333,22 @@ function Assert-FullmagStoragePath {
       $candidate.StartsWith($base + "\", [System.StringComparison]::OrdinalIgnoreCase))) {
     throw "$Label must be contained by ${base}: $candidate"
   }
-  if (-not ($candidate.Equals($storage, [System.StringComparison]::OrdinalIgnoreCase) -or
-      $candidate.StartsWith($storage + "\", [System.StringComparison]::OrdinalIgnoreCase))) {
-    throw "$Label must be contained by Fullmag storage: $candidate"
+  $approvedRoots = @($storage)
+  foreach ($scratchField in @("scratch_build_root", "build_temp_root")) {
+    if ($Layout.PSObject.Properties[$scratchField]) {
+      $approvedRoots += Resolve-FullmagStoragePath ([string]$Layout.$scratchField)
+    }
+  }
+  $withinApprovedRoot = $false
+  foreach ($approvedRoot in $approvedRoots) {
+    if ($candidate.Equals($approvedRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $candidate.StartsWith($approvedRoot + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+      $withinApprovedRoot = $true
+      break
+    }
+  }
+  if (-not $withinApprovedRoot) {
+    throw "$Label must stay in durable storage or this worktree/profile's enrolled scratch: $candidate"
   }
 
   # Resolve every existing component to catch a junction/symlink that would
@@ -349,10 +364,10 @@ function Assert-FullmagStoragePath {
       if (-not $resolved.Equals($probe, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "$Label must not traverse a junction or symlink: $candidate -> $resolved"
       }
-      break
     }
     $parent = Split-Path -Parent $probe
-    if (-not $parent -or $parent -eq $probe) {
+    if (-not $parent -or $parent -eq $probe -or
+        $parent -eq [System.IO.Path]::GetPathRoot($parent)) {
       break
     }
     $probe = $parent.TrimEnd("\")
