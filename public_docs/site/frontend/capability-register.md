@@ -36,7 +36,7 @@ because the backend can represent it.
 | Study and stage authoring | `Model Explorer -> Stages -> Add stage` | `partial` | `StudyStageDraftEditor`, `StudyGlobalAuthoringModel` |
 | Relax/run/eigenmode/frequency result inspection | `Model Explorer -> Stages -> <stage> -> Inspector` | `partial` | `RelaxStageInspector`, `RunStageInspector`, `EigenmodesStageInspector`, `FrequencyResponseStageInspector` |
 | Table and field autosave | `Model Explorer -> Stages -> <stage> -> Autosave` | `partial` | `AutosaveStageInspector`, `TableAutosaveStageInspector` |
-| Runtime and resolved ProblemIR metadata | `Model Explorer -> Runtime` | `inspection-only` | `RuntimeExplorerInspectorPanels`, `StudyInspectorPanel` |
+| Runtime and resolved ProblemIR metadata | `Model Explorer -> Runtime` | `inspection-only` | `RuntimeResourceInspectorPanel`, `StudyInspectorPanel` |
 
 ## 3. Parameter classes with explicit TODO
 
@@ -74,14 +74,14 @@ Room` or `Control Room crosswalk`. That section must include:
 | Texture authoring | `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx` | `ObjectMagneticTexturePanel` |
 | Mesh authoring | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `ObjectMeshPolicyPanel` |
 | Stage authoring | `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx` | `StudyStageDraftEditor` |
-| Runtime inspection | `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx` | `RuntimeExplorerInspectorPanels` |
+| Runtime inspection | `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx` | `RuntimeResourceInspectorPanel` |
 ## Control Room crosswalk
 
 This page is the Control Room surface itself. The status is `partial` unless every listed field has a named inspector and transaction. Fields not present in the cited component are `TODO: frontend support`; runtime/result-only views are `inspection-only`. See {doc}`/frontend/capability-register`.
 
 ## Python/API crosswalk
 
-Python remains the authoritative authoring contract. Use the linked `{doc}``/python-api/index` pages for exact constructors, functions, arguments, units, and failure semantics; this page must not invent a Python signature.
+Python remains the authoritative authoring contract. Use the linked {doc}`/python-api/index` pages for exact constructors, functions, arguments, units, and failure semantics; this page must not invent a Python signature.
 
 ## Physics and bibliography scope
 

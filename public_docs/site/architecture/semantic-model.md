@@ -45,5 +45,8 @@ This page documents architecture rather than a standalone Python callable. Exact
 No independent physical model is introduced here. Scientific equations are owned by the applicable physics or numerical-methods page. Bibliography: not applicable to this architecture overview; implementation ownership is recorded in the source-code references on the terminal page.
 ## Source-code index
 
-- No standalone Python callable is introduced by this architecture page. Use the exact source symbol named by the linked API or implementation page; architecture terms alone are not public functions.
-
+| Repository path | Stable symbol | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/problem.py` | `Problem.to_ir` | Python-to-IR lowering and validation |
+| `crates/fullmag-ir/src/lib.rs` | `ProblemIR` | canonical problem data contract |
+| `crates/fullmag-plan/src/lib.rs` | `plan` | validation and capability planning |

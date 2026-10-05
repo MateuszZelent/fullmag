@@ -16,7 +16,7 @@ snapshot.
 
 ## What the example computes
 
-A film of size $160 \times 160 \times 24\ \mathrm{nm}$ is discretized on a regular FDM grid with
+A computational universe of size $160 \times 160 \times 24\ \mathrm{nm}$ is discretized on a regular FDM grid with
 $4\ \mathrm{nm}$ cells. The magnetic body is $80 \times 120 \times 8\ \mathrm{nm}$, so the resolved
 geometry sits inside the discretization universe. Exchange stiffness $A_{\mathrm{ex}}$ and the
 magnetostatic field drive the magnetization toward a local minimum; the overdamped LLG relaxation
@@ -25,6 +25,7 @@ stage stops when the requested torque/field tolerance or step budget is reached.
 ## Author the study
 
 ```python
+# %% Author the study
 import fullmag as fm
 
 nm = 1.0e-9
@@ -50,6 +51,8 @@ film.Aex = 13.0e-12
 film.alpha = 0.1
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 
+study.exchange()
+study.demag()
 study.solver(fix_dt=5.0e-13, gamma=2.211e5)
 
 study.stages.add_relax(
@@ -111,7 +114,7 @@ artifacts selected through stage outputs.
 
 ## Limits of this example
 
-This is an onboarding run, not an MD/qualification benchmark. It uses a small cell grid so it is
+This is an onboarding run, not a scientific qualification benchmark. It uses a small cell grid so it is
 practical to run; exchange and demagnetization validation regimes are documented on the canonical
 {ref}`interaction pages <public-docs-physics-interactions-root>`. The FDM CPU lane shown here has
 scoped published evidence; do not infer executed CUDA parity from this snippet.
@@ -121,12 +124,15 @@ Use the authoring path stated in this guide, normally `Model Explorer -> Objects
 
 ## Python/API crosswalk
 
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked `{doc}``/python-api/index` page rather than duplicating an unverified signature.
+The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
 
 ## Physics, limitations, and bibliography
 
 Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
 ## Source-code index
 
-- No new implementation symbol is introduced by this guide. The exact Python source symbol is owned by the linked terminal API page and the runnable example.
+- `packages/fullmag-py/src/fullmag/world.py` — `StudyBuilder`, `StudyStagesBuilder`: stage-first authoring and capture.
+- `packages/fullmag-py/src/fullmag/model/problem.py` — `Problem.to_ir`: canonical serialization and validation.
+- `justfile` — `run-headless` (FDM), `fem-managed-headless` (FEM): launcher recipes and execution-mode selection.
 
+Authoring and IR validation do not establish mesh convergence, solver execution, or GPU parity.
