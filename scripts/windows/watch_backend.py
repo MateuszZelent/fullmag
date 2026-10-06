@@ -165,6 +165,8 @@ def main(argv=None):
                 publish({"state": "waiting", "source_sha256": args.baseline_digest})
                 heartbeat = StatusHeartbeat(status_publisher).start()
             while True:
+                if heartbeat is not None:
+                    heartbeat.raise_if_failed()
                 if stop is not None and stop.exists():
                     publish({"state": "stopped", "source_sha256": watcher.pending or args.baseline_digest})
                     return 0
