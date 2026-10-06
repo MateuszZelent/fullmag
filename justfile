@@ -172,6 +172,10 @@ verify-windows-development-consumer-readiness:
 verify-windows-development-consumer-pump owner_bundle:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --consumer-pump-owner-bundle "{{owner_bundle}}"
 
+# Refuse native restart while a real FDM CPU run keeps progressing.
+verify-windows-development-active-run-refusal owner_bundle:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --active-run-refusal-owner-bundle "{{owner_bundle}}"
+
 # Owned native restart with a real nonempty browser workspace and unsaved draft.
 verify-windows-development-workspace-browser owner_bundle:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --workspace-browser-owner-bundle "{{owner_bundle}}"

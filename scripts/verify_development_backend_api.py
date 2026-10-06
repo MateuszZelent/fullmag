@@ -1,4 +1,4 @@
-"""Verify development observation and terminal drain in owned empty processes."""
+"""Verify native development API scopes, including active-run restart refusal."""
 from __future__ import annotations
 
 import argparse
@@ -26,40 +26,69 @@ from windows.development_status import verified_build_identity
 from windows.workspace_backend_identity import fingerprint
 
 
+def _validate_active_run_refusal_scope(
+    owner_bundle: str | None,
+    *,
+    conflicting_scope: bool,
+    frozen_native_build_id: str | None,
+) -> None:
+    if owner_bundle is None:
+        return
+    if conflicting_scope or frozen_native_build_id is not None:
+        raise storage.StorageError("Active-run refusal is a separate frozen-native verification scope")
+    if not re.fullmatch(r"[0-9a-f]{32}", owner_bundle):
+        raise storage.StorageError("Active-run refusal owner must be a canonical bundle ID")
+
+
 def run(repo_root: str, cross_build_bundle: str = "", project_document_only: bool = False,
         restart_transport_only: bool = False, observer_pause_only: bool = False,
         restart_consumer_only: bool = False, consumer_readiness_only: bool = False,
         consumer_pump_owner_bundle: str | None = None,
         candidate_preparation_only: bool = False,
         workspace_browser_owner_bundle: str | None = None,
-        frozen_native_build_id: str | None = None) -> int:
+        frozen_native_build_id: str | None = None,
+        active_run_refusal_owner_bundle: str | None = None) -> int:
+    active_run_refusal = active_run_refusal_owner_bundle is not None
+    _validate_active_run_refusal_scope(
+        active_run_refusal_owner_bundle,
+        conflicting_scope=bool(
+            cross_build_bundle or project_document_only or restart_transport_only
+            or observer_pause_only or restart_consumer_only or consumer_readiness_only
+            or consumer_pump_owner_bundle is not None or candidate_preparation_only
+            or workspace_browser_owner_bundle is not None
+        ),
+        frozen_native_build_id=frozen_native_build_id,
+    )
     if frozen_native_build_id is not None:
         if not re.fullmatch(r"[0-9a-f]{64}", frozen_native_build_id):
             raise storage.StorageError("Frozen native build ID must be a lowercase SHA-256")
         if (cross_build_bundle or project_document_only or restart_transport_only
                 or observer_pause_only or restart_consumer_only or consumer_readiness_only
                 or consumer_pump_owner_bundle is not None or candidate_preparation_only
+                or active_run_refusal
                 or workspace_browser_owner_bundle is not None):
             raise storage.StorageError("Frozen native package verification is a separate default-gate scope")
     if workspace_browser_owner_bundle is not None:
         if (cross_build_bundle or project_document_only or restart_transport_only
                 or observer_pause_only or restart_consumer_only or consumer_readiness_only
-                or consumer_pump_owner_bundle is not None or candidate_preparation_only):
+                or consumer_pump_owner_bundle is not None or candidate_preparation_only
+                or active_run_refusal):
             raise storage.StorageError("Browser workspace restart is a separate verification scope")
         if not re.fullmatch(r"[0-9a-f]{32}", workspace_browser_owner_bundle):
             raise storage.StorageError("Browser workspace owner must be a canonical bundle ID")
-    frozen_probe = (consumer_pump_owner_bundle is not None or candidate_preparation_only
+    frozen_probe = (consumer_pump_owner_bundle is not None or active_run_refusal
+                    or candidate_preparation_only
                     or workspace_browser_owner_bundle is not None)
     frozen_source_binding = frozen_probe or frozen_native_build_id is not None
     if candidate_preparation_only and (
         cross_build_bundle or project_document_only or restart_transport_only
         or observer_pause_only or restart_consumer_only or consumer_readiness_only
-        or consumer_pump_owner_bundle is not None
+        or consumer_pump_owner_bundle is not None or active_run_refusal
     ):
         raise storage.StorageError("Candidate preparation faults are a separate verification scope")
     if consumer_pump_owner_bundle is not None and (
         cross_build_bundle or project_document_only or restart_transport_only
-        or observer_pause_only or restart_consumer_only or consumer_readiness_only
+        or observer_pause_only or restart_consumer_only or consumer_readiness_only or active_run_refusal
     ):
         raise storage.StorageError("Consumer pump is a separate verification scope")
     if consumer_pump_owner_bundle is not None and not re.fullmatch(
@@ -67,15 +96,17 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
     ):
         raise storage.StorageError("Consumer pump owner must be a canonical bundle ID")
     if consumer_readiness_only and (cross_build_bundle or project_document_only or restart_transport_only
-                                   or observer_pause_only or restart_consumer_only):
+                                   or observer_pause_only or restart_consumer_only or active_run_refusal):
         raise storage.StorageError("Consumer readiness is a separate verification scope")
-    if restart_consumer_only and (cross_build_bundle or project_document_only or restart_transport_only or observer_pause_only):
+    if restart_consumer_only and (cross_build_bundle or project_document_only or restart_transport_only
+                                  or observer_pause_only or active_run_refusal):
         raise storage.StorageError("Restart consumer is a separate verification scope")
-    if observer_pause_only and (cross_build_bundle or project_document_only or restart_transport_only):
+    if observer_pause_only and (cross_build_bundle or project_document_only or restart_transport_only
+                                or active_run_refusal):
         raise storage.StorageError("Observer pause is a separate verification scope")
-    if restart_transport_only and (cross_build_bundle or project_document_only):
+    if restart_transport_only and (cross_build_bundle or project_document_only or active_run_refusal):
         raise storage.StorageError("Restart transport observation is a separate verification scope")
-    if project_document_only and cross_build_bundle:
+    if project_document_only and (cross_build_bundle or active_run_refusal):
         raise storage.StorageError("Project document observation does not use a cross-build candidate")
     if cross_build_bundle and not re.fullmatch(r"[0-9a-f]{32}", cross_build_bundle):
         raise storage.StorageError("Cross-build candidate must be a canonical bundle ID")
@@ -168,6 +199,11 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             receipt["checkout_source_sha256_before"] = checkout_source_before
             receipt["source_binding"] = "verified_frozen_native_package"
             receipt["scope"] = "B native CLI consumer pump readiness against an independently verified A API bundle and real B ready candidate; no production launcher, public UI availability, hydration, solver or release qualification"
+        if active_run_refusal_owner_bundle is not None:
+            receipt["active_run_refusal_owner_bundle"] = active_run_refusal_owner_bundle
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = "B native CLI production restart refusal while a real FDM CPU run stays active on owned A; no UI hydration, solver correctness or release qualification"
         if candidate_preparation_only:
             receipt["candidate_preparation_only"] = True
             receipt["checkout_source_sha256_before"] = checkout_source_before
@@ -226,6 +262,12 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 from windows.verify_consumer_pump import exercise as exercise_consumer_pump
                 exercise_consumer_pump(
                     repo, run_root, manifest, receipt, api.parent, consumer_pump_owner_bundle
+                )
+            elif active_run_refusal_owner_bundle is not None:
+                from windows.verify_consumer_pump import exercise as exercise_consumer_pump
+                exercise_consumer_pump(
+                    repo, run_root, manifest, receipt, api.parent,
+                    active_run_refusal_owner_bundle, case="active-run",
                 )
             else:
                 exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
@@ -2181,6 +2223,7 @@ if __name__ == "__main__":
     parser.add_argument("--restart-consumer-only", action="store_true")
     parser.add_argument("--consumer-readiness-only", action="store_true")
     parser.add_argument("--consumer-pump-owner-bundle")
+    parser.add_argument("--active-run-refusal-owner-bundle")
     parser.add_argument("--candidate-preparation-only", action="store_true")
     parser.add_argument("--workspace-browser-owner-bundle")
     parser.add_argument("--frozen-native-build-id")
@@ -2190,7 +2233,8 @@ if __name__ == "__main__":
                              args.restart_transport_only, args.observer_pause_only,
                              args.restart_consumer_only, args.consumer_readiness_only,
                              args.consumer_pump_owner_bundle, args.candidate_preparation_only,
-                             args.workspace_browser_owner_bundle, args.frozen_native_build_id))
+                             args.workspace_browser_owner_bundle, args.frozen_native_build_id,
+                             args.active_run_refusal_owner_bundle))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

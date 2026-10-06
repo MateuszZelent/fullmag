@@ -1,5 +1,15 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53BC, 06.10.2026: [real active-run restart refusal](p8/53bc-real-active-run-restart-refusal.md)
+Diagnostic i managed driver dodane; kontrakt/regresje oraz kompilacja
+API/CLI/desktop **PASS**. Scenariusz zachowuje solver/API A przy kandydacie B,
+bez omijania zgodności buildów. Runtime **NOT VERIFIED**: pierwsze dwie
+próby ujawniły poprawione błędy fixture, trzecia zatrzymała się na selectorze;
+na C: jest około 150 MB wobec wymaganych 307 MB. Konkretna odtwarzalna kopia
+kompilatora 310 MB została wskazana do akceptacji usunięcia. Target/cache,
+snapshoty, logi i wyniki pozostają zachowane. Odmowa restartu przy realnym
+running/paused i wyścig Start/freezing nadal są otwarte; procentów nie zwiększono.
+
 Checkpoint P8-53BB, 06.10.2026: [frozen active-run prerequisite](p8/53bb-frozen-active-run-prerequisite.md)
 **PASS**, receipt `c575d6492d504616bceb7622920a2070`, exit 0, bez Cargo.
 Zweryfikowany pakiet D wykonał rzeczywisty FDM CPU flat_relax do kroku 1;
