@@ -29,16 +29,16 @@ class AntennaReaderFingerprintTests(unittest.TestCase):
                 self.assertNotIn("ANTENNA_FIELD_READER_RECEIPT=", result.stdout)
 
     def test_imported_direct_decoder_changes_reader_fingerprint(self):
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            decoder = "tests/antenna/direct_quadrature_evidence.py"
-            for name in (*reader.SOURCES, decoder):
-                path = root / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(("fixture:" + name).encode("utf-8"))
-            before = reader.fingerprint(root)
-            (root / decoder).write_bytes(b"changed independent decoder")
-            self.assertNotEqual(before, reader.fingerprint(root))
+        for decoder in ("tests/antenna/direct_quadrature_evidence.py", "tests/antenna/matched_libm.py"):
+            with self.subTest(decoder=decoder), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                for name in (*reader.SOURCES, decoder):
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(("fixture:" + name).encode("utf-8"))
+                before = reader.fingerprint(root)
+                (root / decoder).write_bytes(b"changed independent decoder")
+                self.assertNotEqual(before, reader.fingerprint(root))
 
 
 if __name__ == "__main__":

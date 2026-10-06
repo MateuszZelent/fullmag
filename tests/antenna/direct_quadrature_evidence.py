@@ -5,6 +5,11 @@ import re
 import struct
 from fractions import Fraction
 
+if __package__:
+    from .matched_libm import MatchedLibmHypot
+else:
+    from matched_libm import MatchedLibmHypot
+
 OPERATOR = "fem_oersted_direct_tetra_quadrature.v3"
 SCHEMA = "fem_direct_oersted_evidence.v1"
 HEADER = struct.Struct("<16s64s64s12Q6d")
@@ -24,15 +29,18 @@ def digest(value):
     return isinstance(value, str) and re.fullmatch("[0-9a-f]{64}", value) is not None
 
 
-def exact_tolerance(raw):
-    norm = math.hypot(math.hypot(raw[0], raw[1]), raw[2])
+def exact_tolerance(raw, *, math_realization=None):
+    if math_realization is not None and type(math_realization) is not MatchedLibmHypot:
+        raise ValueError("unsupported evidence math realization")
+    norm = (math_realization.norm(raw) if math_realization is not None
+            else math.hypot(math.hypot(raw[0], raw[1]), raw[2]))
     if not math.isfinite(norm):
         raise ValueError("evidence norm is non-finite")
     # Exact binary64 operands, one final nearest-even rounding, no decimal guess.
     return float(Fraction(1e-5) * Fraction(norm) + Fraction(1e-9))
 
 
-def verify_direct_evidence(data, basis, positions, per_ampere):
+def verify_direct_evidence(data, basis, positions, per_ampere, *, math_realization=None):
     if len(data) < HEADER.size or len(data) > MAX_BYTES:
         raise ValueError("evidence header/size bound")
     magic, source_bytes, balance_bytes, *values = HEADER.unpack_from(data)
@@ -92,7 +100,7 @@ def verify_direct_evidence(data, basis, positions, per_ampere):
         if (any(not math.isfinite(value) for value in row[:9])
                 or min(error, tolerance, roundoff) < 0):
             raise ValueError("evidence non-finite or negative target")
-        if (bits(tolerance) != bits(exact_tolerance(raw))
+        if (bits(tolerance) != bits(exact_tolerance(raw, math_realization=math_realization))
                 or Fraction(error) + Fraction(roundoff) > Fraction(tolerance)):
             raise ValueError("evidence target E+R/tau acceptance")
         if (not sources <= leaves <= min(caps[1], sources * 8**depth)

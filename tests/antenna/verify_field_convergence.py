@@ -8,10 +8,12 @@ import struct
 from pathlib import Path
 
 if __package__:
+    from .matched_libm import MatchedLibmHypot
     from .direct_quadrature_evidence import (
         MAX_BYTES, MAX_TARGETS, OPERATOR, SCHEMA, digest, verify_direct_evidence,
     )
 else:
+    from matched_libm import MatchedLibmHypot
     from direct_quadrature_evidence import (
         MAX_BYTES, MAX_TARGETS, OPERATOR, SCHEMA, digest, verify_direct_evidence,
     )
@@ -90,13 +92,14 @@ def read_vectors(directory, prefix, reference, expected_unit, seen):
     return list(zip(values[::3], values[1::3], values[2::3]))
 
 
-def read_solution(manifest_path, port_mode_id, *, allow_legacy_local_estimator=False):
+def read_solution(manifest_path, port_mode_id, *, allow_legacy_local_estimator=False, math_realization=None):
     positions, field, _ = read_solution_checked(
-        manifest_path, port_mode_id, allow_legacy_local_estimator=allow_legacy_local_estimator)
+        manifest_path, port_mode_id, allow_legacy_local_estimator=allow_legacy_local_estimator,
+        math_realization=math_realization)
     return positions, field
 
 
-def read_solution_checked(manifest_path, port_mode_id, *, allow_legacy_local_estimator=False):
+def read_solution_checked(manifest_path, port_mode_id, *, allow_legacy_local_estimator=False, math_realization=None):
     manifest_path = Path(manifest_path).absolute()
     directory = manifest_path.parent
     if (directory.parent.name == "field_solutions"
@@ -168,7 +171,7 @@ def read_solution_checked(manifest_path, port_mode_id, *, allow_legacy_local_est
                 or reference["byte_length"] > MAX_BYTES):
             raise ValueError("field lacks exact direct v3 evidence reference")
         data = read_payload(directory, prefix, reference, reference["byte_length"], seen)
-        qualification = verify_direct_evidence(data, basis, positions, field)
+        qualification = verify_direct_evidence(data, basis, positions, field, math_realization=math_realization)
     elif schema in ("fem_oersted_direct_tetra_quadrature.v1", "fem_oersted_direct_tetra_quadrature.v2"):
         if not allow_legacy_local_estimator:
             raise ValueError("legacy local estimator requires explicit archive opt-in")
@@ -214,7 +217,7 @@ def relative_errors(positions, field, start, end, minimum_distance):
 
 
 def verify(manifests, port_mode_id, start, end, minimum_distance, max_l2, max_linf,
-           *, allow_legacy_local_estimator=False):
+           *, allow_legacy_local_estimator=False, math_realization=None):
     if any(type(value) not in (float, int) or not math.isfinite(value) or value <= 0
            for value in (minimum_distance, max_l2, max_linf)):
         raise ValueError("distance and tolerances must be positive and finite")
@@ -225,7 +228,8 @@ def verify(manifests, port_mode_id, start, end, minimum_distance, max_l2, max_li
     reference_qualification = None
     for name, manifest in zip(("coarse", "medium", "fine"), manifests):
         positions, field, qualification = read_solution_checked(
-            manifest, port_mode_id, allow_legacy_local_estimator=allow_legacy_local_estimator)
+            manifest, port_mode_id, allow_legacy_local_estimator=allow_legacy_local_estimator,
+            math_realization=math_realization)
         if reference_qualification is not None and qualification != reference_qualification:
             raise ValueError("mesh levels must not mix quadrature qualification")
         reference_qualification = qualification
@@ -241,6 +245,11 @@ def verify(manifests, port_mode_id, start, end, minimum_distance, max_l2, max_li
     return {"schema": "fullmag.antenna.field_convergence.v1", "status": "pass",
             "quadrature_qualification": reference_qualification,
             "producer_provenance_qualified": False,
+            "math_realization": (
+                {"kind": "not_applied_legacy_local_estimator", "producer_math_qualified": False}
+                if reference_qualification == "legacy_local_estimator_not_global_certificate" else
+                math_realization.description if math_realization is not None else
+                {"kind": "python_hypot_diagnostic_only", "producer_math_qualified": False}),
             "port_mode_id": port_mode_id,
             "reference": {"model": "finite_straight_filament", "current_a": 1.0,
                           "start_xyz_m": start, "end_xyz_m": end,
@@ -260,7 +269,13 @@ def main():
     parser.add_argument("--max-linf-relative", type=float, required=True)
     parser.add_argument("--allow-legacy-local-estimator", action="store_true",
                         help="Archive comparison only; never a global-target certificate")
+    parser.add_argument("--libm-path", type=Path, help="Explicit matched GNU libm; requires --libm-sha256")
+    parser.add_argument("--libm-sha256", help="Expected runtime library digest; requires --libm-path")
     args = parser.parse_args()
+    if (args.libm_path is None) != (args.libm_sha256 is None):
+        parser.error("--libm-path and --libm-sha256 must be supplied together")
+    math_realization = (MatchedLibmHypot(args.libm_path, args.libm_sha256)
+                        if args.libm_path is not None else None)
     if any(not math.isfinite(value) or value <= 0 for value in (
         args.minimum_distance_m, args.max_l2_relative, args.max_linf_relative
     )):
@@ -268,7 +283,8 @@ def main():
     print(json.dumps(verify(args.manifests, args.port_mode_id, args.wire_start,
                             args.wire_end, args.minimum_distance_m,
                             args.max_l2_relative, args.max_linf_relative,
-                            allow_legacy_local_estimator=args.allow_legacy_local_estimator), indent=2))
+                            allow_legacy_local_estimator=args.allow_legacy_local_estimator,
+                            math_realization=math_realization), indent=2))
 
 
 if __name__ == "__main__":

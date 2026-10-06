@@ -296,8 +296,10 @@ R3 nadal wymaga terminalnego odpowiedniego buildu i jego własnego eksportu.
 ### Niezależny czytnik artefaktów anteny — testy bez solvera
 
 `just verify-antenna-field-reader` uruchamia wyłącznie interpretowane regresje
-`tests.antenna.test_verify_field_convergence`. Przed i po wykonaniu fingerprint
-obejmuje także importowany `tests/antenna/direct_quadrature_evidence.py`;
+`tests.antenna.test_verify_field_convergence` oraz
+`tests.antenna.test_matched_libm`. Przed i po wykonaniu fingerprint
+obejmuje także importowane `tests/antenna/direct_quadrature_evidence.py`,
+`tests/antenna/matched_libm.py` i jego regresje;
 zmiana któregokolwiek przypiętego źródła powoduje odmowę receiptu.
 Log i terminalny receipt trafiają przez resolver do profilu
 `antenna-field-reader` w kanonicznym storage, nie do checkoutu.
@@ -307,6 +309,15 @@ Receipt zachowuje `artifact_reader_only_not_native_or_physics`; nie zastępuje
 trzech publikacji native ani producer/input provenance. Rzeczywisty verifier
 wymaga direct-v3 evidence domyślnie; historyczne v1/v2 wolno wczytać wyłącznie
 przez jawne `--allow-legacy-local-estimator`, bez globalnego certyfikatu.
+Parametry analizy `--libm-path` i `--libm-sha256` występują razem:
+absolute library path i jawny expected SHA-256 z przypiętego GNU/Linux
+x86-64 runtime. Adapter wiąże `hypot@GLIBC_2.35`, sprawdza canonical
+resolved path, hash przed/po i nearest-even; nie zmienia fenv ani nie
+wraca do Python hypot po odmowie. Bez pary parametrów raport pozostaje
+`python_hypot_diagnostic_only`, a jawny legacy ma
+`not_applied_legacy_local_estimator`. Żaden profil nie nadaje sam z siebie
+producer/input qualification. Hash i `dladdr` nie chronią mapped ELF przed
+równoległą podmianą; wymagany jest przypięty runtime tylko do odczytu.
 Regresja samego fingerprintu jest w
 `scripts/test_verify_antenna_field_reader.py::test_imported_direct_decoder_changes_reader_fingerprint`.
 

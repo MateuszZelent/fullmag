@@ -18,6 +18,8 @@ import fullmag_storage as storage
 PROFILE = "antenna-field-reader"
 SOURCES = ("tests/antenna/verify_field_convergence.py",
            "tests/antenna/direct_quadrature_evidence.py",
+           "tests/antenna/matched_libm.py",
+           "tests/antenna/test_matched_libm.py",
            "tests/antenna/test_verify_field_convergence.py",
            "scripts/verify_antenna_field_reader.py",
            "scripts/fullmag_storage.py",
@@ -42,7 +44,7 @@ def run(repo):
         log = root / "checks.log"
         receipt_path = root / "receipt.json"
         command = [sys.executable, "-B", "-m", "unittest",
-                   "tests.antenna.test_verify_field_convergence", "-v"]
+                   "tests.antenna.test_verify_field_convergence", "tests.antenna.test_matched_libm", "-v"]
         receipt = {"schema": "fullmag.antenna.field_reader_checks.v1",
                    "state": "running", "started_at": storage.now(),
                    "head": subprocess.check_output(["git", "rev-parse", "HEAD"],
