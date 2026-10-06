@@ -125,6 +125,14 @@ case "${recipe}" in
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --candidate-preparation-only
       fi
       consumer_pump_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --consumer-pump-owner-bundle "([0-9a-f]{32})"$'
+      active_run_paused_refusal_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --active-run-refusal-owner-bundle "([0-9a-f]{32})" --active-run-scenario "paused"$'
+      if [[ "${recipe}" =~ ${active_run_paused_refusal_pattern} ]]; then
+        if ! is_windows_shell; then
+          echo "[fullmag just] active-run restart verification requires Windows" >&2
+          exit 2
+        fi
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --active-run-refusal-owner-bundle "${BASH_REMATCH[1]}" --active-run-scenario paused
+      fi
       active_run_refusal_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --active-run-refusal-owner-bundle "([0-9a-f]{32})"$'
       if [[ "${recipe}" =~ ${active_run_refusal_pattern} ]]; then
         if ! is_windows_shell; then
@@ -132,6 +140,14 @@ case "${recipe}" in
           exit 2
         fi
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --active-run-refusal-owner-bundle "${BASH_REMATCH[1]}"
+      fi
+      start_freeze_race_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --start-freeze-race-only$'
+      if [[ "${recipe}" =~ ${start_freeze_race_pattern} ]]; then
+        if ! is_windows_shell; then
+          echo "[fullmag just] Start/freeze race verification requires Windows" >&2
+          exit 2
+        fi
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --start-freeze-race-only
       fi
       if [[ "${recipe}" =~ ${consumer_pump_pattern} ]]; then
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --consumer-pump-owner-bundle "${BASH_REMATCH[1]}"

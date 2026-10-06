@@ -40,6 +40,18 @@ def _validate_active_run_refusal_scope(
         raise storage.StorageError("Active-run refusal owner must be a canonical bundle ID")
 
 
+def _validate_active_run_scenario(scenario: str, owner_bundle: str | None) -> None:
+    if scenario not in {"running", "paused"}:
+        raise storage.StorageError("Active-run refusal scenario must be running or paused")
+    if owner_bundle is None and scenario != "running":
+        raise storage.StorageError("Paused-run refusal requires its dedicated active-run owner bundle")
+
+
+def _validate_start_freeze_race_scope(enabled: bool, conflicting_scope: bool) -> None:
+    if enabled and conflicting_scope:
+        raise storage.StorageError("Start/freeze race is a separate owned native verification scope")
+
+
 def _can_reuse_active_binaries(source_bin: Path, stable_bin: Path, expected: dict) -> bool:
     from windows.runtime_bundle import BINARY_NAMES, _check_path_chain, _require_directory, _require_regular_file
 
@@ -72,8 +84,21 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         candidate_preparation_only: bool = False,
         workspace_browser_owner_bundle: str | None = None,
         frozen_native_build_id: str | None = None,
-        active_run_refusal_owner_bundle: str | None = None) -> int:
+        active_run_refusal_owner_bundle: str | None = None,
+        active_run_scenario: str = "running",
+        start_freeze_race_only: bool = False) -> int:
     active_run_refusal = active_run_refusal_owner_bundle is not None
+    _validate_start_freeze_race_scope(
+        start_freeze_race_only,
+        bool(
+            cross_build_bundle or project_document_only or restart_transport_only
+            or observer_pause_only or restart_consumer_only or consumer_readiness_only
+            or consumer_pump_owner_bundle is not None or candidate_preparation_only
+            or workspace_browser_owner_bundle is not None or frozen_native_build_id is not None
+            or active_run_refusal
+        ),
+    )
+    _validate_active_run_scenario(active_run_scenario, active_run_refusal_owner_bundle)
     _validate_active_run_refusal_scope(
         active_run_refusal_owner_bundle,
         conflicting_scope=bool(
@@ -103,7 +128,7 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             raise storage.StorageError("Browser workspace owner must be a canonical bundle ID")
     frozen_probe = (consumer_pump_owner_bundle is not None or active_run_refusal
                     or candidate_preparation_only
-                    or workspace_browser_owner_bundle is not None)
+                    or workspace_browser_owner_bundle is not None or start_freeze_race_only)
     frozen_source_binding = frozen_probe or frozen_native_build_id is not None
     if candidate_preparation_only and (
         cross_build_bundle or project_document_only or restart_transport_only
@@ -226,9 +251,18 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             receipt["scope"] = "B native CLI consumer pump readiness against an independently verified A API bundle and real B ready candidate; no production launcher, public UI availability, hydration, solver or release qualification"
         if active_run_refusal_owner_bundle is not None:
             receipt["active_run_refusal_owner_bundle"] = active_run_refusal_owner_bundle
+            receipt["active_run_scenario"] = active_run_scenario
             receipt["checkout_source_sha256_before"] = checkout_source_before
             receipt["source_binding"] = "verified_frozen_native_package"
-            receipt["scope"] = "B native CLI production restart refusal while a real FDM CPU run stays active on owned A; no UI hydration, solver correctness or release qualification"
+            receipt["scope"] = (
+                f"B native CLI production restart refusal while a real FDM CPU run stays {active_run_scenario} "
+                "on owned A; no UI hydration, solver correctness or release qualification"
+            )
+        if start_freeze_race_only:
+            receipt["start_freeze_race_only"] = True
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = "overlapping production API Solve and owner restart acquisition on an isolated valid FDM scene; no solver execution or user workspace"
         if candidate_preparation_only:
             receipt["candidate_preparation_only"] = True
             receipt["checkout_source_sha256_before"] = checkout_source_before
@@ -318,8 +352,11 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 from windows.verify_consumer_pump import exercise as exercise_consumer_pump
                 exercise_consumer_pump(
                     repo, run_root, manifest, receipt, api.parent,
-                    active_run_refusal_owner_bundle, case="active-run",
+                    active_run_refusal_owner_bundle,
+                    case=("active-run-paused" if active_run_scenario == "paused" else "active-run"),
                 )
+            elif start_freeze_race_only:
+                exercise(api, repo, run_root, receipt, start_freeze_race_only=True)
             else:
                 exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
                          restart_transport_only=restart_transport_only,
@@ -1477,7 +1514,8 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
 
 
 def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_document_only: bool = False,
-             restart_transport_only: bool = False, consumer_readiness_only: bool = False) -> None:
+             restart_transport_only: bool = False, consumer_readiness_only: bool = False,
+             start_freeze_race_only: bool = False) -> None:
     generation, source, worktree = "1" * 32, "a" * 64, "fixture-worktree"
     fixture_storage = run_root / "fixture-storage"
     status = fixture_storage / "builds" / worktree / "windows-native-fdm-cpu-dev/backend-watch-status.json"
@@ -1954,8 +1992,9 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
                     "http_status": outcome["status"]})
             with_api("renderer-" + fault, {"FULLMAG_REPO_ROOT": str(helper_root)}, renderer_fault)
         return
-    with_api("disabled", {}, disabled)
-    with_api("partial", {"FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation}, lambda get: check("partial-configuration", get()[2], "unknown", "configuration_invalid"))
+    if not start_freeze_race_only:
+        with_api("disabled", {}, disabled)
+        with_api("partial", {"FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation}, lambda get: check("partial-configuration", get()[2], "unknown", "configuration_invalid"))
 
     # This tests the private prelisten consumer, not capsule authenticity or
     # the manager's complete restart. No previous process/session is stopped.
@@ -1979,7 +2018,7 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
 
     owner_token = "7" * 32
 
-    def private_acquisition(get, expected_scene=None):
+    def private_acquisition(get, expected_scene=None, *, start_race=False):
         owner_root = fixture_storage / "runtimes" / worktree
         deadline = time.monotonic() + 5
         while True:
@@ -2053,6 +2092,19 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
                 assert json.load(error)["code"] == "development_restart_in_progress"
             else:
                 raise AssertionError("Private acquisition did not freeze mutation admission")
+            try:
+                get("/v2/sessions/current/simulation/commands", method="POST", payload={
+                    "client_intent_id": str(uuid.uuid4()), "kind": "solve",
+                    "reason": "user_requested", "requested_at_unix_ms": int(time.time() * 1000),
+                    "target": {"kind": "study"},
+                })
+            except urllib.error.HTTPError as error:
+                assert error.code == 409, error.code
+                assert json.load(error)["code"] == "development_restart_in_progress"
+            else:
+                raise AssertionError("Solve/Start command was admitted while restart freeze was held")
+            if "private-freeze-rejects-simulation-start" not in checks:
+                checks.append("private-freeze-rejects-simulation-start")
 
         def rejected_body_transport():
             body = json.dumps({"name": "Rejected transport fixture", "backend": "fdm",
@@ -2097,6 +2149,157 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
                 finally:
                     connection.close()
                 checks.append("frozen-" + ("partial" if partial_body else "stalled") + "-body-is-bounded-and-closes-connection")
+
+        if start_race:
+            assert expected_scene is not None, "Start/freeze race requires the frozen valid FDM scene"
+            code, _, readiness = get("/v2/sessions/current/model/readiness")
+            assert code == 200 and readiness.get("ready_to_run") is True, readiness
+            checks.append("start-freeze-race-scene-ready")
+
+            # Prove this idle authored workspace is independently restartable
+            # before racing its first accepted Solve against mutation freeze.
+            with connect() as stream:
+                idle = exchange(stream, frame)
+                assert idle.get("schema") == "fullmag.development-authoring-acquisition.v1", idle
+                assert idle["workspace"].get("state") == "session", idle
+                assert idle["workspace"].get("scene_document") == canonical, idle
+                assert exchange(stream, {**frame, "command": "abort"}).get("schema") == "fullmag.development-api-abort.v1"
+            checks.append("start-freeze-race-idle-session-can-be-acquired")
+
+            # Prove the freeze-first ordering independently of which request
+            # wins the overlapping barrier below.
+            with connect() as stream:
+                frozen = exchange(stream, {**frame, "nonce": str(uuid.uuid4())})
+                assert frozen.get("schema") == "fullmag.development-authoring-acquisition.v1", frozen
+                confirmed = exchange(stream, {
+                    **frame, "nonce": frozen["nonce"], "command": "confirm",
+                })
+                assert confirmed.get("schema") == "fullmag.development-api-confirm.v1", confirmed
+                assert_mutation_frozen()
+                aborted = exchange(stream, {
+                    **frame, "nonce": frozen["nonce"], "command": "abort",
+                })
+                assert aborted.get("schema") == "fullmag.development-api-abort.v1", aborted
+            checks.append("private-freeze-before-start-rejects-simulation-command")
+
+            start_body = {
+                "client_intent_id": str(uuid.uuid4()),
+                "kind": "solve",
+                "reason": "user_requested",
+                "requested_at_unix_ms": int(time.time() * 1000),
+                "target": {"kind": "study"},
+            }
+            barrier = threading.Barrier(3)
+            race_results = {}
+
+            def submit_start():
+                barrier.wait(timeout=5)
+                try:
+                    code, _, body = get("/v2/sessions/current/simulation/commands",
+                        method="POST", payload=start_body, timeout=10)
+                    race_results["start"] = (code, body)
+                except urllib.error.HTTPError as error:
+                    race_results["start"] = (error.code, json.load(error))
+                except Exception as error:
+                    race_results["start_error"] = repr(error)
+
+            def race_acquire():
+                barrier.wait(timeout=5)
+                try:
+                    with connect() as stream:
+                        acquired = exchange(stream, {**frame, "nonce": str(uuid.uuid4())})
+                        if acquired.get("schema") == "fullmag.development-authoring-acquisition.v1":
+                            race_results["acquire"] = ("held", acquired)
+                            confirmed = exchange(stream, {**frame, "nonce": acquired["nonce"], "command": "confirm"})
+                            assert confirmed.get("schema") == "fullmag.development-api-confirm.v1", confirmed
+                            assert_mutation_frozen()
+                            aborted = exchange(stream, {**frame, "nonce": acquired["nonce"], "command": "abort"})
+                            assert aborted.get("schema") == "fullmag.development-api-abort.v1", aborted
+                        else:
+                            race_results["acquire"] = ("rejected", acquired)
+                except Exception as error:
+                    race_results["acquire_error"] = repr(error)
+
+            start_thread = threading.Thread(target=submit_start, daemon=True)
+            acquire_thread = threading.Thread(target=race_acquire, daemon=True)
+            start_thread.start()
+            acquire_thread.start()
+            barrier.wait(timeout=5)
+            start_thread.join(timeout=15)
+            acquire_thread.join(timeout=15)
+            assert not start_thread.is_alive() and not acquire_thread.is_alive(), race_results
+            assert "start_error" not in race_results and "acquire_error" not in race_results, race_results
+            start_status, start_result = race_results["start"]
+            acquire_status, acquire_result = race_results["acquire"]
+            accepted_start_detail = None
+            start_before_acquire_rejection = None
+            if start_status == 200:
+                assert start_result.get("accepted") is True and isinstance(start_result.get("command_id"), str), start_result
+                assert acquire_status == "rejected", (start_status, acquire_status, acquire_result)
+                assert acquire_result == {
+                    "schema": "fullmag.development-api-control.v1",
+                    "status": "rejected",
+                    "reason": "development_owner_request_rejected",
+                }, acquire_result
+                code, _, detail = get(
+                    "/v2/sessions/current/simulation/commands/" + start_result["command_id"]
+                )
+                assert code == 200 and detail["command_id"] == start_result["command_id"]
+                assert detail["kind"] == "solve" and detail["accepted_at_unix_ms"] is not None, detail
+                accepted_start_detail = detail
+                start_before_acquire_rejection = acquire_result
+                race_winner = "start-admitted-first; freeze-refused-queued-command"
+            else:
+                assert start_status == 409 and start_result.get("code") == "development_restart_in_progress", start_result
+                assert acquire_status == "held", (start_status, acquire_status, acquire_result)
+                start_first_body = {
+                    "client_intent_id": str(uuid.uuid4()),
+                    "kind": "solve",
+                    "reason": "user_requested",
+                    "requested_at_unix_ms": int(time.time() * 1000),
+                    "target": {"kind": "study"},
+                }
+                code, _, start_first = get(
+                    "/v2/sessions/current/simulation/commands",
+                    method="POST", payload=start_first_body,
+                )
+                assert code == 200 and start_first.get("accepted") is True, start_first
+                assert isinstance(start_first.get("command_id"), str), start_first
+                with connect() as stream:
+                    rejected = exchange(stream, {**frame, "nonce": str(uuid.uuid4())})
+                assert rejected == {
+                    "schema": "fullmag.development-api-control.v1",
+                    "status": "rejected",
+                    "reason": "development_owner_request_rejected",
+                }, rejected
+                code, _, detail = get(
+                    "/v2/sessions/current/simulation/commands/" + start_first["command_id"]
+                )
+                assert code == 200 and detail["command_id"] == start_first["command_id"]
+                assert detail["kind"] == "solve" and detail["accepted_at_unix_ms"] is not None, detail
+                accepted_start_detail = detail
+                start_before_acquire_rejection = rejected
+                race_winner = "freeze-closed-admission-first; start-rejected"
+            checks.append("private-start-before-freeze-preserves-accepted-command")
+            receipt["start_freeze_race"] = {
+                "winner": race_winner,
+                "linearization_orderings_proven": [
+                    "freeze-before-start-rejects-simulation-command",
+                    "start-before-freeze-preserves-accepted-command",
+                ],
+                "start_http_status": start_status,
+                "acquisition_outcome": acquire_status,
+                "start_command_id": start_result.get("command_id"),
+                "accepted_start_command": {
+                    "command_id": accepted_start_detail["command_id"],
+                    "kind": accepted_start_detail["kind"],
+                    "accepted_at_unix_ms": accepted_start_detail["accepted_at_unix_ms"],
+                },
+                "start_before_acquire_rejection": start_before_acquire_rejection,
+                "acquisition_api_instance_id": owner["api_instance_id"],
+            }
+            checks.append("private-start-freeze-race-is-linearizable")
+            return
 
         with connect() as stream:
             acquired = exchange(stream, frame)
@@ -2162,14 +2365,49 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
                 time.sleep(0.05)
         checks.append("private-acquisition-disconnect-reopens-admission")
 
-    for label, configuration in (
-        ("owner-nonmanaged", {"FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}),
-        ("owner-invalid-token", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": "invalid"}),
-    ):
-        with_api(label, configuration, None, reject_startup=True)
-    with_api("owner-empty", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}, private_acquisition)
-    with_api("owner-restored", {**restore_config, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token},
-             lambda get: private_acquisition(get, restored_scene), restore_input=json.dumps(restore_envelope).encode())
+    if not start_freeze_race_only:
+        for label, configuration in (
+            ("owner-nonmanaged", {"FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}),
+            ("owner-invalid-token", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": "invalid"}),
+        ):
+            with_api(label, configuration, None, reject_startup=True)
+        with_api("owner-empty", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}, private_acquisition)
+        with_api("owner-restored", {**restore_config, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token},
+                 lambda get: private_acquisition(get, restored_scene), restore_input=json.dumps(restore_envelope).encode())
+
+    start_race_scene = json.loads(json.dumps(restored_scene))
+    start_race_scene["objects"][0].update(
+        role="magnet", material_ref="start-race-material", magnetization_ref="start-race-m0",
+        physics_stack=[{"kind": "exchange", "enabled": True}],
+        geometry={
+            "geometry_kind": "Box",
+            "geometry_params": {"size": [1.0e-6, 1.0e-6, 1.0e-8]},
+        },
+    )
+    start_race_scene["materials"] = [{
+        "id": "start-race-material", "name": "Start race material",
+        "properties": {"Ms": 800000.0, "Aex": 1.3e-11, "alpha": 0.02},
+    }]
+    start_race_scene["magnetization_assets"] = [{
+        "id": "start-race-m0", "name": "Uniform", "kind": "uniform", "value": [1.0, 0.0, 0.0],
+    }]
+    start_race_scene["study"].update(
+        backend="fdm", requested_backend="fdm", requested_device="cpu",
+        requested_precision="double", requested_mode="strict",
+        fdm={"default_cell": [1.0e-7, 1.0e-7, 1.0e-8]},
+        stages=[{"kind": "relax", "entrypoint_kind": "flat_relax",
+                 "algorithm": "projected_gradient_bb", "max_steps": "1000"}],
+    )
+    start_race_envelope = {
+        **restore_envelope,
+        "old_session_id": "old-session-start-freeze-race",
+        "scene_document": start_race_scene,
+    }
+    with_api("owner-start-freeze-race", {**restore_config, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token},
+             lambda get: private_acquisition(get, start_race_scene, start_race=True),
+             restore_input=json.dumps(start_race_envelope).encode())
+    if start_freeze_race_only:
+        return
 
     def restored(get):
         code, _, current = get("/v2/sessions/current")
@@ -2275,6 +2513,8 @@ if __name__ == "__main__":
     parser.add_argument("--consumer-readiness-only", action="store_true")
     parser.add_argument("--consumer-pump-owner-bundle")
     parser.add_argument("--active-run-refusal-owner-bundle")
+    parser.add_argument("--active-run-scenario", choices=("running", "paused"), default="running")
+    parser.add_argument("--start-freeze-race-only", action="store_true")
     parser.add_argument("--candidate-preparation-only", action="store_true")
     parser.add_argument("--workspace-browser-owner-bundle")
     parser.add_argument("--frozen-native-build-id")
@@ -2285,7 +2525,8 @@ if __name__ == "__main__":
                              args.restart_consumer_only, args.consumer_readiness_only,
                              args.consumer_pump_owner_bundle, args.candidate_preparation_only,
                              args.workspace_browser_owner_bundle, args.frozen_native_build_id,
-                             args.active_run_refusal_owner_bundle))
+                              args.active_run_refusal_owner_bundle, args.active_run_scenario,
+                              args.start_freeze_race_only))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

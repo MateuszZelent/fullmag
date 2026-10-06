@@ -113,3 +113,10 @@ Pin pakietu D: `e5d8a135567436dcbaab881af770e92afa5c702a0f8040df603838177e82d73c
 Zamknięto prerequisite rzeczywistego aktywnego solvera i bounded reconnect.
 Odmowa acquisition podczas rzeczywistego running/paused, wyścig Start/freezing,
 walidacja naukowa, publiczny restart i kwalifikacja wydania pozostają otwarte.
+
+## Follow-up — 06.10.2026
+
+Późniejszy punkt [P8-53BC](53bc-real-active-run-restart-refusal.md) zamknął
+managed refusal dla running i paused oraz wyścig Start/freeze. Ten raport
+pozostaje dowodem prerequisite rzeczywistego frozen FDM CPU runtime i bounded
+reconnect; nie zastępuje pozostałych bramek naukowych ani wydania.

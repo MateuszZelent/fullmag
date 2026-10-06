@@ -32,7 +32,7 @@ from windows import runtime_bundle
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 BUNDLE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 REQUEST_SCHEMA = "fullmag.development-cli-consumer-pump-request.v1"
-ACTIVE_RUN_REQUEST_SCHEMA = "fullmag.development-cli-active-run-request.v1"
+ACTIVE_RUN_REQUEST_SCHEMA = "fullmag.development-cli-active-run-request.v2"
 RESULT_SCHEMA = "fullmag.development-cli-consumer-pump-check.v1"
 HELPER_PROGRESS_SCHEMA = "fullmag.development-cli-consumer-pump-helper.v1"
 PREPARATION_PROGRESS_SCHEMA = "fullmag.development-cli-candidate-preparation-progress.v1"
@@ -62,12 +62,11 @@ EXPECTED_CHECKS = frozenset({
     "scope_loss_no_candidate",
     "scope_loss_no_replacement",
 })
-ACTIVE_RUN_RESULT_SCHEMA = "fullmag.development-cli-active-run-check.v2"
+ACTIVE_RUN_RESULT_SCHEMA = "fullmag.development-cli-active-run-check.v3"
 ACTIVE_RUN_PROGRESS_SCHEMA = "fullmag.development-cli-active-run-progress.v1"
-ACTIVE_RUN_EXPECTED_CHECKS = frozenset({
+ACTIVE_RUN_COMMON_CHECKS = frozenset({
     "idle_owner_acquire_accepted_and_aborted",
     "candidate_ready_observed",
-    "active_run_running_observed",
     "active_run_steps_positive",
     "typed_restart_intent_published",
     "active_run_refusal_failed",
@@ -76,11 +75,26 @@ ACTIVE_RUN_EXPECTED_CHECKS = frozenset({
     "no_replacement_started",
     "same_owner_session_run_after_refusal",
     "solver_worker_alive_after_refusal",
-    "solver_steps_advanced_after_refusal",
 })
+ACTIVE_RUN_EXPECTED_CHECKS = ACTIVE_RUN_COMMON_CHECKS | {
+    "active_run_running_observed",
+    "solver_steps_advanced_after_refusal",
+}
+ACTIVE_RUN_PAUSED_EXPECTED_CHECKS = frozenset({
+    *ACTIVE_RUN_COMMON_CHECKS,
+    "active_run_running_observed",
+    "active_run_paused_before_refusal",
+    "pause_command_terminal",
+    "paused_state_preserved_after_refusal",
+    "resume_command_terminal",
+    "solver_resumed_after_refusal",
+    "solver_steps_advanced_after_resume",
+})
+ACTIVE_RUN_ALL_CHECKS = ACTIVE_RUN_EXPECTED_CHECKS | ACTIVE_RUN_PAUSED_EXPECTED_CHECKS
 ACTIVE_RUN_RESULT_FIELDS = frozenset({
     "schema",
     "status",
+    "scenario",
     "request_id",
     "old_api_instance_id",
     "session_id",
@@ -92,6 +106,10 @@ ACTIVE_RUN_RESULT_FIELDS = frozenset({
     "solver_steps_after",
     "solver_state_before",
     "solver_state_after",
+    "pause_command_id",
+    "resume_command_id",
+    "solver_steps_after_resume",
+    "solver_state_after_resume",
     "active_run_result_state",
     "active_run_public_reason",
     "refusal_reason_attribution",
@@ -112,7 +130,7 @@ HASHED_HELPERS = (
 def _case_schemas(case: str) -> tuple[str, str]:
     if case == "readiness":
         return REQUEST_SCHEMA, RESULT_SCHEMA
-    if case == "active-run":
+    if case in {"active-run", "active-run-paused"}:
         return ACTIVE_RUN_REQUEST_SCHEMA, ACTIVE_RUN_RESULT_SCHEMA
     raise storage.StorageError("Consumer pump case is not supported")
 
@@ -205,6 +223,10 @@ def _valid_uuid(value: Any) -> bool:
     return parsed.int != 0 and str(parsed) == value
 
 
+def _valid_simulation_command_id(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("fm-") and _valid_uuid(value[3:])
+
+
 def validate_active_run_result(
     result: Any,
     *,
@@ -215,6 +237,13 @@ def validate_active_run_result(
     """Validate the distinct active-run refusal result without claiming its private API error."""
     if not isinstance(result, dict) or set(result) != ACTIVE_RUN_RESULT_FIELDS:
         raise storage.StorageError("Active-run refusal result fields differ from the pinned contract")
+    scenario = result.get("scenario") if isinstance(result, dict) else None
+    if scenario not in {"running", "paused"}:
+        raise storage.StorageError("Active-run refusal result has an unsupported solver scenario")
+    expected_checks = (
+        ACTIVE_RUN_EXPECTED_CHECKS if scenario == "running"
+        else ACTIVE_RUN_PAUSED_EXPECTED_CHECKS
+    )
     if (
         result.get("schema") != ACTIVE_RUN_RESULT_SCHEMA
         or result.get("status") != "passed"
@@ -238,9 +267,24 @@ def validate_active_run_result(
         or type(result.get("solver_steps_at_refusal")) is not int
         or result["solver_steps_at_refusal"] < result["solver_steps_before"]
         or type(result.get("solver_steps_after")) is not int
-        or result["solver_steps_after"] <= result["solver_steps_at_refusal"]
-        or result.get("solver_state_before") != "running"
-        or result.get("solver_state_after") != "running"
+        or (scenario == "running" and result["solver_steps_after"] <= result["solver_steps_at_refusal"])
+        or (scenario == "paused" and (
+            result["solver_steps_at_refusal"] != result["solver_steps_before"]
+            or result["solver_steps_after"] != result["solver_steps_at_refusal"]
+        ))
+        or result.get("solver_state_before") != scenario
+        or result.get("solver_state_after") != scenario
+        or (scenario == "running" and any(result.get(field) is not None for field in (
+            "pause_command_id", "resume_command_id", "solver_steps_after_resume",
+            "solver_state_after_resume",
+        )))
+        or (scenario == "paused" and (
+            not _valid_simulation_command_id(result.get("pause_command_id"))
+            or not _valid_simulation_command_id(result.get("resume_command_id"))
+            or type(result.get("solver_steps_after_resume")) is not int
+            or result["solver_steps_after_resume"] <= result["solver_steps_after"]
+            or result.get("solver_state_after_resume") != "running"
+        ))
         or result.get("active_run_result_state") != "failed"
         or result.get("active_run_public_reason") != "restart_preparation_refused"
         or result.get("refusal_reason_attribution") != ACTIVE_RUN_REFUSAL_ATTRIBUTION
@@ -249,8 +293,8 @@ def validate_active_run_result(
     checks = result.get("checks")
     if (
         not isinstance(checks, dict)
-        or set(checks) != ACTIVE_RUN_EXPECTED_CHECKS
-        or any(value is not True for value in checks.values())
+        or set(checks) != ACTIVE_RUN_ALL_CHECKS
+        or any(checks[name] is not (name in expected_checks) for name in ACTIVE_RUN_ALL_CHECKS)
     ):
         raise storage.StorageError("Active-run refusal result does not satisfy its exact checks")
 
@@ -434,17 +478,39 @@ def exercise(
     case: str = "readiness",
 ) -> None:
     """Run a bounded B-pump probe against an immutable, verified A bundle."""
-    if case not in {"readiness", "active-run"}:
+    if case not in {"readiness", "active-run", "active-run-paused"}:
         raise storage.StorageError("Consumer pump case is not supported")
+    active_run_case = case in {"active-run", "active-run-paused"}
+    paused_case = case == "active-run-paused"
     request_schema, result_schema = _case_schemas(case)
     if not BUNDLE_ID_RE.fullmatch(owner_bundle):
         raise storage.StorageError("Consumer pump owner bundle must be a lowercase bundle ID")
 
-    fixture_name = "consumer-pump-fixture" if case == "readiness" else "active-run-refusal-fixture"
-    fixture_key = "consumer_pump_fixture" if case == "readiness" else "active_run_refusal_fixture"
-    result_key = "consumer_pump_result" if case == "readiness" else "active_run_refusal_result"
-    receipt_prefix = "consumer_pump" if case == "readiness" else "active_run_refusal"
-    process_prefix = "consumer-pump" if case == "readiness" else "active-run-refusal"
+    fixture_name = {
+        "readiness": "consumer-pump-fixture",
+        "active-run": "active-run-refusal-fixture",
+        "active-run-paused": "active-run-paused-refusal-fixture",
+    }[case]
+    fixture_key = {
+        "readiness": "consumer_pump_fixture",
+        "active-run": "active_run_refusal_fixture",
+        "active-run-paused": "active_run_paused_refusal_fixture",
+    }[case]
+    result_key = {
+        "readiness": "consumer_pump_result",
+        "active-run": "active_run_refusal_result",
+        "active-run-paused": "active_run_paused_refusal_result",
+    }[case]
+    receipt_prefix = {
+        "readiness": "consumer_pump",
+        "active-run": "active_run_refusal",
+        "active-run-paused": "active_run_paused_refusal",
+    }[case]
+    process_prefix = {
+        "readiness": "consumer-pump",
+        "active-run": "active-run-refusal",
+        "active-run-paused": "active-run-paused-refusal",
+    }[case]
     fixture = run_root / fixture_name
     fixture.mkdir(parents=True, exist_ok=False)
     native = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
@@ -470,7 +536,7 @@ def exercise(
         receipt[f"{receipt_prefix}_prior_status_sha256"] = _sha256(original_status)
 
     active_run_helper_paths = (
-        ("scripts/verify_project_active_run_runtime.py",) if case == "active-run" else ()
+        ("scripts/verify_project_active_run_runtime.py",) if active_run_case else ()
     )
     helper_hashes_before = _hash_helpers(repo, extra_paths=active_run_helper_paths)
 
@@ -507,7 +573,7 @@ def exercise(
     active_python_package: dict[str, Any] | None = None
     active_python_binding: dict[str, Any] | None = None
     active_python_receipt: dict[str, Any] | None = None
-    if case == "active-run":
+    if active_run_case:
         _check_active_candidate_capacity(
             Path(native["build_root"]), storage_root, runtime_root,
             ready_manifest_path, ready_build_id, receipt,
@@ -630,7 +696,7 @@ def exercise(
         "FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation,
         "FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE": case,
     }
-    if case == "active-run":
+    if active_run_case:
         if active_run_script is None or active_python_package is None:
             raise storage.StorageError("Active-run case lacks its verified frozen DSL inputs")
         env.update({
@@ -755,8 +821,15 @@ def exercise(
             "ready_build_id": ready_build_id,
             "ready_source_sha256": ready_source_sha256,
         }
+        if active_run_case:
+            request["scenario"] = "paused" if paused_case else "running"
         request_bytes = json.dumps(request, separators=(",", ":")).encode("utf-8")
-        log_path = fixture / ("consumer-pump.log" if case == "readiness" else "active-run-refusal.log")
+        log_name = {
+            "readiness": "consumer-pump.log",
+            "active-run": "active-run-refusal.log",
+            "active-run-paused": "active-run-paused-refusal.log",
+        }[case]
+        log_path = fixture / log_name
         cli_record: dict[str, Any]
         timed_out = False
         with log_path.open("wb") as log:
@@ -814,7 +887,7 @@ def exercise(
         solver_frame_error: str | None = None
         if case == "readiness" and active_run_progress:
             raise storage.StorageError("Readiness pump emitted an unexpected active-run progress frame")
-        if case == "active-run":
+        if active_run_case:
             solver_pid, solver_frame_error = _active_solver_start_pid(
                 active_run_progress,
                 failed_or_timed_out=(
@@ -884,7 +957,7 @@ def exercise(
                 helper_evidence.setdefault(pid, terminal)
             if case == "readiness" and (len(helper_progress) != 4 or len(result_helpers) != 4):
                 raise storage.StorageError("Consumer pump omitted owner and selector/verifier helper evidence")
-            if case == "active-run" and (not helper_progress or not result_helpers):
+            if active_run_case and (not helper_progress or not result_helpers):
                 raise storage.StorageError("Active-run refusal omitted owner or candidate helper evidence")
             if set(helper_evidence) != result_helpers:
                 raise storage.StorageError("Consumer pump result helper PIDs differ from terminal progress")
@@ -969,7 +1042,7 @@ def exercise(
             for record in solver_records.values():
                 if record.get("waited") is not True:
                     record.update(waited=False, outcome="unknown")
-            if case == "active-run":
+            if active_run_case:
                 detail = _active_run_cli_failure_detail(
                     _bounded_error_tail(log_path), solver_frame_error
                 )
@@ -979,7 +1052,7 @@ def exercise(
             raise storage.StorageError(
                 f"Consumer pump CLI failed with exit code {process.returncode}; see {log_path}"
             )
-        if case == "active-run":
+        if active_run_case:
             if (
                 len(api_starts) != 1
                 or len(active_run_progress) != 1
@@ -1036,7 +1109,10 @@ def exercise(
             receipt[fixture_key]["post_run_owner_files"] = after_owner_hashes
             receipt[result_key] = result
             receipt["checks"].extend(
-                f"active-run-refusal-{name}" for name in sorted(ACTIVE_RUN_EXPECTED_CHECKS)
+                f"{receipt_prefix}-{name}"
+                for name in sorted(
+                    ACTIVE_RUN_PAUSED_EXPECTED_CHECKS if paused_case else ACTIVE_RUN_EXPECTED_CHECKS
+                )
             )
             heartbeat.raise_if_failed()
             return
@@ -1136,7 +1212,7 @@ def exercise(
         )
         heartbeat.raise_if_failed()
     finally:
-        if case == "active-run":
+        if active_run_case:
             safe_to_restore_status = safe_to_restore_status and _retain_unknown_active_processes(
                 api_started=api_started,
                 api_terminal=api_terminal,

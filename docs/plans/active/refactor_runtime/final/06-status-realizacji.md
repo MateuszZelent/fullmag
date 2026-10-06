@@ -1,18 +1,22 @@
 # Status realizacji całego planu refaktoryzacji
 
 Checkpoint P8-53BC, 06.10.2026: [real active-run restart refusal](p8/53bc-real-active-run-restart-refusal.md)
-Managed realny active-run **PASS**: receipt `b732756686d046fea4df3f203d4cc4fd`,
-exit 0. API A odmówiło restartu z publicznym powodem
-`restart_preparation_refused`, bez handoffu, wyjścia starego API ani zastępczego
-API. Ten sam API, session i run pozostały aktywne; generacja API wynosiła 1
-przed żądaniem i po odmowie. Solver CPU kontynuował od kroku 1 przy odmowie
-do kroku 50 po niej, a worker był żywy po odmowie. Wszystkie procesy próby
-mają potwierdzone wait; trzy helpery zakończyły się exit 0. Runtime nie
-ujawnia prywatnej przyczyny odmowy ponad publiczny kod. Buildy A/B, testy
-kontraktu i szczegóły prób: [raport P8-53BC](p8/53bc-real-active-run-restart-refusal.md).
-To zamyka konkretną bramkę odmowy podczas running, ale nie wariant paused,
-wyścig Start/freezing, publiczną dostępność restartu ani release qualification.
-Procentów P0–P8 nie zwiększono. Rust testy jednostkowe pozostają NOT RUN.
+**CLOSED** dla odmowy podczas `running` i `paused` oraz wyścigu Start/freeze.
+Potwierdzają to trzy managed receipts z finalnego builda
+`44a976d76203ce65d8cdb36a447ec62cd09c32c0b757bb181d76827ee896d549`:
+running `a58b6596bc394fd78fe06169471c6506`, Start/freeze
+`41e4f43bb559445e915fab3558ed9993` i paused
+`6312ce8eca0546daaa0047a5a489d43e`; każdy zakończył się `completed`, exit 0.
+Wariant paused zachował API/session/run i epoch `1 → 1`; licznik pozostał na 15
+przed odmową, w jej chwili i po niej, po terminalnym resume wzrósł do 16. W teście
+wyścigu Start-first zachowało przyjętą komendę i uniemożliwiło późniejszy acquire;
+freeze-first odrzucił Start kodem 409 `development_restart_in_progress`. Każdy
+własny proces ma terminalny wait. Natywny build `backend-dev` PASS, manifest
+`bcb74639170776eb8939552b771dafc95154e3e7fc787cd3b21525df92ef963d`; szczegóły
+i ograniczenia: [raport P8-53BC](p8/53bc-real-active-run-restart-refusal.md).
+Zamknięcie dotyczy tego wiersza runtime; publiczny restart, pozostałe scenariusze
+CAE, wymagane lane'y i release qualification pozostają otwarte. Procentów P0–P8
+nie zwiększono. Rust testy jednostkowe pozostają NOT RUN.
 Tabela zbiorcza poniżej podaje ocenę całej fazy, nie identyczny procent każdego
 podpakietu. P3a jest rozpisane oddzielnie poniżej tabeli (90%, ostatni zapisany
 inventory: 276 SOURCE PASS / 15 OPEN / 13 GLOBAL). Strumień backendu B obejmuje

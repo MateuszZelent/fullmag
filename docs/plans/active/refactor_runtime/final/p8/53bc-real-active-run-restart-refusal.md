@@ -1,6 +1,6 @@
 # P8-53BC — odmowa restartu podczas rzeczywistego solve
 
-Status: **IN PROGRESS**, 06.10.2026. Poprzedni prerequisite:
+Status: **CLOSED**, 06.10.2026. Poprzedni prerequisite:
 [P8-53BB](53bb-frozen-active-run-prerequisite.md), commit
 `5e3caefe62d23067907d6eb4eed8be9532ace0ff`.
 
@@ -365,7 +365,33 @@ Nie jest to awaria API ani solvera: procesy zakończono po ukończeniu dowodu.
 Capacity startowa 547 401 728 B przy dostępnych 17 274 728 448 B; reuse
 zweryfikowanych 13 EXE A ograniczył dodatkowe kopie startowe do zera.
 
-Odbiór wiersza runtime P8-53BC dla `running`: **PASS**. Otwarte pozostają
-osobny aktywny wariant `paused`, wyścig Start kontra freeze na żywym workerze,
-publiczny restart, pozostałe scenariusze CAE, wszystkie wymagane lane'y i
-release qualification. Procentów całego planu nie podnosimy.
+## Zamknięcie punktu — 06.10.2026
+
+Natywny managed build: `just windows-backend-dev 3197` **PASS**, exit 0,
+profil `backend-dev`; kompilacja jednostek testowych nie była uruchamiana.
+Log `native-build-0a4c333d849649ac828eca2580576f53.log`; frozen source
+`32e5f87646d6b9b850e341b9d6b7fa036058be7e520645b93c9407fbb6b418f6`,
+snapshot SHA-256 `69a71c3485ddc66149cf6542e47123b6e240f2ae86b3e1c6b5fd27f65361ba02`,
+manifest SHA-256 `44a976d76203ce65d8cdb36a447ec62cd09c32c0b757bb181d76827ee896d549`.
+Build-only nie restartował workspace na 3197.
+
+- **`running`: PASS**, receipt `a58b6596bc394fd78fe06169471c6506`. Poprzedni API,
+  sesja i run pozostały te same, epoch `1 → 1`; FDM CPU wzrósł z kroku 1 przy
+  odmowie do kroku 50 po niej.
+- **Wyścig Start/freeze: PASS**, receipt `41e4f43bb559445e915fab3558ed9993`.
+  Równoczesny barrier przyjął Start (HTTP 200, komenda
+  `fm-855ab24c-c669-49ce-82a8-5bbb0ea373f6`), a późniejszy acquire odrzucił.
+  Ten sam przebieg osobno potwierdził freeze-first: Start zwrócił 409
+  `development_restart_in_progress`. Wszystkie procesy fixture zostały odczekane.
+- **`paused`: PASS**, receipt `6312ce8eca0546daaa0047a5a489d43e`.
+  API instance `ebb1df0a-bc21-4d0f-824d-f7a9cad22400`, session
+  `session-1791297562934-123096`, run `run-session-1791297562934-123096` i epoch
+  `1` zachowały się przez odmowę. Terminalna pauza pozostawiła stan `paused` i
+  15 kroków bez zmian przy odmowie; terminalne wznowienie wróciło do `running`
+  i zwiększyło kroki do 16. Procesy API, solvera i helperów mają wait.
+
+Wyniki odrzucają prywatną przyczynę odmowy ponad publiczny
+`restart_preparation_refused`, zgodnie z ograniczeniem kanału ownera. Ten punkt
+zamyka runtime refusal dla `running`/`paused` i wyścig Start/freeze. Publiczny
+restart, pozostałe scenariusze CAE, wymagane lane'y, naukowa walidacja i release
+qualification pozostają poza tym zakresem; procentu całego planu nie podnosimy.

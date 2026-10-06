@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import verify_development_backend_api as backend_gate
 from windows.verify_consumer_pump import (
     ACTIVE_RUN_EXPECTED_CHECKS,
+    ACTIVE_RUN_ALL_CHECKS,
+    ACTIVE_RUN_PAUSED_EXPECTED_CHECKS,
     ACTIVE_RUN_REQUEST_SCHEMA,
     ACTIVE_RUN_RESULT_SCHEMA,
     ACTIVE_RUN_RESULT_FIELDS,
@@ -31,6 +33,10 @@ from windows.verify_consumer_pump import (
     _retain_unknown_active_processes,
     _terminal_helper,
     validate_active_run_result,
+)
+from verify_development_backend_api import (
+    _validate_active_run_scenario,
+    _validate_start_freeze_race_scope,
 )
 
 
@@ -101,10 +107,12 @@ with mock.patch("windows.select_development_candidate._source_inventory_bytes", 
             raise AssertionError("unverified candidate capacity was accepted")
 
 
-def valid_result() -> dict[str, object]:
+def valid_result(scenario: str = "running") -> dict[str, object]:
+    paused = scenario == "paused"
     return {
         "schema": ACTIVE_RUN_RESULT_SCHEMA,
         "status": "passed",
+        "scenario": scenario,
         "request_id": REQUEST_ID,
         "old_api_instance_id": "22222222-2222-4222-8222-222222222222",
         "session_id": "session-active-run",
@@ -112,10 +120,14 @@ def valid_result() -> dict[str, object]:
         "api_transition_epoch_after": 1,
         "run_id": "run-active-run",
         "solver_steps_before": 4,
-        "solver_steps_at_refusal": 6,
-        "solver_steps_after": 7,
-        "solver_state_before": "running",
-        "solver_state_after": "running",
+        "solver_steps_at_refusal": 4 if paused else 6,
+        "solver_steps_after": 4 if paused else 7,
+        "solver_state_before": scenario,
+        "solver_state_after": scenario,
+        "pause_command_id": "fm-33333333-3333-4333-8333-333333333333" if paused else None,
+        "resume_command_id": "fm-44444444-4444-4444-8444-444444444444" if paused else None,
+        "solver_steps_after_resume": 5 if paused else None,
+        "solver_state_after_resume": "running" if paused else None,
         "active_run_result_state": "failed",
         "active_run_public_reason": "restart_preparation_refused",
         "refusal_reason_attribution": ACTIVE_RUN_REFUSAL_ATTRIBUTION,
@@ -125,7 +137,12 @@ def valid_result() -> dict[str, object]:
             {"pid": 42102, "waited": True, "exit_code": 0},
             {"pid": 42103, "waited": True, "exit_code": 0},
         ],
-        "checks": {name: True for name in ACTIVE_RUN_EXPECTED_CHECKS},
+        "checks": {
+            name: name in (
+                ACTIVE_RUN_PAUSED_EXPECTED_CHECKS if paused else ACTIVE_RUN_EXPECTED_CHECKS
+            )
+            for name in ACTIVE_RUN_ALL_CHECKS
+        },
     }
 
 
@@ -146,21 +163,40 @@ for invalid_epoch in (0, 2, True, "1"):
     invalid["api_transition_epoch_after"] = invalid_epoch
     rejects(invalid)
 legacy_result = valid_result()
-legacy_result["schema"] = "fullmag.development-cli-active-run-check.v1"
+legacy_result["schema"] = "fullmag.development-cli-active-run-check.v2"
 rejects(legacy_result)
 
 
 assert _case_schemas("readiness") == (REQUEST_SCHEMA, RESULT_SCHEMA)
 assert _case_schemas("active-run") == (ACTIVE_RUN_REQUEST_SCHEMA, ACTIVE_RUN_RESULT_SCHEMA)
+assert _case_schemas("active-run-paused") == (ACTIVE_RUN_REQUEST_SCHEMA, ACTIVE_RUN_RESULT_SCHEMA)
 assert EXPECTED_CHECKS.isdisjoint(ACTIVE_RUN_EXPECTED_CHECKS)
+assert ACTIVE_RUN_EXPECTED_CHECKS != ACTIVE_RUN_PAUSED_EXPECTED_CHECKS
 assert set(valid_result()) == ACTIVE_RUN_RESULT_FIELDS
 validate_active_run_result(valid_result(), api_pid=API_PID, solver_pid=SOLVER_PID)
+validate_active_run_result(valid_result("paused"), api_pid=API_PID, solver_pid=SOLVER_PID)
 
 backend_gate._validate_active_run_refusal_scope(
     OWNER_BUNDLE,
     conflicting_scope=False,
     frozen_native_build_id=None,
 )
+_validate_active_run_scenario("running", OWNER_BUNDLE)
+_validate_active_run_scenario("paused", OWNER_BUNDLE)
+for invalid_scenario, owner_bundle in (("unknown", OWNER_BUNDLE), ("paused", None)):
+    try:
+        _validate_active_run_scenario(invalid_scenario, owner_bundle)
+    except backend_gate.storage.StorageError:
+        pass
+    else:
+        raise AssertionError("invalid active-run refusal scenario was accepted")
+_validate_start_freeze_race_scope(True, False)
+try:
+    _validate_start_freeze_race_scope(True, True)
+except backend_gate.storage.StorageError:
+    pass
+else:
+    raise AssertionError("Start/freeze race was combined with another verification scope")
 backend_gate._validate_active_run_refusal_scope(
     None,
     conflicting_scope=True,
@@ -218,6 +254,10 @@ false_check = valid_result()
 false_check["checks"] = dict(false_check["checks"], no_old_api_exit=False)
 rejects(false_check)
 
+missing_negative_check = valid_result()
+missing_negative_check["checks"]["pause_command_terminal"] = True
+rejects(missing_negative_check)
+
 no_step_advance = valid_result()
 no_step_advance["solver_steps_after"] = 6
 rejects(no_step_advance)
@@ -229,6 +269,26 @@ rejects(no_post_refusal_advance)
 bad_refusal_baseline = valid_result()
 bad_refusal_baseline["solver_steps_at_refusal"] = bad_refusal_baseline["solver_steps_before"] - 1
 rejects(bad_refusal_baseline)
+
+paused_step_advanced_during_refusal = valid_result("paused")
+paused_step_advanced_during_refusal["solver_steps_after"] += 1
+rejects(paused_step_advanced_during_refusal)
+
+paused_missing_resume_progress = valid_result("paused")
+paused_missing_resume_progress["solver_steps_after_resume"] = paused_missing_resume_progress["solver_steps_after"]
+rejects(paused_missing_resume_progress)
+
+paused_resume_not_running = valid_result("paused")
+paused_resume_not_running["solver_state_after_resume"] = "paused"
+rejects(paused_resume_not_running)
+
+paused_missing_pause_ack = valid_result("paused")
+paused_missing_pause_ack["pause_command_id"] = None
+rejects(paused_missing_pause_ack)
+
+paused_invalid_command_id = valid_result("paused")
+paused_invalid_command_id["resume_command_id"] = "44444444-4444-4444-8444-444444444444"
+rejects(paused_invalid_command_id)
 
 solver_pid, solver_frame_error = _active_solver_start_pid([], failed_or_timed_out=True)
 assert solver_pid is None and solver_frame_error is None
@@ -307,6 +367,8 @@ print(json.dumps({
         "generic-refusal-reason-and-attribution-required",
         "active-run-must-advance-while-running",
         "solver-must-advance-after-confirmed-refusal",
+        "paused-run-refusal-preserves-paused-state-and-step-count",
+        "paused-run-requires-terminal-pause-and-resume-and-post-resume-progress",
         "exact-api-and-solver-terminal-pids-required",
         "all-owner-and-candidate-helpers-waited-successfully",
         "early-cli-failure-keeps-terminal-helper-and-bounded-error-tail",

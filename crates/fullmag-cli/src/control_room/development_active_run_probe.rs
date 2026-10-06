@@ -13,22 +13,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{
-    api_port, configure_child_process, emit_development_restart_probe_progress,
-    emit_owner_probe_process_started, init_api_port, repo_root, runtime_state_root,
-    BootstrapProcessGuard, ChildProcess, ControlRoomGuard,
+    BootstrapProcessGuard, ChildProcess, ControlRoomGuard, api_port, configure_child_process,
+    emit_development_restart_probe_progress, emit_owner_probe_process_started, init_api_port,
+    repo_root, runtime_state_root,
 };
 use crate::{
     development_api_owner::{ConsumerReadinessStatus, OwnerLaunch},
     development_restart::NativeRestartPump,
 };
 
-const INPUT_SCHEMA: &str = "fullmag.development-cli-active-run-request.v1";
-const RESULT_SCHEMA: &str = "fullmag.development-cli-active-run-check.v2";
+const INPUT_SCHEMA: &str = "fullmag.development-cli-active-run-request.v2";
+const RESULT_SCHEMA: &str = "fullmag.development-cli-active-run-check.v3";
 const PROGRESS_SCHEMA: &str = "fullmag.development-cli-active-run-progress.v1";
 const REFUSAL_ATTRIBUTION: &str = "unavailable_private_api_handler_discards_api_error";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -41,6 +41,7 @@ const ADVANCE_TIMEOUT: Duration = Duration::from_secs(20);
 #[serde(deny_unknown_fields)]
 struct Input {
     schema: String,
+    scenario: String,
     owner_bundle_id: String,
     owner_manifest_sha256: String,
     owner_source_sha256: String,
@@ -48,6 +49,7 @@ struct Input {
     ready_source_sha256: String,
 }
 
+#[derive(Clone)]
 struct ActiveSnapshot {
     api_instance_id: String,
     session_id: String,
@@ -72,6 +74,7 @@ fn read_input() -> Result<Input> {
     }
     let input: Input = serde_json::from_slice(&raw)?;
     if input.schema != INPUT_SCHEMA
+        || !matches!(input.scenario.as_str(), "running" | "paused")
         || !lower_hex(&input.owner_bundle_id, 32)
         || !lower_hex(&input.owner_manifest_sha256, 64)
         || !lower_hex(&input.owner_source_sha256, 64)
@@ -199,6 +202,119 @@ fn same_active_run(left: &ActiveSnapshot, right: &ActiveSnapshot) -> bool {
         && left.session_id == right.session_id
         && left.session_epoch == right.session_epoch
         && left.run_id == right.run_id
+}
+
+fn encode_scope_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn current_session_scope(
+    client: &reqwest::blocking::Client,
+    api_port: u16,
+    api_instance_id: &str,
+    expected_session_id: &str,
+) -> Result<String> {
+    let base = format!("http://127.0.0.1:{api_port}");
+    let status: Value = client
+        .get(format!("{base}/v2/sessions/current/status"))
+        .header("x-fullmag-api-instance", api_instance_id)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let session = &status["session"];
+    let session_id = session["session_id"]
+        .as_str()
+        .context("stage control status has no session ID")?;
+    let session_epoch = session["session_epoch"]
+        .as_str()
+        .context("stage control status has no browser session epoch")?;
+    let request_scope_epoch = session["request_scope_epoch"]
+        .as_str()
+        .context("stage control status has no request scope epoch")?;
+    if session_id != expected_session_id {
+        bail!("stage control session scope changed before command submission");
+    }
+    Ok(format!(
+        "session={}&epoch={}&request_scope_epoch={}",
+        encode_scope_component(session_id),
+        encode_scope_component(session_epoch),
+        encode_scope_component(request_scope_epoch),
+    ))
+}
+
+fn submit_and_wait_stage_control(
+    client: &reqwest::blocking::Client,
+    api_port: u16,
+    api_instance_id: &str,
+    snapshot: &ActiveSnapshot,
+    kind: &str,
+    expected_runtime_state: &str,
+) -> Result<String> {
+    let scope = current_session_scope(client, api_port, api_instance_id, &snapshot.session_id)?;
+    let client_intent_id = uuid::Uuid::new_v4().to_string();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let base = format!("http://127.0.0.1:{api_port}");
+    let response = client
+        .post(format!("{base}/v2/sessions/current/simulation/commands"))
+        .header("x-fullmag-api-instance", api_instance_id)
+        .header("x-fullmag-session-scope", &scope)
+        .header("Idempotency-Key", &client_intent_id)
+        .header("X-Request-ID", &request_id)
+        .json(&json!({
+            "client_intent_id":client_intent_id,
+            "kind":kind,
+            "reason":"user_requested",
+            "requested_at_unix_ms":std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?.as_millis(),
+            "target":{"kind":"current_stage"},
+            "precondition":{"runtime_state":expected_runtime_state},
+        }))
+        .send()?;
+    let status = response.status();
+    let body: Value = response.json()?;
+    if !status.is_success() || body["accepted"] != true {
+        bail!("{kind} command was not accepted: HTTP {status}, {body}");
+    }
+    let command_id = body["command_id"]
+        .as_str()
+        .context("accepted stage control has no command ID")?
+        .to_owned();
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let detail: Value = client
+            .get(format!(
+                "{base}/v2/sessions/current/simulation/commands/{command_id}"
+            ))
+            .header("x-fullmag-api-instance", api_instance_id)
+            .header("x-fullmag-session-scope", &scope)
+            .send()?
+            .error_for_status()?
+            .json()?;
+        if detail["command_id"] != command_id {
+            bail!("{kind} command detail returned a different command identity");
+        }
+        match detail["status"].as_str() {
+            Some("completed")
+                if detail["completion_status"] == "completed" && detail["error"].is_null() =>
+            {
+                return Ok(command_id);
+            }
+            Some("failed" | "rejected") => {
+                bail!("{kind} command terminated without ACK: {detail}");
+            }
+            _ if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => bail!("{kind} command did not reach completed ACK before its deadline: {detail}"),
+        }
+    }
 }
 
 fn helper_pids(pump: &NativeRestartPump) -> Result<BTreeSet<u32>> {
@@ -483,7 +599,7 @@ pub(super) fn verify() -> Result<()> {
     emit_solver_started(solver_pid)?;
 
     let solver_start_deadline = Instant::now() + SOLVER_START_TIMEOUT;
-    let before = loop {
+    let initially_running = loop {
         if solver_startup.process_mut().0.try_wait()?.is_some() {
             bail!("active-run A solver CLI exited before publishing a live run");
         }
@@ -500,6 +616,52 @@ pub(super) fn verify() -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(100));
     };
+    let pause_command_id = if input.scenario == "paused" {
+        let command_id = submit_and_wait_stage_control(
+            &client,
+            api_port(),
+            &api_instance_id,
+            &initially_running,
+            "pause",
+            "running",
+        )?;
+        let pause_deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if solver_startup.process_mut().0.try_wait()?.is_some() {
+                bail!("active-run solver exited while acknowledging pause");
+            }
+            let snapshot = active_snapshot(&client, api_port(), &api_instance_id)?;
+            if !same_active_run(&initially_running, &snapshot) {
+                bail!("active-run identity changed while pausing the solver");
+            }
+            if snapshot.solver_state == "paused" {
+                break;
+            }
+            if snapshot.solver_state != "running" || Instant::now() >= pause_deadline {
+                bail!("active-run solver did not enter paused after terminal pause ACK");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Some(command_id)
+    } else {
+        None
+    };
+    let before = if input.scenario == "paused" {
+        active_snapshot(&client, api_port(), &api_instance_id)?
+    } else {
+        initially_running.clone()
+    };
+    if !same_active_run(&initially_running, &before) {
+        bail!("active-run identity changed before the restart-refusal baseline");
+    }
+    let expected_refusal_state = if input.scenario == "paused" {
+        "paused"
+    } else {
+        "running"
+    };
+    if before.solver_state != expected_refusal_state || before.solver_steps == 0 {
+        bail!("active-run probe did not reach the requested pre-refusal runtime state");
+    }
     let current_platform = client
         .get(&platform_url)
         .header("x-fullmag-api-instance", &api_instance_id)
@@ -587,33 +749,91 @@ pub(super) fn verify() -> Result<()> {
     }
     let refusal_baseline = active_snapshot(&client, api_port(), &api_instance_id)?;
     if !same_active_run(&before, &refusal_baseline)
-        || refusal_baseline.solver_state != "running"
+        || refusal_baseline.solver_state != expected_refusal_state
+        || (input.scenario == "paused" && refusal_baseline.solver_steps != before.solver_steps)
         || refusal_baseline.solver_steps < before.solver_steps
     {
         bail!("active-run refusal baseline differs from the original live solver run");
     }
-    let advance_deadline = Instant::now() + ADVANCE_TIMEOUT;
-    let after = loop {
-        if solver_startup.process_mut().0.try_wait()?.is_some() {
-            bail!("active-run solver exited after restart refusal");
+    let after = if input.scenario == "paused" {
+        let snapshot = active_snapshot(&client, api_port(), &api_instance_id)?;
+        if solver_startup.process_mut().0.try_wait()?.is_some()
+            || !same_active_run(&before, &snapshot)
+            || snapshot.solver_state != "paused"
+            || snapshot.solver_steps != refusal_baseline.solver_steps
+        {
+            bail!("paused solver state or identity changed after restart refusal");
         }
-        if let Ok(snapshot) = active_snapshot(&client, api_port(), &api_instance_id) {
-            if !same_active_run(&before, &snapshot) || snapshot.solver_state != "running" {
-                bail!("active-run API, session, run, or live solver state changed after refusal");
+        snapshot
+    } else {
+        let advance_deadline = Instant::now() + ADVANCE_TIMEOUT;
+        loop {
+            if solver_startup.process_mut().0.try_wait()?.is_some() {
+                bail!("active-run solver exited after restart refusal");
             }
-            if snapshot.solver_steps > refusal_baseline.solver_steps {
-                break snapshot;
+            if let Ok(snapshot) = active_snapshot(&client, api_port(), &api_instance_id) {
+                if !same_active_run(&before, &snapshot) || snapshot.solver_state != "running" {
+                    bail!(
+                        "active-run API, session, run, or live solver state changed after refusal"
+                    );
+                }
+                if snapshot.solver_steps > refusal_baseline.solver_steps {
+                    break snapshot;
+                }
             }
+            if Instant::now() >= advance_deadline {
+                bail!("active-run solver steps did not advance before the bounded deadline");
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
-        if Instant::now() >= advance_deadline {
-            bail!("active-run solver steps did not advance before the bounded deadline");
+    };
+    let resume_command_id = if input.scenario == "paused" {
+        Some(submit_and_wait_stage_control(
+            &client,
+            api_port(),
+            &api_instance_id,
+            &after,
+            "resume",
+            "paused",
+        )?)
+    } else {
+        None
+    };
+    let after_resume = if input.scenario == "paused" {
+        let resume_deadline = Instant::now() + ADVANCE_TIMEOUT;
+        loop {
+            if solver_startup.process_mut().0.try_wait()?.is_some() {
+                bail!("active-run solver exited after resume ACK");
+            }
+            if let Ok(snapshot) = active_snapshot(&client, api_port(), &api_instance_id) {
+                if !same_active_run(&before, &snapshot) {
+                    bail!("active-run identity changed after resume ACK");
+                }
+                if snapshot.solver_state == "running" && snapshot.solver_steps > after.solver_steps
+                {
+                    break Some(snapshot);
+                }
+                if snapshot.solver_state != "paused" && snapshot.solver_state != "running" {
+                    bail!("active-run solver entered an unexpected state after resume ACK");
+                }
+            }
+            if Instant::now() >= resume_deadline {
+                bail!("active-run solver did not resume and advance after resume ACK");
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
-        std::thread::sleep(Duration::from_millis(100));
+    } else {
+        None
     };
     let api_after = active_snapshot(&client, api_port(), &api_instance_id)?;
     if !same_active_run(&before, &api_after)
-        || api_after.solver_state != "running"
-        || api_after.solver_steps < after.solver_steps
+        || (input.scenario == "running"
+            && (api_after.solver_state != "running" || api_after.solver_steps < after.solver_steps))
+        || (input.scenario == "paused"
+            && (api_after.solver_state != "running"
+                || after_resume
+                    .as_ref()
+                    .is_none_or(|resumed| api_after.solver_steps < resumed.solver_steps)))
     {
         bail!("active-run final API observation differs from the continuing live run");
     }
@@ -641,7 +861,9 @@ pub(super) fn verify() -> Result<()> {
     let checks = json!({
         "idle_owner_acquire_accepted_and_aborted":true,
         "candidate_ready_observed":true,
-        "active_run_running_observed":before.solver_state == "running",
+        "active_run_running_observed":initially_running.solver_state == "running",
+        "active_run_paused_before_refusal":input.scenario == "paused" && before.solver_state == "paused",
+        "pause_command_terminal":input.scenario == "paused" && pause_command_id.is_some(),
         "active_run_steps_positive":before.solver_steps > 0,
         "typed_restart_intent_published":true,
         "active_run_refusal_failed":result_state == "failed",
@@ -650,11 +872,16 @@ pub(super) fn verify() -> Result<()> {
         "no_replacement_started":!replacement_started,
         "same_owner_session_run_after_refusal":same_api && same_active_run(&before, &after) && same_active_run(&before, &api_after),
         "solver_worker_alive_after_refusal":true,
-        "solver_steps_advanced_after_refusal":after.solver_steps > refusal_baseline.solver_steps,
+        "solver_steps_advanced_after_refusal":input.scenario == "running" && after.solver_steps > refusal_baseline.solver_steps,
+        "paused_state_preserved_after_refusal":input.scenario == "paused" && after.solver_state == "paused" && after.solver_steps == refusal_baseline.solver_steps,
+        "resume_command_terminal":input.scenario == "paused" && resume_command_id.is_some(),
+        "solver_resumed_after_refusal":after_resume.as_ref().is_some_and(|snapshot| snapshot.solver_state == "running"),
+        "solver_steps_advanced_after_resume":after_resume.as_ref().is_some_and(|snapshot| snapshot.solver_steps > after.solver_steps),
     });
     let result = json!({
         "schema":RESULT_SCHEMA,
         "status":"passed",
+        "scenario":input.scenario,
         "request_id":request_id,
         "old_api_instance_id":api_instance_id,
         "session_id":before.session_id,
@@ -666,6 +893,10 @@ pub(super) fn verify() -> Result<()> {
         "solver_steps_after":after.solver_steps,
         "solver_state_before":before.solver_state,
         "solver_state_after":after.solver_state,
+        "pause_command_id":pause_command_id,
+        "resume_command_id":resume_command_id,
+        "solver_steps_after_resume":after_resume.as_ref().map(|snapshot| snapshot.solver_steps),
+        "solver_state_after_resume":after_resume.as_ref().map(|snapshot| snapshot.solver_state.as_str()),
         "active_run_result_state":result_state,
         "active_run_public_reason":public_reason,
         "refusal_reason_attribution":REFUSAL_ATTRIBUTION,

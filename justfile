@@ -176,6 +176,14 @@ verify-windows-development-consumer-pump owner_bundle:
 verify-windows-development-active-run-refusal owner_bundle:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --active-run-refusal-owner-bundle "{{owner_bundle}}"
 
+# Refuse native restart while a real FDM CPU run is paused, then resume it.
+verify-windows-development-active-run-paused-refusal owner_bundle:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --active-run-refusal-owner-bundle "{{owner_bundle}}" --active-run-scenario "paused"
+
+# Exercise the concurrent API Solve versus restart-acquisition admission boundary.
+verify-windows-development-start-freeze-race:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --start-freeze-race-only
+
 # Owned native restart with a real nonempty browser workspace and unsaved draft.
 verify-windows-development-workspace-browser owner_bundle:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --workspace-browser-owner-bundle "{{owner_bundle}}"
