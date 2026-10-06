@@ -28,7 +28,7 @@ use crate::{
 };
 
 const INPUT_SCHEMA: &str = "fullmag.development-cli-active-run-request.v1";
-const RESULT_SCHEMA: &str = "fullmag.development-cli-active-run-check.v1";
+const RESULT_SCHEMA: &str = "fullmag.development-cli-active-run-check.v2";
 const PROGRESS_SCHEMA: &str = "fullmag.development-cli-active-run-progress.v1";
 const REFUSAL_ATTRIBUTION: &str = "unavailable_private_api_handler_discards_api_error";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -157,6 +157,9 @@ fn active_snapshot(
     let session_epoch = identity["session_epoch"]
         .as_u64()
         .context("active-run workspace identity has no numeric session epoch")?;
+    if session_epoch == 0 {
+        bail!("active-run live session has no committed API transition epoch");
+    }
     let status: Value = client
         .get(format!("{base}/v2/sessions/current/status"))
         .header("x-fullmag-api-instance", expected_api_instance_id)
@@ -655,6 +658,8 @@ pub(super) fn verify() -> Result<()> {
         "request_id":request_id,
         "old_api_instance_id":api_instance_id,
         "session_id":before.session_id,
+        "api_transition_epoch_before":before.session_epoch,
+        "api_transition_epoch_after":api_after.session_epoch,
         "run_id":before.run_id,
         "solver_steps_before":before.solver_steps,
         "solver_steps_at_refusal":refusal_baseline.solver_steps,

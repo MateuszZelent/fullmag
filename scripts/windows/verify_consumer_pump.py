@@ -62,7 +62,7 @@ EXPECTED_CHECKS = frozenset({
     "scope_loss_no_candidate",
     "scope_loss_no_replacement",
 })
-ACTIVE_RUN_RESULT_SCHEMA = "fullmag.development-cli-active-run-check.v1"
+ACTIVE_RUN_RESULT_SCHEMA = "fullmag.development-cli-active-run-check.v2"
 ACTIVE_RUN_PROGRESS_SCHEMA = "fullmag.development-cli-active-run-progress.v1"
 ACTIVE_RUN_EXPECTED_CHECKS = frozenset({
     "idle_owner_acquire_accepted_and_aborted",
@@ -84,6 +84,8 @@ ACTIVE_RUN_RESULT_FIELDS = frozenset({
     "request_id",
     "old_api_instance_id",
     "session_id",
+    "api_transition_epoch_before",
+    "api_transition_epoch_after",
     "run_id",
     "solver_steps_before",
     "solver_steps_at_refusal",
@@ -223,6 +225,10 @@ def validate_active_run_result(
         or not result["session_id"]
         or len(result["session_id"]) > 512
         or any(ord(character) < 32 for character in result["session_id"])
+        or type(result.get("api_transition_epoch_before")) is not int
+        or not 0 < result["api_transition_epoch_before"] < 2**64
+        or type(result.get("api_transition_epoch_after")) is not int
+        or result["api_transition_epoch_after"] != result["api_transition_epoch_before"]
         or not isinstance(result.get("run_id"), str)
         or not result["run_id"]
         or len(result["run_id"]) > 512

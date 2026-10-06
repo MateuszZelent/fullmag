@@ -108,6 +108,8 @@ def valid_result() -> dict[str, object]:
         "request_id": REQUEST_ID,
         "old_api_instance_id": "22222222-2222-4222-8222-222222222222",
         "session_id": "session-active-run",
+        "api_transition_epoch_before": 1,
+        "api_transition_epoch_after": 1,
         "run_id": "run-active-run",
         "solver_steps_before": 4,
         "solver_steps_at_refusal": 6,
@@ -133,6 +135,19 @@ def rejects(result: dict[str, object], api_pid: int = API_PID, solver_pid: int =
     except backend_gate.storage.StorageError:
         return
     raise AssertionError("invalid active-run refusal result was accepted")
+
+
+for invalid_epoch in (0, -1, True, "1", 2**64):
+    invalid = valid_result()
+    invalid["api_transition_epoch_before"] = invalid_epoch
+    rejects(invalid)
+for invalid_epoch in (0, 2, True, "1"):
+    invalid = valid_result()
+    invalid["api_transition_epoch_after"] = invalid_epoch
+    rejects(invalid)
+legacy_result = valid_result()
+legacy_result["schema"] = "fullmag.development-cli-active-run-check.v1"
+rejects(legacy_result)
 
 
 assert _case_schemas("readiness") == (REQUEST_SCHEMA, RESULT_SCHEMA)
@@ -288,6 +303,7 @@ print(json.dumps({
         "candidate-capacity-fails-before-processes-and-preserves-byte-counts",
         "active-run-route-isolated-to-frozen-owner-bundle",
         "exact-active-result-schema-and-checkset-accepted",
+        "nonzero-u64-api-transition-epoch-preserved-after-refusal",
         "generic-refusal-reason-and-attribution-required",
         "active-run-must-advance-while-running",
         "solver-must-advance-after-confirmed-refusal",

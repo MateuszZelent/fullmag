@@ -322,3 +322,50 @@ liczbami u64, pierwsza dodatnia, druga identyczna. Wersja v1, zero, bool,
 string, overflow i zmieniona inkarnacja są odrzucane przez driver.
 Interpretowana regresja PASS; rustfmt check PASS. Nie zmieniono publicznego
 OpenAPI ani semantyki żądania restartu; rozszerzenie dotyczy prywatnego dowodu.
+
+Frozen active-run prerequisite nowego A: **PASS**, handle `27486`, receipt
+`2f51540a64d5472c92f86ec472e8e8aa`, state passed, exit 0. Realny FDM CPU
+osiągnął krok 1, a po disconnect/reconnect krok 50 w stanie running;
+utrzymał session/run i niemalejące revisions. Pakiet A:
+`4dcf797a42e64d3e91bb82d7da3f57f5`, bundle manifest SHA-256
+`595196f3a904b496f8c7f48f5c0e8d8a9a33f5f94ec542f11ef0df9f119ccde6`.
+Python probe PID 67252 waited exit 0; CLI 116484 i API 115760 waited exit 1
+(kontrolowane zakończenie). Nie jest to jeszcze dowód odmowy restartu.
+
+Poprawka produkcyjnej sesji zapisana lokalnie:
+`56410140f507c16d7704f7bb21907f98cc5bee57`.
+Review trzech plików receipt v2: brak actionable findings. Managed build B
+uruchomiono po zakończeniu A, handle `32676`, log
+`native-build-738f352f53ea4012945f7745c50490cb.log`; wynik do odczytania.
+
+Build B: **PASS, exit 0**, completed, manifest SHA-256
+`8f2d6b7748745dddc40acab2a48fe68e8a0842fe2ee1cd0d5a5fb6ebc1efe670`.
+Backend `68ccb34b1a927801bd5e787858c52e84445b4a5659a2801911474522175b16f3`,
+snapshot `76b744b13514cf29e6418c7320b640964786c89357c149c21e2eceb83aaaa565`;
+source directory `2e515dc09ee65a479fb1813e318e992d165730b3ba25784890351e68198da9b7`.
+API/CLI 38,64 s; desktop 47,17 s. Źródła A/B są odrębne, oba zawierają
+poprawkę pierwszej inkarnacji; B rozszerza diagnostyczny wynik do v2.
+Managed odmowa restartu wystartowała z pakietem A `4dcf797a42e64d3e91bb82d7da3f57f5`,
+handle `43199`; receipt **`b732756686d046fea4df3f203d4cc4fd`**, state completed,
+exit 0. A i B mają różne source digests; test zachował zgodność i nie nadpisał
+pakietu A aktywnym pakietem B.
+
+Wynik `fullmag.development-cli-active-run-check.v2` potwierdza API transition
+epoch `1 → 1`, ten sam API/session/run, aktywny solver `running` przed i po,
+brak handoffu/wyjścia A/zastępczego API oraz odmowę z publicznym powodem
+`restart_preparation_refused`. Solver miał krok 1 przy pierwszej obserwacji,
+krok 1 w chwili odmowy i krok 50 po niej. Wymagana kontynuacja po odmowie
+jest potwierdzona. Prywatnego szczegółu odmowy API nie udostępnia w swoim
+kanale ownera; receipt jawnie oznacza tę atrybucję jako niedostępną.
+
+Process custody: CLI B PID 91360, store initializer 115124, helpery 36932,
+73212 i 113776 waited exit 0; API A PID 54132 i solver PID 8964 waited po
+kontrolowanym shutdown exit 1. Python binding probe PID 18540 waited exit 0.
+Nie jest to awaria API ani solvera: procesy zakończono po ukończeniu dowodu.
+Capacity startowa 547 401 728 B przy dostępnych 17 274 728 448 B; reuse
+zweryfikowanych 13 EXE A ograniczył dodatkowe kopie startowe do zera.
+
+Odbiór wiersza runtime P8-53BC dla `running`: **PASS**. Otwarte pozostają
+osobny aktywny wariant `paused`, wyścig Start kontra freeze na żywym workerze,
+publiczny restart, pozostałe scenariusze CAE, wszystkie wymagane lane'y i
+release qualification. Procentów całego planu nie podnosimy.

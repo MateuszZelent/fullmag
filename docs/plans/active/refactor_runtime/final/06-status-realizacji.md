@@ -1,23 +1,23 @@
 # Status realizacji całego planu refaktoryzacji
 
 Checkpoint P8-53BC, 06.10.2026: [real active-run restart refusal](p8/53bc-real-active-run-restart-refusal.md)
-Diagnostic i managed driver dodane; kontrakt/regresje oraz kompilacja
-API/CLI/desktop **PASS**. Scenariusz zachowuje solver/API A przy kandydacie B,
-bez omijania zgodności buildów. Runtime **NOT VERIFIED**: pierwsze dwie
-próby ujawniły poprawione błędy fixture i problem pojemności. Ostatnia próba
-`9ad9d92dce4940ed8a80eb5f4f4a8c9c` uruchomiła realny solver A do kroku 1,
-lecz typed restart transport odrzucił pierwszą sesję z epoch 0. Poprawka
-produkcyjnej publikacji inkarnacji sesji jest przygotowana; review bez findings.
-Build `bb00f760cbf94783a46e3cc7f6a47bd4` failed: linker LNK1180, brak miejsca
-na C:. Po zwolnieniu miejsca kolejny build
-`560571c824984aeabdbbaad9d86708a5` **PASS, exit 0**, manifest
-`2d25ce9f0297dee66b2ad445aa7e1a900756194d9877b956f414e90906deb458`.
-Dowód runtime tej poprawki i finalna odmowa restartu pozostają otwarte.
-Interpretowana regresja drivera PASS;
-regresje Rust zapisane, NOT RUN (zakaz kompilacji testów). Konkretna kopia
-kompilatora 310 MB nadal czeka na akceptację usunięcia. Target/cache,
-snapshoty, logi i wyniki pozostają zachowane. Odmowa restartu przy realnym
-running/paused i wyścig Start/freezing nadal są otwarte; procentów nie zwiększono.
+Managed realny active-run **PASS**: receipt `b732756686d046fea4df3f203d4cc4fd`,
+exit 0. API A odmówiło restartu z publicznym powodem
+`restart_preparation_refused`, bez handoffu, wyjścia starego API ani zastępczego
+API. Ten sam API, session i run pozostały aktywne; generacja API wynosiła 1
+przed żądaniem i po odmowie. Solver CPU kontynuował od kroku 1 przy odmowie
+do kroku 50 po niej, a worker był żywy po odmowie. Wszystkie procesy próby
+mają potwierdzone wait; trzy helpery zakończyły się exit 0. Runtime nie
+ujawnia prywatnej przyczyny odmowy ponad publiczny kod. Buildy A/B, testy
+kontraktu i szczegóły prób: [raport P8-53BC](p8/53bc-real-active-run-restart-refusal.md).
+To zamyka konkretną bramkę odmowy podczas running, ale nie wariant paused,
+wyścig Start/freezing, publiczną dostępność restartu ani release qualification.
+Procentów P0–P8 nie zwiększono. Rust testy jednostkowe pozostają NOT RUN.
+Tabela zbiorcza poniżej podaje ocenę całej fazy, nie identyczny procent każdego
+podpakietu. P3a jest rozpisane oddzielnie poniżej tabeli (90%, ostatni zapisany
+inventory: 276 SOURCE PASS / 15 OPEN / 13 GLOBAL). Strumień backendu B obejmuje
+B-CORE/FDM/FEM/DEMAG/WORKFLOW/STATE/ABI/OBS; nie ma wiarygodnie zmierzonego
+osobnego procentu, więc śledzi się go przez bramki lane'ów.
 
 Checkpoint P8-53BB, 06.10.2026: [frozen active-run prerequisite](p8/53bb-frozen-active-run-prerequisite.md)
 **PASS**, receipt `c575d6492d504616bceb7622920a2070`, exit 0, bez Cargo.
@@ -1194,6 +1194,11 @@ otwarte. **P6 52%, cały plan około 49%**. Szczegóły:
 | **P6** | Trwałe wyniki, quantities, datasets i frontend analityczny | **52%** | Docelowe manifesty, dataset identity i wymagania Control Room są opisane. Publiczny katalog immutable observation frames oraz source-qualified odczyt historycznego `m` przez FMVP v4 mają kontrakt API, centralną fasadę i session-scoped resource hooks z exact field generation. Explorer pokazuje ramki pod Dynamics, każda ma exact selection i dedykowany Inspector; session-fenced workspace przechowuje wyłącznie mały pinned source descriptor. Pinned source zasila istniejący viewport przez wspólny bounded cache, exact-source validation i source-fenced retention; browser/WebGL potwierdza widoczny canvas, żywy kontekst i niezerowy buffer. `fullmag-quantities` ma fundament `DatasetDefinition`, osobnego `MaterializedDataset`, `DerivedValueDefinition` i `PlotDefinition`, stabilne axis/sample/item/branch, jawne stany unavailable oraz obowiązek projekcji niezgodnych przestrzeni. Storage-neutralny slice contract ponad istniejącym CAS/TensorDescriptor ma bounded request/response, exact range checksum i pełne real/imag planes; checksum-first decoder zachowuje precision/planes/harmonic convention bez dodatkowej kopii pełnego payloadu i odrzuca misalignment oraz NaN/Inf. Adapter session mapuje istniejące TensorDescriptor/chunki CAS na exact-range slice, a streaming CAS range-read hashuje cały obiekt stałym buforem i alokuje tylko bounded response. Field descriptor zachowuje pełne frame/sample/support/topology/carrier/function-space/basis/ordering/axes/complex/normalization metadata K11. Projection receipt wiąże exact source/target layout oraz measured/estimated/certified error metrics z jednostkami. Semantyka K18 rozróżnia pola fizyczne, modalne składowe fizyczne, współczynniki FEM i lokalnej bazy stycznej oraz przypina rekonstrukcję do zaakceptowanego stanu równowagi, linearyzacji, bazy, fazy, normalizacji i znaczenia amplitudy. `SolutionSetCatalog` zapisuje immutable monotonic revisions, append-only artifacts/coverage i atomowy current manifest; `SessionStore::open` współdzieli writer i automatycznie odzyskuje wszystkie poprawne orphan revisions, a `open_existing` pozostaje bezefektowe. Publikacja pod tym samym writer lease sprawdza streamingowo pełny hash i exact byte length wszystkich referencji CAS przed immutable revision, a następnie zwalnia wyłącznie piny tych obiektów; recovery domyka przerwany unpin po pełnej walidacji root graph. Store reachability zachowuje current, całą historię oraz wszystkie ich obiekty i blokuje GC przy niespójności. Profile solved/resume/archive przenoszą ten graf przez typed `.fms` preflight i restore z zachowaniem content identity. Accepted study publikuje SolutionSet, a identity-aware modal-eigen, Kittel i FMR writers zachowują exact session/run/stage/runtime w migrowanych manifestach. | Brak pełnego mappera wszystkich writerów runtime, raportowania recovery przez API, materializatora i publicznego dataset API, adapterów pól FDM/FEM, rzeczywistego projectora i CAE-40, porównań wielu ramek, ogólnego batch `ComputeQuantities`, migracji artifact keys, verified-generation cache, profilu dużego datasetu, frontendowych plot/export recipes, modalnego roundtripu renderera i pełnej kwalifikacji wyników. |
 | **P7** | Studies złożone, wiele projektów i targety | **0%** | Zależności, case mapping i target contracts są zaplanowane. | Brak study compiler, wieloprojektowego runtime, target adapters i raportów reprodukowalnych. |
 | **P8** | Cutover, dystrybucja, macierz CAE i wydanie | **2%** | Cutover, rollback, packaging i release gates są zdefiniowane; usunięto jawnie zaakceptowaną archiwalną kopię `_to_delete_legacy_web` (981 śledzonych plików), gdy aktywne skrypty root wskazują Control Room. | Brak usunięcia legacy writers backendu, pełnej kwalifikacji klientów/cutover, managed build/package, pełnej macierzy CAE, review/CI/merge i release qualification. |
+
+| Obszar uzupełniający | Postęp | Zadania / stan |
+|---|---:|---|
+| **P3a** | **90%** | P3a-A/B/C: context propagation, API/resource/cache migration i ograniczone compatibility aliases. Ostatni zapisany inventory: 276 SOURCE PASS / 15 OPEN / 13 GLOBAL; browser/managed cutover pozostaje NOT VERIFIED. |
+| **Strumień backendu B** | **Nieoszacowany** | B-CORE, B-FDM, B-FEM, B-DEMAG, B-WORKFLOW, B-STATE, B-ABI i B-OBS mają odrębne bramki architektury oraz walidacji lane'ów; nie wyliczamy jednego procentu z katalogów/plików. |
 
 Aktualizacja P4-C z 28.09.2026: Control Room ma jawne `Build Grid` dla FDM w
 ribbonie i Explorerze. Obie powierzchnie wywołują `grid.build-fdm`, wymagają
