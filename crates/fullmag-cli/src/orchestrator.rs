@@ -3366,30 +3366,41 @@ fn current_antenna_solution_signatures(
     })
 }
 
-/// Attach published immutable antenna bases to the backend execution plan
-/// that will consume them. The field-solve stage only publishes an asset; this
-/// boundary is the explicit asset-to-LLG hand-off. FEM and FDM use separate
-/// target projections, while missing/stale assets fail closed instead of
-/// silently dropping the authored drive.
-fn attach_solved_antenna_drive_bases(
+/// Validate activation before resolving any asset storage. Clear obsolete
+/// bases when this exact problem has no active antenna consumer.
+pub(super) fn prepare_solved_antenna_drive_activation(
     problem: &ProblemIR,
     execution_plan: &mut ExecutionPlanIR,
-    artifact_dir: &Path,
-) -> Result<()> {
-    if problem.solved_antenna_drives.is_empty() {
-        return Ok(());
-    }
+) -> Result<bool> {
     let active_stage_id = problem
         .problem_meta
         .runtime_metadata
         .get("active_stage_id")
         .and_then(serde_json::Value::as_str);
+    if !problem.solved_antenna_drives.is_empty() {
+        let time_stage = match &execution_plan.backend_plan {
+            BackendPlanIR::Fem(plan) => Some(&plan.time_stage),
+            BackendPlanIR::Fdm(plan) => Some(&plan.time_stage),
+            _ => None,
+        };
+        if time_stage.is_some_and(|stage| {
+            stage.study_kind != problem.study.kind()
+                || stage.active_stage_id.as_deref() != active_stage_id
+        }) {
+            bail!("solved antenna drive activation context differs between ProblemIR and execution plan");
+        }
+    }
     if !problem.solved_antenna_drives.iter().any(|drive| {
         drive
             .activation
             .is_active_for(problem.study.kind(), active_stage_id)
     }) {
-        return Ok(());
+        match &mut execution_plan.backend_plan {
+            BackendPlanIR::Fem(plan) => plan.solved_antenna_drive_bases.clear(),
+            BackendPlanIR::Fdm(plan) => plan.solved_antenna_drive_bases.clear(),
+            _ => {}
+        }
+        return Ok(false);
     }
     match &execution_plan.backend_plan {
         BackendPlanIR::Fem(_) | BackendPlanIR::Fdm(_) => {}
@@ -3400,6 +3411,22 @@ fn attach_solved_antenna_drive_bases(
             bail!("solved antenna drives are supported only by the FEM time-evolution LLG lane")
         }
     };
+    Ok(true)
+}
+
+/// Attach published immutable antenna bases to the backend execution plan
+/// that will consume them. The field-solve stage only publishes an asset; this
+/// boundary is the explicit asset-to-LLG hand-off. FEM and FDM use separate
+/// target projections, while missing/stale assets fail closed instead of
+/// silently dropping the authored drive.
+fn attach_solved_antenna_drive_bases(
+    problem: &ProblemIR,
+    execution_plan: &mut ExecutionPlanIR,
+    artifact_dir: &Path,
+) -> Result<()> {
+    if !prepare_solved_antenna_drive_activation(problem, execution_plan)? {
+        return Ok(());
+    }
 
     let time_stage = match &execution_plan.backend_plan {
         BackendPlanIR::Fem(plan) => &plan.time_stage,
