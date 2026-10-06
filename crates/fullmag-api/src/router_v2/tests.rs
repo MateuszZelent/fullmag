@@ -28997,7 +28997,17 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             )
             .await
             .unwrap();
-        assert_eq!(restore.status(), StatusCode::BAD_REQUEST, "restore {label}");
+        let restore_status = restore.status();
+        let restore_body = axum::body::to_bytes(restore.into_body(), 64 * 1024)
+            .await
+            .expect("bounded restore error response");
+        assert_eq!(
+            restore_status,
+            StatusCode::BAD_REQUEST,
+            "restore {label}; fixture_root={}; response_body={}",
+            repo_root.display(),
+            String::from_utf8_lossy(&restore_body),
+        );
         let guard = state.current_live_state.read().await;
         let snapshot = guard.as_ref().unwrap();
         let latest = &snapshot.live_state.as_ref().unwrap().latest_step;

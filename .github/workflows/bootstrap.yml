@@ -45,6 +45,9 @@ jobs:
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
 
+      - name: Run native session writer lease contracts
+        run: cargo test -p fullmag-session --lib writer --no-fail-fast
+
       - name: Run Rust quantity, API and CLI contracts
         env:
           # The router contract serializes a full SceneDocument; keep the

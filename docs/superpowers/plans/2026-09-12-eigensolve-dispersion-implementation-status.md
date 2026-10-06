@@ -7648,3 +7648,34 @@ nieudanego adaptive ani jego dowodu. Uchwyt80293 i kontener
 fullmag-dispersion-60db3c9d49a9a30192955a3f565592fc potwierdzone live; native FEM
 wykonuje kolejne solve. Wyjście kończy się UUIDefb6cd49bf8e4cd6bc0366b65c315628.
 Nie ma jeszcze terminalnych15 zaakceptowanych wierszy ani parytetu.
+
+
+### Trwałość writer lease — poprawka hazardu i diagnostyka API
+
+W `WriteTransaction::drop` samo zamknięcie własnego descriptoru nie musi zwolnić
+Linux flock, gdy ten sam open-file-description ma clone/inherited descriptor.
+Wynika to z [flock(2)](https://man7.org/linux/man-pages/man2/flock.2.html) i
+kontraktu [File::unlock](https://doc.rust-lang.org/std/fs/struct.File.html#method.unlock).
+To potwierdzony hazard lifetime, zgodny z obserwowanym StoreWriterBusy; dokładna
+przyczyna obu sporadycznych błędów CI nadal nie jest udowodniona.
+
+Release własnego tokenu przy depth=0 jawnie unlockuje File przed zamknięciem.
+Nested lease nie zwalnia blokady; błąd unlock zachowuje descriptor i sentinel
+odrzucający następne acquire. Nie usuwa lock inode, nie przejmuje obcego tokenu
+ani nie używa PID/age do recovery. Linux regression z try_clone sprawdza
+exclusion podczas nested/outer lease, zwolnienie po outer drop przy żywym
+clone oraz brak zwolnienia nowego właściciela przez późniejsze zamknięcie clone.
+Source review i parser PASS; unlock-error sentinel nie ma oddzielnej fault
+injection regresji. Wykonanie CI pozostaje wymagane.
+
+Fixture restore zachowuje status400 i wszystkie no-mutation assertions,
+lecz błąd wypisuje bounded64KiB body i root. Coordinator opens mają stage/root
+context. Nie dodano retry ani globalnej serializacji testów. CI ma focused
+fullmag-session --lib writer gate, oprócz istniejących API/CLI kontraktów.
+
+Pierwszy submit kolejnego buildu ebc3edfdb odrzucono lokalnie StorageBusy przed
+przygotowaniem kapsuły; nie utworzono joba. Serial15 pozostaje rzeczywiście live.
+Jednorazowy kontroler75798 czeka na jego terminalny stan i wtedy zgłosi exact
+SHAebc3edfdb837f81dceeff436f67400bb67c1560a z tym samym request key. Ta kapsuła
+nie obejmuje późniejszej poprawki writer; kwalifikację każdej wersji raportujemy
+oddzielnie. Nowego numeru joba/receiptu nie ma jeszcze. Nie restartowano sweepa.
