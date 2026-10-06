@@ -1,5 +1,18 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AZ, 06.10.2026: [ochrona szkicu Inspectora](p8/53az-native-browser-inspector-draft-guard.md)
+**PASS** dla jednego rzeczywistego szkicu anizotropii i jawnego Revert.
+Restart odmówił przed wysłaniem intentu, zachowując Ku1, panel, model i stary
+API; po Revert odtworzono model oraz dirty document w nowej sesji. Receipt
+`4d829bea8f7746a78c889c99c4fddfdc`: completed, exit 0, 7 kontroli, wszystkie
+własne procesy waited. Driver 20/20 interpretowanych regresji PASS.
+Naprawiono również wybór strony diagnostycznej: produkt pozostaje frozen D,
+a bieżąca fixture ma osobny snapshot i SHA-256 w receipt. Wcześniejszy AY
+receipt dowodzi odtworzenia modelu, lecz używał starszej diagnostyki z D.
+Nowa próba potwierdza bieżący overlay i linked-scene guard. Apply, pozostałe
+rodzaje szkiców, aktywne solve i publiczny restart pozostają otwarte;
+procentów całego planu nie zwiększono.
+
 Checkpoint P8-53AY, 06.10.2026: [native/browser restart niepustego workspace](p8/53ay-native-browser-workspace-restart.md)
 **PASS**, receipt `6379d58c5ac14c9b8c956bd775c3e9cc`, completed, exit 0,
 7 kontroli. Rzeczywisty model FDM z geometrią, regionem i materiałem oraz

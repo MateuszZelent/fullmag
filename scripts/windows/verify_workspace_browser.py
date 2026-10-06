@@ -421,6 +421,44 @@ def configure_fixture(repo, run_root, manifest, receipt, owner_bundle):
     return native, fixture, status, prior, expected, request, env
 
 
+def stage_diagnostic_page(repo, app, fixture):
+    """Seal the calling checkout's diagnostic page separately from product sources."""
+    source = Path(repo) / "apps/control-room/scripts/fixtures/native-workspace-restart-page.tsx"
+    # Check the lexical path before resolving containment: resolving first
+    # would hide a symlink or junction in the source chain.
+    before = runtime_bundle._require_regular_file(source, "current diagnostic page", nonempty=True)
+    source = storage.validate_path(source, repo, "current diagnostic page")
+    if before.st_size > 256 * 1024:
+        raise storage.StorageError("Current diagnostic page exceeds its byte limit")
+    with source.open("rb") as input_file:
+        captured = input_file.read(256 * 1024 + 1)
+    if not captured or len(captured) > 256 * 1024:
+        raise storage.StorageError("Current diagnostic page has an invalid captured size")
+    digest = hashlib.sha256(captured).hexdigest()
+    snapshot = fixture / "diagnostic-page-source.tsx"
+    runtime_bundle._check_path_chain(snapshot.parent, "diagnostic snapshot directory")
+    with snapshot.open("xb") as output:
+        output.write(captured)
+    page = app / "app/native-browser-proof/page.tsx"
+    if os.path.lexists(page):
+        raise storage.StorageError("Browser proof cannot overwrite a product route")
+    page.parent.mkdir(parents=True, exist_ok=False)
+    runtime_bundle._check_path_chain(page.parent, "diagnostic route directory")
+    shutil.copyfile(snapshot, page)
+    after = runtime_bundle._require_regular_file(source, "current diagnostic page", nonempty=True)
+    runtime_bundle._require_regular_file(snapshot, "diagnostic page snapshot", nonempty=True)
+    runtime_bundle._require_regular_file(page, "staged diagnostic page", nonempty=True)
+    stable_stat = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                                 value.st_mtime_ns, value.st_ctime_ns)
+    if (source.read_bytes() != captured or stable_stat(before) != stable_stat(after)
+            or hashlib.sha256(snapshot.read_bytes()).hexdigest() != digest
+            or hashlib.sha256(page.read_bytes()).hexdigest() != digest):
+        raise storage.StorageError("Diagnostic page changed during capture or staging")
+    return page, {"source_path": str(source), "snapshot_path": str(snapshot),
+                  "source_sha256": digest, "staged_route_path": str(page),
+                  "staged_route_sha256": digest}
+
+
 def start_frontend(repo, native, fixture, manifest, bridge_url, api_port, receipt):
     snapshot = manifest["build_source_snapshot"]
     source_root = storage.validate_path(snapshot["source_root"], native["build_root"], "frozen frontend sources")
@@ -437,11 +475,8 @@ def start_frontend(repo, native, fixture, manifest, bridge_url, api_port, receip
     for required in ("typescript/bin/tsc", "@types/node/index.d.ts", "@types/react/index.d.ts"):
         if not (dependencies / required).is_file():
             raise storage.StorageError(f"Frozen frontend dependencies are incomplete: {required}; no automatic install")
-    page = app / "app/native-browser-proof/page.tsx"
-    if page.exists():
-        raise storage.StorageError("Browser proof cannot overwrite a product route")
-    page.parent.mkdir(parents=True, exist_ok=False)
-    shutil.copy2(app / "scripts/fixtures/native-workspace-restart-page.tsx", page)
+    page, diagnostic = stage_diagnostic_page(repo, app, fixture)
+    receipt["workspace_browser_diagnostic_page"] = diagnostic
     api_route = app / "app/native-browser-probe/[operation]/route.ts"
     api_route.parent.mkdir(parents=True, exist_ok=False)
     api_route.write_text(
@@ -481,7 +516,8 @@ def start_frontend(repo, native, fixture, manifest, bridge_url, api_port, receip
                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
     receipt["workspace_browser_frontend"] = {"pid": process.pid, "waited": False,
         "source_manifest_sha256": stage["manifest_sha256"], "workspace_root": stage["workspace_root"],
-        "dependencies": str(dependencies), "test_route": str(page)}
+        "product_source_root": str(source_root), "dependencies": str(dependencies),
+        "test_route": str(page), "test_route_sha256": diagnostic["staged_route_sha256"]}
     return process, log
 
 

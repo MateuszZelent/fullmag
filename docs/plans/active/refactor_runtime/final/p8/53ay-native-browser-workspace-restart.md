@@ -569,6 +569,15 @@ i cutover/release nadal obowiązują; publicznego restartu nie włączono.
 
 ## Review dowodu
 
+**Uzupełnienie z P8-53AZ, 06.10.2026:** odczyt rzeczywistej staged route
+wykazał, że receipt `6379d58c...` używał strony diagnostycznej z zamrożonego D.
+Późniejsze zmiany overlayu i linked-scene guard w checkoutcie nie były więc
+wykonane przez tę próbę. PASS pozostaje dowodem odtworzenia rzeczywistego
+modelu i dokumentu w produkcyjnych źródłach D; nie jest runtime dowodem tych
+zmian strony diagnostycznej. Driver został poprawiony w
+[P8-53AZ](53az-native-browser-inspector-draft-guard.md), z oddzielnym snapshotem
+i hashem bieżącej strony testowej. Historycznego receiptu nie zmieniono.
+
 Read-only review wszystkich linii natywnego probe oraz dwóch hunksów
 mod/dispatch w `control_room.rs`: brak wymaganych poprawek. Potwierdzono
 łańcuch manifest/bundle/EXE→owner PID/API, bounded input i TTL, brak sukcesu

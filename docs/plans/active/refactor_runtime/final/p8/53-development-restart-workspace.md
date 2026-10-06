@@ -1,5 +1,12 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AZ](53az-native-browser-inspector-draft-guard.md): rzeczywisty szkic
+Inspectora zablokował restart bez utraty danych i bez replacement. Po jawnym
+Revert odtworzenie modelu i dirty document **PASS**, receipt
+`4d829bea8f7746a78c889c99c4fddfdc`, exit 0. Próba utrwala bieżącą diagnostykę
+osobno od produkcyjnych źródeł frozen D. Dowód nie obejmuje Apply, wszystkich
+typów szkiców ani aktywnego solvera; publiczny restart pozostaje wyłączony.
+
 [P8-53AY](53ay-native-browser-workspace-restart.md), 06.10.2026: rzeczywisty
 restart C→D niepustego idle workspace FDM **PASS**, receipt
 `6379d58c5ac14c9b8c956bd775c3e9cc`, exit 0, 7 kontroli. Scena z obiektem,

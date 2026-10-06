@@ -14,6 +14,55 @@ import verify_development_backend_api as native_gate
 
 
 class BrowserProofChecks(unittest.TestCase):
+    def diagnostic_paths(self, directory):
+        root = Path(directory).resolve()
+        repo, app, fixture = root / "checkout", root / "frozen-product", root / "fixture"
+        source = repo / "apps/control-room/scripts/fixtures/native-workspace-restart-page.tsx"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"current diagnostic with material_ref")
+        old = app / "scripts/fixtures/native-workspace-restart-page.tsx"
+        old.parent.mkdir(parents=True)
+        old.write_bytes(b"frozen old diagnostic without material binding")
+        fixture.mkdir()
+        return repo, app, fixture, source, old
+
+    def test_diagnostic_page_uses_current_snapshot_and_preserves_frozen_product(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo, app, fixture, source, old = self.diagnostic_paths(directory)
+            old_bytes = old.read_bytes()
+            page, evidence = proof.stage_diagnostic_page(repo, app, fixture)
+            self.assertEqual(page.read_bytes(), source.read_bytes())
+            self.assertNotEqual(page.read_bytes(), old_bytes)
+            self.assertEqual(old.read_bytes(), old_bytes)
+            self.assertEqual(Path(evidence["snapshot_path"]).read_bytes(), source.read_bytes())
+            self.assertEqual(evidence["source_path"], str(source))
+            self.assertEqual(evidence["staged_route_sha256"],
+                             proof.hashlib.sha256(page.read_bytes()).hexdigest())
+
+    def test_diagnostic_capture_rejects_source_mutation_and_tampered_copy(self):
+        for tamper_source in (True, False):
+            with self.subTest(source_mutation=tamper_source), tempfile.TemporaryDirectory() as directory:
+                repo, app, fixture, source, _ = self.diagnostic_paths(directory)
+                real_copy = proof.shutil.copyfile
+
+                def changing_copy(snapshot, page):
+                    real_copy(snapshot, page)
+                    (source if tamper_source else page).write_bytes(b"tampered diagnostic")
+
+                with patch.object(proof.shutil, "copyfile", side_effect=changing_copy):
+                    with self.assertRaisesRegex(proof.storage.StorageError, "changed during capture"):
+                        proof.stage_diagnostic_page(repo, app, fixture)
+
+    def test_diagnostic_capture_rejects_link_before_resolving_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo, app, fixture, source, _ = self.diagnostic_paths(directory)
+            with patch.object(proof.runtime_bundle, "_require_regular_file",
+                              side_effect=proof.storage.StorageError("linked source")), \
+                    patch.object(proof.storage, "validate_path") as resolve:
+                with self.assertRaisesRegex(proof.storage.StorageError, "linked source"):
+                    proof.stage_diagnostic_page(repo, app, fixture)
+                resolve.assert_not_called()
+
     def test_service_cleanup_timeout_preserves_primary_failure(self):
         child = Mock()
         child.wait.side_effect = native_gate.subprocess.TimeoutExpired("fixture", 20)
