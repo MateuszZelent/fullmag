@@ -7974,3 +7974,11 @@ Pełny S09 wymaga jeszcze worldequivalence/fingerprint/structuralinvariance/
 equilibrium/typedrouting/MFEMowner/runtime/science. S00–S12 nadal aktywny.
 Read-only buildobserver235 PID99292/exec76080 potwierdzony live i sprawdza
 exact source identity tego samego queued joba; nie restartuje ani nie submituje.
+
+
+CI37403974091 odrzuciło nowy world fragment: conflicting Debug implementations
+na WorldGeometry (derive Debug,Debug). Root przy końcowej poprawce dodał derive
+już obecny przed strukturą; rustfmt połączył oba. Parser potwierdzał syntax,
+nie trait coherence. Usunięto wyłącznie duplikat; brak zmiany walidacji/matematyki.
+Python, frontend/browser, Windows i API hygiene PASS; Rust/FDM/generated API
+zablokowane tą wspólną kompilacją IR. Nowe CI wymagane przed deklaracją PASS.

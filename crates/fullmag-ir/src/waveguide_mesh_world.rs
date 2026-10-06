@@ -249,7 +249,7 @@ pub(crate) fn validate_waveguide_world_mapping<'d, 'b, 'i, 'f>(
     })
 }
 
-#[derive(Debug, Debug)]
+#[derive(Debug)]
 struct WorldGeometry {
     world_nodes_m: Vec<[f64; 3]>,
     minimum_triangle_quality: f64,
