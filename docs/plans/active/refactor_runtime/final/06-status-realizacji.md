@@ -1,5 +1,15 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53BB, 06.10.2026: [frozen active-run prerequisite](p8/53bb-frozen-active-run-prerequisite.md)
+**PASS**, receipt `c575d6492d504616bceb7622920a2070`, exit 0, bez Cargo.
+Zweryfikowany pakiet D wykonał rzeczywisty FDM CPU flat_relax do kroku 1;
+bounded websocket reconnect zachował session/run i stan running.
+Observer ma osobną utrwaloną kopię i hash, własne procesy waited.
+Poprawiono kontrolę ABI dla Windows CPython z null SOABI; 7/7 lekkich
+regresji PASS i review bez findings. Nie dowodzi to odmowy restartu podczas
+realnego solve, wyścigu Start/freezing ani długotrwałego postępu solvera.
+Te bramki i publiczny restart pozostają otwarte; procentów nie zwiększono.
+
 Checkpoint P8-53BA, 06.10.2026: [Apply Inspectora i restart](p8/53ba-native-browser-applied-inspector-draft.md)
 **PASS** dla jednej zatwierdzonej anizotropii w idle FDM workspace. Apply
 aktualizował kanoniczny physics_stack; po restarcie ten sam moduł i Ku1,

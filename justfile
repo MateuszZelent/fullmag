@@ -524,6 +524,10 @@ verify-project-realtime-runtime:
 verify-project-active-run-runtime:
     {{storage_python}} "{{repo_root}}/scripts/verify_project_active_run_runtime.py" --repo-root "{{repo_root}}"
 
+# Real FDM CPU active-run smoke from an explicitly pinned native Windows package.
+verify-windows-frozen-active-run-runtime build_id:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_active_run_runtime.py" --repo-root "{{repo_root}}" --frozen-native-build-id "{{build_id}}"
+
 # Managed runtime-free CLI smoke for the shared project Open entrypoint.
 verify-project-entrypoint-runtime:
     {{storage_python}} "{{repo_root}}/scripts/verify_project_entrypoint_runtime.py" --repo-root "{{repo_root}}"

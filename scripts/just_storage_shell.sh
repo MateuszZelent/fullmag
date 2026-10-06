@@ -288,6 +288,18 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/verify_accepted_fdm_gpu_runtime.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_project_active_run_runtime.py"*)
+    frozen_active_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_project_active_run_runtime.py" --repo-root "[^"]+" --frozen-native-build-id "([0-9a-f]{64})"$'
+    if [[ "${recipe}" =~ ${frozen_active_pattern} ]]; then
+      if ! is_windows_shell; then
+        echo "[fullmag just] frozen active-run verification requires Windows" >&2
+        exit 2
+      fi
+      exec "${python_cmd}" "${script_dir}/verify_project_active_run_runtime.py" --repo-root "${repo_root}" --frozen-native-build-id "${BASH_REMATCH[1]}"
+    fi
+    if [[ "${recipe}" == *"--frozen-native-build-id"* ]]; then
+      echo "[fullmag just] frozen active-run verification requires a lowercase SHA-256 build ID" >&2
+      exit 2
+    fi
     exec "${python_cmd}" "${script_dir}/verify_project_active_run_runtime.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_session_persistence.py"*"--route project-application-check"*)
