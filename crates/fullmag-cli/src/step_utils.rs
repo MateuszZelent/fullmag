@@ -901,12 +901,11 @@ pub(crate) fn materialize_script_stages(
                 &ir,
                 default_until_seconds,
             )?;
-            if !materialized.is_empty() {
-                for stage in &mut materialized {
-                    configure_stage_output_storage(stage, output_storage.as_ref())?;
-                }
-                return Ok(annotate_stage_transitions(materialized));
+            for stage in &mut materialized {
+                configure_stage_output_storage(stage, output_storage.as_ref())?;
             }
+            // An authored empty/all-disabled pipeline must not start a legacy solver.
+            return Ok(annotate_stage_transitions(materialized));
         }
         let entrypoint_kind = ir.problem_meta.entrypoint_kind.clone();
         let entrypoint_kind = if entrypoint_kind.is_empty() {
@@ -6281,6 +6280,84 @@ mod tests {
         };
 
         assert_eq!(bias_field_sweep.as_ref(), Some(&sweep));
+    }
+
+    #[test]
+    fn materialize_script_stages_does_not_synthesize_solver_for_empty_pipeline() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![],
+            }),
+            stages: vec![],
+        };
+        assert!(materialize_script_stages(config).expect("empty pipeline").is_empty());
+    }
+
+    #[test]
+    fn materialize_script_stages_does_not_synthesize_solver_for_disabled_pipeline() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![StudyPipelineNode::Primitive {
+                    id: "disabled_run".to_string(),
+                    label: "Disabled run".to_string(),
+                    enabled: false,
+                    notes: None,
+                    source: Some("script_imported".to_string()),
+                    stage_kind: "run".to_string(),
+                    payload: serde_json::from_value(json!({"until_seconds": "5e-12"}))
+                        .expect("payload"),
+                }],
+            }),
+            stages: vec![],
+        };
+        assert!(materialize_script_stages(config).expect("disabled pipeline").is_empty());
+    }
+
+    #[test]
+    fn materialize_script_stages_skips_enabled_children_of_disabled_group() {
+        let document = serde_json::from_value(json!({
+            "version": "study_pipeline.v1",
+            "nodes": [{
+                "node_kind": "group", "id": "disabled_group", "label": "Disabled",
+                "enabled": false,
+                "children": [{
+                    "node_kind": "primitive", "id": "child_run", "label": "Run",
+                    "enabled": true, "stage_kind": "run",
+                    "payload": {"until_seconds": "5e-12"}
+                }]
+            }]
+        })).expect("group document");
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(document),
+            stages: vec![],
+        };
+        assert!(materialize_script_stages(config).expect("disabled group").is_empty());
+    }
+
+    #[test]
+    fn materialize_script_stages_retains_legacy_solver_without_pipeline() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: None,
+            stages: vec![],
+        };
+        let stages = materialize_script_stages(config).expect("legacy solver");
+        assert_eq!(stages.len(), 1);
+        assert!(stages[0].action.is_none());
+        assert!((stages[0].until_seconds - 5e-12).abs() < 1e-24);
     }
 
     #[test]
