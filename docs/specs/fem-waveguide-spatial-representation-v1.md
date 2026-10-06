@@ -192,3 +192,34 @@ w drugim air jest zamkniętą wyspą. Wybrany brzeg musi zostać osobno powiąza
 z konkretnymi one-owner half-edges/komponentami i rejestrami modelu.
 Regresja obejmuje pełną kompozycję incidence na dwóch takich domenach;
 parser/source checks nie zastępują wykonania CI ani produkcyjnego MFEM2D.
+
+
+### Prywatne powiązania rejestrów — przyrost S09, 2026-10-06
+
+`waveguide_mesh_bindings::validate_waveguide_registry_bindings` jest prywatnym
+etapem kompilatora. Przyjmuje pożyczone `ProblemIRV04`, raw mesh i jawną mapę
+`mesh region_id -> RegionRefIR`; składa walidację ProblemIR z pełną istniejącą
+walidacją konturów/geometrii. Wynik ma prywatne pola, nie jest deserializowalny
+ani certyfikatem admission, a jego czas życia wiąże go z dokładnymi wejściami.
+
+Mapa musi pokrywać dokładnie zbiór regionów mesha. Object ID musi zgadzać się
+z raw meshem i rejestrem; regionalny target musi mieć właściwego właściciela
+i być enabled. Region magnetyczny wymaga zgodnego materiału (kluczem obecnego
+MaterialIR jest `name`), jawnego MagnetizationModule oraz zgodnego assignment
+wymienionego przez obiekt. Nazwa i prezentacyjny typ obiektu nie włączają fizyki.
+Whole-object target pokrywa regionalny target; odwrotne pokrycie jest odrzucane.
+Air nie otrzymuje syntetycznego materiału i nie może mieć potencjalnie
+nakładającego się modułu magnetyzacji. Żaden moduł magnetyzacji nie jest pomijany.
+
+Ten pierwszy etap odrzuca więcej niż jeden region mesha dla tego samego obiektu
+oraz konkurujące whole/regional providers. Nie wybiera pierwszego wpisu i nie
+zakłada rozłączności różnych region IDs. Pełna produkcyjna obsługa regionalnych
+materiałów wymaga późniejszego dowodu pokrycia i geometrycznej rozłączności lub
+jawnej reguły pierwszeństwa; obecne ograniczenie nie zamyka tego wymagania S09.
+
+Pozostają world/frame mapping, immutable fingerprint, wiązanie wybranych
+zewnętrznych konturów air i essential nodes Dirichleta do wszystkich komponentów
+skalarnych, invariance pól/interakcji oraz certyfikat równowagi. Typed routing,
+owner MFEM CPU/GPU i naukowa kwalifikacja 2.5D pozostają niedostępne. Przygotowane
+regresje podlegają istniejącej bramce `cargo test -p fullmag-ir waveguide_mesh`
+wyłącznie w GitHub Actions. Parser i review nie zastępują ich wykonania.

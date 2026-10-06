@@ -7713,3 +7713,51 @@ krawędzi), zanim detector sprawdzi collinear overlap0/3. Test zmienia apex na
 (5,-1), jawnie sprawdza poprawność element/incidence i dokładny overlap pair0/3.
 Nie zmieniono produkcyjnej walidacji ani nie poszerzono assertion o dowolny błąd.
 Parser i diff PASS; CI ma potwierdzić tę korektę oraz wcześniej skipped writer/API.
+
+
+### Zielone bramki źródeł b08500ae02 — 2026-10-06
+
+GitHub Actions bootstrap37394599087 zakończył się success dla
+b08500ae02d73b353f78f9c56868057fbbb76e6c. Wszystkie jobs PASS: Rust,
+Control Room, browser fixture, Python, generated API, Windows volatile,
+FDM qualification i API hygiene. Rust obejmuje nowe kpool/adaptive_resources,
+waveguide mesh (w tym poprawiony overlap i component lookup), writer lease,
+application oraz quantity/API/CLI gates. Nie zastępuje to managed runtime,
+rzeczywistego GUI, GPU ani walidacji naukowej S00–S12.
+
+Oddzielny controller73417/PID106356 czeka na terminalny serial reference.
+Generuje wykres PNG/PDF dopiero po completed_unqualified/return0, zgodności
+modelu/runtime, hashów wszystkich required artifacts, row-preflight PASS
+oraz dokładnych15 wektorach. Żaden FEM punkt nie powstaje przez odbicie lub
+podstawienie analityki. Porównanie używa istniejącego thin-film thickness oracle
+N32; render wymaga jeszcze wizualnego review. Jeśli solve zawiedzie, kontroler
+zachowuje błąd i nie tworzy wykresu.
+
+
+### S09 — prywatny registry binding i aktualny runtime, 2026-10-06
+
+Dodano pożyczony, opaque fragment compiler bindings w
+`crates/fullmag-ir/src/waveguide_mesh_bindings.rs`. Wiąże exact raw region targets
+z V04 object/region/material/assignment/module i odrzuca niepokryte moduły,
+niejednoznaczne providers, obce/disabled regiony oraz magnetyczny air.
+Składa istniejące geometryczne validators. Nie aktywuje structural_2d ani
+production admission; regionalne pokrycie/precedence, frame/world mapping,
+Dirichlet anchoring, invariance/equilibrium, routing i MFEM owner pozostają OPEN.
+
+Nowe regresje są objęte istniejącym CI filter waveguide_mesh. Lokalnie nie
+uruchamiano ani nie kompilowano unit tests. Review/parser i wykonanie nowego CI
+należy raportować oddzielnie; source fragment nie jest ukończonym S09.
+
+Obserwacja bieżącego serial15: kontener
+fullmag-dispersion-60db3c9d49a9a30192955a3f565592fc rzeczywiście Up, Γ frequency
+window refinement41/50, window_s3522.2. Kontrolery kolejnego managed buildu
+PID84692 i wykresu PID106356 mają potwierdzone procesy z właściwą command line.
+Brak terminalnego signed15 produktu. Nie ponawiano ani nie restartowano solvera.
+Kolejny build nadal czeka przed submit na zwolnienie worktree lease i będzie
+przypięty do070d277a8f01cb86795bb3e8e69872cc2d73c91f; nowy fragment S09 nie jest
+częścią tej kapsuły. Pełny S00–S12 pozostaje aktywny.
+
+Niezależny source review prywatnych bindings bez blockerów. Dodano także jawne
+odrzucenie regional-provider -> whole-object oraz niezgodnych regional targets,
+z osobnym sprawdzeniem poprawności ProblemIR w obu fixture. Rust parser/format
+PASS; git diff whitespace PASS. Wykonanie regresji w nowym CI pozostaje OPEN.
