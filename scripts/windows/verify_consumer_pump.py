@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -387,6 +388,35 @@ def _reserve_port() -> int:
             return port
 
 
+def _check_active_candidate_capacity(
+    build_root: Path, storage_root: Path, runtime_root: Path,
+    manifest_path: Path, build_id: str, receipt: dict[str, Any],
+    *, additional_copy_bytes: int = 0,
+    receipt_key: str = "active_run_candidate_capacity",
+) -> None:
+    from windows.select_development_candidate import COPY_HEADROOM_BYTES, _source_inventory_bytes
+
+    binary_bytes = _source_inventory_bytes(build_root, storage_root, manifest_path, build_id)
+    evidence = {
+        "binary_bytes": binary_bytes,
+        "headroom_bytes": COPY_HEADROOM_BYTES,
+        "additional_copy_bytes": additional_copy_bytes,
+        "required_bytes": binary_bytes + COPY_HEADROOM_BYTES + additional_copy_bytes,
+        "available_bytes": None,
+    }
+    receipt[receipt_key] = evidence
+    try:
+        evidence["available_bytes"] = shutil.disk_usage(runtime_root).free
+    except OSError as error:
+        raise storage.StorageError("Active-run candidate storage capacity could not be verified") from error
+    if evidence["available_bytes"] < evidence["required_bytes"]:
+        raise storage.StorageError(
+            "Active-run candidate storage insufficient: "
+            f"required={evidence['required_bytes']} available={evidence['available_bytes']}. "
+            "No API or solver was started."
+        )
+
+
 def exercise(
     repo: Path,
     run_root: Path,
@@ -472,6 +502,10 @@ def exercise(
     active_python_binding: dict[str, Any] | None = None
     active_python_receipt: dict[str, Any] | None = None
     if case == "active-run":
+        _check_active_candidate_capacity(
+            Path(native["build_root"]), storage_root, runtime_root,
+            ready_manifest_path, ready_build_id, receipt,
+        )
         from verify_project_active_run_runtime import (
             measure_frozen_python_binding,
             verify_frozen_native_package,

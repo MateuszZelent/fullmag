@@ -218,6 +218,25 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         code = 1
         try:
             from windows.runtime_bundle import BINARY_NAMES
+            source_bin = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
+            if active_run_refusal_owner_bundle is not None:
+                from windows.verify_consumer_pump import _check_active_candidate_capacity
+                archive_bytes = growth_bytes = 0
+                for name in BINARY_NAMES:
+                    source_size = _require_regular_file(source_bin / name, "verified fixture executable", nonempty=True).st_size
+                    archive_bytes += source_size
+                    destination = api.parent / name
+                    _check_path_chain(destination, "stable fixture executable", allow_missing=True)
+                    existing_size = (_require_regular_file(destination, "existing stable fixture executable", nonempty=True).st_size
+                                     if os.path.lexists(destination) else 0)
+                    growth_bytes += max(0, source_size - existing_size)
+                _check_active_candidate_capacity(
+                    Path(native["build_root"]), Path(native["storage_root"]),
+                    Path(native["runtime_root"]), Path(native["build_root"]) / "windows-runtime/build-manifest.json",
+                    verified["ready_build_id"], receipt,
+                    additional_copy_bytes=archive_bytes + growth_bytes,
+                    receipt_key="active_run_startup_capacity",
+                )
             archive = run_root / "service-binaries"
             staging = run_root / "runtime-stage"
             archive.mkdir()

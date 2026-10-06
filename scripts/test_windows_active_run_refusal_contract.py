@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -16,6 +18,7 @@ from windows.verify_consumer_pump import (
     ACTIVE_RUN_REFUSAL_ATTRIBUTION,
     EXPECTED_CHECKS,
     _active_run_cli_failure_detail,
+    _check_active_candidate_capacity,
     REQUEST_SCHEMA,
     RESULT_SCHEMA,
     ACTIVE_RUN_PROGRESS_SCHEMA,
@@ -34,6 +37,42 @@ FROZEN_BUILD_ID = "b" * 64
 REQUEST_ID = "11111111-1111-4111-8111-111111111111"
 API_PID = 42100
 SOLVER_PID = 42101
+
+capacity_paths = [Path("build"), Path("storage"), Path("runtime"), Path("manifest.json")]
+with mock.patch("windows.select_development_candidate._source_inventory_bytes", return_value=100), \
+        mock.patch("windows.select_development_candidate.COPY_HEADROOM_BYTES", 20):
+    evidence = {}
+    with mock.patch("windows.verify_consumer_pump.shutil.disk_usage", return_value=SimpleNamespace(free=119)), \
+            mock.patch("windows.verify_consumer_pump.subprocess.Popen") as launch:
+        try:
+            _check_active_candidate_capacity(*capacity_paths, "b" * 64, evidence)
+        except backend_gate.storage.StorageError as error:
+            assert "required=120 available=119" in str(error)
+        else:
+            raise AssertionError("insufficient candidate capacity was accepted")
+        launch.assert_not_called()
+    assert evidence["active_run_candidate_capacity"]["required_bytes"] == 120
+    with mock.patch("windows.verify_consumer_pump.shutil.disk_usage", return_value=SimpleNamespace(free=120)):
+        _check_active_candidate_capacity(*capacity_paths, "b" * 64, {})
+    startup_evidence = {}
+    with mock.patch("windows.verify_consumer_pump.shutil.disk_usage", return_value=SimpleNamespace(free=219)):
+        try:
+            _check_active_candidate_capacity(
+                *capacity_paths, "b" * 64, startup_evidence,
+                additional_copy_bytes=100, receipt_key="active_run_startup_capacity",
+            )
+        except backend_gate.storage.StorageError as error:
+            assert "required=220 available=219" in str(error)
+        else:
+            raise AssertionError("archive copy capacity was omitted")
+    assert startup_evidence["active_run_startup_capacity"]["additional_copy_bytes"] == 100
+    with mock.patch("windows.verify_consumer_pump.shutil.disk_usage", side_effect=OSError("unavailable")):
+        try:
+            _check_active_candidate_capacity(*capacity_paths, "b" * 64, {})
+        except backend_gate.storage.StorageError as error:
+            assert "could not be verified" in str(error)
+        else:
+            raise AssertionError("unverified candidate capacity was accepted")
 
 
 def valid_result() -> dict[str, object]:
@@ -219,6 +258,7 @@ print(json.dumps({
     "status": "passed",
     "cases": [
         "readiness-schema-and-checkset-unchanged",
+        "candidate-capacity-fails-before-processes-and-preserves-byte-counts",
         "active-run-route-isolated-to-frozen-owner-bundle",
         "exact-active-result-schema-and-checkset-accepted",
         "generic-refusal-reason-and-attribution-required",

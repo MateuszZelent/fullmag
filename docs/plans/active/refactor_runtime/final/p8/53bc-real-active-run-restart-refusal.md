@@ -243,3 +243,20 @@ inventory `2709b813bf98ebea9c57bc24b1a46b5ef6fd3832f5c345671185f3baa1052c60`.
 Oryginalny source snapshot/record, EXE, receipts, logi, sesje i target/cache
 Cargo pozostają zachowane. Usunięcie całej odtwarzalnej kopii wymaga
 odpowiedzi operatora; samo oczekiwanie nie jest zgodą.
+
+## Wczesny preflight pojemności
+
+Dodano kontrolę przed procesami oraz przed kopiami EXE. Pierwsza próba
+tej poprawki ujawniła, że parent tworzy dodatkowe `service-binaries` przed
+wywołaniem consumer harness; sama quota selectora była więc za późno.
+Preflight startowy uwzględnia archiwum EXE, dodatni przyrost stabilnej kopii,
+przyszły bundle i istniejący headroom selectora. Nie obniża żadnego progu.
+
+Regresje: odmowa poniżej progu, akceptacja dokładnego progu, błąd odczytu
+dysku, uwzględnienie dodatkowych kopii — PASS. Readiness: 9/9 PASS.
+Managed próba handle 45475: receipt `88c4ba89693a4260acf3343db85a6fc7`,
+oczekiwana odmowa (`failed`, exit 1), **0 procesów**, bez `service-binaries`
+i `runtime-stage`. Required 547 398 656 B, available 442 707 968 B.
+Wolne miejsce zmieniło się od poprzedniego pomiaru; zgoda na wskazaną kopię
+kompilatora nadal jest potrzebna. Ten dowód zamyka preflight, nie bramkę
+rzeczywistego aktywnego solve/refusal.
