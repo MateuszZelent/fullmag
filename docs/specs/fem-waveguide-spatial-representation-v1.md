@@ -247,3 +247,63 @@ Przygotowane regresje obejmują outer air, błędne ID/magnetic/hole/interface,
 dwie rozłączne domeny i deterministyczność union względem kolejności selekcji.
 Wykonanie testów zachowuje istniejącą bramkę CI waveguide_mesh; parser finalnych
 bajtów oraz review źródeł nie zastępują wykonania Rust ani managed runtime.
+
+
+### Prywatna tożsamość geometrii — zakres i kodowanie v1
+
+Kolejny compiler prerequisite `waveguide_mesh_identity` oblicza geometry identity
+wyłącznie z opaque world mapping. To nie jest `structural_2d` certificate ani
+klucz gotowego operatora. Liczby materiałowe/interakcje, równowaga, sampled k,
+producer build i execution wymagają własnych kompletnych bindings przed reuse.
+Nie używać samego geometry digest jako operator/equilibrium fingerprint.
+
+Domain: `fullmag.waveguide.geometry-identity.v1`; algorytm SHA-256. Preimage jest
+streamem z jawnymi tagami, długościami/counts u64 little-endian, indeksami u64,
+local-side/enum tags u8 oraz bitami f64 little-endian, bez JSON pretty-print.
+String długości odnoszą się do bajtów UTF-8. Surowe signed zero zachowuje bity;
+geometryczne sprawdzanie zbieżności ±0 nie zmienia exact authored identity.
+BTreeMap targets jest kodowane w porządku kluczy; Vec order pozostaje znaczący.
+Konwersje usize/count i przyrost długości preimage są checked.
+
+Preimage wiąże: dokładny raw mesh schema/nodes/triangles/edges/incidences/regions/
+ordered boundary components; exact RegionRef target map; requested i canonical
+frame oraz dodatnie normalization lengths i frame tolerance; resolved world
+nodes; selected Dirichlet component indices i essential-node union; quality
+threshold oraz versioned arithmetic/orientation policy. Nie używa topology
+fingerprint3D ani pól prezentacyjnej nazwy/typu obiektu do aktywacji fizyki.
+
+Wynik pozostaje private borrowed value, bez Deserialize/public constructor.
+Zachowuje odwołanie do tego samego world mapping, digest i dokładną długość
+preimage. Nie zapisuje automatycznie artefaktów ani nie aktywuje cache/provider.
+Regresje mają obejmować deterministic output, length framing, -0 identity,
+zmianę geometrii/ramy/bindings/selection i brak zmiany przez kolejność insert
+w target map. Hash wiąże dane; nie zastępuje żadnego validatora ani dowodu nauki.
+
+#### Zamrożone tagi preimage v1
+
+Wartość tagu zajmuje jeden bajt. Kolejność sekcji i pól w każdej sekcji jest
+częścią protokołu. Indeks elementu poprzedza jego pola; kontenery zaczynają się
+od liczby elementów. Wszystkie indeksy i liczby elementów są u64 little-endian.
+
+| Tagi hex | Sekcja, w kolejności kodowania |
+|---|---|
+| `01` | Domain i string `fullmag.waveguide.geometry-identity.v1` |
+| `10`, `11` | Raw mesh; schema enum `V1=1` |
+| `12`, `13` | Nodes: count; index, u, v |
+| `14`, `15` | Triangles: count; index, 3 node indices, region ID |
+| `16`–`19` | Edges: count; index, 2 nodes; incidences count; triangle index, local side u8 |
+| `1a`, `1b` | Regions: count; index, kind (`magnetic=1`, `air=2`), region ID, object ID; material ID tylko dla magnetic |
+| `1c`–`1f` | Boundaries: count; index, component ID, region ID, loop (`outer=1`, `hole=2`); half-edge count; triangle index, local side u8 |
+| `20`, `21` | Targets: count; sorted key, object ID, optional region (`None=0`, `Some=1` i string) |
+| `30`–`34` | Frame: requested origin/Eu/Ev/axis; canonical origin/Eu/Ev/axis; 3 normalization lengths; tolerance |
+| `40`, `41` | World nodes: count; index, x, y, z |
+| `50`, `51` | Selected boundary indices i essential nodes: count, posortowane indeksy |
+| `60`–`62` | Triangle quality f64; arithmetic policy string; orientation policy string |
+
+Każdy string ma prefiks długości bajtów UTF-8 u64. Wektory mają ustalony wymiar;
+nie zawierają osobnej długości. Wartości f64 koduje się przez `to_bits()` jako u64.
+Polityki arytmetyki i orientacji mają jawne, niezmienne stringi w źródle encodera:
+mapowanie `(origin+u*Eu)+v*Ev` z osobnymi operacjami, canonical axes i kontrolą
+wartości skończonych oraz exact dyadic orientation względem osi. Zmiana tagów,
+kolejności/pokrycia pól, enum wartości lub policy strings wymaga nowej wersji
+domain; nie wolno przepisywać historycznych digestów jako v1.

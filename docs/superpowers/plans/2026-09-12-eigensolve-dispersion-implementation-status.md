@@ -3,8 +3,8 @@
 
 **Cały cel S00–S12 pozostaje aktywny.** Poniższa tabela opisuje aktualny
 stan; dalsze checkpointy zachowują historię i nie zastępują bieżących dowodów.
-Baza ostatniego zweryfikowanego przyrostu:67ef8f9baf1f7350e77f351a00292a807cf20379,
-remote aktualny dla tego commita; CI37401671540 wszystkie8jobs success.
+Baza ostatniego zweryfikowanego przyrostu:98907f6afaceed7290cf6347e62f359d8159c0e4,
+remote aktualny dla tego commita; CI37405082553 wszystkie8jobs success.
 
 | Zakres | Potwierdzone | Pozostaje |
 |---|---|---|
@@ -12,13 +12,13 @@ remote aktualny dla tego commita; CI37401671540 wszystkie8jobs success.
 | Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Nowy attested build, pełny window certificate Γ, potem15 punktów i sprawdzony wykres |
 | Adaptive k pool | Poprawka exit telemetry, deterministyczny plan digest i kontrakty CI | Rzeczywisty świeży przebieg, pomiary CPU/RAM i serial/adaptive parity |
 | Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Pełna scoped kompozycja lower bounds i runtime consumer regionalnych minima pozostają oddzielnymi lukami |
-| S09/2.5D | UV geometry, contours, registry i jawne Dirichlet bindings mają CI evidence; frame ma source fixtures | World representability w bieżącym przyroście; następnie world equivalence, fingerprint, invariance/equilibrium, typed routing i owner MFEM |
+| S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity zaimplementowane i source review PASS; nowe CI pending. World equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
 | Nauka | Wstępne benchmarki i analityczne oracles nie domykają kwalifikacji | DE/BV, zbieżności siatki/airboxu/liczby modów, identyczny COMSOL A1 i GPU |
 | GUI/integracja | Frontend/browser fixture CI PASS; PR97 otwarty | Rzeczywisty workspace z modelem/wynikami, pełne review/science gates, merge i bezpieczne cleanup worktree |
 
 Build235 d6482966a2404d6d933a6708cdf3466d pozostaje queued, na exact070d277a8
 (stara polityka NCV). Runtime obserwowany osobnym read-only klientem; brak nowych
-submit/cancel/restart. Ostatni wolny storage2.67GB przy progu8GiB. Ponadto własny
+submit/cancel/restart. Ostatni pomiar storage1.11GB przy progu8GiB (API 2026-10-06 03:08 UTC). Ponadto własny
 read-only preview execution inventory zajmuje wspólny build slot; ma postęp
 między jobami, a nie wewnątrz wielomilionowego drzewa. Nie przypisujemy mu spadku
 miejsca bez dowodu. Nie uruchamiamy równoległego inventory ani apply bez zgody.
@@ -7982,3 +7982,59 @@ już obecny przed strukturą; rustfmt połączył oba. Parser potwierdzał synta
 nie trait coherence. Usunięto wyłącznie duplikat; brak zmiany walidacji/matematyki.
 Python, frontend/browser, Windows i API hygiene PASS; Rust/FDM/generated API
 zablokowane tą wspólną kompilacją IR. Nowe CI wymagane przed deklaracją PASS.
+
+
+CI37405082553 dla98907f6af zakończone success we wszystkich8jobs. Nowe
+waveguide_frame oraz waveguide_mesh (w tym world mapping) regresje wykonane
+w GitHub Actions; Python/actual density, frontend/browser i API również PASS.
+To zamyka source/CI world prerequisite, nie completeS09/operator admission.
+Kolejny private geometry identity protocol wiąże rawmesh/map/frame/Dirichlet/
+world i validationpolicy. Liczby materiałowe, k, equilibrium i build identity
+pozostają osobnymi required bindings; nie używać geometryhash jako cachekey
+pełnego operatora. Implementacja identity nadal WIP, spec przygotowana.
+
+
+## Checkpoint — geometry identity S09, 2026-10-06
+
+Prywatny borrowed geometry identity wiąże dokładne wejścia world mapping,
+raw mesh/target map, obie ramy, normalization/tolerance, world nodes i jawny
+Dirichlet. Spec dokumentuje byte-level typed preimage SHA-256 oraz granicę
+scope. Review źródłowe nie znalazło błędów; prepared regressions wykonuje
+istniejący waveguide_mesh gate wyłącznie w GitHub Actions. Nowe CI pending.
+Nie jest to operator cache key, equilibrium fingerprint ani admission 2.5D.
+World equivalence, invariance/material/field/interaction/equilibrium bindings,
+MFEM owner/routing oraz cały cel S00–S12 pozostają otwarte.
+
+Read-only API potwierdziło healthy coordinator, worker alive i brak aktywnych
+jobów; retention_busy=true. Preview plan-a925ec0bb61d41ef8fce801299d01b9c
+nadal planning35/235/applied=false; API zmierzyło1108758528B wolnego. Build235 obserwowany tym samym live
+handle, bez submit/cancel/restart i bez usuwania danych.
+
+### Następny przyrost S09: typed intent i admission
+
+Po geometry identity nie dokładamy kolejnych izolowanych helperów geometrii.
+Priorytetem jest StudyIRV04 w istniejącym staging ProblemIRV04 (physics_object.rs),
+typed tagged spatial representation i jawna macierz missing/null/BC z ADR0035.
+Publiczny writer0.3 pozostaje niezmieniony do atomowego cutoveru konsumentów;
+nowe pole w0.3 nadal musi być odrzucane, a legacy0.3→0.4 zachowuje full_3d
+oraz provenance defaulted_from_missing. Γ nie przełącza waveguide na3D.
+
+Kolejność implementacji i warunki odbioru:
+
+1. Typed StudyIRV04/spatial variants oraz atomic migrator: roundtrip,
+   missing/null/unknown fields/conflicting legacy BC, brak mutacji przy odmowie.
+2. V04 admission: root/script/serializer version checks i pełna walidacja;
+   waveguide unsupported dla innych study kinds i unavailable przed3D meshing.
+3. Kompletny structural2D model: wszystkie material/applied-field/interactions/
+   BC/equilibrium bindings; żadnego nieznanego callbacku ani pominiętego terms.
+4. Dedicated MFEM2D owner, append-only ABI i triangle/edge payload. Bounded
+   reference assembler nie jest providerem ani dowodem produkcji.
+5. Operator/rekonstrukcja: P(k)=K_perp+k²M, exchange A k², P1 nodalMs quadrature,
+   physical feedback -μ0 i signed longitudinal derivative; outer-air Dirichlet
+   także przyΓ bez dodatkowego gauge. Pełne residuals i nowe artefakty/normy dA.
+6. ManagedCPU/oddzielnyGPU, convergence/extruded3D/TetraX, OpenAPI/generated
+   client i rzeczywisty browser proof, potem capability promotion/cutover.
+
+Ten kontrakt wynika ze sprawdzonych źródeł IR/planner/native i ADR0035/spec.
+Nie deklaruje gotowego typed admission ani dostępnego providera. Równoległym
+priorytetem runtime pozostaje kontrolowane Γ nowej polityki NCV i signed15.

@@ -113,6 +113,8 @@
     {"id": "world_kronecker", "latex": "\\delta_{ij}", "meaning": "Delta Kroneckera lokalnych indeksów P1", "si_unit": "1"}
   ],
   "sources": [
+    {"id": "source-0833-geometry-identity", "path": "crates/fullmag-ir/src/waveguide_mesh_identity.rs", "symbol": "compute_waveguide_geometry_identity", "responsibility": "Private borrowed geometry digest only; no provider admission or full operator/equilibrium cache proof", "evidence_status": "implemented_ci_pending"},
+    {"id": "source-0833-geometry-preimage", "path": "crates/fullmag-ir/src/waveguide_mesh_identity.rs", "symbol": "encode_geometry_preimage", "responsibility": "Versioned typed bytes binding exact geometry and resolved Dirichlet selection", "evidence_status": "implemented_ci_pending"},
     {"id": "source-0833-raw", "path": "docs/physics/0833-fem-waveguide-25d-normalization.md", "symbol": "DOC-ANCHOR:eq-0833-raw-shape-area-norm", "responsibility": "Surowy shape, lokalna tangencja do m0 i norma pola.", "evidence_status": "planned_contract"},
     {"id": "source-0833-l2", "path": "docs/physics/0833-fem-waveguide-25d-normalization.md", "symbol": "DOC-ANCHOR:eq-0833-unit-l2-envelope", "responsibility": "Envelope unit L2.", "evidence_status": "planned_contract"},
     {"id": "source-0833-l2-restoration", "path": "docs/physics/0833-fem-waveguide-25d-normalization.md", "symbol": "DOC-ANCHOR:eq-0833-unit-l2-restoration", "responsibility": "Odtworzenie amplitudy i magnetyzacji.", "evidence_status": "planned_contract"},

@@ -35,6 +35,7 @@ pub mod waveguide_mesh_incidence;
 pub(crate) mod waveguide_mesh_bindings;
 pub(crate) mod waveguide_mesh_dirichlet;
 pub(crate) mod waveguide_mesh_world;
+pub(crate) mod waveguide_mesh_identity;
 mod floating_point_guard;
 mod validation;
 pub use constraint::*;

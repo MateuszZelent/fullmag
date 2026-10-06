@@ -1015,3 +1015,24 @@ używają właściwego descriptoru i miary dA, a nie tego pomocniczego raportu.
 | Ścieżka | Symbol | Odpowiedzialność |
 |---|---|---|
 | crates/fullmag-ir/src/waveguide_mesh_world.rs | validate_world_triangles | Skala/area/quality/gradient/mass/stiffness na rzeczywistych world nodes |
+
+
+### Prywatna tożsamość geometrii przekroju
+
+`waveguide_mesh_identity::compute_waveguide_geometry_identity` wiąże SHA-256
+z dokładnym borrowed world mapping: raw mesh, target map, requested/canonical
+frame, normalization/tolerance, world nodes i resolved Dirichlet selection.
+Preimage ma jawne versioned tags, lengths i dokładne bity f64; jego protokół
+określa spec `docs/specs/fem-waveguide-spatial-representation-v1.md`.
+
+To jest identyfikator danych geometrii, nie dowód równoważności world embedding,
+nie certyfikat structural_2d, nie fingerprint pełnego operatora ani równowagi.
+Materiały, pola, interakcje, sampled k i runtime identity wymagają dalszych
+kompletnych bindings. Nie zmienia się miary dA, norm modów, publicznego DSL,
+ProblemIR ani żadnej z czterech realizacji solvera. Provider 2.5D pozostaje
+niedostępny, a runtime i invariance pozostają NOT VERIFIED.
+
+| Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|
+| crates/fullmag-ir/src/waveguide_mesh_identity.rs | compute_waveguide_geometry_identity | Prywatny digest dokładnych borrowed danych geometrii; bez admission/cache reuse |
+| crates/fullmag-ir/src/waveguide_mesh_identity.rs | encode_geometry_preimage | Versioned typed preimage; signed zero i kolejność Vec zachowane |
