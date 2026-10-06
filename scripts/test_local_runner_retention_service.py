@@ -412,15 +412,22 @@ class RetentionServiceTests(unittest.TestCase):
 
     def test_runtime_automatic_is_separate_opt_in_and_alternates_with_execution(self):
         self.hub.set_retention_policy({'mode': 'automatic'})
-        with patch.object(self.service, 'preview') as preview:
+        with patch.object(self.service, 'preview') as preview, \
+                patch('local_runner.retention_service.time.monotonic', return_value=1000.0) as clock:
             self.service.tick(force=True)
             self.assertEqual('execution', preview.call_args.kwargs['scope'])
             self.hub.set_retention_policy({'runtime_retention_enabled': True})
-            self.service.last_automatic = 0
+            # Exercise the real interval without relying on host uptime.
+            clock.return_value = 1299.0
             self.service.tick()
+            self.assertEqual(1, preview.call_count)
+            clock.return_value = 1300.0
+            self.service.tick()
+            self.assertEqual(2, preview.call_count)
             self.assertEqual('runtime', preview.call_args.kwargs['scope'])
-            self.service.last_automatic = 0
+            clock.return_value = 1600.0
             self.service.tick()
+            self.assertEqual(3, preview.call_count)
             self.assertEqual('execution', preview.call_args.kwargs['scope'])
 
     def test_disabling_runtime_during_inventory_cancels_automatic_mutation(self):
