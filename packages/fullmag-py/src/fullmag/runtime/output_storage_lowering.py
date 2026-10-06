@@ -126,8 +126,8 @@ def _configure_stage_mapping(
         kind,
         sampling,
         storage,
-        until_seconds=_positive_number(stage.get("until_seconds")),
-        output_every_seconds=_positive_number(stage.get("output_every_seconds")),
+        until_seconds=_positive_stage_time(stage.get("until_seconds")),
+        output_every_seconds=_positive_stage_time(stage.get("output_every_seconds")),
         explicit_autosave=stage.get("autosave"),
         table_autosave=stage_table,
         set_stage_autosave=lambda policy: stage.__setitem__("autosave", policy),
@@ -235,6 +235,16 @@ def _existing_time_fields(sampling: Mapping[str, object]) -> list[dict[str, obje
             continue
         fields.append(field)
     return fields
+
+
+def _positive_stage_time(value: object) -> float | None:
+    # Canonical authoring stages retain numeric literals as text, unlike IR.
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return None
+    return _positive_number(value)
 
 
 def _positive_number(value: object) -> float | None:

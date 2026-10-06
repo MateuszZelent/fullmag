@@ -30,7 +30,46 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def check_literal_stage_times() -> None:
+    default = OutputStorage()
+    literal_stage = {"kind": "run", "until_seconds": "1e-12"}
+    configured_literal = configure_scene_stage_autosaves(
+        [literal_stage], default.to_ir()
+    )[0]
+    require(configured_literal["until_seconds"] == "1e-12", "canonical stage time was rewritten")
+    require("autosave" not in literal_stage, "autosave mutated the input scene")
+    require(
+        configured_literal["autosave"]["fields"][0]["every_seconds"] == 1e-12,
+        "canonical string time did not supply the storage cadence",
+    )
+    literal_pipeline = configure_study_pipeline_autosaves(
+        {"nodes": [{"node_kind": "stage", "stage_kind": "run", "payload": literal_stage}]},
+        default.to_ir(),
+    )
+    require(
+        literal_pipeline["nodes"][0]["payload"]["autosave"] == configured_literal["autosave"],
+        "pipeline string time differs from flat stage autosave",
+    )
+    explicit_cadence = configure_scene_stage_autosaves(
+        [{**literal_stage, "output_every_seconds": "2e-13"}], default.to_ir()
+    )[0]
+    require(
+        explicit_cadence["autosave"]["fields"][0]["every_seconds"] == 2e-13,
+        "string output cadence did not take precedence over the run duration",
+    )
+    for invalid_time in (True, "", "0", "-1", "nan", "inf", "1e309", "1e-400", "1 * ps"):
+        try:
+            configure_scene_stage_autosaves(
+                [{"kind": "run", "until_seconds": invalid_time}], default.to_ir()
+            )
+        except ValueError as error:
+            require("positive output cadence" in str(error), "invalid time lost cadence validation")
+        else:
+            raise AssertionError(f"invalid stage time supplied a cadence: {invalid_time!r}")
+
+
 def main() -> None:
+    check_literal_stage_times()
     python_sources = (
         REPO / "packages/fullmag-py/src/fullmag/model/output_storage.py",
         REPO / "packages/fullmag-py/src/fullmag/runtime/output_storage_lowering.py",
