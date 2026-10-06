@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import threading
 import time
@@ -23,6 +24,18 @@ class DevelopmentStatusError(RuntimeError):
     """A managed development status cannot be published or trusted."""
 
 
+def _write_status_json(path: Path, document: Mapping[str, Any]) -> None:
+    """Bound Windows metadata contention without abandoning atomic publication."""
+    for delay in (0.025, 0.05, 0.1, 0.2, 0.4, None):
+        try:
+            atomic_json(path, document)
+            return
+        except PermissionError as error:
+            if os.name != "nt" or getattr(error, "winerror", None) not in (5, 32, 33) or delay is None:
+                raise
+        time.sleep(delay)
+
+
 class DevelopmentStatusPublisher:
     """Serialize state changes and heartbeats into one atomic status file."""
 
@@ -33,7 +46,7 @@ class DevelopmentStatusPublisher:
         worktree_id: str,
         *,
         clock_ms: Callable[[], int] | None = None,
-        write_json: Callable[[Path, Mapping[str, Any]], None] = atomic_json,
+        write_json: Callable[[Path, Mapping[str, Any]], None] = _write_status_json,
     ):
         if not isinstance(generation_id, str) or not GENERATION_ID.fullmatch(generation_id):
             raise DevelopmentStatusError("Managed status requires a lowercase 32-character generation id")
