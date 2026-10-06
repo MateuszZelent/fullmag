@@ -22,7 +22,7 @@ import uuid
 from typing import Any, Mapping
 
 from fullmag_storage import atomic_json, validate_path, file_lock
-from local_runner.retention import plan as retention_plan
+from local_runner.retention import PreviewCancelled, plan as retention_plan
 
 
 _DEFAULT_POLICY = {
@@ -1065,7 +1065,13 @@ class ObservabilityHub:
     # -------------------------------------------------------------------------
     # Retention Planning
     # -------------------------------------------------------------------------
-    def generate_retention_plan(self, queue=None, *, job_ids=None, progress=None) -> dict[str, Any]:
+    def generate_retention_plan(self, queue=None, *, job_ids=None, progress=None,
+                                cancelled=None) -> dict[str, Any]:
+        def check_cancelled() -> None:
+            if cancelled is not None and cancelled.is_set():
+                raise PreviewCancelled("Retention preview was cancelled")
+
+        check_cancelled()
         jobs = []
         if queue is not None:
             try:
@@ -1077,6 +1083,7 @@ class ObservabilityHub:
                     jobs = queue.list(owner=self.owner, limit=1000)
             except Exception as error:
                 raise RuntimeError('Retention queue inventory unavailable') from error
+        check_cancelled()
 
         outside = []
         if job_ids is not None:
@@ -1087,10 +1094,12 @@ class ObservabilityHub:
             outside = [job for job in jobs if not isinstance(job, Mapping) or job.get('job_id') not in wanted]
             jobs = [job for job in jobs if isinstance(job, Mapping) and job.get('job_id') in wanted]
 
+        check_cancelled()
         pinned = self.get_pinned()
         indexed_pins = []
         scan_jobs = []
         for job in jobs:
+            check_cancelled()
             if not isinstance(job, Mapping) or not isinstance(job.get('job_id'), str) or not isinstance(job.get('worktree_id'), str):
                 scan_jobs.append(job)
                 continue
@@ -1104,14 +1113,34 @@ class ObservabilityHub:
             else:
                 scan_jobs.append(job)
         jobs = scan_jobs
+        check_cancelled()
+
+        job_progress = {}
+
+        def report(fields):
+            check_cancelled()
+            if progress is not None:
+                progress({**job_progress, **fields})
 
         def monitored_jobs():
             for index, job in enumerate(jobs):
+                check_cancelled()
+                job_progress.update({
+                    'processed_jobs': index,
+                    'total_jobs': len(jobs),
+                    'current_job_id': job.get('job_id') if isinstance(job, Mapping) else None,
+                })
                 if progress is not None:
-                    progress({'processed_jobs': index, 'total_jobs': len(jobs), 'current_job_id': job.get('job_id') if isinstance(job, Mapping) else None})
+                    progress(dict(job_progress))
                 yield job
+                check_cancelled()
             if progress is not None:
-                progress({'processed_jobs': len(jobs), 'total_jobs': len(jobs), 'current_job_id': None})
+                job_progress.update({
+                    'processed_jobs': len(jobs),
+                    'total_jobs': len(jobs),
+                    'current_job_id': None,
+                })
+                progress(dict(job_progress))
 
         policy = self.get_retention_policy()
         ttl_success_h = float(policy.get("ttl_success_hours", 24))
@@ -1121,9 +1150,17 @@ class ObservabilityHub:
         raw_plan = {"candidates": [], "retained": []}
         if jobs:
             try:
-                raw_plan = retention_plan(str(self.storage), monitored_jobs(), now, success_hours=ttl_success_h, failed_hours=ttl_failure_h)
+                options = {}
+                if cancelled is not None:
+                    options.update(cancelled=cancelled, progress=report)
+                raw_plan = retention_plan(str(self.storage), monitored_jobs(), now,
+                                          success_hours=ttl_success_h, failed_hours=ttl_failure_h,
+                                          **options)
+            except PreviewCancelled:
+                raise
             except Exception as error:
                 raise RuntimeError('Retention execution inventory unavailable') from error
+        check_cancelled()
         if raw_plan.get('error'):
             raise RuntimeError('Retention inventory failed: ' + str(raw_plan['error']))
 
@@ -1141,6 +1178,7 @@ class ObservabilityHub:
         candidates = []
         pinned_retained = []
         for c in raw_plan.get("candidates", []):
+            check_cancelled()
             wt = c.get("worktree_id")
             jid = c.get("job_id")
             res_id = f"exec-{wt}-{jid}"
@@ -1169,6 +1207,7 @@ class ObservabilityHub:
 
         retained = list(pinned_retained)
         for r in raw_plan.get("retained", []):
+            check_cancelled()
             wt = r.get("worktree_id")
             jid = r.get("job_id")
             res_id = f"exec-{wt}-{jid}"
@@ -1189,11 +1228,54 @@ class ObservabilityHub:
             if item.get("worktree_id") and item.get("job_id")
         }
         runs_dir = self.storage / "runs"
+        orphan_worktrees = 0
+        orphan_jobs = 0
+        last_orphan_progress = 0.0
+
+        def report_orphan(phase: str, *, force: bool = False) -> None:
+            nonlocal last_orphan_progress
+            check_cancelled()
+            if progress is None:
+                return
+            now_monotonic = time.monotonic()
+            if not force and now_monotonic - last_orphan_progress < 0.5:
+                return
+            progress({
+                **job_progress,
+                'orphan_scan_phase': phase,
+                'orphan_worktrees_enumerated': orphan_worktrees,
+                'orphan_jobs_enumerated': orphan_jobs,
+            })
+            last_orphan_progress = now_monotonic
+
+        def sorted_children(directory: Path, phase: str) -> list[Path]:
+            nonlocal orphan_worktrees, orphan_jobs
+            check_cancelled()
+            children = []
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    check_cancelled()
+                    children.append(Path(entry.path))
+                    if phase == 'worktrees':
+                        orphan_worktrees += 1
+                    else:
+                        orphan_jobs += 1
+                    report_orphan('enumerating_' + phase)
+            check_cancelled()
+            report_orphan('sorting_' + phase)
+            children.sort()
+            check_cancelled()
+            return children
+
+        check_cancelled()
         if job_ids is None and runs_dir.is_dir() and not _is_reparse_or_symlink(runs_dir):
-            for wt_dir in sorted(runs_dir.iterdir()):
+            report_orphan('enumerating_worktrees', force=True)
+            for wt_dir in sorted_children(runs_dir, 'worktrees'):
+                check_cancelled()
                 if not wt_dir.is_dir() or _is_reparse_or_symlink(wt_dir):
                     continue
-                for job_dir in sorted(wt_dir.iterdir()):
+                for job_dir in sorted_children(wt_dir, 'jobs'):
+                    check_cancelled()
                     if not job_dir.is_dir() or _is_reparse_or_symlink(job_dir):
                         continue
                     ident = (wt_dir.name, job_dir.name)
@@ -1211,7 +1293,9 @@ class ObservabilityHub:
                             })
                             accounted_identities.add(ident)
 
+        check_cancelled()
         volumes = self.get_storage_volumes()
+        check_cancelled()
         free_before = volumes[0].get("free_bytes") if volumes else None
         estimated_reclaim = sum(c["size_bytes"] for c in candidates)
 
@@ -1229,11 +1313,16 @@ class ObservabilityHub:
             "disk_free_after_estimated_bytes": free_before + estimated_reclaim if free_before is not None else None,
             "raw_engine_plan": raw_plan,
         }
-        with self._lock:
-            self._plans[plan_id] = plan_record
-            while len(self._plans) > 16:
-                self._plans.pop(next(iter(self._plans)))
-        self.record_event("INFO", "retention_plan_created", f"Created retention plan {plan_id} ({len(candidates)} candidates)")
+        check_cancelled()
+        # Cancellable previews publish only through RetentionService after it
+        # takes its cancellation lock. This prevents a complete engine plan
+        # from becoming apply-addressable while cancellation wins the race.
+        if cancelled is None:
+            with self._lock:
+                self._plans[plan_id] = plan_record
+                while len(self._plans) > 16:
+                    self._plans.pop(next(iter(self._plans)))
+            self.record_event("INFO", "retention_plan_created", f"Created retention plan {plan_id} ({len(candidates)} candidates)")
         return plan_record
 
     def apply_retention_plan(self, plan_id: str) -> dict[str, Any]:

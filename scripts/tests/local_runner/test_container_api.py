@@ -146,6 +146,37 @@ class ContainerAPITests(unittest.TestCase):
             self.assertEqual(pid, self.json_body(payload)['plan_id'])
         self.assertEqual([('apply', pid), ('poll', pid), ('poll', pid)], self.calls)
 
+    def test_retention_cancel_requires_auth_valid_plan_id_and_empty_payload(self):
+        pid = 'plan-01234567'
+        self.server.callbacks = replace(
+            self.server.callbacks,
+            retention_plan_cancel=lambda value: self.calls.append(('retention_cancel', value)) or {
+                'plan_id': value, 'scope': 'execution', 'status': 'cancel_requested', 'applied': False,
+            },
+        )
+        route = '/api/v1/retention/plans/' + pid + '/cancel'
+
+        self.assertEqual(401, self.request('POST', route, body={}, token='wrong')[0])
+        self.assertEqual([], self.calls)
+        self.assertEqual(404, self.request('POST', '/api/v1/retention/plans/invalid/cancel', body={})[0])
+        self.assertEqual(400, self.request('POST', route, body={'unexpected': True})[0])
+        self.assertEqual([], self.calls)
+
+        status, _, payload = self.request('POST', route, body={})
+        self.assertEqual(200, status)
+        self.assertEqual('cancel_requested', self.json_body(payload)['status'])
+        self.assertEqual([('retention_cancel', pid)], self.calls)
+
+    def test_retention_cancel_fails_closed_without_backend_capability(self):
+        self.server.callbacks = replace(self.server.callbacks, retention_plan_cancel=None)
+
+        status, _, payload = self.request(
+            'POST', '/api/v1/retention/plans/plan-01234567/cancel', body={})
+
+        self.assertEqual(503, status)
+        self.assertEqual('retention_cancel_unavailable', self.json_body(payload)['error'])
+        self.assertEqual([], self.calls)
+
     def test_origin_is_rejected_without_cors_headers(self):
         status, headers, payload = self.request("GET", "/jobs", headers={"Origin": "http://evil.invalid"})
         self.assertEqual(403, status)

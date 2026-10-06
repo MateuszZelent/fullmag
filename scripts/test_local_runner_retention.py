@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -11,7 +12,12 @@ SCRIPT_ROOT = Path(__file__).resolve().parent
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from local_runner.retention import RetentionError, plan  # noqa: E402
+from local_runner.retention import (  # noqa: E402
+    PreviewCancelled,
+    RetentionError,
+    inspect_execution,
+    plan,
+)
 
 
 class RetentionPlanTests(unittest.TestCase):
@@ -229,6 +235,56 @@ class RetentionPlanTests(unittest.TestCase):
             plan(self.storage, [], self.now, success_hours=-1)
         after = sorted(path.relative_to(self.storage).as_posix() for path in self.storage.rglob("*"))
         self.assertEqual(before, after)
+
+    def test_execution_progress_is_measured_and_does_not_change_fingerprint(self):
+        execution = self.storage / 'execution'
+        (execution / 'nested').mkdir(parents=True)
+        (execution / 'a.bin').write_bytes(b'abc')
+        (execution / 'nested' / 'b.bin').write_bytes(b'defgh')
+        updates = []
+
+        baseline = inspect_execution(execution)
+        measured = inspect_execution(execution, progress=updates.append)
+
+        self.assertEqual(baseline, measured)
+        self.assertGreaterEqual(len(updates), 2)
+        for key in ('tree_entries_enumerated', 'tree_stat_entries', 'tree_files', 'tree_logical_bytes'):
+            values = [item[key] for item in updates]
+            self.assertEqual(sorted(values), values)
+        self.assertEqual(2, updates[-1]['tree_files'])
+        self.assertEqual(8, updates[-1]['tree_logical_bytes'])
+        self.assertTrue(all('fingerprint' not in item and 'candidates' not in item for item in updates))
+        self.assertTrue(all('total_entries' not in item and 'percent' not in item and 'eta_seconds' not in item
+                            for item in updates))
+
+    def test_execution_scan_cancellation_propagates_without_a_partial_plan(self):
+        job = self._job('cancel-scan')
+        _, execution = self._materialize(job, execution_files={
+            'a.bin': b'a', 'b.bin': b'b', 'c.bin': b'c',
+        })
+        cancelled = threading.Event()
+        updates = []
+
+        def progress(fields):
+            updates.append(dict(fields))
+            if fields.get('tree_entries_enumerated') == 1:
+                cancelled.set()
+
+        ticks = iter(range(100))
+        with patch('local_runner.retention.time.monotonic', side_effect=lambda: next(ticks)):
+            with self.assertRaises(PreviewCancelled):
+                plan(self.storage, [job], self.now, cancelled=cancelled, progress=progress)
+
+        self.assertTrue(any(item.get('tree_entries_enumerated') == 1 for item in updates))
+        self.assertTrue(all('fingerprint' not in item and 'candidates' not in item for item in updates))
+
+    def test_execution_scan_cancellation_before_first_job_skips_metadata_inspection(self):
+        cancelled = threading.Event()
+        cancelled.set()
+        with patch('local_runner.retention.inspect_execution') as inspect:
+            with self.assertRaises(PreviewCancelled):
+                plan(self.storage, [self._job('cancel-before-scan')], self.now, cancelled=cancelled)
+        inspect.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -433,3 +433,35 @@ a po stop ponownie atestuje kontener i metadane. Przerwany preview otrzymuje
 blocked/applied=false; trzeba wygenerować świeży plan. Nie używaj tego wariantu
 do apply, automatycznej retencji lub odzyskania nieznanego wyniku mutacji.
 Domyślny wariant recepty zachowuje odmowę podczas retention_busy.
+
+
+## Cooperative cancel tylko dla read-only execution preview
+
+Przygotowywany przyrost rozszerza istniejącą usługę retention o
+`POST /api/v1/retention/plans/<plan_id>/cancel` z pustym body i komendę
+`retention-cancel <plan_id>` zatwierdzonego klienta. Obejmuje wyłącznie aktywny
+read-only preview scope execution. Cancel apply oraz preview sources/runtime
+pozostaje niedostępny; nie przerywa się usuwania danych w połowie operacji.
+
+Klient CLI zwraca kod `124` dla ACK `cancel_requested`, `0` dla terminalnego
+`cancelled`, a `1` dla pozostałych odpowiedzi (np. odmowy anulowania).
+Kod `124` wymaga odczytu tego samego planu, a nie ponowienia preview.
+
+ACK `cancel_requested` nie jest wynikiem terminalnym. Thread sprawdza event
+między odczytami metadanych i etapami drzewa, po czym utrwala `cancelled` z
+`applied=false`. Slot builda pozostaje zajęty do faktycznego zakończenia threadu.
+Nie wolno wyczyścić lease, zrestartować procesu ani ponowić skanu na podstawie
+samego ACK lub wieku operacji. Przy utracie handle wynik pozostaje
+`interrupted_unknown`, nie success. Canceled preview nie może być użyty do apply.
+
+Progress przedstawia rzeczywiście zbadane entries/files/logical bytes oraz
+fazę enumeracji/inspekcji. Nie ma zgadywanego procentu, całkowitej liczby entries
+ani ETA; kandydat i fingerprint są dostępne dopiero po pełnej inspekcji.
+Finalne publish i przejście automatic-preview→apply są chronione tą samą blokadą
+co cancel, aby zaakceptowany cancel nie został nadpisany gotowym planem.
+
+Przygotowanie źródeł i regresji CI nie włącza tej trasy we wdrożonym koordynatorze.
+Przed użyciem potrzebne są sprawdzone CI, zgodna aktualizacja jednego runnera,
+attestacja obrazu, pusta aktywna ścieżka builda i preserved queue/profiles/data.
+Dla starego koordynatora brak obsługi oznacza unavailable; nie udajemy anulowania.
+Reguły autoryzacji i ochrony kandydatów przy rzeczywistym cleanup pozostają bez zmian.

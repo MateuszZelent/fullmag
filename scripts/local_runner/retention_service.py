@@ -9,7 +9,7 @@ from contextlib import contextmanager
 
 from fullmag_storage import atomic_json, validate_path
 from local_runner.retention_executor import apply_execution_plan
-from local_runner.retention import _read_json
+from local_runner.retention import PreviewCancelled, _read_json
 
 
 class RetentionService:
@@ -20,6 +20,9 @@ class RetentionService:
         self.lock = threading.RLock()
         self.thread = None
         self.active_id = None
+        self.active_kind = None
+        self.active_scope = None
+        self.cancel_event = None
         self.stopping = False
         self.build_running = False
         self.last_automatic = 0.0
@@ -45,30 +48,45 @@ class RetentionService:
         atomic_json(path, record)
 
     def get(self, plan_id):
-        path = self._path(plan_id, operation=True)
-        if not path.exists():
-            path = self._path(plan_id)
-        if not path.exists():
-            raise ValueError('Retention plan not found')
-        record = dict(_read_json(path))
-        original = self._path(plan_id)
-        if path != original and original.exists():
-            record = {**dict(_read_json(original)), **record}
-        if record.get('status') in ('planning', 'accepted', 'running'):
-            with self.lock:
+        with self.lock:
+            operation_path = self._path(plan_id, operation=True)
+            original_path = self._path(plan_id)
+            path = operation_path if operation_path.exists() else original_path
+            if not path.exists():
+                raise ValueError('Retention plan not found')
+            record = dict(_read_json(path))
+            if path != original_path and original_path.exists():
+                record = {**dict(_read_json(original_path)), **record}
+            if record.get('status') in ('planning', 'cancel_requested', 'accepted', 'running'):
                 live = self.active_id == plan_id and self.busy
-            if not live:
-                record.update(status='interrupted_unknown', applied=False,
-                              error='Previous operation stopped; reconcile with a fresh plan')
+                if not live:
+                    record.update(status='interrupted_unknown', applied=False,
+                                  error='Previous operation stopped; reconcile with a fresh plan')
+                    self._save(record, operation=path == operation_path)
         # The metadata needed by the executor stays on disk. The UI receives
         # one control-plane copy rather than a duplicate raw engine inventory.
         record.pop('raw_engine_plan', None)
         record.pop('raw_runtime_plan', None)
         return record
 
-    def _launch(self, plan_id, target):
+    def _launch(self, plan_id, target, *, kind, scope, cancel_event=None):
         self.active_id = plan_id
-        self.thread = threading.Thread(target=target, name='retention-' + plan_id, daemon=True)
+
+        self.active_kind = kind
+        self.active_scope = scope
+        self.cancel_event = cancel_event
+
+        def run():
+            try:
+                target()
+            finally:
+                with self.lock:
+                    if self.active_id == plan_id:
+                        self.active_kind = None
+                        self.active_scope = None
+                        self.cancel_event = None
+
+        self.thread = threading.Thread(target=run, name='retention-' + plan_id, daemon=True)
         self.thread.start()
 
     @contextmanager
@@ -104,6 +122,15 @@ class RetentionService:
             created_at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
             planning = {'plan_id': plan_id, 'scope': scope, 'status': 'planning', 'applied': False, 'created_at': created_at}
             self._save(planning)
+            cancel_event = threading.Event() if scope == 'execution' else None
+
+            def save_progress(fields):
+                with self.lock:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise PreviewCancelled("Retention preview was cancelled")
+                    if self.active_id == plan_id and self.active_kind == 'preview':
+                        self._save({**planning, **fields})
+
             def work():
                 try:
                     if scope == 'sources':
@@ -115,24 +142,82 @@ class RetentionService:
                                                     policy=self.hub.get_retention_policy(), job_ids=job_ids)
                     else:
                         plan = self.hub.generate_retention_plan(
-                            queue=self.queue, job_ids=job_ids,
-                            progress=lambda fields: self._save({**planning, **fields}))
+                            queue=self.queue, job_ids=job_ids, progress=save_progress,
+                            cancelled=cancel_event)
                     plan['scope'] = scope
                     plan['created_at'] = created_at
                     plan['plan_id'] = plan_id
-                    self._save(plan)
                     if automatic:
-                        # Policy and drain state may change while inventory runs.
-                        policy = self.hub.get_retention_policy()
-                        if (self.stopping or policy['mode'] != 'automatic'
-                                or (scope == 'runtime' and not policy['runtime_retention_enabled'])):
-                            return
-                        self._execute(plan)
+                        with self.lock:
+                            if cancel_event is not None and cancel_event.is_set():
+                                raise PreviewCancelled("Retention preview was cancelled")
+                            # Policy and drain state may change while inventory runs.
+                            policy = self.hub.get_retention_policy()
+                            should_apply = (not self.stopping and policy['mode'] == 'automatic'
+                                            and (scope != 'runtime' or policy['runtime_retention_enabled']))
+                            if should_apply:
+                                accepted = {**plan, 'status': 'accepted', 'applied': False}
+                                self._save(accepted)
+                                # This transition shares the cancellation lock:
+                                # once apply is accepted, cancel can no longer
+                                # mistake it for a read-only preview.
+                                self.active_kind = 'apply'
+                            else:
+                                self._save(plan)
+                                self.active_kind = None
+                            self.hub.record_event(
+                                'INFO', 'retention_plan_created',
+                                f"Created retention plan {plan_id} ({plan.get('candidates_count', 0)} candidates)")
+                        if should_apply:
+                            self._execute(accepted)
+                    else:
+                        with self.lock:
+                            if cancel_event is not None and cancel_event.is_set():
+                                raise PreviewCancelled("Retention preview was cancelled")
+                            self._save(plan)
+                            # The result is now durable and cannot be canceled.
+                            self.active_kind = None
+                            self.hub.record_event(
+                                'INFO', 'retention_plan_created',
+                                f"Created retention plan {plan_id} ({plan.get('candidates_count', 0)} candidates)")
+                except PreviewCancelled:
+                    self._finish_cancelled(plan_id, scope, created_at)
                 except Exception as error:
-                    self._save({'plan_id': plan_id, 'scope': scope, 'status': 'failed', 'applied': False,
-                                'error': f'{type(error).__name__}: {error}'})
-            self._launch(plan_id, work)
+                    with self.lock:
+                        if cancel_event is not None and cancel_event.is_set() and self.active_kind == 'preview':
+                            self._finish_cancelled(plan_id, scope, created_at)
+                        else:
+                            self._save({'plan_id': plan_id, 'scope': scope, 'status': 'failed', 'applied': False,
+                                        'error': f'{type(error).__name__}: {error}'})
+            self._launch(plan_id, work, kind='preview', scope=scope, cancel_event=cancel_event)
             return {'plan_id': plan_id, 'scope': scope, 'status': 'planning', 'applied': False}
+
+    def _finish_cancelled(self, plan_id, scope, created_at):
+        with self.lock:
+            details = {}
+            try:
+                current = _read_json(self._path(plan_id))
+                allowed = (
+                    'processed_jobs', 'total_jobs', 'current_job_id', 'tree_phase',
+                    'tree_entries_enumerated', 'tree_stat_entries', 'tree_files',
+                    'tree_logical_bytes', 'orphan_scan_phase',
+                    'orphan_worktrees_enumerated', 'orphan_jobs_enumerated',
+                )
+                details = {key: current[key] for key in allowed if key in current}
+            except Exception:
+                pass
+            self._save({
+                'plan_id': plan_id,
+                'scope': scope,
+                'status': 'cancelled',
+                'applied': False,
+                'created_at': created_at,
+                'finished_at': time.time(),
+                'error': 'preview_cancelled',
+                **details,
+            })
+            self.hub.record_event('INFO', 'retention_terminal',
+                                  f"Retention {plan_id}: cancelled")
 
     def _execute(self, plan):
         try:
@@ -184,8 +269,54 @@ class RetentionService:
                         'error': 'plan_is_not_a_completed_preview'}
             accepted = {**plan, 'status': 'accepted', 'applied': False}
             self._save(accepted)
-            self._launch(plan_id, lambda: self._execute(plan))
+            self._launch(plan_id, lambda: self._execute(plan),
+                         kind='apply', scope=plan.get('scope', 'execution'))
             return {'plan_id': plan_id, 'status': 'accepted', 'applied': False}
+
+    def cancel(self, plan_id):
+        # Validate before inspecting in-memory operation state or touching disk.
+        self._path(plan_id)
+        with self.lock:
+            live = self.active_id == plan_id and self.busy
+            if live and self.active_kind == 'preview' and self.active_scope == 'execution':
+                if self.cancel_event is None:
+                    return {'plan_id': plan_id, 'scope': 'execution', 'status': 'blocked',
+                            'applied': False, 'error': 'cancellation_unavailable'}
+                record = self.get(plan_id)
+                if self.cancel_event.is_set():
+                    return record
+                if record.get('status') != 'planning':
+                    # Final publication and the preview -> apply transition are
+                    # serialized with this lock; preserve whichever state won.
+                    return record
+                self.cancel_event.set()
+                record.update(status='cancel_requested', applied=False)
+                self._save(record)
+                return record
+
+            try:
+                record = self.get(plan_id)
+            except ValueError as error:
+                if str(error) != 'Retention plan not found':
+                    raise
+                return {'plan_id': plan_id, 'status': 'blocked', 'applied': False,
+                        'error': 'retention_plan_not_found'}
+            scope = record.get('scope')
+            if scope in ('sources', 'runtime') or (live and self.active_scope in ('sources', 'runtime')):
+                return {'plan_id': plan_id, 'scope': scope or self.active_scope,
+                        'status': 'blocked', 'applied': False,
+                        'error': 'retention_scope_not_cancellable'}
+            if live and self.active_kind == 'apply':
+                return {'plan_id': plan_id, 'scope': scope or self.active_scope,
+                        'status': 'blocked', 'applied': False,
+                        'error': 'retention_operation_not_cancellable'}
+            if live and record.get('status') in ('planning', 'cancel_requested', 'accepted', 'running'):
+                return {'plan_id': plan_id, 'scope': scope or self.active_scope,
+                        'status': 'blocked', 'applied': False,
+                        'error': 'retention_operation_not_cancellable'}
+            # Completed previews and reconciled terminal/unknown outcomes are
+            # idempotent reads: never manufacture a cancellation result.
+            return record
 
     def tick(self, *, force=False):
         with self.lock:

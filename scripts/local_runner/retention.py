@@ -19,11 +19,16 @@ import os
 from pathlib import Path
 import re
 import stat
+import time
 from typing import Any
 
 
 class RetentionError(ValueError):
     """The planner received an invalid storage root or retention policy."""
+
+
+class PreviewCancelled(Exception):
+    """Cooperative cancellation of a read-only execution retention preview."""
 
 
 _TERMINAL_STATES = frozenset(("succeeded", "failed", "cancelled"))
@@ -35,6 +40,20 @@ _SCHEMA = "fullmag.local-runner.retention-plan.v1"
 _JOURNAL_SCHEMA = "fullmag.local-runner.coordinator.v1"
 _MAX_JSON_BYTES = 4 * 1024 * 1024
 _REPARSE_POINT = 0x400
+
+
+def _check_cancelled(cancelled: object | None) -> None:
+    if cancelled is None:
+        return
+    is_set = getattr(cancelled, "is_set", None)
+    if callable(is_set):
+        requested = is_set()
+    elif callable(cancelled):
+        requested = cancelled()
+    else:
+        requested = bool(cancelled)
+    if requested:
+        raise PreviewCancelled("Retention preview was cancelled")
 
 
 class _PathIssue(Exception):
@@ -161,9 +180,11 @@ def _read_json(path: Path) -> Mapping[str, Any]:
     return value
 
 
-def inspect_execution(root: Path) -> dict[str, Any]:
+def inspect_execution(root: Path, *, cancelled: object | None = None,
+                      progress: Any | None = None) -> dict[str, Any]:
     """Bind a private tree to its no-follow metadata inventory, not link targets."""
 
+    _check_cancelled(cancelled)
     try:
         root_info = os.lstat(root)
     except OSError as error:
@@ -177,19 +198,56 @@ def inspect_execution(root: Path) -> dict[str, Any]:
     fingerprint = hashlib.sha256()
     files = 0
     links = 0
+    enumerated_entries = 0
+    completed_stat_entries = 0
+    last_progress = None
+
+    def report(phase: str, *, force: bool = False) -> None:
+        nonlocal last_progress
+        if progress is None:
+            return
+        now = time.monotonic()
+        if not force and last_progress is not None and now - last_progress < 0.5:
+            return
+        progress({
+            "tree_phase": phase,
+            "tree_entries_enumerated": enumerated_entries,
+            "tree_stat_entries": completed_stat_entries,
+            "tree_files": files,
+            "tree_logical_bytes": total,
+        })
+        last_progress = now
+
     pending = [root]
     while pending:
+        _check_cancelled(cancelled)
         current = pending.pop()
+        report("enumerating")
+        entries = []
         try:
-            entries = list(os.scandir(current))
+            with os.scandir(current) as iterator:
+                for entry in iterator:
+                    _check_cancelled(cancelled)
+                    entries.append(entry)
+                    enumerated_entries += 1
+                    report("enumerating")
         except OSError as error:
             raise _PathIssue("unreadable_execution_tree") from error
-        for entry in sorted(entries, key=lambda item: item.name):
+
+        # Preserve the original deterministic name ordering, with cancellation
+        # checks on both sides of Python's non-interruptible in-memory sort.
+        _check_cancelled(cancelled)
+        entries.sort(key=lambda item: item.name)
+        _check_cancelled(cancelled)
+        report("stat")
+        for entry in entries:
+            _check_cancelled(cancelled)
             path = Path(entry.path)
             try:
                 info = entry.stat(follow_symlinks=False)
             except OSError as error:
                 raise _PathIssue("unreadable_execution_tree") from error
+            completed_stat_entries += 1
             record = [path.relative_to(root).as_posix(), info.st_mode, info.st_size,
                       info.st_mtime_ns, info.st_ctime_ns, info.st_ino]
             fingerprint.update(json.dumps(record, ensure_ascii=True).encode("ascii") + b"\n")
@@ -220,6 +278,9 @@ def inspect_execution(root: Path) -> dict[str, Any]:
                 files += 1
             else:
                 raise _PathIssue("unsafe_execution_tree")
+            report("stat")
+    _check_cancelled(cancelled)
+    report("complete", force=True)
     return {"logical_bytes": total, "files": files, "links": links,
             "fingerprint": fingerprint.hexdigest(),
             "root_device": root_info.st_dev, "root_inode": root_info.st_ino}
@@ -284,7 +345,8 @@ def _sort_key(value: Mapping[str, Any]) -> tuple[str, str, str]:
 
 
 def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now: float,
-         success_hours: float = 24, failed_hours: float = 168) -> dict[str, Any]:
+         success_hours: float = 24, failed_hours: float = 168,
+         cancelled: object | None = None, progress: Any | None = None) -> dict[str, Any]:
     """Build a deterministic, read-only retention inventory.
 
     ``jobs`` is normally the queue's public record list.  A candidate is
@@ -313,6 +375,7 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
     scanned_bytes = 0
 
     for raw in records:
+        _check_cancelled(cancelled)
         if not isinstance(raw, Mapping):
             retained.append(_record(job_id=None, worktree_id=None, state=None,
                                     execution=None, container_id=None,
@@ -412,8 +475,17 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
             continue
 
         try:
-            inventory = inspect_execution(execution)
+            inspect_options = {}
+            if cancelled is not None:
+                inspect_options["cancelled"] = cancelled
+            if progress is not None:
+                inspect_options["progress"] = lambda fields, job_id=job_id: progress({
+                    **fields, "current_job_id": job_id,
+                })
+            inventory = inspect_execution(execution, **inspect_options)
             size = inventory["logical_bytes"]
+        except PreviewCancelled:
+            raise
         except _PathIssue as issue:
             retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
                                     execution=execution, container_id=container_id,
@@ -431,8 +503,11 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
         candidate_bytes += size
         retained_bytes -= size
 
+    _check_cancelled(cancelled)
     candidates.sort(key=_sort_key)
+    _check_cancelled(cancelled)
     retained.sort(key=_sort_key)
+    _check_cancelled(cancelled)
     unmeasured_retained_count = sum(1 for item in retained if "bytes" not in item)
     return {
         "schema": _SCHEMA,
@@ -453,4 +528,4 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
     }
 
 
-__all__ = ["RetentionError", "plan"]
+__all__ = ["PreviewCancelled", "RetentionError", "inspect_execution", "plan"]

@@ -86,6 +86,24 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(response, json.loads(output))
         request.assert_called_once()
 
+    def test_retention_cancel_ack_is_pending_and_blocked_is_failure(self):
+        self.enable_container_mode()
+        pid = 'plan-01234567'
+        pending = {'plan_id': pid, 'scope': 'execution', 'status': 'cancel_requested', 'applied': False}
+        with patch('local_runner.container_client.request', return_value=pending) as request:
+            code, output, errors = self.run_client('retention-cancel', pid)
+        self.assertEqual(124, code, errors)
+        self.assertEqual(pending, json.loads(output))
+        request.assert_called_once_with(self.layout, owner='alice', method='POST',
+                                        path=f'/api/v1/retention/plans/{pid}/cancel', payload={})
+
+        blocked = {'plan_id': pid, 'scope': 'execution', 'status': 'blocked',
+                   'applied': False, 'error': 'retention_operation_not_cancellable'}
+        with patch('local_runner.container_client.request', return_value=blocked):
+            code, output, errors = self.run_client('retention-cancel', pid)
+        self.assertEqual(1, code, errors)
+        self.assertEqual(blocked, json.loads(output))
+
     def test_status_never_exposes_lease(self):
         queue = JobQueue(self.root / 'index' / 'runner-jobs.sqlite')
         job = queue.submit(owner='alice', worktree_id='wt', source_digest='a' * 64,

@@ -3,31 +3,43 @@
 
 **Cały cel S00–S12 pozostaje aktywny.** Poniższa tabela opisuje aktualny
 stan; dalsze checkpointy zachowują historię i nie zastępują bieżących dowodów.
-Remote HEAD: c458f57b2769e44492e066b285d7a8a67c34b932. CI37408473006
-zakończone8/8jobs PASS, w tym waveguide_frame/waveguide_mesh i8 identity
-regresji. Public documentation CI37408473007 również PASS.
+Ostatni wypchnięty HEAD: b62e4146f60e06a73608c318c47531f1de936e2b.
+CI37414170967: 7/8 jobs PASS; Rust FAIL w istniejącej regresji
+`unknown_resource_fields_are_not_discarded`. Wszystkie31 nowych regresji
+StudyIRV04 PASS. Przyczyna: internally-tagged unit variants ignorowały pola
+mimo deny_unknown_fields. Lokalna poprawka b3ea8da1c35ae44c9b6f5416ddaf5a10bb39569a
+zachowuje publiczny wire/defaulty i egzekwuje ścisłe Deserialize przez prywatne
+empty-struct variants Local/SingleProcess. Source review/parser PASS;
+wykonanie poprawionych regresji wymaga świeżego CI.
 
 | Zakres | Potwierdzone | Pozostaje |
 |---|---|---|
-| Źródła/CI | Rust, Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS | Świeży managed runtime dla nowej polityki NCV; source CI nie jest walidacją eigensolve |
+| Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | Świeże CI po poprawce parsera ComputeResources oraz managed runtime dla NCV4; source CI nie jest walidacją eigensolve |
 | Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Nowy attested build, pełny window certificate Γ, potem15 punktów i sprawdzony wykres |
 | Adaptive k pool | Poprawka exit telemetry, deterministyczny plan digest i kontrakty CI | Rzeczywisty świeży przebieg, pomiary CPU/RAM i serial/adaptive parity |
 | Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Pełna scoped kompozycja lower bounds i runtime consumer regionalnych minima pozostają oddzielnymi lukami |
-| S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,31 nowych regresji CI pending; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
+| S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,31 nowych regresji CI PASS; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
 | Nauka | Wstępne benchmarki i analityczne oracles nie domykają kwalifikacji | DE/BV, zbieżności siatki/airboxu/liczby modów, identyczny COMSOL A1 i GPU |
 | GUI/integracja | Frontend/browser fixture CI PASS; PR97 otwarty | Rzeczywisty workspace z modelem/wynikami, pełne review/science gates, merge i bezpieczne cleanup worktree |
 
 Build235 d6482966a2404d6d933a6708cdf3466d anulowano przed wykonaniem: exact070d277a8
 nie zawiera NCV4. Dane i kapsuła zachowane; obserwator zakończył się terminalnie.
 Następny runtime przypięty do sprawdzonego c458; recepta przygotowana, nowy job
-niezgłoszony przy krytycznie niskim storage. Ostatni pomiar725196800B (~0.73GB)
-przy progu8GiB. Pełny wcześniejszy build zużył około27GB. Ponadto własny
-read-only preview execution inventory zajmuje wspólny build slot; ma postęp (obecnie43/235)
+niezgłoszony podczas wcześniejszej blokady storage. Po odciążeniu dysku pomiar14367903744B (~14.4GB),
+przy progu8GiB. Pełny dysk wcześniej zablokował zapis; ucięty plik
+compute_resources.rs odtworzono dokładnie z commita przed poprawką. Pełny wcześniejszy build zużył około27GB. Ponadto własny
+read-only preview execution inventory przy ostatnim odczycie zajmował wspólny
+build slot; ostatni potwierdzony postęp60/235. Nowy odczyt health jeszcze
+niezakończony; brak podstaw do deklaracji aktualnego stanu koordynatora. Postęp
 między jobami, a nie wewnątrz wielomilionowego drzewa. Nie przypisujemy mu spadku
 miejsca bez dowodu. Nie uruchamiamy równoległego inventory ani apply bez zgody.
 Upload dwóch synthetic failure artifacts nadal nieaktywny po odmowie auto-review;
 aktualny density test już przechodzi, więc jest to opcjonalna diagnostyka przyszłych
-błędów. Pytania o miejsce i upload pozostają po stronie użytkownika.
+błędów. Zwolnienie miejsca potwierdzono, ale sam próg8GiB nie gwarantuje miejsca
+na pełny build. Potrzebny ponowny health/storage preflight. Upload pozostaje
+nieaktywny. Przygotowany cooperative cancel execution preview ma źródłowe
+review i kompletne regresje obu race boundaries; AST11files/YAML PASS,
+wykonanie w CI oraz aktualizacja runnera nadal NOT VERIFIED.
 <!-- current-eigensolve-status-end -->
 
 <!-- master1bdb-integration-20261006 -->

@@ -1001,6 +1001,9 @@ class Application:
     def retention_plan_apply(self, plan_id):
         return self.retention_service.apply(plan_id)
 
+    def retention_plan_cancel(self, plan_id):
+        return self.retention_service.cancel(plan_id)
+
     def retention_plan_get(self, plan_id):
         return self.retention_service.get(plan_id)
 
@@ -1111,7 +1114,8 @@ def main():
         'submit', 'list', 'get', 'logs', 'cancel', 'stop', 'health', 'resume', 'retention',
         'overview', 'paginated_jobs', 'job_detail', 'job_events', 'job_metrics', 'job_resources',
         'storage_volumes', 'storage_resources', 'processes', 'alerts', 'events',
-        'retention_plan_preview', 'retention_plan_apply', 'retention_plan_get', 'get_retention_policy',
+        'retention_plan_preview', 'retention_plan_apply', 'retention_plan_cancel',
+        'retention_plan_get', 'get_retention_policy',
         'put_retention_policy', 'pin_resource',
     )
     callbacks = {name: getattr(app, name) for name in callback_names}

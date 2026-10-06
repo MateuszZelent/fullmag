@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from local_runner.observability import ObservabilityHub
+from local_runner.retention import PreviewCancelled
 from local_runner.retention_service import RetentionService
 
 
@@ -51,6 +52,7 @@ class RetentionServiceTests(unittest.TestCase):
             self.finish()
         pid = accepted['plan_id']
         self.assertEqual('preview', self.service.get(pid)['status'])
+        self.assertEqual('preview', self.service.cancel(pid)['status'])
         self.assertEqual('accepted', self.service.apply(pid)['status'])
         self.finish()
         result = self.service.get(pid)
@@ -180,7 +182,7 @@ class RetentionServiceTests(unittest.TestCase):
     def test_execution_scope_filters_before_scan_and_persists_real_progress(self):
         selected = ['a' * 32]
         entered, release = threading.Event(), threading.Event()
-        def inventory(*, queue, job_ids, progress):
+        def inventory(*, queue, job_ids, progress, cancelled):
             self.assertEqual(selected, job_ids)
             progress({'processed_jobs': 0, 'total_jobs': 1, 'current_job_id': selected[0]})
             entered.set()
@@ -196,6 +198,210 @@ class RetentionServiceTests(unittest.TestCase):
             release.set()
             self.finish()
         self.assertEqual(observed['created_at'], self.service.get(accepted['plan_id'])['created_at'])
+
+    def test_execution_preview_cancel_ack_is_cooperative_and_keeps_build_slot_busy(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def inventory(*, queue, job_ids, progress, cancelled):
+            progress({
+                'processed_jobs': 1,
+                'total_jobs': 3,
+                'current_job_id': 'a' * 32,
+                'tree_phase': 'stat',
+                'tree_entries_enumerated': 7,
+                'tree_stat_entries': 4,
+                'tree_files': 2,
+                'tree_logical_bytes': 11,
+            })
+            entered.set()
+            self.assertTrue(release.wait(5))
+            if cancelled.is_set():
+                raise PreviewCancelled()
+            return {'status': 'preview', 'candidates': [{'resource_id': 'partial'}],
+                    'raw_engine_plan': {'candidates': [{'partial': True}]}}
+
+        with patch.object(self.hub, 'generate_retention_plan', side_effect=inventory):
+            accepted = self.service.preview()
+            self.assertTrue(entered.wait(2))
+            wrong_plan = self.service.cancel('plan-01234567')
+            self.assertEqual('blocked', wrong_plan['status'])
+            self.assertEqual('retention_plan_not_found', wrong_plan['error'])
+            self.assertEqual('planning', self.service.get(accepted['plan_id'])['status'])
+            acknowledgement = self.service.cancel(accepted['plan_id'])
+            self.assertEqual('cancel_requested', acknowledgement['status'])
+            self.assertFalse(acknowledgement['applied'])
+            self.assertTrue(self.service.busy)
+            self.assertEqual(7, acknowledgement['tree_entries_enumerated'])
+            with self.service.build_slot() as admitted:
+                self.assertFalse(admitted)
+            self.assertEqual('cancel_requested', self.service.cancel(accepted['plan_id'])['status'])
+            release.set()
+            self.finish()
+
+        cancelled = self.service.get(accepted['plan_id'])
+        self.assertEqual('cancelled', cancelled['status'])
+        self.assertFalse(cancelled['applied'])
+        self.assertNotIn('candidates', cancelled)
+        self.assertNotIn('raw_engine_plan', cancelled)
+        self.assertEqual('cancelled', self.service.cancel(accepted['plan_id'])['status'])
+        self.assertEqual('blocked', self.service.apply(accepted['plan_id'])['status'])
+
+    def test_cancel_wins_after_complete_hub_plan_before_service_publication(self):
+        import time
+
+        job_id = 'e' * 32
+        finished_at = time.time() - 48 * 3600
+        job = {
+            'job_id': job_id,
+            'owner': 'operator',
+            'worktree_id': 'wt',
+            'source_digest': 'c' * 64,
+            'state': 'succeeded',
+            'updated_at': finished_at,
+        }
+        self.queue.list = lambda **kwargs: [job]
+        run = self.root / 'runs' / 'wt' / job_id
+        execution = run / 'execution'
+        execution.mkdir(parents=True)
+        (execution / 'result.bin').write_bytes(b'complete candidate')
+        (run / 'coordinator.json').write_text(json.dumps({
+            'schema': 'fullmag.local-runner.coordinator.v1',
+            'job_id': job_id,
+            'owner': 'operator',
+            'worktree_id': 'wt',
+            'source_digest': 'c' * 64,
+            'container_id': 'd' * 64,
+            'state': 'succeeded',
+            'finished_at': finished_at,
+        }), encoding='utf-8')
+
+        hub_returned = threading.Event()
+        release_service = threading.Event()
+        complete_plans = []
+        original_generate = self.hub.generate_retention_plan
+
+        def after_hub_return(**kwargs):
+            complete = original_generate(**kwargs)
+            complete_plans.append(complete)
+            hub_returned.set()
+            self.assertTrue(release_service.wait(5))
+            return complete
+
+        with patch.object(self.hub, 'generate_retention_plan', side_effect=after_hub_return), \
+                patch('local_runner.retention_service.apply_execution_plan') as apply_executor:
+            accepted = self.service.preview()
+            try:
+                self.assertTrue(hub_returned.wait(2))
+                complete = complete_plans[0]
+                self.assertEqual(1, complete['candidates_count'])
+                self.assertEqual(1, len(complete['raw_engine_plan']['candidates']))
+                with self.hub._lock:
+                    self.assertNotIn(complete['plan_id'], self.hub._plans)
+
+                acknowledgement = self.service.cancel(accepted['plan_id'])
+                self.assertEqual('cancel_requested', acknowledgement['status'])
+                self.assertTrue(self.service.busy)
+                self.assertNotIn('candidates', self.service.get(accepted['plan_id']))
+                self.assertNotIn('raw_engine_plan', self.service.get(accepted['plan_id']))
+                with self.service.build_slot() as admitted:
+                    self.assertFalse(admitted)
+            finally:
+                release_service.set()
+                self.finish()
+
+            cancelled = self.service.get(accepted['plan_id'])
+            self.assertEqual('cancelled', cancelled['status'])
+            self.assertFalse(cancelled['applied'])
+            self.assertNotIn('candidates', cancelled)
+            self.assertNotIn('raw_engine_plan', cancelled)
+            with self.hub._lock:
+                self.assertNotIn(complete_plans[0]['plan_id'], self.hub._plans)
+            self.assertEqual('blocked', self.service.apply(accepted['plan_id'])['status'])
+            apply_executor.assert_not_called()
+            self.assertFalse(self.service.busy)
+
+    def test_cancel_requested_without_a_live_handle_reconciles_unknown(self):
+        pid = 'plan-abcdef12'
+        self.service._save({'plan_id': pid, 'scope': 'execution', 'status': 'cancel_requested',
+                            'applied': False, 'tree_stat_entries': 5})
+
+        result = self.service.get(pid)
+
+        self.assertEqual('interrupted_unknown', result['status'])
+        self.assertFalse(result['applied'])
+        self.assertEqual('interrupted_unknown', self.service.get(pid)['status'])
+
+    def test_cancel_refuses_sources_and_runtime_previews(self):
+        for scope in ('sources', 'runtime'):
+            with self.subTest(scope=scope):
+                entered, release = threading.Event(), threading.Event()
+
+                def inventory(*args, **kwargs):
+                    entered.set()
+                    self.assertTrue(release.wait(5))
+                    return {'status': 'preview', 'scope': scope, 'candidates': [], 'retained': []}
+
+                target = ('local_runner.storage_maintenance.plan_source_compaction' if scope == 'sources'
+                          else 'local_runner.runtime_retention.plan_runtime_cleanup')
+                with patch(target, side_effect=inventory):
+                    accepted = self.service.preview(scope=scope)
+                    self.assertTrue(entered.wait(2))
+                    response = self.service.cancel(accepted['plan_id'])
+                    self.assertEqual('blocked', response['status'])
+                    self.assertEqual('retention_scope_not_cancellable', response['error'])
+                    release.set()
+                    self.finish()
+                completed = self.service.cancel(accepted['plan_id'])
+                self.assertEqual('blocked', completed['status'])
+                self.assertEqual('retention_scope_not_cancellable', completed['error'])
+
+    def test_cancel_refuses_manual_apply(self):
+        accepted = self.service.preview()
+        self.finish()
+        entered, release = threading.Event(), threading.Event()
+
+        def apply(plan, *args, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            return {'plan_id': plan['plan_id'], 'status': 'succeeded', 'applied': True}
+
+        with patch('local_runner.retention_service.apply_execution_plan', side_effect=apply):
+            self.assertEqual('accepted', self.service.apply(accepted['plan_id'])['status'])
+            self.assertTrue(entered.wait(2))
+            response = self.service.cancel(accepted['plan_id'])
+            self.assertEqual('blocked', response['status'])
+            self.assertEqual('retention_operation_not_cancellable', response['error'])
+            release.set()
+            self.finish()
+
+    def test_automatic_preview_transitions_to_apply_before_cancel_can_claim_it(self):
+        self.hub.set_retention_policy({'mode': 'automatic'})
+        scan_entered, scan_release = threading.Event(), threading.Event()
+        apply_entered, apply_release = threading.Event(), threading.Event()
+
+        def inventory(*, queue, job_ids, progress, cancelled):
+            scan_entered.set()
+            self.assertTrue(scan_release.wait(5))
+            if cancelled.is_set():
+                raise PreviewCancelled()
+            return {'candidates': [], 'retained': [], 'status': 'preview'}
+
+        def apply(plan, *args, **kwargs):
+            apply_entered.set()
+            self.assertTrue(apply_release.wait(5))
+            return {'plan_id': plan['plan_id'], 'status': 'succeeded', 'applied': True}
+
+        with patch.object(self.hub, 'generate_retention_plan', side_effect=inventory), \
+                patch('local_runner.retention_service.apply_execution_plan', side_effect=apply):
+            accepted = self.service.preview(automatic=True)
+            self.assertTrue(scan_entered.wait(2))
+            scan_release.set()
+            self.assertTrue(apply_entered.wait(2))
+            response = self.service.cancel(accepted['plan_id'])
+            self.assertEqual('blocked', response['status'])
+            self.assertEqual('retention_operation_not_cancellable', response['error'])
+            apply_release.set()
+            self.finish()
 
     def test_scope_and_selection_validation_precedes_background_work(self):
         for kwargs in ({'scope': 'all'}, {'scope': 'sources', 'job_ids': []},

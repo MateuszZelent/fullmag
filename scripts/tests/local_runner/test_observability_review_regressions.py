@@ -3,14 +3,51 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from local_runner.observability import ObservabilityHub, build_job_timeline, _probe_docker_root
+from local_runner.retention import PreviewCancelled
 
 
 class StorageReviewTests(unittest.TestCase):
+    def test_cancellable_hub_preview_propagates_orphan_scan_cancel_without_cache(self):
+        from itertools import count
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            orphan = root / 'runs' / 'orphan-wt' / 'orphan-job' / 'execution'
+            orphan.mkdir(parents=True)
+            (orphan / 'result.bin').write_bytes(b'protected')
+            hub = ObservabilityHub(root)
+
+            cancellable = threading.Event()
+            complete = hub.generate_retention_plan(cancelled=cancellable)
+            self.assertEqual('preview', complete['status'])
+            with hub._lock:
+                self.assertNotIn(complete['plan_id'], hub._plans)
+
+            cancelled = threading.Event()
+            updates = []
+
+            def progress(fields):
+                updates.append(dict(fields))
+                if fields.get('orphan_worktrees_enumerated') == 1:
+                    cancelled.set()
+
+            ticks = count()
+            with patch('local_runner.observability.time.monotonic',
+                       side_effect=lambda: float(next(ticks))):
+                with self.assertRaises(PreviewCancelled):
+                    hub.generate_retention_plan(cancelled=cancelled, progress=progress)
+
+            self.assertTrue(cancelled.is_set())
+            self.assertTrue(any(item.get('orphan_worktrees_enumerated') == 1 for item in updates))
+            with hub._lock:
+                self.assertEqual({}, hub._plans)
+
     def test_unknown_docker_backing_does_not_substitute_host_root(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -31,7 +31,7 @@ def main(argv=None):
     preview = sub.add_parser('retention-preview')
     preview.add_argument('--scope', choices=('execution', 'sources', 'runtime'), default='execution')
     preview.add_argument('--job-id', action='append', default=None)
-    for action in ('retention-get', 'retention-apply'):
+    for action in ('retention-get', 'retention-apply', 'retention-cancel'):
         command = sub.add_parser(action)
         command.add_argument('plan_id')
     container_config = sub.add_parser('container-configure')
@@ -86,7 +86,7 @@ def main(argv=None):
             raise QueueError('No runner jobs have been submitted')
         owner = getpass.getuser()
         container_mode = (storage / 'index' / 'local-runner-container.json').exists()
-        if args.action in ('retention-preview', 'retention-get', 'retention-apply'):
+        if args.action in ('retention-preview', 'retention-get', 'retention-apply', 'retention-cancel'):
             if not container_mode:
                 raise QueueError('Maintenance requires the container coordinator')
             from local_runner.container_client import request
@@ -103,8 +103,11 @@ def main(argv=None):
                 path = '/api/v1/retention/plans/' + args.plan_id
                 if args.action == 'retention-apply':
                     path += '/apply'
-                result = request(layout, owner=owner, method='POST' if args.action == 'retention-apply' else 'GET',
-                                 path=path, payload={} if args.action == 'retention-apply' else None)
+                elif args.action == 'retention-cancel':
+                    path += '/cancel'
+                mutation = args.action in ('retention-apply', 'retention-cancel')
+                result = request(layout, owner=owner, method='POST' if mutation else 'GET',
+                                 path=path, payload={} if mutation else None)
         elif args.action == 'retention-plan':
             if not container_mode:
                 raise QueueError('Retention inventory requires the container coordinator')
@@ -257,6 +260,13 @@ def main(argv=None):
                 queue.cancel(args.job_id, owner)
                 result = queue.get(args.job_id)
         print(json.dumps(result, indent=2))
+        if args.action == 'retention-cancel':
+            status = result.get('status')
+            if status == 'cancelled':
+                return 0
+            if status == 'cancel_requested':
+                return 124
+            return 1
         if args.action in ('retention-preview', 'retention-apply') and result.get('status') in (
                 'blocked', 'failed', 'partial', 'interrupted_unknown'):
             return 1
