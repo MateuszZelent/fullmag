@@ -2427,6 +2427,18 @@
       "path": "packages/fullmag-py/tests/test_problem_ir.py",
       "symbol": "test_save_all_modes_has_explicit_intent_without_assumed_raw_ids",
       "responsibility": "Executed Python contract checks; not managed runtime evidence"
+    },
+    {
+      "id": "source-gamma-window-basis-trial",
+      "path": "scripts/de_gamma_krylov_trial.py",
+      "symbol": "_validate_window_basis_policy",
+      "responsibility": "Validate actual queried EPS dimensions for exact requested window policy; configuration proof only"
+    },
+    {
+      "id": "source-gamma-window-basis-trial-tests",
+      "path": "scripts/test_de_gamma_krylov_trial.py",
+      "symbol": "class GammaWindowBasisPolicyTests",
+      "responsibility": "Prepared measured-dimension mutation regressions; executed only in GitHub Actions"
     }
   ],
   "public_api": {

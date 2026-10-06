@@ -214,6 +214,24 @@ def _require_matching_query(expected, actual, name):
             raise ValueError(f"{name}.{field} disagrees with the sample/global query")
 
 
+def _validate_window_basis_policy(window, query, split_dimension, multiplier, name):
+    """Bind declared window dimensions to actual EPS queries, not source intent."""
+    nev = _required_integer(window.get("requested_nev"), f"{name}.requested_nev", minimum=1)
+    ncv = _required_integer(window.get("requested_ncv"), f"{name}.requested_ncv", minimum=1)
+    if nev >= split_dimension:
+        raise ValueError(f"{name}.requested_nev must leave a proper Krylov subspace")
+    expected_ncv = min(split_dimension, max(nev + 1, multiplier * nev))
+    if ncv != expected_ncv:
+        raise ValueError(f"{name}.requested_ncv disagrees with the requested window policy")
+    dimensions = query.get("eps_dimensions")
+    if dimensions is None or dimensions.get("query_succeeded") is not True:
+        raise ValueError(f"{name} requires a successful actual EPS dimension query")
+    if dimensions["nev"] != nev or dimensions["ncv"] != ncv:
+        raise ValueError(f"{name}.eps_dimensions disagree with the declared window dimensions")
+    if dimensions["mpd"] <= 0 or dimensions["mpd"] > ncv:
+        raise ValueError(f"{name}.eps_dimensions.mpd is outside the resolved subspace")
+
+
 def validate_gamma_krylov_trial(
     case_dir: Path,
     sampling: str,
@@ -222,12 +240,20 @@ def validate_gamma_krylov_trial(
     *,
     eps_prefilter: str | None = None,
     gmres_restart: str | None = None,
+    expected_window_krylov_policy: str | None = None,
 ):
     """Validate actual K0 EPS/ST queries without claiming residual or physics acceptance."""
     if not isinstance(sampling, str) or sampling not in SAMPLING:
         raise ValueError("Gamma Krylov trial has an unknown sampling name")
     if not isinstance(requested_type, str) or requested_type not in _KSP_TYPES:
         raise ValueError("Gamma Krylov requested_type must be gmres or fgmres")
+
+    policies = {"bounded_double_nev_v1": 2, "bounded_quadruple_nev_window_v2": 4}
+    if expected_window_krylov_policy is not None and (
+        not isinstance(expected_window_krylov_policy, str)
+        or expected_window_krylov_policy not in policies
+    ):
+        raise ValueError("unsupported expected_window_krylov_policy")
 
     requested_rtol_value = _required_positive_request(requested_rtol, "requested_rtol")
     requested_eps_value = _required_positive_request(eps_prefilter, "eps_prefilter")
@@ -306,6 +332,9 @@ def validate_gamma_krylov_trial(
         )
         if certificate.get("schema_version") != _WINDOW_CERTIFICATE_SCHEMA:
             raise ValueError(f"sample {sample_index} has an unsupported window certificate")
+        if expected_window_krylov_policy is not None:
+            if certificate.get("krylov_subspace_policy") != expected_window_krylov_policy:
+                raise ValueError(f"sample {sample_index} window Krylov policy disagrees with the request")
         planned_by_pass = {}
         for pass_name, schedule_field in _WINDOW_PASSES:
             schedule = _required_object(
@@ -348,6 +377,11 @@ def validate_gamma_krylov_trial(
                 split_dof_count,
             )
             _require_matching_query(sample_query, window_query, f"{name}.modal_krylov_tuning")
+            if expected_window_krylov_policy is not None:
+                _validate_window_basis_policy(
+                    window, window_query, split_dof_count,
+                    policies[expected_window_krylov_policy], name,
+                )
             accepted_windows.append({"pass": pass_name, "subwindow_index": subwindow_index, **window_query})
         for pass_name, planned_count in planned_by_pass.items():
             if seen_by_pass[pass_name] != set(range(planned_count)):
@@ -385,6 +419,8 @@ def validate_gamma_krylov_trial(
             "frequency, physical residual, equilibrium, and convergence gates",
         ],
     }
+    if expected_window_krylov_policy is not None:
+        report["expected_window_krylov_policy"] = expected_window_krylov_policy
     if global_query is not None and "eps_dimensions" in global_query:
         report["eps_dimensions"] = global_query["eps_dimensions"]
     return report

@@ -487,5 +487,60 @@ class GammaKrylovTrialTests(unittest.TestCase):
                 self._validate(case)
 
 
+class GammaWindowBasisPolicyTests(unittest.TestCase):
+    POLICY = "bounded_quadruple_nev_window_v2"
+
+    def fixture(self):
+        value = _diagnostics()
+        value["q_dof_count"] = 32
+        value["window_certificate"]["krylov_subspace_policy"] = self.POLICY
+        for window in value["subwindows"]:
+            nev = 4 if window["pass"] == "base" else 8
+            window["requested_nev"] = nev
+            window["requested_ncv"] = 4 * nev
+            window["modal_krylov_tuning"]["eps_dimensions"] = _eps_dimensions(
+                nev=nev, ncv=4 * nev, mpd=4 * nev,
+            )
+        return value
+
+    def validate(self, value, policy=None):
+        with TemporaryDirectory() as tmp:
+            case = _write_case(tmp, value)
+            return trial.validate_gamma_krylov_trial(
+                case, "k0", "fgmres", "1e-9",
+                eps_prefilter="1e-9", gmres_restart="8",
+                expected_window_krylov_policy=self.POLICY if policy is None else policy,
+            )
+
+    def test_accepts_actual_base_and_refined_dimensions(self):
+        report = self.validate(self.fixture())
+        self.assertEqual(report["expected_window_krylov_policy"], self.POLICY)
+        self.assertEqual(report["by_sample"][0]["subwindow_count"], 50)
+        self.assertEqual(report["qualification"], "NOT VERIFIED")
+
+    def test_rejects_old_policy_mislabeled_or_unmeasured_basis(self):
+        for mutation in ("old_policy", "old_declared_basis", "wrong_actual_basis", "missing_query", "failed_query", "invalid_mpd", "unknown_policy"):
+            with self.subTest(mutation=mutation):
+                value = self.fixture()
+                window = value["subwindows"][0]
+                policy = None
+                if mutation == "old_policy":
+                    value["window_certificate"]["krylov_subspace_policy"] = "bounded_double_nev_v1"
+                elif mutation == "old_declared_basis":
+                    window["requested_ncv"] = 8
+                elif mutation == "wrong_actual_basis":
+                    window["modal_krylov_tuning"]["eps_dimensions"]["ncv"] = 8
+                elif mutation == "missing_query":
+                    del window["modal_krylov_tuning"]["eps_dimensions"]
+                elif mutation == "failed_query":
+                    window["modal_krylov_tuning"]["eps_dimensions"] = _eps_dimensions(query_succeeded=False, nev=None, ncv=None, mpd=None)
+                elif mutation == "invalid_mpd":
+                    window["modal_krylov_tuning"]["eps_dimensions"]["mpd"] = 0
+                else:
+                    policy = "invented"
+                with self.assertRaises(ValueError):
+                    self.validate(value, policy)
+
+
 if __name__ == "__main__":
     unittest.main()

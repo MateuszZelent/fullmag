@@ -11361,9 +11361,79 @@ class RegionMeshPolicyTests(unittest.TestCase):
         median_region = np.median(region_edge_lengths)
         median_bulk = np.median(bulk_edge_lengths)
 
-        # Assert localized refinement inside the region
-        self.assertLessEqual(median_region, 5e-9)
-        self.assertGreaterEqual(median_bulk, 10e-9)
+        # Write failure evidence locally only when explicitly configured.
+        try:
+            self.assertLessEqual(median_region, 5e-9)
+            self.assertGreaterEqual(median_bulk, 10e-9)
+        except AssertionError as density_error:
+            artifact_root = os.environ.get("FULLMAG_MESH_FAILURE_ARTIFACT_DIR")
+            if artifact_root:
+                try:
+                    import hashlib
+                    import importlib.metadata
+
+                    artifact_dir = Path(artifact_root) / "arch-waveguide-skyrmion-core-density"
+                    artifact_dir.mkdir(parents=True, exist_ok=True)
+                    centroids = nodes[elements].mean(axis=1)
+                    magnetic_mask = np.asarray(element_markers) == waveguide_marker
+                    cylinder_mask = ((np.hypot(centroids[:, 0], centroids[:, 1]) <= 15e-9)
+                                     & (np.abs(centroids[:, 2]) <= 5e-9))
+                    edge_slots = np.asarray([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
+                    edge_nodes = elements[:, edge_slots]
+                    edge_lengths = np.linalg.norm(nodes[edge_nodes[:, :, 0]] - nodes[edge_nodes[:, :, 1]], axis=2)
+                    mesh_path = artifact_dir / "mesh-and-roi.npz"
+                    np.savez_compressed(
+                        mesh_path, nodes_m=np.asarray(nodes), elements=np.asarray(elements),
+                        element_markers=np.asarray(element_markers), centroids_m=centroids,
+                        edge_node_indices=edge_nodes, edge_lengths_m=edge_lengths,
+                        magnetic_element_mask=magnetic_mask, finite_cylinder_element_mask=cylinder_mask,
+                        selected_roi_element_indices=np.flatnonzero(magnetic_mask & cylinder_mask),
+                        bulk_element_indices=np.flatnonzero(magnetic_mask & ~cylinder_mask),
+                        region_edge_lengths_m=np.asarray(region_edge_lengths),
+                        bulk_edge_lengths_m=np.asarray(bulk_edge_lengths),
+                    )
+
+                    def statistics(lengths: list[float]) -> dict[str, object]:
+                        values = np.asarray(lengths, dtype=np.float64)
+                        return {"count": int(values.size), "finite_count": int(np.isfinite(values).sum()),
+                                "min_m": float(values.min()), "p05_m": float(np.quantile(values, 0.05)),
+                                "median_m": float(np.median(values)), "p95_m": float(np.quantile(values, 0.95)),
+                                "max_m": float(values.max())}
+
+                    evidence = {
+                        "schema_version": "fullmag.meshing.density_failure.v1", "test": self.id(),
+                        "units": {"coordinates": "m", "edge_lengths": "m"},
+                        "inputs": {
+                            "geometry": {"kind": "arch_waveguide", "name": "waveguide",
+                                         "length": 180e-9, "width": 60e-9, "height": 40e-9, "arch_height": 0.0},
+                            "materials": [], "hints": {"engine": "fem", "order": 1, "hmax": 20e-9},
+                            "study_universe": study_universe, "mesh_workflow": mesh_workflow,
+                            "per_object_recipes": {name: recipe.to_ir() for name, recipe in per_object_recipes.items()},
+                            "resolved_gmsh_threads": _resolve_gmsh_thread_count(),
+                        },
+                        "dependencies": {name: importlib.metadata.version(name) for name in ("gmsh", "numpy", "scipy", "trimesh")},
+                        "report": report.to_dict(), "region_markers": region_markers,
+                        "selection": {
+                            "magnetic_marker": int(waveguide_marker), "cylinder_radius_m": 15e-9,
+                            "cylinder_half_height_m": 5e-9,
+                            "membership": "magnetic marker and finite-cylinder tetrahedron centroid",
+                            "edge_weighting": "six edges per tetrahedron, shared edges repeated",
+                            "roi_element_count": int((magnetic_mask & cylinder_mask).sum()),
+                            "bulk_element_count": int((magnetic_mask & ~cylinder_mask).sum()),
+                        },
+                        "thresholds": {"region_median_max_m": 5e-9, "bulk_median_min_m": 10e-9},
+                        "region_edge_statistics": statistics(region_edge_lengths),
+                        "bulk_edge_statistics": statistics(bulk_edge_lengths),
+                        "mesh_payload": {"path": mesh_path.name,
+                                         "sha256": hashlib.sha256(mesh_path.read_bytes()).hexdigest(),
+                                         "node_count": int(len(nodes)), "element_count": int(len(elements))},
+                    }
+                    (artifact_dir / "failure-evidence.json").write_text(
+                        json.dumps(evidence, indent=2, allow_nan=False) + "\n", encoding="utf-8",
+                    )
+                except Exception as artifact_error:
+                    density_error.add_note(f"could not preserve density failure artifacts: {artifact_error}")
+            raise
 
     def test_disabled_policy_invariance(self) -> None:
         try:

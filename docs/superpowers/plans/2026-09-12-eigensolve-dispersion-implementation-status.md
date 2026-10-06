@@ -7850,3 +7850,35 @@ AST obu plików i diff review PASS; wykonanie296-test meshing gate w CI wymagane
 Globalny hmin i odkrywanie całkowicie wewnętrznego małego support nie zmienione;
 pozostają przedmiotem diagnozy, jeśli właściwe pola nie dadzą wymaganej siatki.
 Poprzedni CI Python sukces nie zamyka tego produkcyjnego defektu.
+
+
+### Próba Γ i dowody realnego zagęszczenia — dalsza kwalifikacja
+
+Dodano opcjonalny expected_window_krylov_policy do istniejącego postprocessora
+Gamma: exact label, queried NEV/NCV/MPD w każdym zaplanowanym podoknie oraz
+zgodność z requested dimensions i bounded polityką. Brak parametru zachowuje
+historyczny query-only kontrakt. Nowe mutation regressions i CI gate obejmują
+brak/failed query, stary label/basis, wrong queried NCV i invalid MPD. Nie nadaje
+kwalifikacji fizycznej; AST, source review i focused scientific map PASS.
+Kontrolowana recepta k0 zachowuje okno8.5–16GHz i modelba0045fef; nie podstawia
+węższego standalone default8.5–12GHz. Nowego runtime/probe jeszcze nie uruchomiono.
+
+CI37399201738: zachowanie regionalnego field działa (applied20/3nm assertions
+PASS), ale actual median cylinder edges14.5276nm nadal przekracza5nm.
+Zapis failure-only NPZ+JSON zachowuje pełną siatkę/ROI i dokładny report/input;
+próg i finite-cylinder membership nie zmienione. Instrumentacja jest aktywna
+wyłącznie po jawnym ustawieniu CI env. To dowód do diagnosis generatora,
+nie naprawa actual density. Seeding/global minimum wymaga analizy tego mesha.
+
+Automatyczna kontrola odrzuciła upload tych dwóch plików do GitHubActions,
+podając brak bezpośredniej zgody na payload+destination. Upload nie wdrożony;
+konkretna propozycja stałego synthetic fixture i retencji7dni przygotowana
+poza repozytorium, pytanie do użytkownika oczekuje. Niezależne źródła i GammaCI
+mogą być ukończone; bez uploadu evidence runnera jest ulotne. Build235 wciąż
+queued/disk guard, brak nowego pełnego signed15/plot; S00–S12 aktywny.
+
+CI37399201738 Rust job112062315220 zakończony success: regresje registry i
+Dirichlet, kpool/adaptive_resources, writer oraz API przeszły. Generated API,
+Control Room, browser fixture, Windows, FDM i API hygiene również PASS.
+Python gate FAIL wyłącznie na actual mesh density; prywatne S09 helpery mają
+wykonany dowód CI, lecz provider/MFEM2D i runtime/nauka nadal nie są potwierdzone.

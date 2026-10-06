@@ -310,7 +310,12 @@ jobs:
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
 
+      - name: Run DE Gamma Krylov trial contracts
+        run: python scripts/test_de_gamma_krylov_trial.py -v
+
       - name: Run Python meshing tests
+        env:
+          FULLMAG_MESH_FAILURE_ARTIFACT_DIR: ${{ runner.temp }}/fullmag-mesh-failure-artifacts
         run: python -X faulthandler -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v
 
       - name: Run texture compatibility contracts

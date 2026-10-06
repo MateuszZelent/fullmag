@@ -3595,3 +3595,19 @@ original-descriptor residuals i zgodny wybrany mod. Native regression ma
 sprawdzić bounded wymiary w każdym subwindow oraz standalone nearest bez zmiany.
 Kompilacja unit tests wyłącznie CI; lokalny managed runtime-v2 nie kompiluje
 unit tests. Dopóki pełny runtime nie przejdzie, poprawka pozostaje NOT VERIFIED.
+
+
+### Kontrola rzeczywiście użytej przestrzeni w próbie Γ
+
+Prywatny postprocessor `validate_gamma_krylov_trial` ma opcjonalne
+`expected_window_krylov_policy`. Brak zachowuje historyczny kontrakt query-only;
+żądanie v2 wymaga exact policy label i skutecznego odczytu actual EPS dimensions
+w każdym podoknie, zgodnych z jego requested NEV/NCV i bounded polityką4.
+MPD musi być dodatnie i mieścić się w rzeczywistej przestrzeni. Sam SHA buildu
+ani nowy label nie zastępują tych pomiarów. Raport nadal ma NOT VERIFIED i
+nie dowodzi residualu, pełnego frequency-window certificate ani fizyki.
+
+| Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/de_gamma_krylov_trial.py | _validate_window_basis_policy | Związanie actual queried EPS dimensions z deklaracją konkretnego podokna |
+| scripts/test_de_gamma_krylov_trial.py | class GammaWindowBasisPolicyTests | Odrzucenie starej, błędnie opisanej lub niezmierzonej przestrzeni; wykonanie wyłącznie CI |
