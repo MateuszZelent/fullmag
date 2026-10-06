@@ -17,6 +17,7 @@ import fullmag_storage as storage
 
 PROFILE = "antenna-field-reader"
 SOURCES = ("tests/antenna/verify_field_convergence.py",
+           "tests/antenna/direct_quadrature_evidence.py",
            "tests/antenna/test_verify_field_convergence.py",
            "scripts/verify_antenna_field_reader.py",
            "scripts/fullmag_storage.py",

@@ -293,6 +293,23 @@ PASS. Walidator odczytał również rzeczywisty seq 33 raw/receipt/proof:
 PASS, raw niezmieniony, generated JSON/TS nie nadpisane. Pełna regeneracja
 R3 nadal wymaga terminalnego odpowiedniego buildu i jego własnego eksportu.
 
+### Niezależny czytnik artefaktów anteny — testy bez solvera
+
+`just verify-antenna-field-reader` uruchamia wyłącznie interpretowane regresje
+`tests.antenna.test_verify_field_convergence`. Przed i po wykonaniu fingerprint
+obejmuje także importowany `tests/antenna/direct_quadrature_evidence.py`;
+zmiana któregokolwiek przypiętego źródła powoduje odmowę receiptu.
+Log i terminalny receipt trafiają przez resolver do profilu
+`antenna-field-reader` w kanonicznym storage, nie do checkoutu.
+
+Testy sprawdzają syntetyczne pliki readera, nie wykonują native, LLG ani Relax.
+Receipt zachowuje `artifact_reader_only_not_native_or_physics`; nie zastępuje
+trzech publikacji native ani producer/input provenance. Rzeczywisty verifier
+wymaga direct-v3 evidence domyślnie; historyczne v1/v2 wolno wczytać wyłącznie
+przez jawne `--allow-legacy-local-estimator`, bez globalnego certyfikatu.
+Regresja samego fingerprintu jest w
+`scripts/test_verify_antenna_field_reader.py::test_imported_direct_decoder_changes_reader_fingerprint`.
+
 ### Pozostałe ograniczenia
 
 - Build/uruchomienie Fullmaga z prywatnej kopii kapsuły i jawnego execution context.

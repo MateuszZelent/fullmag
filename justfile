@@ -1851,6 +1851,10 @@ verify-fem-oersted-oet0-cpu-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oet0
 
+# Interpreted cold-reader checks only; never compiles native tests or solves fields.
+verify-antenna-field-reader:
+    {{storage_python}} "{{repo_root}}/scripts/verify_antenna_field_reader.py" --repo-root "{{repo_root}}"
+
 verify-fem-oersted-oet0-tsan-cpu-contract:
     docker compose build fem-cpu-tsan
     docker compose run --rm --no-deps fem-cpu-tsan ./scripts/run_fem_cpu_only_contract.sh oersted-oet0-tsan

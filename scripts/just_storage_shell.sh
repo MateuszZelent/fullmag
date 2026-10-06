@@ -87,6 +87,16 @@ fi
 # Admit this fixed helper before generic diagnostic substring handling, so a
 # composite command cannot use a diagnostic marker to bypass its argument check.
 case "${recipe}" in
+  *"scripts/verify_antenna_field_reader.py"*)
+    antenna_reader_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_antenna_field_reader.py" --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${antenna_reader_pattern} ]]; then
+      echo "[fullmag just] invalid antenna field-reader recipe" >&2
+      exit 2
+    fi
+    # This fixed Python-only helper owns resolver preflight, its profile lock
+    # and terminal source-bound receipt. No arbitrary command is forwarded.
+    exec "${python_cmd}" "${script_dir}/verify_antenna_field_reader.py" --repo-root "${repo_root}"
+    ;;
   *"scripts/windows/recover_runtime.py"*)
     runtime_recovery_pattern='^[^[:space:]]+ "[^"]+/scripts/windows/recover_runtime.py" --repo-root "[^"]+" --web-port "([1-9][0-9]{0,4})"$'
     if [[ ! "${recipe}" =~ ${runtime_recovery_pattern} ]]; then
