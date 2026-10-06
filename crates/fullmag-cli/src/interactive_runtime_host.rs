@@ -556,7 +556,10 @@ impl InteractiveRuntimeHost {
         };
 
         let continuation_slice = continuation_magnetization.as_deref();
-        self.ensure_base_runtime_ready(continuation_slice, live_workspace);
+        if let Err(error) = self.ensure_base_runtime_ready(continuation_slice, live_workspace) {
+            eprintln!("interactive preview runtime warning: {error}");
+            live_workspace.push_log("warn", format!("Idle live preview runtime unavailable: {error}"));
+        }
 
         if self.runtime.is_none()
             && self.dynamic_idle_preview_supported
@@ -709,7 +712,7 @@ impl InteractiveRuntimeHost {
         let display_selection = self.control.display_selection_snapshot();
         let preview_request = display_selection.preview_request();
         let materialization_request = full_field_materialization_request(preview_request.clone());
-        self.ensure_base_runtime_ready(continuation_magnetization, live_workspace);
+        self.ensure_base_runtime_ready(continuation_magnetization, live_workspace)?;
 
         if let Some(runtime) = self.runtime.as_mut() {
             refresh_interactive_preview_runtime_display(
@@ -746,14 +749,15 @@ impl InteractiveRuntimeHost {
         continuation_magnetization: Option<&[[f64; 3]]>,
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
-        self.ensure_base_runtime_ready(continuation_magnetization, live_workspace);
+        self.ensure_base_runtime_ready(continuation_magnetization, live_workspace)?;
 
-        if let Some(runtime) = self.runtime.as_mut() {
-            let step_stats = runtime.snapshot_step_stats()?;
-            live_workspace.update(|state| {
-                apply_step_stats_to_idle_live_state(state, &step_stats);
-            });
-        }
+        let runtime = self.runtime.as_mut().ok_or_else(|| {
+            anyhow!("Energy snapshots are unavailable for the current interactive backend")
+        })?;
+        let step_stats = runtime.snapshot_step_stats()?;
+        live_workspace.update(|state| {
+            apply_step_stats_to_idle_live_state(state, &step_stats);
+        });
 
         Ok(())
     }
@@ -824,6 +828,8 @@ impl InteractiveRuntimeHost {
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
         validate_imported_magnetization(&self.base_problem, &magnetization)?;
+        self.ensure_base_runtime_ready(Some(&magnetization), live_workspace)?;
+
         let generation = if let Ok(mut preview_state) = self.preview_source.lock() {
             preview_state.status = InteractivePreviewStatus::AwaitingCommand;
             preview_state.continuation_magnetization = Some(magnetization.clone());
@@ -832,13 +838,6 @@ impl InteractiveRuntimeHost {
         } else {
             0
         };
-
-        self.ensure_base_runtime_ready(Some(&magnetization), live_workspace);
-        if let Some(runtime) = self.runtime.as_mut() {
-            runtime
-                .upload_magnetization(&magnetization)
-                .map_err(|error| anyhow!(error.to_string()))?;
-        }
 
         live_workspace.update(|state| {
             state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
@@ -876,43 +875,30 @@ impl InteractiveRuntimeHost {
         &mut self,
         continuation_magnetization: Option<&[[f64; 3]]>,
         live_workspace: &LocalLiveWorkspace,
-    ) {
+    ) -> Result<()> {
         if !self.runtime_capable {
-            return;
+            return Ok(());
         }
 
         if self.runtime.is_none() {
-            match create_interactive_preview_runtime_from_problem(
+            let runtime = create_interactive_preview_runtime_from_problem(
                 &self.base_problem,
                 continuation_magnetization,
-            ) {
-                Ok(runtime) => {
-                    self.runtime = Some(runtime);
-                    self.publish_runtime_engine_metadata(live_workspace);
-                }
-                Err(error) => {
-                    eprintln!("interactive preview runtime warning: {}", error);
-                    live_workspace.push_log(
-                        "warn",
-                        format!("Idle live preview runtime unavailable: {}", error),
-                    );
-                    return;
-                }
-            }
+            )
+            .context("Idle live preview runtime unavailable")?;
+            self.runtime = Some(runtime);
+            self.publish_runtime_engine_metadata(live_workspace);
         } else if let (Some(runtime), Some(magnetization)) =
             (self.runtime.as_mut(), continuation_magnetization)
         {
             if let Err(error) = runtime.upload_magnetization(magnetization) {
-                eprintln!("interactive preview runtime warning: {}", error);
-                live_workspace.push_log(
-                    "warn",
-                    format!("Idle live preview runtime resync failed: {}", error),
-                );
                 self.runtime = None;
+                return Err(anyhow!("Idle live preview runtime resync failed: {error}"));
             } else {
                 self.publish_runtime_engine_metadata(live_workspace);
             }
         }
+        Ok(())
     }
 
     fn publish_runtime_engine_metadata(&self, live_workspace: &LocalLiveWorkspace) {
