@@ -2281,7 +2281,7 @@ def _strip_overridden_geometry_fields(
     existing_fields: list[dict[str, object]],
     per_object_recipes: dict[str, PerObjectMeshRecipe],
 ) -> list[dict[str, object]]:
-    """Remove runtime workflow size fields for geometries overridden by recipes.
+    """Remove geometry-owned workflow fields replaced by per-object recipes.
 
     This ensures that when a recipe specifies a *coarser* hmax than the workflow,
     the finer workflow field is removed so Gmsh's ``Min`` background-field rule
@@ -2299,9 +2299,14 @@ def _strip_overridden_geometry_fields(
     if not overridden_names:
         return existing_fields
 
+    # Explicit region policies refine their owner independently of its bulk recipe.
+    # Preserve their authored support and target instead of silently removing them.
     def _is_overridden(field: dict[str, object]) -> bool:
         params = field.get("params")
         if not isinstance(params, dict):
+            return False
+        # Match the source taxonomy used by the realized-field report.
+        if (field.get("source") or params.get("Source")) == "region_mesh_policy":
             return False
         geom_name = params.get("GeometryName")
         if isinstance(geom_name, str) and geom_name in overridden_names:

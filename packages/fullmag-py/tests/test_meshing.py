@@ -9086,6 +9086,57 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         # so effective_hmax must be at least 200 nm.
         self.assertGreaterEqual(resolved.effective_hmax, 200e-9)
 
+    def test_recipe_replaces_bulk_fields_without_removing_region_owned_refinement(self) -> None:
+        from fullmag.meshing.asset_pipeline import _strip_overridden_geometry_fields
+
+        geometry = fm.Box(100e-9, 100e-9, 40e-9, name="left")
+        options = _mesh_options_from_runtime_metadata(
+            {
+                "per_geometry": [{"geometry": "left", "bulk_hmax": 8e-9}],
+                "mesh_options": {
+                    "scene_problem_patch": {
+                        "object_regions": [{
+                            "owner_object": "left",
+                            "enabled": True,
+                            "shape": {
+                                "kind": "cylinder", "radius": 15e-9, "height": 10e-9,
+                                "center": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0],
+                            },
+                            "mesh_policy": {
+                                "maximum_element_size": 3e-9, "minimum_element_size": 1.5e-9,
+                                "transition_distance": 5e-9, "order": 1,
+                            },
+                        }],
+                    },
+                },
+            },
+            geometries=[geometry],
+            default_hmax=50e-9,
+            component_aware=True,
+        )
+        fields = list(options.size_fields)
+        region_fields = [field for field in fields if field["params"].get("Source") == "region_mesh_policy"]
+        bulk_fields = [field for field in fields if field["kind"] == "ComponentVolumeConstant"]
+        self.assertEqual(len(region_fields), 1)
+        self.assertEqual(len(bulk_fields), 1)
+        foreign_field = {
+            "kind": "ComponentVolumeConstant",
+            "params": {"GeometryName": "right", "VIn": 7e-9, "VOut": 1.0},
+        }
+        for recipe_name in ("left", "left_geom"):
+            with self.subTest(recipe_name=recipe_name):
+                stripped = _strip_overridden_geometry_fields(
+                    fields + [foreign_field],
+                    {recipe_name: PerObjectMeshRecipe(hmax=20e-9)},
+                )
+                self.assertNotIn(bulk_fields[0], stripped)
+                self.assertIn(region_fields[0], stripped)
+                self.assertIs(next(field for field in stripped if field is region_fields[0]), region_fields[0])
+                self.assertEqual(region_fields[0]["params"]["VIn"], 3e-9)
+                self.assertEqual(region_fields[0]["params"]["Radius"], 15e-9)
+                self.assertEqual(region_fields[0]["params"]["Height"], 10e-9)
+                self.assertIn(foreign_field, stripped)
+
     def test_recipe_can_coarsen_workflow_field_stack_for_same_geometry(self) -> None:
         """When recipe wants a coarser mesh, workflow fields for that geometry
         should be removed so the recipe field actually takes effect (A3)."""
@@ -11251,9 +11302,26 @@ class RegionMeshPolicyTests(unittest.TestCase):
             geometries=[waveguide],
             hints=fm.FEM(order=1, hmax=20e-9),
             study_universe=study_universe,
-            per_object_recipes=None,
+            per_object_recipes=per_object_recipes,
             mesh_workflow=mesh_workflow,
         )
+
+        self.assertEqual(report.effective_per_object_targets["waveguide"].hmax, 20e-9)
+        region_fields = [
+            field for field in report.size_fields_realized
+            if field["source"] == "region_mesh_policy" and field["target"] == "waveguide"
+        ]
+        self.assertEqual(len(region_fields), 1, report.to_dict())
+        self.assertEqual(region_fields[0]["kind"], "ComponentRestrictedGradedCylinder")
+        self.assertEqual(region_fields[0]["status"], "applied")
+        self.assertEqual(region_fields[0]["params"]["VIn"], 3e-9)
+        bulk_fields = [
+            field for field in report.size_fields_realized
+            if field["kind"] == "ComponentVolumeConstant" and field["target"] == "waveguide"
+        ]
+        self.assertEqual(len(bulk_fields), 1, report.to_dict())
+        self.assertEqual(bulk_fields[0]["status"], "applied")
+        self.assertEqual(bulk_fields[0]["params"]["VIn"], 20e-9)
 
         waveguide_marker = None
         for entry in region_markers:

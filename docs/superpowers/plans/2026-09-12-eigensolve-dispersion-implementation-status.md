@@ -7831,3 +7831,22 @@ Build235 queued na070d pozostaje starą polityką. Poprawkę musi objąć osobna
 immutable kapsuła i controlled Γ runtime przed ponowieniem pełnego signed15.
 Stan disk guard:5.46GB przy wymaganych8GiB; operator pytany o dodatkowe miejsce.
 Nie osłabiono guardów i nie ponowiono nieudanego solvera.
+
+
+### Regionalne zagęszczenie — zachowanie niezależnego ownera
+
+Audit density fixture ujawnił dwa błędy: deklarowana recepta waveguide20/5nm nie
+była przekazywana, a _strip_overridden_geometry_fields usuwało również pola
+Source=region_mesh_policy tej geometrii. Przywrócono istniejącą receptę i
+zachowano region-owned fields podczas zastępowania bulk. To realizuje kontrakt
+0104 material-regions-implementation-mapping i zakaz cichego porzucenia regionu;
+nie zmienia wsparcia geometrycznego, fizyki, region shape ani progu median5nm.
+
+Nowa regresja generuje rzeczywisty field stack i sprawdza usunięcie bulk,
+zachowanie tego samego pola regionu3nm/radius15nm/height10nm oraz foreign field,
+włącznie z aliasem geometry name. Density fixture wymaga applied bulk20nm i
+applied region3nm w resolved report oraz dotychczasowej gęstości actual mesh.
+AST obu plików i diff review PASS; wykonanie296-test meshing gate w CI wymagane.
+Globalny hmin i odkrywanie całkowicie wewnętrznego małego support nie zmienione;
+pozostają przedmiotem diagnozy, jeśli właściwe pola nie dadzą wymaganej siatki.
+Poprzedni CI Python sukces nie zamyka tego produkcyjnego defektu.
