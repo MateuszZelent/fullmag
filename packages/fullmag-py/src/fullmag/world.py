@@ -5734,8 +5734,12 @@ class StudyBuilder:
                 "projection.solution must be an AntennaStageOutputRef or "
                 "AntennaFieldSolutionRef"
             )
-        if any(item.id == projection.id for item in _state._antenna_target_projections):
-            raise ValueError(f"duplicate antenna projection id {projection.id!r}")
+        existing_projection = next(
+            (item for item in _state._antenna_target_projections if item.id == projection.id),
+            None,
+        )
+        if existing_projection is not None and existing_projection != projection:
+            raise ValueError(f"conflicting antenna projection id {projection.id!r}")
         if any(item.id == drive.id for item in _state._solved_antenna_drives):
             raise ValueError(f"duplicate solved antenna drive id {drive.id!r}")
         if any(
@@ -5745,7 +5749,8 @@ class StudyBuilder:
         ):
             raise ValueError(f"duplicate stage_id {drive.id!r}")
         problem_before_action = _build_problem()
-        _state._antenna_target_projections.append(projection)
+        if existing_projection is None:
+            _state._antenna_target_projections.append(projection)
         _state._solved_antenna_drives.append(drive)
         _state._declared_stages.append(
             CapturedStage(
