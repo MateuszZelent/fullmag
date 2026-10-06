@@ -141,6 +141,10 @@ case "${recipe}" in
     ;;
   *"scripts/export_runner_openapi.py"*)
     export_openapi_pattern='^[^[:space:]]+ "[^"]+/scripts/export_runner_openapi.py" --repo-root "[^"]+" --job-id "([0-9a-f]{32})" --expected-commit "([0-9a-f]{40})"$'
+    export_openapi_snapshot_pattern='^[^[:space:]]+ "[^"]+/scripts/export_runner_openapi.py" --repo-root "[^"]+" --job-id "([0-9a-f]{32})" --expected-commit "([0-9a-f]{40})" --source-digest "([0-9a-f]{64})" --native-snapshot-sha256 "([0-9a-f]{64})"$'
+    if [[ "${recipe}" =~ ${export_openapi_snapshot_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}" --source-digest "${BASH_REMATCH[3]}" --native-snapshot-sha256 "${BASH_REMATCH[4]}"
+    fi
     if [[ ! "${recipe}" =~ ${export_openapi_pattern} ]]; then
       echo "[fullmag just] invalid managed OpenAPI export recipe" >&2
       exit 2

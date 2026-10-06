@@ -396,6 +396,10 @@ generate-api-openapi:
 export-runner-openapi job_id expected_commit:
     {{storage_python}} "{{repo_root}}/scripts/export_runner_openapi.py" --repo-root "{{repo_root}}" --job-id "{{job_id}}" --expected-commit "{{expected_commit}}"
 
+# WIP admission is explicit and bound to both immutable content identities.
+export-runner-openapi-snapshot job_id expected_commit source_digest native_snapshot_sha256:
+    {{storage_python}} "{{repo_root}}/scripts/export_runner_openapi.py" --repo-root "{{repo_root}}" --job-id "{{job_id}}" --expected-commit "{{expected_commit}}" --source-digest "{{source_digest}}" --native-snapshot-sha256 "{{native_snapshot_sha256}}"
+
 # Lightweight generated client and production source checks; no unit builds.
 generate-control-room-client:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route generate-client --repo-root "{{repo_root}}"

@@ -31,7 +31,9 @@ JOB_ID = "e" * 32
 
 
 class Fixture:
-    def __init__(self) -> None:
+    def __init__(self, *, source_mode="commit", dirty=False) -> None:
+        self.source_mode = source_mode
+        self.dirty = dirty
         self.temp = tempfile.TemporaryDirectory(prefix="fullmag-openapi-export-")
         root = Path(self.temp.name)
         self.storage = root / "storage"
@@ -58,18 +60,22 @@ class Fixture:
         path.write_bytes(content)
 
     def _native_identity(self) -> dict[str, object]:
+        dirty_content = [{
+            "path": "README.md", "kind": "regular_file", "mode": "100644",
+            "sha256": self.source_manifest["files"][0]["sha256"], "git_index_entries": [],
+        }] if self.dirty else []
         payload = {
             "schema": "fullmag.source-snapshot.v2",
             "head_commit_full": COMMIT,
             "head_tree_sha256": "1" * 64,
-            "git_status_porcelain_v1": [],
-            "dirty_path_content": [],
+            "git_status_porcelain_v1": [{"status": " M", "paths": ["README.md"]}] if self.dirty else [],
+            "dirty_path_content": dirty_content,
             "ignored_non_runtime_dirty": True,
         }
         return {
             **payload,
-            "source_snapshot_dirty": False,
-            "dirty_content_sha256": hashlib.sha256(canonical([])).hexdigest(),
+            "source_snapshot_dirty": self.dirty,
+            "dirty_content_sha256": hashlib.sha256(canonical(dirty_content)).hexdigest(),
             "source_snapshot_sha256": hashlib.sha256(canonical(payload)).hexdigest(),
         }
 
@@ -79,7 +85,7 @@ class Fixture:
         self._write(self.capsule / "tree" / relative, file_bytes)
         core = {
             "schema_version": "fullmag.source-capsule.v1",
-            "source_mode": "commit",
+            "source_mode": self.source_mode,
             "resolved_commit": COMMIT,
             "files": [{"path": relative, "type": "file", "mode": "100644",
                        "size": len(file_bytes), "sha256": hashlib.sha256(file_bytes).hexdigest()}],
@@ -238,6 +244,74 @@ class ExportRunnerOpenApiTests(unittest.TestCase):
         native["source_snapshot_dirty"] = True
         with self.assertRaises(exporter.ExportError):
             exporter._validate_native_identity(native, COMMIT)
+
+    def _snapshot_fixture(self, *, dirty=True):
+        self.fixture.close()
+        self.fixture = Fixture(source_mode="snapshot", dirty=dirty)
+        return {
+            "source_digest": self.fixture.source_manifest["source_digest"],
+            "native_snapshot_sha256": self.fixture.context["native_source_identity"]["source_snapshot_sha256"],
+        }
+
+    def test_explicit_snapshot_export_binds_both_digests_and_actual_dirty_state(self):
+        for dirty in (True, False):
+            pins = self._snapshot_fixture(dirty=dirty)
+
+            def capture(command):
+                result = self._capture(command)
+                document = json.loads(result.stdout)
+                document["x-fullmag-build-identity"]["worktree_state"] = "dirty" if dirty else "clean"
+                return exporter.ProcessCapture(0, json.dumps(document).encode(), b"", False, False, started=True)
+
+            evidence = exporter.export_openapi(
+                Path("C:/fixture/fullmag"), JOB_ID, COMMIT, **pins,
+                layout=self.fixture.layout, image_inspect=self._image, capture=capture,
+            )
+            receipt = json.loads((evidence / "receipt.json").read_text())
+            proof = json.loads((evidence / "proof.json").read_text())
+            self.assertEqual(receipt["source_mode"], "snapshot")
+            self.assertEqual(receipt["source_digest"], pins["source_digest"])
+            self.assertEqual(proof["source_identity"]["worktree_state"], "dirty" if dirty else "clean")
+            self.assertEqual(receipt["source_worktree_state"], proof["source_identity"]["worktree_state"])
+            self.assertEqual(receipt["qualification"], "NOT VERIFIED")
+
+    def test_snapshot_requires_complete_well_formed_matching_pins_before_any_capture(self):
+        pins = self._snapshot_fixture()
+        for changes in (
+            {"source_digest": None}, {"native_snapshot_sha256": None},
+            {"source_digest": "c" * 64}, {"native_snapshot_sha256": "d" * 64},
+            {"source_digest": "bad"}, {"native_snapshot_sha256": "bad"},
+        ):
+            with self.subTest(changes=changes), patch.object(exporter, "_new_evidence_root") as allocate:
+                with self.assertRaises(exporter.ExportError):
+                    exporter.export_openapi(
+                        Path("C:/fixture/fullmag"), JOB_ID, COMMIT, **(pins | changes),
+                        layout=self.fixture.layout, image_inspect=self._image, capture=self._capture,
+                    )
+                allocate.assert_not_called()
+
+    def test_snapshot_mode_does_not_accept_commit_capsule(self):
+        pins = {"source_digest": self.fixture.source_manifest["source_digest"],
+                "native_snapshot_sha256": self.fixture.context["native_source_identity"]["source_snapshot_sha256"]}
+        with self.assertRaises(exporter.ExportError):
+            exporter._validate_managed_build(self.fixture.layout, JOB_ID, COMMIT, **pins)
+
+    def test_default_commit_route_refuses_even_clean_snapshot(self):
+        self._snapshot_fixture(dirty=False)
+        with self.assertRaises(exporter.ExportError):
+            exporter._validate_managed_build(self.fixture.layout, JOB_ID, COMMIT)
+
+    def test_snapshot_export_refuses_wrong_raw_dirty_state_and_preserves_failed_proof(self):
+        pins = self._snapshot_fixture()
+        with self.assertRaises(exporter.ExportError) as raised:
+            exporter.export_openapi(
+                Path("C:/fixture/fullmag"), JOB_ID, COMMIT, **pins,
+                layout=self.fixture.layout, image_inspect=self._image, capture=self._capture,
+            )
+        evidence = Path(str(raised.exception).rsplit(" at ", 1)[-1])
+        proof = json.loads((evidence / "proof.json").read_text())
+        self.assertEqual(proof["state"], "failed")
+        self.assertEqual(proof["source_identity"]["worktree_state"], "dirty")
 
     def test_stale_openapi_identity_is_retained_as_failed_evidence(self) -> None:
         def stale(_command):
@@ -690,6 +764,30 @@ class ExportStorageShellTests(unittest.TestCase):
         result = self._run(JOB_ID, COMMIT, " # fullmag_storage.py resolve")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("invalid managed OpenAPI export recipe", result.stderr)
+
+    def test_shell_snapshot_requires_complete_pins_and_refuses_composites(self):
+        suffix = f' --source-digest "{SOURCE_DIGEST}" --native-snapshot-sha256 "{SNAPSHOT}"'
+        for invalid in (
+            f' --source-digest "{SOURCE_DIGEST}"',
+            f' --native-snapshot-sha256 "{SNAPSHOT}"',
+            suffix.replace(SOURCE_DIGEST, "bad"),
+            suffix + " && printf UNAUTHORIZED_EXPORT_COMMAND",
+            suffix + " # fullmag_storage.py resolve",
+        ):
+            with self.subTest(invalid=invalid):
+                result = self._run(JOB_ID, COMMIT, invalid)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("invalid managed OpenAPI export recipe", result.stderr)
+                self.assertNotIn("UNAUTHORIZED_EXPORT_COMMAND", result.stdout)
+
+    def test_shell_snapshot_dispatches_only_fixed_helper_with_exact_pins(self):
+        suffix = f' --source-digest "{SOURCE_DIGEST}" --native-snapshot-sha256 "{SNAPSHOT}"'
+        # A nonexistent exact job exercises wrapper dispatch, but is refused by
+        # read-only queue admission before evidence allocation or Docker access.
+        result = self._run(JOB_ID, COMMIT, suffix)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertNotIn("invalid managed OpenAPI export recipe", result.stderr)
+        self.assertIn("Managed build job does not exist", result.stderr)
 
 
 if __name__ == "__main__":

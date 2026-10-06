@@ -244,6 +244,34 @@ właściwego kontenera nie wymaga usuwania danych. Osobny browser smoke musi
 potwierdzić działanie UI; zdrowe `/healthz` nie jest kwalifikacją solvera,
 fizyki ani wydania.
 
+### Eksport OpenAPI z dokładnego snapshotu
+
+`just export-runner-openapi <job-id> <pełny-commit>` pozostaje trasą dla
+czystej kapsuły `commit`. Nie dopuszcza dirty state ani kapsuły `snapshot`.
+Dla jawnego WIP służy osobna recepta
+`just export-runner-openapi-snapshot <job-id> <pełny-commit> <source-digest> <native-snapshot-sha256>`.
+Oba digests są wymaganymi SHA-256 (64 małe znaki hex); commit bazowy nie
+identyfikuje zawartości WIP. Niepełna para, niezgodność z queue/trusted
+context/build receipt/kapsułą lub zły source mode powodują odmowę przed
+alokacją dowodu i przed dostępem do Dockera. Pełne walidatory artefaktów,
+trusted inputs, membership i hashy kapsuły pozostają obowiązkowe.
+
+To diagnostyczny odczyt z terminalnego pakietu, bez buildu, solvera i sesji.
+Kontener wypisuje `--print-openapi-v2`, ma readonly root/package, brak sieci
+i portów. Eksport sprawdza dokładny clean/dirty stamp rzeczywistej natywnej
+tożsamości przed normalizacją. Zachowuje `stdout.raw.json`, log, receipt
+i proof w nowym `storage/runs/<worktree-id>/openapi-export/<id>`; proof nie
+promuje WIP do clean ani nie kwalifikuje fizyki. Zabezpieczenia writer sesji
+nie ulegają zmianie.
+
+Dowód z 2026-10-06: 32 interpretowane regresje, 31 PASS / 1 Windows symlink
+SKIP. Rzeczywisty eksport snapshotu producenta R1 seq 33 zakończył się
+exit 0, input hashes PASS i cleanup confirmed. Zachował dirty provenance.
+Ten pakiet nie zawiera nowego DTO R3. Odbiór eksportu nie zastępuje
+regeneracji aktualnego OpenAPI/TS. Obecny frontendowy domyślny import
+nadal odmawia dirty export; przed importem R3 wymaga osobnej, związanej
+z receiptem trasy snapshotowej, bez osłabiania clean importu.
+
 ### Pozostałe ograniczenia
 
 - Build/uruchomienie Fullmaga z prywatnej kopii kapsuły i jawnego execution context.
