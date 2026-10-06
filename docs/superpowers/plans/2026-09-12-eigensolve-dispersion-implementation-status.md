@@ -7761,3 +7761,12 @@ Niezależny source review prywatnych bindings bez blockerów. Dodano także jawn
 odrzucenie regional-provider -> whole-object oraz niezgodnych regional targets,
 z osobnym sprawdzeniem poprawności ProblemIR w obu fixture. Rust parser/format
 PASS; git diff whitespace PASS. Wykonanie regresji w nowym CI pozostaje OPEN.
+
+
+CI37397140598 odrzuciło f5f57f1de podczas kompilacji: pierwszy wiersz nowego
+pliku Rust był nagłówkiem ścieżki z rustfmt --emit stdout. Wcześniejszy parser
+sprawdzał wejście formattera, nie jego później zapisane wyjście; deklaracja
+PASS nie dowodziła poprawności finalnych bajtów. Usunięto wyłącznie nagłówek,
+formatowanie przełączono na stdin bez file heading i ponownie sparsowano
+rzeczywiście zapisany plik. Parser finalnych bajtów PASS; nowe CI wymagane.
+Runtime234 i oczekująca kapsuła070d nie zawierają tego fragmentu S09.

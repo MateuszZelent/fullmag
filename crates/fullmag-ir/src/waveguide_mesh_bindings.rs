@@ -1,5 +1,3 @@
-\\?\C:\git\fullmag\worktrees\eigensolve-dispersion-plan-20260912\crates\fullmag-ir\src\waveguide_mesh_bindings.rs:
-
 //! Borrowed registry bindings between a raw waveguide mesh and ProblemIR.
 //!
 //! This private fragment resolves explicit object, region, material, assignment,
