@@ -899,3 +899,119 @@ Używamy tych standardowych definicji geometrycznych; nie dodajemy zależności 
 | source-0833-contour-area | crates/fullmag-ir/src/waveguide_mesh_contours.rs + signed_contour_area_exact | Sign prostego regionalnego konturu; source implemented/runtime NOT VERIFIED |
 | source-0833-contour-location | crates/fullmag-ir/src/waveguide_mesh_contours.rs + point_in_contour_exact | Exact odd-even inside/outside/boundary; source implemented/runtime NOT VERIFIED |
 | source-0833-contours | crates/fullmag-ir/src/waveguide_mesh_contours.rs + validate_waveguide_mesh_contours | Regionalne orientation/nesting; nie pełny mesh certificate/runtime |
+
+
+(waveguide-world-representability)=
+## Reprezentowalność współrzędnych świata — prywatny prerequisite S09
+
+Przekrój UV pozostaje źródłem geometrii operatora 2D. Pomocnicze współrzędne
+świata wiążą dokładny mesh z canonical frame i nie są importem mesha3D,
+certyfikatem invariance ani admission do providera.
+
+```{math}
+:label: eq-waveguide-world-coordinates
+\mathbf x_i=\mathbf o+u_i\mathbf e_u+v_i\mathbf e_v.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\mathbf x_i$ | Zaokrąglona pozycja węzła w świecie | $\mathrm m$ |
+| $\mathbf o$ | Początek canonical frame | $\mathrm m$ |
+| $u_i,v_i$ | Lokalne współrzędne węzła UV | $\mathrm m$ |
+| $\mathbf e_u,\mathbf e_v$ | Dodatnio znormalizowane osie przekroju | $1$ |
+| $\mathbf a$ | Canonical jednostkowa oś falowodu | $1$ |
+
+Kolejność f64 jest jawna: oddzielne produkty u*Eu i v*Ev, następnie
+(origin+u*Eu)+v*Ev. Nie stosować milczącego FMA, Gram–Schmidta, zmiany znaków
+ani clampu. Nonfinite produkt/intermediate/result jest błędem. Guard IEEE
+gradual underflow jest współdzielony i sprawdzany ponownie przy mapowaniu.
+Wszystkie world nodes muszą być różne, z +0/-0 traktowanym jako ta sama
+współrzędna. Duży origin może skasować małe różnice UV i musi zostać odrzucony.
+
+Orientacja ma być sprawdzana na rzeczywistych zaokrąglonych world nodes,
+a nie wyprowadzona wyłącznie z dodatniego determinant UV lub ramy:
+
+```{math}
+:label: eq-waveguide-rounded-world-orientation
+\left[(\mathbf x_1-\mathbf x_0)\times(\mathbf x_2-\mathbf x_0)\right]
+\cdot\mathbf a>0.
+```
+
+Znak wyznacza exact dyadic predicate z BigInt i wspólnego kodowania finite f64,
+bez geometrycznego absolute epsilon. Pozostałe arytmetyczne kontrole P1
+stosują skalowane krawędzie, normę iloczynu wektorowego oraz istniejącą
+bezwymiarową granicę jakości64*EPS. Fizyczne pole trójkąta i mass entries
+$\mathrm{m^2}$, gradienty $\mathrm{m^{-1}}$ oraz stiffness $1$ muszą pozostać reprezentowalne.
+Nie naprawiać nieudanej orientacji przez permutację connectivity.
+
+Wynik wiąże pożyczony Dirichlet/registry mesh i zwalidowaną ramę, zachowuje
+world nodes oraz zmierzone minima jakości/pola i błędy projekcji/plane deviation.
+Te kontrole nie dowodzą zachowania całego embeddingu ani accuracy transformacji.
+Geometric equivalence zaokrąglonego world mesha pozostaje osobną bramką przed
+jego użyciem do interpretacji fizycznych pól. Structural invariance,
+equilibrium, fingerprint i owner MFEM również pozostają wymagane.
+
+FEM CPU/GPU: wspólna prywatna walidacja danych, bez wykonania operatora lub GPU.
+FDM CPU/GPU: ten descriptor nie jest ich siatką. Publiczny Python/ProblemIR,
+capability, OpenAPI i UI nie otrzymują nowej dostępnej realizacji z tego helpera.
+Regresje obejmują identity/rotated frame, huge origin collapse, overflow,
+małą poprawną geometrię bez absolute floor oraz niezmienność wejść.
+Rust unit tests tylko w CI; parser/source review nie dowodzą runtime.
+
+| Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|
+| crates/fullmag-ir/src/waveguide_mesh_world.rs | validate_waveguide_world_mapping | Prywatne powiązanie world representability z dokładnymi borrowed wejściami |
+| crates/fullmag-ir/src/waveguide_mesh_embedding.rs | exact_binary64_integer | Wspólne exact dyadic kodowanie skończonego f64, także signed zero |
+
+
+### Skalowane wielkości P1 zaokrąglonego trójkąta świata
+
+Każdą krawędź wyznacza się oddzielnie z zapisanych world coordinates, a następnie
+dzieli przez największą długość krawędzi. Odejmowanie/scaling ma własne guards;
+nie zastępuje się jednej krawędzi różnicą innych z inną kolejnością roundingu.
+
+```{math}
+:label: eq-waveguide-world-p1-geometry
+\mathbf r_{ij}=(\mathbf x_j-\mathbf x_i)/s_T,\quad
+\mathbf n_T=\mathbf r_{01}\times\mathbf r_{02},\quad
+A_T=\frac{s_T^2}{2}\|\mathbf n_T\|,\quad
+Q_T=\frac{2\sqrt{3}\|\mathbf n_T\|}
+{\|\mathbf r_{01}\|^2+\|\mathbf r_{02}\|^2+\|\mathbf r_{12}\|^2}.
+```
+
+```{math}
+:label: eq-waveguide-world-p1-gradients
+\nabla N_1=\frac{\mathbf r_{02}\times\mathbf n_T}{s_T\|\mathbf n_T\|^2},\quad
+\nabla N_2=\frac{\mathbf n_T\times\mathbf r_{01}}{s_T\|\mathbf n_T\|^2},\quad
+\nabla N_0=-\nabla N_1-\nabla N_2.
+```
+
+```{math}
+:label: eq-waveguide-world-p1-integrals
+M_{ij}^{T}=\frac{A_T}{12}(1+\delta_{ij}),\qquad
+K_{ij}^{T}=\frac{\|\mathbf n_T\|}{2}
+(s_T\nabla N_i)\cdot(s_T\nabla N_j).
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $s_T$ | Największa długość krawędzi trójkąta świata | $\mathrm m$ |
+| $\mathbf r_{ij}$ | Oddzielnie obliczona skalowana krawędź świata | $1$ |
+| $\mathbf n_T$ | Iloczyn wektorowy skalowanych krawędzi | $1$ |
+| $A_T$ | Fizyczne pole trójkąta świata | $\mathrm{m^2}$ |
+| $Q_T$ | Bezwymiarowa jakość trójkąta świata | $1$ |
+| $\nabla N_j$ | Fizyczny gradient liniowej funkcji P1 | $\mathrm{m^{-1}}$ |
+| $M_{ij}^{T}$ | Geometryczny wpis macierzy masy P1 bez Ms | $\mathrm{m^2}$ |
+| $K_{ij}^{T}$ | Geometryczny wpis scalar stiffness P1 | $1$ |
+| $\delta_{ij}$ | Delta Kroneckera lokalnych indeksów P1 | $1$ |
+
+Kod materializuje area jako (scale*normalized_area)*scale i stiffness ze
+scaled gradients, aby nie tworzyć pośredniego scale² lub physical gradient².
+Nonfinite i zanik niezerowych gradients po przeskalowaniu są błędami.
+Mass/stiffness służą tu wyłącznie sprawdzeniu reprezentowalności; helper nie
+składa operatora demag, exchange ani pencil. Publiczne normy modów nadal
+używają właściwego descriptoru i miary dA, a nie tego pomocniczego raportu.
+
+| Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|
+| crates/fullmag-ir/src/waveguide_mesh_world.rs | validate_world_triangles | Skala/area/quality/gradient/mass/stiffness na rzeczywistych world nodes |

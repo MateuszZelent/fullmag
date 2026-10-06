@@ -40,7 +40,9 @@ jobs:
         run: cargo test -p fullmag-ir project_output_policy --no-fail-fast
 
       - name: Run waveguide mesh descriptor contracts
-        run: cargo test -p fullmag-ir waveguide_mesh --no-fail-fast
+        run: |
+          cargo test -p fullmag-ir waveguide_frame --no-fail-fast
+          cargo test -p fullmag-ir waveguide_mesh --no-fail-fast
 
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast

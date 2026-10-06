@@ -214,7 +214,7 @@ pub(crate) fn binary64_order_key(value: f64) -> u64 {
 }
 
 /// Encode one finite binary64 value exactly in units of 2^-1074.
-fn exact_binary64_integer(value: f64) -> Option<BigInt> {
+pub(crate) fn exact_binary64_integer(value: f64) -> Option<BigInt> {
     let bits = value.to_bits();
     let negative = bits >> 63 != 0;
     let exponent = ((bits >> 52) & 0x7ff) as u16;

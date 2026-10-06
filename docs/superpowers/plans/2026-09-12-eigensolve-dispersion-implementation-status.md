@@ -1,3 +1,32 @@
+<!-- current-eigensolve-status-begin -->
+## Bieżący stan — 2026-10-06
+
+**Cały cel S00–S12 pozostaje aktywny.** Poniższa tabela opisuje aktualny
+stan; dalsze checkpointy zachowują historię i nie zastępują bieżących dowodów.
+Baza ostatniego zweryfikowanego przyrostu:67ef8f9baf1f7350e77f351a00292a807cf20379,
+remote aktualny dla tego commita; CI37401671540 wszystkie8jobs success.
+
+| Zakres | Potwierdzone | Pozostaje |
+|---|---|---|
+| Źródła/CI | Rust, Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS | Świeży managed runtime dla nowej polityki NCV; source CI nie jest walidacją eigensolve |
+| Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Nowy attested build, pełny window certificate Γ, potem15 punktów i sprawdzony wykres |
+| Adaptive k pool | Poprawka exit telemetry, deterministyczny plan digest i kontrakty CI | Rzeczywisty świeży przebieg, pomiary CPU/RAM i serial/adaptive parity |
+| Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Pełna scoped kompozycja lower bounds i runtime consumer regionalnych minima pozostają oddzielnymi lukami |
+| S09/2.5D | UV geometry, contours, registry i jawne Dirichlet bindings mają CI evidence; frame ma source fixtures | World representability w bieżącym przyroście; następnie world equivalence, fingerprint, invariance/equilibrium, typed routing i owner MFEM |
+| Nauka | Wstępne benchmarki i analityczne oracles nie domykają kwalifikacji | DE/BV, zbieżności siatki/airboxu/liczby modów, identyczny COMSOL A1 i GPU |
+| GUI/integracja | Frontend/browser fixture CI PASS; PR97 otwarty | Rzeczywisty workspace z modelem/wynikami, pełne review/science gates, merge i bezpieczne cleanup worktree |
+
+Build235 d6482966a2404d6d933a6708cdf3466d pozostaje queued, na exact070d277a8
+(stara polityka NCV). Runtime obserwowany osobnym read-only klientem; brak nowych
+submit/cancel/restart. Ostatni wolny storage2.67GB przy progu8GiB. Ponadto własny
+read-only preview execution inventory zajmuje wspólny build slot; ma postęp
+między jobami, a nie wewnątrz wielomilionowego drzewa. Nie przypisujemy mu spadku
+miejsca bez dowodu. Nie uruchamiamy równoległego inventory ani apply bez zgody.
+Upload dwóch synthetic failure artifacts nadal nieaktywny po odmowie auto-review;
+aktualny density test już przechodzi, więc jest to opcjonalna diagnostyka przyszłych
+błędów. Pytania o miejsce i upload pozostają po stronie użytkownika.
+<!-- current-eigensolve-status-end -->
+
 <!-- master1bdb-integration-20261006 -->
 ## Checkpoint — najnowszy master, trzy konflikty rozwiązane
 
@@ -7912,3 +7941,36 @@ consumer oraz brakuje scoped lower-bound composition dla wielu właścicieli.
 Nie promujemy tej korekty fixture do kompletnej naprawy polityki meshing.
 Najnowszy CI37400348160:21 Gamma query regressions PASS, density8.1449nm FAIL;
 synthetic failure capture bez zgłoszonego błędu, upload nadal nieautoryzowany.
+
+
+CI37401671540 dla67ef8f9ba: python-contracts success, w szczególności Gamma
+query/pilot routing contracts oraz actual meshing density case PASS przy
+niezmienionym threshold5nm i skorygowanym jawnym body minimum1.5nm.
+To wykonany dowód fixture/configuration, nie kwalifikacja eigensolve ani
+pełnej scoped lower-bound policy. Pozostałe jobs CI jeszcze obserwowane.
+World mapping prerequisite jest w implementacji; zmiany tej sekcji/note0833
+pozostają WIP do ukończenia źródła/review/parser/CI, bez public admission.
+
+
+### S09 — source world representability i uporządkowany bieżący status
+
+Prywatny validate_waveguide_world_mapping wiąże te same Dirichlet/registry
+borrows i canonical frame. Fixed f64 operation order, global node collisions
+(±0), exact BigInt orientation oraz scaled3D P1 area/quality/mass/gradient/
+stiffness guards są źródłowo zaimplementowane. Wynik nie jest publicznym
+3D meshem, geometric-equivalence ani invariance/admission certificate.
+Measured projection/plane errors pozostają pomiarami, bez ukrytegoepsilon.
+
+Prepared regressions obejmują identity/rotation, zgodne axis+UV+winding reversal,
+huge-origin collapse,±0, overflow, tinypositivearea, roundedorientation reversal
+i pełne borrowed-token integration. Root dodał Debug dla privatehelperresult
+wymagany przez expect_err; nie była to zmiana walidacji. Final-byte Rust parser,
+whitespace check, niezależny review i focused0833 scientificmap PASS.
+Unit tests nie kompilowane lokalnie. CI dodaje pełny waveguide_frame filter
+obok waveguide_mesh, żeby nowa zależność nie opierała się na samym parse.
+
+Aktualna tabela stanu jest na początku planu; historyczne checkpointy zachowano.
+Pełny S09 wymaga jeszcze worldequivalence/fingerprint/structuralinvariance/
+equilibrium/typedrouting/MFEMowner/runtime/science. S00–S12 nadal aktywny.
+Read-only buildobserver235 PID99292/exec76080 potwierdzony live i sprawdza
+exact source identity tego samego queued joba; nie restartuje ani nie submituje.

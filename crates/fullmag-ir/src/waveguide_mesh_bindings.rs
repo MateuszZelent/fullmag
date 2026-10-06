@@ -549,7 +549,7 @@ fn target_covers(coverage: &RegionRefIR, requested: &RegionRefIR) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{validate_waveguide_registry_bindings, WaveguideRegistryBindingsError};
     use crate::waveguide_mesh::{WaveguideCrossSectionMeshIR, WaveguideCrossSectionRegionIR};
     use crate::{
@@ -565,7 +565,7 @@ mod tests {
     const AIR_OBJECT_ID: &str = "object-waveguide-air";
     const AIR_GEOMETRY_ID: &str = "geometry-waveguide-air";
 
-    fn valid_fixture() -> (
+    pub(crate) fn valid_fixture() -> (
         ProblemIRV04,
         WaveguideCrossSectionMeshIR,
         BTreeMap<String, RegionRefIR>,

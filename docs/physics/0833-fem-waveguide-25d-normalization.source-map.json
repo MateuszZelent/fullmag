@@ -24,7 +24,12 @@
     {"id": "eq-0833-mesh-exact-binary64-coordinate", "symbols": ["h64", "Jx", "sigma_bits", "E_bits", "F_bits"], "sources": ["source-0833-mesh-exact-coordinate"]},
     {"id": "eq-0833-mesh-exact-orientation", "symbols": ["orient_exact", "Jx", "orient_points"], "sources": ["source-0833-mesh-exact-orientation"]},
     {"id": "eq-0833-contour-exact-area", "symbols": ["contour_area_integer", "contour_area_physical", "contour_n", "contour_x", "h64", "Jx"], "sources": ["source-0833-contour-area"]},
-    {"id": "eq-0833-contour-nesting-depth", "symbols": ["contour_C", "contour_p", "contour_region", "contour_depth"], "sources": ["source-0833-contour-location", "source-0833-contours"]}
+    {"id": "eq-0833-contour-nesting-depth", "symbols": ["contour_C", "contour_p", "contour_region", "contour_depth"], "sources": ["source-0833-contour-location", "source-0833-contours"]},
+    {"id": "eq-waveguide-world-coordinates", "symbols": ["world_x", "world_origin", "world_uv", "world_axes"], "sources": ["source-0833-world-map"]},
+    {"id": "eq-waveguide-rounded-world-orientation", "symbols": ["world_x", "world_axis"], "sources": ["source-0833-world-map", "source-0833-exact-binary64"]},
+    {"id": "eq-waveguide-world-p1-geometry", "symbols": ["world_x", "world_scale", "world_edge", "world_normal", "world_triangle_area", "world_quality"], "sources": ["source-0833-world-p1"]},
+    {"id": "eq-waveguide-world-p1-gradients", "symbols": ["world_gradient", "world_scale", "world_edge", "world_normal"], "sources": ["source-0833-world-p1"]},
+    {"id": "eq-waveguide-world-p1-integrals", "symbols": ["world_mass", "world_triangle_area", "world_kronecker", "world_stiffness", "world_scale", "world_gradient", "world_normal"], "sources": ["source-0833-world-p1"]}
   ],
   "symbols": [
     {"id": "Sigma_m", "latex": "\\Sigma_m", "meaning": "magnetyczny przekrój waveguide", "si_unit": "\\mathrm{m^2}"},
@@ -91,7 +96,21 @@
     {"id": "contour_x", "latex": "x_j", "meaning": "lokalny start node półkrawędzi konturu", "si_unit": "\\mathrm m"},
     {"id": "contour_p", "latex": "p_i", "meaning": "reprezentatywny pierwszy start node konturu C_i", "si_unit": "\\mathrm m"},
     {"id": "contour_region", "latex": "r_i", "meaning": "jawny identyfikator regionu konturu C_i", "si_unit": "1"},
-    {"id": "contour_depth", "latex": "d_i", "meaning": "liczba zawierających konturów tego samego regionu", "si_unit": "1"}
+    {"id": "contour_depth", "latex": "d_i", "meaning": "liczba zawierających konturów tego samego regionu", "si_unit": "1"},
+    {"id": "world_x", "latex": "\\mathbf x_i", "meaning": "Zaokrąglona pozycja węzła w świecie", "si_unit": "\\mathrm m"},
+    {"id": "world_origin", "latex": "\\mathbf o", "meaning": "Początek canonical frame", "si_unit": "\\mathrm m"},
+    {"id": "world_uv", "latex": "u_i,v_i", "meaning": "Lokalne współrzędne węzła UV", "si_unit": "\\mathrm m"},
+    {"id": "world_axes", "latex": "\\mathbf e_u,\\mathbf e_v", "meaning": "Dodatnio znormalizowane osie przekroju", "si_unit": "1"},
+    {"id": "world_axis", "latex": "\\mathbf a", "meaning": "Canonical jednostkowa oś falowodu", "si_unit": "1"},
+    {"id": "world_scale", "latex": "s_T", "meaning": "Największa długość krawędzi trójkąta świata", "si_unit": "\\mathrm m"},
+    {"id": "world_edge", "latex": "\\mathbf r_{ij}", "meaning": "Oddzielnie obliczona skalowana krawędź świata", "si_unit": "1"},
+    {"id": "world_normal", "latex": "\\mathbf n_T", "meaning": "Iloczyn wektorowy skalowanych krawędzi", "si_unit": "1"},
+    {"id": "world_triangle_area", "latex": "A_T", "meaning": "Fizyczne pole trójkąta świata", "si_unit": "\\mathrm{m^2}"},
+    {"id": "world_quality", "latex": "Q_T", "meaning": "Bezwymiarowa jakość trójkąta świata", "si_unit": "1"},
+    {"id": "world_gradient", "latex": "\\nabla N_j", "meaning": "Fizyczny gradient liniowej funkcji P1", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "world_mass", "latex": "M_{ij}^{T}", "meaning": "Geometryczny wpis macierzy masy P1 bez Ms", "si_unit": "\\mathrm{m^2}"},
+    {"id": "world_stiffness", "latex": "K_{ij}^{T}", "meaning": "Geometryczny wpis scalar stiffness P1", "si_unit": "1"},
+    {"id": "world_kronecker", "latex": "\\delta_{ij}", "meaning": "Delta Kroneckera lokalnych indeksów P1", "si_unit": "1"}
   ],
   "sources": [
     {"id": "source-0833-raw", "path": "docs/physics/0833-fem-waveguide-25d-normalization.md", "symbol": "DOC-ANCHOR:eq-0833-raw-shape-area-norm", "responsibility": "Surowy shape, lokalna tangencja do m0 i norma pola.", "evidence_status": "planned_contract"},
@@ -126,7 +145,10 @@
     {"id": "source-0833-mesh-embedding", "path": "crates/fullmag-ir/src/waveguide_mesh_embedding.rs", "symbol": "validate_waveguide_mesh_embedding", "responsibility": "Globalna konformność scalar mesha bez pełnego certificate/admission.", "evidence_status": "source_implemented_runtime_not_verified"},
     {"id": "source-0833-contour-area", "path": "crates/fullmag-ir/src/waveguide_mesh_contours.rs", "symbol": "signed_contour_area_exact", "responsibility": "Exact signed area prostego konturu.", "evidence_status": "source_implemented_runtime_not_verified"},
     {"id": "source-0833-contour-location", "path": "crates/fullmag-ir/src/waveguide_mesh_contours.rs", "symbol": "point_in_contour_exact", "responsibility": "Exact odd-even inside/outside/boundary.", "evidence_status": "source_implemented_runtime_not_verified"},
-    {"id": "source-0833-contours", "path": "crates/fullmag-ir/src/waveguide_mesh_contours.rs", "symbol": "validate_waveguide_mesh_contours", "responsibility": "Regionalne orientation/nesting bez admission.", "evidence_status": "source_implemented_runtime_not_verified"}
+    {"id": "source-0833-contours", "path": "crates/fullmag-ir/src/waveguide_mesh_contours.rs", "symbol": "validate_waveguide_mesh_contours", "responsibility": "Regionalne orientation/nesting bez admission.", "evidence_status": "source_implemented_runtime_not_verified"},
+    {"id": "source-0833-world-map", "path": "crates/fullmag-ir/src/waveguide_mesh_world.rs", "symbol": "validate_waveguide_world_mapping", "responsibility": "Prywatne world mapping i representability, bez admission", "evidence_status": "source_implemented_ci_pending"},
+    {"id": "source-0833-exact-binary64", "path": "crates/fullmag-ir/src/waveguide_mesh_embedding.rs", "symbol": "exact_binary64_integer", "responsibility": "Wspólne exact dyadic kodowanie f64"},
+    {"id": "source-0833-world-p1", "path": "crates/fullmag-ir/src/waveguide_mesh_world.rs", "symbol": "validate_world_triangles", "responsibility": "Representability of scaled world P1 geometry only, not operator assembly"}
   ],
   "public_api": {
     "parameters": [
