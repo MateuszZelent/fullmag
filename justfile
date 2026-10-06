@@ -152,6 +152,10 @@ verify-windows-development-handoff:
 verify-windows-development-backend-api cross_build_bundle="":
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --cross-build-bundle "{{cross_build_bundle}}"
 
+# Explicit frozen native package gate, pinned to the completed manifest digest.
+verify-windows-frozen-development-backend-api build_id:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --frozen-native-build-id "{{build_id}}"
+
 # Native observer protocol proof; no unit-test compilation or user-session restart.
 verify-windows-development-observer-pause:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --observer-pause-only
@@ -167,6 +171,10 @@ verify-windows-development-consumer-readiness:
 # Exercise the B consumer pump with an independently verified A API bundle.
 verify-windows-development-consumer-pump owner_bundle:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --consumer-pump-owner-bundle "{{owner_bundle}}"
+
+# Owned native restart with a real nonempty browser workspace and unsaved draft.
+verify-windows-development-workspace-browser owner_bundle:
+    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --workspace-browser-owner-bundle "{{owner_bundle}}"
 
 # Real candidate helper faults in owned processes; no API or unit compilation.
 verify-windows-candidate-preparation:

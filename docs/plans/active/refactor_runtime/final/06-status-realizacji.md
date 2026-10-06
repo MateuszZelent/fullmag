@@ -1,5 +1,17 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53AY, 06.10.2026: [native/browser restart niepustego workspace](p8/53ay-native-browser-workspace-restart.md)
+**PASS**, receipt `6379d58c5ac14c9b8c956bd775c3e9cc`, completed, exit 0,
+7 kontroli. Rzeczywisty model FDM z geometrią, regionem i materiałem oraz
+otwarty niezapisany dokument (revision 2, identyczny hash archiwum i sceny)
+zostały odtworzone po zmianie API, sesji i kernel generation. WebGL visible,
+contextLost false, niezerowy drawing buffer. Wszystkie 13 native/source
+procesów oraz Next waited; typecheck/lint PASS. Interpretowane regresje:
+driver 17/17 i status overlay 4/4 PASS. Wcześniejsze nieudane próby zachowano
+w raporcie. Dowód obejmuje jeden idle workspace; pozostałe bramki P8-53,
+publiczny restart i pełna kwalifikacja P0–P8 pozostają otwarte. Procentów
+całego planu nie zwiększono na podstawie tej wąskiej bramki.
+
 Aktualna bramka produkcyjnych typów Control Room, 05.10.2026:
 `just check-control-room-production-source` PASS, receipt
 `0a51bc82889b435aa2d781b6244b5c71`. Wcześniejsze diagnostyki Start/About
@@ -8,6 +20,17 @@ opisane poniżej są historyczne; w tej próbie nie wystąpiły. Kontrola ma
 `4b48e606f9b449cbb432d10e93120ca1`, exit 0, identyczny digest źródeł
 `6d1c959ed8598f83c434f953ba30c34666ae3b9d90b22f16aad77407724b93f0`
 w obu próbach. Są to bramki źródeł, nie browser/runtime/physics gates.
+
+Checkpoint P8-53AY, 05.10.2026: [native/browser restart niepustego workspace](p8/53ay-native-browser-workspace-restart.md).
+Build `native-build-5aa15ba41b0c4b0e9e9d7ccd596f17da.log` PASS, exit 0.
+Próba browser `b36fb7c3677744fb8b5ef2acc24c823c` potwierdziła utworzenie
+pustej symulacji, geometrii, regionu i przypisania materiału bez meshera/solvera;
+widoczny canvas, context_lost=false, drawing buffer 532×281. Restart nie
+został wykonany: diagnostyczna strona odrzuciła przygotowanie dokumentu.
+Odebrano terminalne wyniki API A, CLI i wszystkich zaobserwowanych helperów.
+NoEmit i lint stagingu PASS. Poprawiono rozróżnienie epoch i prywatnego overlay
+w fixture; kolejny build i pełna próba hydration pozostają w toku.
+Publiczny restart i procenty P0–P8 pozostają bez awansu.
 
 Checkpoint P8-53AV, 05.10.2026: [asynchroniczne przygotowanie kandydata](p8/53av-asynchronous-candidate-preparation.md).
 Zarządzany cykl pompy `c10afae06a774ddcb1307842bbf87aab`: completed,

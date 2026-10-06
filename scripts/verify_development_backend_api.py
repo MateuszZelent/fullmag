@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import http.client
 import json
@@ -29,7 +30,27 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         restart_transport_only: bool = False, observer_pause_only: bool = False,
         restart_consumer_only: bool = False, consumer_readiness_only: bool = False,
         consumer_pump_owner_bundle: str | None = None,
-        candidate_preparation_only: bool = False) -> int:
+        candidate_preparation_only: bool = False,
+        workspace_browser_owner_bundle: str | None = None,
+        frozen_native_build_id: str | None = None) -> int:
+    if frozen_native_build_id is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", frozen_native_build_id):
+            raise storage.StorageError("Frozen native build ID must be a lowercase SHA-256")
+        if (cross_build_bundle or project_document_only or restart_transport_only
+                or observer_pause_only or restart_consumer_only or consumer_readiness_only
+                or consumer_pump_owner_bundle is not None or candidate_preparation_only
+                or workspace_browser_owner_bundle is not None):
+            raise storage.StorageError("Frozen native package verification is a separate default-gate scope")
+    if workspace_browser_owner_bundle is not None:
+        if (cross_build_bundle or project_document_only or restart_transport_only
+                or observer_pause_only or restart_consumer_only or consumer_readiness_only
+                or consumer_pump_owner_bundle is not None or candidate_preparation_only):
+            raise storage.StorageError("Browser workspace restart is a separate verification scope")
+        if not re.fullmatch(r"[0-9a-f]{32}", workspace_browser_owner_bundle):
+            raise storage.StorageError("Browser workspace owner must be a canonical bundle ID")
+    frozen_probe = (consumer_pump_owner_bundle is not None or candidate_preparation_only
+                    or workspace_browser_owner_bundle is not None)
+    frozen_source_binding = frozen_probe or frozen_native_build_id is not None
     if candidate_preparation_only and (
         cross_build_bundle or project_document_only or restart_transport_only
         or observer_pause_only or restart_consumer_only or consumer_readiness_only
@@ -64,6 +85,7 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
     repo = Path(layout["repo_root"])
     native = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
     source_before = fingerprint(repo)["sha256"]
+    checkout_source_before = source_before
     verifier_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     owner_path = storage.validate_path(Path(layout["storage_root"]) / "index" / (layout["worktree_id"] + ".json"), layout["storage_root"], "owner registry")
     owner = json.loads(owner_path.read_text(encoding="utf-8"))
@@ -76,10 +98,10 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             manifest_path = storage.validate_path(Path(native["build_root"]) / "windows-runtime/build-manifest.json", layout["storage_root"], "native build manifest")
             verified = verified_build_identity(
                 native["build_root"], native["runtime_root"], manifest_path,
-                None if consumer_pump_owner_bundle is not None or candidate_preparation_only else source_before,
+                None if frozen_source_binding else source_before,
+                expected_manifest_sha256=frozen_native_build_id,
             )
-            checkout_source_before = source_before
-            if consumer_pump_owner_bundle is not None or candidate_preparation_only:
+            if frozen_source_binding:
                 source_before = verified["ready_source_sha256"]
             raw_manifest = manifest_path.read_bytes()
             if hashlib.sha256(raw_manifest).hexdigest() != verified["ready_build_id"]:
@@ -93,7 +115,7 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                                                  layout["build_storage_root"], "refused native API checks")
             refused_root.mkdir(parents=True, exist_ok=False)
             refused_receipt = refused_root / "receipt.json"
-            storage.atomic_json(refused_receipt, {
+            refused_record = {
                 "schema": "fullmag.development-backend-api-checks.v1", "state": "blocked",
                 "head": storage.git(repo, "rev-parse", "HEAD"), "task_id": owner["task_id"],
                 "owner": owner["owner"], "source_sha256": source_before, "verifier_sha256": verifier_hash,
@@ -103,7 +125,11 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 "unit_tests": "not_compiled_not_run", "checks": [], "processes": [],
                 "scope": "package admission refusal; no native API or runtime verification",
                 "public_reason": "verified_native_package_unavailable",
-            })
+            }
+            if frozen_native_build_id is not None:
+                refused_record["frozen_native_build_id"] = frozen_native_build_id
+                refused_record["current_checkout_source_sha256_before"] = checkout_source_before
+            storage.atomic_json(refused_receipt, refused_record)
             raise storage.StorageError(f"Native package preflight refused; receipt: {refused_receipt}") from error
         run_root = storage.validate_path(Path(layout["build_root"]) / "checks" / uuid.uuid4().hex, layout["build_storage_root"], "native API checks")
         run_root.mkdir(parents=True, exist_ok=False)
@@ -122,6 +148,11 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                    "started_at": storage.now(), "checks": [], "processes": [],
                    "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten asset-backed authoring restore and live cold completion with HTTP mutation admission, interrupted store completion journals and repeated store cycles, empty-service terminal drain; no UI hydration, end-to-end compute reopening, solver or release qualification"}
         receipt["project_document_only"] = project_document_only
+        if frozen_native_build_id is not None:
+            receipt["frozen_native_build_id"] = frozen_native_build_id
+            receipt["frozen_native_source_sha256"] = verified["ready_source_sha256"]
+            receipt["current_checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
         if project_document_only:
             receipt["scope"] = "runtime-free project archive create/open identity and canonical bytes; no UI hydration, restart, solver or release qualification"
         if restart_transport_only:
@@ -142,6 +173,11 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             receipt["checkout_source_sha256_before"] = checkout_source_before
             receipt["source_binding"] = "verified_frozen_native_package"
             receipt["scope"] = "real candidate helper completion, transport failures, timeout and cancellation; no API, restart, UI, solver or release qualification"
+        if workspace_browser_owner_bundle is not None:
+            receipt["workspace_browser_owner_bundle"] = workspace_browser_owner_bundle
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = "owned A-to-B native restart with real nonempty scene and browser dirty-document hydration; private eligibility only, no public capability, solver or release qualification"
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
@@ -175,7 +211,11 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             binary_hash = hashlib.sha256(api.read_bytes()).hexdigest()
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
-            if candidate_preparation_only:
+            if workspace_browser_owner_bundle is not None:
+                from windows.verify_workspace_browser import exercise as exercise_workspace_browser
+                exercise_workspace_browser(repo, run_root, manifest, receipt, api.parent,
+                                           workspace_browser_owner_bundle)
+            elif candidate_preparation_only:
                 from windows.verify_candidate_preparation import exercise as exercise_candidate_preparation
                 exercise_candidate_preparation(repo, run_root, manifest, receipt, api.parent)
             elif observer_pause_only:
@@ -193,7 +233,7 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                          consumer_readiness_only=consumer_readiness_only)
             if (not project_document_only and not restart_transport_only and not observer_pause_only
                     and not restart_consumer_only and not consumer_readiness_only
-                    and consumer_pump_owner_bundle is None and not candidate_preparation_only):
+                    and not frozen_probe):
                 exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
@@ -212,11 +252,16 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             storage.atomic_json(run_root / "openapi-v2.json", spec)
             receipt["openapi_sha256"] = hashlib.sha256((run_root / "openapi-v2.json").read_bytes()).hexdigest()
             receipt["checks"].append("canonical-codegen-identity")
-            if consumer_pump_owner_bundle is not None or candidate_preparation_only:
-                receipt["checkout_source_sha256_after"] = fingerprint(repo)["sha256"]
+            if frozen_source_binding:
+                checkout_source_after = fingerprint(repo)["sha256"]
+                if frozen_native_build_id is not None:
+                    receipt["current_checkout_source_sha256_after"] = checkout_source_after
+                else:
+                    receipt["checkout_source_sha256_after"] = checkout_source_after
                 final_identity = verified_build_identity(
                     native["build_root"], native["runtime_root"], manifest_path,
-                    None, verified["ready_build_id"],
+                    None,
+                    expected_manifest_sha256=frozen_native_build_id or verified["ready_build_id"],
                 )
                 after = final_identity["ready_source_sha256"]
             else:
@@ -924,6 +969,46 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         receipt["checks"].append("native-launcher-confirms-different-verified-api-build")
 
 
+def _wait_for_owned_service_ready(owner_path: Path, child, manifest: dict, *,
+                                  clock=time.monotonic, sleep=time.sleep) -> dict:
+    """Observe this fixture's publication within the existing startup deadline."""
+    deadline = clock() + 20
+    while clock() < deadline:
+        if child.poll() is not None:
+            raise storage.StorageError("Empty resident service exited before Ready")
+        try:
+            owner = json.loads(owner_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            sleep(0.1)
+            continue
+        except PermissionError as error:
+            if error.errno != errno.EACCES and getattr(error, "winerror", None) not in (5, 32, 33):
+                raise
+            sleep(0.1)
+            continue
+        if (not isinstance(owner, dict) or owner.get("schema_version") != "runtime_service_owner.v1"
+                or type(owner.get("pid")) is not int or owner["pid"] != child.pid):
+            raise storage.StorageError("Empty resident service published a foreign or invalid owner")
+        if owner.get("state") == "ready":
+            if (owner.get("build_commit") != manifest["git_commit"]
+                    or owner.get("build_snapshot") != manifest["source_snapshot_sha256"]):
+                raise storage.StorageError("Empty resident service Ready identity differs from the pinned build")
+            return owner
+        sleep(0.1)
+    raise storage.StorageError("Empty resident service did not publish Ready")
+
+
+def _wait_for_owned_service_exit(child, record: dict, primary_error: Exception | None) -> None:
+    try:
+        record["exit_code"] = child.wait(timeout=20)
+        record["waited"] = True
+    except subprocess.TimeoutExpired as error:
+        record["retained_reason"] = "owned service drain outcome remains unknown"
+        record["cleanup_error"] = type(error).__name__
+        if primary_error is None:
+            raise
+
+
 def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path) -> None:
     """Exercise only this verifier's initialized empty store and sealed binaries."""
     from windows.runtime_bundle import BINARY_NAMES
@@ -1113,6 +1198,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
         receipt["processes"].append(record)
         owner = None
         idle_drain_requested = False
+        primary_error = None
 
         def control(command, token, nonce):
             address, port = owner["control_address"].rsplit(":", 1)
@@ -1133,17 +1219,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
                 return json.loads(line)
 
         try:
-            deadline = time.monotonic() + 20
-            while True:
-                if child.poll() is not None:
-                    raise storage.StorageError("Empty resident service exited before Ready")
-                if owner_path.exists():
-                    owner = json.loads(owner_path.read_text(encoding="utf-8"))
-                    if owner["state"] == "ready":
-                        break
-                if time.monotonic() >= deadline:
-                    raise storage.StorageError("Empty resident service did not publish Ready")
-                time.sleep(0.1)
+            owner = _wait_for_owned_service_ready(owner_path, child, manifest)
             assert owner["pid"] == child.pid
             assert owner["build_commit"] == manifest["git_commit"]
             assert owner["build_snapshot"] == manifest["source_snapshot_sha256"]
@@ -1284,6 +1360,10 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
             receipt["checks"].append("confirmed-drain-follows-both-terminal-children")
             assert json.loads(owner_path.read_text(encoding="utf-8"))["state"] == "drained"
             receipt["checks"].append("terminal-owner-published-before-confirmation")
+        except Exception as error:
+            primary_error = error
+            record["primary_error"] = type(error).__name__
+            raise
         finally:
             # Never stop an unrelated owner or replace an unknown drain result.
             # Once an idle lifecycle request may have been sent, a lost CLI
@@ -1294,12 +1374,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
                     control("drain", owner["owner_token"], None)
                 except (OSError, ValueError, storage.StorageError):
                     pass
-            try:
-                record["exit_code"] = child.wait(timeout=20)
-                record["waited"] = True
-            except subprocess.TimeoutExpired:
-                record["retained_reason"] = "owned service drain outcome remains unknown"
-                raise
+            _wait_for_owned_service_exit(child, record, primary_error)
             record["log_sha256"] = hashlib.sha256(log_path.read_bytes()).hexdigest()
         if record["exit_code"] != 0:
             raise storage.StorageError("Empty resident service did not exit successfully")
@@ -2107,12 +2182,15 @@ if __name__ == "__main__":
     parser.add_argument("--consumer-readiness-only", action="store_true")
     parser.add_argument("--consumer-pump-owner-bundle")
     parser.add_argument("--candidate-preparation-only", action="store_true")
+    parser.add_argument("--workspace-browser-owner-bundle")
+    parser.add_argument("--frozen-native-build-id")
     args = parser.parse_args()
     try:
         raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only,
                              args.restart_transport_only, args.observer_pause_only,
                              args.restart_consumer_only, args.consumer_readiness_only,
-                             args.consumer_pump_owner_bundle, args.candidate_preparation_only))
+                             args.consumer_pump_owner_bundle, args.candidate_preparation_only,
+                             args.workspace_browser_owner_bundle, args.frozen_native_build_id))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

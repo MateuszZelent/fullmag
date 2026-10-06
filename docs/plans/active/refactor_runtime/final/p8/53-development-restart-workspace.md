@@ -1,5 +1,14 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53AY](53ay-native-browser-workspace-restart.md), 06.10.2026: rzeczywisty
+restart C→D niepustego idle workspace FDM **PASS**, receipt
+`6379d58c5ac14c9b8c956bd775c3e9cc`, exit 0, 7 kontroli. Scena z obiektem,
+regionem i materiałem oraz dirty project document zostały odtworzone bez
+zmiany treści i rewizji; nowe API/session scope, kernel generation 1,
+visible WebGL bez utraty kontekstu. Procesy testowe terminalnie odebrane.
+Pozostałe fault gates, warianty szkiców i publiczne udostępnienie pozostają
+otwarte. Poniższe checkpointy opisują wcześniejsze stany.
+
 [P8-53AV](53av-asynchronous-candidate-preparation.md) zamyka pozytywny cykl
 gotowości pompy między dwoma zweryfikowanymi buildami: 13 kontroli, pierwszy
 krok 17 ms, odnowienie i wygaśnięcie lease, reuse kandydata, odebrane własne

@@ -14,6 +14,7 @@ use crate::terminal_logs::{terminal_logger, TerminalLogSource};
 use crate::types::*;
 
 mod development_consumer_probe;
+mod development_workspace_probe;
 
 pub(crate) const LOCALHOST_HTTP_HOST: &str = "localhost";
 pub(crate) const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
@@ -3386,6 +3387,7 @@ pub(crate) fn verify_development_restart_consumer() -> Result<()> {
     match std::env::var("FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE").as_deref() {
         Ok("empty" | "scene") => verify_development_api_owner(),
         Ok("readiness") => development_consumer_probe::verify(),
+        Ok("browser-workspace") => development_workspace_probe::verify(),
         Ok("preparation-faults") => {
             crate::development_api_owner::verify_candidate_preparation_faults(&repo_root())
         }

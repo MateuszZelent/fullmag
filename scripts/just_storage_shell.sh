@@ -108,6 +108,18 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
     ;;
     *"scripts/verify_development_backend_api.py"*)
+    frozen_native_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --frozen-native-build-id "([0-9a-f]{64})"$'
+    if [[ "${recipe}" =~ ${frozen_native_pattern} ]]; then
+      if ! is_windows_shell; then
+        echo "[fullmag just] frozen native package verification requires Windows" >&2
+        exit 2
+      fi
+      exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --frozen-native-build-id "${BASH_REMATCH[1]}"
+    fi
+      workspace_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --workspace-browser-owner-bundle "([0-9a-f]{32})"$'
+      if [[ "${recipe}" =~ ${workspace_browser_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --workspace-browser-owner-bundle "${BASH_REMATCH[1]}"
+      fi
       candidate_preparation_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --candidate-preparation-only$'
       if [[ "${recipe}" =~ ${candidate_preparation_pattern} ]]; then
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --candidate-preparation-only
