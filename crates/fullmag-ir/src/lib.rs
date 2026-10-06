@@ -33,6 +33,7 @@ pub mod waveguide_mesh_elements;
 pub mod waveguide_mesh_embedding;
 pub mod waveguide_mesh_incidence;
 pub(crate) mod waveguide_mesh_bindings;
+pub(crate) mod waveguide_mesh_dirichlet;
 mod floating_point_guard;
 mod validation;
 pub use constraint::*;

@@ -7770,3 +7770,35 @@ PASS nie dowodziła poprawności finalnych bajtów. Usunięto wyłącznie nagł�
 formatowanie przełączono na stdin bez file heading i ponownie sparsowano
 rzeczywiście zapisany plik. Parser finalnych bajtów PASS; nowe CI wymagane.
 Runtime234 i oczekująca kapsuła070d nie zawierają tego fragmentu S09.
+
+
+### S09 — jawne finite-air Dirichlet bindings
+
+Prywatny validator waveguide_mesh_dirichlet wiąże żądane exact boundary IDs
+z tym samym pożyczonym registry mesh. Dopuszcza wyłącznie Air/Outer/one-owner,
+wyznacza deterministic essential node union i odrzuca każdą niezakotwiczoną
+składową skalarną. Powietrze na interfejsie nie otrzymuje Dirichleta; marker outer
+nie zastępuje sprawdzenia incidence. Przygotowano sukcesy/odrzucenia i dwie
+rozłączne domeny z porównaniem kolejności selekcji. Parser zapisanych bajtów
+PASS; lokalnych testów nie wykonano. Review i CI raportowane osobno.
+
+To następny prerequisite S09, bez publicznego authoring/admission/provider.
+Kolejne zależności: frame/world representability i exact fingerprints,
+pełne regional coverage/precedence oraz structural invariance i equilibrium,
+atomowy typed routing i natywny owner MFEM. Sweep15 i poprawiony adaptive runtime
+pozostają odrębnymi aktywnymi bramkami; pełny S00–S12 nadal OPEN.
+
+Niezależny review Dirichlet bez blockerów. Dopisano bezpośrednią regresję
+Air/Outer na interfejsie two-owner, oprócz air-hole. Parser finalnych bajtów PASS.
+CI37397452595: produkcyjna kompilacja IR i generated API/FDM PASS; Rust unit
+compile odrzuciło fixture E0505 (borrow object_id i move target w jednym call).
+Poprawiono target.clone, bez zmiany zachowania walidatora. Python meshing:
+295 testow, 1 failure i 1 skip; density test oczekuje median<=5nm, zaobserwował
+14.719nm. To osobny wymagający diagnozy problem, bez zmiany progu/skip/retry.
+
+Serial runtime234 zakończył się exit1: Gamma shared-domain Schur frequency
+window_subwindow_failed. Kontener potwierdzony absent, state terminal
+failed_preserved_review_required; niepełny sweep nie jest zaakceptowanym
+produktem. Kompletny structured diagnostics JSON zachowano poza checkoutem.
+Plot nie jest generowany dla błędu. Observer następnego buildu przeszedł do
+submitting_once; numer/jobID/receipt wymaga odczytu, bez ponawiania submit.

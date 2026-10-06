@@ -922,7 +922,7 @@ mod tests {
             &mut problem,
             &target.object_id,
             "assignment-core-region",
-            target,
+            target.clone(),
             &material_id,
         );
 
@@ -1007,5 +1007,245 @@ mod tests {
             expect_binding_error(&problem, &mesh, &region_targets),
             WaveguideRegistryBindingsError::UnmappedMagnetizationModule { .. }
         ));
+    }
+    #[test]
+    fn dirichlet_binds_only_explicit_outer_air_nodes() {
+        use crate::waveguide_mesh_dirichlet::validate_finite_air_dirichlet_bindings;
+        let (problem, mesh, targets) = valid_fixture();
+        let registry = validate_waveguide_registry_bindings(&problem, &mesh, &targets).unwrap();
+        let bound =
+            validate_finite_air_dirichlet_bindings(&registry, &["boundary-air-outer".into()])
+                .unwrap();
+        assert!(std::ptr::eq(bound.registry(), &registry));
+        assert_eq!(bound.selected_edge_counts_by_component(), &[12]);
+        assert_eq!(bound.essential_node_counts_by_component(), &[12]);
+        let boundary = &mesh.boundary_components[bound.boundary_component_indices()[0]];
+        let mut expected = BTreeSet::new();
+        for side in &boundary.half_edges {
+            let nodes = mesh.triangles[side.triangle_index as usize].nodes;
+            let i = usize::from(side.local_edge_index.as_u8());
+            expected.extend([nodes[i], nodes[(i + 1) % 3]]);
+        }
+        assert_eq!(
+            bound.essential_node_indices(),
+            expected.into_iter().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn dirichlet_rejects_empty_duplicate_missing_magnetic_and_hole_selections() {
+        use crate::waveguide_mesh_dirichlet::{
+            validate_finite_air_dirichlet_bindings as validate,
+            FiniteAirDirichletBindingsError as E,
+        };
+        let (problem, mesh, targets) = valid_fixture();
+        let registry = validate_waveguide_registry_bindings(&problem, &mesh, &targets).unwrap();
+        assert!(matches!(validate(&registry, &[]), Err(E::EmptySelection)));
+        assert!(matches!(
+            validate(&registry, &[" ".into()]),
+            Err(E::EmptyBoundaryId)
+        ));
+        assert!(matches!(
+            validate(
+                &registry,
+                &["boundary-air-outer".into(), "boundary-air-outer".into()]
+            ),
+            Err(E::DuplicateBoundaryId(_))
+        ));
+        assert!(matches!(
+            validate(&registry, &[" boundary-air-outer".into()]),
+            Err(E::MissingBoundaryId(_))
+        ));
+        assert!(matches!(
+            validate(&registry, &["unknown".into()]),
+            Err(E::MissingBoundaryId(_))
+        ));
+        let magnetic = mesh
+            .boundary_components
+            .iter()
+            .find(|b| b.region_id == "region-magnetic")
+            .unwrap()
+            .boundary_component_id
+            .clone();
+        assert!(matches!(
+            validate(&registry, &[magnetic]),
+            Err(E::NonAirBoundary(_))
+        ));
+        assert!(matches!(
+            validate(&registry, &["boundary-air-hole".into()]),
+            Err(E::AirHoleBoundary(_))
+        ));
+    }
+
+    #[test]
+    fn dirichlet_rejects_air_outer_contour_on_an_internal_interface() {
+        use crate::waveguide_mesh_dirichlet::{
+            validate_finite_air_dirichlet_bindings as validate,
+            FiniteAirDirichletBindingsError as E,
+        };
+        let (mut problem, mut mesh, targets) = valid_fixture();
+        problem.magnetization_modules.clear();
+        let original = mesh.regions[0].clone();
+        if let WaveguideCrossSectionRegionIR::Magnetic {
+            region_id,
+            object_id,
+            ..
+        } = original
+        {
+            mesh.regions[0] = WaveguideCrossSectionRegionIR::Air {
+                region_id,
+                object_id,
+            };
+        } else {
+            panic!("fixture core must start magnetic");
+        }
+        let inner = mesh
+            .boundary_components
+            .iter()
+            .find(|b| b.region_id == "region-magnetic")
+            .unwrap()
+            .boundary_component_id
+            .clone();
+        let registry = validate_waveguide_registry_bindings(&problem, &mesh, &targets).unwrap();
+        assert!(matches!(
+            validate(&registry, &[inner]),
+            Err(E::InterfaceBoundary { .. })
+        ));
+    }
+
+    fn disconnected_dirichlet_fixture() -> (
+        ProblemIRV04,
+        WaveguideCrossSectionMeshIR,
+        BTreeMap<String, RegionRefIR>,
+    ) {
+        let (mut problem, mut mesh, mut targets) = valid_fixture();
+        let mut second = mesh.clone();
+        let node_offset = mesh.nodes_uv_m.len() as u64;
+        let triangle_offset = mesh.triangles.len() as u64;
+        let min_x = mesh
+            .nodes_uv_m
+            .iter()
+            .map(|p| p[0])
+            .fold(f64::INFINITY, f64::min);
+        let max_x = mesh
+            .nodes_uv_m
+            .iter()
+            .map(|p| p[0])
+            .fold(f64::NEG_INFINITY, f64::max);
+        for node in &mut second.nodes_uv_m {
+            node[0] += 2.0 * (max_x - min_x);
+        }
+        for triangle in &mut second.triangles {
+            for node in &mut triangle.nodes {
+                *node += node_offset;
+            }
+            triangle.region_id.push_str("-second");
+        }
+        for edge in &mut second.edges {
+            for node in &mut edge.nodes {
+                *node += node_offset;
+            }
+            for side in &mut edge.incidences {
+                side.triangle_index += triangle_offset;
+            }
+        }
+        for region in &mut second.regions {
+            match region {
+                WaveguideCrossSectionRegionIR::Magnetic {
+                    region_id,
+                    object_id,
+                    ..
+                }
+                | WaveguideCrossSectionRegionIR::Air {
+                    region_id,
+                    object_id,
+                } => {
+                    region_id.push_str("-second");
+                    object_id.push_str("-second");
+                }
+            }
+        }
+        for boundary in &mut second.boundary_components {
+            boundary.boundary_component_id.push_str("-second");
+            boundary.region_id.push_str("-second");
+            for side in &mut boundary.half_edges {
+                side.triangle_index += triangle_offset;
+            }
+        }
+        for mut object in problem.objects.clone() {
+            object.object_id.push_str("-second");
+            object.name.push_str("-second");
+            for id in &mut object.material_assignment_ids {
+                id.push_str("-second");
+            }
+            problem.objects.push(object);
+        }
+        for mut region in problem.object_regions.clone() {
+            region.region_id.push_str("-second");
+            region.owner_object.push_str("-second");
+            region.name.push_str("-second");
+            problem.object_regions.push(region);
+        }
+        for mut assignment in problem.material_assignments.clone() {
+            assignment.assignment_id.push_str("-second");
+            assignment.target.object_id.push_str("-second");
+            if let Some(id) = &mut assignment.target.region_id {
+                id.push_str("-second");
+            }
+            problem.material_assignments.push(assignment);
+        }
+        for mut module in problem.magnetization_modules.clone() {
+            module.module_id.push_str("-second");
+            module.target.object_id.push_str("-second");
+            if let Some(id) = &mut module.target.region_id {
+                id.push_str("-second");
+            }
+            problem.magnetization_modules.push(module);
+        }
+        for (id, mut target) in targets.clone() {
+            target.object_id.push_str("-second");
+            if let Some(region) = &mut target.region_id {
+                region.push_str("-second");
+            }
+            targets.insert(format!("{id}-second"), target);
+        }
+        mesh.nodes_uv_m.extend(second.nodes_uv_m);
+        mesh.triangles.extend(second.triangles);
+        mesh.edges.extend(second.edges);
+        mesh.regions.extend(second.regions);
+        mesh.boundary_components.extend(second.boundary_components);
+        (problem, mesh, targets)
+    }
+
+    #[test]
+    fn dirichlet_requires_selected_anchors_on_every_scalar_component() {
+        use crate::waveguide_mesh_dirichlet::{
+            validate_finite_air_dirichlet_bindings as validate,
+            FiniteAirDirichletBindingsError as E,
+        };
+        let (problem, mesh, targets) = disconnected_dirichlet_fixture();
+        let registry = validate_waveguide_registry_bindings(&problem, &mesh, &targets).unwrap();
+        assert!(matches!(
+            validate(&registry, &["boundary-air-outer".into()]),
+            Err(E::UnanchoredScalarComponent { component_index: 1 })
+        ));
+        let ids = vec![
+            "boundary-air-outer".into(),
+            "boundary-air-outer-second".into(),
+        ];
+        let forward = validate(&registry, &ids).unwrap();
+        let mut reverse_ids = ids;
+        reverse_ids.reverse();
+        let reverse = validate(&registry, &reverse_ids).unwrap();
+        assert_eq!(forward.selected_edge_counts_by_component(), &[12, 12]);
+        assert_eq!(forward.essential_node_counts_by_component(), &[12, 12]);
+        assert_eq!(
+            forward.essential_node_indices(),
+            reverse.essential_node_indices()
+        );
+        assert_eq!(
+            forward.boundary_component_indices(),
+            reverse.boundary_component_indices()
+        );
     }
 }

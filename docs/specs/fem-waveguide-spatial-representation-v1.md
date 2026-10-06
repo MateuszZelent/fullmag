@@ -223,3 +223,27 @@ skalarnych, invariance pól/interakcji oraz certyfikat równowagi. Typed routing
 owner MFEM CPU/GPU i naukowa kwalifikacja 2.5D pozostają niedostępne. Przygotowane
 regresje podlegają istniejącej bramce `cargo test -p fullmag-ir waveguide_mesh`
 wyłącznie w GitHub Actions. Parser i review nie zastępują ich wykonania.
+
+
+### Jawny Dirichlet przekroju — prywatne bindings, 2026-10-06
+
+`waveguide_mesh_dirichlet::validate_finite_air_dirichlet_bindings` przyjmuje
+pożyczony wynik registry binding i listę exact boundary_component_id. Nie
+przyjmuje niezależnego raportu innego mesha. Sprawdza ponownie incydencje na
+niezmiennym mesh tego samego tokenu. Pusta selekcja, puste/powtórzone/nieznane ID,
+magnetic contours, air holes i two-owner interfaces są błędami. Whitespace nie
+jest usuwany z identyfikatorów. Każda wybrana half-edge musi należeć do zewnętrznego
+konturu air i mieć jednego właściciela. Sama deklaracja outer nie wystarcza.
+
+Wyjściowy opaque token zachowuje pożyczony registry, indeksy konturów w kolejności
+mesha, posortowany union essential node indices oraz liczniki rzeczywiście
+wybranych krawędzi i węzłów w każdej składowej skalarnej. Każda składowa musi
+mieć wybrane krawędzie i essential nodes. Istnienie zewnętrznego powietrza bez
+jego jawnego wyboru nie dowodzi anchoring. Ten token nie jest certyfikatem
+structural_2d, równowagi ani gotowości MFEM. World mapping, fingerprint, invariance,
+produkcja operatorów i wszystkie bramki naukowe pozostają wymagane.
+
+Przygotowane regresje obejmują outer air, błędne ID/magnetic/hole/interface,
+dwie rozłączne domeny i deterministyczność union względem kolejności selekcji.
+Wykonanie testów zachowuje istniejącą bramkę CI waveguide_mesh; parser finalnych
+bajtów oraz review źródeł nie zastępują wykonania Rust ani managed runtime.
