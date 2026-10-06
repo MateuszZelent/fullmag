@@ -11280,7 +11280,9 @@ class RegionMeshPolicyTests(unittest.TestCase):
         ]
 
         per_object_recipes = {
-            "waveguide": PerObjectMeshRecipe(hmax=20e-9, hmin=5e-9),
+            # The body lower bound remains eligible inside its regions. Keep it
+            # compatible with the region's authored [1.5, 3] nm size interval.
+            "waveguide": PerObjectMeshRecipe(hmax=20e-9, hmin=1.5e-9),
         }
         study_universe = {
             "mode": "manual",

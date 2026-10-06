@@ -7894,3 +7894,21 @@ policy/KSP/Γ przed dispatch. Przygotowano forwarding/noGamma/noDispatch
 regresje. AST i focused doc validator PASS; nowe CI wymagane.
 Controlled recipe ma explicit window8.5–16GHz i expected v2, lecz runtime
 jeszcze nie wykonany. Source-only forwarding nie domyka Γ ani signed15.
+
+
+### Korekta jawnej konfiguracji density fixture, bez zmiany generatora
+
+Potwierdzony clamp: recipe body minimum5nm trafia do global Gmsh minimum;
+regionalny upper target3nm nie może go ominąć. Kanoniczne równanie0104
+max(min eligible upper,max eligible lower) zachowuje parent lower bound w ROI.
+Dlatego wcześniejsze żądanie body[5,20] i region[1.5,3]nm nie opisuje testu
+actual3nm. Fixture jawnie zmienia body minimum na1.5nm, zachowując bulk20nm,
+regionalny target3nm, geometrię i threshold5nm. Nie zmieniono _mesh_hmin_value,
+nie zastosowano globalnej cichej redukcji ograniczeń, skip ani retry.
+
+AST/source review PASS; CI actual density nadal wymagane. Osobne ujawnione
+luki produkcyjne pozostają OPEN: regionalne minimum jest metadata bez runtime
+consumer oraz brakuje scoped lower-bound composition dla wielu właścicieli.
+Nie promujemy tej korekty fixture do kompletnej naprawy polityki meshing.
+Najnowszy CI37400348160:21 Gamma query regressions PASS, density8.1449nm FAIL;
+synthetic failure capture bez zgłoszonego błędu, upload nadal nieautoryzowany.
