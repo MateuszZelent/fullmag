@@ -268,9 +268,30 @@ Dowód z 2026-10-06: 32 interpretowane regresje, 31 PASS / 1 Windows symlink
 SKIP. Rzeczywisty eksport snapshotu producenta R1 seq 33 zakończył się
 exit 0, input hashes PASS i cleanup confirmed. Zachował dirty provenance.
 Ten pakiet nie zawiera nowego DTO R3. Odbiór eksportu nie zastępuje
-regeneracji aktualnego OpenAPI/TS. Obecny frontendowy domyślny import
-nadal odmawia dirty export; przed importem R3 wymaga osobnej, związanej
-z receiptem trasy snapshotowej, bez osłabiania clean importu.
+regeneracji aktualnego OpenAPI/TS.
+
+Generator `apps/control-room/scripts/generate-openapi-v2.mjs` ma osobną
+trasę `--input <absolutny-stdout.raw.json> --expected-commit <40-hex>
+--expected-snapshot <64-hex> --expected-source-digest <64-hex>
+--managed-snapshot-receipt <absolutny-receipt.json>`. Wymaga inputu dokładnie
+`receipt-parent/stdout.raw.json` i sąsiedniego `proof.json`; oba dowody muszą
+być ograniczonymi regularnymi plikami. Sprawdza SHA surowych bajtów, ich
+rozmiar, SHA receiptu w proof, komplet pinów source/native, rzeczywisty
+clean/dirty stamp, succeeded/0, pełne input-hash evidence i cleanup.
+Dopiero potem normalizuje zmienne dane buildu i atomowo publikuje JSON.
+Odmowa zachowuje poprzedni kontrakt; brak inputu nie uruchamia Cargo.
+Snapshot receipt i native receipt są wzajemnie wykluczające. Domyślna
+trasa nadal wymaga clean identity; dotychczasowa native receipt zachowuje
+swój odrębny kontrakt. Hashy i wzajemnej zgodności plików nie należy
+przedstawiać jako uwierzytelnienia przeciw aktorowi mogącemu nadpisać
+raw/receipt/proof jednocześnie. Trusted package/capsule gates pozostają
+odpowiedzialnością managed eksportera.
+
+Dowód importu: `just verify-control-room-openapi-import`, 22/22 PASS,
+bez kompilacji native/unit-test bundles; `just check-control-room-api-hygiene`
+PASS. Walidator odczytał również rzeczywisty seq 33 raw/receipt/proof:
+PASS, raw niezmieniony, generated JSON/TS nie nadpisane. Pełna regeneracja
+R3 nadal wymaga terminalnego odpowiedniego buildu i jego własnego eksportu.
 
 ### Pozostałe ograniczenia
 

@@ -105,6 +105,62 @@ export function validateNativeOpenApiReceipt(
   }
 }
 
+// Local managed-export evidence is a consistency boundary, not authentication
+// against an actor who can rewrite raw bytes, receipt and proof together.
+export function validateManagedSnapshotOpenApiReceipt(document, receipt, proof, expected) {
+  const { expectedCommit, expectedSnapshot, expectedSourceDigest,
+    inputSha256, inputByteLength, receiptSha256 } = expected;
+  if (!/^[a-f0-9]{40}$/.test(expectedCommit ?? "") ||
+      ![expectedSnapshot, expectedSourceDigest, inputSha256, receiptSha256].every(isSha256) ||
+      !Number.isSafeInteger(inputByteLength) || inputByteLength <= 0) {
+    throw new TypeError("Managed snapshot requires complete expected source identifiers and raw-byte hashes");
+  }
+  const identity = document?.["x-fullmag-build-identity"];
+  if (!identity || typeof identity !== "object" || Array.isArray(identity) ||
+      identity.git_commit !== expectedCommit ||
+      identity.source_snapshot_sha256 !== expectedSnapshot ||
+      !["clean", "dirty"].includes(identity.worktree_state) ||
+      !isBuildTimestamp(identity.built_at_utc)) {
+    throw new TypeError("Managed snapshot OpenAPI does not match the expected raw source identity");
+  }
+  const trueFlags = ["process_started", "cleanup_confirmed", "input_hashes_checked", "input_hashes_verified"];
+  const falseFlags = ["spawn_failed", "capture_failed", "cleanup_failed"];
+  const sharedFields = ["job_id", "image_digest", "build_receipt_sha256", "source_manifest_sha256",
+    "api_binary_sha256", "raw_openapi_sha256", "stderr_sha256", "state", "qualification", "exit_code",
+    ...trueFlags, ...falseFlags];
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt) ||
+      receipt.schema !== "fullmag.managed-package-openapi.v1" ||
+      receipt.state !== "succeeded" || receipt.exit_code !== 0 ||
+      receipt.qualification !== "NOT VERIFIED" || receipt.diagnostic_only !== true ||
+      receipt.profile !== "fem-cpu-release" || receipt.source_mode !== "snapshot" ||
+      receipt.source_commit !== expectedCommit ||
+      receipt.source_snapshot_sha256 !== expectedSnapshot ||
+      receipt.source_digest !== expectedSourceDigest ||
+      receipt.source_worktree_state !== identity.worktree_state ||
+      receipt.raw_openapi_sha256 !== inputSha256 || receipt.stdout_bytes !== inputByteLength ||
+      receipt.timed_out !== false || receipt.output_limit_exceeded !== false ||
+      !trueFlags.every((field) => receipt[field] === true) ||
+      !falseFlags.every((field) => receipt[field] === false) ||
+      !Array.isArray(receipt.input_hash_mismatches) || receipt.input_hash_mismatches.length !== 0 ||
+      !/^[a-f0-9]{32}$/.test(receipt.job_id ?? "") ||
+      !/^sha256:[a-f0-9]{64}$/.test(receipt.image_digest ?? "") ||
+      ![receipt.build_receipt_sha256, receipt.source_manifest_sha256,
+        receipt.api_binary_sha256, receipt.stderr_sha256].every(isSha256) ||
+      !["git_commit", "source_snapshot_sha256", "worktree_state", "built_at_utc"].every(
+        (field) => receipt.openapi_identity?.[field] === identity[field])) {
+    throw new TypeError("Managed snapshot receipt does not prove a successful source-pinned raw export");
+  }
+  if (!proof || typeof proof !== "object" || Array.isArray(proof) ||
+      proof.schema !== "fullmag.managed-package-openapi-proof.v1" ||
+      proof.managed_export_receipt_sha256 !== receiptSha256 ||
+      !sharedFields.every((field) => proof[field] === receipt[field]) ||
+      !Array.isArray(proof.input_hash_mismatches) || proof.input_hash_mismatches.length !== 0 ||
+      !["git_commit", "source_snapshot_sha256", "worktree_state"].every(
+        (field) => proof.source_identity?.[field] === identity[field])) {
+    throw new TypeError("Managed snapshot proof is incomplete or does not bind the receipt and raw export");
+  }
+}
+
 function isBuildTimestamp(value) {
   return typeof value === "string" &&
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) &&
