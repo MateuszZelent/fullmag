@@ -517,6 +517,16 @@ impl LocalLiveWorkspace {
         self.publish_snapshot();
     }
 
+    pub fn push_command_log(&self, command_id: &str, level: &str, message: impl Into<String>) {
+        if let Ok(mut state) = self.state.lock() {
+            push_engine_log(&mut state.engine_log, level, message);
+            if let Some(entry) = state.engine_log.last_mut() {
+                entry.command_id = Some(command_id.to_string());
+            }
+        }
+        self.publish_snapshot();
+    }
+
     pub fn set_solver_profile_config(&self, mut config: fullmag_runner::SolverProfileConfig) {
         if self.solver_profile_persistence.persistence_failed() {
             config.persist_artifact = false;

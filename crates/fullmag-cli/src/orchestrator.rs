@@ -9346,7 +9346,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 "load_state" => {
                     let Some(state_path) = cmd.state_path.as_deref() else {
                         live_workspace
-                            .push_log("error", "State import command is missing state_path");
+                            .push_command_log(&cmd.command_id, "error", "Failed to load workspace state: missing state_path");
                         continue;
                     };
                     match read_magnetization_state(
@@ -9391,7 +9391,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     format!("Loaded state preview refresh failed: {}", error),
                                 );
                             }
-                            live_workspace.push_log(
+                            live_workspace.push_command_log(
+                                &cmd.command_id,
                                 "success",
                                 format!(
                                     "Loaded workspace state from {} ({} vectors)",
@@ -9400,7 +9401,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             );
                         }
                         Err(error) => {
-                            live_workspace.push_log(
+                            live_workspace.push_command_log(
+                                &cmd.command_id,
                                 "error",
                                 format!("Failed to load workspace state: {}", error),
                             );
@@ -9430,12 +9432,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &live_workspace,
                         ProblemPreviewRefreshMode::MaterializeFields,
                     ) {
-                        Ok(()) => live_workspace.push_log(
+                        Ok(()) => live_workspace.push_command_log(
+                            &cmd.command_id,
                             "success",
                             "Field snapshots computed for the current magnetization",
                         ),
                         Err(error) => live_workspace
-                            .push_log("error", format!("Compute fields failed: {}", error)),
+                            .push_command_log(&cmd.command_id, "error", format!("Compute fields failed: {}", error)),
                     }
                     continue;
                 }
@@ -9455,9 +9458,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &live_workspace,
                     ) {
                         Ok(()) => live_workspace
-                            .push_log("success", "Energies computed for the current magnetization"),
+                            .push_command_log(&cmd.command_id, "success", "Energies computed for the current magnetization"),
                         Err(error) => live_workspace
-                            .push_log("error", format!("Compute energies failed: {}", error)),
+                            .push_command_log(&cmd.command_id, "error", format!("Compute energies failed: {}", error)),
                     }
                     continue;
                 }
@@ -11086,12 +11089,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 match interactive_runtime_host
                     .compute_current_fields(compute_magnetization, &live_workspace)
                 {
-                    Ok(()) => live_workspace.push_log(
+                    Ok(()) => live_workspace.push_command_log(
+                        &command.command_id,
                         "success",
                         "Field snapshots computed for the current magnetization",
                     ),
                     Err(error) => live_workspace
-                        .push_log("error", format!("Compute fields failed: {}", error)),
+                        .push_command_log(&command.command_id, "error", format!("Compute fields failed: {}", error)),
                 }
                 continue;
             }
@@ -11110,9 +11114,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     .compute_current_energies(compute_magnetization, &live_workspace)
                 {
                     Ok(()) => live_workspace
-                        .push_log("success", "Energies computed for the current magnetization"),
+                        .push_command_log(&command.command_id, "success", "Energies computed for the current magnetization"),
                     Err(error) => live_workspace
-                        .push_log("error", format!("Compute energies failed: {}", error)),
+                        .push_command_log(&command.command_id, "error", format!("Compute energies failed: {}", error)),
                 }
                 continue;
             }
@@ -11208,14 +11212,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
             if command.kind == "load_state" {
                 if paused_stage.is_some() {
-                    live_workspace.push_log(
+                    live_workspace.push_command_log(
+                        &command.command_id,
                         "warning",
-                        "Load-state is disabled while a stage is paused. Stop it first or resume it.",
+                        "Failed to load workspace state: load-state is disabled while a stage is paused. Stop it first or resume it.",
                     );
                     continue;
                 }
                 let Some(state_path) = command.state_path.as_deref() else {
-                    live_workspace.push_log("error", "State import command is missing state_path");
+                    live_workspace.push_command_log(&command.command_id, "error", "Failed to load workspace state: missing state_path");
                     continue;
                 };
                 match read_magnetization_state(
@@ -11228,9 +11233,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         if let Err(error) = interactive_runtime_host
                             .load_state(loaded_state.values.clone(), &live_workspace)
                         {
-                            live_workspace.push_log(
+                            live_workspace.push_command_log(
+                                &command.command_id,
                                 "error",
-                                format!("Failed to apply imported workspace state: {}", error),
+                                format!("Failed to load workspace state: {}", error),
                             );
                             continue;
                         }
@@ -11238,7 +11244,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         continuation_source = None; // loaded from file — unknown source
                         continuation_completion = None;
                         drop(continuation_relax_handoff.take());
-                        live_workspace.push_log(
+                        live_workspace.push_command_log(
+                            &command.command_id,
                             "success",
                             format!(
                                 "Loaded workspace state from {} ({} vectors)",
@@ -11247,7 +11254,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         );
                     }
                     Err(error) => {
-                        live_workspace.push_log(
+                        live_workspace.push_command_log(
+                            &command.command_id,
                             "error",
                             format!("Failed to load workspace state: {}", error),
                         );

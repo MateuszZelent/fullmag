@@ -21639,6 +21639,19 @@ async fn dispatch_compute_fields_command(state: &Arc<AppState>, command_id: &str
     record.dispatched_at_unix_ms = Some(1_700_000_001_000);
 }
 
+async fn publish_compute_fields_result(state: &Arc<AppState>, command_id: &str) {
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("compute_fields requires a live session");
+    snapshot.engine_log.push(crate::types::EngineLogEntry {
+        timestamp_unix_ms: 1_700_000_001_000,
+        level: "success".to_string(),
+        message: "Field snapshots computed for the current magnetization".to_string(),
+        source: None,
+        phase_id: None,
+        command_id: Some(command_id.to_string()),
+    });
+}
+
 async fn reconcile_compute_fields_command(state: &Arc<AppState>) -> bool {
     let snapshot = state
         .current_live_state
@@ -21751,6 +21764,7 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
     );
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     let dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(dispatched["status"], "dispatched");
 
@@ -21881,6 +21895,7 @@ async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_req
     assert!(requirements[1]["carrier_fingerprint"].is_string());
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     let dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(dispatched["status"], "dispatched");
 
@@ -21988,6 +22003,7 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
         .expect("full magnetization field should be present");
 
     dispatch_compute_fields_command(&state, &command_id).await;
+    publish_compute_fields_result(&state, &command_id).await;
 
     {
         let mut guard = state.current_live_state.write().await;
@@ -22126,6 +22142,7 @@ async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readabl
         .is_some_and(|value| !value.is_empty()));
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     assert!(!reconcile_compute_fields_command(&state).await);
     let still_dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(still_dispatched["status"], "dispatched");
@@ -22175,6 +22192,7 @@ async fn compute_fields_command_contract_resolves_fem_full_requirement() {
     assert_eq!(requirements[0]["generation_id"], "42");
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     let dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(dispatched["status"], "dispatched");
 
