@@ -1039,17 +1039,29 @@ mod tests {
 
     #[test]
     fn positive_length_collinear_overlap_is_rejected() {
-        let error = pair_error([
+        // Keep local element/incidence prerequisites valid, and place the
+        // second apex beyond the first edge so the overlapping base pair is
+        // visited before endpoint contacts from the slanted edges.
+        let mesh = two_triangle_mesh([
             [0.0, 0.0],
             [4.0, 0.0],
             [2.0, 3.0],
             [3.0, 0.0],
             [1.0, 0.0],
-            [2.0, -1.0],
+            [5.0, -1.0],
         ]);
+        validate_waveguide_mesh_elements(&mesh)
+            .expect("overlap fixture must pass local triangle validation");
+        validate_waveguide_mesh_incidence(&mesh)
+            .expect("overlap fixture must pass combinatorial incidence validation");
+        let error = validate_waveguide_mesh_embedding(&mesh)
+            .expect_err("positive-length collinear edge overlap must be rejected");
         assert!(matches!(
             error,
-            WaveguideMeshEmbeddingError::CollinearEdgeOverlap { .. }
+            WaveguideMeshEmbeddingError::CollinearEdgeOverlap {
+                first_edge_index: 0,
+                second_edge_index: 3,
+            }
         ));
     }
 

@@ -7679,3 +7679,37 @@ Jednorazowy kontroler75798 czeka na jego terminalny stan i wtedy zgłosi exact
 SHAebc3edfdb837f81dceeff436f67400bb67c1560a z tym samym request key. Ta kapsuła
 nie obejmuje późniejszej poprawki writer; kwalifikację każdej wersji raportujemy
 oddzielnie. Nowego numeru joba/receiptu nie ma jeszcze. Nie restartowano sweepa.
+
+
+### Aktualizacja oczekującego buildu i wynik CI070d
+
+Przed source capture zatrzymano wyłącznie własny observer97828/uchwyt75798,
+po sprawdzeniu dokładnej command line, creation time, fazy waiting i braku
+submit log/job. Serial solver pozostał live. Zachowano poprzednie źródło/state
+oraz supersession receipt. Nowy jednorazowy observer28749/ PID84692 ma exact
+commit070d277a8f01cb86795bb3e8e69872cc2d73c91f i nowy request key, obejmujący
+również poprawkę writer. Czeka na terminalny serial reference; nie ma jeszcze
+job ID ani udanego submit. Nie zmieniono źródeł istniejącego runtime234.
+
+CI37392644899: deterministyczne worker contracts PASS, nowy k_process_pool gate
+PASS (10), adaptive_resources PASS, nowy disconnected-components regression
+PASS. Waveguide mesh gate ma39 PASS/1 FAIL: istniejący
+positive_length_collinear_overlap_is_rejected oczekuje konkretnej klasyfikacji
+CollinearEdgeOverlap. Trwa ustalenie ścieżki walidacji/fixture; nie osłabiono
+odrzucania błędnych meshów. Następne Rust writer/API kroki są SKIPPED, więc nie
+stanowią dowodu PASS. Control Room, browser, Python, generated API i pozostałe
+bramki bootstrap PASS. Pełne CI, runtime adaptive i nauka pozostają otwarte.
+
+Serial15 ma nadal aktywny native solve. Log po siedmiu completion events
+przeszedł do Γ frequency-window refinement, subwindow30/50, window_s1735.7.
+Te zdarzenia nie są zaakceptowanymi finalnymi rows. Zapisano rzeczywisty postęp;
+nie restartowano obliczeń z powodu długości przebiegu ani nie zmieniono tolerancji.
+
+
+Source-order diagnosis testu overlap: elementy/incidence są poprawne, lecz
+stary apex drugiego trójkąta(2,-1) ustawia AABB jego ukośnej edge4 przed base
+edge3. Najpierw edge0/4 daje EdgeContactWithoutSharedNode (endpoint na obcej
+krawędzi), zanim detector sprawdzi collinear overlap0/3. Test zmienia apex na
+(5,-1), jawnie sprawdza poprawność element/incidence i dokładny overlap pair0/3.
+Nie zmieniono produkcyjnej walidacji ani nie poszerzono assertion o dowolny błąd.
+Parser i diff PASS; CI ma potwierdzić tę korektę oraz wcześniej skipped writer/API.
