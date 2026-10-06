@@ -916,9 +916,21 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
             lines.append(f"study.universe.mesh({_python_keyword_args(universe_mesh_kwargs)})")
 
     for stage in builder.get("stages") or []:
-        if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
+        if not isinstance(stage, Mapping):
             continue
-        kwargs: dict[str, object] = {"stage_id": str(stage.get("stage_id") or "relax")}
+        kind = str(stage.get("kind") or "relax")
+        if kind not in {"run", "relax"}:
+            continue
+        kwargs: dict[str, object] = {"stage_id": str(stage.get("stage_id") or kind)}
+        autosave = _scene_stage_autosave(stage.get("autosave"))
+        autosave_expression = _render_stage_autosave(autosave) if autosave is not None else ""
+        if kind == "run":
+            until = _finite_number(stage.get("until_seconds"))
+            if until is None or until <= 0:
+                raise ValueError("Run stage requires finite positive until_seconds.")
+            kwargs["until"] = until
+            lines.append(f"study.stages.add_run({_python_keyword_args(kwargs)}){autosave_expression}")
+            continue
         algorithm = stage.get("algorithm")
         if isinstance(algorithm, str) and algorithm.strip():
             kwargs["algorithm"] = algorithm
@@ -933,10 +945,39 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
             fixed_timestep = _finite_number(solver.get("fixed_timestep"))
         if fixed_timestep is not None:
             kwargs["dt"] = fixed_timestep
-        lines.append(f"study.stages.add_relax({_python_keyword_args(kwargs)})")
+        lines.append(f"study.stages.add_relax({_python_keyword_args(kwargs)}){autosave_expression}")
 
     lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _scene_stage_autosave(value: object) -> StageAutosave | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or value.get("kind") not in {None, "stage_autosave"}:
+        raise ValueError("Scene stage autosave requires a stage_autosave policy.")
+    from fullmag.model.study import FieldAutosave
+
+    table_value = value.get("table")
+    table = _table_autosave_from_override(table_value)
+    if table_value is not None and table is None:
+        raise ValueError("Scene stage autosave table requires a valid sampling cadence.")
+    fields = []
+    for field_value in value.get("fields") or []:
+        if not isinstance(field_value, Mapping) or field_value.get("kind") not in {None, "field_autosave"}:
+            raise ValueError("Scene stage autosave fields require field_autosave policies.")
+        fields.append(FieldAutosave(
+            quantity=field_value.get("quantity"),
+            every=_requested_sampling_period_from_ir(field_value, "every_seconds"),
+            every_steps=field_value.get("every_steps"),
+        ))
+    return StageAutosave(
+        target=value.get("target", "main"),
+        layout=value.get("layout", "continuous"),
+        format=value.get("format", "zarr"),
+        table=table,
+        fields=fields,
+    )
 
 
 def _render_shape_expression(entry: Mapping[str, object]) -> str:
@@ -6580,6 +6621,8 @@ def _render_stage_table_autosave(table: TableAutosave) -> str:
         parts.append(f"t_sampl={_py_sampling_period(table.t_sampl)}")
     if table.quantities is not None:
         parts.append(f"quantities={_py_literal(list(table.quantities))}")
+    if table.expressions:
+        parts.append(f"expressions={_py_literal(list(table.expressions))}")
     if table.table_id != "default":
         parts.append(f"table_id={_py_repr(table.table_id)}")
     return f"fm.TableAutosave({', '.join(parts)})"

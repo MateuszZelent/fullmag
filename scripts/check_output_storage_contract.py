@@ -9,8 +9,9 @@ from tempfile import TemporaryDirectory
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "packages" / "fullmag-py" / "src"))
 
-from fullmag import OutputStorage
+from fullmag import FieldAutosave, OutputStorage
 from fullmag.runtime.output_storage_lowering import (
+    configure_problem_ir_autosave,
     configure_scene_stage_autosaves,
     configure_study_pipeline_autosaves,
 )
@@ -20,6 +21,8 @@ from fullmag.runtime.scene_document import build_scene_document_from_builder
 from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
 from fullmag.runtime.script_builder import (
     _render_output_storage,
+    _render_stage_autosave,
+    _scene_stage_autosave,
     export_builder_draft,
     render_scene_document_as_script,
 )
@@ -28,6 +31,27 @@ from fullmag.runtime.script_builder import (
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def check_default_field_quantities() -> None:
+    storage = OutputStorage().to_ir()
+    for stage, expected in (
+        ({"kind": "relaxation"}, FieldAutosave("m", every_steps=100)),
+        ({"kind": "run", "until_seconds": "1e-12"}, FieldAutosave("m", every=1e-12)),
+    ):
+        policy = configure_scene_stage_autosaves([stage], storage)[0]["autosave"]
+        require(policy["fields"] == [expected.to_ir()], "implicit field is not canonical m")
+        public_policy = _scene_stage_autosave(policy)
+        require(public_policy.to_ir() == policy, "implicit autosave cannot round-trip through the public API")
+        require(f"fm.FieldAutosave({json.dumps('m')}," in _render_stage_autosave(public_policy), "implicit autosave export lost canonical m")
+        pipeline = configure_study_pipeline_autosaves(
+            {"nodes": [{"node_kind": "stage", "stage_kind": stage["kind"], "payload": stage}]},
+            storage,
+        )
+        require(pipeline["nodes"][0]["payload"]["autosave"] == policy, "pipeline implicit field differs from flat stage")
+        ir = {"study": {"kind": stage["kind"], "sampling": {"outputs": []}}}
+        configure_problem_ir_autosave(ir, storage, until_seconds=1e-12)
+        require(ir["study"]["sampling"]["stage_autosave"] == policy, "ProblemIR implicit field differs from scene export")
 
 
 def check_literal_stage_times() -> None:
@@ -69,6 +93,7 @@ def check_literal_stage_times() -> None:
 
 
 def main() -> None:
+    check_default_field_quantities()
     check_literal_stage_times()
     python_sources = (
         REPO / "packages/fullmag-py/src/fullmag/model/output_storage.py",
@@ -174,7 +199,7 @@ study.storage()
                     "outputs": [
                         {
                             "kind": "field",
-                            "name": "magnetization",
+                            "name": "m",
                             "every_seconds": 0.5,
                         }
                     ]
