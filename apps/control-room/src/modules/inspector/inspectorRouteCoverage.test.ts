@@ -453,8 +453,12 @@ const runtime = runtimeExplorerSnapshotFromResources({
     ...unavailable,
     data: {
       completed_stage_indexes: [],
+      request_scope_epoch: "inspector-route-api:0",
       revision: 1,
+      run_id: "run-fixture",
       runtime_state: "running",
+      session_epoch: "session-fixture@0",
+      session_id: "session-fixture",
       stage_statuses: ["running"],
       stages: [{
         command_id: "command-fixture",
