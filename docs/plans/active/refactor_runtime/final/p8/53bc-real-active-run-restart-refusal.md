@@ -260,3 +260,27 @@ i `runtime-stage`. Required 547 398 656 B, available 442 707 968 B.
 Wolne miejsce zmieniło się od poprzedniego pomiaru; zgoda na wskazaną kopię
 kompilatora nadal jest potrzebna. Ten dowód zamyka preflight, nie bramkę
 rzeczywistego aktywnego solve/refusal.
+
+## Realny solver i brak inkarnacji pierwszej sesji — 06.10.2026
+
+Próba `63609`, receipt `9ad9d92dce4940ed8a80eb5f4f4a8c9c`, exit 1,
+uruchomiła rzeczywisty solver A do kroku 1 w stanie running. Żądanie restartu
+zatrzymało się na typed transport: platform workspace identity miała epoch 0.
+Nie jest to dowód poprawnej odmowy restartu podczas solve.
+
+Źródło przyczyny: `sync_current_live_frame_update` tworzyło pierwszą sesję
+z wewnętrznej publikacji solvera bez zwiększenia licznika inkarnacji API.
+Poprawka rezerwuje checked epoch pod transition lock i publikuje go razem
+ze snapshotem dopiero po udanej walidacji/derywacji. Nie zmienia scope
+transportu ani nie wstawia sztucznej sesji do fixture. Dodano źródła regresji
+Rust dla pierwszej i powtórnej klatki, obcej sesji, odrzucenia i overflow;
+**NOT RUN** z powodu obowiązującego zakazu kompilacji testów jednostkowych.
+Produkcję trzeba jeszcze zbudować i sprawdzić z nowo utrwalonym pakietem A.
+
+Driver może użyć istniejącej stabilnej kopii EXE tylko po zgodności wszystkich
+13 plików z oczekiwanymi hashami i bez obcych wpisów/przekierowań. W tej
+próbie uniknięto dwóch zbędnych kopii; pełna quota kandydata i headroom
+pozostają bez zmian. Preflight: required 307 253 760 B, available 419 958 784 B.
+Interpretowana regresja drivera: PASS. API PID 102556, solver 11152 i helper
+67636 po próbie nie istniały, port 22570 był zamknięty. Receipt nadal zachowuje
+unknown wait outcome API/solvera; późniejsze sprawdzenie nie zastępuje wait.

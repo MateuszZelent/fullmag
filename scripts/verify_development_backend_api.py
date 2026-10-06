@@ -40,6 +40,31 @@ def _validate_active_run_refusal_scope(
         raise storage.StorageError("Active-run refusal owner must be a canonical bundle ID")
 
 
+def _can_reuse_active_binaries(source_bin: Path, stable_bin: Path, expected: dict) -> bool:
+    from windows.runtime_bundle import BINARY_NAMES, _check_path_chain, _require_directory, _require_regular_file
+
+    _check_path_chain(stable_bin, "stable fixture executable directory", allow_missing=True)
+    if not stable_bin.exists():
+        return False
+    _require_directory(stable_bin, "stable fixture executable directory")
+    if any(path.name not in BINARY_NAMES for path in stable_bin.iterdir()):
+        raise storage.StorageError("Stable fixture executable directory contains unknown entries")
+    reusable = True
+    for name in BINARY_NAMES:
+        source, destination = source_bin / name, stable_bin / name
+        _require_regular_file(source, "verified fixture executable", nonempty=True)
+        if hashlib.sha256(source.read_bytes()).hexdigest() != expected[name]:
+            raise storage.StorageError("Verified fixture executable changed before reuse")
+        _check_path_chain(destination, "stable fixture executable", allow_missing=True)
+        if not destination.exists():
+            reusable = False
+            continue
+        _require_regular_file(destination, "existing stable fixture executable", nonempty=True)
+        if hashlib.sha256(destination.read_bytes()).hexdigest() != expected[name]:
+            reusable = False
+    return reusable
+
+
 def run(repo_root: str, cross_build_bundle: str = "", project_document_only: bool = False,
         restart_transport_only: bool = False, observer_pause_only: bool = False,
         restart_consumer_only: bool = False, consumer_readiness_only: bool = False,
@@ -219,8 +244,10 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         try:
             from windows.runtime_bundle import BINARY_NAMES
             source_bin = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
+            reuse_active_binaries = False
             if active_run_refusal_owner_bundle is not None:
                 from windows.verify_consumer_pump import _check_active_candidate_capacity
+                reuse_active_binaries = _can_reuse_active_binaries(source_bin, api.parent, manifest["executable_sha256"])
                 archive_bytes = growth_bytes = 0
                 for name in BINARY_NAMES:
                     source_size = _require_regular_file(source_bin / name, "verified fixture executable", nonempty=True).st_size
@@ -234,35 +261,40 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                     Path(native["build_root"]), Path(native["storage_root"]),
                     Path(native["runtime_root"]), Path(native["build_root"]) / "windows-runtime/build-manifest.json",
                     verified["ready_build_id"], receipt,
-                    additional_copy_bytes=archive_bytes + growth_bytes,
+                    additional_copy_bytes=0 if reuse_active_binaries else archive_bytes + growth_bytes,
                     receipt_key="active_run_startup_capacity",
                 )
-            archive = run_root / "service-binaries"
-            staging = run_root / "runtime-stage"
-            archive.mkdir()
-            staging.mkdir()
-            api.parent.mkdir(exist_ok=True)
-            _require_directory(api.parent, "stable fixture executable directory")
-            if any(path.name not in BINARY_NAMES for path in api.parent.iterdir()):
-                raise storage.StorageError("Stable fixture executable directory contains unknown entries")
-            for existing in api.parent.iterdir():
-                _require_regular_file(existing, "existing stable fixture executable", nonempty=True)
-            source_bin = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
-            for name in BINARY_NAMES:
-                _require_regular_file(source_bin / name, "verified fixture executable", nonempty=True)
-                source = storage.validate_path(source_bin / name, native["build_root"], "verified fixture executable")
-                expected = manifest["executable_sha256"][name]
-                shutil.copyfile(source, archive / name)
-                if hashlib.sha256(source.read_bytes()).hexdigest() != expected or hashlib.sha256((archive / name).read_bytes()).hexdigest() != expected:
-                    raise storage.StorageError("Fixture executable changed while sealing its archive")
-                shutil.copyfile(archive / name, staging / name)
-                _check_path_chain(api.parent / name, "stable fixture executable", allow_missing=True)
-                destination = storage.validate_path(api.parent / name, layout["build_root"], "stable fixture executable")
-                # Windows refuses replacement of an active EXE. Never stop a
-                # process to make room; the route holds its managed build lock.
-                os.replace(staging / name, destination)
-                if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
-                    raise storage.StorageError("Stable fixture executable publication failed verification")
+                receipt["active_run_binary_publication"] = {
+                    "mode": "reused_verified_stable_copy" if reuse_active_binaries else "copied_verified_archive",
+                    "executable_sha256": manifest["executable_sha256"],
+                }
+            if not reuse_active_binaries:
+                archive = run_root / "service-binaries"
+                staging = run_root / "runtime-stage"
+                archive.mkdir()
+                staging.mkdir()
+                api.parent.mkdir(exist_ok=True)
+                _require_directory(api.parent, "stable fixture executable directory")
+                if any(path.name not in BINARY_NAMES for path in api.parent.iterdir()):
+                    raise storage.StorageError("Stable fixture executable directory contains unknown entries")
+                for existing in api.parent.iterdir():
+                    _require_regular_file(existing, "existing stable fixture executable", nonempty=True)
+                source_bin = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
+                for name in BINARY_NAMES:
+                    _require_regular_file(source_bin / name, "verified fixture executable", nonempty=True)
+                    source = storage.validate_path(source_bin / name, native["build_root"], "verified fixture executable")
+                    expected = manifest["executable_sha256"][name]
+                    shutil.copyfile(source, archive / name)
+                    if hashlib.sha256(source.read_bytes()).hexdigest() != expected or hashlib.sha256((archive / name).read_bytes()).hexdigest() != expected:
+                        raise storage.StorageError("Fixture executable changed while sealing its archive")
+                    shutil.copyfile(archive / name, staging / name)
+                    _check_path_chain(api.parent / name, "stable fixture executable", allow_missing=True)
+                    destination = storage.validate_path(api.parent / name, layout["build_root"], "stable fixture executable")
+                    # Windows refuses replacement of an active EXE. Never stop a
+                    # process to make room; the route holds its managed build lock.
+                    os.replace(staging / name, destination)
+                    if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
+                        raise storage.StorageError("Stable fixture executable publication failed verification")
             binary_hash = hashlib.sha256(api.read_bytes()).hexdigest()
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")

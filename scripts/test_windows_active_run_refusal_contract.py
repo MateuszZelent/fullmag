@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 from unittest import mock
 
@@ -37,6 +39,30 @@ FROZEN_BUILD_ID = "b" * 64
 REQUEST_ID = "11111111-1111-4111-8111-111111111111"
 API_PID = 42100
 SOLVER_PID = 42101
+
+with tempfile.TemporaryDirectory() as directory:
+    from windows.runtime_bundle import BINARY_NAMES
+    source_root, stable_root = Path(directory) / "source", Path(directory) / "stable"
+    source_root.mkdir()
+    stable_root.mkdir()
+    expected = {}
+    for name in BINARY_NAMES:
+        payload = name.encode()
+        (source_root / name).write_bytes(payload)
+        (stable_root / name).write_bytes(payload)
+        expected[name] = hashlib.sha256(payload).hexdigest()
+    assert backend_gate._can_reuse_active_binaries(source_root, stable_root, expected)
+    changed = stable_root / BINARY_NAMES[0]
+    changed.write_bytes(b"different build")
+    assert not backend_gate._can_reuse_active_binaries(source_root, stable_root, expected)
+    changed.write_bytes((source_root / BINARY_NAMES[0]).read_bytes())
+    (source_root / BINARY_NAMES[0]).write_bytes(b"source changed")
+    try:
+        backend_gate._can_reuse_active_binaries(source_root, stable_root, expected)
+    except backend_gate.storage.StorageError as error:
+        assert "changed before reuse" in str(error)
+    else:
+        raise AssertionError("mutated source executable was accepted")
 
 capacity_paths = [Path("build"), Path("storage"), Path("runtime"), Path("manifest.json")]
 with mock.patch("windows.select_development_candidate._source_inventory_bytes", return_value=100), \
@@ -258,6 +284,7 @@ print(json.dumps({
     "status": "passed",
     "cases": [
         "readiness-schema-and-checkset-unchanged",
+        "active-run-reuses-only-exact-verified-executables",
         "candidate-capacity-fails-before-processes-and-preserves-byte-counts",
         "active-run-route-isolated-to-frozen-owner-bundle",
         "exact-active-result-schema-and-checkset-accepted",
