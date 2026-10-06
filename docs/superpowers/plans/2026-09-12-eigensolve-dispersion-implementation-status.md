@@ -7882,3 +7882,15 @@ Dirichlet, kpool/adaptive_resources, writer oraz API przeszły. Generated API,
 Control Room, browser fixture, Windows, FDM i API hygiene również PASS.
 Python gate FAIL wyłącznie na actual mesh density; prywatne S09 helpery mają
 wykonany dowód CI, lecz provider/MFEM2D i runtime/nauka nadal nie są potwierdzone.
+
+
+### Γ policy proof — wykonawczy forwarding i preflight
+
+CLI pilota udostępnia expected-window-krylov-policy jako postsolve guard.
+Opcja jest zapisana w dry-run i przekazywana do Gamma actual-query report;
+nie zmienia native command/IR. Review P2 wykryło pominięcie proof przez
+programmatic execute z shifted_ksp_type=None; wspólny preflight sprawdza
+policy/KSP/Γ przed dispatch. Przygotowano forwarding/noGamma/noDispatch
+regresje. AST i focused doc validator PASS; nowe CI wymagane.
+Controlled recipe ma explicit window8.5–16GHz i expected v2, lecz runtime
+jeszcze nie wykonany. Source-only forwarding nie domyka Γ ani signed15.

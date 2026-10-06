@@ -3611,3 +3611,21 @@ nie dowodzi residualu, pełnego frequency-window certificate ani fizyki.
 |---|---|---|
 | scripts/de_gamma_krylov_trial.py | _validate_window_basis_policy | Związanie actual queried EPS dimensions z deklaracją konkretnego podokna |
 | scripts/test_de_gamma_krylov_trial.py | class GammaWindowBasisPolicyTests | Odrzucenie starej, błędnie opisanej lub niezmierzonej przestrzeni; wykonanie wyłącznie CI |
+
+
+### Żądanie polityki w zarządzanym pilocie Γ
+
+`run_de_100nm_pilot.py --expected-window-krylov-policy` ma typ enum string,
+domyślnie brak, jednostkę $1$ i wartości `bounded_double_nev_v1` lub
+`bounded_quadruple_nev_window_v2`. Wymaga próbki Γ oraz jawnego shifted KSP type.
+Wspólny preflight obowiązuje CLI i programmatic execute przed dispatch.
+Opcja trafia wyłącznie do postsolve report/guard; nie zmienia ProblemIR,
+compose_command ani konfiguracji operatora. Żądanie bez Γ jest błędem,
+a nie pomijaną opcją. Dry-run ujawnia żądaną politykę; kwalifikacja pozostaje
+odrębna od dowodu rzeczywiście użytych dimensions.
+
+| Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|
+| scripts/run_de_100nm_pilot.py | _validate_window_policy_request | Wspólny preflight polityki/KSP/Γ przed jakimkolwiek dispatch |
+| scripts/run_de_100nm_pilot.py | _validate_krylov_trials | Przekazanie żądanej polityki do postsolve proof, bez zmiany native inputs |
+| scripts/test_de_gamma_krylov_trial.py | class GammaWindowPolicyPilotRoutingTests | Forwarding oraz odrzucenie ignored-policy przed execute dispatch |

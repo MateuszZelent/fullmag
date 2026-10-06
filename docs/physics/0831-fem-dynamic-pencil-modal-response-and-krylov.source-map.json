@@ -2439,6 +2439,24 @@
       "path": "scripts/test_de_gamma_krylov_trial.py",
       "symbol": "class GammaWindowBasisPolicyTests",
       "responsibility": "Prepared measured-dimension mutation regressions; executed only in GitHub Actions"
+    },
+    {
+      "id": "source-gamma-policy-pilot-preflight",
+      "path": "scripts/run_de_100nm_pilot.py",
+      "symbol": "_validate_window_policy_request",
+      "responsibility": "Require explicit shiftedKSP and Gamma before CLI/programmatic dispatch"
+    },
+    {
+      "id": "source-gamma-policy-pilot-forward",
+      "path": "scripts/run_de_100nm_pilot.py",
+      "symbol": "_validate_krylov_trials",
+      "responsibility": "Forward requested window policy to actual-query postsolve guard"
+    },
+    {
+      "id": "source-gamma-policy-pilot-routing-tests",
+      "path": "scripts/test_de_gamma_krylov_trial.py",
+      "symbol": "class GammaWindowPolicyPilotRoutingTests",
+      "responsibility": "Prepared forwarding/no-dispatch regressions, GitHub Actions only"
     }
   ],
   "public_api": {

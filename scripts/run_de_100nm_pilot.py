@@ -1173,9 +1173,24 @@ def _validate_shifted_ksp_trial_request(pilot, requested_type, nearest_frequency
                 "nearest shifted KSP trial requires exactly one nonzero DE/BV sample")
 
 
+def _validate_window_policy_request(pilot, policy, shifted_ksp_type):
+    if policy is None:
+        return
+    if not isinstance(policy, str) or policy not in (
+        "bounded_double_nev_v1", "bounded_quadruple_nev_window_v2",
+    ):
+        raise managed.BenchmarkError("unsupported expected window Krylov policy")
+    if shifted_ksp_type is None:
+        raise managed.BenchmarkError("expected window Krylov policy requires explicit shifted KSP type")
+    sampling = PILOTS.get(pilot, (None, None))[1]
+    if not any(value == 0.0 for value in SAMPLING.get(sampling, ())):
+        raise managed.BenchmarkError("expected window Krylov policy requires a Gamma sample")
+
+
 def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
                             eps_prefilter, gmres_restart, *,
-                            spectral_target="frequency_window", target_frequency_hz=None):
+                            spectral_target="frequency_window", target_frequency_hz=None,
+                            expected_window_krylov_policy=None):
     """Run the separate K0 query and nonzero Floquet residual receipt gates."""
     wavevectors = SAMPLING.get(sampling, ())
     if spectral_target not in ("frequency_window", "nearest"):
@@ -1184,6 +1199,8 @@ def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
         raise managed.BenchmarkError("nearest shifted KSP trial requires one nonzero sample")
     if gmres_restart is not None and gmres_restart not in GMRES_RESTART_CHOICES:
         raise managed.BenchmarkError("shifted KSP trial restart request is unsupported")
+    if expected_window_krylov_policy is not None and not any(value == 0.0 for value in wavevectors):
+        raise managed.BenchmarkError("expected window Krylov policy requires a Gamma sample")
     artifacts = {}
     if any(value == 0.0 for value in wavevectors):
         artifacts["gamma_krylov_trial"] = validate_gamma_krylov_trial(
@@ -1193,6 +1210,7 @@ def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
             requested_rtol,
             eps_prefilter=eps_prefilter,
             gmres_restart=gmres_restart,
+            expected_window_krylov_policy=expected_window_krylov_policy,
         )
     if any(value != 0.0 for value in wavevectors):
         selection = (
@@ -1928,7 +1946,8 @@ def _modal_krylov_environment(command):
     return values
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False, shifted_ksp_type=None, air_growth_rate=None):
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False, shifted_ksp_type=None, air_growth_rate=None, expected_window_krylov_policy=None):
+    _validate_window_policy_request(pilot, expected_window_krylov_policy, shifted_ksp_type)
     _validate_air_growth_rate_request(
         pilot, air_growth_rate, external_model=model_identity is not None,
         parallel_mode=parallel_mode,
@@ -2085,6 +2104,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
                         gmres_restart,
                         spectral_target=modal_target,
                         target_frequency_hz=target_frequency_hz,
+                        expected_window_krylov_policy=expected_window_krylov_policy,
                     ))
                 artifacts["potential_reconstruction"] = validate_smoke_potential_fields(
                     case_dir, artifacts["row_preflight"]["sample_count"])
@@ -2452,11 +2472,19 @@ def main(argv=None):
         "--frequency-max-ghz",
         help="finite positive upper bound for a DE-SMOKE frequency-window override",
     )
+    parser.add_argument(
+        "--expected-window-krylov-policy",
+        choices=("bounded_double_nev_v1", "bounded_quadruple_nev_window_v2"),
+        help="postsolve Gamma EPS dimension proof; does not change native solver inputs",
+    )
     args = parser.parse_args(argv)
     try:
         _validate_shifted_ksp_trial_request(args.pilot, args.shifted_ksp_type,
                                           args.nearest_target_frequency_ghz, args.spectral_target,
                                           dense_oracle=args.dense_oracle)
+        _validate_window_policy_request(
+            args.pilot, args.expected_window_krylov_policy, args.shifted_ksp_type,
+        )
         if args.with_ui and args.capture_session:
             raise ValueError("--with-ui and --capture-session are mutually exclusive")
         if args.with_ui and not args.web_build_root:
@@ -2549,6 +2577,7 @@ def main(argv=None):
                               "model_sha256": model_sha, "model_source": input_identity,
                               "air_growth_rate_requested": args.air_growth_rate,
                               "shifted_ksp_type_diagnostic_requested": args.shifted_ksp_type,
+                              "expected_window_krylov_policy": args.expected_window_krylov_policy,
                               "schur_action_diagnostic_requested": args.schur_action_diagnostic,
                               "command": compose_command(
                                   context, output, pilot=args.pilot,
@@ -2608,6 +2637,7 @@ def main(argv=None):
                 capture_session=args.capture_session,
             )
             execute_kwargs = dict(
+                expected_window_krylov_policy=args.expected_window_krylov_policy,
                 pilot=args.pilot, model_identity=input_identity,
                 dense_oracle=args.dense_oracle, solver_rtol=args.solver_rtol,
                 schur_action_diagnostic=args.schur_action_diagnostic,

@@ -542,5 +542,42 @@ class GammaWindowBasisPolicyTests(unittest.TestCase):
                     self.validate(value, policy)
 
 
+class GammaWindowPolicyPilotRoutingTests(unittest.TestCase):
+    def test_pilot_forwards_requested_policy_to_gamma_postsolve_guard(self):
+        from unittest.mock import patch
+        import run_de_100nm_pilot as pilot
+        policy = "bounded_quadruple_nev_window_v2"
+        with patch.object(pilot, "validate_gamma_krylov_trial", return_value={"status": "pass"}) as guard:
+            report = pilot._validate_krylov_trials(
+                Path("unused-case"), "k0", "fgmres", "1e-9", "1e-9", "8",
+                expected_window_krylov_policy=policy,
+            )
+        self.assertEqual(guard.call_args.kwargs["expected_window_krylov_policy"], policy)
+        self.assertIn("gamma_krylov_trial", report)
+
+    def test_pilot_rejects_policy_request_without_gamma_instead_of_ignoring_it(self):
+        import run_de_100nm_pilot as pilot
+        with self.assertRaises(pilot.managed.BenchmarkError):
+            pilot._validate_krylov_trials(
+                Path("unused-case"), "k10", "fgmres", "1e-9", "1e-9", "8",
+                expected_window_krylov_policy="bounded_quadruple_nev_window_v2",
+            )
+
+
+    def test_execute_rejects_policy_before_dispatch_when_ksp_or_gamma_missing(self):
+        from unittest.mock import patch
+        import run_de_100nm_pilot as pilot
+        for name, ksp_type, message in (("de-smoke-k0", None, "explicit shifted"), ("de-smoke-k10", "fgmres", "Gamma sample")):
+            with self.subTest(pilot=name):
+                with patch.object(pilot.managed, "_run_request") as dispatch:
+                    with self.assertRaisesRegex(pilot.managed.BenchmarkError, message):
+                        pilot.execute(
+                            None, Path("unused-output"), [], "unused-model-sha",
+                            pilot=name, shifted_ksp_type=ksp_type,
+                            expected_window_krylov_policy="bounded_quadruple_nev_window_v2",
+                        )
+                    dispatch.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
