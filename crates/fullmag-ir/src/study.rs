@@ -2113,11 +2113,11 @@ fn default_table_id() -> String {
     "default".to_string()
 }
 
-fn default_measurement_axis() -> MeasurementAxisIR {
+pub(crate) fn default_measurement_axis() -> MeasurementAxisIR {
     MeasurementAxisIR::field_axis()
 }
 
-fn default_initial_protocol() -> String {
+pub(crate) fn default_initial_protocol() -> String {
     "positive_saturation".to_string()
 }
 
@@ -2125,7 +2125,7 @@ fn default_saturation_on_failure() -> String {
     "continue_with_warning".to_string()
 }
 
-fn default_branch_mode() -> String {
+pub(crate) fn default_branch_mode() -> String {
     "major_loop".to_string()
 }
 

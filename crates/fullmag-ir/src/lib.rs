@@ -26,6 +26,7 @@ pub mod selection;
 pub mod spectral_validation;
 pub mod spin_transport;
 pub mod study;
+pub mod study_v04;
 pub mod waveguide_frame;
 pub mod waveguide_mesh;
 pub mod waveguide_mesh_contours;
@@ -63,6 +64,7 @@ pub use selection::*;
 pub use spectral_validation::BlochWavevectorIR;
 pub use spin_transport::*;
 pub use study::*;
+pub use study_v04::*;
 pub use waveguide_frame::{
     validate_waveguide_frame, CanonicalWaveguideFrameIR, ValidatedWaveguideFrameIR,
     WaveguideFrameIR, WaveguideFrameValidationError, WaveguideSignedKIR,

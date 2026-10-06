@@ -139,3 +139,23 @@ Przed implementacją typed mesha pozostają wymagane: kompletny wire triangle/ed
 ## Podstawa ramy w źródłach
 
 Przyrost `crates/fullmag-ir/src/waveguide_frame.rs` implementuje wyłącznie raw/validated geometry frame i signed-k helper. [Kontrakt helpera](../guides/eigensolve-waveguide-frame-source-contract.md) opisuje jednostki, rzeczywiste metryki i source-only dowody. Publiczny writer0.3, typed StudyIRV04, migration/admission, pełny descriptor i provider nie są przez to włączane. Regresje Rust pozostają niekompilowane; geometria źródłowa nie jest certyfikatem physics/runtime.
+
+
+### Typed staging V04: jawne region targets i BC presence
+
+Implementowany prerequisite StudyIRV04 używa istniejącego opt-in ProblemIRV04.
+Przed zamrożeniem wariantu waveguide review wykazało konieczność required typed
+region_targets: BTreeMap<String, RegionRefIR> obok frame/cross_section_mesh/BC.
+Raw mesh region ID nie jest canonical ObjectRegionIR ID; object name/type nie
+rozstrzyga whole-object vs regional target. Mapping zachowuje requested intent,
+wchodzi do exact geometry identity i wymaga pełnych registry bindings.
+
+Tagged finite-air BC ma boundary_component_ids. V04 full_3d spectral study ma
+jawne nie-null legacy BC; waveguide wymaga jego całkowitego braku. Migracja
+historycznego braku zapisuje Open/full_3d z rzeczywistą provenance, a null jest
+atomową odmową. Local deny_unknown_fields nie usuwa root legacy_extensions.
+
+Model validation nie jest provider admission. Osobny unavailable guard blokuje
+wykonanie waveguide przed 3D/Bloch; nie ma lossy konwersji do full_3d. Publiczne
+Python/IR0.3, OpenAPI, capability i działające instancje pozostają bez cutoveru.
+MFEM owner, complete structural/equilibrium proof i qualification nadal OPEN.

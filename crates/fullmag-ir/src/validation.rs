@@ -1024,6 +1024,24 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
             crate::PROBLEM_IR_V04_VERSION
         ));
     }
+    for (field, version) in [
+        (
+            "script_api_version",
+            problem.problem_meta.script_api_version.as_str(),
+        ),
+        (
+            "serializer_version",
+            problem.problem_meta.serializer_version.as_str(),
+        ),
+    ] {
+        if version != crate::PROBLEM_IR_V04_VERSION {
+            errors.push(format!(
+                "problem_meta.{field} must be '{}' for ProblemIRV04 (found '{version}')",
+                crate::PROBLEM_IR_V04_VERSION
+            ));
+        }
+    }
+    errors.extend(problem.study.validation_errors());
     let geometry_ids: BTreeSet<&str> = problem
         .geometry
         .entries
@@ -1238,6 +1256,61 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
             errors.push(format!(
                 "interfaces[{index}].side_a_to_side_b must be finite and non-zero"
             ));
+        }
+    }
+
+    if errors.is_empty() {
+        if let crate::SpatialRepresentationIR::Waveguide2p5d {
+            frame,
+            cross_section_mesh,
+            region_targets,
+            magnetostatic_bc,
+        } = problem.study.spatial_representation()
+        {
+            match crate::validate_waveguide_frame(*frame) {
+                Err(error) => errors.push(format!("study.spatial_representation.frame: {error}")),
+                Ok(validated_frame) => {
+                    let k_errors = crate::study_v04::validate_waveguide_k_sampling(
+                        &problem.study,
+                        &validated_frame,
+                    );
+                    if !k_errors.is_empty() {
+                        errors.extend(k_errors);
+                    } else {
+                        match crate::waveguide_mesh_bindings::validate_waveguide_registry_bindings_for_validated_problem(
+                            problem,
+                            cross_section_mesh,
+                            region_targets,
+                        ) {
+                            Err(error) => errors.push(format!(
+                                "study.spatial_representation: {error}"
+                            )),
+                            Ok(registry) => {
+                                match crate::waveguide_mesh_dirichlet::validate_finite_air_dirichlet_bindings(
+                                    &registry,
+                                    magnetostatic_bc.boundary_component_ids(),
+                                ) {
+                                    Err(error) => errors.push(format!(
+                                        "study.spatial_representation.magnetostatic_bc: {error}"
+                                    )),
+                                    Ok(dirichlet) => {
+                                        if let Err(error) =
+                                            crate::waveguide_mesh_world::validate_waveguide_world_mapping(
+                                                &dirichlet,
+                                                &validated_frame,
+                                            )
+                                        {
+                                            errors.push(format!(
+                                                "study.spatial_representation.frame: {error}"
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

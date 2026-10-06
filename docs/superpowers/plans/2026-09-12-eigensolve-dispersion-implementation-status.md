@@ -3,8 +3,9 @@
 
 **Cały cel S00–S12 pozostaje aktywny.** Poniższa tabela opisuje aktualny
 stan; dalsze checkpointy zachowują historię i nie zastępują bieżących dowodów.
-Baza ostatniego zweryfikowanego przyrostu:98907f6afaceed7290cf6347e62f359d8159c0e4,
-remote aktualny dla tego commita; CI37405082553 wszystkie8jobs success.
+Remote HEAD: c458f57b2769e44492e066b285d7a8a67c34b932. CI37408473006
+zakończone8/8jobs PASS, w tym waveguide_frame/waveguide_mesh i8 identity
+regresji. Public documentation CI37408473007 również PASS.
 
 | Zakres | Potwierdzone | Pozostaje |
 |---|---|---|
@@ -12,14 +13,16 @@ remote aktualny dla tego commita; CI37405082553 wszystkie8jobs success.
 | Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Nowy attested build, pełny window certificate Γ, potem15 punktów i sprawdzony wykres |
 | Adaptive k pool | Poprawka exit telemetry, deterministyczny plan digest i kontrakty CI | Rzeczywisty świeży przebieg, pomiary CPU/RAM i serial/adaptive parity |
 | Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Pełna scoped kompozycja lower bounds i runtime consumer regionalnych minima pozostają oddzielnymi lukami |
-| S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity zaimplementowane i source review PASS; nowe CI pending. World equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
+| S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,31 nowych regresji CI pending; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
 | Nauka | Wstępne benchmarki i analityczne oracles nie domykają kwalifikacji | DE/BV, zbieżności siatki/airboxu/liczby modów, identyczny COMSOL A1 i GPU |
 | GUI/integracja | Frontend/browser fixture CI PASS; PR97 otwarty | Rzeczywisty workspace z modelem/wynikami, pełne review/science gates, merge i bezpieczne cleanup worktree |
 
-Build235 d6482966a2404d6d933a6708cdf3466d pozostaje queued, na exact070d277a8
-(stara polityka NCV). Runtime obserwowany osobnym read-only klientem; brak nowych
-submit/cancel/restart. Ostatni pomiar storage1.11GB przy progu8GiB (API 2026-10-06 03:08 UTC). Ponadto własny
-read-only preview execution inventory zajmuje wspólny build slot; ma postęp
+Build235 d6482966a2404d6d933a6708cdf3466d anulowano przed wykonaniem: exact070d277a8
+nie zawiera NCV4. Dane i kapsuła zachowane; obserwator zakończył się terminalnie.
+Następny runtime przypięty do sprawdzonego c458; recepta przygotowana, nowy job
+niezgłoszony przy krytycznie niskim storage. Ostatni pomiar725196800B (~0.73GB)
+przy progu8GiB. Pełny wcześniejszy build zużył około27GB. Ponadto własny
+read-only preview execution inventory zajmuje wspólny build slot; ma postęp (obecnie43/235)
 między jobami, a nie wewnątrz wielomilionowego drzewa. Nie przypisujemy mu spadku
 miejsca bez dowodu. Nie uruchamiamy równoległego inventory ani apply bez zgody.
 Upload dwóch synthetic failure artifacts nadal nieaktywny po odmowie auto-review;
@@ -8038,3 +8041,70 @@ Kolejność implementacji i warunki odbioru:
 Ten kontrakt wynika ze sprawdzonych źródeł IR/planner/native i ADR0035/spec.
 Nie deklaruje gotowego typed admission ani dostępnego providera. Równoległym
 priorytetem runtime pozostaje kontrolowane Γ nowej polityki NCV i signed15.
+
+
+## Checkpoint — identity CI PASS i typed V04 w przygotowaniu
+
+Remote c458f57b2769e44492e066b285d7a8a67c34b932, source/parser/docs/review PASS.
+CI37408473006 potwierdziło waveguide_frame i waveguide_mesh wraz z ośmioma
+nowymi geometry identity regresjami; siedemjobs PASS, końcowy Rust/API/CLI trwa.
+Pozostałe źródła w tym ci się nie zmieniły. Nowe obliczenia FEM nie powstały.
+
+Rozpoczęto typed StudyIRV04 w istniejącym staging V04 wraz z presence-aware
+BC i atomową migracją. Publiczny writer0.3 i historyczne guards zachowane.
+Spec opisuje exact tagged finite-air BC/selected boundary IDs. Model/shape
+validation pozostaje oddzielna od unavailable provider guard; brak lossy
+konwersji waveguide→full3d i brak capability promotion. Implementacja WIP.
+
+API read-only preview potwierdziło planning38/235/applied=false; brak deletion,
+restartu lub nowego skanu. Exact job235 nadal queued. Obserwatory235 iCI pozostają
+live. Cały S00–S12, kontrolowane NCV4Γ/signed15, nauka, GUI/GPU i integracja OPEN.
+
+
+## Checkpoint — obsolete235 cancelled, właściwy runtime c458 przygotowany
+
+Własny queued job235 (ownerMateusz, profil runtime-v2, exact070d) został
+anulowany API przed startem. Odpowiedź state=cancelled/exit_code=null; źródła,
+historia i dane zachowane. Obserwator76080 zakończony terminalnie, nie jest
+ponawiany. To nie sukces ani awaria naukowego solvera — build nie wykonał się.
+
+Właściwa próba Γ NCV4 ma exactc458, full8/8 sourceCI i prepared recipe8.5–16GHz.
+Nowego joba/kapsuły nie utworzono przy725MB wolnego; rekomendacja pojemności
+uwzględnia315MB wcześniejszej kapsuły i około27GB poprzedniego pełnego buildu.
+Nie obniżamy globalnego8GiB admission ani nie używamy R dla Docker/FEM.
+Read-only preview43/235/applied=false nadal trzyma maintenance slot.
+
+W ramach wcześniejszej zgody na koordynację powiadomiono wątek „Scal audyty i
+plan refaktoryzacji” o pojemności C: i poproszono o sprawdzenie własnych nowych
+snapshotów/bundle przed kolejnym buildem. Nie zlecono przerwania aktywnych
+procesów, usunięcia wspólnego cache ani zmian jego zakresu.
+
+Typed StudyIRV04 zapisany w źródłach, integracja/migracja/bindings/regresje WIP.
+Review wykrył i przekazał do naprawy dokładne tokeny serde przy cyfrze oraz
+programmatic non-Eigen waveguide guard i standalone study BC presence guard.
+Cały S00–S12, noweΓ/signed15, science/GUI/GPU/pełna2.5D/integracja nadal OPEN.
+
+
+## Checkpoint — typed V04 source/review gotowe, CI wymagane
+
+StudyIRV04 ma jawne full_3d/waveguide_2p5d, exact region_targets oraz finite-air
+BC. Odrzuca null BC także przy bezpośrednim study decoderze; legacy0.3/history
+presence guard pozostaje. Shared defaults pięciu study kinds zachowane.
+Migrator sprawdza wersje i provenance conflicts, tworzy kandydat, sprawdza jego
+rzeczywistą odczytywalność V04 i dopiero wtedy swap. Błąd nie modyfikuje wejścia.
+
+Model validation wiąże frame, basic k sampling i projekcję requested control
+vectors, rzeczywiste rejestry, Dirichlet oraz world representability bez
+rekurencyjnego validate. Generated samples, global geometric equivalence,
+invariance/material/applied-field/equilibrium certificates i provider dalej OPEN.
+Availability guard zwraca waveguide_2p5d_unavailable, nie ma legacy fallbacku.
+
+31 prepared integration regressions oraz aktualizacja historycznej V04 guard
+fixture; final source review Sol nie wykrył błędów. Rustfmt/parser/diff i focused
+scientific docs przechodzą; lokalne unit tests/kompilacja nie są wykonywane.
+Nowa bramka GHA obejmuje cały fullmag-ir zamiast nakładających się filterów.
+Dopiero jej wynik może potwierdzić wykonanie/regresje tego przyrostu.
+
+Publiczny writer/API0.3 i capability nie przełączone. Cały S00–S12 i naukowy
+runtime C58 Γ/signed15/COMSOL/GUI/GPU/integracja pozostają otwarte. Równoległy
+cooperative preview cancel jest oddzielnym źródłowym przyrostem, niewdrożonym.

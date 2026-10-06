@@ -4,7 +4,7 @@
   definiuje przyszłą semantykę S09 i nie zmienia istniejących pól artefaktów,
   tokenów Python ani ProblemIR.
 - Właściciel: Fullmag FEM frequency-domain waveguide backend.
-- Ostatnia aktualizacja: 2026-10-03.
+- Ostatnia aktualizacja: 2026-10-06.
 - Powiązane dokumenty: 0828 (eq-0828-waveguide-envelope-demag),
   0831 (eq-fem-waveguide-envelope-demag, eq-fem-waveguide-weak-source-sign,
   eq-fem-waveguide-section-measure), 0832 (FloquetWaveguideCrossSectionProblem).
@@ -1036,3 +1036,40 @@ niedostępny, a runtime i invariance pozostają NOT VERIFIED.
 |---|---|---|
 | crates/fullmag-ir/src/waveguide_mesh_identity.rs | compute_waveguide_geometry_identity | Prywatny digest dokładnych borrowed danych geometrii; bez admission/cache reuse |
 | crates/fullmag-ir/src/waveguide_mesh_identity.rs | encode_geometry_preimage | Versioned typed preimage; signed zero i kolejność Vec zachowane |
+
+
+### Typed intent V04 przed production admission
+
+Planowany przyrost StudyIRV04 zachowuje globalne study.k_sampling i jawnie
+przechowuje full_3d lub waveguide_2p5d. Waveguide wymaga frame, raw cross_section_mesh, jawne region_targets
+oraz tagged finite_air_cross_section_dirichlet z boundary_component_ids.
+Te dane określają fizyczny przekrój i finite-air model brzegu; nie zmieniają
+równań ani normy dA. Własny raw descriptor nie jest automatycznym wycinkiem3D.
+
+Publiczny Python/ProblemIR0.3 pozostaje bez zmiany. Opt-in staging0.4 wymaga
+jawnej reprezentacji; migrator historycznego braku zachowuje full_3d i Open
+z provenance. Jawne null nie staje się defaultem. FrequencyResponse i inne
+study kinds nie otrzymują waveguide support. FDM CPU/GPU pozostają unsupported,
+FEM CPU/GPU są staging/planned i runtime unverified. Typed reader, shape
+validation i geometry identity nie zastępują structural2D/equilibrium proof,
+admission ani produkcyjnego MFEM2D providera. Jawny unavailable guard musi
+zapobiegać konwersji waveguide do dotychczasowego operatora3D także przyΓ.
+
+Szczegółowa macierz wire/migracji i mapowanie pól są w ADR0035 oraz spec v1.
+Typed study, atomic migration i model checks są source-implemented/reviewed;
+31 nowych regresji wymaga wykonania w GitHub Actions. Kompilacja/CI nowego
+przyrostu oraz production admission/runtime pozostają NOT VERIFIED.
+
+
+region_targets wiąże każdy mesh region_id z canonical object_id i opcjonalnym
+ObjectRegionIR.region_id; ID siatki i regionu obiektu nie są utożsamiane.
+Walidacja korzysta z rzeczywistych owner/material/module assignments i jawnie
+wybranego zewnętrznego brzegu powietrza. Nie inferuje aktywacji fizyki z name/type.
+
+
+| Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|
+| crates/fullmag-ir/src/study_v04.rs | StudyIRV04 | Typed staging intent wszystkich pięciu study kinds; bez publicznego cutoveru |
+| crates/fullmag-ir/src/study_v04.rs | validate_v04_study_wire | Closed wire i BC presence przed utratą informacji o null/braku |
+| crates/fullmag-ir/src/study_v04.rs | validate_waveguide_k_sampling | Requested global vectors/control points; generated samples nie są tu walidowane |
+| crates/fullmag-ir/src/study_v04.rs | checked_execution_representation_availability | Waveguide unavailable; nie certyfikat ani admission |

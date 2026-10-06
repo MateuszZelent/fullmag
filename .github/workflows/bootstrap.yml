@@ -36,13 +36,8 @@ jobs:
           cargo test -p fullmag-runner k_process_pool --no-fail-fast
           cargo test -p fullmag-runner adaptive_resources --no-fail-fast
 
-      - name: Run canonical project autosave policy contracts
-        run: cargo test -p fullmag-ir project_output_policy --no-fail-fast
-
-      - name: Run waveguide mesh descriptor contracts
-        run: |
-          cargo test -p fullmag-ir waveguide_frame --no-fail-fast
-          cargo test -p fullmag-ir waveguide_mesh --no-fail-fast
+      - name: Run canonical IR, waveguide and typed V04 migration contracts
+        run: cargo test -p fullmag-ir --no-fail-fast
 
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast

@@ -1,11 +1,11 @@
 use crate::{
     AbsorbingBoundaryLayerIR, AirBoxPolicyIR, BackendPolicyIR, CouplingIR, CurrentModuleIR,
     ElasticBodyIR, ElasticMaterialIR, EnergyTermIR, ExcitationAnalysisIR, FdmPeriodicityIR,
-    GeometryAssetsIR, GeometryIR, InitialMagnetizationIR, MagnetostrictionLawIR, MaterialIR,
-    MaterialParameterAssignmentIR, MechanicalBoundaryConditionIR, MechanicalLoadIR,
-    MeshSemanticsIR, ObjectRegionIR, PlanarMonitorIR, ProblemIR, ProblemMeta, RegionIR,
-    RegionRefIR, RegionalFieldDriveIR, SpinTorqueModuleIR, SpinTransportModuleIR, StudyIR,
-    SurfaceRefIR, ValidationProfileIR,
+    GeometryAssetsIR, GeometryIR, InitialMagnetizationIR, MagnetostaticBoundaryConditionIR,
+    MagnetostrictionLawIR, MaterialIR, MaterialParameterAssignmentIR,
+    MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshSemanticsIR, ObjectRegionIR,
+    PlanarMonitorIR, ProblemIR, ProblemMeta, RegionIR, RegionRefIR, RegionalFieldDriveIR,
+    SpinTorqueModuleIR, SpinTransportModuleIR, StudyIRV04, SurfaceRefIR, ValidationProfileIR,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -225,7 +225,7 @@ pub struct ProblemIRV04 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub planar_monitors: Vec<PlanarMonitorIR>,
     pub energy_terms: Vec<EnergyTermIR>,
-    pub study: StudyIR,
+    pub study: StudyIRV04,
     pub backend_policy: BackendPolicyIR,
     pub validation_profile: ValidationProfileIR,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -307,7 +307,7 @@ struct ProblemIRV04Wire {
     #[serde(default)]
     planar_monitors: Vec<PlanarMonitorIR>,
     energy_terms: Vec<EnergyTermIR>,
-    study: StudyIR,
+    study: StudyIRV04,
     backend_policy: BackendPolicyIR,
     validation_profile: ValidationProfileIR,
     #[serde(default)]
@@ -417,9 +417,7 @@ impl<'de> Deserialize<'de> for ProblemIRV04 {
         D: Deserializer<'de>,
     {
         let mut value = Value::deserialize(deserializer)?;
-        // Staging V04 still embeds legacy StudyIR until the typed cutover.
-        crate::reject_unversioned_spatial_representation(&value)
-            .map_err(serde::de::Error::custom)?;
+        crate::study_v04::validate_v04_study_wire(&value).map_err(serde::de::Error::custom)?;
         crate::normalize_frozen_membership_defaults_in_problem_value(&mut value)
             .map_err(serde::de::Error::custom)?;
         if let Some(policy_value) = value.pointer("/mesh_semantics/requested_policy") {
@@ -514,8 +512,34 @@ fn insert_legacy_object_alias(
     Ok(())
 }
 
+fn validate_v03_migration_metadata_versions(
+    root: &serde_json::Map<String, Value>,
+) -> Result<(), String> {
+    let metadata = root
+        .get("problem_meta")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "/problem_meta: expected an object".to_string())?;
+    for key in ["script_api_version", "serializer_version"] {
+        match metadata.get(key) {
+            Some(Value::String(version)) if version == "0.3.0" => {}
+            Some(Value::String(version)) => {
+                return Err(format!(
+                    "/problem_meta/{key}: version '{version}' conflicts with ir_version '0.3.0'"
+                ))
+            }
+            Some(_) => {
+                return Err(format!(
+                    "/problem_meta/{key}: expected version string '0.3.0'"
+                ))
+            }
+            None => return Err(format!("/problem_meta/{key}: missing version '0.3.0'")),
+        }
+    }
+    Ok(())
+}
+
 /// Migrate one 0.3 JSON document to the explicit 0.4 object wire model.
-/// It is deliberately opt-in: direct `ProblemIR` deserialization still reads 0.3.
+/// It is deliberately opt-in: direct ProblemIR deserialization still reads 0.3.
 /// Failed migrations are atomic and leave the caller-owned document unchanged.
 pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> {
     if value.get("ir_version").and_then(Value::as_str) == Some("0.3.0") {
@@ -523,6 +547,9 @@ pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> 
     }
     let mut candidate = value.clone();
     migrate_v0_3_problem_ir_to_v0_4_in_place(&mut candidate)?;
+    let _: ProblemIRV04 = serde_json::from_value(candidate.clone()).map_err(|error| {
+        format!("/study: migrated document does not satisfy the typed V04 wire: {error}")
+    })?;
     *value = candidate;
     Ok(())
 }
@@ -534,6 +561,86 @@ fn migrate_v0_3_problem_ir_to_v0_4_in_place(value: &mut Value) -> Result<(), Str
     if root.get("ir_version").and_then(Value::as_str) != Some("0.3.0") {
         return Err("/ir_version: expected '0.3.0' for the 0.3 -> 0.4 migration".to_string());
     }
+    validate_v03_migration_metadata_versions(root)?;
+
+    let bootstrap = serde_json::to_value(ProblemIR::bootstrap_example())
+        .expect("ProblemIR bootstrap must serialize");
+    let study_was_present = root.contains_key("study");
+    let bootstrap_study = bootstrap
+        .get("study")
+        .cloned()
+        .ok_or_else(|| "ProblemIR bootstrap study must serialize".to_string())?;
+    let mut migrated_study = root.get("study").cloned().unwrap_or(bootstrap_study);
+    let study_object = migrated_study
+        .as_object_mut()
+        .ok_or_else(|| "/study: expected an object".to_string())?;
+    let study_kind = required_string(
+        study_object.get("kind").unwrap_or(&Value::Null),
+        "/study/kind",
+    )?;
+    if !matches!(
+        study_kind.as_str(),
+        "time_evolution" | "relaxation" | "eigenmodes" | "frequency_response" | "hysteresis"
+    ) {
+        return Err(format!(
+            "/study/kind: unsupported study kind '{study_kind}'"
+        ));
+    }
+    let spectral_study = matches!(study_kind.as_str(), "eigenmodes" | "frequency_response");
+    let magnetostatic_bc_presence =
+        if spectral_study {
+            match study_object.get("magnetostatic_bc") {
+                None => {
+                    study_object.insert(
+                        "magnetostatic_bc".to_string(),
+                        Value::String("open".to_string()),
+                    );
+                    "missing"
+                }
+                Some(Value::Null) => return Err(
+                    "/study/magnetostatic_bc: explicit null is not a missing historical default"
+                        .to_string(),
+                ),
+                Some(boundary_condition) => {
+                    serde_json::from_value::<MagnetostaticBoundaryConditionIR>(
+                        boundary_condition.clone(),
+                    )
+                    .map_err(|error| format!("/study/magnetostatic_bc: {error}"))?;
+                    "explicit"
+                }
+            }
+        } else {
+            if study_object.contains_key("magnetostatic_bc") {
+                return Err(format!(
+                    "/study/magnetostatic_bc: field is not valid for {study_kind}"
+                ));
+            }
+            "not_applicable"
+        };
+    study_object.insert(
+        "spatial_representation".to_string(),
+        serde_json::json!({ "kind": "full_3d" }),
+    );
+    let magnetostatic_bc_value = study_object.get("magnetostatic_bc").cloned();
+    let spatial_migration_record = serde_json::json!({
+        "schema_version": "fullmag.spatial-representation-migration.v1",
+        "source_ir_version": "0.3.0",
+        "target_ir_version": PROBLEM_IR_V04_VERSION,
+        "study_presence": if study_was_present { "present" } else { "missing" },
+        "study_source": if study_was_present { "historical_payload" } else { "historical_bootstrap" },
+        "study_kind": study_kind,
+        "spatial_representation_presence": "missing",
+        "spatial_representation": "full_3d",
+        "magnetostatic_bc_presence": magnetostatic_bc_presence,
+        "magnetostatic_bc_provenance": if magnetostatic_bc_presence == "missing" {
+            "defaulted_from_missing"
+        } else if magnetostatic_bc_presence == "explicit" {
+            "explicit"
+        } else {
+            "not_applicable"
+        },
+        "magnetostatic_bc_value": magnetostatic_bc_value,
+    });
 
     let geometry_entries = root
         .get("geometry")
@@ -810,12 +917,11 @@ fn migrate_v0_3_problem_ir_to_v0_4_in_place(value: &mut Value) -> Result<(), Str
     }
 
     root.remove("magnets");
+    root.insert("study".to_string(), migrated_study);
     root.insert(
         "ir_version".to_string(),
         Value::String(PROBLEM_IR_V04_VERSION.to_string()),
     );
-    let bootstrap = serde_json::to_value(ProblemIR::bootstrap_example())
-        .expect("ProblemIR bootstrap must serialize");
     for key in [
         "energy_terms",
         "study",
@@ -848,6 +954,27 @@ fn migrate_v0_3_problem_ir_to_v0_4_in_place(value: &mut Value) -> Result<(), Str
                     Value::String(PROBLEM_IR_V04_VERSION.to_string()),
                 );
             }
+        }
+    }
+    let runtime_metadata = root
+        .get_mut("problem_meta")
+        .and_then(Value::as_object_mut)
+        .and_then(|meta| meta.get_mut("runtime_metadata"))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "/problem_meta/runtime_metadata: expected an object".to_string())?;
+    match runtime_metadata.get("spatial_representation_migration") {
+        Some(existing) if existing == &spatial_migration_record => {}
+        Some(_) => {
+            return Err(
+                "/problem_meta/runtime_metadata/spatial_representation_migration: conflicting preexisting record"
+                    .to_string(),
+            )
+        }
+        None => {
+            runtime_metadata.insert(
+                "spatial_representation_migration".to_string(),
+                spatial_migration_record,
+            );
         }
     }
     root.insert(

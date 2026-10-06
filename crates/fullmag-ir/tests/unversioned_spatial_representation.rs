@@ -70,15 +70,16 @@ fn unsupported_version_retains_ordinary_version_error() {
 }
 
 #[test]
-fn staging_v04_study_rejects_spatial_intent_until_typed_cutover() {
-    for representation in [Value::Null, json!({"kind": "waveguide_2p5d"})] {
-        let mut value = serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap();
-        value["study"]["spatial_representation"] = representation;
-        let error = serde_json::from_value::<ProblemIRV04>(value).unwrap_err();
-        assert!(error.to_string().contains("/study/spatial_representation"));
-    }
+fn staging_v04_reader_accepts_its_typed_full3d_spatial_representation() {
     let value = serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap();
-    serde_json::from_value::<ProblemIRV04>(value).unwrap();
+    assert_eq!(value["study"]["spatial_representation"]["kind"], "full_3d");
+
+    let decoded: ProblemIRV04 = serde_json::from_value(value).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert_eq!(
+        encoded["study"]["spatial_representation"]["kind"],
+        "full_3d"
+    );
 }
 
 #[test]

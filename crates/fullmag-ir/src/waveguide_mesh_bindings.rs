@@ -223,6 +223,16 @@ pub(crate) fn validate_waveguide_registry_bindings<'a>(
     problem
         .validate()
         .map_err(WaveguideRegistryBindingsError::InvalidProblem)?;
+    validate_waveguide_registry_bindings_for_validated_problem(problem, mesh, region_targets)
+}
+
+/// Registry/mesh binding validation for callers that already passed the common
+/// ProblemIRV04 object checks. This helper does not re-enter problem validation.
+pub(crate) fn validate_waveguide_registry_bindings_for_validated_problem<'a>(
+    problem: &'a ProblemIRV04,
+    mesh: &'a WaveguideCrossSectionMeshIR,
+    region_targets: &'a BTreeMap<String, RegionRefIR>,
+) -> Result<ValidatedWaveguideRegistryBindings<'a>, WaveguideRegistryBindingsError> {
     validate_waveguide_mesh_contours(mesh)
         .map_err(WaveguideRegistryBindingsError::InvalidMeshContours)?;
 

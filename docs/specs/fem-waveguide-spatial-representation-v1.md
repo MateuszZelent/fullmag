@@ -15,7 +15,7 @@ Przy przyszłym atomowym cutoverze istniejącego V04 serializer ma jawnie zapisy
 
 Eigensolve predicate `floquet_airbox_dynamic_demag_cpu_plan_supported` w `crates/fullmag-plan/src/fem.rs` rozróżnia Single i Path. Guard frequency response jest innym produktem i nie określa legalności Eigenmodes. Nowy waveguide sweep przechodzi przez Γ bez zmiany reprezentacji; naukowa ciągłość k→0 pozostaje osobną bramką.
 
-Dokładna ścieżka IR nowego BC: `study.spatial_representation` jest tagged enum; wariant `waveguide_2p5d` zawiera `frame`, `cross_section_mesh` oraz własny tagged `magnetostatic_bc.kind = finite_air_cross_section_dirichlet` z referencjami do stabilnych `boundary_component_id` i incidence krawędzi zewnętrznego powietrza; sam luźny marker nie dowodzi topologii. Top-level legacy `study.magnetostatic_bc` pozostaje wyłącznie dla full_3d i jest niedozwolony w nowym wire waveguide. Pierwszy nowy authoring musi odróżniać brak legacy BC od jawnego żądania (default sentinel/None): dla full_3d brak rozwiązuje się do open; dla waveguide BC pochodzi z tagged wariantu, a jawne 3D BC jest konfliktem. Serializer nie emituje obu niezgodnych reprezentacji. Historyczny importer nie zna waveguide, a nowy importer zachowuje go i nigdy nie redukuje do open/full_3d.
+Dokładna ścieżka IR nowego BC: `study.spatial_representation` jest tagged enum; wariant `waveguide_2p5d` zawiera `frame`, `cross_section_mesh`, jawne `region_targets` oraz własny tagged `magnetostatic_bc.kind = finite_air_cross_section_dirichlet` z referencjami do stabilnych `boundary_component_id` i incidence krawędzi zewnętrznego powietrza; sam luźny marker nie dowodzi topologii. Top-level legacy `study.magnetostatic_bc` pozostaje wyłącznie dla full_3d i jest niedozwolony w nowym wire waveguide. Pierwszy nowy authoring musi odróżniać brak legacy BC od jawnego żądania (default sentinel/None): dla full_3d brak rozwiązuje się do open; dla waveguide BC pochodzi z tagged wariantu, a jawne 3D BC jest konfliktem. Serializer nie emituje obu niezgodnych reprezentacji. Historyczny importer nie zna waveguide, a nowy importer zachowuje go i nigdy nie redukuje do open/full_3d.
 
 Inne kombinacje nie otrzymują fallbacku. Nowy rodzaj magnetostatyki nie może być dodany do obecnego globalnego string allow-list bez tagged kontraktu reprezentacji i guardów wszystkich konsumentów. Gdy provider nie istnieje, wynik jest `waveguide_2p5d_unavailable`, przed budową siatki 3D lub wyborem solvera Blocha.
 
@@ -307,3 +307,59 @@ mapowanie `(origin+u*Eu)+v*Ev` z osobnymi operacjami, canonical axes i kontrolą
 wartości skończonych oraz exact dyadic orientation względem osi. Zmiana tagów,
 kolejności/pokrycia pól, enum wartości lub policy strings wymaga nowej wersji
 domain; nie wolno przepisywać historycznych digestów jako v1.
+
+
+### Pierwszy przyrost typed StudyIRV04 — staging, 2026-10-06
+
+Istniejący opt-in ProblemIRV04 otrzymuje własny typed StudyIRV04; nie powstaje
+konkurencyjny wire0.4/0.5. Publiczny writer i reader0.3 pozostają niezmienione.
+Study i spatial variants mają lokalne deny_unknown_fields; root zachowuje
+legacy_extensions. Każde nowe studyV04 wymaga jawnego spatial_representation.
+
+| Pole wariantu waveguide_2p5d | Typ / znaczenie |
+|---|---|
+| frame | WaveguideFrameIR; wszystkie cztery wektory wymagane, jednostki SI jak w rozdziale ramy |
+| cross_section_mesh | WaveguideCrossSectionMeshIR; jawny raw descriptor v1, nie ukryty przekrój mesha3D |
+| region_targets | wymagane BTreeMap mesh region_id → canonical RegionRefIR; jawny object_id i opcjonalny canonical region_id |
+| magnetostatic_bc.kind | dokładnie finite_air_cross_section_dirichlet |
+| magnetostatic_bc.boundary_component_ids | niepusta lista dokładnych niepustych ID konturów; bez powtórzeń |
+
+Raw shape i geometria nie są admission ani dowodem physical invariance.
+Ostateczne wybrane kontury muszą przejść istniejące region/incidence/Dirichlet
+bindings z tego samego modelu; same ID nie dowodzą zewnętrznego brzegu powietrza.
+Signed k jest resolved z istniejącego study.k_sampling, nie z drugiego skalaru.
+
+Pierwszy wariant waveguide występuje tylko dla Eigenmodes. FrequencyResponse,
+TimeEvolution, Relaxation i Hysteresis nie dziedziczą jego legalności. W V04
+full_3d spectral study top-level magnetostatic_bc jest jawne i nie-null; przy
+waveguide musi być całkowicie nieobecne, również null jest konfliktem. Tagged
+BC wewnątrz waveguide nie rozszerza starego globalnego string enum.
+
+Migrator0.3→0.4 sprawdza obecność przed defaultingiem: brak reprezentacji daje
+full_3d; historycznie brakujące spectral BC daje Open z provenance
+`defaulted_from_missing`, jawne poprawne BC pozostaje zachowane, null jest
+błędem bez mutacji dokumentu. Provenance należy do istniejącego
+problem_meta.runtime_metadata i ma wersjonowany rekord migracji przestrzennej.
+
+Walidacja modelu pozostaje oddzielna od dostępności providera. Typed reader
+nie autoryzuje wykonania; jawny guard dostępności odmawia waveguide_2p5d z
+waveguide_2p5d_unavailable do pełnego admission/owner MFEM i kwalifikacji.
+Nie wolno zapewniać tej zgodności przez Deref/flatten do legacy StudyIR ani
+przez fallback do full_3d. Ewentualna konwersja zgodności musi być checked i
+przyjmować wyłącznie wariant full_3d. Ta sekcja nie przełącza publicznego API,
+capability matrix, generowanych klientow ani uruchomionych instancji.
+
+
+Raw mesh region_id i canonical ObjectRegionIR.region_id są odrębnymi przestrzeniami
+identyfikatorów. region_targets musi dokładnie pokrywać regiony mesha; nieznane
+klucze, brakujące regiony, niewłaściwy właściciel lub nieważny canonical target
+są błędem. Whole-object target i regionalny target zachowują własne znaczenie;
+nie wstawia się syntetycznego None ani nie wyprowadza target z object name/type.
+Pole jest częścią requested intent, roundtrip i geometry identity.
+
+Walidacja staging modelu składa istniejące common object-registry checks,
+niezależne frame/mesh checks oraz rzeczywiste registry/Dirichlet bindings.
+Jej call graph nie może wywoływać ponownie ProblemIRV04.validate z jego własnego
+kroku bindings. Post-common-validation helper jest crate-private i ma wyraźne
+preconditions; zwykły wejściowy registry validator nadal wykonuje pełną walidację
+modelu. To nie oznacza invariance/equilibrium certificate ani admission.
