@@ -557,7 +557,7 @@ mod tests {
         ObjectRegionIR, PhysicsObjectIR, PhysicsObjectTypeIR, ProblemIRV04, RegionFrameIR,
         RegionIR, RegionRealizationPolicyIR, RegionRefIR, RegionShapeIR,
     };
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     const RAW_MESH_FIXTURE: &str =
         include_str!("../tests/fixtures/waveguide_cross_section_mesh.v1.json");

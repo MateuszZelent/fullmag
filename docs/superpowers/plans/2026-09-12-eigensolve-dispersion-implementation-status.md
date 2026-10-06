@@ -7802,3 +7802,10 @@ failed_preserved_review_required; niepełny sweep nie jest zaakceptowanym
 produktem. Kompletny structured diagnostics JSON zachowano poza checkoutem.
 Plot nie jest generowany dla błędu. Observer następnego buildu przeszedł do
 submitting_once; numer/jobID/receipt wymaga odczytu, bez ponawiania submit.
+
+
+CI37398052818: Python295 PASS oraz frontend/browser/API/FDM/Windows PASS.
+Rust unit compile zgłosił E0433: w nowej regresji union użyto BTreeSet bez importu
+w lokalnym module tests. Dodano jawny import (scope produkcyjny miał go osobno).
+Nie zmieniono asercji ani walidatora. Parser finalnego Rust PASS; wykonanie
+regresji w następnym CI nadal wymagane.
