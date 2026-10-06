@@ -4,9 +4,18 @@ Checkpoint P8-53BC, 06.10.2026: [real active-run restart refusal](p8/53bc-real-a
 Diagnostic i managed driver dodane; kontrakt/regresje oraz kompilacja
 API/CLI/desktop **PASS**. Scenariusz zachowuje solver/API A przy kandydacie B,
 bez omijania zgodności buildów. Runtime **NOT VERIFIED**: pierwsze dwie
-próby ujawniły poprawione błędy fixture, trzecia zatrzymała się na selectorze;
-na C: jest około 150 MB wobec wymaganych 307 MB. Konkretna odtwarzalna kopia
-kompilatora 310 MB została wskazana do akceptacji usunięcia. Target/cache,
+próby ujawniły poprawione błędy fixture i problem pojemności. Ostatnia próba
+`9ad9d92dce4940ed8a80eb5f4f4a8c9c` uruchomiła realny solver A do kroku 1,
+lecz typed restart transport odrzucił pierwszą sesję z epoch 0. Poprawka
+produkcyjnej publikacji inkarnacji sesji jest przygotowana; review bez findings.
+Build `bb00f760cbf94783a46e3cc7f6a47bd4` failed: linker LNK1180, brak miejsca
+na C:. Po zwolnieniu miejsca kolejny build
+`560571c824984aeabdbbaad9d86708a5` **PASS, exit 0**, manifest
+`2d25ce9f0297dee66b2ad445aa7e1a900756194d9877b956f414e90906deb458`.
+Dowód runtime tej poprawki i finalna odmowa restartu pozostają otwarte.
+Interpretowana regresja drivera PASS;
+regresje Rust zapisane, NOT RUN (zakaz kompilacji testów). Konkretna kopia
+kompilatora 310 MB nadal czeka na akceptację usunięcia. Target/cache,
 snapshoty, logi i wyniki pozostają zachowane. Odmowa restartu przy realnym
 running/paused i wyścig Start/freezing nadal są otwarte; procentów nie zwiększono.
 

@@ -284,3 +284,41 @@ pozostają bez zmian. Preflight: required 307 253 760 B, available 419 958 784 B
 Interpretowana regresja drivera: PASS. API PID 102556, solver 11152 i helper
 67636 po próbie nie istniały, port 22570 był zamknięty. Receipt nadal zachowuje
 unknown wait outcome API/solvera; późniejsze sprawdzenie nie zastępuje wait.
+
+## Build poprawki pierwszej inkarnacji — 06.10.2026
+
+Read-only review poprawki i bezpośrednich konsumentów: brak actionable findings.
+Realtime state nie przechwytuje starego atomic epoch; publikacja zdarzeń
+następuje po instalacji snapshotu, a Hello używa kontekstu z transition lock.
+
+Managed `just windows-backend-dev 3197`, handle `43664`, **failed, exit 1**;
+Cargo exit 101, linker exit 1140, `LNK1180` (brak miejsca na dysku).
+Log `native-build-bb00f760cbf94783a46e3cc7f6a47bd4.log`, utrwalony snapshot
+`d7407a49680c45855603d60e8ed2fc43bd3bc393eb1f66e6bc85c56b6ad1e010`.
+TEMP kompilatora był na R:, ale wynik linkowania należy do trwałego Cargo
+target na C:. Nie zastępujemy bramki produkcyjnej diagnostyką źródłową;
+poprawka epoch i realna odmowa restartu pozostają **NOT VERIFIED**.
+
+Sprawdzony driver zapisano w lokalnym commicie
+`99d50c6e45a430799b9163215f9355adf37e583a`
+(`test(runtime): reuse verified active-run diagnostic binaries`).
+Nie usunięto cache, snapshotów ani wskazanej do zgody kopii compiler-inputs.
+
+## Wznowienie po zwolnieniu dysku — 06.10.2026
+
+Operator zwolnił miejsce: preflight odczytał 17 701 523 456 B wolnego na C:.
+Managed build handle `75542`: **PASS, exit 0**, `build-status.json` completed.
+Log `native-build-560571c824984aeabdbbaad9d86708a5.log`, frozen source directory
+`b4db50dcf03b9cca9d5b482d12525ecc7f4af8cd2fd14807fedc6dd5f9e09ad0`.
+Manifest SHA-256 `2d25ce9f0297dee66b2ad445aa7e1a900756194d9877b956f414e90906deb458`.
+Backend SHA-256 `fc1e070feef66e8c6373913c5f538c636d08fc60b6567d44add883a964253352`.
+API/CLI 58,69 s, desktop 54,35 s (fazy Cargo, nie całkowity czas przygotowania).
+Build zawiera poprawkę pierwszej inkarnacji sesji; testy Rust NOT RUN.
+Osobny test frozen active-run i finalna odmowa restartu pozostają do odczytania.
+
+Kolejny diagnostic B publikuje wynik `fullmag.development-cli-active-run-check.v2`
+z `api_transition_epoch_before` i `api_transition_epoch_after`. Oba muszą być
+liczbami u64, pierwsza dodatnia, druga identyczna. Wersja v1, zero, bool,
+string, overflow i zmieniona inkarnacja są odrzucane przez driver.
+Interpretowana regresja PASS; rustfmt check PASS. Nie zmieniono publicznego
+OpenAPI ani semantyki żądania restartu; rozszerzenie dotyczy prywatnego dowodu.
