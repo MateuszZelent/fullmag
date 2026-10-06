@@ -1552,7 +1552,7 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
               "\"requested_ncv\":") == 50u,
           "every planned subwindow must publish its explicit SLEPc ncv");
     check(contains(result.window_certificate_json,
-                   "\"krylov_subspace_policy\":\"bounded_double_nev_v1\""),
+                   "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\""),
           "window certificate must name the bounded Krylov-subspace policy");
     const std::uint64_t split_dimension = 2u * result.q_dof_count;
     const std::uint64_t requested_nev = static_cast<std::uint64_t>(
@@ -1561,7 +1561,7 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
         json_number_after(result.window_certificate_json, "\"requested_ncv\":"));
     const std::uint64_t expected_ncv = std::min(
         split_dimension,
-        std::max(requested_nev + 1u, 2u * requested_nev));
+        std::max(requested_nev + 1u, 4u * requested_nev));
     check(requested_ncv == expected_ncv && requested_ncv <= split_dimension,
           "base ncv must follow the explicit bounded policy and not exceed dimension");
     const char *cursor = result.executed_subwindows_json;
@@ -1584,7 +1584,7 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
         check(local_ncv > local_nev && local_ncv <= split_dimension &&
                   local_ncv == std::min(
                       split_dimension,
-                      std::max(local_nev + 1u, 2u * local_nev)),
+                      std::max(local_nev + 1u, 4u * local_nev)),
               "each subwindow ncv must follow the bounded policy");
         ++checked_subwindow_dimensions;
         cursor = ncv_entry + 1;
@@ -1633,7 +1633,7 @@ void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
         split_dimension,
         std::max<std::uint64_t>(
             static_cast<std::uint64_t>(requested_nev) + 1u,
-            2u * static_cast<std::uint64_t>(requested_nev)));
+            4u * static_cast<std::uint64_t>(requested_nev)));
     check(json_number_after(result.window_certificate_json, "\"requested_ncv\":") ==
               static_cast<double>(expected_base_ncv),
           "local retry must publish the resolved ncv for its larger effective nev");

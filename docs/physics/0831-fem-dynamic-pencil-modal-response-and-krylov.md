@@ -3535,3 +3535,63 @@ benchmarku z niezerową wymianą. Status pozostaje diagnostic_oracle_only_not_FE
 | scripts/test_floquet_airbox_source_convention.py | test_physical_potential_requires_conversion_while_schur_is_invariant | Niezależna algebra potencjału i podłączenie źródłowe; bez native |
 | backends/fem/cpu/frequency_domain/floquet_waveguide_cross_section.cpp | assemble_floquet_waveguide_cross_section_blocks | Bloki i geometria przekroju niezależne od metadanej długości; źródła, bez nowego managed wykonania |
 | backends/fem/tests/frequency_domain/floquet_waveguide_cross_section_test.cpp | main | Wywołuje regresje miary oraz mixed_source_matches_independent_weak_quadrature; przygotowane, niekompilowane |
+
+
+(k0-window-krylov-oversampling-v2)=
+## Większa przestrzeń Kryłowa pełnego okna K0 — hipoteza do kwalifikacji
+
+Runtime234, serial15 na niezmiennym filmie DE, zakończył siedem podprzedziałów
+z EPS iteration limit2000. Zaakceptowane original-descriptor residuals nie
+zawiodły; pełny frequency-window certificate pozostaje failed. Dla bazowego
+NEV4/NCV8 uzyskano dwie pary, dla części refined NEV8/NCV16 sześć par. To dowód
+stagnacji EPS, ale nie dowód jej przyczyny. Większa przestrzeń jest pojedynczą
+zmianą do sprawdzenia, bez osłabienia residualu lub kompletności okna.
+
+```{math}
+:label: eq-k0-window-krylov-oversampling-v2
+n_{\mathrm{cv}}=\min\!\left(D,\max(n_{\mathrm{ev}}+1,
+\chi n_{\mathrm{ev}})\right),\qquad
+\chi=\begin{cases}4&\text{pełne okno częstotliwości},\\
+2&\text{pojedynczy shift poza oknem}.\end{cases}
+```
+
+$D$ oznacza wymiar real-split operatora; $n_{\mathrm{ev}}$ liczbę żądanych Ritz
+pairs, $n_{\mathrm{cv}}$ rozmiar przestrzeni Kryłowa, a $\chi$ mnożnik
+nadpróbkowania. Wszystkie cztery mają jednostkę $1$. Nadal wymagane jest
+$0<n_{\mathrm{ev}}<D$; implementacja ogranicza mnożenie przed wykonaniem, także
+przy granicy u64. Dla tego runu bazowe NCV zmienia się8→16 i refined16→32,
+bez zmiany NEV. MPD pozostaje wyborem SLEPc; provenance zapisuje actual queried
+NEV/NCV/MPD, zamiast przypisywać bibliotece niezmierzoną wartość.
+
+Owner: `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp`
++ `bounded_krylov_dimensions`; window coordinator i borrowed subcalls muszą
+wybierać tę samą politykę. Certificate publikuje
+`bounded_quadruple_nev_window_v2`. Historyczne v1 wyniki pozostają niezmienione.
+Standalone nearest nadal używa dotychczasowej polityki. Równania magnetyczne,
+demag/Poisson, SI, siatka, preconditioner cap, EPS/KSP tolerancje, restart8,
+schedule50, residual acceptance i cały window certificate nie zmieniają się.
+Zwiększenie NCV zwiększa pamięć oraz koszt ortogonalizacji; nie gwarantuje
+zbieżności ani krótszego runtime.
+
+FEM CPU: implementacja źródłowa do managed kwalifikacji. FEM GPU: ten owner CPU
+nie zmienia ani nie dowodzi ścieżki GPU. FDM CPU/GPU: nie dotyczy. Publiczny Python,
+ProblemIR, planner legality, OpenAPI i eksport skryptu UI zachowują kontrakt;
+zmienia się wewnętrzna polityka Kryłowa i jej istniejąca diagnostyka.
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $D$ | Wymiar operatora real-split | $1$ |
+| $n_{\mathrm{ev}}$ | Żądana liczba par Ritz | $1$ |
+| $n_{\mathrm{cv}}$ | Wymiar przestrzeni Kryłowa | $1$ |
+| $\chi$ | Mnożnik nadpróbkowania | $1$ |
+
+Dokumentacja [SLEPc EPSSetDimensions](https://slepc.upv.es/release/manualpages/EPS/EPSSetDimensions.html)
+rozdziela NEV, NCV i MPD oraz zaleca jawny wybór co najwyżej jednego z NCV/MPD.
+Polityka4 jest lokalną hipotezą Fullmaga do walidacji; nie jest gwarancją SLEPc.
+
+Wymagana walidacja: ten sam frozen Γ/model/okno/NEV i solver controls, zmienione
+wyłącznie window NCV; pełne50/50, EPS/KSP diagnostics, dotychczasowy certificate,
+original-descriptor residuals i zgodny wybrany mod. Native regression ma
+sprawdzić bounded wymiary w każdym subwindow oraz standalone nearest bez zmiany.
+Kompilacja unit tests wyłącznie CI; lokalny managed runtime-v2 nie kompiluje
+unit tests. Dopóki pełny runtime nie przejdzie, poprawka pozostaje NOT VERIFIED.

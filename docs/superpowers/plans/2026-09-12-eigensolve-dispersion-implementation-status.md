@@ -7809,3 +7809,25 @@ Rust unit compile zgłosił E0433: w nowej regresji union użyto BTreeSet bez im
 w lokalnym module tests. Dodano jawny import (scope produkcyjny miał go osobno).
 Nie zmieniono asercji ani walidatora. Parser finalnego Rust PASS; wykonanie
 regresji w następnym CI nadal wymagane.
+
+
+### Γ frequency-window — większa przestrzeń Kryłowa, hipoteza do runtime
+
+Dokładny diagnostics234: 43/50 subwindows zakończone, siedem EPS reason-1 po2000
+iteracji; w failed podoknach zero odrzuceń original-descriptor residuals.
+Window certificate zachował rank1 mod9.299249697GHz, lecz perturbation_result
+pass_incomplete; to nie jest zaakceptowany punkt ani pełny sweep. Diagnoza
+źródłowa potwierdza pełny window kontrakt mimo requested_mode_count1.
+
+Przyrost zmienia wyłącznie window NCV z2NEV na4NEV (bounded wymiarem): base8→16,
+refined16→32; standalone shifts zachowują2NEV. NEV, MPDdefault, tolerancje,
+restart8,50podokien i acceptance/certificate bez zmian. Actual queried
+NEV/NCV/MPD nadal publikowane. Polityka certificate jest jawnie v2. Nota0831
+z równaniem/SI/mapą źródeł poprzedziła zmianę kodu. Focused doc validator PASS,
+37 diagnostic printf calls PASS, niezależny review bez blockerów. Native unit
+regressions zmienione, ale nie kompilowane lokalnie; skuteczność NOT VERIFIED.
+
+Build235 queued na070d pozostaje starą polityką. Poprawkę musi objąć osobna
+immutable kapsuła i controlled Γ runtime przed ponowieniem pełnego signed15.
+Stan disk guard:5.46GB przy wymaganych8GiB; operator pytany o dodatkowe miejsce.
+Nie osłabiono guardów i nie ponowiono nieudanego solvera.

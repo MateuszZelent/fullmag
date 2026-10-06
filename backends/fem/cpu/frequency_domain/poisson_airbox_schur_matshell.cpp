@@ -241,20 +241,23 @@ struct BoundedKrylovDimensions {
 
 BoundedKrylovDimensions bounded_krylov_dimensions(
     std::uint64_t dimension,
-    std::uint64_t requested_nev) noexcept
+    std::uint64_t requested_nev,
+    bool frequency_window = false) noexcept
 {
     if (dimension < 2u || requested_nev == 0u) {
         return {};
     }
     const std::uint64_t nev = std::min(dimension - 1u, requested_nev);
-    // Keep the Krylov basis at twice the requested Ritz count where possible,
-    // but never exceed the operator dimension.  The guarded nev < dimension
-    // makes nev + 1 representable and guarantees a proper subspace.
-    const std::uint64_t doubled_nev =
-        nev > dimension / 2u ? dimension : 2u * nev;
+    // Window coverage requests retain extra Ritz pairs even in empty local
+    // intervals. Reserve a larger basis for that solve, without changing nev,
+    // tolerances or the completeness certificate. Standalone shifts keep 2x.
+    // Bound before multiplication to avoid overflow near the u64 limit.
+    const std::uint64_t basis_multiplier = frequency_window ? 4u : 2u;
+    const std::uint64_t oversampled_nev =
+        nev > dimension / basis_multiplier ? dimension : basis_multiplier * nev;
     const std::uint64_t ncv = std::min(
         dimension,
-        std::max(nev + 1u, doubled_nev));
+        std::max(nev + 1u, oversampled_nev));
     return {nev, ncv, ncv > nev && ncv <= dimension};
 }
 
@@ -3946,7 +3949,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 4u * static_cast<std::uint64_t>(requested_count));
         };
         const auto resolved_ncv = [split_dimension](std::uint64_t nev) {
-            return bounded_krylov_dimensions(split_dimension, nev).ncv;
+            return bounded_krylov_dimensions(split_dimension, nev, true).ncv;
         };
         if (problem.requested_mode_count >
                 std::numeric_limits<std::uint32_t>::max() / 4u ||
@@ -4922,7 +4925,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
                 "\"status\":\"%s\","
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
-                "\"krylov_subspace_policy\":\"bounded_double_nev_v1\","
+                "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
                 "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
                 "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
@@ -5267,7 +5270,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
                 "\"status\":\"%s\","
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
-                "\"krylov_subspace_policy\":\"bounded_double_nev_v1\","
+                "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
                 "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
                 "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
@@ -5601,7 +5604,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
             "\"status\":\"%s\","
             "\"method\":\"shift_nev_refinement_subspace_v1\","
-            "\"krylov_subspace_policy\":\"bounded_double_nev_v1\","
+            "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
             "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
             "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
             "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
@@ -5862,7 +5865,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
              : 4u);
     const BoundedKrylovDimensions dimensions = bounded_krylov_dimensions(
         split_count >= 2 ? static_cast<std::uint64_t>(split_count) : 0u,
-        requested_pairs);
+        requested_pairs,
+        borrowed_window_operator);
     if (!dimensions.valid) {
         return fail_production_schur(
             problem,

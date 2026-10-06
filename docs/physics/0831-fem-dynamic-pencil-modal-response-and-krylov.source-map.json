@@ -573,6 +573,18 @@
         "source-certified-field-stage-consumer",
         "source-certified-field-scope-guard"
       ]
+    },
+    {
+      "id": "eq-k0-window-krylov-oversampling-v2",
+      "symbols": [
+        "k0_window_dim",
+        "k0_window_nev",
+        "k0_window_ncv",
+        "k0_window_chi"
+      ],
+      "sources": [
+        "source-k0-bounded-krylov-policy"
+      ]
     }
   ],
   "symbols": [
@@ -1181,6 +1193,30 @@
       "latex": "$\\mathbf H_{\\mathrm{ex},0},\\mathbf H_{\\mathrm{demag},0},\\mathbf H_{K,0},\\mathbf H_{\\mathrm{ext},0}$",
       "meaning": "certified static exchange, demagnetizing, uniaxial and external fields",
       "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "k0_window_dim",
+      "latex": "$D$",
+      "meaning": "Wymiar operatora real-split",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "k0_window_nev",
+      "latex": "$n_{\\mathrm{ev}}$",
+      "meaning": "Żądana liczba par Ritz",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "k0_window_ncv",
+      "latex": "$n_{\\mathrm{cv}}$",
+      "meaning": "Wymiar przestrzeni Kryłowa",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "k0_window_chi",
+      "latex": "$\\chi$",
+      "meaning": "Mnożnik nadpróbkowania",
+      "si_unit": "$1$"
     }
   ],
   "sources": [
@@ -2028,7 +2064,7 @@
       "id": "source-k0-bounded-krylov-policy",
       "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
       "symbol": "bounded_krylov_dimensions",
-      "responsibility": "Bound nev/ncv to the real-split dimension; standalone positive nearest 2x, borrowed window 4x.",
+      "responsibility": "Bound nev/ncv to real-split dimension; window NCV4xNEV, standalone NCV2xNEV; preserve Ritz count policy and queried dimensions.",
       "evidence_status": "source_visible / managed execution pending"
     },
     {
