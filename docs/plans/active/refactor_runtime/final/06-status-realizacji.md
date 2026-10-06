@@ -1,5 +1,15 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53BA, 06.10.2026: [Apply Inspectora i restart](p8/53ba-native-browser-applied-inspector-draft.md)
+**PASS** dla jednej zatwierdzonej anizotropii w idle FDM workspace. Apply
+aktualizował kanoniczny physics_stack; po restarcie ten sam moduł i Ku1,
+scena revision 5 i dirty document zostały dokładnie odtworzone. Receipt
+`02254ad5af7e419db05d32657dfe78cf`: completed, exit 0, 7 kontroli, wszystkie
+własne procesy waited; noEmit/lint PASS, WebGL visible i contextLost false.
+Dotychczasowe 287 checks native nie obejmują rzeczywistego aktywnego solve
+ani Start-vs-freeze z działającym workerem. Te bramki, inne formularze
+i publiczny restart pozostają otwarte; procentów całego planu nie zwiększono.
+
 Checkpoint P8-53AZ, 06.10.2026: [ochrona szkicu Inspectora](p8/53az-native-browser-inspector-draft-guard.md)
 **PASS** dla jednego rzeczywistego szkicu anizotropii i jawnego Revert.
 Restart odmówił przed wysłaniem intentu, zachowując Ku1, panel, model i stary
