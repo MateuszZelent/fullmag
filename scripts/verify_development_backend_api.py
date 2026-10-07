@@ -86,7 +86,10 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         frozen_native_build_id: str | None = None,
         active_run_refusal_owner_bundle: str | None = None,
         active_run_scenario: str = "running",
-        start_freeze_race_only: bool = False) -> int:
+        start_freeze_race_only: bool = False,
+        archive_frozen_bundle: bool = False) -> int:
+    if archive_frozen_bundle and (not project_document_only or frozen_native_build_id is None):
+        raise storage.StorageError("Native bundle archive requires the frozen project-document verification scope")
     active_run_refusal = active_run_refusal_owner_bundle is not None
     _validate_start_freeze_race_scope(
         start_freeze_race_only,
@@ -422,6 +425,24 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 raise storage.StorageError("Native API verifier changed during verification")
             if not receipt["checks"] or not all(item["waited"] for item in receipt["processes"]):
                 raise storage.StorageError("Native API verification lacks terminal evidence")
+            if archive_frozen_bundle:
+                from windows.runtime_bundle import create_bundle, validate_bundle
+                required = sum((source_bin / name).stat().st_size for name in BINARY_NAMES)
+                if shutil.disk_usage(native["storage_root"]).free < required + 512 * 1024 * 1024:
+                    raise storage.StorageError("Insufficient storage for the verified native bundle archive")
+                bundle = create_bundle(native["build_root"], native["runtime_root"], manifest_path, "dev")
+                archived, hashes = validate_bundle(bundle["bundle_root"], native["runtime_root"], "dev")
+                if (archived["source"]["manifest_sha256"] != frozen_native_build_id
+                        or archived["source"]["backend_source_sha256"] != source_before):
+                    raise storage.StorageError("Native bundle archive does not match the verified package")
+                # Retain this immutable A bundle before a later build replaces
+                # the mutable target; this does not activate any workspace.
+                receipt["archived_native_bundle"] = {**bundle, "verified_files": hashes}
+                verified_build_identity(native["build_root"], native["runtime_root"], manifest_path,
+                                        None, expected_manifest_sha256=frozen_native_build_id)
+                if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != verifier_hash:
+                    raise storage.StorageError("Native API verifier changed while archiving the verified package")
+                receipt["checks"].append("frozen-native-bundle-archive")
             code = 0
         except Exception as error:
             receipt["reason"] = type(error).__name__
@@ -2583,6 +2604,7 @@ if __name__ == "__main__":
     parser.add_argument("--candidate-preparation-only", action="store_true")
     parser.add_argument("--workspace-browser-owner-bundle")
     parser.add_argument("--frozen-native-build-id")
+    parser.add_argument("--archive-frozen-bundle", action="store_true")
     args = parser.parse_args()
     try:
         raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only,
@@ -2591,7 +2613,8 @@ if __name__ == "__main__":
                              args.consumer_pump_owner_bundle, args.candidate_preparation_only,
                              args.workspace_browser_owner_bundle, args.frozen_native_build_id,
                               args.active_run_refusal_owner_bundle, args.active_run_scenario,
-                              args.start_freeze_race_only))
+                              args.start_freeze_race_only,
+                              archive_frozen_bundle=args.archive_frozen_bundle))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)
