@@ -323,6 +323,7 @@ jobs:
           python -m pytest -q
           packages/fullmag-py/tests/test_eigen_scene_merge_contract.py
           packages/fullmag-py/tests/test_scene_document_problem_ir.py
+          packages/fullmag-py/tests/test_mesh_stl_fallback_owner_binding.py
           packages/fullmag-py/tests/test_execution_profile_authoring_roundtrip.py
           packages/fullmag-py/tests/test_scene_execution_config.py
 
