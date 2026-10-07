@@ -16,8 +16,8 @@ use std::fmt;
 
 /// Requested V04 spatial representation. Typed parsing preserves intent but
 /// does not establish runtime availability, invariance, equilibrium, or admission.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SpatialRepresentationIR {
     #[serde(rename = "full_3d")]
     Full3d,
@@ -28,6 +28,39 @@ pub enum SpatialRepresentationIR {
         region_targets: BTreeMap<String, RegionRefIR>,
         magnetostatic_bc: WaveguideMagnetostaticBoundaryConditionIR,
     },
+}
+
+impl<'de> Deserialize<'de> for SpatialRepresentationIR {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // An empty struct variant rejects fields that serde's tagged unit variant ignores.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", deny_unknown_fields)]
+        enum Wire {
+            #[serde(rename = "full_3d")]
+            Full3d {},
+            #[serde(rename = "waveguide_2p5d")]
+            Waveguide2p5d {
+                frame: WaveguideFrameIR,
+                cross_section_mesh: WaveguideCrossSectionMeshIR,
+                region_targets: BTreeMap<String, RegionRefIR>,
+                magnetostatic_bc: WaveguideMagnetostaticBoundaryConditionIR,
+            },
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Full3d {} => Self::Full3d,
+            Wire::Waveguide2p5d {
+                frame,
+                cross_section_mesh,
+                region_targets,
+                magnetostatic_bc,
+            } => Self::Waveguide2p5d {
+                frame,
+                cross_section_mesh,
+                region_targets,
+                magnetostatic_bc,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

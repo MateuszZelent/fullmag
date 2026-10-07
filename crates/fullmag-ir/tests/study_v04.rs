@@ -846,3 +846,28 @@ fn direct_full3d_availability_is_only_the_legacy_staging_route() {
         fullmag_ir::StudyIRV04ExecutionRepresentation::Full3dLegacyStaging
     );
 }
+
+#[test]
+fn standalone_full3d_decoders_never_discard_extra_spatial_intent() {
+    for representation in [
+        json!({"kind":"full_3d","future_field":true}),
+        json!({"kind":"full_3d","frame":null}),
+        json!({"kind":"full_3d","cross_section_mesh":{}}),
+    ] {
+        assert!(
+            serde_json::from_value::<SpatialRepresentationIR>(representation.clone()).is_err(),
+            "standalone representation accepted {representation}"
+        );
+        let study = eigenmodes_v04(representation.clone(), Some(json!("open")));
+        assert!(
+            serde_json::from_value::<StudyIRV04>(study.clone()).is_err(),
+            "standalone study discarded {representation}"
+        );
+        let error = serde_json::from_value::<ProblemIRV04>(problem_value_with_study(study))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("/study/spatial_representation/"));
+    }
+    let representation: SpatialRepresentationIR = serde_json::from_value(full_3d()).unwrap();
+    assert_eq!(serde_json::to_value(representation).unwrap(), full_3d());
+}

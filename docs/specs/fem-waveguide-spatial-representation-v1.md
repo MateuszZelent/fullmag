@@ -363,3 +363,15 @@ Jej call graph nie może wywoływać ponownie ProblemIRV04.validate z jego włas
 kroku bindings. Post-common-validation helper jest crate-private i ma wyraźne
 preconditions; zwykły wejściowy registry validator nadal wykonuje pełną walidację
 modelu. To nie oznacza invariance/equilibrium certificate ani admission.
+
+## Ścisły odczyt reprezentacji bez pełnego modelu — 2026-10-07
+
+`crates/fullmag-ir/src/study_v04.rs::SpatialRepresentationIR::deserialize`
+odrzuca dodatkowe pola `full_3d` również przy bezpośrednim odczycie reprezentacji
+lub `StudyIRV04`. Pole frame/mesh ani nieznany intent nie może zostać pominięty
+przez internally-tagged unit variant. Poprawny wire pozostaje
+`{"kind":"full_3d"}`; mapowania i wymagane pola waveguide nie zmieniają się.
+Odczyt całego `ProblemIRV04` zachowuje wcześniejsze pointer-qualified errors.
+Regresja `standalone_full3d_decoders_never_discard_extra_spatial_intent` obejmuje
+wszystkie trzy granice dekodowania. To walidacja kształtu danych, nie admission,
+certyfikat invariance ani dowód wykonania MFEM. Wykonanie regresji wymaga CI.
