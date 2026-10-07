@@ -386,6 +386,13 @@ pub(crate) fn antenna_field_solution_payload_lengths(
             insert(&evidence.path, evidence.byte_length)?;
         }
     }
+    // All raw payloads coexist during verification. Individual lengths can
+    // fit while their aggregate cannot; reject that before payload I/O.
+    lengths.values().try_fold(manifest_bytes.len(), |total, length| {
+        total.checked_add(*length).ok_or_else(|| RunError {
+            message: "antenna stored payload aggregate size overflows address space".into(),
+        })
+    })?;
     Ok(lengths)
 }
 
@@ -812,7 +819,10 @@ fn decode_xyz_f64_le(bytes: &[u8], value_count: usize) -> Result<Vec<[f64; 3]>, 
             ),
         });
     }
-    let mut field = Vec::with_capacity(value_count / 3);
+    let mut field = Vec::new();
+    field.try_reserve_exact(value_count / 3).map_err(|error| RunError {
+        message: format!("reserve decoded antenna field buffer: {error}"),
+    })?;
     for xyz in bytes.chunks_exact(24) {
         let component = |offset| f64::from_le_bytes(xyz[offset..offset + 8].try_into().unwrap());
         let value = [component(0), component(8), component(16)];
@@ -842,7 +852,10 @@ fn decode_tet4_u32_le(
             ),
         });
     }
-    let mut cells = Vec::with_capacity(value_count / 4);
+    let mut cells = Vec::new();
+    cells.try_reserve_exact(value_count / 4).map_err(|error| RunError {
+        message: format!("reserve decoded antenna topology buffer: {error}"),
+    })?;
     for tet in bytes.chunks_exact(16) {
         let mut nodes = [0_u32; 4];
         for (local, chunk) in tet.chunks_exact(4).enumerate() {
@@ -2461,6 +2474,41 @@ mod tests {
             value["content_digest"] = serde_json::json!(format!("sha256:{}", sha256(&serde_json::to_vec(&value).unwrap())));
             assert!(antenna_field_solution_payload_lengths(&serde_json::to_vec(&value).unwrap()).is_err(), "{mutation}");
         }
+    }
+
+    #[test]
+    fn read_plan_refuses_aggregate_overflow_with_valid_individual_lengths() {
+        let mut fixture = input(2.0);
+        let mut other = fixture.bases[0].clone();
+        other.port_mode_id = "other".into();
+        fixture.bases.push(other);
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&artifacts.last().unwrap().bytes).unwrap();
+        // Each buffer fits even the per-allocation isize bound, but the
+        // positions and two magnetic-field buffers cannot coexist in usize.
+        let count = (usize::MAX / 16 / 3) * 3;
+        assert!(count.checked_mul(8).unwrap() <= isize::MAX as usize);
+        value["sample_positions"]["value_count"] = serde_json::json!(count);
+        for basis in value["bases"].as_array_mut().unwrap() {
+            basis["magnetic_field_per_ampere"]["value_count"] = serde_json::json!(count);
+        }
+        value.as_object_mut().unwrap().remove("content_digest");
+        value["content_digest"] = serde_json::json!(format!("sha256:{}", sha256(&serde_json::to_vec(&value).unwrap())));
+        let error = antenna_field_solution_payload_lengths(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+        assert!(error.message.contains("aggregate size overflows"));
+    }
+
+    #[test]
+    fn decoded_buffers_preserve_values_and_validation() {
+        let bytes: Vec<u8> = [1.0_f64, -2.0, 3.0].into_iter().flat_map(f64::to_le_bytes).collect();
+        assert_eq!(decode_xyz_f64_le(&bytes, 3).unwrap(), vec![[1.0, -2.0, 3.0]]);
+        assert!(decode_xyz_f64_le(&bytes, 6).is_err());
+        let nonfinite: Vec<u8> = [1.0_f64, f64::NAN, 3.0].into_iter().flat_map(f64::to_le_bytes).collect();
+        assert!(decode_xyz_f64_le(&nonfinite, 3).is_err());
+        let topology: Vec<u8> = [0_u32, 1, 2, 3].into_iter().flat_map(u32::to_le_bytes).collect();
+        assert_eq!(decode_tet4_u32_le(&topology, 4, 4).unwrap(), vec![[0, 1, 2, 3]]);
+        assert!(decode_tet4_u32_le(&topology, 4, 3).is_err());
+        assert!(decode_tet4_u32_le(&topology, 8, 4).is_err());
     }
 
     #[test]

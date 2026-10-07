@@ -3114,6 +3114,12 @@ zakazane testy nie pozwalają nazwać tej granicy zakwalifikowaną.
 
 **Pliki:** nowe planner `antenna_preflight.rs` i runner `antenna_validity.rs`, istniejący IR/plan, `native_fem/steady_transport.rs`, direct tetra options, manifest/DTO; nowy `tests/antenna/verify_budget.py`.
 
+Uzupełnienie 2026-10-08: [checkpoint sumy pamięci cold-load](2026-10-08-antenna-aggregate-memory-checkpoint.md)
+opisuje checked sumę manifestu/payloadów przed odczytem oraz fallible reservation
+dekodowania. To nie jest peak RAM ani twardy limit. Istniejące
+`ram.reservation_bytes` pozostaje minimum rezerwacji, bez zmiany semantyki.
+Regresje Rust dodano, lecz nie wykonano; pełny T11 pozostaje otwarty.
+
 - [ ] Wyliczać przed solve liczbę elementów źródła, targetów, par i rozmiar buforów. Użyć checked multiplication; overflow jest błędem, nie ogromnym zaakceptowanym zadaniem.
 - [ ] Zastąpić stałą miliona par jawnie wersjonowaną polityką wykonania. Zachować limit domyślny dopóki benchmark nie uzasadni innego; błąd preflight pokazuje oba rozmiary i koszt.
 - [ ] Blokować targety dla ograniczenia pamięci i granic anulowania. Licznik globalny obejmuje wszystkie bloki, porty i retries; nie resetować budżetu dla każdego bloku, aby obchodzić limit.
