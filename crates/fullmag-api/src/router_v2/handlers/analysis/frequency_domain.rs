@@ -330,7 +330,8 @@ pub struct FrequencyDomainSpectrumV3ModePayload {
     pub mode_field_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_field_resource_key: Option<String>,
-    pub residual_relative_l2: f64,
+    /// Missing solver evidence remains unavailable, never an inferred zero.
+    pub residual_relative_l2: Option<f64>,
     pub component_participation: FrequencyDomainModalParticipationPayload,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
@@ -1906,12 +1907,11 @@ async fn json_artifact_resource_first_existing_with_context(
     resource_key: &str,
 ) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
     for artifact_path in artifact_paths {
-        if try_resolve_artifact_path(artifact_dir, artifact_path)?.is_some() {
+        if let Some((payload_value, content_digest)) =
+            super::results::read_result_artifact_snapshot(artifact_dir, artifact_path)?
+        {
             let live_identity = frequency_domain_live_artifact_identity(state, artifact_path).await;
-            let payload_value = read_json_artifact_value(artifact_dir, artifact_path)?;
             let payload = decode_frequency_domain_artifact_payload(artifact_path, payload_value)?;
-            let content_digest =
-                frequency_domain_artifact_content_digest(artifact_dir, artifact_path)?;
             let response = Json(FrequencyDomainJsonArtifactResource {
                 schema_version: schema_version.to_string(),
                 status: "ready".to_string(),
@@ -2024,21 +2024,6 @@ async fn frequency_domain_live_artifact_identity(
                     .and_then(|mesh| mesh.generation_id.clone())
             }),
     }
-}
-
-fn frequency_domain_artifact_content_digest(
-    artifact_dir: &std::path::Path,
-    artifact_path: &str,
-) -> Result<String, ApiError> {
-    let resolved = try_resolve_artifact_path(artifact_dir, artifact_path)?
-        .ok_or_else(|| ApiError::not_found(format!("artifact '{artifact_path}' is not present")))?;
-    let bytes = std::fs::read(&resolved).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to read frequency-domain artifact '{}': {error}",
-            artifact_path
-        ))
-    })?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 pub(crate) fn decode_frequency_domain_artifact_payload(
@@ -2558,7 +2543,10 @@ fn validate_frequency_domain_spectrum_v3(
                     "eigen spectrum v3 contains non-finite frequency_hz",
                 ));
             }
-            if !mode.residual_relative_l2.is_finite() || mode.residual_relative_l2 < 0.0 {
+            if mode
+                .residual_relative_l2
+                .is_some_and(|residual| !residual.is_finite() || residual < 0.0)
+            {
                 return Err(ApiError::internal(
                     "eigen spectrum v3 contains invalid residual_relative_l2",
                 ));
@@ -3859,4 +3847,66 @@ fn validate_complex_payload_counts(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod spectrum_residual_tests {
+    use super::*;
+
+    fn spectrum() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "eigen_spectrum.v3",
+            "samples": [{
+                "sample_id": "sample:0", "sample_index": 0,
+                "modes": [{
+                    "mode_id": "mode:0", "raw_mode_index": 0,
+                    "frequency_hz": 9.3e9,
+                    "component_participation": {
+                        "schema_version": "modal_component_participation.v1",
+                        "definition_id": "volume_weighted_complex_l2_fraction.v1",
+                        "status": "unavailable", "quantity_id": "magnetization",
+                        "quantity_symbol": "m", "unit": "1",
+                        "component_basis": "global_cartesian_xyz",
+                        "integration_method": "unavailable",
+                        "qualification": "NOT VERIFIED",
+                        "provenance": {"solver_device": "cpu", "observable_lane": "fem"},
+                        "unavailable": {
+                            "reason_code": "component_participation_unavailable",
+                            "detail": "No exported mode field"
+                        }
+                    }
+                }]
+            }]
+        })
+    }
+
+    #[test]
+    fn missing_and_null_residual_remain_unavailable() {
+        for explicit_null in [false, true] {
+            let mut input = spectrum();
+            if explicit_null {
+                input["samples"][0]["modes"][0]["residual_relative_l2"] = Value::Null;
+            }
+            let parsed: FrequencyDomainSpectrumV3ArtifactPayload =
+                serde_json::from_value(input).unwrap();
+            assert_eq!(parsed.samples[0].modes[0].residual_relative_l2, None);
+            assert!(validate_frequency_domain_spectrum_v3(&parsed).is_ok());
+            let output = serde_json::to_value(&parsed).unwrap();
+            assert!(output["samples"][0]["modes"][0]["residual_relative_l2"].is_null());
+        }
+    }
+
+    #[test]
+    fn measured_residual_is_preserved_and_invalid_values_are_rejected() {
+        let mut input = spectrum();
+        input["samples"][0]["modes"][0]["residual_relative_l2"] = serde_json::json!(2e-9);
+        let mut parsed: FrequencyDomainSpectrumV3ArtifactPayload =
+            serde_json::from_value(input).unwrap();
+        assert_eq!(parsed.samples[0].modes[0].residual_relative_l2, Some(2e-9));
+        assert!(validate_frequency_domain_spectrum_v3(&parsed).is_ok());
+        for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            parsed.samples[0].modes[0].residual_relative_l2 = Some(invalid);
+            assert!(validate_frequency_domain_spectrum_v3(&parsed).is_err());
+        }
+    }
 }

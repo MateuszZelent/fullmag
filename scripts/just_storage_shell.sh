@@ -97,6 +97,25 @@ case "${recipe}" in
     # worktree build lock.
     exec "${python_cmd}" "${script_dir}/windows/watch_backend.py" --repo-root "${repo_root}" --web-port "${web_port}"
     ;;
+  *"scripts/verify_control_room_sources.py"*)
+    # Never execute the recipe text: accept only the fixed argument shape and
+    # invoke the trusted helper from this checkout with the selected route.
+    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint|openapi-import-check|react-doctor|development-restart-check|resource-client-cache-check|development-kernel-host-check|development-transport-pause-check|development-run-outcome-handoff-check|development-run-outcome-handoff-lint|development-restart-action-check|development-restart-action-lint|development-backend-build-action-check) --repo-root "[^"]+"( --dependency-workspace "([^"]+)")?[[:space:]]*$'
+    if [[ ! "${recipe}" =~ ${source_recipe_pattern} ]]; then
+      echo "[fullmag just] invalid lightweight frontend recipe" >&2
+      exit 2
+    fi
+    source_route="${BASH_REMATCH[1]}"
+    dependency_workspace="${BASH_REMATCH[3]:-}"
+    if [[ -n "${dependency_workspace}" ]]; then
+      case "${source_route}" in
+        generate-client|production-source|api-hygiene) ;;
+        *) echo "[fullmag just] dependency workspace is unsupported for this source route" >&2; exit 2 ;;
+      esac
+      exec "${python_cmd}" -B "${script_dir}/verify_control_room_sources.py" --route "${source_route}" --repo-root "${repo_root}" --dependency-workspace "${dependency_workspace}"
+    fi
+    exec "${python_cmd}" -B "${script_dir}/verify_control_room_sources.py" --route "${source_route}" --repo-root "${repo_root}"
+    ;;
   *"scripts/export_runner_openapi.py"*)
     export_openapi_pattern='^[^[:space:]]+ "[^"]+/scripts/export_runner_openapi.py" --repo-root "[^"]+" --job-id "([0-9a-f]{32})" --expected-commit "([0-9a-f]{40})"$'
     if [[ ! "${recipe}" =~ ${export_openapi_pattern} ]]; then
@@ -238,6 +257,21 @@ case "${recipe}" in
   *"scripts/local_runner_cli.py"*)
     FULLMAG_STORAGE_PYTHON="${python_cmd}" exec bash -euo pipefail -c "${recipe}"
     ;;
+  *"scripts/diagnose_managed_fem_startup.py"*)
+    "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" >/dev/null
+    export PYTHONDONTWRITEBYTECODE=1
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
+  *"scripts/run_comsol_dispersion_benchmark.py"*|*"scripts/run_de_100nm_pilot.py"*)
+    # The benchmark consumes an already completed runner build.  Its Python
+    # entry point acquires the per-worktree build lock around the immutable
+    # receipt check and Compose run, so it must not enter the generic heavy
+    # lock that rejects all commands while the container coordinator is
+    # enrolled on Windows.
+    "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" >/dev/null
+    export PYTHONDONTWRITEBYTECODE=1
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
 esac
 
 # These plain-Rust package routes have fixed commands and own their resolver
@@ -287,16 +321,6 @@ case "${recipe}" in
       exit 2
     fi
     exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}"
-    ;;
-  *"scripts/verify_control_room_sources.py"*)
-    # Never execute the recipe text: accept only the fixed argument shape and
-    # invoke the trusted helper from this checkout with the selected route.
-    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint|openapi-import-check|react-doctor|development-restart-check|resource-client-cache-check|development-kernel-host-check|development-transport-pause-check|development-run-outcome-handoff-check|development-run-outcome-handoff-lint|development-restart-action-check|development-restart-action-lint|development-backend-build-action-check) --repo-root "[^"]+"$'
-    if [[ ! "${recipe}" =~ ${source_recipe_pattern} ]]; then
-      echo "[fullmag just] invalid lightweight frontend recipe" >&2
-      exit 2
-    fi
-    exec "${python_cmd}" "${script_dir}/verify_control_room_sources.py" --route "${BASH_REMATCH[1]}" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_project_entrypoint_runtime.py"*)
     exec "${python_cmd}" "${script_dir}/verify_project_entrypoint_runtime.py" --repo-root "${repo_root}"

@@ -43,6 +43,7 @@ pub mod visualization_state;
 pub mod workspace;
 pub mod workspace_items;
 
+pub use authoring::{ParallelExecutionModeResource, ParallelExecutionResource};
 pub use frozen_spins::*;
 pub use planar_fields::*;
 pub use planar_monitors::*;

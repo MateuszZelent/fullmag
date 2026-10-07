@@ -1,8 +1,10 @@
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
+#include "cpu/frequency_domain/floquet_airbox_operator.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 
 #include "context.hpp"
+#include "fem_common.hpp"
 #include "core/fem_mesh.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "frequency_domain/canonical_digest.hpp"
@@ -20,11 +22,120 @@
 #include <set>
 #include <string>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
 namespace {
+
+// F01: keep the mixed-P1 frequency-domain blocks on one geometry-aware
+// overintegrated policy.  Prism6 shape gradients are linear on the reference
+// prism, so their products are quadratic; order 1 is therefore an
+// hourglass-producing rule.  The MFEM 4.7 tetrahedron order-4 rule contains a
+// negative weight, while the exchange producer requires every physical
+// quadrature weight to be positive.  Use the next positive tetrahedron rule
+// for compatibility with that image and retain order 4 for prism6 (triangle
+// order 4 x segment order 4).  Newer MFEM releases may make simplex order4
+// positive, but do not change this explicit backend policy implicitly.
+constexpr int kFrequencyDomainP1TetrahedronQuadratureOrder = 5;
+constexpr int kFrequencyDomainP1PrismQuadratureOrder = 4;
+constexpr char kFrequencyDomainP1QuadraturePolicy[] =
+    "p1_geometry_aware_tet5_prism4_positive";
+
+struct QuadratureProvenanceKey {
+    std::string geometry{};
+    int finite_element_order = 0;
+    int requested_quadrature_order = 0;
+    int resolved_quadrature_order = 0;
+    int rule_npoints = 0;
+
+    bool operator<(const QuadratureProvenanceKey &other) const noexcept
+    {
+        return std::tie(
+                   geometry,
+                   finite_element_order,
+                   requested_quadrature_order,
+                   resolved_quadrature_order,
+                   rule_npoints) <
+            std::tie(
+                other.geometry,
+                other.finite_element_order,
+                other.requested_quadrature_order,
+                other.resolved_quadrature_order,
+                other.rule_npoints);
+    }
+};
+
+std::string quadrature_provenance_json(
+    const std::map<QuadratureProvenanceKey, std::uint64_t> &entries,
+    std::uint64_t element_count)
+{
+    std::string json =
+        "{\"schema_version\":\"poisson_airbox_shared_domain_quadrature.v1\","
+        "\"policy\":\"" + std::string(kFrequencyDomainP1QuadraturePolicy) +
+        "\",\"element_count\":" + std::to_string(element_count) +
+        ",\"entries\":[";
+    bool first = true;
+    for (const auto &[key, count] : entries) {
+        if (!first) {
+            json += ',';
+        }
+        first = false;
+        json += "{\"geometry\":\"" + key.geometry +
+            "\",\"finite_element_order\":" +
+            std::to_string(key.finite_element_order) +
+            ",\"requested_quadrature_order\":" +
+            std::to_string(key.requested_quadrature_order) +
+            ",\"resolved_quadrature_order\":" +
+            std::to_string(key.resolved_quadrature_order) +
+            ",\"rule_npoints\":" + std::to_string(key.rule_npoints) +
+            ",\"element_count\":" + std::to_string(count) + "}";
+    }
+    json += "]}";
+    return json;
+}
+
+const char *frequency_domain_p1_geometry_name(mfem::Geometry::Type geometry)
+{
+    switch (geometry) {
+    case mfem::Geometry::TETRAHEDRON:
+        return "tet4";
+    case mfem::Geometry::PRISM:
+        return "prism6";
+    default:
+        return "unsupported";
+    }
+}
+
+int frequency_domain_p1_quadrature_order(mfem::Geometry::Type geometry)
+{
+    switch (geometry) {
+    case mfem::Geometry::TETRAHEDRON:
+        return kFrequencyDomainP1TetrahedronQuadratureOrder;
+    case mfem::Geometry::PRISM:
+        return kFrequencyDomainP1PrismQuadratureOrder;
+    default:
+        throw std::invalid_argument(
+            "frequency-domain P1 quadrature supports only tet4 or prism6 elements");
+    }
+}
+
+const mfem::IntegrationRule &frequency_domain_p1_quadrature(
+    const mfem::FiniteElement &finite_element)
+{
+    const mfem::IntegrationRule &rule = mfem::IntRules.Get(
+        finite_element.GetGeomType(),
+        frequency_domain_p1_quadrature_order(finite_element.GetGeomType()));
+    for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
+        if (!std::isfinite(rule.IntPoint(point_index).weight) ||
+            !(rule.IntPoint(point_index).weight > 0.0)) {
+            throw std::invalid_argument(
+                "frequency-domain P1 quadrature policy requires positive reference weights");
+        }
+    }
+    return rule;
+}
 
 constexpr std::uint32_t kInactiveMagneticClass = std::numeric_limits<std::uint32_t>::max();
 
@@ -74,6 +185,303 @@ struct SparseAccumulator {
         }
     }
 };
+
+using Complex = std::complex<double>;
+
+struct ComplexSparseAccumulator {
+    std::uint64_t row_count = 0;
+    std::uint64_t column_count = 0;
+    std::vector<std::map<std::uint32_t, Complex>> rows{};
+
+    ComplexSparseAccumulator(std::uint64_t rows_in, std::uint64_t columns_in)
+        : row_count(rows_in)
+        , column_count(columns_in)
+        , rows(static_cast<std::size_t>(rows_in))
+    {
+    }
+
+    void add(std::uint64_t row, std::uint64_t column, Complex value)
+    {
+        if (row >= row_count || column >= column_count ||
+            column > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::out_of_range("shared-domain complex CSR entry is out of range");
+        }
+        if (value == Complex{}) {
+            return;
+        }
+        rows[static_cast<std::size_t>(row)][static_cast<std::uint32_t>(column)] += value;
+    }
+
+    void finish(PoissonAirboxSharedDomainComplexCsrMatrix &out) const
+    {
+        out = PoissonAirboxSharedDomainComplexCsrMatrix{};
+        out.row_count = row_count;
+        out.column_count = column_count;
+        out.row_offsets.reserve(rows.size() + 1u);
+        out.row_offsets.push_back(0u);
+        for (const auto &row : rows) {
+            for (const auto &[column, value] : row) {
+                if (value == Complex{}) {
+                    continue;
+                }
+                if (!std::isfinite(value.real()) || !std::isfinite(value.imag())) {
+                    throw std::invalid_argument(
+                        "shared-domain complex CSR assembly produced a non-finite value");
+                }
+                out.column_indices.push_back(column);
+                out.values.push_back(value);
+            }
+            if (out.values.size() > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::overflow_error(
+                    "shared-domain complex CSR nnz exceeds uint32 range");
+            }
+            out.row_offsets.push_back(static_cast<std::uint32_t>(out.values.size()));
+        }
+    }
+};
+
+bool complex_csr_is_valid(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &matrix) noexcept
+{
+    if (matrix.row_count == 0u || matrix.column_count == 0u ||
+        matrix.row_count == std::numeric_limits<std::uint64_t>::max() ||
+        matrix.row_count > std::numeric_limits<std::size_t>::max() ||
+        matrix.row_offsets.size() !=
+            static_cast<std::size_t>(matrix.row_count + 1u) ||
+        matrix.column_indices.size() != matrix.values.size() ||
+        matrix.row_offsets.empty() || matrix.row_offsets.front() != 0u ||
+        matrix.row_offsets.back() != matrix.values.size()) {
+        return false;
+    }
+    for (std::uint64_t row = 0u; row < matrix.row_count; ++row) {
+        if (matrix.row_offsets[static_cast<std::size_t>(row)] >
+            matrix.row_offsets[static_cast<std::size_t>(row + 1u)]) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0u; index < matrix.values.size(); ++index) {
+        if (matrix.column_indices[index] >= matrix.column_count ||
+            !std::isfinite(matrix.values[index].real()) ||
+            !std::isfinite(matrix.values[index].imag())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool copy_mfem_complex_matrix(
+    const mfem::ComplexSparseMatrix &source,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    const mfem::SparseMatrix &real = source.real();
+    const mfem::SparseMatrix &imaginary = source.imag();
+    if (real.Height() <= 0 || real.Width() <= 0 ||
+        real.Height() != imaginary.Height() || real.Width() != imaginary.Width() ||
+        static_cast<std::uint64_t>(real.Height()) >
+            std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(real.Width()) >
+            std::numeric_limits<std::uint32_t>::max()) {
+        error = "Floquet MFEM complex block has invalid dimensions";
+        return false;
+    }
+    try {
+        ComplexSparseAccumulator accumulator(
+            static_cast<std::uint64_t>(real.Height()),
+            static_cast<std::uint64_t>(real.Width()));
+        mfem::Array<int> real_columns;
+        mfem::Array<int> imaginary_columns;
+        mfem::Vector real_values;
+        mfem::Vector imaginary_values;
+        for (int row = 0; row < real.Height(); ++row) {
+            real.GetRow(row, real_columns, real_values);
+            imaginary.GetRow(row, imaginary_columns, imaginary_values);
+            if (real_columns.Size() != real_values.Size() ||
+                imaginary_columns.Size() != imaginary_values.Size()) {
+                error = "Floquet MFEM complex block row storage is inconsistent";
+                return false;
+            }
+            for (int index = 0; index < real_columns.Size(); ++index) {
+                if (real_columns[index] < 0) {
+                    error = "Floquet MFEM complex block has a negative column index";
+                    return false;
+                }
+                accumulator.add(
+                    static_cast<std::uint64_t>(row),
+                    static_cast<std::uint64_t>(real_columns[index]),
+                    Complex(real_values[index], 0.0));
+            }
+            for (int index = 0; index < imaginary_columns.Size(); ++index) {
+                if (imaginary_columns[index] < 0) {
+                    error = "Floquet MFEM complex block has a negative column index";
+                    return false;
+                }
+                accumulator.add(
+                    static_cast<std::uint64_t>(row),
+                    static_cast<std::uint64_t>(imaginary_columns[index]),
+                    Complex(0.0, imaginary_values[index]));
+            }
+        }
+        accumulator.finish(out);
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool copy_real_csr_as_complex(
+    const CsrMatrixView &source,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    if (source.row_count == 0u || source.column_count == 0u ||
+        source.row_offsets == nullptr ||
+        source.row_offsets_len != source.row_count + 1u ||
+        source.column_indices_len != source.values_len ||
+        (source.values_len > 0u &&
+         (source.column_indices == nullptr || source.values == nullptr)) ||
+        source.row_offsets[0] != 0u ||
+        source.row_offsets[source.row_count] != source.values_len) {
+        error = "shared-domain real CSR block is invalid";
+        return false;
+    }
+    for (std::uint64_t row = 0u; row < source.row_count; ++row) {
+        if (source.row_offsets[row] > source.row_offsets[row + 1u]) {
+            error = "shared-domain real CSR row offsets are not monotone";
+            return false;
+        }
+    }
+    for (std::uint64_t entry = 0u; entry < source.values_len; ++entry) {
+        if (source.column_indices[entry] >= source.column_count ||
+            !std::isfinite(source.values[entry])) {
+            error = "shared-domain real CSR block contains an invalid entry";
+            return false;
+        }
+    }
+    try {
+        ComplexSparseAccumulator accumulator(source.row_count, source.column_count);
+        for (std::uint64_t row = 0u; row < source.row_count; ++row) {
+            for (std::uint32_t entry = source.row_offsets[row];
+                 entry < source.row_offsets[row + 1u];
+                 ++entry) {
+                accumulator.add(
+                    row,
+                    source.column_indices[entry],
+                    Complex(source.values[entry], 0.0));
+            }
+        }
+        accumulator.finish(out);
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool complex_csr_multiply(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &left,
+    const PoissonAirboxSharedDomainComplexCsrMatrix &right,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    if (!complex_csr_is_valid(left) || !complex_csr_is_valid(right) ||
+        left.column_count != right.row_count) {
+        error = "Floquet complex CSR multiplication shape mismatch";
+        return false;
+    }
+    try {
+        ComplexSparseAccumulator accumulator(left.row_count, right.column_count);
+        for (std::uint64_t row = 0u; row < left.row_count; ++row) {
+            const std::uint32_t begin = left.row_offsets[static_cast<std::size_t>(row)];
+            const std::uint32_t end = left.row_offsets[static_cast<std::size_t>(row + 1u)];
+            for (std::uint32_t left_entry = begin; left_entry < end; ++left_entry) {
+                const std::uint32_t middle = left.column_indices[left_entry];
+                const Complex left_value = left.values[left_entry];
+                const std::uint32_t right_begin =
+                    right.row_offsets[static_cast<std::size_t>(middle)];
+                const std::uint32_t right_end =
+                    right.row_offsets[static_cast<std::size_t>(middle + 1u)];
+                for (std::uint32_t right_entry = right_begin;
+                     right_entry < right_end;
+                     ++right_entry) {
+                    accumulator.add(
+                        row,
+                        right.column_indices[right_entry],
+                        left_value * right.values[right_entry]);
+                }
+            }
+        }
+        accumulator.finish(out);
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool complex_csr_conjugate_transpose(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &source,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    if (!complex_csr_is_valid(source)) {
+        error = "Floquet complex CSR conjugate-transpose input is invalid";
+        return false;
+    }
+    try {
+        ComplexSparseAccumulator accumulator(source.column_count, source.row_count);
+        for (std::uint64_t row = 0u; row < source.row_count; ++row) {
+            for (std::uint32_t entry = source.row_offsets[static_cast<std::size_t>(row)];
+                 entry < source.row_offsets[static_cast<std::size_t>(row + 1u)];
+                 ++entry) {
+                accumulator.add(
+                    source.column_indices[entry],
+                    row,
+                    std::conj(source.values[entry]));
+            }
+        }
+        accumulator.finish(out);
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool project_real_csr_with_complex_constraint(
+    const CsrMatrixView &full_matrix,
+    const PoissonAirboxSharedDomainComplexCsrMatrix &constraint,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    PoissonAirboxSharedDomainComplexCsrMatrix full_complex{};
+    PoissonAirboxSharedDomainComplexCsrMatrix constrained{};
+    PoissonAirboxSharedDomainComplexCsrMatrix adjoint{};
+    if (!copy_real_csr_as_complex(full_matrix, full_complex, error) ||
+        full_complex.row_count != constraint.row_count ||
+        !complex_csr_multiply(full_complex, constraint, constrained, error) ||
+        !complex_csr_conjugate_transpose(constraint, adjoint, error) ||
+        !complex_csr_multiply(adjoint, constrained, out, error)) {
+        if (error.empty()) {
+            error = "Floquet phase projection shape mismatch";
+        }
+        return false;
+    }
+    return true;
+}
+
+bool project_accumulator_with_complex_constraint(
+    const SparseAccumulator &full_matrix,
+    const PoissonAirboxSharedDomainComplexCsrMatrix &constraint,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    PoissonAirboxSharedDomainCsrMatrix full_real{};
+    full_matrix.finish(full_real);
+    return project_real_csr_with_complex_constraint(
+        full_real.view(), constraint, out, error);
+}
 
 void copy_error(char out[256], const char *message) noexcept
 {
@@ -1462,12 +1870,45 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                        "native magnetic A_qq descriptor has incomplete dimensions or terms");
             return FrequencyDomainStatus::validation_error;
         }
-        if ((descriptor.term_presence_mask &
-             (FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY |
-              FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DMI)) != 0u) {
+        if ((descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DMI) != 0u) {
             copy_error(error_message,
-                       "native magnetic A_qq producer does not yet certify anisotropy or DMI weak forms");
+                       "native magnetic A_qq producer does not yet certify DMI weak forms");
             return FrequencyDomainStatus::unavailable;
+        }
+        const bool has_uniaxial =
+            (descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY) != 0u;
+        double unit_anisotropy_axis[3] = {0.0, 0.0, 0.0};
+        double anisotropy_field = 0.0;
+        if (has_uniaxial) {
+            if (node_count == 0u || descriptor.uniaxial_anisotropy_field_count != 1u) {
+                copy_error(error_message,
+                           "native magnetic A_qq requires one constant uniaxial field coefficient");
+                return FrequencyDomainStatus::unavailable;
+            }
+            anisotropy_field = descriptor.uniaxial_anisotropy_field_a_per_m[0];
+            for (std::uint64_t node = 0; node < node_count; ++node) {
+                const double *axis = &descriptor.uniaxial_axis_xyz[3u * node];
+                const double norm = std::hypot(std::hypot(axis[0], axis[1]), axis[2]);
+                if (!finite_positive(norm)) {
+                    copy_error(error_message,
+                               "native magnetic A_qq uniaxial axis must be finite and non-zero");
+                    return FrequencyDomainStatus::validation_error;
+                }
+                double normalized[3] = {axis[0] / norm, axis[1] / norm, axis[2] / norm};
+                if (node == 0u) {
+                    std::copy(normalized, normalized + 3, unit_anisotropy_axis);
+                } else {
+                    // u and -u define the same rank-one energy Hessian.
+                    const double sign = dot3(normalized, unit_anisotropy_axis) >= 0.0 ? 1.0 : -1.0;
+                    for (int component = 0; component < 3; ++component) {
+                        if (std::abs(normalized[component] - sign * unit_anisotropy_axis[component]) > 1.0e-12) {
+                            copy_error(error_message,
+                                       "native magnetic A_qq does not yet certify spatial uniaxial axes");
+                            return FrequencyDomainStatus::unavailable;
+                        }
+                    }
+                }
+            }
         }
         const bool has_exchange_material_view = exchange_material_view != nullptr;
         if ((descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_EXCHANGE) != 0u &&
@@ -1616,7 +2057,7 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
 
         const std::uint64_t full_q_count = 2u * node_count;
         SparseAccumulator assembled(full_q_count, full_q_count);
-        const double mu0 = 1.25663706212e-6;
+        const double mu0 = fullmag::fem::kMu0;
         const auto node_ms = [&](std::uint64_t node) {
             return descriptor.saturation_magnetisation_a_per_m != nullptr
                 ? descriptor.saturation_magnetisation_a_per_m[node]
@@ -1636,6 +2077,17 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
              *
              *   K[(i,c),(j,d)] += 2 A_ex
              *       (e_c(i) . e_d(j)) (grad N_i . grad N_j) w_K.
+             *
+             * The geometry-aware positive-weight policy is intentional:
+             * prism6 P1 shape gradients are linear on the reference prism,
+             * so their dot products are quadratic and order one would create
+             * hourglass null modes.  MFEM order 4 is positive for prism6,
+             * while the MFEM 4.7 order-4 tet rule contains a negative point
+             * and is therefore not used by this exchange path; tet4 uses
+             * order 5.  Newer MFEM releases may provide positive simplex
+             * order4, but the explicit tet5 policy remains stable.
+             * The same selected rule is used by the mixed field/coupling
+             * blocks below; A_ex is not rescaled to hide quadrature error.
              *
              * Keeping this carrier interpretation explicit prevents a
              * runner-owned graph Laplacian from becoming production physics.
@@ -1701,7 +2153,7 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                 mfem::ElementTransformation *transformation =
                     exchange_mesh->GetElementTransformation(element);
                 const mfem::IntegrationRule &rule =
-                    mfem::IntRules.Get(finite_element->GetGeomType(), 1);
+                    frequency_domain_p1_quadrature(*finite_element);
                 for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
                     const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
                     transformation->SetIntPoint(&point);
@@ -1771,7 +2223,7 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
             }
         }
 
-        if ((descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD) != 0u) {
+        if ((descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD) != 0u || has_uniaxial) {
             constexpr double kStaticFieldParallelRelativeTolerance = 1.0e-8;
             for (std::uint64_t node = 0u; node < node_count; ++node) {
                 if (magnetic_node_mask[static_cast<std::size_t>(node)] == 0u) {
@@ -1806,13 +2258,18 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                 const mfem::FiniteElement *finite_element = scalar_space->GetFE(element);
                 mfem::ElementTransformation *transformation = mesh->GetElementTransformation(element);
                 const mfem::IntegrationRule &rule =
-                    mfem::IntRules.Get(finite_element->GetGeomType(), 4);
+                    frequency_domain_p1_quadrature(*finite_element);
                 for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
                     const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
                     transformation->SetIntPoint(&point);
                     mfem::Vector shape(dofs.Size());
                     finite_element->CalcShape(point, shape);
                     const double weight = transformation->Weight() * point.weight;
+                    if (!finite_positive(weight)) {
+                        copy_error(error_message,
+                                   "native magnetic A_qq field quadrature has non-positive weight");
+                        return FrequencyDomainStatus::operator_error;
+                    }
                     double m0[3] = {0.0, 0.0, 0.0};
                     double h_eff0[3] = {0.0, 0.0, 0.0};
                     double ms = 0.0;
@@ -1837,10 +2294,6 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                         m0[axis] /= m_norm;
                     }
                     const double h_parallel = dot3(m0, h_eff0);
-                    const double field_block[2][2] = {
-                        {h_parallel, 0.0},
-                        {0.0, h_parallel},
-                    };
                     for (int local_row = 0; local_row < dofs.Size(); ++local_row) {
                         const std::uint64_t row_node = static_cast<std::uint64_t>(
                             dofs[local_row] >= 0 ? dofs[local_row] : -1 - dofs[local_row]);
@@ -1849,6 +2302,12 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                             const std::uint64_t column_node = static_cast<std::uint64_t>(
                                 dofs[local_column] >= 0 ? dofs[local_column] : -1 - dofs[local_column]);
                             const double column_sign = dofs[local_column] >= 0 ? 1.0 : -1.0;
+                            const TangentFrameNode &row_frame =
+                                tangent_frames[static_cast<std::size_t>(row_node)];
+                            const TangentFrameNode &column_frame =
+                                tangent_frames[static_cast<std::size_t>(column_node)];
+                            const double *row_tangent[2] = {row_frame.e1, row_frame.e2};
+                            const double *column_tangent[2] = {column_frame.e1, column_frame.e2};
                             const double coefficient = row_sign * column_sign * weight *
                                 shape[local_row] * shape[local_column] * mu0 * ms;
                             for (std::uint32_t row_component = 0; row_component < 2u; ++row_component) {
@@ -1857,7 +2316,12 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                                     assembled.add(
                                         2u * row_node + row_component,
                                         2u * column_node + column_component,
-                                        coefficient * field_block[row_component][column_component]);
+                                        coefficient *
+                                            (h_parallel * dot3(row_tangent[row_component],
+                                                               column_tangent[column_component]) -
+                                             anisotropy_field *
+                                                 dot3(row_tangent[row_component], unit_anisotropy_axis) *
+                                                 dot3(column_tangent[column_component], unit_anisotropy_axis)));
                                 }
                             }
                         }
@@ -1956,6 +2420,31 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                        "shared-domain assembly requires a finite full magnetic A_qq CSR block");
             return out_result->status;
         }
+        PoissonAirboxSharedDomainComplexCsrMatrix phase_constraint{};
+        if (request.magnetic_phase_constraint != nullptr) {
+            const mfem::SparseMatrix &phase_real =
+                request.magnetic_phase_constraint->real();
+            const mfem::SparseMatrix &phase_imag =
+                request.magnetic_phase_constraint->imag();
+            const std::uint64_t expected_phase_columns =
+                2u * request.magnetic_reduced_node_count;
+            if (phase_real.Height() != phase_imag.Height() ||
+                phase_real.Width() != phase_imag.Width() ||
+                phase_real.Height() != static_cast<int>(full_q_count) ||
+                phase_real.Width() != static_cast<int>(expected_phase_columns)) {
+                copy_error(
+                    out_result->error_message,
+                    "shared-domain Floquet phase constraint dimensions do not match full A_qq");
+                return out_result->status;
+            }
+            if (!copy_mfem_complex_matrix(
+                    *request.magnetic_phase_constraint,
+                    phase_constraint,
+                    error)) {
+                copy_error(out_result->error_message, error.c_str());
+                return out_result->status;
+            }
+        }
 
         switch (request.boundary_kind) {
         case PoissonAirboxBoundaryKind::robin:
@@ -1982,6 +2471,131 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
         default:
             copy_error(out_result->error_message, "unknown shared-domain boundary kind");
             return out_result->status;
+        }
+
+        if (request.magnetic_phase_constraint == nullptr) {
+            const char *boundary_name = request.boundary_kind == PoissonAirboxBoundaryKind::dirichlet
+                ? "poisson_dirichlet"
+                : request.boundary_kind == PoissonAirboxBoundaryKind::robin
+                    ? "poisson_robin"
+                    : "pure_neumann";
+            std::strncpy(
+                out_result->k0_demag_probe.outer_boundary_kind,
+                boundary_name,
+                sizeof(out_result->k0_demag_probe.outer_boundary_kind) - 1u);
+            out_result->k0_demag_probe.robin_beta = request.robin_beta;
+        }
+
+        // Build k=0 global-direction perturbations once in the same reduced
+        // tangent coordinates used by the production pencil. The probe is
+        // omitted for phase-reduced Floquet assembly, which has its own probe.
+        if (request.magnetic_phase_constraint == nullptr) {
+            PoissonAirboxK0DemagProbeAssembly &probe = out_result->k0_demag_probe;
+            probe.mu0_t_m_a = request.mu0_T_m_A;
+            const std::uint64_t magnetic_class_count =
+                request.magnetic_reduced_node_count;
+            if (magnetic_class_count == 0u ||
+                magnetic_class_count >
+                    static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / 2u)) {
+                copy_error(out_result->error_message,
+                           "shared-domain K0 demag probe has invalid magnetic classes");
+                return out_result->status;
+            }
+            constexpr std::uint64_t unset_representative =
+                std::numeric_limits<std::uint64_t>::max();
+            std::vector<std::uint64_t> representatives(
+                static_cast<std::size_t>(magnetic_class_count),
+                unset_representative);
+            for (std::uint64_t node = 0u; node < node_count; ++node) {
+                const std::uint32_t class_id = request.magnetic_reduced_node[node];
+                if (class_id == kInactiveMagneticClass) {
+                    continue;
+                }
+                if (class_id >= magnetic_class_count) {
+                    copy_error(out_result->error_message,
+                               "shared-domain K0 demag probe found an invalid magnetic class");
+                    return out_result->status;
+                }
+                std::uint64_t &representative = representatives[class_id];
+                if (representative == unset_representative) {
+                    representative = node;
+                }
+            }
+            const std::size_t q_size =
+                static_cast<std::size_t>(2u * magnetic_class_count);
+            probe.q_global_y.assign(q_size, 0.0);
+            probe.q_global_z.assign(q_size, 0.0);
+            const auto project_global_direction = [](const TangentFrameNode &frame,
+                                                     const double direction[3],
+                                                     double output[2]) noexcept {
+                const double longitudinal = dot3(frame.m, direction);
+                const double transverse[3] = {
+                    direction[0] - longitudinal * frame.m[0],
+                    direction[1] - longitudinal * frame.m[1],
+                    direction[2] - longitudinal * frame.m[2]};
+                output[0] = dot3(frame.e1, transverse);
+                output[1] = dot3(frame.e2, transverse);
+            };
+            constexpr double global_y[3] = {0.0, 1.0, 0.0};
+            constexpr double global_z[3] = {0.0, 0.0, 1.0};
+            bool global_y_consistent = true;
+            bool global_z_consistent = true;
+            long double global_y_norm_squared = 0.0L;
+            long double global_z_norm_squared = 0.0L;
+            for (std::uint64_t class_id = 0u;
+                 class_id < magnetic_class_count;
+                 ++class_id) {
+                const std::uint64_t representative = representatives[class_id];
+                if (representative == unset_representative) {
+                    copy_error(out_result->error_message,
+                               "shared-domain K0 demag probe found a magnetic class without a representative");
+                    return out_result->status;
+                }
+                double projected_y[2]{};
+                double projected_z[2]{};
+                project_global_direction(
+                    request.tangent_frames[representative], global_y, projected_y);
+                project_global_direction(
+                    request.tangent_frames[representative], global_z, projected_z);
+                const std::size_t offset = static_cast<std::size_t>(2u * class_id);
+                probe.q_global_y[offset] = projected_y[0];
+                probe.q_global_y[offset + 1u] = projected_y[1];
+                probe.q_global_z[offset] = projected_z[0];
+                probe.q_global_z[offset + 1u] = projected_z[1];
+                global_y_norm_squared +=
+                    static_cast<long double>(projected_y[0]) * projected_y[0] +
+                    static_cast<long double>(projected_y[1]) * projected_y[1];
+                global_z_norm_squared +=
+                    static_cast<long double>(projected_z[0]) * projected_z[0] +
+                    static_cast<long double>(projected_z[1]) * projected_z[1];
+            }
+            for (std::uint64_t node = 0u; node < node_count; ++node) {
+                const std::uint32_t class_id = request.magnetic_reduced_node[node];
+                if (class_id == kInactiveMagneticClass) {
+                    continue;
+                }
+                double projected_y[2]{};
+                double projected_z[2]{};
+                project_global_direction(
+                    request.tangent_frames[node], global_y, projected_y);
+                project_global_direction(
+                    request.tangent_frames[node], global_z, projected_z);
+                const std::size_t offset = static_cast<std::size_t>(2u * class_id);
+                global_y_consistent = global_y_consistent &&
+                    std::abs(projected_y[0] - probe.q_global_y[offset]) <= 1.0e-8 &&
+                    std::abs(projected_y[1] - probe.q_global_y[offset + 1u]) <= 1.0e-8;
+                global_z_consistent = global_z_consistent &&
+                    std::abs(projected_z[0] - probe.q_global_z[offset]) <= 1.0e-8 &&
+                    std::abs(projected_z[1] - probe.q_global_z[offset + 1u]) <= 1.0e-8;
+            }
+            probe.global_y_observable = global_y_consistent &&
+                global_y_norm_squared > 1.0e-24L;
+            probe.global_z_observable = global_z_consistent &&
+                global_z_norm_squared > 1.0e-24L;
+            probe.h_functional_global_y.assign(
+                static_cast<std::size_t>(request.scalar_reduced_node_count), 0.0);
+            probe.h_functional_global_z.assign(
+                static_cast<std::size_t>(request.scalar_reduced_node_count), 0.0);
         }
 
         std::unique_ptr<mfem::ConstantCoefficient> robin_coefficient;
@@ -2048,7 +2662,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             mfem::ElementTransformation *transformation =
                 mesh->GetElementTransformation(element);
             const mfem::IntegrationRule &rule =
-                mfem::IntRules.Get(finite_element->GetGeomType(), 4);
+                frequency_domain_p1_quadrature(*finite_element);
             for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
                 const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
                 transformation->SetIntPoint(&point);
@@ -2057,6 +2671,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                 finite_element->CalcShape(point, shape);
                 finite_element->CalcPhysDShape(*transformation, physical_dshape);
                 const double weight = transformation->Weight() * point.weight;
+                if (!finite_positive(weight)) {
+                    copy_error(out_result->error_message,
+                               "shared-domain mixed quadrature has non-positive weight");
+                    out_result->status = FrequencyDomainStatus::operator_error;
+                    return out_result->status;
+                }
                 double m0[3] = {0.0, 0.0, 0.0};
                 double ms = 0.0;
                 for (int local = 0; local < dofs.Size(); ++local) {
@@ -2077,6 +2697,63 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                 m0[0] /= m0_norm;
                 m0[1] /= m0_norm;
                 m0[2] /= m0_norm;
+                if (request.magnetic_phase_constraint == nullptr) {
+                    PoissonAirboxK0DemagProbeAssembly &probe = out_result->k0_demag_probe;
+                    double delta_m_y[3] = {0.0, 0.0, 0.0};
+                    double delta_m_z[3] = {0.0, 0.0, 0.0};
+                    for (int local = 0; local < dofs.Size(); ++local) {
+                        const std::uint64_t node = static_cast<std::uint64_t>(
+                            dofs[local] >= 0 ? dofs[local] : -1 - dofs[local]);
+                        const double dof_sign = dofs[local] >= 0 ? 1.0 : -1.0;
+                        const std::uint32_t class_id = request.magnetic_reduced_node[node];
+                        if (class_id == kInactiveMagneticClass) {
+                            continue;
+                        }
+                        const std::size_t q_offset = static_cast<std::size_t>(2u * class_id);
+                        const TangentFrameNode &frame = request.tangent_frames[node];
+                        const double local_y[3] = {
+                            frame.e1[0] * probe.q_global_y[q_offset] +
+                                frame.e2[0] * probe.q_global_y[q_offset + 1u],
+                            frame.e1[1] * probe.q_global_y[q_offset] +
+                                frame.e2[1] * probe.q_global_y[q_offset + 1u],
+                            frame.e1[2] * probe.q_global_y[q_offset] +
+                                frame.e2[2] * probe.q_global_y[q_offset + 1u]};
+                        const double local_z[3] = {
+                            frame.e1[0] * probe.q_global_z[q_offset] +
+                                frame.e2[0] * probe.q_global_z[q_offset + 1u],
+                            frame.e1[1] * probe.q_global_z[q_offset] +
+                                frame.e2[1] * probe.q_global_z[q_offset + 1u],
+                            frame.e1[2] * probe.q_global_z[q_offset] +
+                                frame.e2[2] * probe.q_global_z[q_offset + 1u]};
+                        for (int axis = 0; axis < 3; ++axis) {
+                            delta_m_y[axis] += shape[local] * dof_sign * local_y[axis];
+                            delta_m_z[axis] += shape[local] * dof_sign * local_z[axis];
+                        }
+                        const std::uint32_t scalar_class =
+                            request.scalar_reduced_node[node];
+                        probe.h_functional_global_y[scalar_class] +=
+                            -dof_sign * physical_dshape(local, 1) * weight;
+                        probe.h_functional_global_z[scalar_class] +=
+                            -dof_sign * physical_dshape(local, 2) * weight;
+                    }
+                    const double delta_y_norm_squared =
+                        delta_m_y[0] * delta_m_y[0] +
+                        delta_m_y[1] * delta_m_y[1] +
+                        delta_m_y[2] * delta_m_y[2];
+                    const double delta_z_norm_squared =
+                        delta_m_z[0] * delta_m_z[0] +
+                        delta_m_z[1] * delta_m_z[1] +
+                        delta_m_z[2] * delta_m_z[2];
+                    probe.magnetic_volume_m3 += weight;
+                    probe.magnetization_integral_global_y_a_per_m_m3 +=
+                        ms * delta_m_y[1] * weight;
+                    probe.magnetization_integral_global_z_a_per_m_m3 +=
+                        ms * delta_m_z[2] * weight;
+                    probe.magnetic_energy_scale_global_y_j +=
+                        request.mu0_T_m_A * ms * ms * delta_y_norm_squared * weight;
+                    probe.magnetic_energy_scale_global_z_j +=
+                        request.mu0_T_m_A * ms * ms * delta_z_norm_squared * weight;
+                }
                 for (int local_test = 0; local_test < dofs.Size(); ++local_test) {
                     const std::uint64_t test_node = static_cast<std::uint64_t>(
                         dofs[local_test] >= 0 ? dofs[local_test] : -1 - dofs[local_test]);
@@ -2199,11 +2876,29 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             2u,
             2u,
             b_qq_reduced);
+        if (request.magnetic_phase_constraint != nullptr) {
+            if (!project_real_csr_with_complex_constraint(
+                    *request.magnetic_a_qq_csr,
+                    phase_constraint,
+                    out_result->floquet_a_qq,
+                    error) ||
+                !project_accumulator_with_complex_constraint(
+                    b_qq_full,
+                    phase_constraint,
+                    out_result->floquet_b_qq,
+                    error)) {
+                copy_error(out_result->error_message, error.c_str());
+                return out_result->status;
+            }
+            b_qq_full.finish(out_result->floquet_full_b_qq);
+        }
         a_phiq_reduced.finish(out_result->a_phiq);
         a_qphi_reduced.finish(out_result->a_qphi);
         b_qq_reduced.finish(out_result->b_qq);
 
-        if (request.boundary_kind == PoissonAirboxBoundaryKind::pure_neumann) {
+        if (request.boundary_kind == PoissonAirboxBoundaryKind::pure_neumann &&
+            request.pure_neumann_gauge_policy ==
+                PoissonAirboxPureNeumannGaugePolicy::mean_zero_augmented) {
             mfem::ConstantCoefficient one(1.0);
             mfem::LinearForm mean_form(request.scalar_space);
             mean_form.AddDomainIntegrator(new mfem::DomainLFIntegrator(one));
@@ -2232,6 +2927,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             for (double &weight : out_result->phi_mean_weights) {
                 weight *= inverse_weight_sum;
             }
+        } else if (request.boundary_kind == PoissonAirboxBoundaryKind::pure_neumann &&
+                   request.pure_neumann_gauge_policy !=
+                       PoissonAirboxPureNeumannGaugePolicy::require_invertible) {
+            copy_error(out_result->error_message,
+                       "pure-Neumann shared-domain assembly uses an unknown gauge policy");
+            return out_result->status;
         } else if (request.boundary_kind == PoissonAirboxBoundaryKind::dirichlet) {
             std::set<std::uint32_t> reduced_dofs;
             for (int index = 0; index < essential.Size(); ++index) {
@@ -2239,6 +2940,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                     static_cast<std::size_t>(essential[index])]);
             }
             out_result->dirichlet_dofs.assign(reduced_dofs.begin(), reduced_dofs.end());
+            for (std::uint32_t dof : reduced_dofs) {
+                if (dof < out_result->k0_demag_probe.h_functional_global_y.size()) {
+                    out_result->k0_demag_probe.h_functional_global_y[dof] = 0.0;
+                    out_result->k0_demag_probe.h_functional_global_z[dof] = 0.0;
+                }
+            }
             eliminate_rows_and_columns(
                 out_result->a_phiq,
                 reduced_dofs,
@@ -2254,9 +2961,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             : request.boundary_kind == PoissonAirboxBoundaryKind::dirichlet
                 ? "poisson_dirichlet"
                 : "pure_neumann";
-        const char *gauge = request.boundary_kind == PoissonAirboxBoundaryKind::pure_neumann
-            ? "mean_zero_augmented"
-            : "none";
+        const char *gauge = request.boundary_kind != PoissonAirboxBoundaryKind::pure_neumann
+            ? "none"
+            : request.pure_neumann_gauge_policy ==
+                  PoissonAirboxPureNeumannGaugePolicy::require_invertible
+                ? "require_invertible"
+                : "mean_zero_augmented";
         std::strncpy(out_result->boundary_kind, boundary, sizeof(out_result->boundary_kind) - 1u);
         std::strncpy(out_result->gauge_policy, gauge, sizeof(out_result->gauge_policy) - 1u);
         std::strncpy(out_result->assembly_kind, "mfem_weak_form_shared_domain",
@@ -2269,6 +2979,50 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
         digest.add_u64("q_dof_count", 2u * request.magnetic_reduced_node_count);
         digest.add_string("boundary_kind", boundary);
         digest.add_string("gauge_policy", gauge);
+        digest.add_string("quadrature_policy", kFrequencyDomainP1QuadraturePolicy);
+        std::uint64_t quadrature_element_count = 0u;
+        std::map<QuadratureProvenanceKey, std::uint64_t> quadrature_entries;
+        for (int element = 0; element < mesh->GetNE(); ++element) {
+            if (request.magnetic_element_mask[static_cast<std::size_t>(element)] == 0u) {
+                continue;
+            }
+            const mfem::FiniteElement *finite_element = request.scalar_space->GetFE(element);
+            if (finite_element == nullptr) {
+                throw std::invalid_argument(
+                    "shared-domain quadrature provenance requires one finite element per magnetic cell");
+            }
+            const mfem::IntegrationRule &rule =
+                frequency_domain_p1_quadrature(*finite_element);
+            const std::string geometry =
+                frequency_domain_p1_geometry_name(finite_element->GetGeomType());
+            const int requested_quadrature_order =
+                frequency_domain_p1_quadrature_order(finite_element->GetGeomType());
+            const int resolved_quadrature_order = rule.GetOrder();
+            const int rule_npoints = rule.GetNPoints();
+            const std::string prefix =
+                "quadrature.element[" + std::to_string(element) + "]";
+            digest.add_string(prefix + ".topology", geometry);
+            digest.add_u64(prefix + ".topology_id",
+                           static_cast<std::uint64_t>(finite_element->GetGeomType()));
+            digest.add_u64(prefix + ".finite_element_order",
+                           static_cast<std::uint64_t>(finite_element->GetOrder()));
+            digest.add_u64(prefix + ".requested_quadrature_order",
+                           static_cast<std::uint64_t>(requested_quadrature_order));
+            digest.add_u64(prefix + ".actual_quadrature_order",
+                           static_cast<std::uint64_t>(resolved_quadrature_order));
+            digest.add_u64(prefix + ".actual_quadrature_npoints",
+                           static_cast<std::uint64_t>(rule_npoints));
+            ++quadrature_entries[QuadratureProvenanceKey{
+                geometry,
+                finite_element->GetOrder(),
+                requested_quadrature_order,
+                resolved_quadrature_order,
+                rule_npoints}];
+            ++quadrature_element_count;
+        }
+        digest.add_u64("quadrature.element_count", quadrature_element_count);
+        out_result->quadrature_provenance_json = quadrature_provenance_json(
+            quadrature_entries, quadrature_element_count);
         digest.add_double("robin_beta", request.robin_beta);
         digest.add_double("gamma0_m_per_a_s", request.gamma0_m_per_a_s);
         digest.add_double("mu0_T_m_A", request.mu0_T_m_A);
@@ -2308,7 +3062,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
 
 FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
     const FullmagFemModalSharedDomainPayload &payload,
-    PoissonAirboxSharedDomainAssemblyResult *out_result) noexcept
+    PoissonAirboxSharedDomainAssemblyResult *out_result,
+    const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs,
+    std::uint64_t floquet_periodic_pair_count,
+    const std::array<double, 3> *floquet_k_rad_per_m,
+    FloquetAirboxDynamicDemagKResult *out_floquet_dynamic_demag_k,
+    bool materialize_dense_floquet) noexcept
 {
     if (out_result == nullptr) {
         return FrequencyDomainStatus::validation_error;
@@ -2687,34 +3446,77 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         request.uniform_saturation_magnetization_a_per_m =
             payload.uniform_saturation_magnetisation_a_per_m;
         request.gamma0_m_per_a_s = payload.gamma0_m_per_a_s;
-        request.mu0_T_m_A = 1.25663706212e-6;
-        PoissonAirboxSharedDomainCsrMatrix native_magnetic_a_qq{};
-        char native_error[256]{};
-        const double accepted_max_transverse_field_a_per_m =
-            std::strcmp(payload.acceptance_criterion, "torque") == 0 &&
-                std::strcmp(payload.acceptance_metric_kind, "max_torque_apm") == 0 &&
-                std::strcmp(payload.acceptance_unit, "A/m") == 0
-            ? payload.acceptance_threshold
-            : -1.0;
-        const FrequencyDomainStatus native_status =
-            assemble_native_magnetic_a_qq(
-                *payload.linearization_descriptor,
-                &scalar_space,
-                magnetic_element_mask.data(),
-                magnetic_element_mask.size(),
-                &native_magnetic_a_qq,
-                native_error,
-                payload.exchange_material_view,
-                tangent_frames.data(),
-                tangent_frames.size(),
-                accepted_max_transverse_field_a_per_m);
-        if (native_status != FrequencyDomainStatus::ok) {
-            copy_error(out_result->error_message, native_error);
-            out_result->status = native_status;
-            return native_status;
+        request.mu0_T_m_A = fullmag::fem::kMu0;
+        const bool has_floquet_wavevector = floquet_k_rad_per_m != nullptr;
+        const bool has_floquet_result = out_floquet_dynamic_demag_k != nullptr;
+        if ((!has_floquet_wavevector && has_floquet_result) ||
+            (has_floquet_wavevector && materialize_dense_floquet && !has_floquet_result) ||
+            (has_floquet_wavevector && !materialize_dense_floquet && has_floquet_result) ||
+            (!has_floquet_wavevector && !materialize_dense_floquet)) {
+            copy_error(
+                out_result->error_message,
+                "Floquet shared-domain request has inconsistent wavevector/dense-output policy");
+            out_result->status = FrequencyDomainStatus::validation_error;
+            return out_result->status;
         }
-        CsrMatrixView magnetic_a_qq = native_magnetic_a_qq.view();
-        request.magnetic_a_qq_csr = &magnetic_a_qq;
+        if (has_floquet_wavevector) {
+            long double floquet_k_squared = 0.0L;
+            for (double component : *floquet_k_rad_per_m) {
+                if (!std::isfinite(component)) {
+                    copy_error(
+                        out_result->error_message,
+                        "Floquet dynamic demag-k wavevector must contain finite values");
+                    out_result->status = FrequencyDomainStatus::validation_error;
+                    return out_result->status;
+                }
+                floquet_k_squared += static_cast<long double>(component) * component;
+            }
+            if (!(floquet_k_squared > 0.0L) ||
+                !std::isfinite(static_cast<double>(floquet_k_squared))) {
+                copy_error(
+                    out_result->error_message,
+                    "Floquet dynamic demag-k request requires a nonzero wavevector");
+                out_result->status = FrequencyDomainStatus::validation_error;
+                return out_result->status;
+            }
+            if (floquet_periodic_pairs == nullptr || floquet_periodic_pair_count == 0u) {
+                copy_error(
+                    out_result->error_message,
+                    "Floquet dynamic demag-k request requires periodic pair payload");
+                out_result->status = FrequencyDomainStatus::validation_error;
+                return out_result->status;
+            }
+        }
+        PoissonAirboxSharedDomainCsrMatrix native_magnetic_a_qq{};
+        CsrMatrixView magnetic_a_qq{};
+        {
+            char native_error[256]{};
+            const double accepted_max_transverse_field_a_per_m =
+                std::strcmp(payload.acceptance_criterion, "torque") == 0 &&
+                    std::strcmp(payload.acceptance_metric_kind, "max_torque_apm") == 0 &&
+                    std::strcmp(payload.acceptance_unit, "A/m") == 0
+                ? payload.acceptance_threshold
+                : -1.0;
+            const FrequencyDomainStatus native_status =
+                assemble_native_magnetic_a_qq(
+                    *payload.linearization_descriptor,
+                    &scalar_space,
+                    magnetic_element_mask.data(),
+                    magnetic_element_mask.size(),
+                    &native_magnetic_a_qq,
+                    native_error,
+                    payload.exchange_material_view,
+                    tangent_frames.data(),
+                    tangent_frames.size(),
+                    accepted_max_transverse_field_a_per_m);
+            if (native_status != FrequencyDomainStatus::ok) {
+                copy_error(out_result->error_message, native_error);
+                out_result->status = native_status;
+                return native_status;
+            }
+            magnetic_a_qq = native_magnetic_a_qq.view();
+            request.magnetic_a_qq_csr = &magnetic_a_qq;
+        }
         request.scalar_reduced_node = payload.scalar_reduced_node;
         request.scalar_reduced_node_count = payload.scalar_reduced_node_count;
         request.magnetic_reduced_node = payload.magnetic_reduced_node;
@@ -2723,7 +3525,258 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         request.boundary_kind = boundary_kind;
         request.robin_beta = payload.robin_beta;
         request.robin_boundary_marker = boundary_marker.Size() > 0 ? &boundary_marker : nullptr;
-        return assemble_poisson_airbox_shared_domain(request, out_result);
+        if (has_floquet_wavevector) {
+            request.pure_neumann_gauge_policy =
+                PoissonAirboxPureNeumannGaugePolicy::require_invertible;
+        }
+        const auto assemble_k0 = [&]() noexcept {
+            return assemble_poisson_airbox_shared_domain(request, out_result);
+        };
+        if (!has_floquet_wavevector) {
+            return assemble_k0();
+        }
+
+        FloquetAirboxSharedDomainBlockRequest floquet_blocks_request{};
+        floquet_blocks_request.scalar_space = &scalar_space;
+        floquet_blocks_request.tangent_frames = tangent_frames.data();
+        floquet_blocks_request.tangent_frame_count = tangent_frames.size();
+        floquet_blocks_request.magnetic_element_mask = magnetic_element_mask.data();
+        floquet_blocks_request.magnetic_element_count = magnetic_element_mask.size();
+        floquet_blocks_request.saturation_magnetization_a_per_m =
+            saturation_magnetization.empty() ? nullptr : saturation_magnetization.data();
+        floquet_blocks_request.saturation_magnetization_count =
+            saturation_magnetization.size();
+        floquet_blocks_request.uniform_saturation_magnetization_a_per_m =
+            payload.uniform_saturation_magnetisation_a_per_m;
+        floquet_blocks_request.scalar_reduced_node = payload.scalar_reduced_node;
+        floquet_blocks_request.scalar_reduced_node_count = payload.scalar_reduced_node_count;
+        floquet_blocks_request.magnetic_reduced_node = payload.magnetic_reduced_node;
+        floquet_blocks_request.magnetic_reduced_node_count = payload.magnetic_reduced_node_count;
+        floquet_blocks_request.periodic_pairs = floquet_periodic_pairs;
+        floquet_blocks_request.periodic_pair_count = floquet_periodic_pair_count;
+        floquet_blocks_request.k_rad_per_m = *floquet_k_rad_per_m;
+        switch (boundary_kind) {
+        case PoissonAirboxBoundaryKind::robin:
+            floquet_blocks_request.boundary_kind = FloquetAirboxBoundaryKind::robin;
+            break;
+        case PoissonAirboxBoundaryKind::dirichlet:
+            floquet_blocks_request.boundary_kind = FloquetAirboxBoundaryKind::dirichlet;
+            break;
+        case PoissonAirboxBoundaryKind::pure_neumann:
+            floquet_blocks_request.boundary_kind = FloquetAirboxBoundaryKind::pure_neumann;
+            break;
+        default:
+            // Keep the request's zero value so the Floquet operator rejects
+            // an impossible or future boundary kind before assembly.
+            break;
+        }
+        floquet_blocks_request.robin_beta = payload.robin_beta;
+        floquet_blocks_request.robin_boundary_marker =
+            boundary_marker.Size() > 0 ? &boundary_marker : nullptr;
+
+        FloquetAirboxSharedDomainBlockResult floquet_blocks{};
+        const FrequencyDomainStatus block_status =
+            assemble_floquet_airbox_shared_domain_blocks(
+                floquet_blocks_request,
+                &floquet_blocks);
+        if (block_status != FrequencyDomainStatus::ok) {
+            copy_error(out_result->error_message, floquet_blocks.error_message);
+            out_result->status = block_status;
+            return block_status;
+        }
+        /*
+         * Assemble the static magnetic blocks through the same shared-domain
+         * importer and phase constraint as the scalar blocks.  This is the
+         * ownership boundary for the scalable path: no Rust-side dense K/G
+         * descriptor is accepted, and no dense dynamic demagnetisation block
+         * is needed to produce the sparse operator below.
+         */
+        request.magnetic_phase_constraint = floquet_blocks.tangent_constraint.get();
+        const FrequencyDomainStatus static_status =
+            assemble_poisson_airbox_shared_domain(request, out_result);
+        if (static_status != FrequencyDomainStatus::ok) {
+            return static_status;
+        }
+        // Retain the unprojected magnetic stiffness for an independent
+        // full-field residual after the eigensolver returns. The static
+        // assembler has finished consuming this owner at this point.
+        out_result->floquet_full_a_qq = std::move(native_magnetic_a_qq);
+
+        // The k=0 assembler resets the output record, so publish probes only
+        // after it has produced the phase-constrained Floquet tangent blocks.
+        out_result->floquet_uniform_transverse_probe_q_y =
+            std::move(floquet_blocks.uniform_transverse_probe_q_y);
+        out_result->floquet_uniform_transverse_probe_q_z =
+            std::move(floquet_blocks.uniform_transverse_probe_q_z);
+        if (out_result->floquet_uniform_transverse_probe_q_y.size() !=
+                out_result->floquet_a_qq.row_count ||
+            out_result->floquet_uniform_transverse_probe_q_z.size() !=
+                out_result->floquet_a_qq.row_count) {
+            copy_error(
+                out_result->error_message,
+                "Floquet shared-domain demag probe vectors do not match the tangent operator size");
+            out_result->status = FrequencyDomainStatus::operator_error;
+            return out_result->status;
+        }
+
+        PoissonAirboxSharedDomainComplexCsrMatrix scalar_operator{};
+        PoissonAirboxSharedDomainComplexCsrMatrix scalar_constraint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix tangent_source{};
+        PoissonAirboxSharedDomainComplexCsrMatrix tangent_constraint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix scalar_constraint_adjoint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix scalar_operator_times_constraint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix source_times_constraint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix a_qphi{};
+        if (!copy_mfem_complex_matrix(
+                *floquet_blocks.scalar_operator,
+                scalar_operator,
+                error) ||
+            !copy_mfem_complex_matrix(
+                *floquet_blocks.scalar_constraint,
+                scalar_constraint,
+                error) ||
+            !copy_mfem_complex_matrix(
+                *floquet_blocks.tangent_source,
+                tangent_source,
+                error) ||
+            !copy_mfem_complex_matrix(
+                *floquet_blocks.tangent_constraint,
+                tangent_constraint,
+                error) ||
+            !complex_csr_conjugate_transpose(
+                scalar_constraint,
+                scalar_constraint_adjoint,
+                error) ||
+            !complex_csr_multiply(
+                scalar_operator,
+                scalar_constraint,
+                scalar_operator_times_constraint,
+                error) ||
+            !complex_csr_multiply(
+                scalar_constraint_adjoint,
+                scalar_operator_times_constraint,
+                out_result->floquet_p,
+                error)) {
+            copy_error(out_result->error_message, error.c_str());
+            out_result->status = FrequencyDomainStatus::operator_error;
+            return out_result->status;
+        }
+        // The weak Poisson equation is P phi = S q, while the modal
+        // descriptor is A_phiq q + P phi = 0.  Therefore A_phiq = -S.
+        // Apply the descriptor sign before either Floquet constraint is
+        // projected so the reconstructed physical potential keeps its sign.
+        for (auto &value : tangent_source.values) {
+            value = -value;
+        }
+        if (!complex_csr_multiply(
+                tangent_source,
+                tangent_constraint,
+                source_times_constraint,
+                error) ||
+            !complex_csr_multiply(
+                scalar_constraint_adjoint,
+                source_times_constraint,
+                out_result->floquet_a_phiq,
+                error) ||
+            !complex_csr_conjugate_transpose(
+                out_result->floquet_a_phiq,
+                a_qphi,
+                error)) {
+            copy_error(out_result->error_message, error.c_str());
+            out_result->status = FrequencyDomainStatus::operator_error;
+            return out_result->status;
+        }
+        // The demag Schur complement D = -A_qphi * P^-1 * A_phiq must be a
+        // positive semidefinite representation of the magnetostatic
+        // self-energy.  complex_csr_conjugate_transpose only produces the
+        // bare adjoint A_phiq^H; the reciprocal feedback block additionally
+        // carries a -mu0 factor (matching the k=0 lane's
+        // -mu0 * ms / gamma0 * torque_projection assembly above, where the
+        // -gamma0 in torque_projection cancels against the 1/gamma0 in that
+        // product, leaving -mu0), so apply it explicitly here:
+        // A_qphi = -mu0 * A_phiq^H.
+        for (auto &value : a_qphi.values) {
+            value *= Complex(-request.mu0_T_m_A, 0.0);
+        }
+        out_result->floquet_a_qphi = std::move(a_qphi);
+        if (out_result->floquet_a_qq.row_count == 0u ||
+            out_result->floquet_b_qq.row_count == 0u ||
+            out_result->floquet_p.row_count == 0u ||
+            out_result->floquet_a_phiq.row_count == 0u ||
+            out_result->floquet_a_qphi.row_count == 0u ||
+            !complex_csr_is_valid(out_result->floquet_a_qq) ||
+            !complex_csr_is_valid(out_result->floquet_b_qq) ||
+            !complex_csr_is_valid(out_result->floquet_p) ||
+            !complex_csr_is_valid(out_result->floquet_a_phiq) ||
+            !complex_csr_is_valid(out_result->floquet_a_qphi)) {
+            copy_error(
+                out_result->error_message,
+                "Floquet shared-domain sparse block assembly returned an invalid block");
+            out_result->status = FrequencyDomainStatus::operator_error;
+            return out_result->status;
+        }
+        out_result->floquet_sparse_operator_ready = true;
+
+        if (boundary_kind == PoissonAirboxBoundaryKind::pure_neumann) {
+            // A pure-Neumann Floquet scalar block is handled by the actual
+            // phase-constrained P(k) factorization and its original residual.
+            // A universal |k|*L cutoff is not a valid invertibility test:
+            // phase equivalence depends on the periodic lattice vectors, and
+            // the conditioning also depends on the assembled mesh/operator.
+            // Never carry the k=0 mean-zero gauge into this Floquet block.
+            out_result->phi_mean_weights.clear();
+        }
+
+        FloquetAirboxDynamicDemagKProblem floquet_problem{};
+        floquet_problem.scalar_operator = floquet_blocks.scalar_operator.get();
+        floquet_problem.scalar_constraint = floquet_blocks.scalar_constraint.get();
+        floquet_problem.tangent_source = floquet_blocks.tangent_source.get();
+        floquet_problem.tangent_source_convention =
+            FloquetAirboxTangentSourceConvention::weak_poisson_rhs;
+        floquet_problem.tangent_constraint = floquet_blocks.tangent_constraint.get();
+        floquet_problem.k_rad_per_m = *floquet_k_rad_per_m;
+        floquet_problem.qphi_feedback_scale = -request.mu0_T_m_A;
+        floquet_problem.gauge_policy = FloquetDynamicDemagKGaugePolicy::require_invertible;
+        floquet_problem.workspace_budget_bytes = 256ull * 1024ull * 1024ull;
+        if (materialize_dense_floquet) {
+            const FrequencyDomainStatus dynamic_status =
+                assemble_floquet_airbox_dynamic_demag_k(
+                    floquet_problem,
+                    out_floquet_dynamic_demag_k);
+            if (dynamic_status != FrequencyDomainStatus::ok) {
+                copy_error(
+                    out_result->error_message,
+                    out_floquet_dynamic_demag_k->diagnostics.error_message);
+                out_result->status = dynamic_status;
+                return dynamic_status;
+            }
+        }
+        out_result->floquet_tangent_frames = std::move(tangent_frames);
+        out_result->floquet_periodic_pairs.reserve(
+            static_cast<std::size_t>(floquet_periodic_pair_count));
+        for (std::uint64_t index = 0u; index < floquet_periodic_pair_count; ++index) {
+            const FrequencyDomainFloquetPeriodicPair &pair = floquet_periodic_pairs[index];
+            out_result->floquet_periodic_pairs.push_back(FloquetDescriptorPeriodicPair{
+                pair.node_a,
+                pair.node_b,
+                {pair.translation_m[0], pair.translation_m[1], pair.translation_m[2]},
+                payload.magnetic_reduced_node[pair.node_a] != kInactiveMagneticClass});
+        }
+        out_result->floquet_k_rad_per_m = *floquet_k_rad_per_m;
+        out_result->floquet_full_field_blocks = std::move(floquet_blocks);
+        // The nonzero-k route deliberately does not populate the legacy K0
+        // CSR blocks above.  Mark the result explicitly so a future caller
+        // cannot mistake an otherwise successful dynamic provider for a K0
+        // assembly with empty matrices.
+        std::strncpy(
+            out_result->assembly_kind,
+            materialize_dense_floquet
+                ? "floquet_dynamic_demag_k"
+                : "floquet_shared_domain_sparse_matshell",
+            sizeof(out_result->assembly_kind) - 1u);
+        out_result->assembly_kind[sizeof(out_result->assembly_kind) - 1u] = '\0';
+        out_result->status = FrequencyDomainStatus::ok;
+        return out_result->status;
     } catch (const std::exception &exception) {
         copy_error(out_result->error_message, exception.what());
     } catch (...) {

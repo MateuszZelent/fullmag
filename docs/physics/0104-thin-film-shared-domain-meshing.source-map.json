@@ -47,7 +47,8 @@
         "h_target"
       ],
       "sources": [
-        "policy-adr"
+        "policy-adr",
+        "scoped-lower-composition-owner"
       ]
     }
   ],
@@ -130,6 +131,34 @@
       "symbol": "DOC-ANCHOR:canonical-fem-mesh-policy",
       "responsibility": "Defines canonical size policy and evidence.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "periodic-layer-subdivision",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_tetrahedra.py",
+      "symbol": "subdivide_layered_prisms",
+      "responsibility": "Subdivides vertical prism6 and quad4 with a shared translation-invariant rule without new nodes.",
+      "evidence_status": "source_regression_passed_runtime_not_verified"
+    },
+    {
+      "id": "periodic-layer-owner",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Preserves exact layers and physical regions; classifies only the combined domain boundary as exterior.",
+      "evidence_status": "source_regression_passed_runtime_not_verified"
+    },
+    {
+      "id": "periodic-layer-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_layered_periodic_triangles_are_conforming",
+      "responsibility": "Real-Gmsh periodic bijection, facet incidence, volume and exact-plane regression.",
+      "evidence_status": "python_passed"
+    },
+    {
+      "id": "scoped-lower-composition-owner",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_configure_mesh_size_fields",
+      "responsibility": "Existing upper/lower aggregator; scoped lower producer and ownership binding remediation is in progress.",
+      "evidence_status": "planned_contract_runtime_not_verified"
     }
   ],
   "public_api": {

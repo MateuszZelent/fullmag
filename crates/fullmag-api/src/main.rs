@@ -3980,7 +3980,13 @@ where
     let realtime_state =
         current_live_realtime_state_from_snapshot(&state, &next, display_selection.revision).await;
     let scalar_sample =
-        if has_scalar_row_update {
+        if has_scalar_row_update
+            && !has_modal_latest_step(&next)
+            && next.scalar_revision
+                > previous_snapshot
+                    .as_ref()
+                    .map_or(0, |snapshot| snapshot.scalar_revision)
+        {
             next.scalar_rows
                 .last()
                 .cloned()
@@ -4002,10 +4008,21 @@ where
     if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
         return Err(ApiError::conflict("current_live_session_transitioned"));
     }
+    if has_modal_latest_step(&next) {
+        // The transition lock also serializes delayed scalar flushes. Cancel
+        // a pending physical sample before admitting diagnostic-only state.
+        state
+            .current_live_realtime_scalar_sample_qos
+            .lock()
+            .await
+            .clear();
+    }
     {
         let mut current = state.current_live_state.write().await;
         if let Some(epoch) = first_session_epoch {
-            state.current_live_session_epoch.store(epoch, Ordering::Release);
+            state
+                .current_live_session_epoch
+                .store(epoch, Ordering::Release);
         }
         *current = Some(next);
     }
@@ -6334,7 +6351,12 @@ fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {
     if let Some(live_state) = current.live_state.as_ref() {
         return (live_state.latest_step.step, live_state.latest_step.time);
     }
-    if let Some(row) = current.scalar_rows.last() {
+    if let Some(row) = current
+        .scalar_rows
+        .iter()
+        .rev()
+        .find(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+    {
         return (row.step, row.time);
     }
     if let Some(run) = current.run.as_ref() {
@@ -6344,15 +6366,26 @@ fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {
 }
 
 fn current_global_scalar_value(current: &SessionStateResponse, quantity: &str) -> Option<f64> {
+    if has_modal_latest_step(current) {
+        return None;
+    }
     let metric_key = quantity_spec(quantity)?.scalar_metric_key?;
     current
         .scalar_rows
-        .last()
+        .iter()
+        .rev()
+        .find(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
         .and_then(|row| scalar_row_metric_value(row, metric_key))
         .or_else(|| {
             current
                 .live_state
                 .as_ref()
+                .filter(|state| {
+                    !state
+                        .latest_step
+                        .per_object_scalars
+                        .contains_key("fem_eigen_progress")
+                })
                 .and_then(|state| live_step_metric_value(&state.latest_step, metric_key))
         })
         .or_else(|| {

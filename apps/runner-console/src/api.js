@@ -20,64 +20,107 @@ class RunnerAPI {
 
   async request(path, options = {}) {
     const url = `${this.baseUrl}${path}`;
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(0, options.timeoutMs) : 15000;
+    const retries = Number.isInteger(options.retries) ? Math.max(0, options.retries) : 0;
+    const {
+      timeoutMs: _timeoutMs,
+      retries: _retries,
+      ...fetchOptions
+    } = options;
     const headers = {
       'Content-Type': 'application/json',
-      ...(options.headers || {}),
+      ...(fetchOptions.headers || {}),
     };
 
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
-    const config = {
-      ...options,
-      headers,
-      credentials: 'same-origin',
-    };
-
-    try {
-      const res = await fetch(url, config);
-
-      if (res.status === 401) {
-        if (typeof this.onAuthFailure === 'function') {
-          this.onAuthFailure();
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const externalSignal = fetchOptions.signal;
+      let timeoutHandle = null;
+      let removeExternalAbortListener = null;
+      if (controller) {
+        if (externalSignal) {
+          if (externalSignal.aborted) {
+            controller.abort();
+          } else {
+            const onExternalAbort = () => controller.abort();
+            externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+            removeExternalAbortListener = () => externalSignal.removeEventListener('abort', onExternalAbort);
+          }
         }
-        const err = new Error('Wymagana autoryzacja (brak ważnego tokena lub sesji)');
-        err.status = 401;
-        throw err;
+        timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
       }
+      const config = {
+        ...fetchOptions,
+        headers,
+        credentials: 'same-origin',
+        ...(controller ? { signal: controller.signal } : {}),
+      };
 
-      if (res.status === 403) {
-        const err = new Error('Brak uprawnień lub niedozwolony Origin');
-        err.status = 403;
-        throw err;
-      }
+      try {
+        const res = await fetch(url, config);
 
-      if (!res.ok) {
-        let errData = {};
-        try {
-          errData = await res.json();
-        } catch (_) {}
-        const msg = errData.error || `Błąd serwera (${res.status} ${res.statusText})`;
-        const err = new Error(msg);
-        err.status = res.status;
-        err.data = errData;
-        throw err;
-      }
+        if (res.status === 401) {
+          if (typeof this.onAuthFailure === 'function') {
+            this.onAuthFailure();
+          }
+          const err = new Error('Wymagana autoryzacja (brak ważnego tokena lub sesji)');
+          err.status = 401;
+          throw err;
+        }
 
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        return await res.json();
+        if (res.status === 403) {
+          const err = new Error('Brak uprawnień lub niedozwolony Origin');
+          err.status = 403;
+          throw err;
+        }
+
+        if (!res.ok) {
+          let errData = {};
+          try {
+            errData = await res.json();
+          } catch (_) {}
+          const msg = errData.error || `Błąd serwera (${res.status} ${res.statusText})`;
+          const err = new Error(msg);
+          err.status = res.status;
+          err.data = errData;
+          throw err;
+        }
+
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          return await res.json();
+        }
+        return await res.text();
+      } catch (error) {
+        const timedOut = error?.name === 'AbortError';
+        if (timedOut) {
+          const timeoutError = new Error(`Przekroczono limit ${timeoutMs} ms dla żądania ${path}`);
+          timeoutError.status = 408;
+          timeoutError.code = 'REQUEST_TIMEOUT';
+          timeoutError.cause = error;
+          error = timeoutError;
+        } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+          const netErr = new Error('Brak połączenia z koordynatorem Fullmag runner');
+          netErr.status = 0;
+          error = netErr;
+        }
+
+        const retryable = error.status === 0 || error.status === 408 || error.code === 'REQUEST_TIMEOUT';
+        if (retryable && attempt < retries) {
+          continue;
+        }
+        throw error;
+      } finally {
+        if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+        if (removeExternalAbortListener) removeExternalAbortListener();
       }
-      return await res.text();
-    } catch (error) {
-      if (error.name === 'TypeError' && error.message.includes('fetch')) {
-        const netErr = new Error('Brak połączenia z koordynatorem Fullmag runner');
-        netErr.status = 0;
-        throw netErr;
-      }
-      throw error;
     }
+
+    throw new Error(`Nie udało się wykonać żądania ${path}`);
   }
 
   // --- Auth Session ---
@@ -198,12 +241,12 @@ class RunnerAPI {
   }
 
   // --- Storage Endpoints ---
-  async getStorageVolumes() {
-    return await this.request('/api/v1/storage/volumes');
+  async getStorageVolumes(options = {}) {
+    return await this.request('/api/v1/storage/volumes', options);
   }
 
-  async getStorageResources() {
-    return await this.request('/api/v1/storage/resources');
+  async getStorageResources(options = {}) {
+    return await this.request('/api/v1/storage/resources', options);
   }
 
   // --- Processes & Diagnostic Endpoints ---

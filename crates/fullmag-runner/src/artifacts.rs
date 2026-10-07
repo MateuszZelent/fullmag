@@ -321,6 +321,109 @@ pub(crate) fn build_identity_json() -> serde_json::Value {
     })
 }
 
+/// Materialize the typed producer sidecar from the exact payload bytes that
+/// are about to be written.  The runner does not invent a run identity: the
+/// execution owner must provide `producer_run_id` and `producer_stage_id` in
+/// the problem runtime metadata. Public standalone entry points allocate this
+/// binding before dispatch; orchestrated calls retain their supplied identity.
+/// Direct artifact writers without it receive no verified replay sidecar.
+fn fem_relaxation_producer_provenance_artifact(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    executed: &ExecutedRun,
+) -> std::io::Result<Option<crate::types::AuxiliaryArtifact>> {
+    let fullmag_ir::BackendPlanIR::Fem(source_plan) = &plan.backend_plan else {
+        return Ok(None);
+    };
+    if source_plan.relaxation.is_none()
+        || !matches!(executed.result.status, crate::types::RunStatus::Completed)
+    {
+        return Ok(None);
+    }
+    let runtime_metadata = &problem.problem_meta.runtime_metadata;
+    let Some(source_run_id) = runtime_metadata
+        .get("producer_run_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(source_stage_id) = runtime_metadata
+        .get("producer_stage_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(source_stage_kind) = runtime_metadata
+        .get("producer_stage_kind")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let accepted_path = crate::types::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+        &source_plan.material,
+    );
+    let (certified_path, recomputed_path) =
+        crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+            &source_plan.material,
+        );
+    let exact_bytes = |path: &str, label: &str| -> std::io::Result<&[u8]> {
+        let mut matches = executed
+            .auxiliary_artifacts
+            .iter()
+            .filter(|artifact| artifact.relative_path == path);
+        let Some(artifact) = matches.next() else {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "FEM relaxation producer sidecar missing exact {label} payload {path}"
+                ),
+            ));
+        };
+        if matches.next().is_some() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("FEM relaxation producer sidecar has duplicate {label} payload {path}"),
+            ));
+        }
+        Ok(artifact.bytes.as_slice())
+    };
+    let accepted_bytes = exact_bytes(accepted_path, "accepted fields")?;
+    let certified_bytes = exact_bytes(certified_path, "certified fields")?;
+    let recomputed_bytes = exact_bytes(recomputed_path, "recomputed certificate")?;
+    let provenance = crate::fem::eigen_equilibrium_contract::
+        fem_relaxation_producer_provenance_from_exact_artifacts(
+            source_run_id,
+            source_stage_id,
+            source_stage_kind,
+            source_plan,
+            &executed.result.final_magnetization,
+            build_identity_json(),
+            accepted_path,
+            accepted_bytes,
+            certified_path,
+            certified_bytes,
+            recomputed_path,
+            recomputed_bytes,
+        )
+        .map_err(|error| Error::new(ErrorKind::InvalidData, error.message))?;
+    let bytes = serde_json::to_vec_pretty(&provenance).map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("serializing FEM relaxation producer provenance: {error}"),
+        )
+    })?;
+    Ok(Some(crate::types::AuxiliaryArtifact {
+        relative_path: crate::fem::eigen_equilibrium_contract::
+            FEM_RELAXATION_PRODUCER_PROVENANCE_RELATIVE_PATH
+            .to_string(),
+        bytes,
+    }))
+}
+
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
     let resolved_cpu_threads = u32::try_from(crate::configured_cpu_threads(problem)).ok();
     serde_json::json!({
@@ -2039,6 +2142,20 @@ pub(crate) fn write_artifacts(
     }
 
     let mut auxiliary_artifacts = executed.auxiliary_artifacts.clone();
+    if let Some(producer_provenance) =
+        fem_relaxation_producer_provenance_artifact(problem, plan, executed)?
+    {
+        if auxiliary_artifacts
+            .iter()
+            .any(|artifact| artifact.relative_path == producer_provenance.relative_path)
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "duplicate FEM relaxation producer provenance sidecar",
+            ));
+        }
+        auxiliary_artifacts.push(producer_provenance);
+    }
     if matches!(
         &plan.backend_plan,
         fullmag_ir::BackendPlanIR::FdmMultilayer(_)

@@ -290,6 +290,9 @@ class MeshOptions:
     optimize: str | None = None
     optimize_iters: int = 1
     size_fields: list[dict[str, Any]] = field(default_factory=list)
+    # Scoped minimum-size floors have different eligibility from upper targets
+    # and are composed through the lower-bound branch of the Gmsh field stack.
+    lower_bound_fields: list[dict[str, Any]] = field(default_factory=list)
     compute_quality: bool = True
     per_element_quality: bool = True
     # Boundary-layer extrusion settings (None = disabled)

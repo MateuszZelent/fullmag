@@ -221,6 +221,56 @@ class LocalRunnerSourceTests(unittest.TestCase):
                 {item["path"] for item in manifest["files"]},
             )
 
+    def test_allows_exact_start_screen_token_paths_in_commit_and_snapshot(self) -> None:
+        paths = (
+            "apps/control-room/src/design/styles/start-screen.tokens.css",
+            "docs/design/start-screen/tokens/start-screen.tokens.css",
+        )
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-test-") as raw:
+            root = Path(raw)
+            repo, _ = _repository(root)
+            contents = {
+                paths[0]: ":root { --fm-start-rail-width: 232px; }\n",
+                paths[1]: ":root { --fm-start-meta: #a6adc8; }\n",
+            }
+            for relative, content in contents.items():
+                stylesheet = repo / Path(*relative.split("/"))
+                stylesheet.parent.mkdir(parents=True, exist_ok=True)
+                stylesheet.write_text(content, encoding="utf-8")
+            _git(repo, "add", *paths)
+            _git(repo, "commit", "-qm", "start screen design tokens")
+            commit = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+            commit_output = root / "commit-capsule"
+            commit_output.mkdir()
+            commit_manifest = capture_source(repo, commit_output, mode="commit", ref=commit)
+
+            self.assertEqual(commit_manifest["source_mode"], "commit")
+            self.assertEqual(commit_manifest["resolved_commit"], commit)
+            committed_paths = {item["path"] for item in commit_manifest["files"]}
+            self.assertTrue(set(paths).issubset(committed_paths))
+            for relative, content in contents.items():
+                self.assertEqual(
+                    (commit_output / "tree" / Path(*relative.split("/"))).read_text(encoding="utf-8"),
+                    content,
+                )
+
+            contents[paths[0]] += "/* local snapshot change */\n"
+            (repo / Path(*paths[0].split("/"))).write_text(contents[paths[0]], encoding="utf-8")
+            snapshot_output = root / "snapshot-capsule"
+            snapshot_output.mkdir()
+            snapshot_manifest = capture_source(repo, snapshot_output)
+
+            self.assertEqual(snapshot_manifest["source_mode"], "snapshot")
+            self.assertEqual(snapshot_manifest["resolved_commit"], commit)
+            snapshot_paths = {item["path"] for item in snapshot_manifest["files"]}
+            self.assertTrue(set(paths).issubset(snapshot_paths))
+            for relative, content in contents.items():
+                self.assertEqual(
+                    (snapshot_output / "tree" / Path(*relative.split("/"))).read_text(encoding="utf-8"),
+                    content,
+                )
+
     def test_rejects_gitlinks_without_silent_omission(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fullmag-source-test-") as raw:
             root = Path(raw)
@@ -398,6 +448,9 @@ class LocalRunnerSourceTests(unittest.TestCase):
             "config/foo.token",
             "auth.credentials",
             "session.secret",
+            "apps/control-room/src/design/styles/start-screen.tokens-copy.css",
+            "apps/control-room/src/design/styles/start-screen.tokens.css.bak",
+            "docs/design/start-screen/tokens/start-screen.tokens.css.secret",
         )
         with tempfile.TemporaryDirectory(prefix="fullmag-source-test-") as raw:
             root = Path(raw)

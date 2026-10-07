@@ -352,7 +352,9 @@ def test_scene_single_ir_keeps_geometry_assets_omitted_and_scene_unmodified(tmp_
     assert scene == original_scene
     assert ir["geometry_assets"] is None
     _assert_annotations(ir, scene)
-    assert ir["problem_meta"]["runtime_metadata"]["output_storage_source_stem"] == "scene_document"
+    # The temporary capture script is not an authored output basename.
+    assert "output_storage_source_stem" not in ir["problem_meta"]["runtime_metadata"]
+    assert ir["problem_meta"]["name"] == scene["scene"]["name"] == "scene-config-test"
 
 
 def test_scene_pipeline_macro_remains_owned_by_shared_materializer(tmp_path):

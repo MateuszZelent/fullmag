@@ -1,3 +1,251 @@
+<!-- scene-pbc-roundtrip-contract-20261005 -->
+(scene-pbc-roundtrip-contract)=
+## Zachowanie jawnej periodyczności podczas eksportu dokumentu sceny
+
+Regresja po integracji mastera wykazała utratę `study.pbc(x=True, y=True)`
+w trasie Python → builder → SceneDocument → Python, mimo zachowania
+`EigenStudy` i jego `FloquetBC`. Nota poprzedza naprawę transportu danych.
+Nie zmienia istniejących równań, znaku fazy, operatorów ani reguł legalności
+backendu z noty [0710](0710-periodic-and-floquet-boundary-conditions.md).
+
+Jawne PBC modelu oraz dynamiczne `FloquetBC` pozostają odrębnymi wejściami.
+Eksport nie może odtwarzać osi PBC przez zgadywanie z wektora k, nazwy modelu
+lub dynamicznych par Floqueta. Publiczny `study.pbc(...)` i istniejące
+`ProblemIR.pbc` zachowują dotychczasową semantykę. Naprawa dodaje opcjonalne
+pole `pbc` do buildera i `SceneStudyState`, używając istniejącego typu
+`FdmPeriodicityIR` zamiast alternatywnej polityki.
+
+| Pole transportu | Typ / domyślnie | SI | Walidacja i mapowanie |
+| --- | --- | --- | --- |
+| `builder.pbc`, `scene.study.pbc` | istniejący obiekt PBC lub `null`; brak oznacza brak polityki | 1 | Python `FdmPbc.to_ir()` → typed Rust `FdmPeriodicityIR` → `ProblemIR.pbc`; jawny `null` w override usuwa politykę |
+| `pbc.axes` | trzy wartości `open`/`periodic` | 1 | zachowanie kolejności x/y/z; render jako jawne booleans `study.pbc(x=..., y=..., z=...)` |
+| `pbc.demag` | `open`, `truncated_images`, `periodic_airbox_k0` | 1 | wartość zachowana; nie przełącza niejawnie realizacji lub urządzenia |
+| `pbc.image_counts` | opcjonalne trzy nieujemne liczby całkowite | 1 | istniejąca semantyka `truncated_images`; renderer zachowuje jawne `images` |
+
+Brak pola w starym dokumencie i `null` dekodują się do `None`. Nie ustawiamy
+periodyczności domyślnie w otwartym modelu. Nieprawidłowe wartości muszą być
+odrzucone przed eksportem zamiast zmienione na otwarte osie. Adaptery Rust
+przekazują to samo pole w obie strony i do overrides. Python zachowuje je
+w bezpośredniej trasie SceneDocument → ProblemIR dla prawidłowego modelu.
+Pusty dokument sceny może przechowywać PBC jako stan authoringu, lecz nadal
+nie tworzy wykonywalnego Problem/ProblemIR bez magnesów; istniejąca odmowa
+pozostaje w mocy. Nie dodajemy sztucznej geometrii ani pustego modelu fizycznego.
+
+FDM CPU/GPU nadal używają swoich istniejących reguł local/demag periodicity.
+FEM CPU/GPU nadal wymagają właściwych operatorów i certyfikatów periodycznej
+siatki; obecność pola authoring nie stanowi nowej capability ani kwalifikacji.
+Requested intent pozostaje jawny, a resolved execution nie jest wyznaczane
+przez adapter dokumentu. Nie ma zmiany schematu wyników ani fallbacku.
+
+Kryteria odbioru: ponowne wczytanie obu eksportów zachowuje PBC, signed k,
+FloquetBC, równoległość i output storage; osobne kontrole obejmują wartości
+domyślne, null, images oraz odrzucenie błędnych danych. Native serde/adapters
+i integracja API wymagają produkcyjnego buildu i dowodów runtime. Regresje
+Rust przygotowuje się bez kompilacji testów jednostkowych.
+
+| ID | Źródło i symbol | Odpowiedzialność | Dowód |
+| --- | --- | --- | --- |
+| source-scene-pbc-state | `crates/fullmag-authoring/src/scene.rs` + `SceneStudyState` | Typed optional PBC in authored study | source; runtime pending |
+| source-scene-pbc-adapter | `crates/fullmag-authoring/src/adapters.rs` + `scene_document_to_script_builder` | Preserve PBC in the canonical Rust round-trip | source; native regression pending |
+| source-scene-pbc-python | `packages/fullmag-py/src/fullmag/runtime/scene_document.py` + `build_scene_document_from_builder` | Preserve explicit PBC through Python scene adapters | interpreted regression |
+| source-scene-pbc-script | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` + `render_scene_document_as_script` | Recreate editable public script without losing PBC | interpreted round-trip regression |
+
+<!-- de-air-matrix231-observed-field-resolution-20261004 -->
+(de-air-matrix231-observed-field-resolution)=
+## Rzeczywista macierz siatki powietrza i rozdzielczość porównania pól
+
+Na pakiecie FEM CPU/double #231 ze źródła
+`4b34ec7b91dadb18ac87d7f8b98b3a2cf5c8f574` wykonano sześć prób
+$k_y=+10,+25\,\mathrm{rad/\mu m}$ × air growth 1,3/1,15/1,075.
+Pełne wejścia, pomiary, referencje i ograniczenia zawiera
+[raport macierzy runtime #231](../raports/2026-10-04-de-air-matrix-runtime231.md).
+To kontynuacja kontraktów `de-air-refinement-levels`,
+`modal-equilibrium-field-replay-domain` i `modal-static-demag-replay-preimage`;
+nie zmienia równań, operatorów ani tolerancji solvera.
+
+Porównanie izoluje zmianę harmonogramu powietrza w rozdzielczości istniejącego
+kontraktu odtwarzania stanu. Kanoniczne współrzędne i connectivity filmu są
+zgodne, a maksymalna różnica surowych współrzędnych wynosi
+$3{,}31\cdot10^{-24}\,\mathrm m$. Wszystkie siatki mają 396 węzłów
+magnetycznych, 1476 tetraedrów filmu i cztery płaszczyzny przez grubość.
+Cała siatka zmienia się z 6138/30012 do 10098/49692 węzłów/tetraedrów.
+Maksymalna różnica składowej $m_0$ wynosi $4{,}79\cdot10^{-20}$.
+
+Pomocniczy audyt v1 używał ad hoc progu
+$\max(1\,\mathrm{A/m},|H|)\cdot10^{-12}$ i odrzucił porównanie
+prawie zerowego pola statycznego demagu. Zachowano jego nieudany wynik i hash.
+Audyt v2 używa istniejącego bezwzględnego progu replay
+$10^{-8}\,\mathrm{A/m}$ z `build_shared_domain_linearization_state`
+na odpowiadających sobie węzłach magnetycznych. Zmierzone maksima wynoszą
+$3{,}62\cdot10^{-11}\,\mathrm{A/m}$ dla $H_{demag,0}$ oraz
+$2{,}04\cdot10^{-9}\,\mathrm{A/m}$ dla $H_{eff,0}$.
+To zgodność przy rozdzielczości kontraktu replay, bez twierdzenia o dokładnej
+równości pól, zgodności do roundoff albo ograniczeniu błędu częstotliwości.
+Każdy run zachowuje niezależne sprawdzenie podpisów własnego stanu i siatki.
+
+Residual pełnej postaci słabej zaakceptowanych modów mieści się między
+$1{,}54\cdot10^{-11}$ i $2{,}48\cdot10^{-11}$ przy niezmienionym progu
+$10^{-8}$. W najgęstszej z tych siatek odchylenie od otwartej referencji
+grubościowej 1D/basis32 wynosi −0,0742% dla +10 oraz −0,3711% dla +25.
+Kwadrat nakładania modów w spójnej masie P1 przekracza 0,9999996;
+nie zastępuje to identyfikacji kompletnej gałęzi. Nie zmieniono tolerancji,
+aby uzyskać akceptację solvera. Okna wszystkich sześciu prób pozostają
+`not_certified`; zbieżność filmu, paddingu, pełnego widma i parytet GPU
+pozostają OPEN. Przypadek jest jednorodnym filmem DE, nie geometrią COMSOL A1.
+
+<!-- nearest-floquet-telemetry-consumer-20261004 -->
+(nearest-floquet-telemetry-consumer)=
+## Konsument pojedynczego świadectwa shifted KSP dla nearest
+
+Nota poprzedza rozszerzenie interpretowanego konsumenta `de_shifted_ksp_trial.py` i diagnostycznego drivera DE/BV. Producent opisany w `nearest-floquet-telemetry-producer` już zapisuje istniejące pomiary; ich konsument ma odrzucać brakujące lub sprzeczne dane. Samo przyjęcie przez konsumenta nie dowodzi poprawności modów, zbieżności przestrzennej, pełnego widma ani zgodności COMSOL.
+
+Nowa ścieżka dotyczy tylko jawnego trialu GMRES/FGMRES dla jednego niezerowego wektora i native adaptera `floquet_airbox_cpu_schur_slepc`. Świadectwo pochodzi z `sample_solver_diagnostics` o jednoznacznym indeksie. Globalny ostatni wynik, pomiar dla innego wektora, dane podokien oraz wyjątek `window_exhausted` nie mogą zastąpić tego świadectwa. Window zachowuje istniejący domyślny interfejs i odrębną ocenę podokien; obie ścieżki używają tej samej kontroli rzeczywistego residualu bez kopiowania kryterium lub tworzenia fikcyjnego podokna.
+
+Konsument wymaga dodatnich kodów zakończenia EPS/KSP, rzeczywistej konfiguracji przed EPSSolve i po ostatnim solve (PC_RIGHT / NORM_UNPRECONDITIONED), dostępnych próbek, zgodnych liczników solve/measured/sample oraz zerowych liczników violation/unavailable/measurement failure. Sprawdza istniejące maksimum tolerance ratio i kryterium ostatniego solve'a względem RHS oraz zadanego rtol/atol. Nie zastępuje tego residualem rekurencyjnym. Konfiguracja requested/global/sample musi być zgodna, a wymiary EPS muszą pochodzić z dostępnego query. Brak telemetry w starszym runtime oznacza odrzucenie, nie dopisanie danych.
+
+| Sterowanie lub pole | Typ / jednostka SI | Znaczenie i walidacja |
+| --- | --- | --- |
+| `spectral_target` | string, domyślnie `frequency_window`; $1$ | `nearest` wymaga dokładnie jednego niezerowego sample; inne wartości odrzucane |
+| `target_frequency_hz` | finite positive number, dla nearest wymagane; $\mathrm{Hz}$ | zgodne z native target_frequency_hz; bool i brak odrzucane |
+| `gmres_restart` | opcjonalny dodatni int; $1$ | rzeczywisty restart sample/global zgodny z jawnie żądanym; CLI używa istniejącej listy stringów |
+| `eps_nev/ncv/mpd` | dodatnie int; $1$ | wymagane available query, ncv nie mniejsze od nev i mpd nie większe od ncv |
+| `sample_index`, `k_vector_rad_m` | int i trzy finite numbers; $1$ i $\mathrm{m^{-1}}$ | binding konkretnego indeksu, znaku i osi DE/BV, bez global fallbacku |
+
+Native status musi być `ok` i `solve_complete=true`, ale `spectrum_completeness=selected_only` oraz `window_complete=false` pozostają obowiązkowe. Nie nadajemy certyfikatu pełnego widma. Odrębne istniejące bramki CSV/spectrum, projected magnetic/potential/seam residualu, mesh, equilibrium i linearization pozostają aktywne. K0 nearest z jawnym trialem typu KSP pozostaje poza tym rozszerzeniem Floquet; dotychczasowy K0 window consumer zachowuje swoją trasę.
+
+Publiczny stage-first Python DSL, ProblemIR, schematy ABI, fizyka i domyślne tolerancje nie zmieniają się. To internal FEM CPU trial admission i postsolve validation. FEM GPU: NOT VERIFIED; FDM CPU/GPU nie dotyczy tego producenta. Kryterium walidacji: interpretowane positive i negative fixtures dla wszystkich bindingów, typed/availability/failure/criterion przypadków, zachowanie dotychczasowych window testów i integracja drivera. Wykonanie native nowego producenta/konsumenta i kontrolowane nearest GMRES/FGMRES A/B pozostają NOT VERIFIED do nowego managed runtime oraz rzeczywistych artefaktów.
+
+Zmiana drivera unieważnia przypięte hashe przygotowanego kontrolera air1,075. Przed kolejnym solve zachowujemy historyczne preparation/owner, oznaczamy poprzedni niewysłany plan jako superseded i przygotowujemy nową wersję z nowymi hashami/dry-run. Nie zmieniamy modelu air1,075, żadnego istniejącego wyniku ani receiptów; nowe obliczenia nadal wymagają admission storage.
+
+
+<!-- nearest-floquet-telemetry-producer-20261004 -->
+(nearest-floquet-telemetry-producer)=
+## Diagnostyka rzeczywistego residualu pojedynczego solve'a Floqueta
+
+Producent FEM CPU zapisuje rzeczywisty residual shifted KSP i kryterium względem normy RHS w podoknach `frequency_window` oraz samodzielnym `nearest`. Migawka opisana niżej zachowuje dodatkowo postęp monitora przy unwindzie twardego błędu. Dane te nie zmieniają równania Schura, normy, tolerancji, liczby modów ani kryterium akceptacji.
+
+Prywatny formatter `floquet_shifted_ksp_diagnostics_json_fields` w `production_cpu_modal_eigen.cpp` serializuje wyłącznie pola `SLEPcTinyGyrotropicModalEigenResult`. Użycie wymaga rzeczywistego `solver_adapter=floquet_airbox_cpu_schur_slepc`. `production_window_diagnostics_json` i `solve_sparse_production_modal_payload` współdzielą ten formatter; single-k publikuje dane zarówno po sukcesie, jak po błędzie. Monitor odczytuje ostatni kod KSP wyłącznie wewnątrz callbacku działającego podczas solve. Formatter i ścieżka błędu po powrocie z EPSSolve nie odpytują PETSc. Brak obserwacji pozostaje jawny poprzez availability oraz `null`; nie odtwarzamy metryk z tolerancji żądania ani residualu rekurencyjnego.
+
+| Obserwacja | Semantyka | SI / dostępność |
+| --- | --- | --- |
+| `shifted_ksp_configuration_before_eps` | rzeczywiste odczytane PC side i norm type przed EPSSolve, oddzielne od ostatniego solve'a | enumy $1$; obiekt albo `null` |
+| `ksp_true_residual_criterion` | istniejące liczniki solve/measured/violation/unavailable i maksimum stosunku normy rzeczywistego residualu do wymaganej tolerancji | liczniki i ratio $1$; niefinitywne maksimum jako `null` |
+| `ksp_last_true_residual_*`, `ksp_last_rhs_norm` | ostatnia rzeczywiście zmierzona norma residualu/RHS oraz względny residual z tego solve'a | normy mają jednostkę znormalizowanego algebraicznego RHS; względny residual $1$; availability zachowana |
+| `ksp_final_residual` | norma skonfigurowana przez PETSc, nie zamiennik ponownie obliczonej normy rzeczywistej | jednostka zależy od skonfigurowanej normy; semantics zachowana |
+| `ksp_monitor_progress` | zapisana w callbacku liczba obserwacji, ostatnia iteracja, rekurencyjna norma z monitora i ostatni zaobserwowany kod reason; `last_observed_reason_is_final=false` | phase `during_eps_solve`, source `petsc_ksp_monitor`; zero pozostaje znane, unavailable jako `null`/false |
+| `ksp_*reason`, `eps_converged_reason` | odczytane kody zakończenia, nie domniemanie na podstawie statusu całego żądania | $1$; niedostępny kod jako `null` |
+| `eps_dimensions_available`, `eps_nev/ncv/mpd` | odczytane wymiary EPS, nie wartości odtworzone z żądania | $1$; niedostępne jako `null` |
+
+Normy i istniejące kryterium true-residual opisuje kanoniczny rozdział solvera poniżej; ta nota dodaje wyłącznie realizację publikacji. Publiczny stage-first Python DSL, ProblemIR, planner, ABI i domyślne ustawienia nie zmieniają się. Zapis `nearest` nadal oznacza `selected_only`, a `window_complete=false`: nie tworzymy podokna, certyfikatu pokrycia ani dowodu kompletności widma. Generic/K0 nearest nie otrzymuje telemetry Floqueta. FEM GPU pozostaje NOT VERIFIED dla tego rozszerzenia CPU; FDM CPU/GPU nie dotyczy tego producenta.
+
+Zmieniona regresja produkcyjna przygotowuje kontrolowany `EPSSolve` failure fixture i sprawdza, że snapshot przetrwa obok niedostępnych końcowych query; kontrakt production sprawdza schemat oraz brak migawki w generic/K0. Interpretowany consumer terminalnego `RunError` zachowuje monitor i odrzuca sprzeczne availability albo final-query pola. Źródła i consumer zostały sprawdzone, lecz testów C++ nie kompilowano ani nie uruchamiano zgodnie z zakazem użytkownika. Native typecheck, managed build/runtime nowej migawki i fizyczna kwalifikacja pozostają NOT VERIFIED. Wcześniejszy producer/consumer nearest sprawdzono na pakiecie #231; nie dowodzi to wykonania dodanego później monitora. Nie wolno kwalifikować solvera na podstawie samej publikacji diagnostyki.
+
+
+<!-- floquet-shifted-ksp-failure-progress-20261004 -->
+(floquet-shifted-ksp-failure-progress)=
+### Migawka postępu shifted KSP przy błędzie EPSSolve
+
+Monitor PETSc shifted KSP podczas EPSSolve zapisuje do zwykłej pamięci liczbę
+wywołań, ostatni numer iteracji, rekurencyjną normę residualu zgłoszoną przez
+monitor oraz ostatni zaobserwowany kod KSP. Obiekt rozdziela phase
+during_eps_solve, source petsc_ksp_monitor i ogólną dostępność od dostępności
+każdego pola. Brak obserwacji daje null i availability=false; zmierzona wartość
+zero pozostaje liczbą zero przy availability=true. Licznik wywołań jest znany
+także jako zero, gdy monitor niczego nie zgłosił.
+
+Rekurencyjny residual z monitora nie zastępuje residualu rzeczywistego i nie
+certyfikuje solve. Kod 0 w last_observed_reason oznacza obserwowany stan
+KSP_CONVERGED_ITERATING, a last_observed_reason_is_final pozostaje false.
+Autorytatywne pomiary true residualu i ich liczniki nadal pochodzą z istniejącego
+KSPPostSolve; końcowy KSP reason oraz skonfigurowana norma residualu są
+publikowane wyłącznie z dotychczasowych zapytań po udanym EPSSolve. Po twardym
+błędzie EPSSolve serializer otrzymuje wyłącznie skopiowane wartości snapshotu i
+nie odpytuje EPS/ST/KSP ani operatorów podczas unwindu.
+
+Migawka nie zmienia operatorów, GMRES/FGMRES, tolerancji, restartu, limitów
+iteracji, preconditionera ani kryteriów akceptacji. Kontrola produkcyjnej
+regresji, managed build i runtime pozostają do wykonania; do tego czasu dowód
+runtime tej ścieżki jest NOT VERIFIED.
+<!-- de-air-refinement-levels-20261004 -->
+(de-air-refinement-levels)=
+## Dalsze poziomy kontrolowanego zagęszczania powietrza DE
+
+Nota poprzedza rozszerzenie wejścia diagnostycznego. Dwie zakończone próby air growth1,15 przy +10/+25 potwierdziły wkład siatki powietrza, ale nie jej zbieżność: [raport obu prób](../raports/2026-10-04-de-air-grading-two-points.md). Następny krok wymaga co najmniej dalszego poziomu przy niezmienionym filmie. Dla tej kontrolowanej sekwencji dopuszczamy cztery dokładne wartości stringów, bez swobodnego parametru i bez zmian domyślnego growth1,3:
+
+```{math}
+:label: eq-de-air-refinement-levels
+r_n=1+0.3\,2^{-n},\qquad n\in\{0,1,2,3\}.
+```
+
+| Symbol | Znaczenie | SI |
+| --- | --- | --- |
+| $r_n$ | zadany współczynnik wzrostu warstw powietrza na poziomie kontrolnej sekwencji | $1$ |
+| $n$ | indeks poziomu diagnostycznego, nie stopień wielomianu FEM | $1$ |
+
+| Poziom | Dokładny string CLI/environment | Float w istniejącym DSL | Stan dowodu |
+| ---: | --- | ---: | --- |
+| 0 | `"1.3"` | 1.3 | historyczny baseline15; zbieżność OPEN |
+| 1 | `"1.15"` | 1.15 | +10/+25 zaakceptowane, rzeczywista izolacja filmu/stanów PASS |
+| 2 | `"1.075"` | 1.075 | źródła przygotowywane; wykonanie i izolacja NOT VERIFIED |
+| 3 | `"1.0375"` | 1.0375 | źródła przygotowywane; wykonanie i izolacja NOT VERIFIED |
+
+Równanie definiuje dyskretną sekwencję wyborów, nie produkcyjną regułę automatycznego refinementu ani ocenę błędu. Planer zachowuje poprzednią rekurencję {eq}`eq-de-air-grading-controlled-sequence`, seed5nm i cap100nm w L2/3. Mniejszy wzrost może zwiększyć liczbę warstw, pamięć i czas; nie gwarantuje gniazdowania siatek ani zbieżności częstotliwości. Nie wolno ekstrapolować rzędu dokładności z samego indeksu poziomu.
+
+`FULLMAG_DE_SMOKE_AIR_GROWTH_RATE` i opcjonalny `--air-growth-rate` są bezwymiarowymi stringami z powyższej listy; domyślnie environment1,3, CLI brak override. Wartości niefinitywne, bool, liczby zamiast stringów i niezatwierdzone zapisy (np.1.0750) są odrzucane. Ograniczenia pozostają: single-k Damon–Eshbach, standalone input z pełnego `--model-ref`, bez grouped/parallel/BV. Przed przyjęciem wyniku cztery ścieżki requested/declaration/effective mesh growth muszą zgadzać się; nie zamieniamy tego na odczyt legacy grading.
+
+Publiczny Python/IR, requested device i równania fizyczne nie zmieniają się: `StudyUniverseHandle.mesh` → `StudyUniverseConfig.to_dict` → `meta.runtime_metadata.study_universe.airbox_growth_rate` → `_study_universe_airbox_options` → `AirboxOptions.grading_ratio`. Istniejący przykład stage-first `examples/fem_de_smoke_numeric.py` zachowuje film, materiał, demag, Floquet, padding i tolerancje. Sterowanie diagnostyczne mapuje `AIR_GROWTH_RATE`, `_validate_air_growth_rate_request` i `validate_air_growth_rate_metadata` w source-map; dalsze poziomy wymagają nowego wersjonowanego inputu, nie nadpisania historycznej kapsuły.
+
+FEM CPU: poziomy2/3 source przygotowywane i runtime NOT VERIFIED; przejdą niezależne postsolve i actual body/equilibrium/profile isolation. FEM GPU: brak dowodu tych prób, NOT VERIFIED. FDM CPU/GPU: nie dotyczy layered FEM airboxu; ich demag ma odrębną realizację. Nie wprowadzamy fallbacku, capability ani publicznej migracji.
+
+Kryterium dalszej oceny: na +10/+25 porównać kolejne rzeczywiste częstotliwości, pełny residual i zmianę względem poprzedniego poziomu; skontrolować geometrię filmu, stan, air z-schedule i profile, zachowując raw artefakty oraz tożsamości runtime/model. Lepsza zgodność z open-air1D nie wystarcza do uznania zbieżności. Padding, body/thickness, mode-count, Γ full window, native serial/adaptive parity/zasoby, GUI, A1/COMSOL i integracja pozostają osobnymi otwartymi bramkami. Żadne obliczenie nie może omijać admission storage.
+
+Poniższa starsza nota opisuje pierwszy etap1,3→1,15; aktualny zakres kontrolki rozszerza wyłącznie powyższa dyskretna lista.
+
+<!-- de-air-grading-controlled-input-20261004 -->
+(de-air-grading-controlled-input)=
+## Kontrolowany eksperyment siatki powietrza DE — 4 października 2026
+
+Ta nota poprzedza dodanie jawnego przełącznika **wejścia diagnostycznego**, bez zmiany równań LLG/Poissona, operatorów, publicznego DSL, schematu ProblemIR ani domyślnego buildu. Przykład `examples/fem_de_smoke_numeric.py` zachowuje domyślny wzrost 1,3. Nowa próba ma zmienić go na 1,15 przy +10 rad/µm. Model fizyczny i interpretacja Schura pozostają opisane w rozdziałach poniżej; odwołujemy się do ich równań zamiast tworzyć drugi właścicielski opis demagu.
+
+### Parametr i realizacja
+
+Istniejące publiczne `study.universe.mesh(maximum_element_growth_rate=...)` wyraża bezwymiarowy współczynnik wzrostu; `StudyUniverseHandle.mesh` i `_validate_mesh_control_values` odrzucają wartości niefinitywne i ≤1. Kontrola diagnostycznego fixture'u ogranicza wybór do stringów `"1.3"` i `"1.15"`, domyślnie `"1.3"`. CLI `--air-growth-rate` ma domyślnie brak override; jawne użycie wymaga nieparalelnego DE-SMOKE oraz wersjonowanego `--model-ref`. Nie jest to nowy parametr produkcyjnego solvera ani planner capability.
+
+| Parametr | Typ / domyślnie | SI | Walidacja i znaczenie | Python → IR → realizacja |
+| --- | --- | --- | --- | --- |
+| `FULLMAG_DE_SMOKE_AIR_GROWTH_RATE` | string, `"1.3"` | $1$ | tylko `"1.3"`/`"1.15"`; błędne wejście odrzucane przed obliczeniem | fixture → istniejące `study.universe.mesh(maximum_element_growth_rate=...)` |
+| `--air-growth-rate` | opcjonalny string, brak | $1$ | ten sam zakres; bez niejawnego override dla historycznego buildu/inputu lub grouped sweep | Compose environment → fixture; requested w run-request, resolved z bound mesh metadata |
+| `study.universe.mesh(maximum_element_growth_rate=...)` | opcjonalny float, `None` | $1$ | finite >1; istniejący publiczny DSL, bez zmiany domeny | `StudyUniverseHandle.mesh` → `StudyUniverseConfig.to_dict()` → `meta.runtime_metadata.study_universe.airbox_growth_rate` → `_study_universe_airbox_options` → `AirboxOptions.grading_ratio` |
+
+W trasie layered Box rzeczywisty planer `_box_airbox_layer_levels` zachowuje płaszczyzny filmu i buduje na zewnątrz sekwencję:
+
+```{math}
+:label: eq-de-air-grading-controlled-sequence
+h_0=h_{\mathrm{inner}},\qquad
+h_{j+1}=\min(r h_j,h_{\mathrm{outer}}).
+```
+
+| Symbol | Znaczenie | SI |
+| --- | --- | --- |
+| $h_0$ | pierwszy krok od interfejsu | $\mathrm{m}$ |
+| $h_j$ | planowany krok warstwy powietrza o indeksie $j$ | $\mathrm{m}$ |
+| $h_{\mathrm{inner}}$ | zadany rozmiar początkowy, tu 5 nm | $\mathrm{m}$ |
+| $h_{\mathrm{outer}}$ | ograniczenie kroku, tu 100 nm | $\mathrm{m}$ |
+| $r$ | współczynnik wzrostu, 1,3 lub 1,15 | $1$ |
+| $j$ | indeks zewnętrznej warstwy, nie indeks materiału | $1$ |
+
+Ostatni segment jest przycinany do fizycznej granicy airboxu. Równanie opisuje sekwencję z planera, a nie gwarancję rozmiaru każdej krawędzi tetra ani błędu modalnego. Publiczny punkt wejścia DSL pozostaje `fm.study(...)`; kompletny stage-first model znajduje się w istniejącym przykładzie DE-SMOKE. To zmiana istniejącego parametru wejścia, bez nowego konstruktora, eksportu ani migracji IR.
+
+### Weryfikacja i granice
+
+FEM CPU: eksperyment źródłowy jest przygotowywany; wykonanie i izolacja **NOT VERIFIED** do odczytu końcowych artefaktów. FEM GPU: ta kontrola CPU nie kwalifikuje GPU. FDM CPU/GPU: nie dotyczy layered FEM Poisson airboxu; ich demag ma odrębny właścicielski opis. Nie dodajemy fallbacku ani capability. Runtime/Python pochodzą z attested build228, natomiast samodzielny skrypt z pełnego SHA wejścia; obie tożsamości mają oddzielne hashe i pozostają w receiptach.
+
+Warunki porównania: +10 rad/µm, film 40×40×10 nm, Ms800000 A/m, Aex1,3e−11 J/m, B0,1 T, M₀=x, k=y, PBC x/y, finite Dirichlet air padding2µm, L2/3; EPS/KSP1e−9, FGMRES restart8 i pełny residual1e−8. Zmieniamy wyłącznie $r$. Przed akceptacją sprawdzamy bound metadata dla rzeczywistego growth oraz zgodność źródeł, siatki, stanu, pełnego projected weak-form residualu, periodic seams i true KSP residual.
+
+Po solve trzeba porównać rzeczywistą magnetyczną geometrię/connectivity (nie whole-mesh hash), 4 płaszczyzny filmu, magnetic equilibrium i profile, oraz zmierzyć zmianę air schedule. Jeżeli film lub stan również zmieni się, wynik nie izoluje powietrza. Nawet zaakceptowany residual nie oznacza zbieżności przestrzennej; zmniejszenie różnicy częstotliwości wspiera jedynie hipotezę zależności od air mesh dla tej próby. Pełna zbieżność airboxu, siatki, liczby modów, Γ pełnego okna, adaptive parity, GUI i A1 pozostają odroczone.
+
+Mapa źródeł: `world.py:StudyUniverseHandle.mesh`, `world.py:StudyUniverseConfig.to_dict`, `asset_pipeline.py:_study_universe_airbox_options`, `_gmsh_swept.py:_box_airbox_layer_levels`; diagnostyczne wejście i driver są mapowane osobno w source-map. Raport źródłowy i hipotezy: [kontrola rozbieżności DE](../raports/2026-10-04-de-nonzero-discrepancy-source-scan.md). Te źródła dowodzą realizacji kontrolki; nie zastępują bramek fizycznych opisanych poniżej.
+
 # FEM Poisson-Airbox Modal Eigenproblem
 
 - Status: FEM CPU and FEM GPU `source_visible / unvalidated`; public physical
@@ -519,6 +767,179 @@ model referencyjny, ale faktycznie wykonała produkcyjny adapter CPU/GPU. Dzięk
 temu raport nie może oznaczyć produkcyjnego GPU jako `reference` ani rozjechać
 `solver_algorithm` względem `frequency_domain/manifest.v1.json`.
 
+<!-- common-modal-krylov-tuning -->
+### 3.1.1 Strojenie EPS i shift-invert na ścieżce zawierającej Γ
+
+Punkt Γ zachowuje okresowy operator K0 z pełnym dynamicznym demagiem; nie
+wolno sztucznie zastępować go małym niezerowym k. Strojenie kryłowowskie
+kontroluje koszt i zbieżność podproblemów, ale nie zmienia operatora,
+certyfikatu równowagi, normalizacji, doboru 16+34 shiftów ani końcowej bramki
+oryginalnego residualu. Wewnętrzna tolerancja EPS/KSP nie jest tą bramką.
+
+FEM CPU udostępnia następujące jawne, diagnostyczne parametry runtime dla
+obu adapterów: okresowego Schura K0 i niezerowego Floqueta. Nie dodają pól
+Python ani ProblemIR; pochodzą z kontrolowanej konfiguracji uruchomienia.
+
+| Zmienna runtime | Typ / SI | Domyślna wartość przy braku override | Walidacja i znaczenie |
+| --- | --- | --- | --- |
+| `FULLMAG_MODAL_EPS_PREFILTER_ABS` | dodatni float / $1$ | dotychczasowy wzór właściwego adaptera; K0: budżet 1e-3 residual tolerance z clamp 1e-12–1e-8 | dokładny token od `1e-6` do `1e-13`; wewnętrzne kryterium EPS |
+| `FULLMAG_MODAL_SHIFTED_KSP_RTOL` | dodatni float / $1$ | dotychczasowy wzór właściwego adaptera; K0: clamp 1e-13–1e-10 z 1e-3 tolerancji EPS | dokładny token od `1e-6` do `1e-13`; relative stopping kryterium ST KSP |
+| `FULLMAG_MODAL_SHIFTED_KSP_TYPE` | enum / $1$ | `gmres` | wyłącznie `gmres` lub `fgmres`; algorytm ST shift-invert |
+| `FULLMAG_MODAL_GMRES_RESTART` | dodatni int / $1$ | dotychczasowy restart adaptera; K0: min(split DOF,256) | 8,10,12,16,30; liczba kierunków, dodatkowo ograniczona wymiarem operatora K0 |
+
+Niepoprawne, puste lub sprzeczne wartości kończą się validation error.
+Historyczne `FULLMAG_FLOQUET_*` pozostają aliasami tylko w adapterze Floqueta;
+gdy alias i wspólny parametr są zadane jednocześnie, wymagają tych samych
+tokenów. Sam historyczny alias nie zmienia zachowania samodzielnego K0.
+Managed pilot zapisuje wspólne parametry i zgodne aliasy, aby zachować
+odtwarzalność dla starych kapsuł; stary build nie otrzymuje przez to
+nieistniejącej obsługi strojenia Γ. Receipt wiąże wersję binarium i requested
+tuning, a diagnostyka native opisuje rzeczywiście skonfigurowane EPS/KSP.
+
+Jawny dodatni `max_linear_iterations` jest górnym limitem KSP, nie dolnym
+progiem 1000; pominięty limit zachowuje dotychczasowy default. Oba jawne limity iteracji
+muszą mieścić się w używanym typie `PetscInt`, przed konfiguracją native. Dotyczy ST i
+pomocniczego KSP korekcji Ritz w K0. Wspólne override typu/restartu/rtol
+dotyczą ST; korekcja Ritz zachowuje swój dotychczasowy algorytm i wzór
+tolerancji. Pełny, nieprzeskalowany residual deskryptora nadal musi spełnić
+`residual_tolerance` z ProblemIR, także przy luźniejszym prefilterze.
+
+Zakres: FEM CPU. FEM GPU oraz FDM CPU/GPU mają oddzielne realizacje i nie
+uzyskują obsługi tych opcji ani kwalifikacji na podstawie tej poprawki.
+Publiczny Python→ProblemIR, wybór backendu i requested/resolved intent
+pozostają takie same. Dane strojenia są diagnostyką wykonania, nie częścią
+podpisu operatora fizycznego ani zamiennikiem source/build identity.
+
+Mapowanie źródeł: `backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp`
++ `resolve_modal_krylov_tuning`, Schur K0 w
+`poisson_airbox_schur_matshell.cpp` + `solve_poisson_airbox_modal_eigen_cpu_schur`,
+Floquet w `modal/floquet_modal_solver.cpp` + `solve_floquet_modal_sparse_spectrum`,
+oraz `scripts/run_de_100nm_pilot.py` + `compose_command`. Testy przygotowane
+w `backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp`;
+interpretowane regresje managed drivera sprawdzają requested konfigurację.
+Kompilacja testów native jest zabroniona. Source checks i fixture nie
+dowodzą jeszcze query rzeczywistych opcji PETSc, czasu, zbieżności Γ,
+serial/adaptive parity ani kwalifikacji naukowej: wymagany nowy managed
+runtime-v2 oraz ten sam model, siatka, airbox i progi akceptacji.
+
+Podstawy implementacji: [PETSc KSPSetTolerances](https://petsc.org/release/manualpages/KSP/KSPSetTolerances/)
+określa `maxits` jako maksimum iteracji;
+[PETSc KSPFGMRES](https://petsc.org/release/manualpages/KSP/KSPFGMRES/)
+opisuje elastyczny GMRES i jego restart. Nie wyprowadzamy z dokumentacji
+biblioteki dowodu poprawności fizycznej modelu Fullmag.
+
+<!-- k0-inner-residual-progress -->
+### 3.1.2 Telemetria KSP i postęp podokien K0
+
+Norma `rnorm` dostarczana przez PETSc do testu zbieżności KSP jest normą
+wewnętrznego problemu liniowego, zależną od jego skalowania i ustawionej
+normy/preconditioningu. Nie jest pełnym, względnym residualem deskryptora
+LLG. Nie należy porównywać jej w UI z `residual_tolerance` modu ani używać
+jako dowodu akceptacji częstotliwości.
+
+Callback JSON `fem_frequency_domain_progress.v1` zachowuje historyczne pola,
+ale dla jawnego źródła `residual_source=ksp_norm` publikuje
+`current_residual_relative_l2=null` i `outer_iteration=null`. Osobno podaje
+`linear_iteration`, `linear_residual_norm`, rolę `linear_solver_role`
+(`poisson` albo `shift_invert`) oraz odczytany `linear_ksp_type`, gdy query
+jest dostępne. Wartości niefinity i nieznane są null lub pomijane; nie stają
+się zerowym residualem. Brak pola w historycznej telemetrii nie stanowi
+certyfikatu nowej semantyki ani pełnego residualu.
+
+Indeks podokna (`current_subwindow/total_subwindows`) jest osobnym wymiarem
+postępu. Konsument nie zapisuje go jako liczby iteracji EPS; wyświetla go
+jako podokno. Iteracje KSP i ich normę podpisuje osobno, wraz z rolą solvera.
+Operatory, stop KSP, cancellation, harmonogram shiftów i pełna bramka
+residualu modu pozostają bez zmiany. Są to dane diagnostyczne FEM CPU K0;
+FDM i GPU nie uzyskują przez tę poprawkę kwalifikacji.
+
+Mapowanie wykonania: `poisson_airbox_schur_matshell.cpp` +
+`production_modal_ksp_convergence_test`, `poisson_airbox_modal_eigen.hpp` +
+`poisson_airbox_modal_emit_progress`, `eigen_progress.rs` +
+`native_modal_progress_event`, runner `lib.rs` + `fem_eigen_progress_update`
+oraz CLI `orchestrator.rs` + `append_fem_eigen_step_progress`.
+Źródłowe regresje producer/consumer są przygotowywane bez kompilacji
+C++/Rust zgodnie z zakazem. Managed query, publikacja API/UI i rzeczywisty
+log wymagają nowego runtime-v2: NOT VERIFIED.
+
+<!-- gamma-hard-error-contract -->
+### 3.1.3 Twardy błąd EPS: kwarantanna grafu K0
+
+Niezerowy PetscErrorCode z EPSSolve jest odrębny od ujemnego
+EPSConvergedReason zwróconego po poprawnym powrocie funkcji. W drugim
+przypadku można odczytać wykonane iteracje i konwergentne Ritz vectors jako
+diagnostykę, lecz nie zaakceptować niekompletnego okna. W pierwszym
+przypadku nie wolno zakładać, że wewnętrzne borrowed views SLEPc zostały
+oddane: przykładowa ścieżka Krylov–Schur odczytuje DSGetMat, wykonuje
+Arnoldi przez PetscCall i dopiero potem DSRestoreMat. DSReset niszczy
+przechowywane macierze. To uzasadnienie konserwatywnej polityki Fullmag,
+nie obietnica biblioteki, że każdy błąd uszkadza graf.
+
+FEM CPU K0 zachowuje po twardym błędzie heap-owned kontekst Schura i cały
+zależny EPS/ST/KSP/Mat/Vec graph do odzyskania przez system operacyjny.
+Właściciel kontekstu musi pozostać pod stabilnym adresem; samo pominięcie
+EPSDestroy nie wystarcza przy stack-local callback context. Powrót nie
+wywołuje getterów ani PETSc teardown tego grafu, rozbraja hostowe callbacks,
+oznacza go invalidated i przerywa lokalne próby/growth oraz pozostałe
+podokna. Trwała kwarantanna procesu nie dopuszcza kolejnego produkcyjnego
+K0 solve w tym procesie; operator otrzymuje błąd wymagający nowego procesu.
+Nie zabija to UI ani nie udaje sukcesu. Retencja jest wyjątkiem po błędzie,
+nie cache ani polityką normalnego cleanup. Normalna ścieżka i ujemny
+convergence reason bez PetscErrorCode zachowują dotychczasowy teardown.
+
+Diagnostyka zachowuje pierwotny liczbowy kod EPSSolve, etap i brak
+after-query; cancellation nadal ma status interrupted. Zachowane liczniki
+hosta nie są wymyśloną liczbą iteracji EPS. Nie publikuje się accepted modes,
+complete window ani certificate w tej gałęzi. Operatory, strojenie,
+normalizacja, demag i końcowy residual acceptance pozostają takie same.
+Publiczny Python→IR, SI i requested/resolved intent nie zmieniają się.
+Zakres FEM CPU K0; pozostałe lane nie są przez to kwalifikowane.
+Osobny izolowany failure regression i późniejszy managed runtime-v2 muszą
+potwierdzić brak getterów/teardown/reuse oraz kontrolowane zakończenie.
+Failure fixture nie został jeszcze wykonany; kompilacja testów C++ jest
+obecnie zabroniona. Przegląd źródeł nie zamyka tej bramki. NOT VERIFIED runtime.
+
+Podstawy źródłowe: [Krylov–Schur SLEPc](https://slepc.upv.es/release/src/eps/impls/krylov/krylovschur/krylovschur.c.html)
+oraz [DSReset/DSDestroy](https://slepc.upv.es/release/src/sys/classes/ds/interface/dsbasic.c.html).
+Źródła upstream są uzasadnieniem mechanizmu; dowód zachowania konkretnego
+builda Fullmag wymaga jego własnego source/runtime identity.
+
+<!-- gamma-common-query-trial -->
+### 3.1.4 Kontrolowany trial samodzielnego Γ
+
+Managed driver dopuszcza jawny typ gmres/fgmres w native frequency_window
+DE-SMOKE również dla samodzielnego Γ. Zachowuje pierwotny model i pełny
+operator K0. Konsument konfiguracji Γ wymaga rzeczywistego native adaptera
+K0 Schur CPU, wektora zerowego, przypisania sample_index oraz query EPS/ST
+w każdym wykonanym podoknie. Phase musi być queried_after_eps; snapshot
+configured_before_eps, missing/null lub historyczny build bez obsługi nie
+dowodzą wykonania requested konfiguracji.
+
+Typ ST, requested rtol oraz jawne EPS prefilter/restart są porównywane z
+query; restart uwzględnia ograniczenie liczbą split DOF. Budżety są
+dodatnie, z dopuszczalnym null jedynie dla nierozwiązanego EPS max.
+Niefinity/bool/ujemne dane, duplicate/missing pary (pass,subwindow_index) i niezerowy wektor
+w recordzie Γ kończą się błędem. Liczby planowanych podokien pochodzą z
+base_schedule i refinement_schedule natywnego window_certificate; konsument
+nie narzuca własnej liczby okien. Tożsamość native adaptera odczytuje się z
+solver_adapter, a nie z prezentacyjnego solver_model całej ścieżki. Global
+fallback jest dopuszczony wyłącznie dla samodzielnego punktu Γ. W mieszanym
+sweepie globalny adapter i query mogą należeć do pierwszego niezerowego
+Floquet; Γ jest wtedy sprawdzane wyłącznie na indexed sample i jego oknach.
+Brak after-query po hard EPS error nie staje się konfiguracją domyślną.
+
+Wrapper K0 publikuje jawny wektor z operator_request albo zadeklarowanego
+floquet_k_vector takze w swoim bezposrednim return; nie dopisuje zer dla
+niezadeklarowanego wektora. Zapis dotyczy diagnostics i result, bez zmiany
+rownan, ABI ani publicznej semantyki k.
+
+Existing nonzero-k Floquet true-residual criterion pozostaje osobną,
+nieosłabioną bramką. Mieszany sweep musi przejść oba konsumenty, standalone
+Γ tylko własną kontrolę query. Receipt konfiguracji nie mierzy końcowego
+true residual i nie kwalifikuje fizyki: istniejący row/spectrum/window/
+demag preflight, certified equilibrium i naukowa zbieżność pozostają
+obowiązkowe. Status naukowy NOT VERIFIED do managed wykonania.
+
 ### 3.2 GPU
 
 A GPU result can become production-capable only when the assembled blocks,
@@ -839,11 +1260,11 @@ Klasyfikacja źródłowa jest fail-closed względem fizycznego wektora:
 | co najmniej jedna niezerowa składowa `k_vector` | `dispersion_modal` | `path` | `spectrum`, `branches`, `dispersion`, `mode_fields` zgodnie z manifestem |
 
 Reguła jest zaimplementowana wspólnie w
-`crates/fullmag-runner/src/eigen/artifacts.rs` (`modal_manifest_execution`,
-`eigen_calculation_mode`) i
-`crates/fullmag-runner/src/dispatch.rs`
-(`build_eigen_path_frequency_domain_manifest`,
-`eigen_path_calculation_mode`). Dzięki temu pozostałe po poprzednim runie
+`crates/fullmag-runner/src/eigen/artifacts/common.rs`
+(`modal_manifest_execution`, `eigen_calculation_mode`) i
+`crates/fullmag-runner/src/fem/eigen_path_manifest.rs`
+(`build_eigen_path_frequency_domain_manifest`, `eigen_path_calculation_mode`).
+Dzięki temu pozostałe po poprzednim runie
 `branches.v2.json` lub `dispersion.csv` nie są publikowane w manifeście
 bieżącego skanu `k=0` i nie mogą zasilić drzewa `Results`.
 
@@ -932,21 +1353,21 @@ managed assembly and physics evidence.
 |---|---|---|
 | Public physical sweep | `packages/fullmag-py/src/fullmag/model/eigen.py` + `BiasFieldSweep` | Python constructor and round-trip tests; no solve qualification |
 | Canonical sweep IR and legality | `crates/fullmag-ir/src/study.rs` + `BiasFieldSweepIR`; `crates/fullmag-ir/src/lib.rs` + `ProblemIR::validate` | IR rejection tests for exact Gamma, double, strict, demag and x/y-periodic/open-z |
-| Per-sample execution and Kittel separation | `crates/fullmag-runner/src/fem_eigen.rs` + `execute_bias_field_sweep` and `validate_bias_field_sweep_oracle_contract` | Oracle isolation is source tested; current runner-local lifecycle is explicitly non-production because it cannot create certified per-sample equilibria |
+| Per-sample execution and Kittel separation | `crates/fullmag-runner/src/fem/eigen_execution.rs` + `execute_bias_field_sweep`; `crates/fullmag-runner/src/fem/eigen_sweep.rs` + `validate_bias_field_sweep_oracle_contract` | Oracle isolation is source tested; current runner-local lifecycle is explicitly non-production because it cannot create certified per-sample equilibria |
 | Request-v19/result-v18 native magnetic block | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `assemble_native_magnetic_a_qq` | Native MFEM source tests for P1 `tet4|prism6` exchange, certificate-bound field tolerance, unsupported anisotropy/DMI and demag identity |
-| Shared-domain import and assembly | same path + `assemble_poisson_airbox_shared_domain_payload` and `assemble_poisson_airbox_shared_domain` | Native shared-domain source tests; no current-snapshot runtime promotion |
+| Shared-domain import and assembly | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp` + `assemble_poisson_airbox_shared_domain` (implementation in the matching `.cpp`) | Native shared-domain source tests; no current-snapshot runtime promotion |
 | CPU Schur and two-pass window | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Focused synthetic certificate tests; source evidence only |
 | GPU PETSc/SLEPc, persistent state and Schur application | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp` + `solve_poisson_airbox_modal_eigen_gpu_petsc_slepc`, `create_gpu_solver_state` and `apply_schur` | Focused synthetic GPU adapter tests; no fresh device execution or production scaling proof |
 | Caller-sized GPU attestation result v20 | `native/include/fullmag_fem.h`, `backends/fem/src/api.cpp`, `crates/fullmag-fem-sys/src/lib.rs` and `crates/fullmag-runner/src/native_fem/frequency_domain.rs` | Symbols, V1 sidecar, layout v5, destroy and fail-closed consumer are source-visible; managed ABI parity and measured attestation remain unvalidated |
-| Native diagnostics and eigen-v2 artifact writer | `crates/fullmag-runner/src/fem_eigen.rs` + `native_solver_diagnostics_json` and `write_eigen_v2_bundle` | Source serialization contracts; no managed-runtime or scientific qualification implied |
+| Native diagnostics and eigen-v2 artifact writer | `crates/fullmag-runner/src/fem/eigen_native_window.rs` + `native_solver_diagnostics_json`; `crates/fullmag-runner/src/fem/eigen_output.rs` + `write_eigen_v2_bundle` | Source serialization contracts; no managed-runtime or scientific qualification implied |
 | Diagnostics and mode-field API resources | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` + `get_frequency_domain_eigen_diagnostics_v2` and `get_frequency_domain_eigen_mode_field_meta` | API source contracts; native browser evidence remains open |
 | Results Inspector mode-field resource | `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx` + `EigenModeFieldResourceInspectorPanel` | React source/tests only; no native browser qualification |
 | Unified viewport mode-field overlay | `apps/control-room/src/kernel/visualization/ModeFieldOverlayIntentController.ts` + `class ModeFieldOverlayIntentController` | Controller source/tests only; no WebGL/runtime qualification |
 | Field-sweep plot and Inspector | `apps/control-room/src/modules/analysis-plots/hooks/useAnalysisFrequencyData.ts` and `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainFieldSweepPanel.tsx` | Currently hardcoded unsupported; requires typed series/availability implementation and real browser proof |
 | Results mode availability and execution qualification | `apps/control-room/src/modules/explorer/builders/frequencyDomainExplorerNodes.ts` (`activeFrequencyDomainProduct`, `publishedFrequencyDomainArtifact`) and `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainPublishedState.ts` | Results children are now gated by the ready published manifest; backend/device/residency qualification and real browser evidence remain open |
-| Results product classification for field sweeps | `crates/fullmag-runner/src/eigen/artifacts.rs` (`eigen_calculation_mode`) + `crates/fullmag-runner/src/dispatch.rs` (`eigen_path_calculation_mode`, `build_eigen_path_frequency_domain_manifest`) | Multi-sample `k=0` sweep is `free_modes`/`single`; nonzero `k_vector` is required for `dispersion_modal`/`path`; Rust regression tests pass, managed runtime unvalidated |
-| Reference mode-field publication gate | `crates/fullmag-runner/src/dispatch.rs` (`mode_fields_requested`, `eigen_path_mode_artifacts_from_result`) + `crates/fullmag-runner/src/eigen/artifacts.rs` (`write_mode_bundle`, `mode_source_mesh_identity`) | No hidden mode bundle for spectrum-only requests; explicit analytic mode request fails closed without mesh identity; dispatch and artifact tests pass |
-| Field-sweep artifact axis | `crates/fullmag-runner/src/eigen/artifacts.rs` + `field_sweep_axis` | Writer emits `bias_field_a_per_m` and `mu0_H`; verifier consistency is a separate gate |
+| Results product classification for field sweeps | `crates/fullmag-runner/src/eigen/artifacts/common.rs` (`eigen_calculation_mode`) + `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` (`eigen_path_calculation_mode`, `build_eigen_path_frequency_domain_manifest`) | Multi-sample `k=0` sweep is `free_modes`/`single`; nonzero `k_vector` is required for `dispersion_modal`/`path`; Rust regression tests pass, managed runtime unvalidated |
+| Reference mode-field publication gate | `crates/fullmag-runner/src/fem/eigen_path.rs` (`mode_fields_requested`) + `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` (`eigen_path_mode_artifacts_from_result`); `crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs` (`write_mode_bundle`) and `crates/fullmag-runner/src/eigen/artifacts/common.rs` (`mode_source_mesh_identity`) | No hidden mode bundle for spectrum-only requests; explicit analytic mode request fails closed without mesh identity; dispatch and artifact tests pass |
+| Field-sweep artifact axis | `crates/fullmag-runner/src/eigen/artifacts/field_sweep.rs` + `field_sweep_axis` | Writer emits `bias_field_a_per_m` and `mu0_H`; verifier consistency is a separate gate |
 
 ## 8. Discrete realization and validation strategy
 
@@ -1101,32 +1522,581 @@ managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| source-nearest-ksp-shared-consumer | FEM CPU | `scripts/de_shifted_ksp_trial.py` + `_validate_shifted_solve_diagnostics` | Shared strict true-residual configuration/count/criterion validation for nearest and window; no synthetic window or recursive residual substitution. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-selection-consumer | FEM CPU | `scripts/de_shifted_ksp_trial.py` + `validate_shifted_ksp_trial` | Single nonzero indexed Floquet nearest metadata, target, restart and EPS-dimensions binding; selected-only result, no spectrum completeness. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-driver-admission | FEM CPU | `scripts/run_de_100nm_pilot.py` + `_validate_shifted_ksp_trial_request` | Admit explicit native single-nonzero DE/BV nearest trial; reject dense/Gamma/grouped selection. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-driver-receipt | FEM CPU | `scripts/run_de_100nm_pilot.py` + `_validate_krylov_trials` | Forward resolved selection, target Hz and integer restart to nearest consumer while retaining separate Gamma/window routes. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-consumer-tests | FEM CPU | `scripts/test_de_shifted_ksp_trial.py` + `test_nearest_accepts_single_de_bv_positive_negative_gmres_and_fgmres` | Interpreted synthetic positive/negative telemetry regression; not native runtime or physical qualification. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-ksp-driver-tests | FEM CPU | `scripts/test_run_de_100nm_pilot.py` + `test_nearest_krylov_receipt_receives_target_and_integer_restart` | Interpreted driver admission/forwarding/rejection regression; no solver execution. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
+| source-nearest-floquet-ksp-telemetry | FEM CPU | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` + `floquet_shifted_ksp_diagnostics_json_fields` | Serializes cached true-residual and monitor progress for actual Floquet nearest success/error and window; preserves unavailable values and separates recursive residual. | prepared native production-path regression | source review PASS; native compilation/runtime NOT VERIFIED | new task checkpoint required; runtime228 predates producer |
+| source-nearest-floquet-ksp-monitor-capture | FEM CPU | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `capture_floquet_shifted_ksp_progress` | Copies monitor callback values to a plain snapshot before hard-error unwind; callback reason is observation only, never final reason. | prepared hard-error fixture | source review PASS; native compilation/runtime NOT VERIFIED | new task checkpoint required |
+| source-nearest-floquet-ksp-failure-regression | FEM CPU | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` + `main` (invokes `executes_native_sparse_matshell_above_dense_bound`) | Prepared hard EPSSolve failure fixture checks cached progress survives while final-query diagnostics remain unavailable; source only. | native regression source | prepared; not compiled or run | new task checkpoint required |
+| source-nearest-floquet-ksp-failed-consumer | FEM CPU | `scripts/de_failed_modal_diagnostic.py` + `_validate_ksp_monitor_progress` | Preserves terminal failure monitor telemetry and rejects inconsistent availability/final-query claims. | interpreted failed-log regressions | interpreted checks PASS; native runtime NOT VERIFIED | new task checkpoint required |
+| source-nearest-floquet-ksp-regression | FEM CPU | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` + `main` | Invokes actual shared-domain nearest producer and generic/K0 absence checks; algebraic fixture, no physical qualification. | modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics; modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator | prepared only; native compilation/execution NOT RUN; hard-error fixture source prepared | new task checkpoint required |
+| source-de-air-layer-planner / eq-de-air-grading-controlled-sequence | FEM CPU | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` + `_box_airbox_layer_levels` | Exact film planes and capped exterior growth recurrence; no convergence claim. | controlled input and actual-mesh comparison | source inspected; controlled runtime pending | immutable runtime source 57182911c6e8e721b8ee9705aa7f70491c70fe94 |
+| source-de-air-request-admission | FEM CPU diagnostic input | `scripts/run_de_100nm_pilot.py` + `_validate_air_growth_rate_request` | Reject ambiguous/builtin/parallel requests; require standalone single-k DE and explicit versioned input. | focused interpreted input/metadata regressions | source under review; runtime pending | task source commit will bind input; native capsule remains57182911c6e8e721b8ee9705aa7f70491c70fe94 |
+| source-de-air-resolved-metadata | FEM CPU diagnostic input | `scripts/run_de_100nm_pilot.py` + `validate_air_growth_rate_metadata` | Require matched requested, declared and effective mesh growth; reject ignored controls and nonfinite/bool/missing metadata. | focused interpreted input/metadata regressions | source under review; runtime pending | task source commit will bind input; native capsule remains57182911c6e8e721b8ee9705aa7f70491c70fe94 |
+| source-de-air-input-growth | FEM CPU diagnostic input | `examples/fem_de_smoke_numeric.py` + `AIR_GROWTH_RATE` | Read validated diagnostic growth setting with historical default1.3; author existing universe mesh intent and declare runtime provenance. | focused interpreted input/metadata regressions | source under review; runtime pending | task source commit will bind input; native capsule remains57182911c6e8e721b8ee9705aa7f70491c70fe94 |
+| source-k0-request-vector | FEM CPU | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` + `modal_request_k_vector_json_field` | Publish declared request-derived wavevector provenance on the direct K0 result and diagnostics path without inventing an undeclared zero vector. | prepared native actual-entry regression; strict consumer cases | source WIP; managed runtime NOT VERIFIED | current source; checkpoint pending |
+| source-k0-eps-hard-error | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Quarantine the heap-owned borrowed solver graph after a hard EPS error, preserve the original code and stop further K0 reuse. | source lifetime review; isolated failure-path gate pending | source WIP; managed runtime NOT VERIFIED | current source; checkpoint pending |
+| source-gamma-query-trial | FEM CPU | `scripts/de_gamma_krylov_trial.py` + `validate_gamma_krylov_trial` | Verify actual per-Gamma and per-pass EPS/ST configuration against requested tuning, independently of physical residual qualification. | scoped source regression; interpreted query cases | source WIP; managed runtime NOT VERIFIED | current source; checkpoint pending |
+| source-k0-linear-progress | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `production_modal_ksp_convergence_test` | Emit actual KSP norm and explicit Poisson/ST role, independently of physical modal residual. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
+| source-modal-progress-json | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp` + `poisson_airbox_modal_emit_progress` | Publish nullable physical residual and distinct tagged linear-solver diagnostics without invalid nonfinite JSON. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
+| source-modal-progress-decoder | FEM CPU | `crates/fullmag-runner/src/fem/eigen_progress.rs` + `native_modal_progress_event` | Keep outer iteration, subwindow index and tagged linear norm distinct. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
+| source-modal-progress-runtime | FEM CPU | `crates/fullmag-runner/src/lib.rs` + `fem_eigen_progress_update` | Preserve typed solver diagnostics in the existing progress scalar envelope. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
+| source-modal-progress-cli | FEM CPU | `crates/fullmag-cli/src/orchestrator.rs` + `append_fem_eigen_step_progress` | Label KSP norm/iteration independently of modal relative residual and window progress. | prepared native/consumer regression | source WIP; managed runtime NOT VERIFIED | current source; immutable checkpoint pending |
+| Common modal Krylov tuning | FEM CPU | `backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp` + `resolve_modal_krylov_tuning` | Validate common runtime controls and adapter-specific legacy aliases | prepared native parser cases; interpreted pilot tests | source reviewed; managed native runtime NOT VERIFIED | new source; immutable commit link pending |
 | Physical sweep API | common | `packages/fullmag-py/src/fullmag/model/eigen.py` + `class BiasFieldSweep` | Validate SI samples and lower declared ordering/policies | `test_eigenmodes_bias_field_sweep_serializes_declared_si_samples` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/model/eigen.py) |
 | Stage-first modal authoring | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Lower the stage builder to public `Eigenmodes` | `test_study_stage_builder_bias_field_sweep_roundtrips_cpu_and_gpu_intent` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/world.py) |
 | User-authored relaxation stop | common | `packages/fullmag-py/src/fullmag/world.py` + `_resolve_flat_relax_stop` | Normalize authored `tolA`, `tolT` and energy tolerance into the canonical relaxation stop contract | focused Python relaxation serialization tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/world.py) |
-| Accepted relaxation handoff | common | `crates/fullmag-runner/src/fem_eigen.rs` + `from_completed_relax` | Validate and bind a completed user-authored relaxation criterion to the immutable stage handoff | runner handoff acceptance tests | source tested; managed CPU reached native assembly | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
+| Accepted relaxation handoff | common | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` + `from_completed_relax` | Validate and bind a completed user-authored relaxation criterion to the immutable stage handoff | runner handoff acceptance tests | source tested; managed CPU reached native assembly | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs) |
 | Certified final FEM fields | common | `crates/fullmag-runner/src/types.rs` + `CertifiedFemEquilibriumFields::from_fields`; `crates/fullmag-runner/src/fem/relax/finalize.rs` + `finalize_native_fem_relaxation` | Freeze and write accepted `H_ex/H_demag/H_ext/H_eff/phi` with an exact digest | focused runner tests | source implemented; managed runtime unvalidated | [types](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/types.rs) |
-| Handoff v3 and split equilibrium signatures | common | `crates/fullmag-runner/src/fem_eigen.rs` + `AcceptedFemRelaxStageHandoff`, `materialize_equilibrium`, `build_shared_domain_linearization_state` | Bind certified fields plus source material/static-physics/static-BC identities separately from modal identities | runner v3 negative tests and offline validator v2/v3 tests | source/test implemented; managed runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
-| Equilibrium materialization | common | `crates/fullmag-runner/src/fem_eigen.rs` + `build_shared_domain_linearization_state` | Materialize the accepted equilibrium, retain relative torque as diagnostics and extend operator-only air nodes deterministically | runner equilibrium materialization tests | source tested; managed CPU reached native assembly | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
+| Handoff v3 and split equilibrium signatures | common | `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` + `AcceptedFemRelaxStageHandoff`; `crates/fullmag-runner/src/fem/eigen_equilibrium.rs` + `materialize_equilibrium`; `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `build_shared_domain_linearization_state` | Bind certified fields plus source material/static-physics/static-BC identities separately from modal identities | runner v3 negative tests and offline validator v2/v3 tests | source/test implemented; managed runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem/eigen_shared_domain.rs) |
+| Equilibrium materialization | common | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `build_shared_domain_linearization_state` | Materialize the accepted equilibrium, retain relative torque as diagnostics and extend operator-only air nodes deterministically | runner equilibrium materialization tests | source tested; managed CPU reached native assembly | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem/eigen_shared_domain.rs) |
 | Sweep `ProblemIR` | common | `crates/fullmag-ir/src/study.rs` + `BiasFieldSweepIR` | Canonical physical request | `eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-ir/src/study.rs) |
-| Sweep lifecycle and oracle isolation | common | `crates/fullmag-runner/src/fem_eigen.rs` + `execute_bias_field_sweep`, `validate_bias_field_sweep_oracle_contract` | Keep Kittel postsolve-only and reject execution that lacks a certified per-sample relaxation contract | runner oracle and fail-closed tests; stage-expansion design pending approval | source-visible / incomplete | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
+| Sweep lifecycle and oracle isolation | common | `crates/fullmag-runner/src/fem/eigen_execution.rs` + `execute_bias_field_sweep`; `crates/fullmag-runner/src/fem/eigen_sweep.rs` + `validate_bias_field_sweep_oracle_contract` | Keep Kittel postsolve-only and reject execution that lacks a certified per-sample relaxation contract | runner oracle and fail-closed tests; stage-expansion design pending approval | source-visible / incomplete | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem/eigen_sweep.rs) |
 | {eq}`eq-poisson-airbox-weak-form` and native `A_qq` | FEM CPU/common assembly | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `assemble_native_magnetic_a_qq`, `assemble_poisson_airbox_shared_domain_payload`, `assemble_poisson_airbox_shared_domain` | MFEM P1 magnetic, scalar and mixed assembly | `poisson_airbox_shared_domain_test.cpp` | source tested; runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp) |
 | Native magnetic `A_qq` declaration | FEM CPU/common assembly | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp` + `assemble_native_magnetic_a_qq` | Stable declaration for the implementation in `poisson_airbox_shared_domain.cpp` | `poisson_airbox_shared_domain_test.cpp` | source tested; runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp) |
 | {eq}`eq-poisson-airbox-modal-block`, residuals and CPU window | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Stable declaration for the Schur solve, original residuals and two-pass certificate | focused CPU synthetic window tests | source tested; managed runtime missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp) |
 | GPU selected-spectrum adapter | FEM GPU | `backends/fem/include/frequency_domain/modal_gpu_krylov.hpp` + `solve_poisson_airbox_modal_eigen_gpu_petsc_slepc` | Declare the PETSc/SLEPc CUDA adapter implemented in `modal_petsc_slepc.cpp` | `run_n3_w1_focused_tests` | source tested; device runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/include/frequency_domain/modal_gpu_krylov.hpp) |
 | GPU persistent solver state | FEM GPU | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp` + `create_gpu_solver_state` | Construct the source-visible GPU solver state whose reuse and residency still require runtime proof | focused GPU adapter tests | source tested; persistence unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp) |
 | GPU matrix-free Schur action | FEM GPU | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp` + `split_schur_matmult` (entrypoint `apply_schur`) | Apply the Schur operator used by the scalable selected-spectrum lane | focused GPU adapter tests | source tested; greater-than-1024 convergence unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp) |
-| Native solver diagnostics projection | common | `crates/fullmag-runner/src/fem_eigen.rs` + `native_solver_diagnostics_json` | Project native convergence, solver-state and residency diagnostics into artifact JSON | runner tests | source tested; managed evidence missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
-| Eigen-v2 bundle writer | common | `crates/fullmag-runner/src/fem_eigen.rs` + `write_eigen_v2_bundle` | Write spectrum, diagnostics and mode-field resources with source provenance | runner artifact tests | source tested; qualification bundle missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
-| Component participation observable | common CPU postprocess after CPU/GPU solve | `crates/fullmag-runner/src/eigen/types.rs` + `ModalParticipationMeshContext::compute`; `crates/fullmag-runner/src/fem_eigen.rs` + `modal_participation_mesh_context`; `crates/fullmag-runner/src/dispatch.rs` + `eigen_path_component_participation_from_json` | Evaluate `volume_weighted_complex_l2_fraction.v1` with the full consistent P1/tet4 mass form, aggregate canonical mesh parts by object ID, carry typed unavailable states through managed execution, and publish the result append-only in `eigen/spectrum.v3.json` while leaving v2 unchanged | focused two-object scale-invariance, incomplete-membership, same-object multipart, managed round-trip and dual-writer tests | source tested; managed runtime and real-artifact qualification missing | — |
+| Native solver diagnostics projection | common | `crates/fullmag-runner/src/fem/eigen_native_window.rs` + `native_solver_diagnostics_json` | Project native convergence, solver-state and residency diagnostics into artifact JSON | runner tests | source tested; managed evidence missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem/eigen_native_window.rs) |
+| Eigen-v2 bundle writer | common | `crates/fullmag-runner/src/fem/eigen_output.rs` + `write_eigen_v2_bundle` | Write spectrum, diagnostics and mode-field resources with source provenance | runner artifact tests | source tested; qualification bundle missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem/eigen_output.rs) |
+| Component participation observable | common CPU postprocess after CPU/GPU solve | `crates/fullmag-runner/src/eigen/types.rs` + `ModalParticipationMeshContext::compute`; `crates/fullmag-runner/src/fem/eigen_certificate.rs` + `modal_participation_mesh_context`; `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` + `eigen_path_component_participation_from_json` | Evaluate `volume_weighted_complex_l2_fraction.v1` with the full consistent P1/tet4 mass form, aggregate canonical mesh parts by object ID, carry typed unavailable states through managed execution, and publish the result append-only in `eigen/spectrum.v3.json` while leaving v2 unchanged | focused two-object scale-invariance, incomplete-membership, same-object multipart, managed round-trip and dual-writer tests | source tested; managed runtime and real-artifact qualification missing | — |
 | Component participation publication guard | documentation | `scripts/test_frequency_domain_math_contract_docs.py` + `test_component_participation_publication_contract_is_mass_consistent_and_mapped` | Require definition ID, mass-consistent equations, unit, scope semantics, unavailable behavior and source-map identities | focused pytest | source tested | — |
-| Eigen diagnostics API | common | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` + `frequency_domain_artifact_content_digest` (handler `get_frequency_domain_eigen_diagnostics_v2`) | Serve the typed session-scoped diagnostics resource | API tests | source visible; native browser proof missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs) |
+| Eigen diagnostics API | common | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` + `json_artifact_resource_first_existing_with_context` (handler `get_frequency_domain_eigen_diagnostics_v2`) | Serve the typed session-scoped diagnostics resource | API tests | source visible; native browser proof missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs) |
 | Mode-field metadata API | common | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` + `eigen_mode_field_metadata` (handler `get_frequency_domain_eigen_mode_field_meta`) | Serve typed metadata for the binary mode-field data plane | API tests | source visible; native browser proof missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs) |
 | Results mode-field Inspector | UI | `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx` + `EigenModeFieldResourceInspectorPanel` | Inspect selected mode-field identity, availability and provenance | focused React tests | source visible; browser qualification missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx) |
 | Unified viewport overlay intent | UI | `apps/control-room/src/kernel/visualization/ModeFieldOverlayIntentController.ts` + `activate` on `class ModeFieldOverlayIntentController` | Bind the selected eigen mode and phase to the unified viewport overlay | focused controller tests | source visible; WebGL qualification missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/apps/control-room/src/kernel/visualization/ModeFieldOverlayIntentController.ts) |
-| Artifact axis `bias_field_a_per_m` | common | `crates/fullmag-runner/src/eigen/artifacts.rs` + `field_sweep_axis` | Freeze writer axis, unit and display conversion | field-sweep artifact writer tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/eigen/artifacts.rs) |
-| K0 field-sweep product classification | common | `crates/fullmag-runner/src/eigen/artifacts.rs` + `eigen_calculation_mode`; `crates/fullmag-runner/src/dispatch.rs` + `eigen_path_calculation_mode` | Distinguish a multi-sample Gamma-field sweep from nonzero-k dispersion and condition manifest paths/resources | `eigen_manifest_does_not_publish_dispersion_for_multi_sample_k0_field_sweep`, `k0_multi_sample_path_is_not_classified_as_dispersion` | source tested; managed runtime unvalidated | [runner](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/eigen/artifacts.rs) |
-| Reference mode-field publication gate | common/UI | `crates/fullmag-runner/src/dispatch.rs` + `mode_fields_requested`; `crates/fullmag-runner/src/eigen/artifacts.rs` + `mode_source_mesh_identity` | Prevent placeholder analytic vectors from entering the mesh-bound mode-field data plane | `de_bv_low_k_dispersion_validation_uses_analytic_reference_solver`, `mode_bundle_rejects_invalid_source_mesh_identity_before_publication` | source tested; native browser qualification missing | [runner](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/dispatch.rs) |
+| Artifact axis `bias_field_a_per_m` | common | `crates/fullmag-runner/src/eigen/artifacts/field_sweep.rs` + `field_sweep_axis` | Freeze writer axis, unit and display conversion | field-sweep artifact writer tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/eigen/artifacts/field_sweep.rs) |
+| K0 field-sweep product classification | common | `crates/fullmag-runner/src/eigen/artifacts/common.rs` + `eigen_calculation_mode`; `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` + `eigen_path_calculation_mode` | Distinguish a multi-sample Gamma-field sweep from nonzero-k dispersion and condition manifest paths/resources | `eigen_manifest_does_not_publish_dispersion_for_multi_sample_k0_field_sweep`, `k0_multi_sample_path_is_not_classified_as_dispersion` | source tested; managed runtime unvalidated | [runner](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem/eigen_path_manifest.rs) |
+| Reference mode-field publication gate | common/UI | `crates/fullmag-runner/src/fem/eigen_path.rs` + `mode_fields_requested`; `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` + `eigen_path_mode_artifacts_from_result`; `crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs` + `write_mode_bundle`, `crates/fullmag-runner/src/eigen/artifacts/common.rs` + `mode_source_mesh_identity` | Prevent placeholder analytic vectors from entering the mesh-bound mode-field data plane | `de_bv_low_k_dispersion_validation_uses_analytic_reference_solver`, `mode_bundle_rejects_invalid_source_mesh_identity_before_publication` | source tested; native browser qualification missing | [runner](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem/eigen_path_artifacts.rs) |
 | Request v19 and legacy result v18 | common | `native/include/fullmag_fem.h` + `FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION`, `FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION`, `FullmagFemModalLinearizationDescriptor` | Version the append-only request/acceptance handoff while preserving the frozen by-value result layout | FFI ABI tests | source tested; latest source snapshot not exported | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/native/include/fullmag_fem.h) |
 | Caller-sized GPU attestation boundary | common/GPU | `backends/fem/src/api.cpp` + `fullmag_fem_modal_eigen_solve_v20` | Return the frozen v18 scientific result plus a caller-sized v20 attestation envelope without promoting unavailable measurements | ABI layout and ownership tests | source visible; measurement unavailable | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/src/api.cpp) |
 | Runner GPU attestation validation | GPU | `crates/fullmag-runner/src/native_fem/frequency_domain.rs` + `validate_modal_gpu_attestation_v1` | Fail closed on invalid, incomplete or unavailable device execution evidence | focused Rust FFI/validation tests | source visible; managed GPU proof absent | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/native_fem/frequency_domain.rs) |
+
+
+## Jawne okno diagnostyczne benchmarku DE-SMOKE
+
+Model `examples/fem_de_smoke_numeric.py` może otrzymać parę `FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ` i `FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ`. Oba parametry są wymagane razem, muszą być skończone, dodatnie i uporządkowane. Wartości wejściowe GHz są mnożone przez 10^9 i trafiają w Hz do istniejącego `EigenTargetIR::FrequencyWindow`; metadane publikują faktycznie użyte granice. Przy `nearest` takie nadpisanie jest odrzucane. Brak obu parametrów zachowuje dotychczasowe okna.
+
+To parametr wyboru częstotliwości, bez zmiany LLG, geometrii, materiałów, demagu, fazy Floqueta, siatki, liczby modów ani progu `eps_full <= 1e-8`. Dotyczy istniejącego benchmarku FEM CPU double; nie rozszerza FDM ani FEM GPU. Publiczny DSL, ProblemIR, OpenAPI i zasoby GUI zachowują swoje kontrakty.
+
+Dla diagnostyki ±10 rad/µm używamy jawnego okna 10.9–11.5 GHz wokół referencji n=0 11.2354 GHz. To odrębne wejście obliczeń, zapisane w provenance, a nie dowód pełnego spektrum 8.5–12 GHz. Szerokie przeszukiwanie pozostaje otwarte: aktualny runtime przerwał je na pustym pierwszym podoknie [8.5,10.25] GHz mimo kandydata 11.2053 GHz, którego niezależnego residualu jeszcze nie oceniono. Nie wolno wnioskować o akceptacji z samej częstotliwości ani z zera w niezmierzonym residualu.
+
+Źródła: `_configured_frequency_window_hz` i `study.stages.add_eigenmodes` w przykładzie oraz regresje wejścia `scripts/test_de_smoke_model.py`. Weryfikacja Python sprawdza lowering do Hz, parowanie parametrów, odrzucenie nieprawidłowych wartości i zachowanie modelu. Dowód managed solvera, walidacja artefaktów i zgodność z analityką pozostają wymagane osobno.
+
+
+(de-physical-potential-roundoff)=
+## Niezależna rekonstrukcja pola potencjału i błąd zaokrągleń
+
+<!-- DOC-ANCHOR:de-physical-potential-roundoff -->
+
+Artefakt `fem_modal_physical_potential.v1` publikuje węzłowy potencjał P1
+oraz stałe elementowo składowe
+$H_{e,a}=-\sum_{i=0}^{3}\phi_i g_{i,a}$, gdzie
+$g_{i,a}=\partial_aN_i$. Walidator odtwarza ten wzór z zapisanej łączności i
+współrzędnych. Producent oraz walidator wykonują rekonstrukcję niezależnie,
+więc przy składowej bliskiej zeru nie wolno używać stałego absolutnego progu
+oderwanego od skali składników.
+
+Dla arytmetyki IEEE-754 binary64 przyjmujemy $u=2^{-53}=\epsilon/2$ oraz
+standardowy bound $\gamma_n=nu/(1-nu)$. Lokalny bound dla porównywanej
+składowej ma postać:
+
+```{math}
+:label: eq-poisson-airbox-p1-gradient-roundoff
+B_{e,a}=\gamma_{104}
+ \left(\sum_{i=0}^{3}|\phi_i|\right)
+ \left(\sum_{i=0}^{3}|g_{i,a}|\right),
+\qquad
+|H^{\mathrm{stored}}_{e,a}-H^{\mathrm{reconstructed}}_{e,a}|
+\le r\,\max\left(|H^{\mathrm{stored}}_{e,a}|,
+ |H^{\mathrm{reconstructed}}_{e,a}|,s_0\right)+B_{e,a}.
+```
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| $u=2^{-53}$ | IEEE-754 binary64 unit roundoff | $1$ |
+| $\gamma_n=nu/(1-nu)$ | standard finite-operation forward-error factor | $1$ |
+| $B_{e,a}$ | local P1 gradient reconstruction roundoff bound | $\mathrm{A\,m^{-1}}$ |
+
+Liczba $104$ nie jest dopasowana do wyniku. Obejmuje dwa niezależne
+obliczenia (producent i walidator), z których każde ma konserwatywnie
+20 operacji dla jednej składowej gradientu Tet4 (9 operacji iloczynów
+wektorowych, 5 dla wyznacznika, 3 dzielenia i 3 sumowania węzła zerowego)
+oraz 32 operacje dla czterech zespolonych iloczynów i akumulacji pola:
+$2(20+32)=104$. Implementacja oblicza $\gamma_{104}$ jawnie; nie zmienia
+`rtol=1e-10` ani skali $s_0=1\,\mathrm{A\,m^{-1}}$, lecz dodaje wyłącznie
+lokalny bound propagacji roundoff. Pole z błędem większym od tej sumy nadal
+jest odrzucane.
+
+Zakres tego boundu jest ograniczony do skończonej arytmetyki rekonstrukcji na
+tej samej, nieosobliwej geometrii Tet4. Kontrola orientacji, degeneracji,
+hasha topologii i zgodności metadanych pozostaje wymagana; bound nie jest
+certyfikatem jakości siatki, demagnetyzacji ani fizyki T4. Przy zmianie
+geometrii lub źródłowej łączności wynik wymaga ponownej walidacji, a nie
+zwiększenia $\gamma_n$.
+
+Niezależne obliczenie w 80-cyfrowej arytmetyce dziesiętnej dla zachowanego
+artefaktu DE przy $k_y=+10\,\mathrm{rad/\mu m}$ potwierdziło przyczynę.
+W najgorszym elemencie 29924 składowa $H_x$ ma wartość wysokiej precyzji
+około $10^{-71}\,\mathrm{A\,m^{-1}}$, rekonstrukcja binary64 daje zero,
+a zapisany producentem field ma
+$(-1.8940503\cdot10^{-7}-9.8003304\cdot10^{-8}i)\,\mathrm{A\,m^{-1}}$.
+Różnica $2.13258\cdot10^{-7}\,\mathrm{A\,m^{-1}}$ wynika z kasowania
+składników gradientu, nie z innego wzoru fizycznego. Dla $k_y=-10$ ten sam
+element ma wysokoprecyzyjną składową $H_x$ około $10^{-70}$, a różnica
+binary64–artefakt wynosi $4.75595\cdot10^{-7}\,\mathrm{A\,m^{-1}}$.
+Oba zachowane artefakty mają zgodny fingerprint siatki i przechodzą walidację
+po zastosowaniu lokalnego boundu. Test syntetyczny używa znanego potencjału
+afinicznego, którego dokładny field jest znany analitycznie; akceptuje błąd
+roundoff i odrzuca perturbację $10^{-2}\,\mathrm{A\,m^{-1}}$.
+
+Źródła: `scripts/validate_de_physical_potential.py` (`_gamma`,
+`_reconstruct_field_with_bounds`, `validate_physical_potential`) oraz
+`scripts/test_de_physical_potential.py`
+(`test_near_zero_p1_component_uses_forward_roundoff_bound`). Jest to
+niezależna kontrola spójności zapisu pola; jej status `consistent` nie
+kwalifikuje solvera, demagnetyzacji ani zgodności dyspersji z analityką.
+
+| Źródło | Symbol |
+|---|---|
+| `examples/fem_de_smoke_numeric.py` | `_configured_frequency_window_hz` |
+| `scripts/validate_de_physical_potential.py` | `_gamma` |
+| `scripts/validate_de_physical_potential.py` | `_reconstruct_field_with_bounds` |
+| `scripts/validate_de_physical_potential.py` | `validate_physical_potential` |
+| `scripts/test_de_physical_potential.py` | `test_near_zero_p1_component_uses_forward_roundoff_bound` |
+
+## Konfiguracja shifted KSP przed EPSSolve — diagnostyka addytywna
+
+Pole `shifted_ksp_configuration_before_eps` w diagnostyce podokna Floqueta
+zapisuje wartości odczytane przez KSPGetPCSide/KSPGetNormType bezpośrednio
+przed EPSSolve. Przy poprawnym odczycie obiekt ma `phase=before_eps_solve`,
+`pc_side` i `norm_type` jako liczby enum PETSc. Przy braku obserwacji ma null;
+wartości nie są zastępowane stałą oczekiwaną z konfiguracji.
+
+To konfiguracja przed lazy setup EPS/ST, nie dowód końcowego rozstrzygnięcia
+ani zbieżności. Dotychczasowe `ksp_pc_side`/`ksp_norm_type` i dostępność true
+residual pozostają osobnym pomiarem z wykonanego shifted solve. Po twardym
+EPSSolve failure nie odpytujemy obiektów EPS/ST/KSP z możliwym borrowed view;
+zachowana wcześniejsza kopia nie wymaga dotykania ich podczas unwind.
+
+Zapis nie zmienia operatora Schura, faktoryzacji, fazy Floqueta, tolerancji
+KSP/EPS ani fizycznej bramki residualu 1e-8. Właściciele:
+`floquet_modal_solver.cpp` (bezpieczny moment obserwacji),
+`slepc_modal_eigen.hpp` (wartości i jawna dostępność),
+`production_cpu_modal_eigen.cpp` (diagnostyka podokien). Bramki: regresja
+kontraktu natywnego, produkcyjny managed build i rzeczywisty pilot z kontrolą
+raportu także przy błędzie. Przed ich wykonaniem runtime pozostaje NOT VERIFIED.
+
+## Opt-in action-only probe Schura przed EPSSolve
+
+Dodano odrębną, domyślnie wyłączoną sondę diagnostyczną. Włącza ją wyłącznie
+zmienna środowiskowa:
+
+```text
+FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC=1
+```
+
+Wynik jest publikowany pod kluczem `floquet_schur_action_diagnostic` ze schematem
+`floquet_schur_action_diagnostic.v1`. Sonda wykonuje dziewięć ograniczonych
+zastosowań produkcyjnego działania Schura na własnych wektorach roboczych:
+trzy powtórzenia tego samego wejścia, skale $0.5$, $2$ i $10^{-12}$ oraz dwa
+niezależne wejścia potrzebne do kontroli addytywności. `action_count` ma więc
+górne ograniczenie $9\le 10$ dla wywołań działania Schura; osiem pomiarów
+blokowych korzysta z własnych wektorów, a dziewiąty dodatkowo wywołuje ten sam
+callback `native_floquet_matmult` przez klon `MatShell`. Sonda nie wykonuje
+`MatComputeOperator` i nie materializuje gęstego operatora.
+
+Działanie obserwowane przez sondę jest tym samym blokowym działaniem, które
+wywołuje produkcyjny `MatShell`:
+
+```{math}
+:label: eq-floquet-schur-action-diagnostic
+\widehat{\mathcal S}_{\sigma} q
+ = \kappa_{\mathrm{op}}\,
+   \mathcal R_{\sigma}\left(
+     A_{qq}q + A_{q\phi}\left[-P^{-1}(A_{\phi q}q)\right]
+   \right).
+```
+
+gdzie $\mathcal R_{\sigma}$ jest normozachowującą rotacją real-split zależną od znaku fazy $\sigma=\texttt{context\_phase\_sign}\in\{-1,+1\}$. W tym równaniu $A_{qq}$ i $A_{q\phi}$ oznaczają złożone bloki przed normalizacją; kontekst mnoży oba przez rzeczywisty, akumulowany czynnik $\kappa_{\mathrm{op}}$ (`operator_normalization_scale`), natomiast $P$ i $A_{\phi q}$ pozostają w skali używanej do rekonstrukcji potencjału. Wobec tego sonda mierzy dokładnie znormalizowane działanie produkcyjnego MatShella, nie drugi model operatora. Czynnik skali jest stosowany spójnie do obu stron uogólnionego problemu własnego; nie jest tolerancją fizyczną.
+Raport zawiera rzeczywisty `q_complex_dof_count`, `real_split_dimension`, znak
+fazy, obie skale normalizacji (`operator_normalization_scale` oraz
+`preconditioner_normalization_scale`) i fazę pomiaru
+`measurement_phase=before_eps_solve`. Oddzielnie zapisywane są normy części
+magnetycznej $A_{qq}q$, sprzężenia zwrotnego $A_{q\phi}\phi$ oraz ich sumy,
+minimalny współczynnik kasowania pośród zmierzonych wejść
+
+```{math}
+:label: eq-floquet-cancellation-ratio
+\rho_{\mathrm{cancel}}
+ = \frac{\lVert\mathbf y_{\mathrm{mag}}
+                  +\mathbf y_{\mathrm{feedback}}\rVert_2}
+        {\max\!\left(
+          \lVert\mathbf y_{\mathrm{mag}}\rVert_2
+          +\lVert\mathbf y_{\mathrm{feedback}}\rVert_2,
+          \delta_{\mathrm{fp}}
+        \right)}.
+```
+
+Sonda zapisuje także maksymalny względny residual równania potencjału,
+oba indywidualne defekty powtarzalności (`repeatability_first_relative_defect`
+i `repeatability_second_relative_defect`), osobne defekty jednorodności
+(`homogeneity_half_relative_defect`, `homogeneity_double_relative_defect`,
+`homogeneity_tiny_relative_defect`) dla skal $0.5$, $2$ i $10^{-12}$ oraz ich
+maksimum, a także addytywność. W mianowniku residualu Poissona używane jest `max(norm_rhs, std::numeric_limits<double>::min())`; jest to arytmetyczna ochrona przed zerowym mianownikiem w tej reprezentacji, a nie epsilon ani fizyczny próg residualu. Współczynnik z równania {eq}`eq-floquet-cancellation-ratio` jest liczony dla każdego pomiaru; raport publikuje jego minimum. Wektory $\mathbf y_{\mathrm{mag}}$ i $\mathbf y_{\mathrm{feedback}}$ są składowymi po wspólnej normalizacji operatora, przed rotacją; są bezwymiarowe, podobnie jak mianownikowy floor $\delta_{\mathrm{fp}}$.
+
+`status=measured` oznacza wyłącznie, że ograniczony pomiar został wykonany,
+`failed` — że sonda nie ukończyła pomiaru, a `unavailable` — że nie mogła
+zostać uruchomiona. Ten obiekt nie ma pola `passed` i nie jest dołączany do
+`dynamic_demag_operator_probe`; powtarzalność lub addytywność działania nie
+certyfikują fazy Floqueta, znaku operatora, demagnetyzacji ani fizyki modelu.
+Nawet błędny, lecz liniowy operator może przejść te metryki, dlatego wynik
+pozostaje obserwacją do diagnostyki błędu ±2.
+
+Sonda działa przed `EPSSolve`, korzysta z własnych ograniczonych wektorów i
+izolowanego klonu kontekstu callbacku (`workspace_scope=
+isolated_clone_of_production_context`). Klon współdzieli wyłącznie niezmienne
+macierze blokowe i scalar KSP; jego `phi_rhs`, `phi_solution`, `feedback` oraz
+`error_message` są prywatne. Sonda nie zapisuje oryginalnego
+`context.error_message`, produkcyjnych buforów ani tolerancji KSP/EPS.
+Współdzielony scalar KSP pozostaje obserwowalnym stanem solvera: sondowane
+`KSPSolve` może zmienić jego ostatni `reason` i liczbę iteracji. Następne
+produkcyjne działanie wykonuje własne rozwiązanie i nadpisuje te wartości;
+sonda nie zmienia opcji, tolerancji ani faktoryzacji i nie jest przedstawiana
+jako pełna izolacja stanu KSP.
+Po twardym błędzie `EPSSolve` kod nie odpytuje EPS/ST/KSP ani obiektów z
+pożyczonym widokiem. Brak ustawienia zmiennej środowiskowej publikuje
+`floquet_schur_action_diagnostic:null`. Gdy zmienna jest ustawiona, lecz
+solver zakończy się przed przygotowaniem sondy, publikowany jest obiekt
+`status=unavailable`, `available=false` i powód
+`diagnostic_not_reached_before_solver_setup_failure`; liczniki pozostają zerowe,
+a nieznane skale i metryki są serializowane jako JSON `null`. Dzięki temu
+`unavailable` nie jest mylone z wyłączonym `null`. Awaria sondy nie zmienia
+wyniku produkcyjnego solvera. Wykonanie managed runtime, porównanie z analityką oraz
+bramka certyfikacji pozostają osobnymi wymaganiami i przed ich wykonaniem mają
+status NOT VERIFIED.
+
+Źródła implementacji i regresji przygotowanej do uruchomienia:
+`backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp`,
+`backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp` oraz
+`backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp`;
+`backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` sprawdza
+optymalizowany przypadek powyżej limitu gęstego oracle, rekonstrukcję callbacku
+oraz ścieżkę twardego błędu. Kompilacja i wykonanie regresji native pozostają
+do potwierdzenia przez managed build.
+
+
+Symbole użyte w równaniach sondy:
+
+| Token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\sigma$ | znak fazy Floqueta używany przez transformację real-split; należy do $\{-1,+1\}$ | $1$ |
+| $\kappa_{\mathrm{op}}$ | akumulowany czynnik `operator_normalization_scale` wspólny dla bloków operatora Schura | $\mathrm{s\,m^{-3}}$ |
+| $\widehat{\mathcal S}_{\sigma}$ | znormalizowane, obrócone działanie operatora Schura obserwowane przez MatShell | $1$ |
+| $\mathcal R_{\sigma}$ | normozachowująca rotacja real-split zależna od znaku fazy | $1$ |
+| $\mathbf y_{\mathrm{mag}}$, $\mathbf y_{\mathrm{feedback}}$ | znormalizowane składowe magnetyczna i sprzężenia zwrotnego przed rotacją | $1$ |
+| $\rho_{\mathrm{cancel}}$ | współczynnik kasowania dla jednego wejścia diagnostycznego; nie jest testem akceptacji | $1$ |
+| $\delta_{\mathrm{fp}}$ | `std::numeric_limits<double>::min()` po normalizacji; wyłącznie numeryczny floor mianownika | $1$ |
+
+`DBL_MIN` nie jest progiem błędu ani skalą fizyczną. Użycie flooru chroni wyłącznie sam iloraz przed dzieleniem przez dokładne zero. `status=measured` oznacza wykonany pomiar, a nie przejście testu ani certyfikat liniowości/fizyki.
+
+Mapowanie diagnostyki w source index (ścieżka + stabilny symbol):
+
+| Source ID | Path + symbol | Odpowiedzialność | Dowód / ograniczenie |
+|---|---|---|---|
+| source-floquet-operator-normalization | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `normalize_native_floquet_pencil` | Skaluje wspólnie bloki magnetyczne Schura i gyrotropiczną prawą stronę; zapisuje akumulowany czynnik operatora. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-schur-components | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `apply_native_floquet_schur_components` | Oblicza znormalizowaną składową magnetyczną i sprzężenie zwrotne przez scalar Poisson KSP. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-action-probe | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `run_floquet_schur_action_diagnostic` | Wykonuje ograniczoną sondę przed EPSSolve na prywatnych wektorach; wynik w typie FloquetSchurActionDiagnostic zadeklarowanym w backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-diagnostic-initialization | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Przed setupem wywołuje initialize_floquet_schur_action_diagnostic i zachowuje requested/unavailable także przy wcześniejszych return. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-diagnostic-serialization | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` + `solve_sparse_production_modal_payload` | Wynik diagnostyczny jest serializowany przez floquet_schur_action_diagnostic_json_field i dołączany do success/error JSON. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-pre-eps-query | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` + `solve_floquet_shared_domain_sparse_modal_spectrum` | Odczytuje rzeczywiste PC side i KSP norm type tuż przed EPSSolve, osobno od telemetry ostatniego solve. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-pre-eps-query-json | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` + `floquet_shifted_ksp_configuration_json_field` | Publikuje oba skopiowane enumy tylko przy udanym odczycie; null zachowuje brak obserwacji. | review źródłowy; kompilacja/runtime NOT VERIFIED |
+| source-floquet-native-regressions | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` + `main` | Native test harness invokes reports_opt_in_action_diagnostic_unavailable_before_setup, executes_native_sparse_matshell_above_dense_bound, and normalizes_si_scale_floquet_pencil. Tests remain prepared only. | test source prepared; not compiled or run |
+
+(modal-normalization-common-scale)=
+## Wspólna skala normalizacji sprzężonego modu — korekta 2026-10-03
+
+Pełny descriptor opisuje jeden zespolony mod: współczynniki magnetyczne $q$, potencjał $\delta\phi$ i ewentualny mnożnik gauge muszą otrzymać ten sam dodatni, skończony dzielnik. `unit_l2` korzysta z bieżącej geometrycznej metryki objętościowej; `unit_max_amplitude` zachowuje dotychczasowe maksimum modułu skalarnego współczynnika. Ta korekta nie wprowadza powierzchniowej normy falowodu z 0833 ani nie zmienia publicznych tokenów Python/IR.
+
+Historyczny dense consumer obliczał skalę certyfikatu jako pierwiastek z nieujemnej normy, ograniczony od dołu przez 1e-30, lecz dla $q$ ograniczał od dołu normę kwadratową przez 1e-30 przed pierwiastkiem. Dawało to różne skale dla dodatniej normy kwadratowej mniejszej niż 1e-30. Nowy consumer ma obliczyć skalę raz i użyć jej zarówno do wektora magnetycznego, jak i rekonstruowanego potencjału/certyfikatu. Zero, ujemna norma kwadratowa, niefinitywne współczynniki, niezgodny rozmiar metryki oraz overflow normalizowanych współczynników są błędem przed publikacją wyniku; nie zastępować ich sztucznym floor. Underflow obliczonej normy do zera wymaga jawnego błędu, nie publikacji pozornie znormalizowanego modu.
+
+Właściciele źródłowi: `crates/fullmag-runner/src/fem/eigen_solve.rs` + `normalize_complex_mode_and_scale` oraz `crates/fullmag-runner/src/fem/eigen_native_result.rs` + `normalize_complex_block_mode`. Obie realizacje postprocess korzystają ze wspólnego checked scale i nie zmieniają operatora MFEM, eigenvalue, tolerancji residualu ani jednostek artefaktów. Regresje obejmują normę poniżej historycznego floor, równą skalę magnetyzacji/potencjału, normę zerową/ujemną/niefinitywną i niedopasowaną metrykę. Kompilacja i managed runtime tej korekty pozostają NOT VERIFIED.
+
+| Source ID | Path + symbol | Odpowiedzialność | Lane | Dowód |
+|---|---|---|---|---|
+| source-modal-common-normalization | crates/fullmag-runner/src/fem/eigen_solve.rs + normalize_complex_mode_and_scale | Jedna sprawdzona skala q/potencjału, bez floor | FEM postprocess CPU/GPU | source-only; runtime NOT VERIFIED |
+| source-modal-block-normalization | crates/fullmag-runner/src/fem/eigen_native_result.rs + normalize_complex_block_mode | Atomowe zastosowanie skali i zwrócenie jej dla certyfikatu | FEM postprocess CPU/GPU | source-only; runtime NOT VERIFIED |
+
+(modal-mass-norm-outward-interval)=
+## Kontrola rzeczywistej normy modalnej przez przedziały — 2026-10-03
+
+Dla bieżącej geometrycznej metryki masy pełnego 3D (nie gyroscopic B) sprawdzamy rzeczywistą normę kwadratową konkretnego modu:
+
+```{math}
+:label: eq-modal-mass-norm-interval
+\begin{aligned}
+Q &= q^\dagger M_g q
+   =\sum_{i,j}\overline{q_i}(M_g)_{ij}q_j,
+&[Q]&=\mathrm{m^3},\\
+\operatorname{Re}Q&\in I_R=[r_-,r_+],
+&\operatorname{Im}Q&\in I_I=[s_-,s_+],\\
+r_-&>0,\qquad 0\in I_I,
+&s_{L2}&=\sqrt{\operatorname{Re}Q_{\mathrm{fl}}}>0.
+\end{aligned}
+```
+
+$Q_{\mathrm{fl}}$ jest wartością bezpośredniej sumy wkładów w binary64, liczoną w tych samych jawnych operacjach skalarnych co enclosure. Historyczna obserwacja `complex_mass_norm`, która grupuje sumy wierszami, nie wyznacza tej skali i pozostaje osobną ścieżką obserwacji. Stored finite coefficients traktowane są jako dokładne wejścia analizy roundoff; błąd samego assembly i poprawność macierzy operatora mają osobne bramki. Zgodność pojedynczego Q z rzeczywistą dodatnią normą NIE dowodzi globalnej Hermitowskości ani dodatniej określoności M_g. Nie zastępować tym kontroli operatora ani convergence.
+
+Przedziały obu części Q powstają podczas przejścia przez rzeczywiste wkłady, włącznie z powtórzonymi wpisami sparse. Każdy wynik podstawowego dodawania, odejmowania lub mnożenia rozszerza się na zewnątrz do sąsiednich binary64, bez arbitralnego relative epsilon:
+
+```{math}
+:label: eq-modal-outward-interval-operations
+\begin{aligned}
+[a,b]\oplus[c,d]
+ &= [\operatorname{nextDown}(a+c),\operatorname{nextUp}(b+d)],\\
+[a,b]\ominus[c,d]
+ &= [\operatorname{nextDown}(a-d),\operatorname{nextUp}(b-c)],\\
+[a,b]\otimes[c,d]
+ &= [\operatorname{nextDown}(\min\{ac,ad,bc,bd\}),
+     \operatorname{nextUp}(\max\{ac,ad,bc,bd\})].
+\end{aligned}
+```
+
+Dokładne strukturalne zero jest zachowane: iloczyn z dokładnym zerowym przedziałem i dodawanie dokładnego zera nie wymagają rozszerzenia. Działania zespolone są rozwinięte na powyższe działania rzeczywiste. Granice finite wymagają braku overflow; niefinitywne wejścia/granice są błędem. Gradual underflow binary64 musi działać: przed ewaluacją wykonuje się kontrolę runtime z black-box wejściami, która odrzuca FTZ/DAZ. Nie stosujemy fast-math ani zmiany trybu FPU. Real interval zawierający zero oznacza niepewną dodatniość, nie poprawną normę. Imaginary interval nieobejmujący zera oznacza istotnie zespoloną normę i błąd przed normalizacją. Pozostają wcześniejsze guardy dodatniej skali oraz overflow q/potencjału.
+
+| Token | Znaczenie | Jednostka SI |
+|---|---|---|
+| $M_g$ | geometryczna metryka masy pełnego 3D | $\mathrm{m^3}$ |
+| $Q$, $Q_{\mathrm{fl}}$ | dokładna i obliczona norma kwadratowa raw shape | $\mathrm{m^3}$ |
+| $s_{L2}$ | wspólna skala raw shape full3D | $\mathrm{m^{3/2}}$ |
+| $a$, $b$, $c$, $d$ | końce lokalnych przedziałów; wymiar zależy od operandu | $1\ \text{lub}\ \mathrm{m^3}$ |
+| $\oplus$, $\ominus$, $\otimes$ | outward-rounded operacje przedziałowe | $1$ |
+| $i$, $j$ | indeksy współczynników | $1$ |
+| $I_R$, $I_I$ | przedziały części rzeczywistej i urojonej Q | $\mathrm{m^3}$ |
+| $r_-$, $r_+$, $s_-$, $s_+$ | granice przedziałów normy | $\mathrm{m^3}$ |
+| $\operatorname{nextDown}$, $\operatorname{nextUp}$ | sąsiednie binary64; jednostka wyniku zgodna z argumentem | $1$ |
+
+API Python, ProblemIR i wire artefaktów nie otrzymują nowych pól ani norm. Implementacja jest postprocessem normy, nie nowym właścicielem FEM. Dense koszt pozostaje O(n²); sparse koszt wynosi O(liczby rzeczywistych wpisów), a dodatkowa pamięć O(1). Nie materializować macierzy dense z liczby DOF. Kontrola zwiększa koszt normalizacji; pomiar runtime i wydajności pozostaje otwarty. Nie wykonuje się w hot loop Krylova ani przez dotychczasowe quadratic_form używane do innych obserwacji.
+
+Źródła: `eigen_normalization_metric.rs` + `checked_mass_quadratic`, `eigen_mass_metric.rs` + `ModalMassMetric::normalization_quadratic_form`, `eigen_solve.rs` + `checked_complex_normalization_scale`. Kontrole metody porównują enclosure z dokładną arytmetyką Fraction; native regressions i cały JSON consumer wymagają osobnego managed runtime. Podstawa sąsiednich liczb: [Rust f64 next_up/next_down](https://doc.rust-lang.org/std/primitive.f64.html#method.next_up). Jest to wyprowadzenie przedziałowe Fullmaga, nie twierdzenie o algorytmie COMSOL.
+
+| Source ID | Path + symbol | Odpowiedzialność | Lane | Dowód |
+|---|---|---|---|---|
+| source-modal-interval-norm | crates/fullmag-runner/src/fem/eigen_normalization_metric.rs + checked_mass_quadratic | Outward enclosure rzeczywistych wpisów Q | FEM postprocess | source-only; runtime NOT VERIFIED |
+| source-modal-interval-metric | crates/fullmag-runner/src/fem/eigen_mass_metric.rs + ModalMassMetric | Osobne dense/sparse iteratory bez materializacji | FEM postprocess | source-only; runtime NOT VERIFIED |
+| source-modal-interval-oracle | scripts/test_modal_norm_interval_source.py + class ModalNormIntervalOracleTests | Dokładne rational counterexamples i enclosure | algebraic verification | 9 interpretowanych kontroli PASS; nie jest runtime Rust |
+
+
+(modal-equilibrium-field-replay-domain)=
+## Replay pola równowagi: dziedzina magnetyczna i airbox
+
+Zmiana dotyczy porównania pola efektywnego zaimportowanego certyfikatu z ponownie obliczonym polem przed złożeniem operatora. Równania LLG/Floquet i ich normalizacja pozostają w tej nocie oraz [0828](0828-fem-frequency-domain-floquet-demag.md). Dyskretne stopnie swobody magnetyzacji istnieją tylko na nośniku materiału magnetycznego. Wartości w pełnowęzłowej tablicy $\mathbf H_{\mathrm{eff},0}$ poza tym nośnikiem są konwencją ekstensji danych: natywny producent może zachować tam pole przyłożone, a referencyjny `FemLlgProblem` zapisuje zera. Tych wartości nie używa się do porównania równań magnetycznych. Nie dotyczy to potencjału magnetostatycznego $\phi_0$, którego równanie i kontrola nadal obejmują cały airbox.
+
+```{math}
+:label: eq-modal-magnetic-field-replay
+\mathcal I_m=\{i:w_i^{(m)}>0\},\qquad
+\epsilon_H=\max_{i\in\mathcal I_m}\max_{\alpha\in\{x,y,z\}}
+\left|H^{\mathrm{stored}}_{\mathrm{eff},0,i\alpha}
+-H^{\mathrm{recomputed}}_{\mathrm{eff},0,i\alpha}\right|
+\le 10^{-8}\ \mathrm{A\,m^{-1}}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $w_i^{(m)}$ | lumped volume magnetycznych tetraedrów przypisany węzłowi i | $\mathrm{m^3}$ |
+| $\mathcal I_m$ | niepusty zbiór węzłów nośnika magnetycznego | $1$ |
+| $i,\alpha$ | indeks węzła i składowa kartezjańska x, y albo z | $1$ |
+| $H^{\mathrm{stored}}_{\mathrm{eff},0,i\alpha}$ | składowa pola efektywnego w certyfikacie | $\mathrm{A\,m^{-1}}$ |
+| $H^{\mathrm{recomputed}}_{\mathrm{eff},0,i\alpha}$ | odpowiadająca składowa odtworzona z tego samego modelu | $\mathrm{A\,m^{-1}}$ |
+| $\epsilon_H$ | największa różnica na nośniku magnetycznym | $\mathrm{A\,m^{-1}}$ |
+| $\phi_0$ | statyczny potencjał całej domeny | $\mathrm{A}$ |
+
+Przed redukcją zakresu wymagane są zgodne pełne długości obu tablic i wag, skończone składowe wszystkich węzłów, skończone nieujemne wagi i co najmniej jeden węzeł magnetyczny. Niefinity w airboxie również oznacza błędne dane. Tolerancja pola 1e-8A/m nie jest zwiększana; zakłócenie na węźle magnetycznym nadal odrzuca replay. Kontrole m0, h_demag0, phi0, certyfikatu, materiału, fizyki, boundary i signature pozostają bez zmian. Nadal wymagamy zgodnego dyskretnego problemu demag: ta korekta nie usprawiedliwia zamiany periodic Poisson na open/Robin ani interpolacji stanu.
+
+Python `equilibrium_source="artifact"` i `equilibrium_artifact`, ich mapowanie do `study.equilibrium.kind/path`, publiczne API, ProblemIR, urządzenie i requested/resolved provenance nie zmieniają się. Nie wprowadzamy nowego schematu ani akceptacji niecertyfikowanych pól. Zmiana jest kontrolą reprezentacji zaimportowanych tablic w istniejącym shared-domain adapterze, nie nowym operatorem FEM. Koszt O(liczby węzłów), bez nowej macierzy dense; kontrola poprzedza Krylov i nie dodaje transferów hot-loop.
+
+| Realizacja | Zakres i dowód |
+|---|---|
+| FEM CPU | shared-domain import certyfikatu; kod i regresje przygotowane, nowy managed runtime wymagany |
+| FEM GPU | wspólny kontrakt importu; urządzenie/GPU replay NOT VERIFIED |
+| FDM CPU | nie dotyczy tego importera i siatki airboxu; własny owner FDM |
+| FDM GPU | nie dotyczy tego importera; brak cichej zmiany urządzenia |
+
+Przypadek diagnostyczny z #222: certyfikat po poprawnym seed -25rad/µm ma6138 węzłów,396 magnetycznych i5742 airbox-only; H_eff=79577.47154594767A/m w kierunku x we wszystkich węzłach, natomiast m0=0 w airbox-only. Worker -20 odrzucono wcześniej różnicą7.958e4A/m. Jest to dowód rozbieżnej ekstensji tablic; nie dowód sukcesu nowego runtime. Regresje wymagają akceptacji różnej skończonej ekstensji w airboxie, odrzucenia perturbacji magnetic node i nieprawidłowej długości/wagi/niefinity oraz zachowania kontroli pełnego phi0. Kompilacja unit tests jest tymczasowo zabroniona; testy Rust pozostają NOT VERIFIED do odwołania zakazu. Nowy managed runtime-v2 ma sprawdzić rzeczywisty seed/replay i artefakty15 punktów. Parytet, identyfikacja modów, Γ i zbieżności pozostają osobnymi bramkami.
+
+| Source ID | Path + symbol | Odpowiedzialność i ograniczenie |
+|---|---|---|
+| source-modal-field-replay-scope | crates/fullmag-runner/src/fem/eigen_equilibrium.rs + max_vector_field_difference_on_magnetic_nodes | zakres nośnika i fail-closed tablic |
+| source-equilibrium-materialization | crates/fullmag-runner/src/fem/eigen_shared_domain.rs + build_shared_domain_linearization_state | próg epsilon_H i niezmienione phi0/signatures |
+| source-reference-external-field-scope | crates/fullmag-engine/src/fem.rs + external_field_vectors | istniejąca ekstensja referencji przez zero poza nośnikiem |
+| source-modal-field-replay-regression | crates/fullmag-runner/src/fem/eigen_equilibrium.rs + finite_air_extension_does_not_change_magnetic_comparison | sześć przygotowanych regresji; kompilacja testów NOT VERIFIED |
+
+Podstawa: ten sam dyskretny nośnik masy magnetycznej i weak form opisany w rozdziale governing-equations oraz [0828](0828-fem-frequency-domain-floquet-demag.md); źródłem stanu implementacji są powyższe symbole i receipty, nie manual COMSOL. Ta sekcja nie promuje realizacji do validated.
+
+
+(modal-static-demag-replay-preimage)=
+## Replay podpisu statycznego demag: integralność i porównanie numeryczne
+
+`static_demag_signature` wiąże dokładną serializację `realization`, `h_demag0_a_per_m` i `phi0_a` opublikowanych w equilibrium artifact. Dla importowanego artefaktu weryfikujemy ten preimage z jego zapisanych pól oraz realizacji demag żądanej przez bieżący plan. Osobno porównujemy zapisane pola z przeliczeniem: H_demag na całej domenie z progiem 1e-8 A/m, phi0 na całej domenie z progiem 1e-10 A; kontrola H_eff na nośniku magnetycznym i m0 pozostaje wyżej opisana. Zgodność numeryczna nie wymaga identycznej serializacji dwóch wyników solvera.
+
+Nie zastępujemy SHA tolerancją, zaokrągleniem ani skopiowanym deklarowanym podpisem. SHA nadal musi dokładnie zgadzać się z przeliczonym preimage przechowywanych pól. Content digest całego artefaktu, mesh/material/physics/boundary signatures i ich porównanie z bieżącym planem pozostają obowiązkowe. W szczególności zmiana realization jest nadal odrzucana. Dla nowego artefaktu z accepted relax handoff używamy świeżych pól; import zachowuje dokładne pola źródła w LinearizationState, więc oba podpisy wiążą ten sam persisted field payload. Nie zmieniamy v7/v8 lub LinearizationState v6/v7 ani ich kluczy.
+
+Dowód #223: bootstrap ukończył pierwszy solve, worker sample1 dla ky=-20e6 rad/m odrzucono `equilibrium_static_demag_hash_mismatch`. Podpis zapisany 4baa61f6… został niezależnie odtworzony z dokładnych lexemes JSON oraz `fem_poisson_dirichlet`; wyniki przeliczenia tworzyły 3db7210e…. Wszystkie wcześniejsze kontrole pól i konfiguracji przeszły. Zapisany H_demag ma maksimum 4.745828944e-11 A/m, phi0 1.318713396e-18 A; bitowa równość wyników arytmetyki nie jest fizycznym kryterium replay. Nie jest to dowód poprawnego nowego runtime: nowy build i ponowienie sweepa nadal wymagane.
+
+Python `equilibrium_source="artifact"` / `equilibrium_artifact` oraz ProblemIR `study.equilibrium.kind/path` bez zmiany. Poprawka jest kontrolą integralności metadata, nie zmianą operatora, normalizacji, jednostek, boundary ani dynamicznego demag. FEM CPU: kod/regresje źródłowe, managed replay OPEN; FEM GPU: wspólny importer, GPU replay NOT VERIFIED; FDM CPU/GPU: importer nie dotyczy ich realizacji. Koszt pozostaje liniowy w liczbie węzłów, bez nowej macierzy i transferów hot-loop.
+
+Źródła: `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `shared_domain_static_demag_signature` oraz `build_shared_domain_linearization_state`; `eigen_equilibrium.rs` + `load_equilibrium_artifact`; `eigen_digest.rs` + `shared_domain_content_digest`. Przygotowane regresje sprawdzają roundoff-compatible replay bez zmiany źródłowego digestu, nowy producent z fresh fields, zmianę realization i odrzucenie niefinity/niepełnych pól. Zakaz kompilacji unit tests zachowany; nauka, 15 punktów, Γ, parity i zbieżność pozostają OPEN.
+
+
+| Source ID | Path + symbol | Zakres |
+|---|---|---|
+| source-static-demag-replay-preimage | crates/fullmag-runner/src/fem/eigen_shared_domain.rs + shared_domain_static_demag_signature | dokładny persisted preimage; odrębna kontrola numeryczna w build_shared_domain_linearization_state |
+
+Dodatkowa kontrola fail-closed: `max_vector_field_difference` i `max_scalar_field_difference` odrzucają również puste, różnej długości oraz nieskończone/NaN tablice po obu stronach porównania, na całej domenie. Zapobiega to pominięciu NaN przez `f64::max` podczas replay demag/phi0. Piąta przygotowana regresja obejmuje NaN na drugim węźle, obie strony, puste/krótsze tablice i nieskończoność; niekompilowana zgodnie z zakazem.
+
+
+## Spójna stała przenikalności w shared-domain FEM CPU
+
+Status: poprawka źródeł; świeży build i powtórny managed runtime **NOT VERIFIED**.
+Ta sekcja określa spójność istniejącego modelu, a nie migrację wartości stałych SI.
+
+W aktualnej konwencji projektu $\mu_0$ ma jednostkę
+$\mathrm{T\,m\,A^{-1}}$ i wspólną wartość `fullmag::fem::kMu0`:
+
+```{math}
+:label: eq-shared-domain-mu0-convention
+
+\mu_0 = 1.2566370614359172\times 10^{-6}
+\;\mathrm{T\,m\,A^{-1}}.
+```
+
+Jest to używane w Fullmag przybliżenie odpowiadające tradycyjnej wartości
+`4.0e-7 * pi`. Po redefinicji SI w 2019 roku przenikalność próżni jest
+wyznaczana doświadczalnie; powyższa konwencja projektu nie oznacza, że współczesna
+wartość SI jest dokładnie ustalona na `4*pi*1e-7`.
+Źródło metrologiczne: [BIPM, Resolution 1 (2018)](https://www.bipm.org/en/committees/cg/cgpm/26-2018/resolution-1).
+
+Producent `assemble_poisson_airbox_shared_domain_payload` przekazuje tę samą
+wartość do sprzężenia `A_qphi`, macierzy gyrotropowej `B_qq` oraz probe demag.
+`assemble_native_magnetic_a_qq` korzysta z niej przy składaniu magnetycznej
+części operatora. Dotychczas dwa przypisania w tym producencie używały
+`1.25663706212e-6`, podczas gdy Python, IR i zamrożony model używały wspólnej
+konwencji. Zmiana wyłącznie pola diagnostyki ukryłaby różnicę rzeczywistego operatora.
+
+Nie zmieniamy publicznego Python DSL, parametrów materiału, serializacji IR,
+planera, wyboru CPU/GPU, jednostek, pola zewnętrznego, demag ani warunków brzegowych.
+Niższa warstwa assemblera nadal obsługuje jawny request stałej; poprawka dotyczy
+producenta wartości dla publicznego shared-domain modelu. FEM CPU wymaga świeżej
+kompilacji i pomiaru. FEM GPU może używać wspólnych złożonych bloków, lecz jego
+wykonanie i zgodność po poprawce pozostają NOT VERIFIED. FDM CPU/GPU nie są
+modyfikowane tym przyrostem.
+
+Dowód starego runtime #226: nearest Γ zakończył solver kodem 0, zapisał
+9,299249697068216 GHz i względny pełny residual 6,3964287916e-11 przy progu 1e-8.
+Driver prawidłowo odrzucił wynik: różnica stałej względem modelu wynosiła
+około 5,44e-10 względnie, przy bramce spójności 1e-12. Nie zmieniamy tej bramki,
+nie podmieniamy starego artefaktu i nie deklarujemy zamknięcia pełnego okna widma.
+
+Walidacja: przygotowana regresja rzeczywistego importera ma sprawdzać wartość
+probe względem `kMu0`; fixture wzajemności Floqueta również używa wspólnej stałej.
+Testów C++ nie kompilujemy ani nie uruchamiamy do odwołania zakazu użytkownika.
+Po nowym managed buildzie trzeba powtórzyć nearest Γ, odczytać query i pełny
+residual, sprawdzić demag, zgodność stałej z niezmienionymi metadata oraz
+binding równowagi i siatki. Pełne okno, signed15, porównania DE/BV/COMSOL,
+zbieżność i GPU pozostają osobnymi otwartymi bramkami.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-shared-domain-canonical-mu0 | crates/fullmag-engine/src/lib.rs + MU0 | Wspólna konwencja, równoważna kMu0 w fem_common.hpp |
+| source-shared-domain-mu0-magnetic | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp + assemble_native_magnetic_a_qq | Deklaracja; implementacja w sąsiednim .cpp używa kMu0; runtime NOT VERIFIED |
+| source-shared-domain-mu0-payload | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp + assemble_poisson_airbox_shared_domain_payload | Sprzężenie, masa i probe; source review, runtime NOT VERIFIED |
+| source-shared-domain-mu0-regression | backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp + main | Przygotowany test prawdziwego importera; niekompilowany |
+| source-shared-domain-mu0-gate | scripts/validate_de_smoke_rows.py + validate_gamma_demag_probe | Niezmieniona bramka zgodności z zamrożonym modelem |
+
+## Zakończenie EPS osobno dla każdego podokna
+
+Status: przygotowany przyrost diagnostyki źródłowej; wykonanie poprawionego runtime
+**NOT VERIFIED**. Nie zmienia operatora, kryterium certyfikacji, tolerancji,
+budżetów iteracji, wymiaru bazy ani limitu dokładnego preconditionera.
+
+Run Γ #226 zakończył poprawnie 43 z 50 podokien. Siedem otrzymało
+`slepc_diverged`, lecz obecny zapis podokna pomija odczytany kod zakończenia
+EPS i liczbę wykonanych iteracji. Globalny kod i suma iteracji nie opisują
+przyczyny zakończenia konkretnego przesunięcia. Nie dowodzi to wyczerpania
+budżetu KSP ani konieczności zwiększenia limitu preconditionera.
+
+Każde podokno ma zachować `eps_reason_available`, signed
+`slepc_converged_reason_code` i `outer_iterations` z tej samej próby EPS.
+Dostępność ustawiamy dopiero po udanym odczycie wyników EPS; znane zero jest
+liczbą, a nie brakiem. Brak konfiguracji/odczytu albo hard error EPSSolve
+pozostawia brak danych (`null`) i fałszywą dostępność. Nie wolno dodawać
+getterów, teardown ani retry po hard error tylko w celu uzupełnienia metryk.
+Przygotowana regresja ma badać rzeczywisty formatter i rozróżnić known zero,
+ujemny reason, nieznane dane oraz stan hard error. Jest source-only, bez
+kompilacji testów C++ do odwołania zakazu użytkownika.
+
+To diagnostyka obserwowanego wykonania, nie osobna bramka fizyczna. Zapis
+ujemnego kodu nie może promować częściowej zbieżności do certyfikacji okna.
+Po świeżym managed buildzie trzeba powtórzyć identyczny eksperyment i dopiero
+na podstawie kodów, liczników oraz effective Krylov configuration wybrać
+następne strojenie. FEM GPU/FDM nie otrzymują przez ten przyrost kwalifikacji.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-cpu-schur | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + solve_poisson_airbox_modal_eigen_cpu_schur | K0 EPS i agregacja podokien w sąsiednim .cpp; przygotowana poprawka źródeł, runtime NOT VERIFIED |
+| source-k0-subwindow-termination-format | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + format_poisson_airbox_subwindow_termination_json | Rzeczywisty formatter nullable EPS termination, bez getterów; runtime NOT VERIFIED |
+| source-k0-subwindow-termination-test | backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp + main | Przygotowana regresja formattera; niekompilowana |
+
+## Odczyt wymiarów EPS osobno od żądania
+
+Status: kontrakt przygotowanego przyrostu diagnostyki FEM CPU/K0; poprawiony
+native/runtime **NOT VERIFIED**. Wymiar żądany w `requested_nev`/`requested_ncv`
+nie jest automatycznie wymiarem odczytanym z biblioteki. Konfiguracja podokna
+ma dodatkowo zachować wynik `EPSGetDimensions` w istniejącym snapshotcie
+`modal_krylov_tuning`: `eps_dimensions.query_succeeded`, `nev`, `ncv`, `mpd`.
+
+NEV oznacza liczbę żądanych par, NCV maksymalny wymiar podprzestrzeni, MPD
+maksymalny wymiar problemu rzutowanego. Są to całkowite liczby w jednostce
+$1$. Wartości getterów zapisujemy jako signed integers, także zero i sentinel
+ujemny. Nie podstawiamy ustawień żądanych w miejsce brakującego pomiaru.
+Faza `configured_before_eps` opisuje odczyt przed setup/solve; nierozwiązany
+jeszcze MPD nie jest wtedy dowodem rzeczywistego rozmiaru problemu po solve.
+Faza `queried_after_eps` oznacza odczyt z tej samej, poprawnie dostępnej próby.
+Błąd getterów wymiaru daje `query_succeeded=false` i trzy `null`, nie nową
+bramkę akceptacji fizycznej ani zmianę parametrów EPS.
+
+Żaden nowy getter nie może wykonać się po hard error EPSSolve lub na
+nieważnym kontekście. Istniejąca wcześniejsza bezpieczna migawka nie staje
+się migawką postsolve przez sam wpis do JSON. Dodanie obserwacji nie zmienia
+operatora, NEV/NCV/MPD, tolerancji, limitów, preconditionera, warunków brzegu
+ani certyfikacji pełnego residualu. Snapshot pozostaje małym fragmentem
+diagnostyki; nie tworzy osobnego endpointu lub alternatywnego planera.
+
+Konsument `validate_gamma_krylov_trial` zachowuje ten mały obiekt osobno
+dla globalnej migawki, próbki i każdego podokna: opcjonalne
+`eps_dimensions` na poziomie root raportu, `by_sample[i].eps_dimensions`
+oraz `by_sample[i].subwindows[j].eps_dimensions`. W mixed sweep root
+nie otrzymuje wymiarów nieistniejącego globalnego snapshotu Γ. W historycznych artefaktach
+brak obiektu pozostaje brakiem dodatkowego pomiaru; jawne null zamiast
+obiektu, nieboolowski status, brak klucza lub wartość poza signed int64 są
+błędem kontraktu danych. Przy `query_succeeded=false` wszystkie trzy wartości
+muszą być null. Nie porównujemy wymiarów między podoknami, bo base/refinement
+mogą legalnie żądać innych baz. Walidacja kształtu telemetry nie zastępuje
+fizycznego residualu ani nie ustala polityki strojenia.
+
+Regresja ma wywołać rzeczywisty formatter dla poprawnych wymiarów, znanego
+zera, ujemnego sentinela, braku odczytu i zbyt małego bufora. Test C++ jest
+przygotowany i niekompilowany zgodnie z zakazem użytkownika. Źródłowe review
+i walidacja noty nie dowodzą wykonania getterów ani bramki naukowej. Źródło
+znaczenia NEV/NCV/MPD: [dokumentacja SLEPc EPSGetDimensions](https://slepc.upv.es/release/manualpages/EPS/EPSGetDimensions.html).
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-cpu-schur | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + solve_poisson_airbox_modal_eigen_cpu_schur | Odczyt EPS w istniejących fazach; runtime NOT VERIFIED |
+| source-k0-eps-dimensions-format | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + format_poisson_airbox_eps_dimensions_json | Signed nullable wymiary odczytane, bez setterów/getterów w formatterze |
+| source-k0-subwindow-termination-test | backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp + main | Regresja actual formattera wymiarów; niekompilowana |
+| source-gamma-query-trial | scripts/de_gamma_krylov_trial.py + validate_gamma_krylov_trial | Zachowanie opcjonalnych rzeczywistych wymiarów osobno dla każdego podokna |

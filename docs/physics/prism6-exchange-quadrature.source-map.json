@@ -1,0 +1,186 @@
+{
+  "document": {
+    "path": "docs/physics/prism6-exchange-quadrature.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source_visible / runtime_unvalidated"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This note covers the native CPU frequency-domain operator; no GPU parity is claimed."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses a separate Cartesian exchange operator."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses a separate Cartesian exchange operator."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-prism6-exchange-energy",
+      "symbols": ["Eex", "Aex", "m"],
+      "sources": ["source-native-exchange", "source-exact-oracle", "source-deformed-oracle"]
+    },
+    {
+      "id": "eq-prism6-exchange-local",
+      "symbols": ["Kijcd", "Aex", "ec", "Ni", "K"],
+      "sources": ["source-native-exchange", "source-exact-oracle", "source-deformed-oracle"]
+    },
+    {
+      "id": "eq-prism6-gradient-transform",
+      "symbols": ["gradientX", "Jacobian", "detJacobian"],
+      "sources": ["source-native-exchange", "source-exact-oracle"]
+    },
+    {
+      "id": "eq-prism6-shape-functions",
+      "symbols": ["Ni", "xi", "eta", "zeta"],
+      "sources": ["source-exact-oracle", "source-math-proof"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "Eex",
+      "latex": "E_{\\mathrm{ex}}",
+      "meaning": "energia exchange",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "Aex",
+      "latex": "A_{\\mathrm{ex}}",
+      "meaning": "sztywność exchange",
+      "si_unit": "\\mathrm{J\\,m^{-1}}"
+    },
+    {
+      "id": "m",
+      "latex": "\\mathbf m",
+      "meaning": "zredukowana magnetyzacja",
+      "si_unit": "1"
+    },
+    {
+      "id": "Kijcd",
+      "latex": "K_{(i,c),(j,d)}",
+      "meaning": "wpis macierzy exchange",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "ec",
+      "latex": "\\mathbf e_c(i)",
+      "meaning": "węzłowa baza styczna",
+      "si_unit": "1"
+    },
+    {
+      "id": "Ni",
+      "latex": "N_i",
+      "meaning": "skalarna funkcja kształtu P1",
+      "si_unit": "1"
+    },
+    {
+      "id": "K",
+      "latex": "K",
+      "meaning": "element fizyczny",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "gradientX",
+      "latex": "\\nabla_x",
+      "meaning": "gradient fizyczny",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "Jacobian",
+      "latex": "J_K",
+      "meaning": "Jacobian mapy elementu",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "detJacobian",
+      "latex": "\\det J_K",
+      "meaning": "wyznacznik Jacobiego",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "xi",
+      "latex": "\\xi",
+      "meaning": "pierwsza współrzędna trójkąta referencyjnego",
+      "si_unit": "1"
+    },
+    {
+      "id": "eta",
+      "latex": "\\eta",
+      "meaning": "druga współrzędna trójkąta referencyjnego",
+      "si_unit": "1"
+    },
+    {
+      "id": "zeta",
+      "latex": "\\zeta",
+      "meaning": "współrzędna odcinka referencyjnego",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source-native-exchange",
+      "path": "docs/physics/prism6-exchange-quadrature.md",
+      "symbol": "DOC-ANCHOR:source-native-exchange",
+      "evidence_status": "planned_contract",
+      "responsibility": "Assemble the native P1 exchange block with transformed physical gradients and tangent-frame transport."
+    },
+    {
+      "id": "source-quadrature-policy",
+      "path": "docs/physics/prism6-exchange-quadrature.md",
+      "symbol": "DOC-ANCHOR:source-quadrature-policy",
+      "evidence_status": "planned_contract",
+      "responsibility": "Select the geometry-aware positive tet5/prism4 rule for all frequency-domain P1 blocks."
+    },
+    {
+      "id": "source-shared-digest",
+      "path": "docs/physics/prism6-exchange-quadrature.md",
+      "symbol": "DOC-ANCHOR:source-shared-digest",
+      "evidence_status": "planned_contract",
+      "responsibility": "Bind the policy and each magnetic element's topology, FE order, requested/actual quadrature order, and actual point count to the assembled operator digest."
+    },
+    {
+      "id": "source-exact-oracle",
+      "path": "docs/physics/prism6-exchange-quadrature.md",
+      "symbol": "DOC-ANCHOR:source-exact-oracle",
+      "evidence_status": "planned_contract",
+      "responsibility": "Build an independent affine prism6 matrix from analytic gradients and a six-point rule."
+    },
+    {
+      "id": "source-deformed-oracle",
+      "path": "docs/physics/prism6-exchange-quadrature.md",
+      "symbol": "DOC-ANCHOR:source-deformed-oracle",
+      "evidence_status": "planned_contract",
+      "responsibility": "Build an independent warped-prism matrix from analytic isoparametric gradients and Duffy/Gauss GL4/GL5/GL7 rules, where the number denotes points per axis rather than MFEM integration order."
+    },
+    {
+      "id": "source-native-regression",
+      "path": "docs/physics/prism6-exchange-quadrature.md",
+      "symbol": "DOC-ANCHOR:source-native-regression",
+      "evidence_status": "planned_contract",
+      "responsibility": "Prepare MFEM positive-rule, exact tetra-gradient, independent deformed-prism Duffy/Gauss GL4/GL5/GL7, Jacobian-chain, rank, nullspace, hourglass, PSD, air-isolation, permutation, and tangent-basis regression checks; production MFEM order4/5/7 convergence remains a separate gate."
+    },
+    {
+      "id": "source-math-proof",
+      "path": "docs/physics/prism6-exchange-quadrature.md",
+      "symbol": "DOC-ANCHOR:source-math-proof",
+      "evidence_status": "planned_contract",
+      "responsibility": "Execute the dependency-free rank3 versus rank5 mathematical proof."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

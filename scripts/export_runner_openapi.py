@@ -33,7 +33,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import fullmag_storage as storage  # noqa: E402
-from local_runner.build_entrypoint import required_outputs_for_profile  # noqa: E402
+from local_runner.build_entrypoint import PROFILES, required_outputs_for_profile  # noqa: E402
 from local_runner.build_executor import (  # noqa: E402
     capsule_path,
     trusted_identity,
@@ -396,8 +396,10 @@ def _validate_managed_build(layout: Mapping[str, Any], job_id: str, expected_com
     _preflight_tree(artifacts, "managed build artifacts")
     build_receipt = validate_build_receipt(artifacts, job_for_receipt, journal)
     required = required_outputs_for_profile(job["profile"])
-    if len(required) < 15:
-        _fail("The selected BuildRunner profile does not expose the complete 15-output release contract")
+    # The receipt validator enforces the complete contract of this profile;
+    # exporting its API does not require frontend or release-only outputs.
+    if "bin/fullmag-api" not in required:
+        _fail("The selected BuildRunner profile does not declare the fullmag-api output")
     source_mount = _safe_validate(_source_mount(journal), storage_root, "source capsule mount")
     expected_capsule = capsule_path(storage_root, job_for_receipt)
     if source_mount.resolve() != expected_capsule.resolve():
@@ -585,6 +587,14 @@ def docker_run_argv(build: ManagedBuild, export_id: str) -> list[str]:
     _require(re.fullmatch(r"[a-f0-9]{32}", export_id) is not None, "Invalid managed export ID")
     container_name = f"fullmag-openapi-{export_id}"
     package = str(build.package.resolve())
+    profile = PROFILES.get(build.job["profile"])
+    if profile is None:
+        _fail("Managed build profile is not recognized by the trusted registry")
+    # Use the declared image-owned ABI paths of the validated profile.
+    # Runtime-v2 MFEM/PETSc/SLEPc live outside the legacy dependency prefix.
+    library_paths = ["/package/lib"]
+    library_paths.extend(path for path in profile.environment.get("LD_LIBRARY_PATH", "").split(":") if path)
+    library_paths.append("/opt/fullmag-deps/lib")
     return [
         *_docker_base(), "run", "--rm", "--pull=never",
         "--name", container_name,
@@ -599,7 +609,7 @@ def docker_run_argv(build: ManagedBuild, export_id: str) -> list[str]:
         "--env", "FULLMAG_WEB_STATIC_DIR=/package/web",
         "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
         "--env", "PATH=/package/bin:/usr/local/bin:/usr/bin:/bin",
-        "--env", "LD_LIBRARY_PATH=/package/lib:/opt/fullmag-deps/lib",
+        "--env", f"LD_LIBRARY_PATH={':'.join(library_paths)}",
         "--entrypoint", "/package/bin/fullmag-api", image, "--print-openapi-v2",
     ]
 
@@ -852,6 +862,15 @@ def export_openapi(repo_root: Path, job_id: str, expected_commit: str,
             layout = storage.resolve_layout(repo_root)
         except (OSError, ValueError, storage.StorageError) as error:
             raise ExportError("Cannot resolve the configured canonical Fullmag storage") from error
+    from local_runner.runtime_use import runtime_package_use
+    try:
+        with runtime_package_use(layout):
+            return _export_protected(layout, job_id, expected_commit, image_inspect, capture)
+    except storage.StorageError as error:
+        raise ExportError('Runtime package use is blocked by storage retention') from error
+
+
+def _export_protected(layout, job_id, expected_commit, image_inspect, capture):
     build = _validate_managed_build(layout, job_id, expected_commit)
     evidence = _new_evidence_root(layout)
     export_id = evidence.name

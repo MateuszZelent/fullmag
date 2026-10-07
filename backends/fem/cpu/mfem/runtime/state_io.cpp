@@ -457,17 +457,26 @@ int context_copy_linearization_field_f64(
             gpu_field = &ctx.gpu_state.device.fields.h_ext;
             label = "linearization_H_ext";
             break;
+        case FULLMAG_FEM_OBSERVABLE_H_ANI:
+            source = &ctx.anisotropy.h_uniaxial_xyz;
+            gpu_field = &ctx.gpu_state.device.fields.h_ani;
+            label = "linearization_H_anisotropy";
+            break;
         case FULLMAG_FEM_OBSERVABLE_H_EFF:
             source = &ctx.effective_field.h_xyz;
             gpu_field = &ctx.gpu_state.device.fields.h_eff;
             label = "linearization_H_eff";
             break;
         default:
-            error = "linearization field copy supports only H_ex, H_demag, H_ext, and H_eff";
+            error = "linearization field copy supports only H_ex, H_demag, H_ext, H_ani, and H_eff";
             return FULLMAG_FEM_ERR_INVALID;
     }
 
     if (ctx.gpu_state.device.lifecycle.allocated) {
+        if (!ctx.gpu_state.device.fields.accepted_observables_valid) {
+            error = "GPU accepted-endpoint observable cache is invalid; refresh a snapshot before reading linearization fields";
+            return FULLMAG_FEM_ERR_INVALID;
+        }
         std::vector<double> tmp;
         if (!gpu_state_download_component_aos(
                 const_cast<FemGpuState &>(ctx.gpu_state.device),

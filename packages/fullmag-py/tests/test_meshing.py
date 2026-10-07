@@ -5,6 +5,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -60,6 +61,8 @@ from fullmag.meshing._mesh_targets import (
     resolve_object_preview_target,
     resolve_shared_domain_targets,
 )
+from fullmag.meshing._size_field_plan import _build_scoped_lower_bound_fields
+from fullmag.meshing._gmsh_swept import _scaled_airbox_maximum_element_size
 from fullmag.meshing._gmsh_types import (
     FEM_TOPOLOGY_VOLUME_EPS,
     MixedPeriodicTopologyError,
@@ -163,6 +166,162 @@ from fullmag.meshing.surface_assets import (
 )
 from fullmag.meshing._size_field_plan import _build_perimeter_refinement_fields
 from fullmag.meshing.voxelization import VoxelMaskData, voxelize_geometry
+
+
+class _RecordingFieldApi:
+    def __init__(self) -> None:
+        self.next_id = 1
+        self.kinds: dict[int, str] = {}
+        self.numbers: dict[tuple[int, str], list[float] | float] = {}
+        self.strings: dict[tuple[int, str], str] = {}
+        self.background: int | None = None
+
+    def add(self, kind: str) -> int:
+        field_id = self.next_id
+        self.next_id += 1
+        self.kinds[field_id] = kind
+        return field_id
+
+    def setNumber(self, field_id: int, name: str, value: float) -> None:
+        self.numbers[(field_id, name)] = float(value)
+
+    def setNumbers(self, field_id: int, name: str, values: list[int] | list[float]) -> None:
+        self.numbers[(field_id, name)] = [float(value) for value in values]
+
+    def setString(self, field_id: int, name: str, value: str) -> None:
+        self.strings[(field_id, name)] = value
+
+    def setAsBackgroundMesh(self, field_id: int) -> None:
+        self.background = field_id
+
+
+class _RecordingGmsh:
+    def __init__(self) -> None:
+        self.field = _RecordingFieldApi()
+        self.option_values: dict[str, float] = {}
+        self.model = SimpleNamespace(mesh=SimpleNamespace(field=self.field))
+        self.option = SimpleNamespace(
+            setNumber=lambda name, value: self.option_values.__setitem__(name, float(value))
+        )
+
+
+def _tet_edge_lengths_by_cylinder_scope(
+    mesh: object,
+    owner_marker: int,
+    *,
+    radius: float,
+    half_height: float,
+) -> tuple[list[float], list[float]]:
+    nodes = np.asarray(mesh.nodes, dtype=np.float64)
+    elements = np.asarray(mesh.elements, dtype=np.int32)
+    element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+    region_lengths: list[float] = []
+    bulk_lengths: list[float] = []
+    edges = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+
+    for index, tet in enumerate(elements):
+        if element_markers[index] != owner_marker:
+            continue
+        centroid = nodes[tet].mean(axis=0)
+        in_region = (
+            np.hypot(centroid[0], centroid[1]) <= radius
+            and abs(centroid[2]) <= half_height
+        )
+        edge_lengths = region_lengths if in_region else bulk_lengths
+        edge_lengths.extend(
+            float(np.linalg.norm(nodes[tet[first]] - nodes[tet[second]]))
+            for first, second in edges
+        )
+    return region_lengths, bulk_lengths
+
+
+def _write_density_failure_capture(
+    artifact_dir: Path,
+    *,
+    test_id: str,
+    nodes: np.ndarray,
+    elements: np.ndarray,
+    element_markers: np.ndarray,
+    magnetic_marker: int,
+    cylinder_radius: float,
+    cylinder_half_height: float,
+    region_edge_lengths: list[float],
+    bulk_edge_lengths: list[float],
+    evidence_context: dict[str, object],
+) -> None:
+    import hashlib
+
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    centroids = nodes[elements].mean(axis=1)
+    magnetic_mask = np.asarray(element_markers) == magnetic_marker
+    cylinder_mask = (
+        (np.hypot(centroids[:, 0], centroids[:, 1]) <= cylinder_radius)
+        & (np.abs(centroids[:, 2]) <= cylinder_half_height)
+    )
+    edge_slots = np.asarray([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
+    edge_nodes = elements[:, edge_slots]
+    edge_lengths = np.linalg.norm(
+        nodes[edge_nodes[:, :, 0]] - nodes[edge_nodes[:, :, 1]],
+        axis=2,
+    )
+    mesh_path = artifact_dir / "mesh-and-roi.npz"
+    np.savez_compressed(
+        mesh_path,
+        nodes_m=np.asarray(nodes),
+        elements=np.asarray(elements),
+        element_markers=np.asarray(element_markers),
+        centroids_m=centroids,
+        edge_node_indices=edge_nodes,
+        edge_lengths_m=edge_lengths,
+        magnetic_element_mask=magnetic_mask,
+        finite_cylinder_element_mask=cylinder_mask,
+        selected_roi_element_indices=np.flatnonzero(magnetic_mask & cylinder_mask),
+        bulk_element_indices=np.flatnonzero(magnetic_mask & ~cylinder_mask),
+        region_edge_lengths_m=np.asarray(region_edge_lengths),
+        bulk_edge_lengths_m=np.asarray(bulk_edge_lengths),
+    )
+
+    def statistics(lengths: list[float]) -> dict[str, object]:
+        values = np.asarray(lengths, dtype=np.float64)
+        return {
+            "count": int(values.size),
+            "finite_count": int(np.isfinite(values).sum()),
+            "min_m": float(values.min()),
+            "p05_m": float(np.quantile(values, 0.05)),
+            "median_m": float(np.median(values)),
+            "p95_m": float(np.quantile(values, 0.95)),
+            "max_m": float(values.max()),
+        }
+
+    evidence = dict(evidence_context)
+    evidence.update(
+        {
+            "schema_version": "fullmag.meshing.density_failure.v1",
+            "test": test_id,
+            "units": {"coordinates": "m", "edge_lengths": "m"},
+            "selection": {
+                "magnetic_marker": magnetic_marker,
+                "cylinder_radius_m": cylinder_radius,
+                "cylinder_half_height_m": cylinder_half_height,
+                "membership": "magnetic marker and finite-cylinder tetrahedron centroid",
+                "edge_weighting": "six edges per tetrahedron, shared edges repeated",
+                "roi_element_count": int((magnetic_mask & cylinder_mask).sum()),
+                "bulk_element_count": int((magnetic_mask & ~cylinder_mask).sum()),
+            },
+            "region_edge_statistics": statistics(region_edge_lengths),
+            "bulk_edge_statistics": statistics(bulk_edge_lengths),
+            "mesh_payload": {
+                "path": mesh_path.name,
+                "sha256": hashlib.sha256(mesh_path.read_bytes()).hexdigest(),
+                "node_count": int(len(nodes)),
+                "element_count": int(len(elements)),
+            },
+        }
+    )
+    (artifact_dir / "failure-evidence.json").write_text(
+        json.dumps(evidence, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
 
 
 class LayeredMeshDslValidationTests(unittest.TestCase):
@@ -3078,7 +3237,12 @@ class MeshScaffoldTests(unittest.TestCase):
         )
 
         self.assertEqual(mesh_options.algorithm_3d, ALGO_3D_HXT)
-        self.assertEqual(mesh_options.hmin, 1e-9)
+        self.assertIsNone(mesh_options.hmin)
+        self.assertEqual(len(mesh_options.lower_bound_fields), 1)
+        self.assertEqual(
+            mesh_options.lower_bound_fields[0]["params"]["MinimumElementSize"],
+            1e-9,
+        )
         self.assertEqual(mesh_options.size_fields, [])
 
     def test_non_component_fallback_skips_edge_corner_size_fields(self) -> None:
@@ -3313,7 +3477,12 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(mesh_options.algorithm_2d, 6)
         self.assertEqual(mesh_options.algorithm_3d, ALGO_3D_HXT)
-        self.assertEqual(mesh_options.hmin, 2e-9)
+        self.assertIsNone(mesh_options.hmin)
+        self.assertEqual(len(mesh_options.lower_bound_fields), 1)
+        self.assertEqual(
+            mesh_options.lower_bound_fields[0]["params"]["MinimumElementSize"],
+            2e-9,
+        )
         self.assertEqual(mesh_options.size_factor, 0.8)
         self.assertEqual(mesh_options.size_from_curvature, 12)
         self.assertEqual(mesh_options.curvature_factor, 0.5)
@@ -3360,7 +3529,12 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(mesh_options.algorithm_2d, 6)
         self.assertEqual(mesh_options.algorithm_3d, ALGO_3D_HXT)
-        self.assertEqual(mesh_options.hmin, 2e-9)
+        self.assertIsNone(mesh_options.hmin)
+        self.assertEqual(len(mesh_options.lower_bound_fields), 1)
+        self.assertEqual(
+            mesh_options.lower_bound_fields[0]["params"]["MinimumElementSize"],
+            2e-9,
+        )
         self.assertEqual(mesh_options.size_factor, 0.8)
         self.assertEqual(mesh_options.size_from_curvature, 12)
         self.assertEqual(mesh_options.curvature_factor, 0.5)
@@ -7744,6 +7918,89 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(_gmsh_heartbeat_interval(120.0, 5.0), 30.0)
         self.assertEqual(_gmsh_heartbeat_interval(300.0, 60.0), 60.0)
 
+    def test_gmsh_progress_logger_reads_native_log_only_after_generation_on_owner(self) -> None:
+        owner = threading.get_ident()
+        active = threading.Event()
+        heartbeat = threading.Event()
+        calls: list[tuple[str, int, bool]] = []
+
+        class _FakeLogger:
+            def start(self) -> None:
+                calls.append(("start", threading.get_ident(), active.is_set()))
+
+            def get(self) -> list[str]:
+                calls.append(("get", threading.get_ident(), active.is_set()))
+                return []
+
+            def stop(self) -> None:
+                calls.append(("stop", threading.get_ident(), active.is_set()))
+
+        progress = _GmshProgressLogger(
+            SimpleNamespace(logger=_FakeLogger()),
+            poll_interval_s=0.01,
+            heartbeat_interval_s=0.01,
+        )
+        with patch("fullmag.meshing._gmsh_infra.emit_progress", side_effect=lambda _: heartbeat.set()):
+            with progress:
+                active.set()
+                try:
+                    self.assertTrue(heartbeat.wait(5), "Python heartbeat must run during native generation")
+                finally:
+                    active.clear()
+        self.assertEqual([call[0] for call in calls], ["start", "get", "stop"])
+        self.assertTrue(all(thread_id == owner and not generating for _, thread_id, generating in calls))
+        self.assertFalse(progress._thread.is_alive())
+
+    def test_gmsh_progress_logger_waits_for_blocked_observer_before_native_cleanup(self) -> None:
+        emitting = threading.Event()
+        release = threading.Event()
+        stopped = threading.Event()
+        cleanup_observations: list[bool] = []
+
+        class _FakeLogger:
+            def start(self) -> None:
+                pass
+
+            def get(self) -> list[str]:
+                return []
+
+            def stop(self) -> None:
+                stopped.set()
+
+        progress = _GmshProgressLogger(
+            SimpleNamespace(logger=_FakeLogger()),
+            poll_interval_s=0.01,
+            heartbeat_interval_s=0.01,
+        )
+
+        def blocked_sink(_: str) -> None:
+            emitting.set()
+            if not release.wait(5):
+                raise RuntimeError("test heartbeat release timed out")
+
+        def unblock_after_cleanup_check() -> None:
+            try:
+                if progress._stop.wait(5):
+                    # Longer than the historical minimum join timeout (0.5s).
+                    cleanup_observations.append(stopped.wait(0.75))
+            finally:
+                release.set()
+
+        releaser = threading.Thread(target=unblock_after_cleanup_check)
+        releaser.start()
+        try:
+            with patch("fullmag.meshing._gmsh_infra.emit_progress", side_effect=blocked_sink):
+                with progress:
+                    self.assertTrue(emitting.wait(5), "observer must reach the blocked sink")
+        finally:
+            release.set()
+            progress._stop.set()
+            releaser.join(timeout=5)
+        self.assertEqual(cleanup_observations, [False])
+        self.assertTrue(stopped.is_set())
+        self.assertFalse(progress._thread.is_alive())
+        self.assertFalse(releaser.is_alive())
+
     def test_gmsh_progress_logger_does_not_age_last_detail_from_filtered_noise(self) -> None:
         class _FakeLogger:
             @staticmethod
@@ -9001,6 +9258,57 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         # Per-object hmax (200 nm) is coarser than FEM.hmax (100 nm),
         # so effective_hmax must be at least 200 nm.
         self.assertGreaterEqual(resolved.effective_hmax, 200e-9)
+
+    def test_recipe_replaces_bulk_fields_without_removing_region_owned_refinement(self) -> None:
+        from fullmag.meshing.asset_pipeline import _strip_overridden_geometry_fields
+
+        geometry = fm.Box(100e-9, 100e-9, 40e-9, name="left")
+        options = _mesh_options_from_runtime_metadata(
+            {
+                "per_geometry": [{"geometry": "left", "bulk_hmax": 8e-9}],
+                "mesh_options": {
+                    "scene_problem_patch": {
+                        "object_regions": [{
+                            "owner_object": "left",
+                            "enabled": True,
+                            "shape": {
+                                "kind": "cylinder", "radius": 15e-9, "height": 10e-9,
+                                "center": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0],
+                            },
+                            "mesh_policy": {
+                                "maximum_element_size": 3e-9, "minimum_element_size": 1.5e-9,
+                                "transition_distance": 5e-9, "order": 1,
+                            },
+                        }],
+                    },
+                },
+            },
+            geometries=[geometry],
+            default_hmax=50e-9,
+            component_aware=True,
+        )
+        fields = list(options.size_fields)
+        region_fields = [field for field in fields if field["params"].get("Source") == "region_mesh_policy"]
+        bulk_fields = [field for field in fields if field["kind"] == "ComponentVolumeConstant"]
+        self.assertEqual(len(region_fields), 1)
+        self.assertEqual(len(bulk_fields), 1)
+        foreign_field = {
+            "kind": "ComponentVolumeConstant",
+            "params": {"GeometryName": "right", "VIn": 7e-9, "VOut": 1.0},
+        }
+        for recipe_name in ("left", "left_geom"):
+            with self.subTest(recipe_name=recipe_name):
+                stripped = _strip_overridden_geometry_fields(
+                    fields + [foreign_field],
+                    {recipe_name: PerObjectMeshRecipe(hmax=20e-9)},
+                )
+                self.assertNotIn(bulk_fields[0], stripped)
+                self.assertIn(region_fields[0], stripped)
+                self.assertIs(next(field for field in stripped if field is region_fields[0]), region_fields[0])
+                self.assertEqual(region_fields[0]["params"]["VIn"], 3e-9)
+                self.assertEqual(region_fields[0]["params"]["Radius"], 15e-9)
+                self.assertEqual(region_fields[0]["params"]["Height"], 10e-9)
+                self.assertIn(foreign_field, stripped)
 
     def test_recipe_can_coarsen_workflow_field_stack_for_same_geometry(self) -> None:
         """When recipe wants a coarser mesh, workflow fields for that geometry
@@ -10783,12 +11091,433 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     "mesh_policy": {
                         "minimum_element_size": 2e-9,
                         "maximum_element_size": 8e-9,
+                        "transition_distance": 5e-9,
                         "order": 1,
                     },
                 }
             ],
         )
         self.assertIsNone(mesh_options.hmin)
+        region_lower = [
+            field
+            for field in mesh_options.lower_bound_fields
+            if field.get("params", {}).get("Source") == "region_mesh_policy"
+        ]
+        self.assertEqual(len(region_lower), 1)
+        self.assertEqual(region_lower[0]["kind"], "ComponentRegionLowerBound")
+        self.assertEqual(region_lower[0]["params"]["RegionId"], "owner:core")
+        self.assertEqual(region_lower[0]["params"]["ShapeKind"], "box")
+        self.assertEqual(region_lower[0]["params"]["MinimumElementSize"], 2e-9)
+        self.assertNotIn("TransitionDistance", region_lower[0]["params"])
+        region_upper = [
+            field
+            for field in mesh_options.size_fields
+            if field.get("params", {}).get("Source") == "region_mesh_policy"
+        ]
+        self.assertEqual(len(region_upper), 1)
+        self.assertEqual(region_upper[0]["kind"], "ComponentRestrictedGradedBox")
+        self.assertEqual(region_upper[0]["params"]["TransitionDistance"], 5e-9)
+        self.assertEqual(
+            region_upper[0]["params"]["RegionId"],
+            region_lower[0]["params"]["RegionId"],
+        )
+
+    def test_per_body_lower_bounds_do_not_reduce_explicit_global_hmin(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="right")
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {
+                "mesh_options": {"hmin": 1e-9},
+                "per_geometry": [
+                    {"geometry": "left", "minimum_element_size": 4e-9},
+                    {"geometry": "right", "minimum_element_size": 6e-9},
+                ],
+            },
+            geometries=[left, right],
+            default_hmax=30e-9,
+            component_aware=True,
+            per_object_recipes={
+                "left": PerObjectMeshRecipe(hmin=5e-9),
+                "right": PerObjectMeshRecipe(hmin=7e-9),
+            },
+        )
+
+        self.assertEqual(mesh_options.hmin, 1e-9)
+        self.assertEqual(
+            {
+                field["params"]["GeometryName"]: field["params"]["MinimumElementSize"]
+                for field in mesh_options.lower_bound_fields
+                if field["kind"] == "ComponentVolumeLowerBound"
+            },
+            {"left": 5e-9, "right": 7e-9},
+        )
+
+    def test_per_geometry_geometry_name_alias_is_preserved_for_lower_bounds(self) -> None:
+        geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {
+                "per_geometry": [
+                    {"geometry_name": "owner_geom", "minimum_element_size": 5e-9}
+                ]
+            },
+            geometries=[geometry],
+            default_hmax=30e-9,
+            component_aware=True,
+        )
+
+        self.assertEqual(len(mesh_options.lower_bound_fields), 1)
+        self.assertEqual(
+            mesh_options.lower_bound_fields[0]["params"]["GeometryName"],
+            "owner",
+        )
+        self.assertEqual(
+            mesh_options.lower_bound_fields[0]["params"]["MinimumElementSize"],
+            5e-9,
+        )
+
+    def test_explicit_body_minimum_without_matching_geometry_fails_closed(self) -> None:
+        geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        cases = [
+            {
+                "metadata": {
+                    "per_geometry": [
+                        {"geometry_name": "missing", "minimum_element_size": 5e-9}
+                    ]
+                },
+                "geometries": [geometry],
+            },
+            {
+                "metadata": {"per_geometry": []},
+                "geometries": [],
+                "recipes": {"missing": PerObjectMeshRecipe(hmin=5e-9)},
+            },
+            {
+                "metadata": {"per_geometry": []},
+                "geometries": [geometry],
+                "recipes": {"missing": PerObjectMeshRecipe(hmin=5e-9)},
+            },
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "mesh_lower_bound_owner_binding_missing",
+                ):
+                    _mesh_options_from_runtime_metadata(
+                        case["metadata"],  # type: ignore[arg-type]
+                        geometries=case["geometries"],  # type: ignore[arg-type]
+                        default_hmax=30e-9,
+                        component_aware=True,
+                        per_object_recipes=case.get("recipes"),  # type: ignore[arg-type]
+                    )
+
+    def test_region_lower_bound_is_emitted_without_an_upper_target(self) -> None:
+        geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {"mesh_options": {}},
+            geometries=[geometry],
+            default_hmax=30e-9,
+            component_aware=True,
+            object_regions=[
+                {
+                    "region_id": "owner:floor-only",
+                    "owner_object": "owner",
+                    "enabled": True,
+                    "shape": {
+                        "kind": "cylinder",
+                        "radius": 12e-9,
+                        "height": 8e-9,
+                        "center": [0.0, 0.0, 0.0],
+                        "axis": [0.0, 0.0, 1.0],
+                    },
+                    "mesh_policy": {"minimum_element_size": 4e-9},
+                }
+            ],
+        )
+
+        self.assertIsNone(mesh_options.hmin)
+        self.assertFalse(
+            any(
+                field.get("params", {}).get("Source") == "region_mesh_policy"
+                for field in mesh_options.size_fields
+            )
+        )
+        self.assertEqual(len(mesh_options.lower_bound_fields), 1)
+        self.assertEqual(mesh_options.lower_bound_fields[0]["params"]["RegionId"], "owner:floor-only")
+        self.assertEqual(mesh_options.lower_bound_fields[0]["params"]["ShapeKind"], "cylinder")
+        self.assertEqual(mesh_options.lower_bound_fields[0]["params"]["MinimumElementSize"], 4e-9)
+
+    def test_apply_mesh_options_composes_scoped_floors_with_upper_and_air_lower(self) -> None:
+        gmsh = _RecordingGmsh()
+        body_a = {
+            "kind": "ComponentVolumeLowerBound",
+            "params": {
+                "GeometryName": "body-a",
+                "MinimumElementSize": 5e-9,
+                "Source": "per_geometry_mesh_policy",
+            },
+        }
+        body_b = {
+            "kind": "ComponentVolumeLowerBound",
+            "params": {
+                "GeometryName": "body-b",
+                "MinimumElementSize": 9e-9,
+                "Source": "per_geometry_mesh_policy",
+            },
+        }
+        region_a = {
+            "kind": "ComponentRegionLowerBound",
+            "params": {
+                "GeometryName": "body-a",
+                "RegionId": "body-a:core",
+                "ShapeKind": "cylinder",
+                "Center": [0.0, 0.0, 0.0],
+                "Radius": 12e-9,
+                "Height": 10e-9,
+                "Axis": [0.0, 0.0, 1.0],
+                "MinimumElementSize": 8e-9,
+                "Source": "region_mesh_policy",
+            },
+        }
+        options = MeshOptions(
+            hmin=2e-9,
+            size_fields=[
+                {
+                    "kind": "Box",
+                    "params": {
+                        "VIn": 3e-9,
+                        "VOut": 20e-9,
+                        "XMin": -50e-9,
+                        "XMax": 50e-9,
+                        "YMin": -50e-9,
+                        "YMax": 50e-9,
+                        "ZMin": -10e-9,
+                        "ZMax": 10e-9,
+                    },
+                }
+            ],
+            lower_bound_fields=[body_a, body_b, region_a],
+        )
+
+        _apply_mesh_options(
+            gmsh,
+            hmax=20e-9,
+            order=1,
+            opts=options,
+            hscale=1e6,
+            preexisting_lower_bound_field_ids=[99],
+            component_volume_tags={"body-a": [11], "body-b": [22]},
+        )
+
+        fields = gmsh.field
+        self.assertEqual(fields.numbers[(1, "VIn")], 3e-3)
+        body_fields = {
+            tuple(fields.numbers[(field_id, "VolumesList")]): field_id
+            for field_id, kind in fields.kinds.items()
+            if kind == "Constant"
+            and fields.numbers.get((field_id, "VIn")) in {5e-3, 9e-3}
+        }
+        self.assertEqual(fields.numbers[(body_fields[(11.0,)], "VOut")], 0.0)
+        self.assertEqual(fields.numbers[(body_fields[(22.0,)], "VOut")], 0.0)
+        self.assertEqual(fields.numbers[(body_fields[(11.0,)], "VIn")], 5e-3)
+        self.assertEqual(fields.numbers[(body_fields[(22.0,)], "VIn")], 9e-3)
+
+        cylinder_ids = [
+            field_id for field_id, kind in fields.kinds.items() if kind == "Cylinder"
+        ]
+        self.assertEqual(len(cylinder_ids), 2)
+        self.assertEqual(
+            [fields.numbers[(field_id, "ZCenter")] for field_id in cylinder_ids],
+            [-5e-3, 5e-3],
+        )
+        self.assertEqual(
+            [fields.numbers[(field_id, "ZAxis")] for field_id in cylinder_ids],
+            [10e-3, -10e-3],
+        )
+        self.assertTrue(
+            all(fields.numbers[(field_id, "VOut")] == 0.0 for field_id in cylinder_ids)
+        )
+        self.assertNotIn("Thickness", {name for _, name in fields.numbers})
+
+        region_math_id = next(
+            field_id for field_id, kind in fields.kinds.items() if kind == "MathEval"
+        )
+        region_expr = fields.strings[(region_math_id, "F")]
+        self.assertIn("Min(F", region_expr)
+        self.assertIn("0.008", region_expr)
+        self.assertIn("*F", region_expr)
+        owner_masks = [
+            field_id
+            for field_id, kind in fields.kinds.items()
+            if kind == "Constant"
+            and fields.numbers.get((field_id, "VIn")) == 1.0
+        ]
+        self.assertEqual(len(owner_masks), 1)
+        self.assertEqual(fields.numbers[(owner_masks[0], "VolumesList")], [11.0])
+        self.assertEqual(fields.numbers[(owner_masks[0], "VOut")], 0.0)
+
+        lower_max = next(
+            field_id
+            for field_id, kind in fields.kinds.items()
+            if kind == "Max" and 99.0 in fields.numbers.get((field_id, "FieldsList"), [])
+        )
+        self.assertIn(
+            region_math_id,
+            fields.numbers[(lower_max, "FieldsList")],
+        )
+        final_max = next(
+            field_id
+            for field_id, kind in fields.kinds.items()
+            if kind == "Max"
+            and fields.numbers.get((field_id, "FieldsList")) == [1.0, float(lower_max)]
+        )
+        self.assertEqual(fields.background, final_max)
+
+    def test_swept_airbox_hmax_is_scaled_with_body_hmax(self) -> None:
+        scale = 1e6
+        body_hmax_scaled = 20e-9 * scale
+        airbox_hmax_scaled = _scaled_airbox_maximum_element_size(
+            AirboxOptions(maximum_element_size=40e-9),
+            scale=scale,
+        )
+        self.assertEqual(airbox_hmax_scaled, 40e-3)
+
+        gmsh = _RecordingGmsh()
+        _apply_mesh_options(
+            gmsh,
+            body_hmax_scaled,
+            1,
+            MeshOptions(),
+            hscale=scale,
+            airbox_maximum_element_size=airbox_hmax_scaled,
+        )
+
+        self.assertEqual(
+            max(body_hmax_scaled, airbox_hmax_scaled),
+            40e-3,
+        )
+        self.assertAlmostEqual(
+            gmsh.option_values["Mesh.CharacteristicLengthMax"],
+            40e-3,
+        )
+
+    def test_apply_mesh_options_runs_lower_only_and_requires_exact_owner_binding(self) -> None:
+        lower = {
+            "kind": "ComponentRegionLowerBound",
+            "params": {
+                "GeometryName": "body-a",
+                "RegionId": "body-a:core",
+                "ShapeKind": "box",
+                "Center": [0.0, 0.0, 0.0],
+                "Size": [20e-9, 20e-9, 10e-9],
+                "MinimumElementSize": 4e-9,
+                "Source": "region_mesh_policy",
+            },
+        }
+        gmsh = _RecordingGmsh()
+        _apply_mesh_options(
+            gmsh,
+            hmax=20e-9,
+            order=1,
+            opts=MeshOptions(lower_bound_fields=[lower]),
+            preexisting_lower_bound_field_ids=[77],
+            component_volume_tags={"body-a": [11]},
+        )
+
+        self.assertEqual(gmsh.field.kinds[4], "MathEval")
+        self.assertAlmostEqual(float(gmsh.field.strings[(4, "F")]), 20e-9)
+        self.assertEqual(gmsh.field.kinds[5], "Max")
+        self.assertEqual(gmsh.field.numbers[(5, "FieldsList")], [77.0, 3.0])
+        self.assertEqual(gmsh.field.kinds[6], "Max")
+        self.assertEqual(gmsh.field.numbers[(6, "FieldsList")], [4.0, 5.0])
+        self.assertEqual(gmsh.field.background, 6)
+        self.assertEqual(gmsh.option_values["Mesh.MeshSizeFromPoints"], 0.0)
+
+        missing_owner = _RecordingGmsh()
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh_lower_bound_owner_binding_missing",
+        ):
+            _apply_mesh_options(
+                missing_owner,
+                hmax=20e-9,
+                order=1,
+                opts=MeshOptions(
+                    lower_bound_fields=[
+                        {
+                            "kind": "ComponentVolumeLowerBound",
+                            "params": {
+                                "GeometryName": "body-a",
+                                "MinimumElementSize": 5e-9,
+                            },
+                        }
+                    ]
+                ),
+            )
+
+    def test_apply_mesh_options_scopes_spherical_region_floor(self) -> None:
+        gmsh = _RecordingGmsh()
+        lower = {
+            "kind": "ComponentRegionLowerBound",
+            "params": {
+                "GeometryName": "body-a",
+                "RegionId": "body-a:sphere",
+                "ShapeKind": "sphere",
+                "Center": [1e-9, 2e-9, 3e-9],
+                "Radius": 6e-9,
+                "MinimumElementSize": 2e-9,
+                "Source": "region_mesh_policy",
+            },
+        }
+
+        _apply_mesh_options(
+            gmsh,
+            hmax=20e-9,
+            order=1,
+            opts=MeshOptions(lower_bound_fields=[lower]),
+            hscale=1e6,
+            component_volume_tags={"body-a": [11]},
+        )
+
+        ball_id = next(
+            field_id for field_id, kind in gmsh.field.kinds.items() if kind == "Ball"
+        )
+        self.assertEqual(gmsh.field.numbers[(ball_id, "VIn")], 2e-3)
+        self.assertEqual(gmsh.field.numbers[(ball_id, "VOut")], 0.0)
+        self.assertEqual(gmsh.field.numbers[(ball_id, "Radius")], 6e-3)
+        math_id = next(
+            field_id for field_id, kind in gmsh.field.kinds.items() if kind == "MathEval"
+        )
+        self.assertIn("F", gmsh.field.strings[(math_id, "F")])
+
+    def test_scoped_lower_bounds_route_curvature_through_upper_field_stack(self) -> None:
+        gmsh = _RecordingGmsh()
+        lower = {
+            "kind": "ComponentVolumeLowerBound",
+            "params": {
+                "GeometryName": "body-a",
+                "MinimumElementSize": 5e-9,
+                "Source": "per_geometry_mesh_policy",
+            },
+        }
+        with patch(
+            "fullmag.meshing._gmsh_fields._add_curvature_surface_field",
+            return_value=77,
+        ) as curvature_field:
+            _apply_mesh_options(
+                gmsh,
+                hmax=20e-9,
+                order=1,
+                opts=MeshOptions(size_from_curvature=8, lower_bound_fields=[lower]),
+                component_volume_tags={"body-a": [11]},
+            )
+
+        curvature_field.assert_called_once()
+        self.assertEqual(gmsh.option_values["Mesh.MeshSizeFromCurvature"], 0.0)
+        final_max = max(gmsh.field.kinds)
+        self.assertEqual(gmsh.field.kinds[final_max], "Max")
+        self.assertEqual(gmsh.field.numbers[(final_max, "FieldsList")], [77.0, 1.0])
+        self.assertEqual(gmsh.field.background, final_max)
 
     def test_region_mesh_policy_rejects_unsupported_local_order(self) -> None:
         geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
@@ -10817,6 +11546,35 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     }
                 ],
             )
+
+        for mesh_policy in (
+            {"minimum_element_size": 4e-9, "order": 2},
+            {"order": 2},
+        ):
+            with self.subTest(mesh_policy=mesh_policy):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "region_mesh_policy_order_unsupported.*requested_order=2",
+                ):
+                    _mesh_options_from_runtime_metadata(
+                        {"mesh_options": {}},
+                        geometries=[geometry],
+                        default_hmax=30e-9,
+                        component_aware=True,
+                        object_regions=[
+                            {
+                                "region_id": "owner:unsupported-order",
+                                "owner_object": "owner",
+                                "enabled": True,
+                                "shape": {
+                                    "kind": "box",
+                                    "size": [20e-9, 20e-9, 10e-9],
+                                    "center": [0.0, 0.0, 0.0],
+                                },
+                                "mesh_policy": mesh_policy,
+                            }
+                        ],
+                    )
 
     def test_difference_hole_region_mesh_policy_builds_local_refinement_field(self) -> None:
         hole_radius = 50e-9
@@ -10955,7 +11713,14 @@ class RegionMeshPolicyTests(unittest.TestCase):
             object_regions=object_regions,
         )
 
-        self.assertEqual(mesh_options.hmin, 3e-9)
+        self.assertIsNone(mesh_options.hmin)
+        body_lower = [
+            field
+            for field in mesh_options.lower_bound_fields
+            if field.get("params", {}).get("Source") == "per_geometry_mesh_policy"
+        ]
+        self.assertEqual(len(body_lower), 1)
+        self.assertEqual(body_lower[0]["params"]["MinimumElementSize"], 3e-9)
         region_fields = [
             field
             for field in mesh_options.size_fields
@@ -11083,6 +11848,15 @@ class RegionMeshPolicyTests(unittest.TestCase):
             else:
                 rf["_gmsh_status"] = "ignored"
 
+        lower_fields = _build_scoped_lower_bound_fields(
+            [waveguide],
+            per_geometry=[],
+            per_object_recipes=None,
+            object_regions=object_regions,
+        )
+        for lower_field in lower_fields:
+            lower_field["_gmsh_status"] = "applied"
+
         mesh_workflow = {
             "mesh_options": {
                 "scene_problem_patch": {
@@ -11098,6 +11872,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
             mesh_workflow=mesh_workflow,
             per_object_recipes=None,
             size_fields=fields,
+            lower_bound_fields=lower_fields,
             region_markers=[],
             build_mode="conformal_occ",
             fallbacks_triggered=[],
@@ -11107,13 +11882,116 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertEqual(report.authored_regions_count, 5)
         self.assertEqual(report.realized_regions_count, 4)
 
+    def test_shared_domain_report_separates_region_upper_and_lower_status(self) -> None:
+        geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        object_regions = [
+            {
+                "region_id": "owner:core",
+                "owner_object": "owner",
+                "enabled": True,
+                "shape": {"kind": "box", "size": [20e-9] * 3},
+                "mesh_policy": {
+                    "maximum_element_size": 3e-9,
+                    "minimum_element_size": 1.5e-9,
+                },
+            },
+            {
+                "region_id": "owner:floor-only",
+                "owner_object": "owner",
+                "enabled": True,
+                "shape": {"kind": "sphere", "radius": 8e-9},
+                "mesh_policy": {"minimum_element_size": 4e-9},
+            },
+        ]
+        mesh_workflow = {
+            "mesh_options": {
+                "scene_problem_patch": {"object_regions": object_regions}
+            }
+        }
+        upper_fields = [
+            {
+                "kind": "ComponentRestrictedGradedBox",
+                "params": {
+                    "GeometryName": "owner",
+                    "RegionId": "owner:core",
+                    "Source": "region_mesh_policy",
+                    "MinimumElementSize": 1.5e-9,
+                    "VIn": 3e-9,
+                },
+                "_gmsh_status": "applied",
+                "_gmsh_field_id": 4,
+            }
+        ]
+        lower_fields = [
+            {
+                "kind": "ComponentRegionLowerBound",
+                "params": {
+                    "GeometryName": "owner",
+                    "RegionId": "owner:core",
+                    "Source": "region_mesh_policy",
+                    "MinimumElementSize": 1.5e-9,
+                },
+                "_gmsh_status": "rejected",
+                "_gmsh_reason": "mesh_lower_bound_owner_binding_missing",
+            },
+            {
+                "kind": "ComponentRegionLowerBound",
+                "params": {
+                    "GeometryName": "owner",
+                    "RegionId": "owner:floor-only",
+                    "Source": "region_mesh_policy",
+                    "MinimumElementSize": 4e-9,
+                },
+                "_gmsh_status": "applied",
+                "_gmsh_field_id": 9,
+            },
+        ]
+
+        report = _build_shared_domain_build_report(
+            [geometry],
+            fm.FEM(order=1, hmax=20e-9),
+            airbox=None,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=None,
+            size_fields=upper_fields,
+            lower_bound_fields=lower_fields,
+            region_markers=[],
+            build_mode="conformal_occ",
+            fallbacks_triggered=[],
+            mesh_options=MeshOptions(
+                size_fields=upper_fields,
+                lower_bound_fields=lower_fields,
+            ),
+        )
+
+        self.assertEqual(report.authored_regions_count, 2)
+        # The upper field alone cannot count the core policy as realized when
+        # its scoped lower field was rejected; the lower-only region does count.
+        self.assertEqual(report.realized_regions_count, 1)
+        realized = report.to_dict()["size_fields_realized"]
+        core_entries = [
+            entry
+            for entry in realized
+            if entry["params"].get("RegionId") == "owner:core"
+        ]
+        self.assertEqual(
+            {(entry["role"], entry["status"]) for entry in core_entries},
+            {("upper_target", "applied"), ("lower_bound", "rejected")},
+        )
+        self.assertEqual(
+            [
+                entry["role"]
+                for entry in realized
+                if entry["params"].get("RegionId") == "owner:floor-only"
+            ],
+            ["lower_bound"],
+        )
+
     def test_arch_waveguide_skyrmion_core_refinement_actual_mesh_density(self) -> None:
         try:
             import gmsh
         except ImportError:
             self.skipTest("gmsh not available")
-        import math
-
         # Create waveguide
         waveguide = fm.ArchWaveguide(
             length=180e-9,
@@ -11145,7 +12023,9 @@ class RegionMeshPolicyTests(unittest.TestCase):
         ]
 
         per_object_recipes = {
-            "waveguide": PerObjectMeshRecipe(hmax=20e-9, hmin=5e-9),
+            # Keep the enclosing body and region policies within their authored
+            # [1.5, 3] nm interval for this original density benchmark.
+            "waveguide": PerObjectMeshRecipe(hmax=20e-9, hmin=1.5e-9),
         }
         study_universe = {
             "mode": "manual",
@@ -11167,9 +12047,48 @@ class RegionMeshPolicyTests(unittest.TestCase):
             geometries=[waveguide],
             hints=fm.FEM(order=1, hmax=20e-9),
             study_universe=study_universe,
-            per_object_recipes=None,
+            per_object_recipes=per_object_recipes,
             mesh_workflow=mesh_workflow,
         )
+
+        self.assertEqual(report.effective_per_object_targets["waveguide"].hmax, 20e-9)
+        region_fields = [
+            field for field in report.size_fields_realized
+            if field["role"] == "upper_target"
+            and field["source"] == "region_mesh_policy"
+            and field["target"] == "waveguide"
+        ]
+        self.assertEqual(len(region_fields), 1, report.to_dict())
+        self.assertEqual(region_fields[0]["kind"], "ComponentRestrictedGradedCylinder")
+        self.assertEqual(region_fields[0]["status"], "applied")
+        self.assertEqual(region_fields[0]["params"]["VIn"], 3e-9)
+        region_lower_fields = [
+            field
+            for field in report.size_fields_realized
+            if field["role"] == "lower_bound"
+            and field["source"] == "region_mesh_policy"
+            and field["target"] == "waveguide"
+        ]
+        self.assertEqual(len(region_lower_fields), 1, report.to_dict())
+        self.assertEqual(region_lower_fields[0]["status"], "applied")
+        self.assertEqual(region_lower_fields[0]["params"]["MinimumElementSize"], 1.5e-9)
+        body_lower_fields = [
+            field
+            for field in report.size_fields_realized
+            if field["role"] == "lower_bound"
+            and field["source"] == "per_object_mesh_recipe"
+            and field["target"] == "waveguide"
+        ]
+        self.assertEqual(len(body_lower_fields), 1, report.to_dict())
+        self.assertEqual(body_lower_fields[0]["status"], "applied")
+        self.assertEqual(body_lower_fields[0]["params"]["MinimumElementSize"], 1.5e-9)
+        bulk_fields = [
+            field for field in report.size_fields_realized
+            if field["kind"] == "ComponentVolumeConstant" and field["target"] == "waveguide"
+        ]
+        self.assertEqual(len(bulk_fields), 1, report.to_dict())
+        self.assertEqual(bulk_fields[0]["status"], "applied")
+        self.assertEqual(bulk_fields[0]["params"]["VIn"], 20e-9)
 
         waveguide_marker = None
         for entry in region_markers:
@@ -11177,31 +12096,15 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 waveguide_marker = entry.get("marker")
         self.assertIsNotNone(waveguide_marker)
 
-        # Calculate edge lengths for elements inside the refined cylinder region vs bulk
-        nodes = mesh.nodes
-        elements = mesh.elements
-        element_markers = mesh.element_markers
-
-        region_edge_lengths = []
-        bulk_edge_lengths = []
-
-        for i, tet in enumerate(elements):
-            if element_markers[i] != waveguide_marker:
-                continue
-            centroid = nodes[tet].mean(axis=0)
-            # Match the authored finite cylinder, not an infinite XY column.
-            dist_xy = math.sqrt(centroid[0]**2 + centroid[1]**2)
-
-            edges = [
-                (tet[0], tet[1]), (tet[0], tet[2]), (tet[0], tet[3]),
-                (tet[1], tet[2]), (tet[1], tet[3]), (tet[2], tet[3])
-            ]
-            for u, v in edges:
-                length = np.linalg.norm(nodes[u] - nodes[v])
-                if dist_xy <= 15e-9 and abs(centroid[2]) <= 5e-9:
-                    region_edge_lengths.append(length)
-                else:
-                    bulk_edge_lengths.append(length)
+        nodes = np.asarray(mesh.nodes, dtype=np.float64)
+        elements = np.asarray(mesh.elements, dtype=np.int32)
+        element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+        region_edge_lengths, bulk_edge_lengths = _tet_edge_lengths_by_cylinder_scope(
+            mesh,
+            int(waveguide_marker),
+            radius=15e-9,
+            half_height=5e-9,
+        )
 
         self.assertTrue(len(region_edge_lengths) > 0)
         self.assertTrue(len(bulk_edge_lengths) > 0)
@@ -11209,9 +12112,218 @@ class RegionMeshPolicyTests(unittest.TestCase):
         median_region = np.median(region_edge_lengths)
         median_bulk = np.median(bulk_edge_lengths)
 
-        # Assert localized refinement inside the region
-        self.assertLessEqual(median_region, 5e-9)
-        self.assertGreaterEqual(median_bulk, 10e-9)
+        # Write failure evidence locally only when explicitly configured.
+        try:
+            self.assertLessEqual(median_region, 5e-9)
+            self.assertGreaterEqual(median_bulk, 10e-9)
+        except AssertionError as density_error:
+            artifact_root = os.environ.get("FULLMAG_MESH_FAILURE_ARTIFACT_DIR")
+            if artifact_root:
+                try:
+                    import importlib.metadata
+
+                    _write_density_failure_capture(
+                        Path(artifact_root) / "arch-waveguide-skyrmion-core-density",
+                        test_id=self.id(),
+                        nodes=nodes,
+                        elements=elements,
+                        element_markers=element_markers,
+                        magnetic_marker=int(waveguide_marker),
+                        cylinder_radius=15e-9,
+                        cylinder_half_height=5e-9,
+                        region_edge_lengths=region_edge_lengths,
+                        bulk_edge_lengths=bulk_edge_lengths,
+                        evidence_context={
+                            "inputs": {
+                                "geometry": {
+                                    "kind": "arch_waveguide",
+                                    "name": "waveguide",
+                                    "length": 180e-9,
+                                    "width": 60e-9,
+                                    "height": 40e-9,
+                                    "arch_height": 0.0,
+                                },
+                                "materials": [],
+                                "hints": {"engine": "fem", "order": 1, "hmax": 20e-9},
+                                "study_universe": study_universe,
+                                "mesh_workflow": mesh_workflow,
+                                "per_object_recipes": {
+                                    name: recipe.to_ir()
+                                    for name, recipe in per_object_recipes.items()
+                                },
+                                "resolved_gmsh_threads": _resolve_gmsh_thread_count(),
+                            },
+                            "dependencies": {
+                                name: importlib.metadata.version(name)
+                                for name in ("gmsh", "numpy", "scipy", "trimesh")
+                            },
+                            "report": report.to_dict(),
+                            "region_markers": region_markers,
+                            "thresholds": {
+                                "region_median_max_m": 5e-9,
+                                "bulk_median_min_m": 10e-9,
+                            },
+                        },
+                    )
+                except Exception as artifact_error:
+                    density_error.add_note(f"could not preserve density failure artifacts: {artifact_error}")
+            raise
+
+    def test_density_failure_capture_writes_local_evidence_without_gmsh(self) -> None:
+        nodes = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [1e-9, 0.0, 0.0],
+                [0.0, 1e-9, 0.0],
+                [0.0, 0.0, 1e-9],
+            ],
+            dtype=np.float64,
+        )
+        elements = np.asarray([[0, 1, 2, 3]], dtype=np.int32)
+        element_markers = np.asarray([1], dtype=np.int32)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact_dir = Path(tmp_dir) / "density-failure"
+            _write_density_failure_capture(
+                artifact_dir,
+                test_id="density-capture-regression",
+                nodes=nodes,
+                elements=elements,
+                element_markers=element_markers,
+                magnetic_marker=1,
+                cylinder_radius=2e-9,
+                cylinder_half_height=2e-9,
+                region_edge_lengths=[1e-9, 2e-9],
+                bulk_edge_lengths=[3e-9],
+                evidence_context={
+                    "report": {"build_mode": "conformal_occ"},
+                    "thresholds": {"region_median_max_m": 5e-9},
+                },
+            )
+
+            mesh_path = artifact_dir / "mesh-and-roi.npz"
+            evidence_path = artifact_dir / "failure-evidence.json"
+            self.assertTrue(mesh_path.is_file())
+            self.assertTrue(evidence_path.is_file())
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            self.assertEqual(evidence["test"], "density-capture-regression")
+            self.assertEqual(evidence["selection"]["roi_element_count"], 1)
+            self.assertEqual(evidence["mesh_payload"]["element_count"], 1)
+            self.assertEqual(evidence["report"]["build_mode"], "conformal_occ")
+
+    def test_direct_layered_box_region_floor_beats_eligible_upper_actual_density(self) -> None:
+        try:
+            import gmsh
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        body = fm.Box(120e-9, 80e-9, 20e-9, name="thin_box")
+        core_shape = {
+            "kind": "cylinder",
+            "radius": 15e-9,
+            "height": 8e-9,
+            "center": [0.0, 0.0, 0.0],
+            "axis": [0.0, 0.0, 1.0],
+        }
+        object_regions = [
+            {
+                "region_id": "thin_box:refinement",
+                "owner_object": "thin_box",
+                "enabled": True,
+                "shape": core_shape,
+                "mesh_policy": {
+                    "maximum_element_size": 3e-9,
+                    "minimum_element_size": 1.5e-9,
+                    "transition_distance": 5e-9,
+                    "order": 1,
+                },
+            },
+            {
+                "region_id": "thin_box:floor-only",
+                "owner_object": "thin_box",
+                "enabled": True,
+                "shape": dict(core_shape),
+                "mesh_policy": {"minimum_element_size": 8e-9},
+            },
+        ]
+        recipes = {"thin_box": PerObjectMeshRecipe(hmax=20e-9, hmin=5e-9)}
+        routes = (
+            (
+                "thin_film_tetrahedral",
+                2,
+                [120e-9, 80e-9, 80e-9],
+            ),
+            (
+                "free_tetrahedral",
+                None,
+                [220e-9, 180e-9, 100e-9],
+            ),
+        )
+        for strategy, layer_count, airbox_size in routes:
+            with self.subTest(strategy=strategy):
+                mesh_options = {"mesh_strategy": strategy}
+                if layer_count is not None:
+                    mesh_options["through_thickness_elements"] = layer_count
+                mesh_workflow = {
+                    "single_geometry_occ_direct": True,
+                    "mesh_options": {
+                        **mesh_options,
+                        "scene_problem_patch": {"object_regions": object_regions},
+                    },
+                    "per_geometry": [{"geometry": "thin_box", "hmax": 20e-9}],
+                }
+                study_universe = {
+                    "mode": "manual",
+                    "size": airbox_size,
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 40e-9,
+                    "airbox_hmin": 10e-9,
+                }
+                mesh, _region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                    geometries=[body],
+                    hints=fm.FEM(order=1, hmax=20e-9),
+                    study_universe=study_universe,
+                    per_object_recipes=recipes,
+                    mesh_workflow=mesh_workflow,
+                )
+
+                self.assertEqual(report.build_mode, "single_geometry_occ")
+                self.assertEqual(report.authored_regions_count, 2)
+                self.assertEqual(report.realized_regions_count, 2)
+                scoped_lowers = [
+                    field
+                    for field in report.size_fields_realized
+                    if field["role"] == "lower_bound"
+                    and field["source"] == "region_mesh_policy"
+                    and field["target"] == "thin_box"
+                ]
+                self.assertEqual(len(scoped_lowers), 2, report.to_dict())
+                self.assertTrue(all(field["status"] == "applied" for field in scoped_lowers))
+                body_lowers = [
+                    field
+                    for field in report.size_fields_realized
+                    if field["role"] == "lower_bound"
+                    and field["source"] == "per_object_mesh_recipe"
+                    and field["target"] == "thin_box"
+                ]
+                self.assertEqual(len(body_lowers), 1, report.to_dict())
+                self.assertEqual(body_lowers[0]["status"], "applied")
+
+                region_lengths, bulk_lengths = _tet_edge_lengths_by_cylinder_scope(
+                    mesh,
+                    1,
+                    radius=15e-9,
+                    half_height=4e-9,
+                )
+                self.assertTrue(region_lengths)
+                self.assertTrue(bulk_lengths)
+                self.assertGreaterEqual(float(np.median(region_lengths)), 4e-9)
+                self.assertLessEqual(float(np.median(region_lengths)), 12e-9)
+                self.assertGreaterEqual(float(np.median(bulk_lengths)), 10e-9)
+                self.assertGreater(
+                    np.count_nonzero(np.asarray(mesh.element_markers) == 0),
+                    0,
+                )
 
     def test_disabled_policy_invariance(self) -> None:
         try:

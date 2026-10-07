@@ -1102,29 +1102,39 @@ mod tests {
         assert_eq!(
             rows,
             vec![EigenDispersionRow {
+                sample_id: None,
+                mode_id: None,
                 mode_index: 0,
                 kx: 0.0,
                 ky: 1.0,
                 kz: 2.0,
                 frequency_hz: 3.0,
                 angular_frequency_rad_per_s: 4.0,
+                mode_field_available: None,
+                mode_field_id: None,
+                mode_field_resource_key: None,
             }]
         );
     }
 
     #[test]
     fn parse_eigen_dispersion_csv_decodes_canonical_v2_rows() {
-        let csv = "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score\n3,1.0,1.0,2.0,3.0,X,7,4,1500000000.0,9424777960.77,0.0,1e-9,0.99\n";
+        let csv = "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,mode_field_resource_key\n3,k-path-sample-0003,1.0,1.0,2.0,3.0,X,7,sample-0003/mode-0007,4,1500000000.0,9424777960.77,0.0,1e-9,0.99,seed,false,stable-field,field-resource\n";
         let rows = parse_eigen_dispersion_csv(csv).expect("csv should parse");
         assert_eq!(
             rows,
             vec![EigenDispersionRow {
+                sample_id: Some("k-path-sample-0003".to_string()),
+                mode_id: Some("sample-0003/mode-0007".to_string()),
                 mode_index: 7,
                 kx: 1.0,
                 ky: 2.0,
                 kz: 3.0,
                 frequency_hz: 1.5e9,
                 angular_frequency_rad_per_s: 9424777960.77,
+                mode_field_available: Some(false),
+                mode_field_id: Some("stable-field".to_string()),
+                mode_field_resource_key: Some("field-resource".to_string()),
             }]
         );
     }

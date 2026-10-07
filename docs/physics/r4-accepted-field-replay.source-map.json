@@ -1,0 +1,83 @@
+{
+  "document": {
+    "path": "docs/physics/r4-accepted-field-replay.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source_visible / unvalidated"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source_visible / unvalidated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This artifact contract is owned by the native FEM equilibrium path."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This artifact contract is owned by the native FEM equilibrium path."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-accepted-field-decomposition",
+      "symbols": ["H_eff", "H_ex", "H_demag", "H_ani", "H_ext"],
+      "sources": ["source-certified-fields", "source-static-field-validator"]
+    },
+    {
+      "id": "eq-replay-difference",
+      "symbols": ["Delta_X", "Delta_phi", "H_ex", "H_demag", "H_ani", "H_ext", "H_eff", "phi"],
+      "sources": ["source-independent-replay", "source-native-accepted-publication"]
+    },
+    {
+      "id": "eq-replay-acceptance",
+      "symbols": ["Delta_X", "epsilon_abs", "epsilon_rel", "H_ex", "H_demag", "H_ani", "H_ext", "H_eff"],
+      "sources": ["source-independent-replay", "source-tolerance-contract"]
+    }
+  ],
+  "symbols": [
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff}}", "meaning": "exact native sum of static field views", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ex", "latex": "\\mathbf H_{\\mathrm{ex}}", "meaning": "exchange effective field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_demag", "latex": "\\mathbf H_{\\mathrm{demag}}", "meaning": "static demagnetizing effective field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ani", "latex": "\\mathbf H_{\\mathrm{ani}}", "meaning": "uniaxial anisotropy effective field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ext", "latex": "\\mathbf H_{\\mathrm{ext}}", "meaning": "external field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "phi", "latex": "\\phi", "meaning": "scalar demagnetizing potential", "si_unit": "\\mathrm A"},
+    {"id": "Delta_X", "latex": "\\Delta_X", "meaning": "maximum accepted/recomputed field difference", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Delta_phi", "latex": "\\Delta_{\\phi}", "meaning": "maximum accepted/recomputed potential difference", "si_unit": "\\mathrm A"},
+    {"id": "epsilon_abs", "latex": "\\epsilon_{X,\\mathrm{abs}}", "meaning": "absolute field tolerance", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "epsilon_rel", "latex": "\\epsilon_{X,\\mathrm{rel}}", "meaning": "relative field tolerance", "si_unit": "1"}
+  ],
+  "sources": [
+    {"id": "source-r4-computed-sample-coverage", "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py", "symbol": "_computed_sample_indices_from_spectrum", "responsibility": "Bind all sidecar sample sets to explicit spectrum sample records."},
+    {"id": "source-r4-computed-sample-regression", "path": "scripts/test_eigen_path_signed_sidecars.py", "symbol": "test_all_seven_sidecar_arrays_must_cover_every_computed_sample", "responsibility": "Reject missing or extra computed samples and invalid integer indices."},
+    {"id": "source-independent-python-field-replay", "path": "scripts/fem_equilibrium_field_replay.py", "symbol": "replay_accepted_recomputed_fields", "responsibility": "Replay binary field digests and component differences; explicitly report missing certificate/source context."},
+    {"id": "source-independent-identity-preimage", "path": "scripts/fem_linearization_identity_replay.py", "symbol": "replay_identity_preimage", "responsibility": "Bind exact own preimage to all identity values and replay raw and framed hashes; not a physical state qualification."},
+    {"id": "source-identity-preimage-path-regression", "path": "scripts/test_eigen_path_signed_sidecars.py", "symbol": "test_exact_preimages_replayed_for_all_computed_samples", "responsibility": "Replay all computed samples and keep full R4 payload status pending."},
+    {"id": "source-identity-preimage-mutation-regression", "path": "scripts/test_fem_linearization_identity_replay.py", "symbol": "test_every_identity_field_is_bound", "responsibility": "Reject field mutations, type coercion, duplicate keys, changed bytes and excessive JSON nesting."},
+    {"id": "source-python-field-replay-regression", "path": "scripts/test_fem_equilibrium_field_replay.py", "symbol": "test_frozen_v1_and_v2_binary_field_digests_match_rust", "responsibility": "Frozen V1/V2 digests and negative replay/preimage cases without native compilation."},
+    {"id": "source-r4-sidecar-conflict-propagation", "path": "crates/fullmag-runner/src/fem/eigen_path.rs", "symbol": "execute_fem_eigen_path", "responsibility": "Propagate conflicting signed sidecar errors before manifest publication."},
+    {"id": "source-r4-sidecar-persistence", "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs", "symbol": "single_k_signed_state_artifact", "responsibility": "Preserve exact accepted, certified, and recomputed certificate bytes per sample independently of mode selection."},
+    {"id": "source-r4-sidecar-discovery", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Publish plural paths only for actual R4 sidecars; empty paths are not replay proof."},
+    {"id": "source-consumer-plan-snapshot", "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs", "symbol": "consumer_plan_snapshot_bytes_and_sha256", "responsibility": "Publish the exact serde consumer plan bytes used by the identity digest."},
+    {"id": "source-consumer-plan-coverage", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_r4_sidecars", "responsibility": "Require one canonical consumer plan snapshot per complete computed sample and bind its raw SHA to identity."},
+    {"id": "source-certified-fields", "path": "crates/fullmag-runner/src/types.rs", "symbol": "CertifiedFemEquilibriumFields", "responsibility": "Versioned static field views and exact material-family paths."},
+    {"id": "source-tolerance-contract", "path": "crates/fullmag-runner/src/types.rs", "symbol": "FEM_LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M", "responsibility": "Shared accepted/recomputed replay tolerances."},
+    {"id": "source-native-accepted-publication", "path": "crates/fullmag-runner/src/fem/relax/finalize.rs", "symbol": "finalize_native_fem_relaxation", "responsibility": "Publish the accepted endpoint before the refreshed endpoint."},
+    {"id": "source-independent-replay", "path": "crates/fullmag-runner/src/fem_eigen.rs", "symbol": "validate_recomputed_fem_linearization_certificate", "responsibility": "Recompute field differences and fail closed."},
+    {"id": "source-bias-consumer", "path": "crates/fullmag-runner/src/fem/eigen_execution.rs", "symbol": "execute_bias_field_sample_with_relaxation", "responsibility": "Decode the accepted sidecar and require verified handoff construction."},
+    {"id": "source-verified-handoff", "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs", "symbol": "from_completed_relax_verified", "responsibility": "Bind replay validation to modal continuation."},
+    {"id": "source-static-field-validator", "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs", "symbol": "validate_certified_equilibrium_fields", "responsibility": "Validate finite schema, digest, and exact field decomposition."},
+    {"id": "source-regression", "path": "scripts/test_fem_accepted_recomputed_replay_contract.py", "symbol": "run_accepted_recomputed_replay_contract", "responsibility": "Interpret the cross-layer replay contract without native compilation."}
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

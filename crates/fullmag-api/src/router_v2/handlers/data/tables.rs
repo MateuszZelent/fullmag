@@ -415,6 +415,10 @@ fn select_table_rows(all_rows: &[ScalarRow], query: &TableRowsQuery) -> TableRow
 
     if !resync_required {
         for (index, row) in all_rows.iter().enumerate() {
+            // Keep source cursor identity while hiding diagnostic-only legacy rows.
+            if row.per_object_scalars.contains_key("fem_eigen_progress") {
+                continue;
+            }
             let cursor = index as u64 + 1;
             if let Some(after_cursor) = query.cursor {
                 if cursor <= after_cursor {
@@ -826,4 +830,48 @@ fn parse_table_expression_column(column: &str) -> Option<(&str, &str, String)> {
         return None;
     }
     Some((object_id, component, format!("{object_id}.m")))
+}
+
+#[cfg(test)]
+mod modal_history_tests {
+    use super::*;
+
+    #[test]
+    fn table_views_exclude_modal_rows_without_renumbering_source_cursors() {
+        let row: ScalarRow = serde_json::from_value(serde_json::json!({
+            "step": 1, "time": 1.0, "solver_dt": 0.1,
+            "mx": 1.0, "my": 0.0, "mz": 0.0,
+            "e_ex": 0.0, "e_demag": 0.0, "e_ext": 0.0, "e_total": 1.25,
+            "max_dm_dt": 0.0, "max_h_eff": 0.0, "max_h_demag": 0.0
+        }))
+        .unwrap();
+        let mut modal = row.clone();
+        modal.step = 2;
+        modal.e_total = 0.0;
+        modal
+            .per_object_scalars
+            .insert("fem_eigen_progress".into(), Default::default());
+        let mut measured_zero = row.clone();
+        measured_zero.step = 3;
+        measured_zero.e_total = 0.0;
+        let rows = vec![row, modal, measured_zero];
+        let query = TableRowsQuery {
+            columns: Some("e_total".into()),
+            ..Default::default()
+        };
+        assert_eq!(select_table_rows(&rows, &query).indices, vec![0, 2]);
+        let window = build_table_rows_resource(
+            "default".into(),
+            &rows,
+            &query,
+            vec!["step".into(), "e_total".into()],
+        )
+        .unwrap();
+        assert_eq!(window.returned_rows, 2);
+        assert_eq!(window.cursor_start, 1);
+        assert_eq!(window.cursor_end, 3);
+        assert_eq!(window.rows, vec![vec![1.0, 1.25], vec![3.0, 0.0]]);
+        assert_eq!(rows.len(), 3, "historical source data is preserved");
+        assert!(!encode_table_rows_binary(&window).is_empty());
+    }
 }

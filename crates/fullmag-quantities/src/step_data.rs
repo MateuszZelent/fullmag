@@ -195,6 +195,11 @@ pub struct GlobalQuantityRow {
 impl GlobalQuantityRow {
     /// Look up a scalar value by its `scalar_metric_key`.
     pub fn scalar_value(&self, metric_key: &str) -> Option<f64> {
+        // Legacy wire structs retain numeric placeholders. Modal callbacks
+        // are diagnostics-only, so placeholders cannot become quantities.
+        if self.per_object_scalars.contains_key("fem_eigen_progress") {
+            return None;
+        }
         match metric_key {
             "e_ex" => Some(self.e_ex),
             "e_demag" => Some(self.e_demag),
@@ -216,6 +221,22 @@ impl GlobalQuantityRow {
             "max_torque_Apm" => Some(self.max_torque_Apm),
             "max_torque_T" => Some(self.max_torque_T),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod modal_quantity_availability_tests {
+    use super::GlobalQuantityRow;
+
+    #[test]
+    fn modal_placeholders_are_unavailable_but_measured_zero_remains_valid() {
+        let mut row = GlobalQuantityRow::default();
+        assert_eq!(row.scalar_value("max_h_eff"), Some(0.0));
+        row.per_object_scalars
+            .insert("fem_eigen_progress".into(), Default::default());
+        for key in ["max_h_eff", "e_total", "mx", "max_torque_Apm"] {
+            assert_eq!(row.scalar_value(key), None);
         }
     }
 }

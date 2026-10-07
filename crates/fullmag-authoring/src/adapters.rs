@@ -87,16 +87,21 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         study: SceneStudyState {
             backend: builder.backend.clone(),
             requested_backend: builder
-                .backend
+                .requested_backend
                 .clone()
+                .or_else(|| builder.backend.clone())
                 .unwrap_or_else(|| "auto".to_string()),
-            requested_device: "auto".to_string(),
-            requested_precision: "double".to_string(),
+            requested_device: builder.requested_device.clone()
+                .unwrap_or_else(|| "auto".to_string()),
+            requested_precision: builder.requested_precision.clone()
+                .unwrap_or_else(|| "double".to_string()),
             requested_mode: builder
                 .requested_mode
                 .clone()
                 .unwrap_or_else(|| "strict".to_string()),
             requested_cpu_threads: builder.cpu_threads,
+            parallel_execution: builder.parallel_execution.clone().unwrap_or_default(),
+            pbc: builder.pbc.clone(),
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
             exchange_enabled: builder.exchange_enabled,
             demag_enabled: builder.demag_enabled,
@@ -229,8 +234,13 @@ pub fn scene_document_to_script_builder(
     Ok(ScriptBuilderState {
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
+        requested_backend: Some(normalized_scene.study.requested_backend.clone()),
+        requested_device: Some(normalized_scene.study.requested_device.clone()),
+        requested_precision: Some(normalized_scene.study.requested_precision.clone()),
         requested_mode: Some(normalized_scene.study.requested_mode.clone()),
         cpu_threads: normalized_scene.study.requested_cpu_threads,
+        parallel_execution: Some(normalized_scene.study.parallel_execution.clone()),
+        pbc: normalized_scene.study.pbc.clone(),
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
         exchange_enabled: normalized_scene.study.exchange_enabled,
         demag_enabled: normalized_scene.study.demag_enabled,
@@ -408,13 +418,17 @@ pub fn scene_document_to_script_builder_overrides(
             "precision": scene.study.requested_precision,
             "mode": scene.study.requested_mode,
             "cpu_threads": scene.study.requested_cpu_threads,
+            "parallel_execution": scene.study.parallel_execution,
             "fem_demag_solver_policy": scene.study.fem_demag_solver_policy,
             "explicit_selection": scene.study.requested_backend != "auto"
                 || scene.study.requested_device != "auto"
                 || scene.study.requested_precision != "double"
                 || scene.study.requested_mode != "strict"
-                || scene.study.requested_cpu_threads.is_some(),
+                || scene.study.requested_cpu_threads.is_some()
+                || scene.study.parallel_execution
+                    != fullmag_ir::ParallelExecutionPolicyIR::default(),
         },
+        "pbc": builder.pbc,
         "exchange_enabled": builder.exchange_enabled,
         "demag_enabled": builder.demag_enabled,
         "demag_realization": builder.demag_realization,
@@ -2340,12 +2354,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn adaptive_scene_builder_roundtrip_preserves_requested_runtime() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.study.backend = None;
+        scene.study.requested_backend = "fem".into();
+        scene.study.requested_device = "cpu".into();
+        scene.study.requested_precision = "single".into();
+        scene.study.parallel_execution.mode = fullmag_ir::ParallelExecutionModeIR::Adaptive;
+        let builder = scene_document_to_script_builder(&scene).expect("valid adaptive scene");
+        let restored = scene_document_from_script_builder(&builder);
+        assert_eq!(restored.study.backend, None);
+        assert_eq!(restored.study.requested_backend, scene.study.requested_backend);
+        assert_eq!(restored.study.requested_device, scene.study.requested_device);
+        assert_eq!(restored.study.requested_precision, scene.study.requested_precision);
+        assert_eq!(restored.study.parallel_execution, scene.study.parallel_execution);
+        crate::validate_scene_document_for_authoring(&restored)
+            .expect("round-trip must preserve the legal lane");
+    }
+
+    #[test]
+    fn legacy_builder_keeps_runtime_defaults_without_policy_inference() {
+        let scene = scene_document_from_script_builder(&sample_builder());
+        assert_eq!(scene.study.requested_backend, "fem");
+        assert_eq!(scene.study.requested_device, "auto");
+        assert_eq!(scene.study.requested_precision, "double");
+    }
+
+    #[test]
+    fn scene_pbc_roundtrip_preserves_axes_demag_images_and_null_override() {
+        let mut builder = sample_builder();
+        builder.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [fullmag_ir::AxisBoundary::Periodic, fullmag_ir::AxisBoundary::Open,
+                   fullmag_ir::AxisBoundary::Periodic],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([4, 0, 7]),
+        });
+        let scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.study.pbc, builder.pbc);
+        let restored = scene_document_to_script_builder(&scene).expect("valid PBC scene");
+        assert_eq!(restored.pbc, builder.pbc);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["pbc"], serde_json::to_value(&builder.pbc).unwrap());
+        let encoded = serde_json::to_value(&scene).unwrap();
+        let decoded: SceneDocument = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.study.pbc, builder.pbc);
+
+        let mut cleared = decoded;
+        cleared.study.pbc = None;
+        assert!(scene_document_to_script_builder(&cleared).unwrap().pbc.is_none());
+        assert!(scene_document_to_script_builder_overrides(&cleared).unwrap()["pbc"].is_null());
+        let mut legacy = serde_json::to_value(&cleared).unwrap();
+        // Keep an explicit reset through serde; absence is not a clear override.
+        assert_eq!(legacy["study"].get("pbc"), Some(&serde_json::Value::Null));
+        legacy["study"].as_object_mut().unwrap().remove("pbc");
+        let legacy: SceneDocument = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.study.pbc.is_none());
+    }
+
+    #[test]
+    fn scene_pbc_rejects_inconsistent_demag_policy() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.study.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [fullmag_ir::AxisBoundary::Periodic, fullmag_ir::AxisBoundary::Open,
+                   fullmag_ir::AxisBoundary::Open],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
+            image_counts: None,
+        });
+        assert!(scene_document_to_script_builder(&scene).is_err());
+        scene.study.pbc.as_mut().unwrap().demag = fullmag_ir::FdmDemagPeriodicityIR::Open;
+        scene.study.pbc.as_mut().unwrap().image_counts = Some([1, 0, 0]);
+        assert!(scene_document_to_script_builder(&scene).is_err());
+    }
+
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 7,
             backend: Some("fem".to_string()),
+            requested_backend: None,
+            requested_device: None,
+            requested_precision: None,
             requested_mode: Some("strict".to_string()),
             cpu_threads: Some(8),
+            parallel_execution: None,
+            pbc: None,
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
             exchange_enabled: true,
             demag_enabled: true,

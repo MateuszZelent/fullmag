@@ -7,10 +7,11 @@
  *
  * Buffer attributes named `color` and `instanceColor` carry no colour-space
  * metadata: three.js reads them as values already in the working space, i.e.
- * as **linear**. Every colour this module's callers produce -- the HSL sphere
- * in orientation/magnetizationColor.ts, the scalar palettes in
- * shared/visualization/scalarColorPalette.ts -- is authored in **sRGB**.
- * Uploading those code values unconverted applies the transfer function a
+ * as **linear**. HSL direction colours from orientation/magnetizationColor.ts
+ * and neutral fallback constants are authored in **sRGB**. Scalar palette
+ * helpers in shared/visualization/scalarColorPalette.ts already return linear
+ * values and must not be converted again. Uploading sRGB direction values
+ * unconverted applies the transfer function a
  * second time and lifts every mid-tone towards white:
  *
  *   tilt out of plane |  intended colour  |  what unconverted upload showed
@@ -24,7 +25,7 @@
  *
  * The surface shaders do the same conversion in GLSL (`srgbToLinearVec3`
  * followed by `#include <colorspace_fragment>`), so CPU-built vertex colours
- * and shader-computed surface colours only agree when both convert.
+ * and shader-computed direction colours agree when both convert exactly once.
  */
 
 /** sRGB electro-optical transfer function: one sRGB channel -> linear. */

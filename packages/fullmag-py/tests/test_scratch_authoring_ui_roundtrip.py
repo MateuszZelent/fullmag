@@ -189,6 +189,191 @@ def test_scene_document_exports_without_a_base_script(backend: str) -> None:
     assert _semantic_scene(round_tripped) == _semantic_scene(scene)
 
 
+def test_scene_document_renders_eigenmodes_stage_with_nonzero_k_and_floquet_bc() -> None:
+    from fullmag.runtime.script_builder import render_scene_document_as_script
+
+    builder = _builder(backend="fem")
+    builder["stages"].append(
+        {
+            "kind": "eigenmodes",
+            "eigen_count": 4,
+            "eigen_target": "nearest",
+            "eigen_target_frequency": 11e9,
+            "eigen_operator": "full_2x2",
+            "eigen_include_demag": True,
+            "eigen_equilibrium_source": "relax",
+            "eigen_normalization": "unit_l2",
+            "eigen_damping_policy": "ignore",
+            "eigen_k_vector": "10000000.0,0.0,0.0",
+            "eigen_spin_wave_bc": "floquet",
+            "eigen_spin_wave_bc_config": {
+                "kind": "floquet",
+                "pair_ids": ["x_faces"],
+                "phase_convention": "exp_plus_i_k_dot_delta_r",
+            },
+            "eigen_magnetostatic_bc": "floquet_airbox",
+            "eigen_solver_rtol": 1e-8,
+            "eigen_solver_max_outer_iterations": 123,
+            "eigen_solver_max_linear_iterations": 456,
+        }
+    )
+
+    scene = build_scene_document_from_builder(builder)
+    source = render_scene_document_as_script(scene)
+
+    assert "study.stages.add_eigenmodes(" in source
+    assert 'operator="full_2x2"' in source
+    assert "k_vector=(10000000.0, 0.0, 0.0)" in source
+    assert 'bc=fm.FloquetBC(["x_faces"], phase_convention="exp_plus_i_k_dot_delta_r")' in source
+    assert 'magnetostatic_bc="floquet_airbox"' in source
+    assert "solver_rtol=1e-08" in source
+    assert "solver_max_outer_iterations=123" in source
+    assert "solver_max_linear_iterations=456" in source
+
+    with TemporaryDirectory() as temporary:
+        script = Path(temporary) / "fem-eigenmodes.py"
+        script.write_text(source, encoding="utf-8")
+        loaded = load_problem_from_script(script, lightweight_assets=True)
+
+    assert [stage.problem.study.to_ir()["kind"] for stage in loaded.stages] == [
+        "relaxation",
+        "eigenmodes",
+    ]
+    eigen = loaded.stages[1].problem.study.to_ir()
+    assert eigen["operator"] == {"kind": "full_2x2", "include_demag": True}
+    assert eigen["target"] == {"kind": "nearest", "frequency_hz": 11e9}
+    assert eigen["k_sampling"] == {"kind": "single", "k_vector": [10000000.0, 0.0, 0.0]}
+    assert eigen["spin_wave_bc"] == {
+        "kind": "floquet",
+        "pair_ids": ["x_faces"],
+        "phase_convention": "exp_plus_i_k_dot_delta_r",
+    }
+    assert eigen["magnetostatic_bc"] == "floquet_airbox"
+    assert loaded.stages[1].problem.to_ir()["problem_meta"]["runtime_metadata"]["modal_solver_policy"] == {
+        "residual_tolerance": 1e-8,
+        "max_outer_iterations": 123,
+        "max_linear_iterations": 456,
+    }
+
+    draft = export_builder_draft(loaded)
+    assert draft["stages"][1]["eigen_solver_rtol"] == "1e-08"
+    rerendered = render_scene_document_as_script(build_scene_document_from_builder(draft))
+    assert "study.stages.add_eigenmodes(" in rerendered
+    assert 'magnetostatic_bc="floquet_airbox"' in rerendered
+    assert "solver_max_outer_iterations=123" in rerendered
+
+
+def test_scene_document_rejects_unsupported_stage_instead_of_dropping_it() -> None:
+    from fullmag.runtime.script_builder import render_scene_document_as_script
+
+    builder = _builder(backend="fem")
+    builder["stages"].append({"kind": "frequency_response"})
+    scene = build_scene_document_from_builder(builder)
+
+    with pytest.raises(ValueError, match="does not support stage kind 'frequency_response'"):
+        render_scene_document_as_script(scene)
+
+
+def test_scene_document_preserves_signed_eigen_stage_ids_and_k_vectors() -> None:
+    from fullmag.runtime.script_builder import render_scene_document_as_script
+
+    builder = _builder(backend="fem")
+    for stage_id, k_value in (("k_plus_10", 10e6), ("k_minus_10", -10e6)):
+        builder["stages"].append(
+            {
+                "stage_id": stage_id,
+                "kind": "eigenmodes",
+                "eigen_count": 2,
+                "eigen_target": "nearest",
+                "eigen_target_frequency": 11e9,
+                "eigen_operator": "full_2x2",
+                "eigen_include_demag": True,
+                "eigen_k_vector": f"{k_value},0.0,0.0",
+                "eigen_spin_wave_bc": "floquet",
+                "eigen_spin_wave_bc_config": {
+                    "kind": "floquet",
+                    "pair_ids": ["x_faces"],
+                },
+                "eigen_magnetostatic_bc": "floquet_airbox",
+            }
+        )
+
+    scene = build_scene_document_from_builder(builder)
+    source = render_scene_document_as_script(scene)
+
+    assert 'stage_id="k_plus_10"' in source
+    assert 'stage_id="k_minus_10"' in source
+    with TemporaryDirectory() as temporary:
+        script = Path(temporary) / "signed-eigenmodes.py"
+        script.write_text(source, encoding="utf-8")
+        loaded = load_problem_from_script(script, lightweight_assets=True)
+
+    assert [stage.stage_id for stage in loaded.stages] == [
+        "relax",
+        "k_plus_10",
+        "k_minus_10",
+    ]
+    assert [
+        stage.problem.study.to_ir()["k_sampling"]["k_vector"][0]
+        for stage in loaded.stages[1:]
+    ] == [10e6, -10e6]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("eigen_count", 0, "invalid eigen_count"),
+        ("eigen_k_vector", "10.0,20.0", "invalid eigen_k_vector"),
+        ("eigen_k_path", "malformed", "invalid eigen_k_path"),
+    ],
+)
+def test_scene_document_rejects_malformed_explicit_eigen_values(
+    field: str, value: object, message: str
+) -> None:
+    from fullmag.runtime.script_builder import render_scene_document_as_script
+
+    builder = _builder(backend="fem")
+    builder["stages"].append({"kind": "eigenmodes", field: value})
+    scene = build_scene_document_from_builder(builder)
+
+    with pytest.raises(ValueError, match=message):
+        render_scene_document_as_script(scene)
+
+
+@pytest.mark.parametrize("value", [1.5, True, float("nan")], ids=["fraction", "bool", "nan"])
+def test_canonical_eigen_rewrite_rejects_malformed_count(value: object) -> None:
+    from fullmag.runtime.script_builder import (
+        render_loaded_problem_as_script,
+        render_scene_document_as_script,
+    )
+
+    builder = _builder(backend="fem")
+    builder["stages"] = [
+        {
+            "stage_id": "modal",
+            "kind": "eigenmodes",
+            "eigen_count": 2,
+            "eigen_target": "lowest",
+        }
+    ]
+    scene = build_scene_document_from_builder(builder)
+    source = render_scene_document_as_script(scene)
+    with TemporaryDirectory() as temporary:
+        script = Path(temporary) / "malformed-eigen-count.py"
+        script.write_text(source, encoding="utf-8")
+        loaded = load_problem_from_script(script, lightweight_assets=True)
+
+    with pytest.raises(ValueError, match="invalid eigen_count"):
+        render_loaded_problem_as_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {"kind": "eigenmodes", "eigen_count": value},
+                ]
+            },
+        )
+
+
 def test_scene_document_normalizes_fdm_grid_object_ids_to_magnet_names() -> None:
     from fullmag.runtime.script_builder import render_scene_document_as_script
 

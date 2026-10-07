@@ -10,14 +10,95 @@ from local_runner import build_executor as executor
 
 
 class BuildExecutorTests(unittest.TestCase):
-    def test_extended_profile_registry_does_not_promote_specialized_receipts_to_release(self):
+    def test_daemon_mount_identity_survives_json_and_host_platform(self):
+        mounts = [{'Type': 'bind', 'Source': '/run/desktop/mnt/host/c/storage/run',
+                   'Destination': '/workspace', 'RW': True}]
+        identity = executor.mount_identity(mounts)
+        self.assertEqual(identity, json.loads(json.dumps(identity)))
+        self.assertEqual(identity[0][1], mounts[0]['Source'])
+
+    def test_cpu_mfem_abi_attestation_rejects_missing_or_wrong_prefix(self):
+        valid = {
+            'mfem_abi': {
+                'path': '/opt/fullmag-mfem-cpu/lib/libmfem.so.4.9.0',
+                'sha256': 'a' * 64,
+            },
+            'mfem_cmake_dir': '/opt/fullmag-mfem-cpu/lib/cmake/mfem',
+        }
+        self.assertTrue(executor.valid_cpu_mfem_abi_attestation(valid))
+        self.assertFalse(executor.valid_cpu_mfem_abi_attestation({}))
+        self.assertFalse(executor.valid_cpu_mfem_abi_attestation({
+            **valid, 'mfem_abi': {
+                **valid['mfem_abi'],
+                'path': '/opt/fullmag-deps/lib/libmfem.so.4.9.0',
+            },
+        }))
+        self.assertFalse(executor.valid_cpu_mfem_abi_attestation({
+            **valid,
+            'mfem_cmake_dir': '/opt/fullmag-mfem-cpu/../fullmag-deps/lib/cmake/mfem',
+        }))
+
+    def test_cpu_modal_dependency_binding_rejects_mixed_or_incomplete_receipts(self):
+        libraries = {name: {'path': '/opt/fullmag-mfem-cpu/lib/lib' + name + '.so',
+                            'sha256': 'a' * 64}
+                     for name in ('mfem', 'hypre', 'ceed', 'petsc', 'slepc')}
+        cmake = {'cpu_dependency_abi': libraries, 'mfem_abi': libraries['mfem']}
+        dependency = {}
+        for name, module in (('petsc', 'FindPETSc.cmake'), ('slepc', 'FindSLEPc.cmake')):
+            dependency.update({name + '_library_path': libraries[name]['path'],
+                               name + '_library_realpath': libraries[name]['path'],
+                               name + '_pkgconfig_dir': '/opt/fullmag-mfem-cpu/lib/pkgconfig',
+                               name + '_find_module_file': '/workspace/backends/fem/cmake/' + module})
+        self.assertTrue(executor.valid_cpu_modal_dependency_attestation(cmake, dependency))
+        self.assertFalse(executor.valid_cpu_modal_dependency_attestation({}, dependency))
+        self.assertFalse(executor.valid_cpu_modal_dependency_attestation(
+            {**cmake, 'mfem_abi': None}, dependency))
+        self.assertFalse(executor.valid_cpu_modal_dependency_attestation(cmake, {
+            **dependency, 'petsc_library_realpath': '/opt/fullmag-deps/lib/libpetsc.so'}))
+        self.assertFalse(executor.valid_cpu_modal_dependency_attestation(cmake, {
+            **dependency, 'petsc_pkgconfig_dir': '/opt/fullmag-deps/lib/pkgconfig'}))
+        for bad_path in ('/opt/fullmag-deps/lib/libpetsc.so',
+                         '/opt/fullmag-mfem-cpu/lib/../foreign/libpetsc.so'):
+            bad = {**libraries, 'petsc': {**libraries['petsc'], 'path': bad_path}}
+            self.assertFalse(executor.valid_cpu_modal_dependency_attestation(
+                {**cmake, 'cpu_dependency_abi': bad}, dependency))
+
+    def test_cpu_modal_runtime_requires_explicit_empty_cuda_compatibility(self):
+        names = ('cuda_driver_compatibility_paths', 'cuda_driver_compatibility_libraries_preloaded')
+        valid = {name: [] for name in names}
+        self.assertTrue(executor.valid_cpu_modal_driver_attestation(valid))
+        self.assertFalse(executor.valid_cpu_modal_driver_attestation(None))
+        for name in names:
+            for bad in (None, '', ['/opt/cuda/compat/libcuda.so']):
+                self.assertFalse(executor.valid_cpu_modal_driver_attestation({**valid, name: bad}))
+            self.assertFalse(executor.valid_cpu_modal_driver_attestation({key: value for key, value in valid.items() if key != name}))
+
+    def test_runtime_v2_receipt_contract_disables_cuda_and_fem_gpu(self):
+        v1 = executor.RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v1']['cmake_options']
+        v2 = executor.RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v2']['cmake_options']
+        self.assertEqual(v1['FULLMAG_ENABLE_CUDA'], 'ON')
+        self.assertEqual(v1['FULLMAG_ENABLE_FEM_GPU'], 'ON')
+        self.assertEqual(v2['FULLMAG_ENABLE_CUDA'], 'OFF')
+        self.assertEqual(v2['FULLMAG_ENABLE_FEM_GPU'], 'OFF')
+        self.assertEqual(v2['FULLMAG_USE_MFEM_STACK'], 'ON')
+        self.assertEqual(v2['FULLMAG_FEM_WITH_SLEPC'], 'ON')
+
+    def test_extended_profile_registry_does_not_promote_specialized_outputs_to_release(self):
         from local_runner import build_entrypoint as entrypoint
-        profile = 'fem-cpu-slepc-runtime-v2'
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            job, journal = self._write_release_receipt(root, profile=profile, accepted=False)
-            with patch.dict(entrypoint.PROFILES, {profile: object()}):
-                executor.validate_build_receipt(root, job, journal)
+        for profile in (
+            'fem-cpu-current-contracts-v1',
+            'fem-cpu-slepc-modal-v1',
+            'fem-cpu-slepc-runtime-v2',
+        ):
+            with self.subTest(profile=profile):
+                self.assertEqual(
+                    entrypoint.required_outputs_for_profile(profile),
+                    entrypoint.BASE_REQUIRED_OUTPUTS,
+                )
+        self.assertEqual(
+            entrypoint.required_outputs_for_profile('fem-cpu-release'),
+            entrypoint.REQUIRED_OUTPUTS,
+        )
 
     def _write_release_receipt(self, root, *, profile='fem-cpu-release', empty=None, accepted=True):
         outputs = ['bin/fullmag-bin', 'bin/fullmag-api', '_fullmag_core.so',
@@ -151,12 +232,39 @@ class BuildExecutorTests(unittest.TestCase):
             queue = Mock()
             queue.active.return_value = []
             queue.next_queued.return_value = {'job_id': 'a' * 32}
+            on_claim = Mock()
             with patch.object(executor, 'JobQueue', return_value=queue), \
                  patch.object(executor, 'file_lock', return_value=nullcontext()), \
                  patch.object(executor.shutil, 'disk_usage', return_value=Mock(free=1024)):
-                result = executor.execute_build({'storage_root': str(root), 'container_coordinator': True}, owner='test')
+                result = executor.execute_build({'storage_root': str(root), 'container_coordinator': True}, owner='test', on_claim=on_claim)
             self.assertEqual('waiting_for_disk', result['state'])
             queue.claim.assert_not_called()
+            on_claim.assert_not_called()
+
+    def test_claim_notification_follows_actual_lease_and_omits_private_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            queue = Mock()
+            queue.active.return_value = []
+            queue.next_queued.return_value = {'job_id': 'a' * 32}
+            claimed = {'job_id': 'a' * 32, 'profile': 'fem-cpu-release',
+                       'operation': 'verify-source', 'lease_token': 'private'}
+            queue.claim.return_value = claimed
+            notifications = []
+            def on_claim(record):
+                queue.claim.assert_called_once()
+                notifications.append(record)
+            with patch.object(executor, 'JobQueue', return_value=queue), \
+                 patch.object(executor, 'file_lock', return_value=nullcontext()), \
+                 patch.object(executor.shutil, 'disk_usage', return_value=Mock(free=16 * 1024**3)):
+                with self.assertRaisesRegex(executor.CoordinatorError, 'Expected a build job'):
+                    executor.execute_build(
+                        {'storage_root': str(root), 'container_coordinator': True},
+                        owner='test', call=Mock(return_value=''), on_claim=on_claim,
+                        expected_job_id=claimed['job_id'],
+                    )
+            self.assertEqual([{'job_id': claimed['job_id'], 'profile': claimed['profile']}], notifications)
+            queue.finish.assert_called_once_with(claimed['job_id'], 'private', 'blocked', None)
 
     def test_profiles_are_closed(self):
         with self.assertRaises(ValueError):
@@ -177,6 +285,20 @@ class BuildExecutorTests(unittest.TestCase):
             self.assertNotIn('docker.sock', ' '.join(command))
             self.assertIn('type=bind,source=' + str(paths['source']) + ',target=/source,readonly', command)
             self.assertEqual(8, command.count('--mount'))
+            modal_command = executor.build_command(
+                'a' * 32,
+                'b' * 64,
+                'fem-cpu-slepc-modal-v1',
+                {
+                    'image_digest': 'sha256:' + 'c' * 64,
+                    'cpus': 2,
+                    'memory_bytes': 8 * 1024**3,
+                },
+                paths,
+                root,
+            )
+            self.assertNotIn('--gpus', modal_command)
+            self.assertIn('fem-cpu-slepc-modal-v1', modal_command)
 
     def test_reject_mount_escape(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -204,6 +326,423 @@ class BuildExecutorTests(unittest.TestCase):
             (root / 'build-receipt.json').write_text(json.dumps({**job, 'state': 'succeeded', 'qualification': 'NOT VERIFIED', 'artifacts': []}))
             with self.assertRaises(ValueError):
                 executor.validate_build_receipt(root, job, {})
+
+    def test_slepc_modal_receipt_accepts_contract_artifacts_and_cpu_provenance(self):
+        import hashlib
+        import json
+        from local_runner.worker_entrypoint import canonical
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            image = "sha256:" + "c" * 64
+            native = {"head_commit_full": "a" * 40, "source_snapshot_sha256": "3" * 64}
+            job = {
+                "job_id": "a" * 32,
+                "source_digest": "b" * 64,
+                "profile": "fem-cpu-slepc-modal-v1",
+                "payload": {"native_source_identity": native},
+            }
+            result = {
+                "schema": "fullmag.fem.cpu.slepc_modal_contract_result.v1",
+                "scenario": "slepc-modal",
+                "status": "pass",
+                "source": {
+                    "commit": native["head_commit_full"],
+                    "snapshot_sha256": native["source_snapshot_sha256"],
+                },
+                "requested": {
+                    "backend": "fem",
+                    "device": "cpu",
+                    "precision": "double",
+                    "slepc": True,
+                },
+                "resolved": {
+                    "backend": "fem",
+                    "device": "cpu",
+                    "precision": "double",
+                    "slepc": True,
+                    "fallback_used": False,
+                },
+                "build": {
+                    "options": [
+                        "-DFULLMAG_ENABLE_CUDA=ON",
+                        "-DFULLMAG_ENABLE_FEM_GPU=OFF",
+                        "-DFULLMAG_USE_MFEM_STACK=ON",
+                        "-DFULLMAG_FEM_WITH_SLEPC=ON",
+                    ],
+                    "modal_target": "fem_poisson_airbox_modal_eigen_slepc_contract",
+                    "floquet_targets": list(
+                        executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"][
+                            "floquet_targets"
+                        ]
+                    ),
+                    "shared_domain_target": executor.PROFILE_CONTRACTS[
+                        "fem-cpu-slepc-modal-v1"
+                    ]["shared_domain_target"],
+                    "ctest_completed": True,
+                    "executed_targets": [
+                        "fem_poisson_airbox_modal_eigen_slepc_contract",
+                        *executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["floquet_targets"],
+                        executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["shared_domain_target"],
+                    ],
+                },
+                "runtime_library": "/workspace/.fullmag/local/lib/libfullmag_fem.so.0",
+                "attestation": {
+                    "ctest_junit": {
+                        "status": "pass",
+                        "testcase_count": 9,
+                        "skipped_count": 0,
+                        "failure_count": 0,
+                        "testcases": [
+                            "fem_poisson_airbox_modal_eigen_slepc_contract",
+                            *executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["floquet_targets"],
+                            executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["shared_domain_target"],
+                        ],
+                    },
+                    "cmake": {
+                        "status": "pass",
+                        "options": {
+                            "FULLMAG_ENABLE_CUDA": {"value": "ON"},
+                            "FULLMAG_ENABLE_FEM_GPU": {"value": "OFF"},
+                            "FULLMAG_USE_MFEM_STACK": {"value": "ON"},
+                            "FULLMAG_FEM_WITH_SLEPC": {"value": "ON"},
+                        },
+                    },
+                    "runtime": {
+                        "status": "pass",
+                        "availability": {"native_fem_cpu_available": True},
+                        "startup_stamp": "[fullmag] build: test | source snapshot: test",
+                    },
+                    "dependency": {
+                        "status": "pass",
+                        "dependency": {
+                            "petsc_available": True,
+                            "slepc_available": True,
+                            "modal_eigen_native_cpu_slepc_available": True,
+                            "petsc_version": "3.24.6",
+                            "slepc_version": "3.24.3",
+                            "diagnostics": {"native_source_snapshot_sha256": native["source_snapshot_sha256"]},
+                        },
+                    },
+                    "resolution": {
+                        "status": "pass",
+                            "resolved": {
+                            "backend": "fem",
+                            "device": "cpu",
+                            "precision": "double",
+                            "slepc": True,
+                                "fallback_used": False,
+                            },
+                            "precision": {
+                                "value": "double",
+                                "basis": "modal CTest compiled with PETSC_USE_REAL_DOUBLE and static_assert(sizeof(PetscReal) == sizeof(double))",
+                            },
+                        },
+                },
+            }
+            result_path = root / "contracts" / "slepc-modal" / "result.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_bytes = result_path.read_bytes()
+            native_library = root / "outputs" / ".fullmag" / "local" / "lib" / "libfullmag_fem.so.0"
+            native_library.parent.mkdir(parents=True)
+            native_library.write_bytes(b"native fem library")
+            identity_path = root / "source-identity.json"
+            identity_path.write_text(json.dumps(native), encoding="utf-8")
+            native_library_bytes = native_library.read_bytes()
+            identity_bytes = identity_path.read_bytes()
+            receipt = {
+                **job,
+                "image_digest": image,
+                "native_source_identity": native,
+                "native_source_identity_sha256": hashlib.sha256(
+                    canonical(native)
+                ).hexdigest(),
+                "qualification": "NOT VERIFIED",
+                "state": "succeeded",
+                "contract_scenarios": ["slepc-modal"],
+                "contract_schema": "fullmag.fem.cpu.slepc_modal_contract_result.v1",
+                "stages": [
+                    {
+                        "name": "contract-slepc-modal",
+                        "exit_code": 0,
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "path": "contracts/slepc-modal/result.json",
+                        "size": len(result_bytes),
+                        "sha256": hashlib.sha256(result_bytes).hexdigest(),
+                    },
+                    {
+                        "path": "outputs/.fullmag/local/lib/libfullmag_fem.so.0",
+                        "size": len(native_library_bytes),
+                        "sha256": hashlib.sha256(native_library_bytes).hexdigest(),
+                    },
+                    {
+                        "path": "source-identity.json",
+                        "size": len(identity_bytes),
+                        "sha256": hashlib.sha256(identity_bytes).hexdigest(),
+                    },
+                ],
+            }
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            validated = executor.validate_build_receipt(
+                root,
+                job,
+                {"image_digest": image},
+            )
+            self.assertEqual(validated["state"], "succeeded")
+
+            dependency_values = result["attestation"]["dependency"]["dependency"]
+            for diagnostics in ({}, {"native_source_snapshot_sha256": "4" * 64}):
+                with self.subTest(native_diagnostics=diagnostics):
+                    dependency_values["diagnostics"] = diagnostics
+                    result_path.write_text(json.dumps(result), encoding="utf-8")
+                    changed = result_path.read_bytes()
+                    receipt["artifacts"][0].update(
+                        size=len(changed), sha256=hashlib.sha256(changed).hexdigest()
+                    )
+                    (root / "build-receipt.json").write_text(
+                        json.dumps(receipt), encoding="utf-8"
+                    )
+                    # Rehashing every changed artifact does not turn a stale
+                    # dependency query into evidence of the current native code.
+                    with self.assertRaisesRegex(ValueError, "native source binding"):
+                        executor.validate_build_receipt(root, job, {"image_digest": image})
+            dependency_values["diagnostics"] = {
+                "native_source_snapshot_sha256": native["source_snapshot_sha256"]
+            }
+
+            result["source"]["snapshot_sha256"] = "4" * 64
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_bytes = result_path.read_bytes()
+            receipt["artifacts"][0].update(
+                size=len(result_bytes),
+                sha256=hashlib.sha256(result_bytes).hexdigest(),
+            )
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "source identity mismatch"):
+                executor.validate_build_receipt(
+                    root,
+                    job,
+                    {"image_digest": image},
+                )
+
+            result["source"]["snapshot_sha256"] = native["source_snapshot_sha256"]
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_bytes = result_path.read_bytes()
+            receipt["artifacts"][0].update(
+                size=len(result_bytes),
+                sha256=hashlib.sha256(result_bytes).hexdigest(),
+            )
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+
+            result["resolved"]["fallback_used"] = True
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_bytes = result_path.read_bytes()
+            receipt["artifacts"][0].update(
+                size=len(result_bytes),
+                sha256=hashlib.sha256(result_bytes).hexdigest(),
+            )
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "implicit fallback"):
+                executor.validate_build_receipt(
+                    root,
+                    job,
+                    {"image_digest": image},
+                )
+
+    def test_slepc_runtime_receipt_requires_native_only_stage_and_runtime_attestations(self):
+        import hashlib
+        import json
+        from local_runner.worker_entrypoint import canonical
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            image = "sha256:" + "c" * 64
+            native = {
+                "head_commit_full": "a" * 40,
+                "source_snapshot_sha256": "3" * 64,
+            }
+            source = {
+                "commit": native["head_commit_full"],
+                "snapshot_sha256": native["source_snapshot_sha256"],
+            }
+            job = {
+                "job_id": "a" * 32,
+                "source_digest": "b" * 64,
+                "profile": "fem-cpu-slepc-runtime-v1",
+                "payload": {"native_source_identity": native},
+            }
+            runtime_attestation = {
+                "schema": "fullmag.fem.slepc_runtime.attestation.v1",
+                "status": "pass",
+                "binary": "outputs/.fullmag/local/bin/fullmag-bin",
+                "availability": {"native_fem_cpu_available": True},
+                "startup_stamp": "[fullmag] build: test | source snapshot: "
+                + native["source_snapshot_sha256"],
+                "source": source,
+            }
+            dependency_attestation = {
+                "schema": "fullmag.fem.slepc_runtime.dependency_attestation.v1",
+                "status": "pass",
+                "library": "outputs/.fullmag/local/lib/libfullmag_fem.so.0",
+                "dependency": {
+                    "petsc_available": True,
+                    "slepc_available": True,
+                    "modal_eigen_native_cpu_slepc_available": True,
+                    "petsc_version": "3.24.6",
+                    "slepc_version": "3.24.3",
+                    "diagnostics_json": json.dumps({"native_source_snapshot_sha256": native["source_snapshot_sha256"]}),
+                },
+                "source": source,
+            }
+            cmake_attestation = {
+                "schema": "fullmag.fem.slepc_runtime.cmake_attestation.v1",
+                "status": "pass",
+                "cache_path": "/workspace/.fullmag-build/cargo-targets/fem-cpu/release/build/fullmag-fem-sys-test/out/native-build/CMakeCache.txt",
+                "options": {
+                    name: {"type": "BOOL", "value": value}
+                    for name, value in executor.RUNTIME_PROFILE_CONTRACTS[
+                        "fem-cpu-slepc-runtime-v1"
+                    ]["cmake_options"].items()
+                },
+                "runtime_library_sha256": hashlib.sha256(b"fem-native").hexdigest(),
+                "native_library_sha256": hashlib.sha256(b"fem-native").hexdigest(),
+                "source": source,
+            }
+            files = {
+                "outputs/.fullmag/local/bin/fullmag-bin": b"cli",
+                "outputs/.fullmag/local/bin/fullmag-api": b"api",
+                "outputs/.fullmag/local/_fullmag_core.so": b"core",
+                "outputs/.fullmag/local/launcher-build-mode": b"fem-cpu\n",
+                "outputs/.fullmag/local/lib/libfullmag_fem.so.0": b"fem-native",
+                "source-identity.json": json.dumps(native).encode("utf-8"),
+                "cmake-attestation.json": json.dumps(cmake_attestation).encode("utf-8"),
+                "runtime-attestation.json": json.dumps(runtime_attestation).encode("utf-8"),
+                "dependency-attestation.json": json.dumps(dependency_attestation).encode("utf-8"),
+            }
+            for relative, content in files.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            receipt = {
+                **job,
+                "image_digest": image,
+                "native_source_identity": native,
+                "native_source_identity_sha256": hashlib.sha256(
+                    canonical(native)
+                ).hexdigest(),
+                "qualification": "NOT VERIFIED",
+                "state": "succeeded",
+                "contract_scenarios": [],
+                "contract_schema": None,
+                "runtime_only": True,
+                "runtime_contract": executor.RUNTIME_PROFILE_CONTRACTS[
+                    "fem-cpu-slepc-runtime-v1"
+                ],
+                "stages": [
+                    {
+                        "name": "native-build",
+                        "command": ["/usr/bin/make", "install-cli-dev"],
+                        "exit_code": 0,
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "path": relative,
+                        "size": len(content),
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                    }
+                    for relative, content in files.items()
+                ],
+            }
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            validated = executor.validate_build_receipt(
+                root,
+                job,
+                {"image_digest": image},
+            )
+            self.assertEqual(validated["state"], "succeeded")
+
+            # Rehashing a valid receipt cannot disguise a stale/unbound native library.
+            for diagnostic in ({}, {"native_source_snapshot_sha256": "0" * 64}):
+                dependency_attestation["dependency"]["diagnostics_json"] = json.dumps(diagnostic)
+                changed = json.dumps(dependency_attestation).encode("utf-8")
+                (root / "dependency-attestation.json").write_bytes(changed)
+                for entry in receipt["artifacts"]:
+                    if entry["path"] == "dependency-attestation.json":
+                        entry.update(size=len(changed), sha256=hashlib.sha256(changed).hexdigest())
+                (root / "build-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "native source binding"):
+                    executor.validate_build_receipt(root, job, {"image_digest": image})
+            dependency_attestation["dependency"]["diagnostics_json"] = json.dumps({
+                "native_source_snapshot_sha256": native["source_snapshot_sha256"]})
+            changed = json.dumps(dependency_attestation).encode("utf-8")
+            (root / "dependency-attestation.json").write_bytes(changed)
+            for entry in receipt["artifacts"]:
+                if entry["path"] == "dependency-attestation.json":
+                    entry.update(size=len(changed), sha256=hashlib.sha256(changed).hexdigest())
+
+            runtime_attestation["startup_stamp"] = (
+                "[fullmag] build: test | source snapshot: " + "0" * 64
+            )
+            stale_runtime_bytes = json.dumps(runtime_attestation).encode("utf-8")
+            (root / "runtime-attestation.json").write_bytes(stale_runtime_bytes)
+            for entry in receipt["artifacts"]:
+                if entry["path"] == "runtime-attestation.json":
+                    entry["size"] = len(stale_runtime_bytes)
+                    entry["sha256"] = hashlib.sha256(stale_runtime_bytes).hexdigest()
+                    break
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "native CPU availability"):
+                executor.validate_build_receipt(
+                    root,
+                    job,
+                    {"image_digest": image},
+                )
+
+            runtime_attestation["startup_stamp"] = (
+                "[fullmag] build: test | source snapshot: "
+                + native["source_snapshot_sha256"]
+            )
+            valid_runtime_bytes = json.dumps(runtime_attestation).encode("utf-8")
+            (root / "runtime-attestation.json").write_bytes(valid_runtime_bytes)
+            for entry in receipt["artifacts"]:
+                if entry["path"] == "runtime-attestation.json":
+                    entry["size"] = len(valid_runtime_bytes)
+                    entry["sha256"] = hashlib.sha256(valid_runtime_bytes).hexdigest()
+                    break
+
+            receipt["stages"].append(
+                {
+                    "name": "contract-slepc-modal",
+                    "command": ["/usr/bin/ctest"],
+                    "exit_code": 0,
+                }
+            )
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "only native-build"):
+                executor.validate_build_receipt(
+                    root,
+                    job,
+                    {"image_digest": image},
+                )
 
     def test_worker_isolation_is_attested(self):
         inspected = {'Image': 'image', 'Mounts': [], 'Config': {'User': '65532:65532'},

@@ -1,29 +1,41 @@
+use super::eigen_capability::{
+    native_cpu_modal_window_has_floquet_dynamic_demag_path,
+    native_shared_domain_cpu_modal_supported,
+};
 use super::eigen_constants::{
     NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND, NATIVE_GPU_MODAL_SHARED_DOMAIN_SOLVER_KIND,
 };
 use super::eigen_digest::shared_domain_content_digest;
 use super::eigen_equilibrium::bind_stage_continuation_artifacts;
 use super::eigen_equilibrium_contract::{
-    AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifactV7,
+    AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifact,
 };
 use super::eigen_execution_resolution::PlannedFemEigenExecution;
+use super::eigen_mass_metric::{
+    canonical_shared_domain_phases, validate_shared_domain_phase_anchors, SharedDomainSparseMass,
+};
 use super::eigen_native_artifacts::{
     native_gpu_modal_shared_domain_execution_provenance, native_modal_artifacts,
     native_modal_execution_provenance,
+};
+use super::eigen_nonshared_domain::{
+    build_nonshared_floquet_provenance, NonSharedFloquetProvenance,
 };
 use super::eigen_native_result::{
     diagnostics_number, is_native_poisson_airbox_modal_adapter,
     merge_poisson_airbox_modal_result_diagnostics, native_bloch_floquet_modes_from_result_json,
     native_modal_modes_from_result_json, normalize_native_window_subwindows,
 };
-use super::eigen_operator::assemble_tangent_mass_matrix;
-use super::eigen_output::{json_artifact, k_vector_json};
+use super::eigen_output::{json_artifact, k_vector_json, requested_mode_indices_for_result};
+use super::eigen_physical_potential::{
+    doubled_real_split_to_complex, physical_potential_artifacts,
+};
 use super::eigen_policy::{
     native_cpu_modal_window_has_bloch_floquet_payload_path, native_modal_damping_policy,
     native_modal_equilibrium_source_kind, native_modal_floquet_periodic_pairs,
     native_modal_frequency_max_hz, native_modal_frequency_min_hz, native_modal_k_vector,
-    native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz, native_modal_target_kind,
-    resolved_demag_realization, shared_domain_k0_modal_requested,
+    native_modal_solver_policy, native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz,
+    native_modal_target_kind, resolved_demag_realization, shared_domain_k0_modal_requested,
 };
 use super::eigen_progress::{
     emit_fem_eigen_progress, native_modal_progress_event, FemEigenProgress,
@@ -32,8 +44,9 @@ use super::eigen_progress::{
 use super::eigen_reduction::ReductionMap;
 use super::eigen_shared_domain::{
     build_native_shared_domain_modal_problem, build_shared_domain_linearization_state,
-    full_physical_magnetic_reduction_map, reduced_shared_domain_tangent_mass,
+    full_physical_magnetic_reduction_map,
 };
+use super::eigen_shared_domain_geometry::modal_shared_domain_equivalence_classes;
 use super::eigen_solve::{
     native_bloch_floquet_dense_payload_from_complex_pair, regularize_periodic_mass_if_needed,
 };
@@ -68,6 +81,23 @@ pub(super) struct NativeModalMagneticPencilPayload {
     pub(super) gamma0_m_per_a_s: f64,
 }
 
+pub(super) fn native_modal_run_result(
+    status: RunStatus,
+    stats: StepStats,
+    final_magnetization: Vec<Vector3>,
+) -> RunResult {
+    RunResult {
+        status,
+        steps: vec![stats],
+        final_magnetization,
+        completion: Some(crate::relaxation::resolve_stage_completion(
+            status,
+            None,
+            crate::relaxation::RelaxationCompletionMetrics::default(),
+        )),
+    }
+}
+
 pub(super) fn execute_native_modal_window(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
@@ -76,7 +106,7 @@ pub(super) fn execute_native_modal_window(
     observables: EffectiveFieldObservables,
     relaxation_steps: u64,
     problem: &FemLlgProblem,
-    source_artifact: Option<&LoadedEquilibriumArtifactV7>,
+    source_artifact: Option<&LoadedEquilibriumArtifact>,
     source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     topology: &MeshTopology,
     reduction: &ReductionMap,
@@ -86,6 +116,7 @@ pub(super) fn execute_native_modal_window(
     active_nodes: usize,
     effective_dof: usize,
     artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
     execution_target: native_fem::NativeModalExecutionTarget,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
     expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
@@ -110,14 +141,19 @@ pub(super) fn execute_native_modal_window(
             candidate_modes: plan.count as usize,
             computed_modes: 0,
             iteration: Some(0),
-            max_iterations: Some(300),
+            // The native adapter reports its resolved EPS budget through the
+            // callback. Do not publish a guessed outer-iteration cap before
+            // that callback has supplied the configured value.
+            max_iterations: None,
             residual: None,
             warning: None,
             ..Default::default()
         },
     )?;
 
-    let shared_domain_linearization_state = if shared_domain_k0_modal_requested(plan) {
+    let shared_domain_requested = shared_domain_k0_modal_requested(plan)
+        || native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    let shared_domain_linearization_state = if shared_domain_requested {
         Some(build_shared_domain_linearization_state(
             plan,
             topology,
@@ -136,6 +172,11 @@ pub(super) fn execute_native_modal_window(
                 handoff.validate_consumed_linearization(plan, &equilibrium, state)?;
                 Some(handoff.clone())
             }
+            // The runner-provided non-shared pencil has its own provenance
+            // transport below.  It must not be forced through the shared
+            // Poisson linearization state merely because a caller carried an
+            // optional handoff token.
+            (Some(_), None) if runner_operator.is_some() => None,
             (Some(_), None) => {
                 return Err(RunError {
                     message: "relax_to_eigen_handoff_requires_linearization_state".to_string(),
@@ -158,7 +199,7 @@ pub(super) fn execute_native_modal_window(
             }
             (None, _) => None,
         };
-    let shared_domain_problem = if shared_domain_k0_modal_requested(plan) {
+    let shared_domain_problem = if shared_domain_requested {
         Some(build_native_shared_domain_modal_problem(
             plan,
             topology,
@@ -182,9 +223,8 @@ pub(super) fn execute_native_modal_window(
                 .to_string(),
         });
     }
-    let operator_diagnostics_json = if let Some((stiffness_field, mass)) = runner_operator {
+    let mut operator_diagnostics_value = if let Some((stiffness_field, mass)) = runner_operator {
         full_2x2_native_operator_diagnostics_json(plan, stiffness_field, mass, active_nodes)
-            .to_string()
     } else {
         serde_json::json!({
             "schema_version": "frequency_domain_operator_diagnostics.v1",
@@ -192,7 +232,53 @@ pub(super) fn execute_native_modal_window(
             "assembly_owner": "native_mfem",
             "runner_operator_transport": "disabled",
         })
-        .to_string()
+    };
+    // The explicit runner operator is also used by real non-Floquet lanes
+    // (free, pinned and ordinary periodic boundaries).  This provenance
+    // record is intentionally scoped to the actual Floquet boundary kind;
+    // otherwise those lanes would publish a false Floquet identity while
+    // their solver path remains valid.
+    let mut nonshared_floquet_provenance = runner_operator
+        .filter(|_| {
+            matches!(
+                plan.spin_wave_bc.kind(),
+                fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+            )
+        })
+        .map(|(stiffness_field, mass)| {
+            build_nonshared_floquet_provenance(
+                plan,
+                topology,
+                source_artifact,
+                source_relax_handoff,
+                &equilibrium,
+                &observables,
+                stiffness_field,
+                mass,
+                &gyrotropic_matrix_row_major_from_tangent_mass(mass, active_nodes)?,
+                active_nodes,
+                artifact_sample_index,
+                &operator_diagnostics_value,
+            )
+        })
+        .transpose()?;
+    if let Some(provenance) = nonshared_floquet_provenance.as_ref() {
+        if let Some(object) = operator_diagnostics_value.as_object_mut() {
+            if let Some(fields) = provenance.native_input_diagnostics().as_object() {
+                for (key, value) in fields {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+    let operator_diagnostics_json = if let Some(provenance) = nonshared_floquet_provenance.as_mut()
+    {
+        provenance.finalize_native_input_diagnostics(
+            &mut operator_diagnostics_value,
+            artifact_sample_index,
+        )?
+    } else {
+        operator_diagnostics_value.to_string()
     };
     let shared_domain_identity = shared_domain_problem
         .as_ref()
@@ -227,7 +313,7 @@ pub(super) fn execute_native_modal_window(
             let operator_input_signature = serde_json::json!({
                 "schema_version": "frequency_domain_operator_input_signature.v1",
                 "assembly_kind": "mfem_weak_form_shared_domain",
-                "demag_kind": "periodic_airbox_k0",
+                "demag_kind": if reduction.complex_reduction { "floquet_airbox" } else { "periodic_airbox_k0" },
                 "matrix_equation": "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q",
                 "physics_contract_version": "micromagnetics_frequency_domain_v5",
                 "operator_dictionary_version": "FrequencyOperatorDictionary.v1",
@@ -336,6 +422,50 @@ pub(super) fn execute_native_modal_window(
     let runner_tangent_mass_row_major = runner_operator
         .map(|(_, mass)| dmatrix_to_row_major(mass))
         .unwrap_or_default();
+    // The production SLEPc adapter has a sparse CSR route, but the runner
+    // still keeps the dense matrices for modal-vector reconstruction and
+    // diagnostics.  Transporting CSR as well lets the native solve use the
+    // sparse operator instead of materialising another PETSc dense matrix.
+    // This is intentionally limited to the non-shared-domain owner: the
+    // shared-domain path already owns its sparse operator in native MFEM.
+    let runner_sparse_storage = if runner_operator.is_some() {
+        let tangent_dof = runner_stiffness_omega
+            .as_ref()
+            .map(|matrix| matrix.nrows())
+            .unwrap_or(0);
+        Some((
+            csr_matrix_from_row_major(
+                &runner_stiffness_row_major,
+                tangent_dof,
+                tangent_dof,
+                "stiffness",
+            )?,
+            csr_matrix_from_row_major(
+                &runner_gyrotropic_row_major,
+                tangent_dof,
+                tangent_dof,
+                "gyrotropic",
+            )?,
+            csr_matrix_from_row_major(
+                &runner_tangent_mass_row_major,
+                tangent_dof,
+                tangent_dof,
+                "mass",
+            )?,
+        ))
+    } else {
+        None
+    };
+    let runner_sparse_operator =
+        runner_sparse_storage
+            .as_ref()
+            .map(|(stiffness, gyrotropic, mass)| {
+                native_fem::NativeModalEigenSparseOperatorProblem {
+                    stiffness_csr: stiffness.view(),
+                    gyrotropic_csr: gyrotropic.view(),
+                    mass_csr: mass.view(),
+                }
+            });
     let runner_native_modal_topology = runner_operator
         .map(|_| {
             MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
@@ -366,11 +496,18 @@ pub(super) fn execute_native_modal_window(
                 &runner_stiffness_row_major,
                 &runner_gyrotropic_row_major,
                 &runner_tangent_mass_row_major,
+                None,
                 magnetic_pencil,
                 &runner_floquet_periodic_pairs,
             )
         });
     let shared_domain_mode = shared_domain_problem.is_some();
+    let shared_domain_pairs = if shared_domain_mode {
+        native_modal_floquet_periodic_pairs(plan, topology)?
+    } else {
+        Vec::new()
+    };
+    let solver_policy = native_modal_solver_policy(plan);
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -389,9 +526,9 @@ pub(super) fn execute_native_modal_window(
         target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
         frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
         frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
-        residual_tolerance: 1.0e-8,
-        max_outer_iterations: 300,
-        max_linear_iterations: 1000,
+        residual_tolerance: solver_policy.residual_tolerance,
+        max_outer_iterations: solver_policy.max_outer_iterations,
+        max_linear_iterations: solver_policy.max_linear_iterations,
         output_directory: None,
         // The native production solver currently returns modal payloads to the
         // runner; its optional native diagnostic writer is reserved for the
@@ -405,9 +542,10 @@ pub(super) fn execute_native_modal_window(
         progress_callback: Some(&progress_callback),
         tiny_validation_problem: None,
         mfem_operator_problem: runner_mfem_operator_problem,
-        mfem_sparse_operator_problem: None,
+        mfem_sparse_operator_problem: runner_sparse_operator,
         poisson_airbox_block_problem: None,
         shared_domain_problem,
+        shared_domain_floquet_periodic_pairs: &shared_domain_pairs,
     })
     .map_err(|message| RunError { message })?;
     progress = live_progress_sink.into_inner();
@@ -459,11 +597,14 @@ pub(super) fn execute_native_modal_window(
     } else {
         None
     };
-    let mut solver_diagnostics = native_solver_diagnostics_json(
+    let mut solver_diagnostics = native_solver_diagnostics_json_with_expected_digest(
         plan,
         &native_result.diagnostics_json,
         Some(&native_result.result_json),
         native_result.modal_gpu_attestation.as_ref(),
+        runner_magnetic_pencil
+            .as_ref()
+            .map(|pencil| pencil.dependency_digest.as_str()),
     )?;
     if let (Some(execution), Some(attestation)) =
         (planned_execution, native_execution_attestation.as_ref())
@@ -476,6 +617,16 @@ pub(super) fn execute_native_modal_window(
     ) {
         if let Some(identity_object) = identity.as_object() {
             for (key, value) in identity_object {
+                diagnostics.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    if let (Some(provenance), Some(diagnostics)) = (
+        nonshared_floquet_provenance.as_ref(),
+        solver_diagnostics.as_object_mut(),
+    ) {
+        if let Some(fields) = provenance.artifact_diagnostics().as_object() {
+            for (key, value) in fields {
                 diagnostics.insert(key.clone(), value.clone());
             }
         }
@@ -496,22 +647,47 @@ pub(super) fn execute_native_modal_window(
     }
     let shared_domain_full_reduction =
         shared_domain_mode.then(|| full_physical_magnetic_reduction_map(topology));
-    let shared_domain_full_mass = shared_domain_full_reduction
-        .as_ref()
-        .map(|full_reduction| assemble_tangent_mass_matrix(topology, full_reduction));
-    let shared_mode_context_data = if let Some(full_mass) = shared_domain_full_mass.as_ref() {
-        Some(reduced_shared_domain_tangent_mass(topology, full_mass)?)
+    let shared_domain_phases = if shared_domain_mode {
+        Some(canonical_shared_domain_phases(topology, plan)?)
+    } else {
+        None
+    };
+    let shared_mode_context_data = if shared_domain_mode {
+        let (scalar_classes, scalar_count, magnetic_classes, magnetic_count) =
+            modal_shared_domain_equivalence_classes(topology)?;
+        let scalar_count = usize::try_from(scalar_count).map_err(|_| RunError {
+            message: "shared-domain scalar class count exceeds host dimensions".to_string(),
+        })?;
+        let magnetic_count = usize::try_from(magnetic_count).map_err(|_| RunError {
+            message: "shared-domain magnetic class count exceeds host dimensions".to_string(),
+        })?;
+        let phases = shared_domain_phases.as_deref().ok_or_else(|| RunError {
+            message: "shared-domain phase map was not constructed".to_string(),
+        })?;
+        validate_shared_domain_phase_anchors(&scalar_classes, scalar_count, phases)?;
+        let metric = SharedDomainSparseMass::from_topology(
+            topology,
+            &magnetic_classes,
+            magnetic_count,
+            phases,
+        )?;
+        Some((
+            metric,
+            magnetic_classes,
+            magnetic_count,
+            scalar_classes,
+            scalar_count,
+        ))
     } else {
         None
     };
     let shared_mode_context = shared_mode_context_data.as_ref().map(
-        |(reduced_tangent_mass, active_nodes, magnetic_classes, magnetic_class_count)| {
-            SharedDomainModeContext {
-                reduced_tangent_mass,
-                active_nodes,
-                magnetic_classes,
-                magnetic_class_count: *magnetic_class_count,
-            }
+        |(metric, magnetic_classes, magnetic_class_count, _, _)| SharedDomainModeContext {
+            reduced_tangent_mass: metric,
+            active_nodes: &metric.active_nodes,
+            magnetic_classes,
+            magnetic_class_count: *magnetic_class_count,
+            node_phases: shared_domain_phases.as_deref(),
         },
     );
     let result_value = serde_json::from_str::<serde_json::Value>(&native_result.result_json)
@@ -579,18 +755,9 @@ pub(super) fn execute_native_modal_window(
     }
 
     let artifact_reduction = shared_domain_full_reduction.as_ref().unwrap_or(reduction);
-    let artifact_node_mass_weights = shared_domain_full_mass
+    let artifact_node_mass_weights = shared_mode_context_data
         .as_ref()
-        .and_then(|full_mass| {
-            shared_domain_full_reduction
-                .as_ref()
-                .and_then(|full_reduction| {
-                    node_mass_weights_from_tangent_mass(
-                        full_mass,
-                        full_reduction.active_nodes.len(),
-                    )
-                })
-        })
+        .map(|(metric, _, _, _, _)| metric.node_diagonal_weights.clone())
         .or_else(|| {
             runner_operator
                 .and_then(|(_, mass)| node_mass_weights_from_tangent_mass(mass, active_nodes))
@@ -606,9 +773,73 @@ pub(super) fn execute_native_modal_window(
         solver_diagnostics,
         relaxation_steps,
         shared_domain_linearization_state.as_ref(),
+        source_relax_handoff,
         relax_to_eigen_handoff.as_ref(),
+        nonshared_floquet_provenance.as_ref(),
         artifact_sample_index,
+        state_artifact_sample_index,
     )?;
+    if shared_domain_mode && !interrupted && plan.enable_demag && plan.operator.include_demag {
+        let (_, _, _, scalar_classes, scalar_class_count) =
+            shared_mode_context_data.as_ref().ok_or_else(|| RunError {
+                message: "shared-domain scalar class map was not constructed".to_string(),
+            })?;
+        let phases = shared_domain_phases.as_deref().ok_or_else(|| RunError {
+            message: "shared-domain phase map was not constructed".to_string(),
+        })?;
+        let mut potential_provenance = shared_domain_identity.clone().ok_or_else(|| RunError {
+            message: "shared-domain physical potential export is missing solver identity"
+                .to_string(),
+        })?;
+        if let Some(object) = potential_provenance.as_object_mut() {
+            object.insert(
+                "source_mesh_topology_sha256".to_string(),
+                serde_json::json!(plan.mesh.mixed_topology_fingerprint_v3().map_err(|error| {
+                    RunError {
+                        message: format!("modal source mesh identity is invalid: {error}"),
+                    }
+                })?),
+            );
+        }
+        for raw_mode_index in requested_mode_indices_for_result(outputs, modes.len())? {
+            let mode_index = raw_mode_index as usize;
+            let Some(mode) = modes.get(mode_index) else {
+                continue;
+            };
+            let reduced = if !mode.phi_vector.is_empty() {
+                if mode.phi_vector.len() != *scalar_class_count {
+                    return Err(RunError {
+                        message: format!(
+                            "native shared-domain phi payload has {} coefficients; expected {} scalar classes",
+                            mode.phi_vector.len(), scalar_class_count
+                        ),
+                    });
+                }
+                mode.phi_vector.clone()
+            } else if !mode.floquet_potential_real_split.is_empty() {
+                doubled_real_split_to_complex(
+                    &mode.floquet_potential_real_split,
+                    *scalar_class_count,
+                )?
+            } else {
+                return Err(RunError {
+                    message: format!(
+                        "requested shared-domain mode {mode_index} has no scalar potential payload"
+                    ),
+                });
+            };
+            auxiliary_artifacts.extend(physical_potential_artifacts(
+                topology,
+                &reduced,
+                *scalar_class_count,
+                scalar_classes,
+                phases,
+                artifact_sample_index,
+                mode_index,
+                &potential_provenance,
+            )?);
+        }
+    }
     if interrupted {
         auxiliary_artifacts.push(json_artifact(
             "eigen/partial.v1.json",
@@ -679,16 +910,7 @@ pub(super) fn execute_native_modal_window(
     }
 
     let mut run = ExecutedRun {
-        result: RunResult {
-            status,
-            steps: vec![stats],
-            final_magnetization: equilibrium,
-            completion: Some(crate::relaxation::resolve_stage_completion(
-                status,
-                None,
-                crate::relaxation::RelaxationCompletionMetrics::default(),
-            )),
-        },
+        result: native_modal_run_result(status, stats, equilibrium),
         initial_magnetization,
         field_snapshots: Vec::new(),
         field_snapshot_count: 0,
@@ -701,7 +923,7 @@ pub(super) fn execute_native_modal_window(
     // otherwise the physical periodic-airbox validator would interpret the
     // zero step count as an unproven equilibrium source.
     if let Some(handoff) = source_relax_handoff {
-        bind_stage_continuation_artifacts(&mut run, handoff)?;
+        bind_stage_continuation_artifacts(&mut run, plan, handoff)?;
     }
     Ok(run)
 }
@@ -749,7 +971,7 @@ pub(super) fn bind_planned_execution_diagnostics(
     );
     requested.insert(
         "magnetostatic_bc".to_string(),
-        serde_json::json!("periodic_airbox_k0"),
+        serde_json::json!(planned_magnetostatic_bc(plan)),
     );
 
     let resolved = object
@@ -818,7 +1040,136 @@ pub(super) fn bind_planned_execution_diagnostics(
     Ok(())
 }
 
+/// Resolve the magnetostatic boundary label from the actual FEM eigen plan.
+///
+/// The planned execution envelope is shared by the Gamma/K0 and nonzero-k
+/// lanes.  It must therefore never use the historical K0 label as a default:
+/// a Floquet dynamic-demag request carries `floquet_airbox` even when its
+/// pair/target capability gate will reject execution.  The requested envelope
+/// records physical intent; the native adapter contract below decides whether
+/// that intent is executable.  Plans without a requested periodic-airbox
+/// demag model remain explicitly open.
+pub(super) fn planned_magnetostatic_bc(plan: &FemEigenPlanIR) -> &'static str {
+    let requested_floquet_dynamic_demag = plan.enable_demag
+        && plan.operator.include_demag
+        && plan.spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Floquet;
+    if requested_floquet_dynamic_demag
+        || native_cpu_modal_window_has_floquet_dynamic_demag_path(plan)
+    {
+        "floquet_airbox"
+    } else if shared_domain_k0_modal_requested(plan) {
+        "periodic_airbox_k0"
+    } else {
+        "open"
+    }
+}
+
 pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    initial_magnetization: Vec<Vector3>,
+    equilibrium: Vec<Vector3>,
+    observables: EffectiveFieldObservables,
+    relaxation_steps: u64,
+    reduction: &ReductionMap,
+    bases: &[(Vector3, Vector3)],
+    stiffness: &[Vec<Complex64>],
+    mass: &[Vec<Complex64>],
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    active_nodes: usize,
+    effective_dof: usize,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    planned_execution: Option<PlannedFemEigenExecution<'_>>,
+    shared_domain_problem: Option<native_fem::NativeModalEigenSharedDomainProblem<'_>>,
+) -> Result<ExecutedRun, RunError> {
+    execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance(
+        plan,
+        outputs,
+        initial_magnetization,
+        equilibrium,
+        observables,
+        relaxation_steps,
+        reduction,
+        bases,
+        stiffness,
+        mass,
+        progress,
+        active_nodes,
+        effective_dof,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        planned_execution,
+        shared_domain_problem,
+        None,
+    )
+}
+
+fn complex_bloch_floquet_operator_diagnostics() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": "frequency_domain_operator_diagnostics.v1",
+        "payload_kind": "bloch_floquet_tangent_operator",
+        "stiffness_field_units": "A_per_m_mass_weighted",
+        "stiffness_omega_units": "rad_s_inv",
+        "native_stiffness_input_units": "rad_s_inv",
+        "stiffness_units": "rad_s_inv",
+        "gyrotropic_form": "pencil_B=-G=[[0,-M],[M,0]]",
+        "operator_embedding": "complex_bloch_floquet_to_real_gyrotropic_pencil",
+    })
+}
+
+/// Prepare the provenance object needed by the complex Bloch/Floquet entry
+/// point.  The execution owner calls this before invoking the `_with_provenance`
+/// variant; keeping conversion here avoids a second, potentially different,
+/// matrix-to-pencil implementation in the execution layer.
+pub(super) fn build_nonshared_floquet_provenance_from_complex(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    source_artifact: Option<&LoadedEquilibriumArtifact>,
+    source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    equilibrium: &[Vector3],
+    observables: &EffectiveFieldObservables,
+    stiffness: &[Vec<Complex64>],
+    mass: &[Vec<Complex64>],
+    active_nodes: usize,
+    sample_index: usize,
+) -> Result<NonSharedFloquetProvenance, RunError> {
+    if !matches!(
+        plan.spin_wave_bc.kind(),
+        fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+    ) {
+        return Err(RunError {
+            message: "nonshared_floquet_provenance_requires_floquet_boundary".to_string(),
+        });
+    }
+    let payload = native_bloch_floquet_dense_payload_from_complex_pair(stiffness, mass)?;
+    // `build_nonshared_floquet_provenance` records the field-unit stiffness
+    // and applies gamma exactly once when it creates `stiffness_omega`.  The
+    // native execution path performs that same conversion only when it builds
+    // the MFEM payload below; passing an already scaled matrix here would make
+    // the provenance matrix pencil carry gamma^2.
+    let stiffness = payload.stiffness;
+    let diagnostics = complex_bloch_floquet_operator_diagnostics();
+    build_nonshared_floquet_provenance(
+        plan,
+        topology,
+        source_artifact,
+        source_relax_handoff,
+        equilibrium,
+        observables,
+        &stiffness,
+        &payload.tangent_mass,
+        &payload.gyrotropic_row_major,
+        active_nodes,
+        sample_index,
+        &diagnostics,
+    )
+}
+
+/// Variant used by the execution owner once it has built the non-shared
+/// source handoff.  The legacy wrapper above intentionally remains source
+/// compatible until that caller is migrated.
+pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     initial_magnetization: Vec<Vector3>,
@@ -832,6 +1183,11 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     active_nodes: usize,
     effective_dof: usize,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    planned_execution: Option<PlannedFemEigenExecution<'_>>,
+    shared_domain_problem: Option<native_fem::NativeModalEigenSharedDomainProblem<'_>>,
+    mut nonshared_floquet_provenance: Option<NonSharedFloquetProvenance>,
 ) -> Result<ExecutedRun, RunError> {
     emit_fem_eigen_progress(
         &mut progress,
@@ -847,7 +1203,10 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             candidate_modes: plan.count as usize,
             computed_modes: 0,
             iteration: Some(0),
-            max_iterations: Some(300),
+            // The native adapter reports its resolved EPS budget through the
+            // callback. Do not publish a guessed outer-iteration cap before
+            // that callback has supplied the configured value.
+            max_iterations: None,
             residual: None,
             warning: None,
             ..Default::default()
@@ -876,6 +1235,55 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         &tangent_mass_row_major,
         &native_floquet_periodic_pairs,
     );
+    let mut operator_diagnostics_value = complex_bloch_floquet_operator_diagnostics();
+    if let Some(provenance) = nonshared_floquet_provenance.as_ref() {
+        if let Some(fields) = provenance.native_input_diagnostics().as_object() {
+            if let Some(object) = operator_diagnostics_value.as_object_mut() {
+                for (key, value) in fields {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+    let operator_diagnostics_json = if let Some(provenance) = nonshared_floquet_provenance.as_mut()
+    {
+        provenance.finalize_native_input_diagnostics(
+            &mut operator_diagnostics_value,
+            artifact_sample_index,
+        )?
+    } else {
+        operator_diagnostics_value.to_string()
+    };
+    let stop_requested = AtomicBool::new(false);
+    // Keep the phase-reduced Floquet path interruptible for the same two
+    // control sources as the shared-domain native path: runtime callbacks and
+    // the opt-in managed cancellation deadline used by qualification tests.
+    let cancellation_deadline = std::env::var("FULLMAG_FEM_EIGEN_CANCEL_AFTER_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .map(|milliseconds| Instant::now() + Duration::from_millis(milliseconds));
+    let live_progress_sink = RefCell::new(progress.take());
+    let cancel_callback = || {
+        stop_requested.load(Ordering::Relaxed)
+            || cancellation_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+    };
+    let progress_callback = |progress_json: &str| {
+        let Some(event) = native_modal_progress_event(
+            progress_json,
+            NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            plan.count as usize,
+        ) else {
+            return;
+        };
+        if let Some(callback) = live_progress_sink.borrow_mut().as_deref_mut() {
+            if callback(event) != StepAction::Continue {
+                stop_requested.store(true, Ordering::Relaxed);
+            }
+        }
+    };
+    let solver_policy = native_modal_solver_policy(plan);
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -888,45 +1296,43 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         damping_policy: native_modal_damping_policy(plan.damping_policy),
         spin_wave_bc_kind: native_modal_spin_wave_bc_kind(&plan.spin_wave_bc),
         k_vector_rad_m: native_modal_k_vector(plan.k_sampling.as_ref()),
-        operator_diagnostics_json: Some(
-            "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\
-             \"payload_kind\":\"bloch_floquet_tangent_operator\",\
-             \"stiffness_units\":\"rad_s_inv\",\
-             \"gyrotropic_form\":\"pencil_B=-G=[[0,-M],[M,0]]\",\
-             \"operator_embedding\":\"complex_bloch_floquet_to_real_gyrotropic_pencil\"}",
-        ),
+        operator_diagnostics_json: Some(operator_diagnostics_json.as_str()),
         requested_mode_count: plan.count as i32,
         target_kind: native_modal_target_kind(&plan.target),
         target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
         frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
         frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
-        residual_tolerance: 1.0e-8,
-        max_outer_iterations: 300,
-        max_linear_iterations: 1000,
+        residual_tolerance: solver_policy.residual_tolerance,
+        max_outer_iterations: solver_policy.max_outer_iterations,
+        max_linear_iterations: solver_policy.max_linear_iterations,
         output_directory: None,
         write_partial_artifacts: false,
         completeness_policy: 1,
         eigensolver_family: 1,
         spectral_transform_kind: 1,
         execution_target: native_fem::NativeModalExecutionTarget::ProductionCpu,
-        cancel_requested: None,
-        progress_callback: None,
+        cancel_requested: Some(&cancel_callback),
+        progress_callback: Some(&progress_callback),
         tiny_validation_problem: None,
         mfem_operator_problem: Some(native_modal_mfem_operator_problem(
             payload.stiffness.nrows() as u64,
             &stiffness_row_major,
             &payload.gyrotropic_row_major,
             &tangent_mass_row_major,
+            None,
             &magnetic_pencil,
             &native_floquet_periodic_pairs,
         )),
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
-        shared_domain_problem: None,
+        shared_domain_problem,
+        shared_domain_floquet_periodic_pairs: &[],
     })
     .map_err(|message| RunError { message })?;
+    progress = live_progress_sink.into_inner();
 
-    if native_result.status != native_fem::NativeFrequencyDomainStatus::Ok {
+    let interrupted = native_result.status == native_fem::NativeFrequencyDomainStatus::Interrupted;
+    if native_result.status != native_fem::NativeFrequencyDomainStatus::Ok && !interrupted {
         return Err(RunError {
             message: format!(
                 "native FEM modal_eigen Bloch/Floquet production CPU solve failed: {} (diagnostics_json={})",
@@ -934,46 +1340,122 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             ),
         });
     }
-    let solver_diagnostics = native_solver_diagnostics_json(
+    let native_execution_attestation = if let Some(execution) = planned_execution {
+        let resolution = execution.resolution().ok_or_else(|| RunError {
+            message: "planned_fem_eigen_resolution_missing_at_native_boundary".to_string(),
+        })?;
+        native_fem::validate_planned_modal_execution_attestation(
+            resolution.resolved_engine,
+            native_fem::NativeModalExecutionTarget::ProductionCpu,
+            native_result
+                .modal_eigen
+                .as_ref()
+                .map(|result| result.resolved_execution_target),
+            native_result.resolved_fallback_state,
+            &native_result.resolved_engine_id,
+        )
+        .map_err(|message| RunError { message })?;
+        Some(
+            execution.native_attestation(
+                native_result
+                    .modal_eigen
+                    .as_ref()
+                    .map(|result| result.resolved_execution_target),
+                &native_result.resolved_engine_id,
+                native_result.resolved_fallback_state,
+                &native_result.resolved_fallback_reason,
+            ),
+        )
+    } else {
+        None
+    };
+    let mut solver_diagnostics = native_solver_diagnostics_json_with_expected_digest(
         plan,
         &native_result.diagnostics_json,
         Some(&native_result.result_json),
         None,
+        Some(magnetic_pencil.dependency_digest.as_str()),
     )?;
-    let modes =
-        native_bloch_floquet_modes_from_result_json(plan, &native_result.result_json, &payload)?;
-    if modes.is_empty() {
+    if let (Some(execution), Some(attestation)) =
+        (planned_execution, native_execution_attestation.as_ref())
+    {
+        bind_planned_execution_diagnostics(&mut solver_diagnostics, plan, execution, attestation)?;
+    }
+    if let Some(provenance) = nonshared_floquet_provenance.as_ref() {
+        if let Some(object) = solver_diagnostics.as_object_mut() {
+            if let Some(fields) = provenance.artifact_diagnostics().as_object() {
+                for (key, value) in fields {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+    if interrupted {
+        if let Some(object) = solver_diagnostics.as_object_mut() {
+            object.insert("status".to_string(), serde_json::json!("interrupted"));
+            object.insert("complete".to_string(), serde_json::json!(false));
+            object.insert(
+                "stop_reason".to_string(),
+                serde_json::json!("cancel_requested"),
+            );
+            object.insert(
+                "partial_artifacts_available".to_string(),
+                serde_json::json!(true),
+            );
+        }
+    }
+    let result_value = serde_json::from_str::<serde_json::Value>(&native_result.result_json)
+        .map_err(|error| RunError {
+            message: format!("failed to parse native modal result JSON: {error}"),
+        })?;
+    let has_modes_payload = result_value
+        .get("modes")
+        .and_then(serde_json::Value::as_array)
+        .is_some();
+    let modes = if has_modes_payload {
+        native_bloch_floquet_modes_from_result_json(plan, &native_result.result_json, &payload)?
+    } else if interrupted {
+        Vec::new()
+    } else {
+        return Err(RunError {
+            message: "native Bloch/Floquet modal result JSON is missing complete modes[] payload"
+                .to_string(),
+        });
+    };
+    if modes.is_empty() && !interrupted {
         return Err(RunError {
             message: "native FEM modal_eigen Bloch/Floquet production CPU solve returned no modes"
                 .to_string(),
         });
     }
 
-    emit_fem_eigen_progress(
-        &mut progress,
-        FemEigenProgress {
-            phase: "writing_artifacts",
-            phase_index: 4,
-            phase_count: 5,
-            percent: 85.0,
-            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
-            active_nodes,
-            effective_dof,
-            requested_modes: plan.count as usize,
-            candidate_modes: modes.len(),
-            computed_modes: modes.len(),
-            iteration: None,
-            max_iterations: None,
-            residual: modes
-                .iter()
-                .map(|mode| mode.residual_relative_l2)
-                .reduce(f64::max),
-            warning: None,
-            ..Default::default()
-        },
-    )?;
+    if !interrupted {
+        emit_fem_eigen_progress(
+            &mut progress,
+            FemEigenProgress {
+                phase: "writing_artifacts",
+                phase_index: 4,
+                phase_count: 5,
+                percent: 85.0,
+                solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+                active_nodes,
+                effective_dof,
+                requested_modes: plan.count as usize,
+                candidate_modes: modes.len(),
+                computed_modes: modes.len(),
+                iteration: None,
+                max_iterations: None,
+                residual: modes
+                    .iter()
+                    .map(|mode| mode.residual_relative_l2)
+                    .reduce(f64::max),
+                warning: None,
+                ..Default::default()
+            },
+        )?;
+    }
 
-    let auxiliary_artifacts = native_modal_artifacts(
+    let mut auxiliary_artifacts = native_modal_artifacts(
         plan,
         outputs,
         &equilibrium,
@@ -985,8 +1467,23 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         relaxation_steps,
         None,
         None,
-        0,
+        None,
+        nonshared_floquet_provenance.as_ref(),
+        artifact_sample_index,
+        state_artifact_sample_index,
     )?;
+    if interrupted {
+        auxiliary_artifacts.push(json_artifact(
+            "eigen/partial.v1.json",
+            &serde_json::json!({
+                "schema_version": "fem_floquet_modal_partial.v1",
+                "complete": false,
+                "stop_reason": "cancelled",
+                "sample_index": artifact_sample_index,
+                "preserved_mode_count": modes.len(),
+            }),
+        )?);
+    }
 
     let stats = StepStats {
         step: relaxation_steps,
@@ -1002,43 +1499,49 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         ..StepStats::default()
     };
 
-    emit_fem_eigen_progress(
-        &mut progress,
-        FemEigenProgress {
-            phase: "completed",
-            phase_index: 5,
-            phase_count: 5,
-            percent: 100.0,
-            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
-            active_nodes,
-            effective_dof,
-            requested_modes: plan.count as usize,
-            candidate_modes: modes.len(),
-            computed_modes: modes.len(),
-            iteration: None,
-            max_iterations: None,
-            residual: None,
-            warning: None,
-            ..Default::default()
-        },
-    )?;
+    if !interrupted {
+        emit_fem_eigen_progress(
+            &mut progress,
+            FemEigenProgress {
+                phase: "completed",
+                phase_index: 5,
+                phase_count: 5,
+                percent: 100.0,
+                solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+                active_nodes,
+                effective_dof,
+                requested_modes: plan.count as usize,
+                candidate_modes: modes.len(),
+                computed_modes: modes.len(),
+                iteration: None,
+                max_iterations: None,
+                residual: None,
+                warning: None,
+                ..Default::default()
+            },
+        )?;
+    }
+
+    let status = if interrupted {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
 
     Ok(ExecutedRun {
-        result: RunResult {
-            status: RunStatus::Completed,
-            steps: vec![stats],
-            final_magnetization: equilibrium,
-            completion: Some(crate::relaxation::resolve_stage_completion(
-                RunStatus::Completed,
-                None,
-                crate::relaxation::RelaxationCompletionMetrics::default(),
-            )),
-        },
+        result: native_modal_run_result(status, stats, equilibrium),
         initial_magnetization,
         field_snapshots: Vec::new(),
         field_snapshot_count: 0,
         auxiliary_artifacts,
-        provenance: native_modal_execution_provenance(plan),
+        provenance: {
+            let mut provenance = native_modal_execution_provenance(plan);
+            if let Some(execution) = planned_execution {
+                execution.bind_execution_provenance(&mut provenance);
+                provenance.fem_eigen_native_execution_attestation = native_execution_attestation;
+            }
+            provenance
+        },
     })
 }
 
@@ -1050,6 +1553,91 @@ fn dmatrix_to_row_major(matrix: &DMatrix<f64>) -> Vec<f64> {
         }
     }
     values
+}
+
+struct OwnedCsrMatrix {
+    row_count: usize,
+    column_count: usize,
+    row_offsets: Vec<u32>,
+    column_indices: Vec<u32>,
+    values: Vec<f64>,
+}
+
+impl OwnedCsrMatrix {
+    fn view(&self) -> native_fem::NativeModalEigenCsrMatrixView<'_> {
+        native_fem::NativeModalEigenCsrMatrixView {
+            row_count: self.row_count as u64,
+            column_count: self.column_count as u64,
+            row_offsets: &self.row_offsets,
+            column_indices: &self.column_indices,
+            values: &self.values,
+        }
+    }
+}
+
+fn csr_matrix_from_row_major(
+    values: &[f64],
+    row_count: usize,
+    column_count: usize,
+    label: &str,
+) -> Result<OwnedCsrMatrix, RunError> {
+    if row_count > u32::MAX as usize || column_count > u32::MAX as usize {
+        return Err(RunError {
+            message: format!(
+                "native modal {label} CSR dimensions exceed the adapter ABI: {row_count}x{column_count}"
+            ),
+        });
+    }
+    let expected_len = row_count
+        .checked_mul(column_count)
+        .ok_or_else(|| RunError {
+            message: format!("native modal {label} CSR dimension overflow"),
+        })?;
+    if values.len() != expected_len {
+        return Err(RunError {
+            message: format!(
+                "native modal {label} CSR source has {} values, expected {expected_len}",
+                values.len()
+            ),
+        });
+    }
+
+    let mut row_offsets = Vec::with_capacity(row_count.saturating_add(1));
+    let mut column_indices = Vec::new();
+    let mut csr_values = Vec::new();
+    row_offsets.push(0);
+    for row in 0..row_count {
+        let row_start = row * column_count;
+        for column in 0..column_count {
+            let value = values[row_start + column];
+            if value == 0.0 {
+                continue;
+            }
+            if !value.is_finite() {
+                return Err(RunError {
+                    message: format!(
+                        "native modal {label} CSR contains a non-finite value at ({row},{column})"
+                    ),
+                });
+            }
+            column_indices.push(column as u32);
+            csr_values.push(value);
+        }
+        if column_indices.len() > u32::MAX as usize {
+            return Err(RunError {
+                message: format!("native modal {label} CSR nonzero count exceeds the adapter ABI"),
+            });
+        }
+        row_offsets.push(column_indices.len() as u32);
+    }
+
+    Ok(OwnedCsrMatrix {
+        row_count,
+        column_count,
+        row_offsets,
+        column_indices,
+        values: csr_values,
+    })
 }
 
 fn matrix_abs_max(matrix: &DMatrix<f64>) -> f64 {
@@ -1176,6 +1764,7 @@ pub(super) fn native_modal_mfem_operator_problem<'a>(
     stiffness_matrix_row_major: &'a [f64],
     gyrotropic_matrix_row_major: &'a [f64],
     mass_matrix_row_major: &'a [f64],
+    dynamic_demag_k_tangent_matrix_row_major: Option<&'a [f64]>,
     pencil: &'a NativeModalMagneticPencilPayload,
     floquet_periodic_pairs: &'a [native_fem::NativeModalEigenFloquetPeriodicPair<'a>],
 ) -> native_fem::NativeModalEigenMfemOperatorProblem<'a> {
@@ -1184,6 +1773,7 @@ pub(super) fn native_modal_mfem_operator_problem<'a>(
         stiffness_matrix_row_major: Some(stiffness_matrix_row_major),
         gyrotropic_matrix_row_major: Some(gyrotropic_matrix_row_major),
         mass_matrix_row_major: Some(mass_matrix_row_major),
+        dynamic_demag_k_tangent_matrix_row_major,
         linearized_pencil_dependency_digest: Some(pencil.dependency_digest.as_str()),
         linearized_pencil_gamma0_m_per_a_s: pencil.gamma0_m_per_a_s,
         phase_convention: native_fem::FrequencyDomainPhaseConvention::ExpIOmegaT,
@@ -1207,7 +1797,11 @@ pub(super) fn full_2x2_native_operator_diagnostics_json(
         "payload_kind": payload_kind,
         "active_node_count": active_nodes,
         "tangent_dof_count": stiffness_field.nrows(),
-        "stiffness_units": "A_per_m_mass_weighted",
+        // The field-unit matrix is used only for the bounded diagnostic
+        // spectrum below.  The native modal request receives K_omega.
+        "stiffness_units": "rad_s_inv",
+        "stiffness_field_units": "A_per_m_mass_weighted",
+        "native_stiffness_input_units": "rad_s_inv",
         "gyrotropic_form": "pencil_B=-G=[[0,M],[-M,0]]",
         "stiffness_field_abs_max": matrix_abs_max(stiffness_field),
         "tangent_mass_abs_max": matrix_abs_max(mass),
@@ -1216,6 +1810,23 @@ pub(super) fn full_2x2_native_operator_diagnostics_json(
     let Some(object) = diagnostics.as_object_mut() else {
         return diagnostics;
     };
+    // This spectrum is an optional diagnostic, not part of the native solve.
+    // Running a dense Cholesky/inverse/eigendecomposition for a production
+    // sized operator would duplicate the modal workload and can exhaust the
+    // runner before SLEPc receives the request.  Keep the bounded diagnostic
+    // for small contract cases and report the explicit omission otherwise.
+    const DIAGNOSTIC_SPECTRUM_MAX_DOF: usize = 4096;
+    if stiffness_field.nrows() > DIAGNOSTIC_SPECTRUM_MAX_DOF {
+        object.insert(
+            "generalized_field_spectrum_status".to_string(),
+            serde_json::json!("skipped_large_operator"),
+        );
+        object.insert(
+            "generalized_field_spectrum_max_dof".to_string(),
+            serde_json::json!(DIAGNOSTIC_SPECTRUM_MAX_DOF),
+        );
+        return diagnostics;
+    }
     let regularized_mass = regularize_periodic_mass_if_needed(mass.clone(), &plan.spin_wave_bc);
     let Some(cholesky) = regularized_mass.cholesky() else {
         object.insert(
@@ -1307,6 +1918,44 @@ pub(super) fn gyrotropic_matrix_row_major_from_tangent_mass(
             ),
         });
     }
+    let mass_abs_max = mass
+        .iter()
+        .copied()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max);
+    if !mass_abs_max.is_finite()
+        || mass
+            .iter()
+            .copied()
+            .any(|value| !value.is_finite())
+    {
+        return Err(RunError {
+            message: "native modal tangent mass contains a nonfinite value".to_string(),
+        });
+    }
+    // The 2N tangent mass is deliberately a repeated scalar FEM mass block.
+    // Do not silently discard a cross-component block or a different second
+    // diagonal block while constructing G; such a payload would represent a
+    // different pencil and must fail before native execution.
+    let block_tolerance = 1.0e-12 * mass_abs_max.max(1.0e-30);
+    for row in 0..active_nodes {
+        for col in 0..active_nodes {
+            let upper_right = mass[(row, col + active_nodes)];
+            let lower_left = mass[(row + active_nodes, col)];
+            let repeated_block_delta = mass[(row, col)] - mass[(row + active_nodes, col + active_nodes)];
+            if upper_right.abs() > block_tolerance || lower_left.abs() > block_tolerance {
+                return Err(RunError {
+                    message: "native modal tangent mass has nonzero cross-component block"
+                        .to_string(),
+                });
+            }
+            if repeated_block_delta.abs() > block_tolerance {
+                return Err(RunError {
+                    message: "native modal tangent mass diagonal blocks differ".to_string(),
+                });
+            }
+        }
+    }
     let mut gyrotropic = vec![0.0; dim * dim];
     for row in 0..active_nodes {
         for col in 0..active_nodes {
@@ -1344,6 +1993,22 @@ pub(super) fn native_solver_diagnostics_json(
     result_raw: Option<&str>,
     gpu_attestation: Option<&native_fem::NativeModalGpuAttestation>,
 ) -> Result<serde_json::Value, RunError> {
+    native_solver_diagnostics_json_with_expected_digest(
+        plan,
+        raw,
+        result_raw,
+        gpu_attestation,
+        None,
+    )
+}
+
+pub(super) fn native_solver_diagnostics_json_with_expected_digest(
+    plan: &FemEigenPlanIR,
+    raw: &str,
+    result_raw: Option<&str>,
+    gpu_attestation: Option<&native_fem::NativeModalGpuAttestation>,
+    expected_pencil_dependency_digest: Option<&str>,
+) -> Result<serde_json::Value, RunError> {
     let mut diagnostics =
         serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
             message: format!("failed to parse native modal diagnostics JSON: {error}"),
@@ -1353,6 +2018,9 @@ pub(super) fn native_solver_diagnostics_json(
             message: "native modal diagnostics JSON must be an object".to_string(),
         });
     };
+    if let Some(expected) = expected_pencil_dependency_digest {
+        validate_native_magnetic_pencil_digests(object, result_raw, expected)?;
+    }
     object.insert(
         "schema_version".to_string(),
         serde_json::json!("frequency_domain_modal_solver_diagnostics.v1"),
@@ -1412,6 +2080,21 @@ pub(super) fn native_solver_diagnostics_json(
             "mu0_T_m_per_A": MU0,
         })
     });
+    let requested_policy = plan.solver_policy.as_ref();
+    object.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({
+            "source": if requested_policy.is_some() {
+                "resolved_fem_eigen_plan"
+            } else {
+                "native_petsc_slepc_defaults"
+            },
+            "delegates_to_native_defaults": requested_policy.is_none(),
+            "requested_residual_tolerance": requested_policy.and_then(|policy| policy.residual_tolerance),
+            "requested_max_outer_iterations": requested_policy.and_then(|policy| policy.max_outer_iterations),
+            "requested_max_linear_iterations": requested_policy.and_then(|policy| policy.max_linear_iterations),
+        }),
+    );
     if matches!(
         plan.spin_wave_bc.kind(),
         fullmag_ir::SpinWaveBoundaryKindIR::Floquet
@@ -1467,12 +2150,215 @@ pub(super) fn native_solver_diagnostics_json(
     if let Some(result_raw) = result_raw {
         merge_poisson_airbox_modal_result_diagnostics(object, result_raw)?;
     }
+    // The native CPU window adapter reports its execution lane and solver
+    // availability in the backend payload, but older payloads did not carry
+    // the common execution attestation consumed by the artifact manifest.
+    // Bind it only when both explicit production facts are present; absence
+    // must remain an unqualified result rather than becoming a guessed claim.
+    let native_production_cpu = object
+        .get("production_solver_available")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && object
+            .get("execution_lane")
+            .and_then(serde_json::Value::as_str)
+            == Some("production_cpu")
+        && object
+            .get("validation_only")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true);
+    if native_production_cpu {
+        object.insert(
+            "production_native_solver_available".to_string(),
+            serde_json::json!(true),
+        );
+        let solver_algorithm = object
+            .get("solver_model")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!("native_cpu_modal_window"));
+        let resolved = object
+            .entry("resolved_execution".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let resolved = resolved.as_object_mut().ok_or_else(|| RunError {
+            message: "native resolved_execution diagnostics must be an object".to_string(),
+        })?;
+        resolved
+            .entry("backend".to_string())
+            .or_insert_with(|| serde_json::json!("fem"));
+        resolved
+            .entry("device".to_string())
+            .or_insert_with(|| serde_json::json!("cpu"));
+        resolved
+            .entry("precision".to_string())
+            .or_insert_with(|| serde_json::json!("double"));
+        resolved
+            .entry("engine".to_string())
+            .or_insert_with(|| serde_json::json!("petsc_slepc"));
+        resolved
+            .entry("native_backend".to_string())
+            .or_insert_with(|| serde_json::json!("native_cpu"));
+        resolved
+            .entry("reference_or_production".to_string())
+            .or_insert_with(|| serde_json::json!("production"));
+        resolved
+            .entry("solver_library".to_string())
+            .or_insert_with(|| serde_json::json!("petsc_slepc"));
+        resolved
+            .entry("solver_algorithm".to_string())
+            .or_insert(solver_algorithm);
+        resolved
+            .entry("solve_kind".to_string())
+            .or_insert_with(|| serde_json::json!("modal_eigen"));
+        resolved
+            .entry("fallback_used".to_string())
+            .or_insert_with(|| serde_json::json!(false));
+    }
     insert_native_poisson_airbox_hardened_contract(object, plan, gpu_attestation)?;
     // The hardened contract normalizes the lane-specific execution object;
     // enrich it last so native provenance fields cannot be discarded by that
     // normalization step.
     insert_native_poisson_airbox_execution_provenance(object, plan, gpu_attestation)?;
     Ok(diagnostics)
+}
+
+fn validate_native_magnetic_pencil_digests(
+    diagnostics: &serde_json::Map<String, serde_json::Value>,
+    result_raw: Option<&str>,
+    expected_dependency_digest: &str,
+) -> Result<(), RunError> {
+    const DEPENDENCY_DIGEST_KEY: &str = "linearized_dynamic_pencil_dependency_digest";
+    const PENCIL_DIGEST_KEY: &str = "linearized_dynamic_pencil_digest";
+    if !is_native_sha256_hex(expected_dependency_digest) {
+        return Err(RunError {
+            message: "native magnetic pencil expected dependency digest is invalid".to_string(),
+        });
+    }
+    let diagnostics_dependency = required_native_sha256_field(
+        diagnostics,
+        DEPENDENCY_DIGEST_KEY,
+        "diagnostics_json",
+    )?;
+    let diagnostics_pencil =
+        required_native_sha256_field(diagnostics, PENCIL_DIGEST_KEY, "diagnostics_json")?;
+    let result_raw = result_raw.ok_or_else(|| RunError {
+        message: "native magnetic pencil result digest is missing result_json".to_string(),
+    })?;
+    let result = serde_json::from_str::<serde_json::Value>(result_raw).map_err(|error| {
+        RunError {
+            message: format!("failed to parse native magnetic pencil result JSON: {error}"),
+        }
+    })?;
+    let result_object = result.as_object().ok_or_else(|| RunError {
+        message: "native magnetic pencil result JSON must be an object".to_string(),
+    })?;
+    let result_dependency = required_native_sha256_field(
+        result_object,
+        DEPENDENCY_DIGEST_KEY,
+        "result_json",
+    )?;
+    let result_pencil =
+        required_native_sha256_field(result_object, PENCIL_DIGEST_KEY, "result_json")?;
+    if diagnostics_dependency != expected_dependency_digest
+        || result_dependency != expected_dependency_digest
+    {
+        return Err(RunError {
+            message: format!(
+                "native magnetic pencil dependency digest mismatch: expected={expected_dependency_digest}, diagnostics={diagnostics_dependency}, result={result_dependency}"
+            ),
+        });
+    }
+    if diagnostics_pencil != result_pencil {
+        return Err(RunError {
+            message: format!(
+                "native magnetic pencil digest differs between diagnostics_json and result_json: diagnostics={diagnostics_pencil}, result={result_pencil}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn required_native_sha256_field<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    source: &str,
+) -> Result<&'a str, RunError> {
+    let value = object
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| is_native_sha256_hex(value))
+        .ok_or_else(|| RunError {
+            message: format!("native magnetic pencil {source} is missing valid {key}"),
+        })?;
+    Ok(value)
+}
+
+fn is_native_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativePoissonAirboxExecutionContract {
+    magnetostatic_bc: &'static str,
+    production_periodic_airbox_claim: bool,
+    validated_scope: Option<&'static str>,
+}
+
+fn is_native_k0_poisson_airbox_modal_adapter(adapter: &str) -> bool {
+    matches!(
+        adapter,
+        "k0_poisson_airbox_cpu_full_coupled_slepc"
+            | "k0_poisson_airbox_cpu_schur_slepc"
+            | "k0_poisson_airbox_gpu_petsc_slepc"
+            | "k0_poisson_airbox_gpu_modal_device_krylov"
+    )
+}
+
+/// Bind the native adapter name to the plan's physical boundary contract.
+///
+/// Adapter text alone is insufficient: a K0 adapter name must not turn a
+/// nonzero Floquet plan into a K0 claim, and a Floquet adapter name must not
+/// be accepted for a plan that failed the complete shared-domain/nonzero-k
+/// predicate.  A recognized adapter/plan mismatch is a run error rather than
+/// an unqualified result: allowing the lower normalizer to continue would
+/// still let a later mode publisher observe a physically incompatible result.
+fn native_poisson_airbox_execution_contract(
+    plan: &FemEigenPlanIR,
+    adapter: &str,
+    gpu: bool,
+) -> Result<NativePoissonAirboxExecutionContract, RunError> {
+    let floquet_plan = native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    if adapter == "floquet_airbox_cpu_schur_slepc" {
+        if !floquet_plan {
+            return Err(RunError {
+                message: "native_poisson_airbox_floquet_adapter_plan_mismatch".to_string(),
+            });
+        }
+        return Ok(NativePoissonAirboxExecutionContract {
+            magnetostatic_bc: "floquet_airbox",
+            production_periodic_airbox_claim: false,
+            validated_scope: None,
+        });
+    }
+    if is_native_k0_poisson_airbox_modal_adapter(adapter) {
+        if !native_shared_domain_cpu_modal_supported(plan) {
+            return Err(RunError {
+                message: "native_poisson_airbox_k0_adapter_plan_mismatch".to_string(),
+            });
+        }
+        let cpu_schur = adapter == "k0_poisson_airbox_cpu_schur_slepc";
+        return Ok(NativePoissonAirboxExecutionContract {
+            magnetostatic_bc: "periodic_airbox_k0",
+            production_periodic_airbox_claim: true,
+            validated_scope: (!gpu && cpu_schur)
+                .then_some("fem_k0_periodic_airbox_p1_double_cpu_slepc"),
+        });
+    }
+    Err(RunError {
+        message: format!("native_poisson_airbox_unknown_adapter={adapter}"),
+    })
 }
 
 fn insert_native_poisson_airbox_execution_provenance(
@@ -1494,6 +2380,7 @@ fn insert_native_poisson_airbox_execution_provenance(
         adapter.as_str(),
         "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov"
     );
+    let contract = native_poisson_airbox_execution_contract(plan, &adapter, gpu)?;
     if gpu && gpu_attestation.is_none() {
         return Err(RunError {
             message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
@@ -1520,9 +2407,10 @@ fn insert_native_poisson_airbox_execution_provenance(
         requested_object
             .entry("solver_family".to_string())
             .or_insert_with(|| serde_json::json!("modal_eigen"));
-        requested_object
-            .entry("magnetostatic_bc".to_string())
-            .or_insert_with(|| serde_json::json!("periodic_airbox_k0"));
+        requested_object.insert(
+            "magnetostatic_bc".to_string(),
+            serde_json::json!(contract.magnetostatic_bc),
+        );
     }
     diagnostics.insert("requested_execution".to_string(), requested);
 
@@ -1681,17 +2569,26 @@ fn insert_native_poisson_airbox_hardened_contract(
         adapter.as_str(),
         "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov"
     );
+    let contract = native_poisson_airbox_execution_contract(plan, &adapter, gpu)?;
     if gpu && gpu_attestation.is_none() {
         return Err(RunError {
             message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
         });
     }
     let cpu_schur = adapter == "k0_poisson_airbox_cpu_schur_slepc";
-    let eps_q = diagnostics_number(diagnostics, "magnetic_block_backward_error").unwrap_or(0.0);
-    let eps_phi = diagnostics_number(diagnostics, "poisson_block_backward_error").unwrap_or(0.0);
-    let eps_gauge =
-        diagnostics_number(diagnostics, "gauge_constraint_backward_error").unwrap_or(0.0);
-    let eps_full = eps_q.max(eps_phi).max(eps_gauge);
+    let eps_q = diagnostics_number(diagnostics, "magnetic_block_backward_error");
+    let eps_phi = diagnostics_number(diagnostics, "poisson_block_backward_error");
+    let eps_gauge = diagnostics_number(diagnostics, "gauge_constraint_backward_error");
+    let eps_full = match (eps_q, eps_phi, eps_gauge) {
+        (Some(q), Some(phi), Some(gauge))
+            if [q, phi, gauge]
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0) =>
+        {
+            Some(q.max(phi).max(gauge))
+        }
+        _ => None,
+    };
     let certification_tolerance = diagnostics_number(diagnostics, "residual_tolerance")
         .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or(1.0e-8_f64);
@@ -1816,16 +2713,15 @@ fn insert_native_poisson_airbox_hardened_contract(
     );
     diagnostics.insert(
         "production_periodic_airbox_claim".to_string(),
-        serde_json::json!(true),
+        serde_json::json!(contract.production_periodic_airbox_claim),
     );
     diagnostics.insert(
         "validated_scope".to_string(),
-        serde_json::json!(if gpu {
-            serde_json::Value::Null
-        } else {
-            serde_json::json!("fem_k0_periodic_airbox_p1_double_cpu_slepc")
-        }),
+        contract
+            .validated_scope
+            .map_or(serde_json::Value::Null, |value| serde_json::json!(value)),
     );
+    let magnetostatic_bc = contract.magnetostatic_bc;
     diagnostics.insert(
         "requested_execution".to_string(),
         serde_json::json!({
@@ -1840,8 +2736,8 @@ fn insert_native_poisson_airbox_hardened_contract(
                 "targeted_spectrum"
             },
             "preconditioner": if gpu { "shifted_schur_device" } else { "lu" },
-            "include_demag": true,
-            "magnetostatic_bc": "periodic_airbox_k0",
+            "include_demag": plan.enable_demag && plan.operator.include_demag,
+            "magnetostatic_bc": magnetostatic_bc,
         }),
     );
     diagnostics.insert(
@@ -1865,7 +2761,7 @@ fn insert_native_poisson_airbox_hardened_contract(
     diagnostics.insert(
         "boundary_gauge".to_string(),
         serde_json::json!({
-            "magnetostatic_bc": "periodic_airbox_k0",
+            "magnetostatic_bc": magnetostatic_bc,
             "outer_boundary_kind": outer_boundary_kind,
             "robin_beta": robin_beta,
             "robin_beta_unit": "1/m",
@@ -1884,6 +2780,10 @@ fn insert_native_poisson_airbox_hardened_contract(
             "tau_rad_per_s": target_tau_rad_s,
         }),
     );
+    let backend_reported_residual =
+        diagnostics_number(diagnostics, "slepc_reported_backward_error")
+            .or_else(|| diagnostics_number(diagnostics, "last_residual_relative"))
+            .filter(|value| value.is_finite() && *value >= 0.0);
     diagnostics.insert(
         "block_residuals".to_string(),
         serde_json::json!({
@@ -1891,9 +2791,9 @@ fn insert_native_poisson_airbox_hardened_contract(
             "eps_phi": eps_phi,
             "eps_gauge": eps_gauge,
             "eps_full": eps_full,
-            "backend_reported_residual": diagnostics_number(diagnostics, "slepc_reported_backward_error").unwrap_or_else(|| diagnostics_number(diagnostics, "last_residual_relative").unwrap_or(eps_full)),
+            "backend_reported_residual": backend_reported_residual,
             "certification_tolerance": certification_tolerance,
-            "certified": eps_full <= certification_tolerance,
+            "certified": eps_full.is_some_and(|value| value <= certification_tolerance),
         }),
     );
     diagnostics.insert(

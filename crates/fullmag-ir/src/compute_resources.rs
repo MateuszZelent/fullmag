@@ -41,8 +41,8 @@ impl RequestedThreads {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ComputeTargetIR {
     #[default]
     Local,
@@ -52,6 +52,24 @@ pub enum ComputeTargetIR {
     Pool {
         id: String,
     },
+}
+
+// Empty struct variants reject extra fields, unlike internally tagged unit variants.
+impl<'de> Deserialize<'de> for ComputeTargetIR {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum Wire {
+            Local {},
+            Node { id: String },
+            Pool { id: String },
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Local {} => Self::Local,
+            Wire::Node { id } => Self::Node { id },
+            Wire::Pool { id } => Self::Pool { id },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,8 +139,8 @@ pub struct MemoryReservationIR {
     pub reservation_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ComputeParallelismIR {
     #[default]
     SingleProcess,
@@ -132,6 +150,36 @@ pub enum ComputeParallelismIR {
         ranks_per_node: u32,
         gpus_per_rank: u32,
     },
+}
+
+impl<'de> Deserialize<'de> for ComputeParallelismIR {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum Wire {
+            SingleProcess {},
+            Distributed {
+                ranks: u32,
+                threads_per_rank: u32,
+                ranks_per_node: u32,
+                gpus_per_rank: u32,
+            },
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::SingleProcess {} => Self::SingleProcess,
+            Wire::Distributed {
+                ranks,
+                threads_per_rank,
+                ranks_per_node,
+                gpus_per_rank,
+            } => Self::Distributed {
+                ranks,
+                threads_per_rank,
+                ranks_per_node,
+                gpus_per_rank,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

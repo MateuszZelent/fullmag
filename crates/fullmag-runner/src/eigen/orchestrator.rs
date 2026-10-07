@@ -11,8 +11,8 @@
 //! tangent-plane LLG assembly is ready.
 
 use crate::eigen::artifacts::{
-    write_branch_bundle, write_frequency_domain_eigen_manifest, write_mode_bundle,
-    write_path_bundle, FrequencyDomainArtifactIdentity,
+    write_branch_bundle_with_sample_namespace, write_frequency_domain_eigen_manifest,
+    write_mode_bundle, write_path_bundle_with_sample_namespace, FrequencyDomainArtifactIdentity,
 };
 use crate::eigen::path::expand_k_sampling;
 use crate::eigen::tracking::track_branches;
@@ -87,6 +87,7 @@ pub fn run_path_or_single<S: SingleKSolver>(
     }
 
     let mut result = PathSolveResult {
+        gamma0_rad_s_per_a_m: plan.gyromagnetic_ratio,
         samples: sample_results,
         branches: Vec::new(),
         solver_model,
@@ -94,6 +95,7 @@ pub fn run_path_or_single<S: SingleKSolver>(
         include_demag: plan.operator.include_demag,
         dispersion_validation: plan.dispersion_validation.clone(),
         k0_kittel_validation: plan.k0_kittel_validation.clone(),
+        solver_policy: plan.solver_policy.clone(),
         dispersion_analytic_reference: plan.dispersion_validation.as_ref().map(|_| {
             DispersionAnalyticReferenceContext {
                 external_field: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
@@ -113,10 +115,20 @@ pub fn run_path_or_single<S: SingleKSolver>(
         artifact_identity.validate().map_err(|error| RunError {
             message: format!("invalid frequency-domain artifact identity: {error}"),
         })?;
-        write_path_bundle(output_dir, &result).map_err(|error| RunError {
+        write_path_bundle_with_sample_namespace(
+            output_dir,
+            &result,
+            !plan.bias_field_samples.is_empty(),
+        )
+        .map_err(|error| RunError {
             message: format!("failed to write path bundle: {error}"),
         })?;
-        write_branch_bundle(output_dir, &result).map_err(|error| RunError {
+        write_branch_bundle_with_sample_namespace(
+            output_dir,
+            &result,
+            !plan.bias_field_samples.is_empty(),
+        )
+        .map_err(|error| RunError {
             message: format!("failed to write branch bundle: {error}"),
         })?;
         write_mode_bundle(output_dir, &result).map_err(|error| RunError {
@@ -197,6 +209,7 @@ mod tests {
                     norm: 1.0,
                     mass_norm: Some(1.0),
                     max_amplitude: 1.0,
+                    residual_relative_l2: Some(1.0e-8),
                     residual_norm: Some(1.0e-8),
                     residual_linf: Some(1.0e-9),
                     tangent_leakage_mean_abs: Some(1.0e-12),
@@ -209,6 +222,7 @@ mod tests {
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
                     node_mass_weights: None,
+                    consistent_p1_metric: None,
                     component_participation:
                         crate::eigen::ModalParticipationObservable::unavailable_without_context(
                             "cpu",
@@ -308,6 +322,7 @@ mod tests {
             mode_tracking: None,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
         }
     }
 
@@ -402,6 +417,7 @@ mod tests {
                     norm: 1.0,
                     mass_norm: Some(1.0),
                     max_amplitude: 1.0,
+                    residual_relative_l2: Some(1.0e-8),
                     residual_norm: Some(1.0e-8),
                     residual_linf: Some(1.0e-9),
                     tangent_leakage_mean_abs: Some(1.0e-12),
@@ -414,6 +430,7 @@ mod tests {
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
                     node_mass_weights: None,
+                    consistent_p1_metric: None,
                     component_participation:
                         crate::eigen::ModalParticipationObservable::unavailable_without_context(
                             "cpu",

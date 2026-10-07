@@ -7,6 +7,7 @@ It never accepts a Docker mount or an arbitrary shell command from a job.
 import argparse
 import getpass
 import json
+import re
 import sqlite3
 from pathlib import Path
 import sys
@@ -27,14 +28,22 @@ def main(argv=None):
     sub.add_parser('list')
     sub.add_parser('doctor')
     sub.add_parser('retention-plan')
+    preview = sub.add_parser('retention-preview')
+    preview.add_argument('--scope', choices=('execution', 'sources', 'runtime'), default='execution')
+    preview.add_argument('--job-id', action='append', default=None)
+    for action in ('retention-get', 'retention-apply', 'retention-cancel'):
+        command = sub.add_parser(action)
+        command.add_argument('plan_id')
     container_config = sub.add_parser('container-configure')
     container_config.add_argument('--image-id', required=True)
     container_config.add_argument('--port', type=int, default=None)
     profile_activation = container_config.add_mutually_exclusive_group()
     profile_activation.add_argument('--enable-current-contracts', action='store_true')
     profile_activation.add_argument('--enable-slepc-modal', action='store_true')
+    profile_activation.add_argument('--enable-slepc-runtime-v2', action='store_true')
     replacement = sub.add_parser('container-replace')
     replacement.add_argument('--image-id', required=True)
+    replacement.add_argument('--abandon-readonly-preview', default=None)
     sub.add_parser('container-resume')
     for command in ('container-start', 'container-status', 'container-stop'):
         sub.add_parser(command)
@@ -77,7 +86,29 @@ def main(argv=None):
             raise QueueError('No runner jobs have been submitted')
         owner = getpass.getuser()
         container_mode = (storage / 'index' / 'local-runner-container.json').exists()
-        if args.action == 'retention-plan':
+        if args.action in ('retention-preview', 'retention-get', 'retention-apply', 'retention-cancel'):
+            if not container_mode:
+                raise QueueError('Maintenance requires the container coordinator')
+            from local_runner.container_client import request
+            if args.action == 'retention-preview':
+                payload = {'scope': args.scope}
+                if args.job_id is not None:
+                    payload['job_ids'] = args.job_id
+                result = request(layout, owner=owner, method='POST', path='/api/v1/retention/plans', payload=payload)
+                if result.get('scope') != args.scope:
+                    raise QueueError('Coordinator did not acknowledge the requested maintenance scope')
+            else:
+                if re.fullmatch(r'plan-[a-f0-9]{8,32}', args.plan_id) is None:
+                    raise QueueError('Invalid maintenance plan ID')
+                path = '/api/v1/retention/plans/' + args.plan_id
+                if args.action == 'retention-apply':
+                    path += '/apply'
+                elif args.action == 'retention-cancel':
+                    path += '/cancel'
+                mutation = args.action in ('retention-apply', 'retention-cancel')
+                result = request(layout, owner=owner, method='POST' if mutation else 'GET',
+                                 path=path, payload={} if mutation else None)
+        elif args.action == 'retention-plan':
             if not container_mode:
                 raise QueueError('Retention inventory requires the container coordinator')
             from local_runner.container_client import request
@@ -92,9 +123,12 @@ def main(argv=None):
                     port=args.port,
                     enable_current_contracts=args.enable_current_contracts,
                     enable_slepc_modal=args.enable_slepc_modal,
+                    enable_slepc_runtime_v2=args.enable_slepc_runtime_v2,
                 )
             elif args.action == 'container-replace':
-                result = container_client.replace(layout, args.image_id, owner=owner)
+                options = ({'abandon_readonly_preview': args.abandon_readonly_preview}
+                           if args.abandon_readonly_preview is not None else {})
+                result = container_client.replace(layout, args.image_id, owner=owner, **options)
             elif args.action == 'container-resume':
                 result = container_client.request(layout, owner=owner, method='POST', path='/resume', payload={})
             elif args.action == 'container-start':
@@ -168,7 +202,11 @@ def main(argv=None):
                 destination.mkdir(parents=True, exist_ok=False)
                 manifest = capture_source(Path(layout['repo_root']), destination,
                                           mode=args.source, ref=args.ref,
-                                          include_untracked=tuple(args.include_untracked))
+                                          include_untracked=tuple(args.include_untracked),
+                                          content_store=validate_path(
+                                              storage / 'cache' / 'source-content-v1',
+                                              storage,
+                                              'source content store'))
                 if args.operation == 'build':
                     final_native = native_identity(Path(layout['repo_root']), args.source, manifest['resolved_commit'])
                     if native is not None and native != final_native:
@@ -222,6 +260,16 @@ def main(argv=None):
                 queue.cancel(args.job_id, owner)
                 result = queue.get(args.job_id)
         print(json.dumps(result, indent=2))
+        if args.action == 'retention-cancel':
+            status = result.get('status')
+            if status == 'cancelled':
+                return 0
+            if status == 'cancel_requested':
+                return 124
+            return 1
+        if args.action in ('retention-preview', 'retention-apply') and result.get('status') in (
+                'blocked', 'failed', 'partial', 'interrupted_unknown'):
+            return 1
         if args.action == 'run-once' and result is not None and result.get('state') != 'succeeded':
             return 1
         return 0

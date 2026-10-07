@@ -1,0 +1,389 @@
+{
+  "document": {
+    "path": "docs/physics/r4-linearization-identity-v2.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "Brak dowodu wykonania GPU i parytetu dla identity v2; format nie daje cichego fallbacku."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Identity v2 dotyczy artefaktów FEM equilibrium/modal."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Identity v2 dotyczy artefaktów FEM equilibrium/modal."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-equilibrium-identity-tuple",
+      "symbols": [
+        "I-eq",
+        "D-mat-eq",
+        "D-stat",
+        "D-bnd"
+      ],
+      "sources": [
+        "physical-identity"
+      ]
+    },
+    {
+      "id": "eq-framed-sha256",
+      "symbols": [
+        "N",
+        "p",
+        "p-length",
+        "D-N"
+      ],
+      "sources": [
+        "framed-digest"
+      ]
+    },
+    {
+      "id": "eq-m0-content-digest",
+      "symbols": [
+        "D-m0",
+        "m0",
+        "n",
+        "i",
+        "c"
+      ],
+      "sources": [
+        "m0-digest"
+      ]
+    },
+    {
+      "id": "eq-linearization-identity-digest",
+      "symbols": [
+        "p-id",
+        "D-id",
+        "I-v2"
+      ],
+      "sources": [
+        "identity-digest"
+      ]
+    },
+    {
+      "id": "eq-recomputed-certificate-preimage",
+      "symbols": [
+        "p-cert",
+        "D-cert",
+        "D-cert-raw",
+        "C"
+      ],
+      "sources": [
+        "certificate-preimage"
+      ]
+    },
+    {
+      "id": "eq-m0-node-norm",
+      "symbols": [
+        "m0",
+        "i"
+      ],
+      "sources": [
+        "m0-gate"
+      ]
+    },
+    {
+      "id": "eq-source-snapshot-binding",
+      "symbols": [
+        "D-source-producer",
+        "D-source-consumer"
+      ],
+      "sources": [
+        "source-binding"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "I-eq",
+      "latex": "\\mathcal I_{\\mathrm{eq}}",
+      "meaning": "fizyczna krotka tożsamości równowagi",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-mat-eq",
+      "latex": "D_{\\mathrm{mat}}^{\\mathrm{eq}}",
+      "meaning": "canonical physical equilibrium material signature",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-stat",
+      "latex": "D_{\\mathrm{stat}}",
+      "meaning": "signature statycznych pól i interakcji",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-bnd",
+      "latex": "D_{\\mathrm{bnd}}",
+      "meaning": "signature statycznych warunków brzegowych",
+      "si_unit": "1"
+    },
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "namespace ramki digestu",
+      "si_unit": "1"
+    },
+    {
+      "id": "p",
+      "latex": "p",
+      "meaning": "dokładne bajty UTF-8 preimage",
+      "si_unit": "1"
+    },
+    {
+      "id": "p-length",
+      "latex": "|p|",
+      "meaning": "długość preimage",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-N",
+      "latex": "D_N(p)",
+      "meaning": "framed SHA-256",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-m0",
+      "latex": "D_{m_0}",
+      "meaning": "digest wektora równowagi",
+      "si_unit": "1"
+    },
+    {
+      "id": "m0",
+      "latex": "\\mathbf m_{0,i}",
+      "meaning": "znormalizowana magnetyzacja w węźle $i$",
+      "si_unit": "1"
+    },
+    {
+      "id": "n",
+      "latex": "n",
+      "meaning": "liczba węzłów w równowadze",
+      "si_unit": "1"
+    },
+    {
+      "id": "i",
+      "latex": "i",
+      "meaning": "indeksy węzłów lub próbek",
+      "si_unit": "1"
+    },
+    {
+      "id": "c",
+      "latex": "c",
+      "meaning": "indeks składowej wektora magnetyzacji",
+      "si_unit": "1"
+    },
+    {
+      "id": "p-id",
+      "latex": "p_{\\mathrm{id}}",
+      "meaning": "preimage identity v2",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-id",
+      "latex": "D_{\\mathrm{id}}",
+      "meaning": "digest identity v2",
+      "si_unit": "1"
+    },
+    {
+      "id": "I-v2",
+      "latex": "I_{\\mathrm{v2}}",
+      "meaning": "typed payload identity v2",
+      "si_unit": "1"
+    },
+    {
+      "id": "p-cert",
+      "latex": "p_{\\mathrm{cert}}",
+      "meaning": "preimage certyfikatu recomputed",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-cert",
+      "latex": "D_{\\mathrm{cert}}",
+      "meaning": "historyczny digest certyfikatu",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-cert-raw",
+      "latex": "D_{\\mathrm{cert,raw}}",
+      "meaning": "digest bajtów preimage certyfikatu",
+      "si_unit": "1"
+    },
+    {
+      "id": "C",
+      "latex": "C",
+      "meaning": "typed recomputed certificate",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-source-producer",
+      "latex": "D_{\\mathrm{source}}^{\\mathrm{producer}}",
+      "meaning": "digest snapshotu źródła producenta",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-source-consumer",
+      "latex": "D_{\\mathrm{source}}^{\\mathrm{consumer}}",
+      "meaning": "digest snapshotu źródła konsumenta",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "physical-identity",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "from_relax_plan",
+      "responsibility": "Oblicza fizyczne sygnatury materiału, statyki i boundary niezależnie od raw damping provenance."
+    },
+    {
+      "id": "framed-digest",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "linearization_identity_v2_content_sha256",
+      "responsibility": "Wymusza namespace, zero content_sha256, długość little-endian i exact serde bytes."
+    },
+    {
+      "id": "m0-digest",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "vector_field_content_sha256",
+      "responsibility": "Zachowuje historyczny digest bitowych wartości m0 i liczby węzłów."
+    },
+    {
+      "id": "identity-digest",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "LinearizationIdentityV2",
+      "responsibility": "Typed schema identity v2 i własny framed digest po exact preimage."
+    },
+    {
+      "id": "consumer-plan-snapshot",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "consumer_plan_snapshot_bytes_and_sha256",
+      "responsibility": "Zwraca jeden surowy serde JSON stream planu konsumenta dla digestu identity i sidecara bez koperty."
+    },
+    {
+      "id": "identity-preimage-sidecar",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "linearization_identity_v2_preimage_sidecar_bytes",
+      "responsibility": "Publikuje exact serde preimage identity jako linearization_identity_preimage.v1 bez cyklicznego hasha."
+    },
+    {
+      "id": "identity-manifest-binding",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "validate_published_linearization_identity_sidecars",
+      "responsibility": "Weryfikuje published identity/preimage i reklamuje ścieżki manifestu tylko po zgodności digestu."
+    },
+    {
+      "id": "consumer-plan-manifest-binding",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "inspect_r4_sidecars",
+      "responsibility": "Wymaga consumer_plan_snapshot.v1.json dla każdego kompletnego sample-setu i wiąże jego raw SHA z identity."
+    },
+    {
+      "id": "state-artifact-paths",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_artifacts.rs",
+      "symbol": "state_artifact_paths",
+      "responsibility": "Wybiera końcową rootową albo sample-scoped ścieżkę equilibrium/state przed framingiem identity."
+    },
+    {
+      "id": "path-sample-index-forwarding",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "solve_single_k",
+      "responsibility": "Przekazuje rzeczywisty indeks próbki do modalnego producenta przed publikacją signed sidecarów."
+    },
+    {
+      "id": "signed-sample-remap",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "remap_single_k_mode_artifacts",
+      "responsibility": "Zachowuje gotowe sample-scoped signed bytes i odrzuca niezgodny indeks źródłowy."
+    },
+    {
+      "id": "single-k-r4-arrays",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "sample_scoped_signed_sidecar_paths",
+      "responsibility": "Publikuje plural arrays R4 w kanonicznej kolejności numerycznej, z minimalną szerokością sample_NNNN, bez modyfikacji signed bytes."
+    },
+    {
+      "id": "r4-sidecar-coverage",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "inspect_r4_sidecars",
+      "responsibility": "Porównuje rzeczywisty zbiór sample_index z kompletną rodziną accepted/identity/preimage/certified/recomputed, sprawdza exact identity own-links i publikuje per-sample digest; brak lub częściowość pozostaje NOT_VERIFIED."
+    },
+    {
+      "id": "path-r4-manifest-coverage",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs",
+      "symbol": "build_eigen_path_frequency_domain_manifest",
+      "responsibility": "Wiąże path manifest z rzeczywistymi próbkami solvera i publikuje r4_replay oraz mapę identity digestów; historyczny brak sidecarów nie staje się kwalifikacją."
+    },
+    {
+      "id": "canonical-signed-sample-remap",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "sample_scoped_signed_state_artifact_index",
+      "responsibility": "Wymusza jeden parser canonical sample_NNNN, akceptując Rust minimum-width sample_10000 i odrzucając arbitralne zero-padding."
+    },
+    {
+      "id": "producer-provenance-paths",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "sample_scoped_producer_provenance_paths",
+      "responsibility": "Wybiera immutable producer provenance sidecary i sortuje je numerycznie po sample_index bez remapowania ścieżek ani bajtów."
+    },
+    {
+      "id": "producer-provenance-manifest",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs",
+      "symbol": "build_eigen_path_frequency_domain_manifest",
+      "responsibility": "Publikuje producer_provenance_v1_path(s) w manifestach single/path; plural paths zachowują kolejność sample_index."
+    },
+    {
+      "id": "certificate-preimage",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "recomputed_fem_linearization_certificate_preimage_bytes",
+      "responsibility": "Zwraca exact UTF-8 JSON bytes certyfikatu z wyzerowanym content_sha256."
+    },
+    {
+      "id": "m0-gate",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "validate_handoff_m0_norms",
+      "responsibility": "Odrzuca niezgodne liczby węzłów i nienormalizowany m0 na węzłach magnetycznych."
+    },
+    {
+      "id": "source-binding",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "strict_build_identity_snapshot",
+      "responsibility": "Wymaga canonical raw64 lowercase source snapshotu build identity."
+    },
+    {
+      "id": "shared-source-snapshot-validation",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "validate_linearization_identity_source_snapshots",
+      "responsibility": "Wspólna walidacja raw64, nested/top-level binding i same-source policy w writerze oraz structural inspectorze."
+    },
+    {
+      "id": "python-identity-replay",
+      "path": "scripts/fem_linearization_identity_replay.py",
+      "symbol": "replay_identity_preimage",
+      "responsibility": "Waliduje exact sidecar own identity preimage, typed semantic equality i framed content digest."
+    },
+    {
+      "id": "python-identity-replay-tests",
+      "path": "scripts/test_fem_linearization_identity_replay.py",
+      "symbol": "class IdentityReplayTests",
+      "responsibility": "Regresje mutacji, duplicate/unknown fields, typów JSON, UTF-8 i reserializacji sidecara."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

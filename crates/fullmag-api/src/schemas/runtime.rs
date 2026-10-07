@@ -87,6 +87,17 @@ pub struct CurrentRunResource {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StageExecutionResource {
+    /// Identity of the same locked snapshot that owns the stage records.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub session_id: String,
+    #[serde(default)]
+    #[schema(required = true)]
+    pub session_epoch: String,
+    /// Explicit null means no run; omission is not accepted by the live UI.
+    #[serde(default)]
+    #[schema(required = true, nullable = true)]
+    pub run_id: Option<String>,
     pub revision: u64,
     pub runtime_state: String,
     pub total_stages: u32,
@@ -97,6 +108,66 @@ pub struct StageExecutionResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_stage_kind: Option<String>,
     pub stages: Vec<StageExecutionRecordResource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ParallelExecutionTelemetryResource {
+    pub sampled_at_unix_ms: u64,
+    pub active_workers: u32,
+    pub admission_desired_workers: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admission_worker_limit: Option<u32>,
+    pub admission_pending_samples: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_workers: Option<u32>,
+    pub cpu_target_percent: f64,
+    pub memory_target_percent: f64,
+    pub memory_reserve_bytes: u64,
+    pub cpu_target_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_busy_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allocated_cpu_cores: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_available_cores: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_limit_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_available_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Admission CPU demand envelope, including a conservative resolved-team
+    /// bound when a short or sparsely observed worker lacks CPU sampling coverage.
+    pub worker_peak_cpu_cores: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_peak_rss_bytes: Option<u64>,
+    pub admission_reason: String,
+    pub terminal: bool,
+}
+
+impl From<&fullmag_runner::LiveParallelExecutionTelemetry> for ParallelExecutionTelemetryResource {
+    fn from(value: &fullmag_runner::LiveParallelExecutionTelemetry) -> Self {
+        Self {
+            sampled_at_unix_ms: value.sampled_at_unix_ms,
+            active_workers: value.active_workers,
+            admission_desired_workers: value.admission_desired_workers,
+            admission_worker_limit: value.admission_worker_limit,
+            admission_pending_samples: value.admission_pending_samples,
+            resolved_workers: value.resolved_workers,
+            cpu_target_percent: value.cpu_target_percent,
+            memory_target_percent: value.memory_target_percent,
+            memory_reserve_bytes: value.memory_reserve_bytes,
+            cpu_target_kind: value.cpu_target_kind.clone(),
+            cpu_busy_percent: value.cpu_busy_percent,
+            allocated_cpu_cores: value.allocated_cpu_cores,
+            cpu_available_cores: value.cpu_available_cores,
+            memory_limit_bytes: value.memory_limit_bytes,
+            memory_available_bytes: value.memory_available_bytes,
+            worker_peak_cpu_cores: value.worker_peak_cpu_cores,
+            worker_peak_rss_bytes: value.worker_peak_rss_bytes,
+            admission_reason: value.admission_reason.clone(),
+            terminal: value.terminal,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -176,6 +247,8 @@ pub struct StageExecutionRecordResource {
     pub current_settle_step_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_settle_step_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_execution: Option<ParallelExecutionTelemetryResource>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

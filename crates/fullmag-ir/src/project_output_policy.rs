@@ -86,7 +86,7 @@ pub fn configure_project_autosave_policy(
         }
         fields.push(FieldAutosaveIR {
             kind: "field_autosave".into(),
-            quantity: "magnetization".into(),
+            quantity: "m".into(),
             every_seconds: (!relaxation).then_some(until_seconds),
             sample_period_policy: None,
             every_steps: relaxation.then_some(100),
@@ -106,4 +106,75 @@ pub fn configure_project_autosave_policy(
         .map_err(|errors| errors.join("; "))?;
     problem.study.sampling_mut().stage_autosave = Some(policy);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_relaxation_field_uses_canonical_quantity_and_step_cadence() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let mut sampling = problem.study.sampling().clone();
+        sampling.outputs.clear();
+        sampling.table_autosave = None;
+        sampling.stage_autosave = None;
+        problem.study = StudyIR::Relaxation {
+            algorithm: crate::RelaxationAlgorithmIR::LlgOverdamped,
+            dynamics: None,
+            stop: crate::RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_relaxation_time_s: None,
+            },
+            sampling,
+        };
+
+        configure_project_autosave_policy(&mut problem, OutputDataFormatIR::Hdf5, 4.0)
+            .expect("default relaxation output policy should be valid");
+
+        let policy = problem
+            .study
+            .sampling()
+            .stage_autosave
+            .as_ref()
+            .expect("default relaxation output policy should be installed");
+        assert_eq!(policy.format, AutosaveFormatIR::Hdf5);
+        assert_eq!(policy.fields.len(), 1);
+        assert_eq!(policy.fields[0].quantity, "m");
+        assert_eq!(policy.fields[0].every_steps, Some(100));
+        assert_eq!(policy.fields[0].every_seconds, None);
+    }
+
+    #[test]
+    fn default_time_evolution_fallback_uses_canonical_quantity_and_run_duration() {
+        let mut problem = ProblemIR::bootstrap_example();
+        assert!(matches!(&problem.study, StudyIR::TimeEvolution { .. }));
+        {
+            let sampling = problem.study.sampling_mut();
+            sampling.outputs.clear();
+            sampling.table_autosave = None;
+            sampling.stage_autosave = None;
+        }
+        let until_seconds = 2.5;
+
+        configure_project_autosave_policy(&mut problem, OutputDataFormatIR::Zarr, until_seconds)
+            .expect("default time-evolution output policy should be valid");
+
+        let policy = problem
+            .study
+            .sampling()
+            .stage_autosave
+            .as_ref()
+            .expect("default time-evolution output policy should be installed");
+        assert_eq!(policy.kind, "stage_autosave");
+        assert_eq!(policy.target, "results");
+        assert_eq!(policy.layout, AutosaveLayoutIR::Separate);
+        assert_eq!(policy.format, AutosaveFormatIR::Zarr);
+        assert_eq!(policy.fields.len(), 1);
+        assert_eq!(policy.fields[0].quantity, "m");
+        assert_eq!(policy.fields[0].every_seconds, Some(until_seconds));
+        assert_eq!(policy.fields[0].every_steps, None);
+    }
 }

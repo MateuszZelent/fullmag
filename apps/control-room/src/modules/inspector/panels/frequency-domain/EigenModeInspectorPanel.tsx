@@ -12,8 +12,10 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   buildEigenSpectrumChartModel,
+  eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { buildEigenResidualSummary, readEigenModeResourcePayload } from "@/shared/domain/analysis/eigenResidualSummary";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { phasorAdapter } from "@/shared/domain/analysis/phasorConventionAdapter";
 import { Button } from "@/shared/ui/Button";
@@ -100,7 +102,10 @@ export function EigenModeInspectorPanel({
         <FieldRow label="Mode field" value={summary.fieldStatus} />
         <FieldRow label="Mode field resource" value={summary.fieldResource} />
         <FieldRow label="Available field views" value={summary.availableViews} />
-        <FieldRow label="Residual" value={summary.residual} />
+        <FieldRow label="Absolute residual (L2)" value={summary.residualAbsoluteL2} />
+        <FieldRow label="Relative residual (L2)" value={summary.residualRelativeL2} />
+        <FieldRow label="Residual scope" value={summary.residualScope} />
+        <FieldRow label="Spectrum residual (type unspecified)" value={summary.residualSpectrumReported} />
         <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
         <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
         <FieldRow label="3D workflow" value={summary.workflow} />
@@ -296,7 +301,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     (point) =>
       point.sampleIndex === sampleIndex && point.rawModeIndex === modeIndex,
   );
-  const modePayload = record(eigenMode.data);
+  const modePayload = readEigenModeResourcePayload(eigenMode.data, sampleIndex, modeIndex);
   const componentSummary = record(modePayload?.component_summary);
   const frequencyHz =
     finiteNumber(modePayload?.frequency_real_hz) ??
@@ -307,24 +312,22 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     spectrumPoint?.imaginaryFrequencyHz ??
     null;
   const angularFrequency = finiteNumber(modePayload?.angular_frequency_rad_per_s);
-  const residual =
-    finiteNumber(modePayload?.residual_norm) ??
-    spectrumPoint?.residualNorm ??
-    null;
+  const residual = buildEigenResidualSummary(modePayload, spectrumPoint?.residualNorm);
   const tangentLeakage =
     finiteNumber(modePayload?.tangent_leakage_max_abs) ??
     spectrumPoint?.tangentLeakageMax ??
     null;
-  const fieldId =
-    ref?.fieldId ??
-    fieldMeta.data?.field_id ??
-    spectrumPoint?.modeFieldId ??
-    null;
-  const fieldResource =
-    ref?.resourceRef ??
-    fieldMeta.data?.resource_key ??
-    spectrumPoint?.modeFieldResourceKey ??
-    null;
+  const spectrumFieldAvailable =
+    spectrumPoint == null || eigenModeFieldAvailable(spectrumPoint);
+  const fieldId = spectrumFieldAvailable
+    ? ref?.fieldId ?? fieldMeta.data?.field_id ?? spectrumPoint?.modeFieldId ?? null
+    : null;
+  const fieldResource = spectrumFieldAvailable
+    ? ref?.resourceRef ??
+      fieldMeta.data?.resource_key ??
+      spectrumPoint?.modeFieldResourceKey ??
+      null
+    : null;
   const identity = buildEigenModeIdentityViewModel({
     branchId: ref?.branchId,
     fieldId,
@@ -426,7 +429,10 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
       qualityFactor == null ? "not available" : formatNumber(qualityFactor),
     modeIdentity: identity.label,
     phaseConvention,
-    residual: formatNumberOrUnavailable(residual),
+    residualAbsoluteL2: formatNumberOrUnavailable(residual.absoluteL2),
+    residualRelativeL2: formatNumberOrUnavailable(residual.relativeL2),
+    residualScope: residual.scope,
+    residualSpectrumReported: formatNumberOrUnavailable(residual.reportedSpectrumResidual),
     tangentLeakageMax: formatNumberOrUnavailable(tangentLeakage),
     valueKind: stringValue(fieldMetaRecord?.value_kind),
     workflow:

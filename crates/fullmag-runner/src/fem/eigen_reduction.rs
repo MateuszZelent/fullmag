@@ -1,4 +1,7 @@
-use super::eigen_constants::TANGENT_FRAME_IDENTITY_TOLERANCE;
+use super::eigen_constants::{
+    GAMMA_K_TOLERANCE_RAD_PER_M, PERIODIC_TANGENT_TRANSPORT_TOLERANCE,
+    TANGENT_FRAME_IDENTITY_TOLERANCE,
+};
 use super::eigen_math::dot;
 use super::eigen_projection::tangent_bases;
 use crate::types::RunError;
@@ -83,22 +86,31 @@ pub(super) fn build_reduction_map(
 pub(super) fn is_gamma_k_sampling(k_sampling: Option<&KSamplingIR>) -> bool {
     match k_sampling {
         None => true,
-        Some(KSamplingIR::Single { k_vector }) => k_vector.iter().all(|value| *value == 0.0),
+        Some(KSamplingIR::Single { k_vector }) => k_vector
+            .iter()
+            .all(|value| value.is_finite() && value.abs() <= GAMMA_K_TOLERANCE_RAD_PER_M),
         Some(KSamplingIR::Path { points, .. }) => {
             !points.is_empty()
-                && points
-                    .iter()
-                    .all(|point| point.k_vector.iter().all(|value| *value == 0.0))
+                && points.iter().all(|point| {
+                    point.k_vector.iter().all(|value| {
+                        value.is_finite() && value.abs() <= GAMMA_K_TOLERANCE_RAD_PER_M
+                    })
+                })
         }
     }
 }
 
 pub(super) fn k_sampling_contains_nonzero(k_sampling: Option<&KSamplingIR>) -> bool {
     match k_sampling {
-        Some(KSamplingIR::Single { k_vector }) => k_vector.iter().any(|value| *value != 0.0),
-        Some(KSamplingIR::Path { points, .. }) => points
+        Some(KSamplingIR::Single { k_vector }) => k_vector
             .iter()
-            .any(|point| point.k_vector.iter().any(|value| *value != 0.0)),
+            .any(|value| !value.is_finite() || value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M),
+        Some(KSamplingIR::Path { points, .. }) => points.iter().any(|point| {
+            point
+                .k_vector
+                .iter()
+                .any(|value| !value.is_finite() || value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M)
+        }),
         None => false,
     }
 }
@@ -135,6 +147,82 @@ pub(super) fn validate_tangent_frame_transport_support(
         return Ok(());
     }
     reject_nonidentity_tangent_frame_transport(topology, &selected_pairs, equilibrium)
+}
+
+/// Validate physical equilibrium continuity for the native shared-domain
+/// Full2x2 payload. Local tangent coordinates may rotate across a periodic
+/// pair; the native constraint transports them with `T_dst^T T_src` before
+/// applying the Bloch phase. The physical equilibrium itself must still match
+/// because this route supports pure translations (`Q = I`) only.
+pub(super) fn validate_shared_domain_tangent_frame_transport(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    equilibrium: &[Vector3],
+) -> Result<(), RunError> {
+    if !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        return Ok(());
+    }
+    let kind = plan.spin_wave_bc.kind();
+    if !matches!(
+        kind,
+        SpinWaveBoundaryKindIR::Periodic | SpinWaveBoundaryKindIR::Floquet
+    ) || topology.periodic_node_pairs.is_empty()
+    {
+        return Ok(());
+    }
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    let selected_pairs = topology
+        .periodic_node_pairs
+        .iter()
+        .filter(|(pair_id, _, _)| {
+            requested_pair_ids.is_empty()
+                || requested_pair_ids
+                    .iter()
+                    .any(|requested| *requested == pair_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected_pairs.is_empty() {
+        return Ok(());
+    }
+    if equilibrium.len() < topology.n_nodes {
+        return Err(RunError {
+            message: format!(
+                "shared-domain Floquet tangent transport cannot be validated: equilibrium has {} nodes but mesh has {} nodes",
+                equilibrium.len(),
+                topology.n_nodes
+            ),
+        });
+    }
+    for (pair_id, node_a, node_b) in selected_pairs {
+        let node_a = node_a as usize;
+        let node_b = node_b as usize;
+        if node_a >= topology.n_nodes || node_b >= topology.n_nodes {
+            return Err(RunError {
+                message: format!(
+                    "shared-domain Floquet tangent transport pair '{pair_id}' has an endpoint outside the mesh"
+                ),
+            });
+        }
+        if topology.magnetic_node_volumes[node_a] <= 0.0
+            || topology.magnetic_node_volumes[node_b] <= 0.0
+        {
+            continue;
+        }
+        let left = equilibrium[node_a];
+        let right = equilibrium[node_b];
+        let mismatch = (left[0] - right[0])
+            .hypot(left[1] - right[1])
+            .hypot(left[2] - right[2]);
+        if !mismatch.is_finite() || mismatch > PERIODIC_TANGENT_TRANSPORT_TOLERANCE {
+            return Err(RunError {
+                message: format!(
+                    "shared-domain Floquet tangent transport requires matching physical equilibrium vectors for pure translation Q=I; pair_id='{pair_id}' node_a={node_a} node_b={node_b} m0_mismatch={mismatch:.6e} tolerance={PERIODIC_TANGENT_TRANSPORT_TOLERANCE:.6e}"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -405,4 +493,31 @@ fn magnetic_boundary_nodes(topology: &MeshTopology) -> std::collections::HashSet
     (0..topology.n_nodes)
         .filter(|&i| topology.magnetic_node_volumes[i] > 0.0 && in_airbox_element.contains(&i))
         .collect()
+}
+
+#[cfg(test)]
+mod gamma_classification_tests {
+    use super::*;
+
+    #[test]
+    fn gamma_threshold_agrees_with_single_k_policy() {
+        for (component, gamma) in [
+            (0.0, true),
+            (5e-13, true),
+            (-1e-12, true),
+            (2e-12, false),
+            (f64::NAN, false),
+            (f64::INFINITY, false),
+        ] {
+            let sampling = KSamplingIR::Single {
+                k_vector: [component, 0.0, 0.0],
+            };
+            assert_eq!(is_gamma_k_sampling(Some(&sampling)), gamma);
+            assert_eq!(
+                super::super::eigen_policy::k_sampling_is_single_k0(Some(&sampling)),
+                gamma
+            );
+            assert_eq!(k_sampling_contains_nonzero(Some(&sampling)), !gamma);
+        }
+    }
 }

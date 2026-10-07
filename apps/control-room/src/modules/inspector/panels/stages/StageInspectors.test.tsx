@@ -778,6 +778,27 @@ describe("Study stage inspectors", () => {
           progressDetail: "heartbeat 8.5s since last solver update",
           progressLabel: "solving",
           progressPercent: 35,
+          parallelExecution: {
+            sampled_at_unix_ms: 1_781_467_068_771,
+            active_workers: 2,
+            admission_desired_workers: 3,
+            admission_worker_limit: 4,
+            admission_pending_samples: 5,
+            resolved_workers: null,
+            cpu_target_percent: 90,
+            memory_target_percent: 80,
+            memory_reserve_bytes: 1024 * 1024 * 1024,
+            cpu_target_kind: "soft_admission_target",
+            cpu_busy_percent: 62.5,
+            allocated_cpu_cores: 8,
+            cpu_available_cores: 4,
+            memory_limit_bytes: 8 * 1024 * 1024 * 1024,
+            memory_available_bytes: 6 * 1024 * 1024 * 1024,
+            worker_peak_cpu_cores: 1.8,
+            worker_peak_rss_bytes: 512 * 1024 * 1024,
+            admission_reason: "waiting_cpu_headroom_for_probe",
+            terminal: false,
+          },
           status: "running",
         }}
       />,
@@ -787,6 +808,14 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Eigenmode solve progress");
     expect(html).toContain("solving");
     expect(html).toContain("heartbeat 8.5s since last solver update");
+    expect(html).toContain("2 active; admission 3; limit 4");
+    expect(html).toContain("CPU 90.0%; memory 80.0%; reserve 1024.0 MiB; Soft CPU admission target");
+    expect(html).toContain(
+      "62.5% CPU busy (leaf allocation); 6144.0 MiB available / 8192.0 MiB limit",
+    );
+    expect(html).toContain("4.00 cores available for admission");
+    expect(html).toContain("Waiting for CPU capacity");
+    expect(html).toContain("2026-06-14T19:57:48.771Z");
     expect(html).not.toContain("fm-study-progress--indeterminate");
     expect(html).toContain("aria-valuenow=\"35\"");
   });

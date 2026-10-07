@@ -15,6 +15,7 @@ from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
 from fullmag.runtime.script_builder import (
     export_builder_draft,
     render_loaded_problem_as_script,
+    render_scene_document_as_script,
 )
 
 
@@ -23,11 +24,22 @@ def _without_source_identity(problem_ir: dict[str, object]) -> dict[str, object]
     problem_meta = dict(comparable["problem_meta"])
     problem_meta.pop("script_source", None)
     problem_meta.pop("source_hash", None)
-    runtime_metadata = dict(problem_meta.get("runtime_metadata", {}))
+    runtime_metadata = dict(problem_meta.get("runtime_metadata") or {})
     runtime_metadata.pop("output_storage_source_stem", None)
     problem_meta["runtime_metadata"] = runtime_metadata
     comparable["problem_meta"] = problem_meta
     return comparable
+
+
+def _assert_output_storage_source_stem_contract(
+    scene_ir: dict[str, object],
+    reference_ir: dict[str, object],
+    reference_stem: str,
+) -> None:
+    scene_runtime = scene_ir["problem_meta"]["runtime_metadata"]
+    reference_runtime = reference_ir["problem_meta"]["runtime_metadata"]
+    assert "output_storage_source_stem" not in scene_runtime
+    assert reference_runtime["output_storage_source_stem"] == reference_stem
 
 
 def test_scene_document_lowers_to_canonical_ir_with_runtime_and_scene_semantics(
@@ -95,6 +107,9 @@ film.alpha.absorbing_boundary(total_width=40e-9, ramp_width=20e-9, max_damping=0
     reference_ir["selections"] = scene["selections"]
     reference_ir["magnetization_constraints"] = scene["magnetization_constraints"]
 
+    _assert_output_storage_source_stem_contract(
+        problem_ir, reference_ir, canonical_source.stem
+    )
     assert problem_ir["problem_meta"]["name"] == "scene-lowering-study"
     assert problem_ir["problem_meta"]["runtime_metadata"]["runtime_selection"] == (
         reference_ir["problem_meta"]["runtime_metadata"]["runtime_selection"]
@@ -407,6 +422,9 @@ study.stages.add_run(stage_id='run', until=1e-12)
         source_root=tmp_path,
     )
 
+    _assert_output_storage_source_stem_contract(
+        problem_ir, reference_ir, canonical_source.stem
+    )
     assert canonical_json_bytes(_without_source_identity(problem_ir)) == (
         canonical_json_bytes(_without_source_identity(reference_ir))
     )
@@ -783,6 +801,133 @@ def test_scene_document_problem_ir_rejects_unlowered_semantics(
 
     with pytest.raises(ValueError, match=message):
         _lower_scene_document(scene, tmp_path)
+
+
+@pytest.mark.parametrize("mode", ["serial", "adaptive"])
+def test_scene_document_problem_ir_preserves_parallel_execution_through_dsl(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    policy = fm.ParallelExecutionPolicy(
+        mode=mode,
+        max_cpu_percent=67.5,
+        max_memory_percent=72.25,
+        memory_reserve_bytes=43_000_000,
+        max_workers=None if mode == "serial" else 3,
+        threads_per_worker=2,
+    )
+    source = tmp_path / "scene_parallel_policy.py"
+    source.write_text(
+        "import fullmag as fm\n"
+        "study = fm.study('scene-parallel-policy')\n"
+        "study.engine('fem')\n"
+        "study.device('cpu', precision='double')\n"
+        f"study.parallel_execution(**{policy.to_ir()!r})\n"
+        "film = study.geometry(fm.Box(20e-9, 10e-9, 5e-9), name='film', object_id='film')\n"
+        "film.Ms = 800000\n"
+        "film.Aex = 13e-12\n"
+        "film.m = fm.texture.uniform(0, 0, 1)\n",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(source, lightweight_assets=True)
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    assert scene["study"]["parallel_execution"] == policy.to_ir()
+
+    rendered = tmp_path / "scene_parallel_policy_export.py"
+    rendered.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+    assert "study.parallel_execution(" in rendered.read_text(encoding="utf-8")
+    reloaded = load_problem_from_script(rendered, lightweight_assets=True)
+    assert reloaded.problem.runtime.parallel_execution == policy
+
+    problem_ir = scene_document_to_problem_ir(
+        scene,
+        requested_backend="fem",
+        requested_device="cpu",
+        requested_precision="double",
+        requested_mode="strict",
+        source_root=tmp_path,
+    )
+    runtime = problem_ir["problem_meta"]["runtime_metadata"]["runtime_selection"]
+    assert runtime["parallel_execution"] == policy.to_ir()
+    reference_ir = reloaded.to_ir(
+        requested_backend=BackendTarget.FEM,
+        execution_mode=ExecutionMode.STRICT,
+        execution_precision=ExecutionPrecision.DOUBLE,
+        include_geometry_assets=False,
+        runtime_device_override="cpu",
+        source_root=tmp_path,
+    )
+    _assert_output_storage_source_stem_contract(
+        problem_ir, reference_ir, rendered.stem
+    )
+    assert canonical_json_bytes(_without_source_identity(problem_ir)) == (
+        canonical_json_bytes(_without_source_identity(reference_ir))
+    )
+
+
+@pytest.mark.parametrize("explicit_null", [False, True])
+def test_scene_document_problem_ir_defaults_legacy_parallel_execution_to_serial(
+    tmp_path: Path,
+    explicit_null: bool,
+) -> None:
+    scene = _minimal_scene_document(tmp_path)
+    if explicit_null:
+        scene["study"]["parallel_execution"] = None
+    else:
+        scene["study"].pop("parallel_execution")
+
+    problem_ir = _lower_scene_document(scene, tmp_path)
+
+    runtime = problem_ir["problem_meta"]["runtime_metadata"]["runtime_selection"]
+    assert runtime["parallel_execution"] == fm.ParallelExecutionPolicy().to_ir()
+    assert runtime["device"] == "cpu"
+    assert problem_ir["backend_policy"]["requested_backend"] == "fdm"
+
+
+@pytest.mark.parametrize(
+    ("policy", "message", "error_type"),
+    [
+        (False, "parallel_execution must be a mapping", TypeError),
+        ([], "parallel_execution must be a mapping", TypeError),
+        ({"future_policy": "new"}, "parallel_execution contains unknown fields", ValueError),
+        ({"max_cpu_percent": True}, "max_cpu_percent must be numeric", ValueError),
+        ({"max_memory_percent": float("nan")}, "max_memory_percent must be finite", ValueError),
+        ({"max_workers": 1.5}, "max_workers must be an integer", ValueError),
+        ({"threads_per_worker": 0}, "threads_per_worker must be >= 1", ValueError),
+        ({"memory_reserve_bytes": 2**64}, "memory_reserve_bytes must be in the range", ValueError),
+    ],
+)
+def test_scene_document_problem_ir_rejects_malformed_parallel_execution(
+    tmp_path: Path,
+    policy: object,
+    message: str,
+    error_type: type[Exception],
+) -> None:
+    scene = _minimal_scene_document(tmp_path)
+    scene["study"]["parallel_execution"] = policy
+
+    with pytest.raises(error_type, match=re.escape(message)):
+        _lower_scene_document(scene, tmp_path)
+
+
+@pytest.mark.parametrize(("backend", "device"), [("fdm", "cpu"), ("fem", "gpu")])
+def test_scene_document_problem_ir_rejects_unsupported_adaptive_request(
+    tmp_path: Path,
+    backend: str,
+    device: str,
+) -> None:
+    scene = _minimal_scene_document(tmp_path)
+    scene["study"]["parallel_execution"] = {"mode": "adaptive"}
+
+    with pytest.raises(ValueError, match="unsupported parallel_execution realization"):
+        scene_document_to_problem_ir(
+            scene,
+            requested_backend=backend,
+            requested_device=device,
+            requested_precision="double",
+            requested_mode="strict",
+            source_root=tmp_path,
+        )
 
 
 def _minimal_scene_document(tmp_path: Path) -> dict[str, object]:

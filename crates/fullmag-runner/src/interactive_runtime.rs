@@ -2398,6 +2398,10 @@ impl InteractiveFemPreviewRuntime {
         }
     }
 
+    /// Low-level in-memory execution. This returns a `RunResult` without
+    /// publishing producer provenance or a qualified relaxation artifact bundle.
+    /// Artifact-producing callers use the runner entry point that binds the
+    /// execution identity before dispatch and writes the exact payloads.
     pub fn execute_with_live_preview(
         &mut self,
         plan: &FemPlanIR,

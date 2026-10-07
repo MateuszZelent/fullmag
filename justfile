@@ -37,8 +37,8 @@ storage-prepare:
 runner-image:
     docker build --network none --pull=false -t fullmag/local-runner-source:development scripts/local_runner
 
-runner-build-image toolchain_image tag="fullmag/local-runner-build:development":
-    docker --context desktop-linux build --network none --pull=false --build-arg TOOLCHAIN_IMAGE={{quote(toolchain_image)}} -f scripts/local_runner/Dockerfile.build -t {{quote(tag)}} scripts/local_runner
+runner-build-image toolchain_image tag="fullmag/local-runner-build:development" cpu_mfem="0" network="none":
+    docker --context desktop-linux build --network {{quote(network)}} --pull=false --build-arg TOOLCHAIN_IMAGE={{quote(toolchain_image)}} --build-arg CPU_MFEM_ONLY={{quote(cpu_mfem)}} -f scripts/local_runner/Dockerfile.build -t {{quote(tag)}} scripts/local_runner
 
 runner-coordinator-image:
     docker --context desktop-linux build --network none --pull=false -f scripts/local_runner/Dockerfile.coordinator -t fullmag/build-runner:development scripts
@@ -98,6 +98,29 @@ runner-once:
 runner-build mode profile="fem-cpu-release" ref="":
     {{storage_python}} scripts/local_runner_cli.py submit --operation build --profile {{quote(profile)}} --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}}
 
+# Consume one completed managed CPU/SLEPc build; this recipe never builds an
+# image or native target and writes only a new run below canonical storage.
+run-comsol-dispersion-benchmark job_id cases="c0,c1,a1" timeout_seconds="21600":
+    {{storage_python}} "{{repo_root}}/scripts/run_comsol_dispersion_benchmark.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --cases {{quote(cases)}} --timeout-seconds {{quote(timeout_seconds)}}
+
+# Numerical DE pilot; science qualification is a separate postsolve gate.
+run-de-100nm-pilot job_id:
+    {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}}
+
+# Bounded forensic startup probe; consumes only a terminal failed CPU/SLEPc job.
+diagnose-managed-fem-startup job_id:
+    {{storage_python}} "{{repo_root}}/scripts/diagnose_managed_fem_startup.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}}
+
+# Frozen 10 nm DE control; sampling is k0, k2, two, five or signed-eleven.
+run-de-smoke job_id sampling="two" model_ref="":
+    {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --pilot {{quote("de-smoke-" + sampling)}} {{if model_ref == "" { "" } else { "--model-ref " + quote(model_ref) }}}
+
+# Closed serial/adaptive parity probe. The driver verifies the completed
+# managed runtime job and source digest against the pinned input manifest.
+# Build FIFO and runtime execution remain separate contracts.
+run-de-smoke-parallel-probe job_id source_digest mode="serial":
+    {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --probe-build-source-digest {{quote(source_digest)}} --pilot de-smoke-parallel-probe --parallel-mode {{quote(mode)}}
+
 runner-configure-build profile image_id:
     {{storage_python}} scripts/local_runner_cli.py configure-build --profile {{quote(profile)}} --image-id {{quote(image_id)}}
 
@@ -107,8 +130,17 @@ runner-container-resume:
 runner-retention-plan:
     {{storage_python}} scripts/local_runner_cli.py retention-plan
 
-runner-container-replace image_id:
-    {{storage_python}} scripts/local_runner_cli.py container-replace --image-id {{quote(image_id)}}
+runner-retention-preview scope="execution":
+    {{storage_python}} scripts/local_runner_cli.py retention-preview --scope {{quote(scope)}}
+
+runner-retention-get plan_id:
+    {{storage_python}} scripts/local_runner_cli.py retention-get {{quote(plan_id)}}
+
+runner-retention-apply plan_id:
+    {{storage_python}} scripts/local_runner_cli.py retention-apply {{quote(plan_id)}}
+
+runner-container-replace image_id preview_id="":
+    {{storage_python}} scripts/local_runner_cli.py container-replace --image-id {{quote(image_id)}} {{if preview_id == "" { "" } else { "--abandon-readonly-preview " + quote(preview_id) }}}
 
 runner-reconcile job:
     {{storage_python}} scripts/local_runner_cli.py reconcile {{quote(job)}}
@@ -424,18 +456,18 @@ export-runner-openapi job_id expected_commit:
     {{storage_python}} "{{repo_root}}/scripts/export_runner_openapi.py" --repo-root "{{repo_root}}" --job-id "{{job_id}}" --expected-commit "{{expected_commit}}"
 
 # Lightweight generated client and production source checks; no unit builds.
-generate-control-room-client:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route generate-client --repo-root "{{repo_root}}"
+generate-control-room-client dependency_workspace="":
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route generate-client --repo-root "{{repo_root}}" {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
 
-check-control-room-production-source:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route production-source --repo-root "{{repo_root}}"
+check-control-room-production-source dependency_workspace="":
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route production-source --repo-root "{{repo_root}}" {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
 
 # Interpreted Node contract checks in isolated managed fixtures; no unit builds.
 verify-control-room-openapi-import:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route openapi-import-check --repo-root "{{repo_root}}"
 
-check-control-room-api-hygiene:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route api-hygiene --repo-root "{{repo_root}}"
+check-control-room-api-hygiene dependency_workspace="":
+    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route api-hygiene --repo-root "{{repo_root}}" {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
 
 verify-control-room-development-restart:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-restart-check --repo-root "{{repo_root}}"
@@ -2110,6 +2142,23 @@ verify-fem-frequency-domain-real-frequency-rotated:
 verify-fem-frequency-domain-floquet-bloch-scalar:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_floquet_bloch_scalar_contract && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_floquet_bloch_scalar_contract'
+
+# Managed source contracts for the nonzero-k modal foundation.  These targets
+# validate the phase-reduced magnetic operator and the bounded demag-k bridges;
+# they do not claim a production mesh assembly or physics qualification.
+verify-fem-modal-floquet-magnetic-contract:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_floquet_magnetic_operator_contract && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_floquet_magnetic_operator_contract'
+
+# CPU contracts use the dependency-complete image as a toolchain.  CUDA linkage
+# is needed by that MFEM build; the Fullmag GPU realization is disabled.  Keep
+# this configuration separate from the managed production native build.
+verify-fem-modal-floquet-airbox-cpu:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_FEM_REQUIRE_GPU=0 -e FULLMAG_FEM_REQUIRE_CEED=0 -e FULLMAG_MANAGED_FEM_DEVICE=cpu \
+      fem-gpu bash -euo pipefail -c 'cd /workspace; build="${FULLMAG_BUILD_ROOT:?managed build root required}/native/floquet-cpu-contracts"; cmake -S native -B "$build" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON; cmake --build "$build" --target fem_floquet_magnetic_operator_contract fem_floquet_bloch_scalar_contract fem_floquet_airbox_operator_contract fem_floquet_dynamic_demag_k_contract fem_floquet_waveguide_demag_k_contract fem_floquet_waveguide_cross_section_contract fem_floquet_modal_solver_contract; export LD_LIBRARY_PATH="$build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-}"; ctest --test-dir "$build/backends/fem" --output-on-failure --no-tests=error -R "^fem_floquet_(magnetic_operator|bloch_scalar|airbox_operator|dynamic_demag_k|waveguide_demag_k|waveguide_cross_section|modal_solver)_contract$"'
 
 verify-fem-frequency-domain-native-contract:
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/verify_fem_frequency_domain_native_contract.ps1" -Device gpu
@@ -5684,7 +5733,7 @@ run-headless script:
     just build fullmag
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag {{script}} --headless --json
 
-# Run headless without 3D preview or chart data (no rendering overhead — good for benchmarks)
+# Run headless without 3D preview or chart data (no rendering overhead â€” good for benchmarks)
 run-headless-bench script:
     just ensure-python
     just build fullmag
@@ -7031,7 +7080,7 @@ build-all-fem-hypre-memory-variants:
 rebuild-gpu-runtime:
     just rebuild-fem-runtime
 
-# ── Benchmarks ──────────────────────────────────────────────────────────
+# â”€â”€ Benchmarks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Run the Box500 FEM CPU/GPU consistency matrix.
 # Writes CSV rows and a CPU/GPU summary JSON. Override defaults with
@@ -7197,4 +7246,3 @@ verify-fdm-gpu-solved-current-racetrack-production:
         --execution-audit "$evidence_root/execution-audit.v1.json" || true; \
       python3 scripts/verify_fdm_gpu_racetrack_qualification.py --evidence-root "$evidence_root" --source-snapshot "$source_snapshot"; \
       echo "production-qualified racetrack manifest: $evidence_root/fdm_gpu_solved_current_racetrack_qualification_v1.json"'
-                                                                                                                                                                                                                                                  

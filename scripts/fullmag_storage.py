@@ -46,6 +46,7 @@ PATH_OVERRIDES = {
     "FULLMAG_TEMP_ROOT": "temp_root",
     "FULLMAG_WINDOWS_TARGET_DIR": "build_root",
     "CARGO_TARGET_DIR": "build_root",
+    "CARGO_BUILD_BUILD_DIR": "build_root",
     "FULLMAG_CARGO_TARGET_DIR": "build_root",
     "FULLMAG_CARGO_TARGET_ROOT": "build_root",
     "CARGO_TARGET_ROOT": "build_root",
@@ -60,7 +61,7 @@ PATH_OVERRIDES = {
     "FULLMAG_WINDOWS_PNPM_ROOT": "cache_root",
 }
 MANAGED_VARIABLES = set(PATH_OVERRIDES) | {
-    "FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_STORAGE_PROFILE",
+    "FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_WINDOWS_VOLATILE_ROOT", "FULLMAG_STORAGE_PROFILE",
     "FULLMAG_STORAGE_LOCK_TOKEN", "FULLMAG_STORAGE_LOCK_KEY",
     "FULLMAG_BUILD_STORAGE_ROOT", "FULLMAG_STORAGE_USE_MANAGED_EXT4",
     "FULLMAG_NATIVE_STORAGE_PROFILE", "FULLMAG_NATIVE_BUILD_IMAGE",
@@ -366,6 +367,13 @@ def resolve_layout(repo_root, profile=None, environ=None):
                          FULLMAG_NATIVE_MOUNT_VIEW=infrastructure["native_mount_view"],
                          FULLMAG_NATIVE_STORAGE_LEGACY="1" if infrastructure["native_storage_legacy"] else "0",
                          FULLMAG_MANAGED_EXT4="1" if managed else "0")
+    if profile in WINDOWS_WORKSPACE_STORAGE_PROFILES.values():
+        # Reduce intermediate path length for the MSVC linker's legacy path limit.
+        # Final artifacts remain in target; existing caches are never removed.
+        variables["CARGO_BUILD_BUILD_DIR"] = str(validate_path(
+            env.get("CARGO_BUILD_BUILD_DIR") or build / "b", build, "CARGO_BUILD_BUILD_DIR"))
+    elif env.get("CARGO_BUILD_BUILD_DIR"):
+        variables["CARGO_BUILD_BUILD_DIR"] = env["CARGO_BUILD_BUILD_DIR"]
     layout["env"] = variables
     return layout
 
@@ -436,6 +444,8 @@ def initialize(layout):
     # Recheck paths at the mutation boundary, including existing markers.
     for field in ("build_root", "cache_root", "temp_root", "runtime_root", "frontend_root"):
         validate_path(layout[field], build_storage, field)
+    if layout["env"].get("CARGO_BUILD_BUILD_DIR"):
+        validate_path(layout["env"]["CARGO_BUILD_BUILD_DIR"], layout["build_root"], "CARGO_BUILD_BUILD_DIR")
     validate_path(layout["runs_root"], root, "runs_root")
     for directory in ("index", "locks"):
         validate_path(root / directory, root, directory)

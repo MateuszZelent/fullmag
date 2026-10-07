@@ -444,7 +444,6 @@ function useFieldMapModuleController() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,

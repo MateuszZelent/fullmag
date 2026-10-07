@@ -739,6 +739,42 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
     });
   });
 
+  it("uses the CSV wavevector when path metadata is absent", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 27, run_id: "runtime-run-27" },
+      dispersion: {
+        status: "ready",
+        text: [
+          "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,mode_field_id,mode_field_resource_key",
+          "0,2,0,12e9,2e7,-1e7,0,field-k0,data/fields/field-k0",
+        ].join("\n"),
+      },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-csv-k",
+            requested_execution: {
+              boundary_context: "floquet_periodic",
+              k_sampling: { kind: "path", sample_count: 1 },
+            },
+            revision: "dispersion-csv-k-r1",
+            stage_id: "dispersion-csv-k-stage",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+    const target = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+      .find((node) => node.kind === "results.dispersion.modal.mode_at_k");
+
+    expect(target).toMatchObject({
+      sampleIndex: 0,
+      wavevectorKf: [2e7, -1e7, 0],
+    });
+  });
+
   it("publishes an explicit wavevector for a grid mode target when the grid resource provides one", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 26, run_id: "runtime-run-26" },

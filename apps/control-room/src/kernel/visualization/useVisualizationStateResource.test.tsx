@@ -9,7 +9,8 @@ const mocks = vi.hoisted(() => ({
   remote: null as Record<string, unknown> | null,
 }));
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     cameraRegistry: { observeRemoteState: vi.fn() },
     visualization: { acknowledgePendingTargetPatches: vi.fn() },

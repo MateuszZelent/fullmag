@@ -83,7 +83,7 @@ fn output_name(output: &OutputIR) -> String {
         | OutputIR::Field { name, .. }
         | OutputIR::FieldAuto { name, .. }
         | OutputIR::FieldResolvedAuto { name, .. }
-        | OutputIR::DispersionCurve { name } => name.clone(),
+        | OutputIR::DispersionCurve { name, .. } => name.clone(),
         OutputIR::Snapshot {
             field, component, ..
         } => format!("{field}:{component}"),

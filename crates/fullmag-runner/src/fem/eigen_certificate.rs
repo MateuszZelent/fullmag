@@ -718,7 +718,13 @@ fn modal_participation_source_mesh_identity(
 ) -> crate::eigen::ModalParticipationSourceMeshIdentity {
     crate::eigen::ModalParticipationSourceMeshIdentity {
         mesh_id: plan.mesh_name.clone(),
-        topology_fingerprint: plan.mesh.topology_fingerprint_v6(),
+        // Modal field payloads are bound to the mixed-mesh v3 identity, which
+        // is also emitted by the native diagnostics.  Periodic certificate v6
+        // intentionally retains its historical v2 fingerprint elsewhere.
+        topology_fingerprint: plan
+            .mesh
+            .mixed_topology_fingerprint_v3()
+            .expect("validated FEM eigen mesh must have finite v3 topology identity"),
         indexing: "full_domain_node_order".to_string(),
         node_count: plan.mesh.nodes.len(),
     }

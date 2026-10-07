@@ -1,6 +1,6 @@
 use super::eigen_capability::{
-    native_cpu_modal_window_enabled, native_gpu_k0_kittel_modal_supported,
-    native_gpu_shared_domain_modal_supported,
+    native_cpu_modal_window_enabled, native_cpu_modal_window_has_floquet_dynamic_demag_path,
+    native_gpu_k0_kittel_modal_supported, native_gpu_shared_domain_modal_supported,
 };
 use super::eigen_certificate::{modal_participation_for_mode, modal_participation_mesh_context};
 use super::eigen_constants::{FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED, NATIVE_GPU_K0_KITTEL_SOLVER_KIND};
@@ -8,7 +8,8 @@ use super::eigen_equilibrium::{
     bind_stage_continuation_artifacts, materialize_equilibrium, prepare_single_k_stage_continuation,
 };
 use super::eigen_equilibrium_contract::{
-    AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff,
+    AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxExactArtifacts,
+    AcceptedFemRelaxStageHandoff, FemRelaxationProducerStageIdentity,
 };
 use super::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
 use super::eigen_math::{
@@ -22,7 +23,9 @@ use super::eigen_native_result::{
     validate_native_modal_lambda_frequency_mapping, NativeModalEigenpair,
 };
 use super::eigen_native_window::{
-    execute_native_cpu_modal_window_from_bloch_floquet_complex, execute_native_modal_window,
+    build_nonshared_floquet_provenance_from_complex,
+    execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance,
+    execute_native_modal_window,
     gyrotropic_matrix_row_major_from_tangent_mass, node_mass_weights_from_tangent_mass,
 };
 use super::eigen_operator::{
@@ -32,15 +35,15 @@ use super::eigen_operator::{
 use super::eigen_output::{
     classify_polarization, damping_imaginary_factor, damping_policy_label, dispersion_csv,
     dispersion_v2_csv, equilibrium_source_json, json_artifact, k_vector_json,
-    merge_modal_transport_diagnostics, modal_tangent_transport_diagnostics, normalization_label,
-    requested_mode_indices, solver_capabilities, solver_kind_label, solver_limitations,
-    solver_notes, spin_wave_bc_json, spin_wave_bc_label, write_eigen_v2_bundle,
+    merge_modal_transport_diagnostics, modal_sample_id, modal_tangent_transport_diagnostics,
+    normalization_label, requested_mode_indices_for_result, solver_capabilities, solver_kind_label,
+    solver_limitations, solver_notes, spin_wave_bc_json, spin_wave_bc_label, write_eigen_v2_bundle,
 };
 use super::eigen_policy::{
     native_modal_damping_policy, native_modal_equilibrium_source_kind,
     native_modal_frequency_max_hz, native_modal_frequency_min_hz, native_modal_k_vector,
-    native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz, native_modal_target_kind,
-    resolved_demag_realization, shared_domain_k0_modal_requested,
+    native_modal_solver_policy, native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz,
+    native_modal_target_kind, resolved_demag_realization, shared_domain_k0_modal_requested,
 };
 use super::eigen_progress::{emit_fem_eigen_progress, FemEigenProgress, FemEigenProgressCallback};
 use super::eigen_projection::{
@@ -99,7 +102,7 @@ pub(crate) fn execute_baseline_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
-    execute_fem_eigen_inner(plan, outputs, false, false, None, 0, None, None, None, None)
+    execute_fem_eigen_inner(plan, outputs, false, false, None, 0, None, None, None, None, None)
 }
 
 #[allow(dead_code)]
@@ -119,6 +122,7 @@ pub(crate) fn execute_baseline_fem_eigen_with_progress(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -130,6 +134,22 @@ fn execute_bias_field_sweep(
     outputs: &[OutputIR],
     try_gpu: bool,
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+) -> Result<ExecutedRun, RunError> {
+    execute_bias_field_sweep_with_producer_identity(
+        plan,
+        outputs,
+        try_gpu,
+        progress,
+        None,
+    )
+}
+
+fn execute_bias_field_sweep_with_producer_identity(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    try_gpu: bool,
+    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     execute_bias_field_sweep_with_executor(plan, |sample_plan, sample_position| {
         execute_bias_field_sample_with_relaxation(
@@ -143,6 +163,7 @@ fn execute_bias_field_sweep(
             progress.as_deref_mut(),
             sample_position,
             None,
+            producer_identity,
         )
     })
 }
@@ -152,6 +173,22 @@ fn execute_planned_bias_field_sweep(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+) -> Result<ExecutedRun, RunError> {
+    execute_planned_bias_field_sweep_with_producer_identity(
+        execution,
+        plan,
+        outputs,
+        progress,
+        None,
+    )
+}
+
+fn execute_planned_bias_field_sweep_with_producer_identity(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     let resolution = execution.resolution().ok_or_else(|| RunError {
         message: "planned_fem_eigen_resolution_missing_at_execution".to_string(),
@@ -167,6 +204,7 @@ fn execute_planned_bias_field_sweep(
                 progress.as_deref_mut(),
                 sample_position,
                 Some(execution),
+                producer_identity,
             )
         },
     )
@@ -176,14 +214,22 @@ fn execute_planned_bias_field_sweep(
 /// certificate before entering the modal solver.  A top-level scripted Relax
 /// stage is still useful as a bootstrap/preview, but it cannot be reused for a
 /// field value whose equilibrium identity contains a different external field.
-fn execute_bias_field_sample_with_relaxation(
+pub(crate) fn execute_bias_field_sample_with_relaxation(
     sample_plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     lane: FemEigenExecutionLane,
     progress: Option<&mut FemEigenProgressCallback<'_>>,
     sample_position: usize,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
+    if let Some(execution) = planned_execution {
+        validate_planned_execution(execution, sample_plan)?;
+    }
+    let producer_identity = producer_identity.ok_or_else(|| RunError {
+        message: "fem_bias_field_relaxation_missing_producer_stage_identity".to_string(),
+    })?;
+    let sample_producer_identity = producer_identity.for_bias_field_sample(sample_position);
     let relax_plan = bias_field_relax_plan(sample_plan);
     let relax_engine = match lane {
         FemEigenExecutionLane::Cpu => FemEngine::CpuNative,
@@ -209,37 +255,68 @@ fn execute_bias_field_sample_with_relaxation(
             ),
         })?;
     let final_magnetization = relax_run.result.final_magnetization.clone();
-    let certified_fields =
-        decode_bias_field_relaxation_artifact::<crate::types::CertifiedFemEquilibriumFields>(
-            &relax_run,
-            "equilibrium/certified_fem_equilibrium_fields.v1.json",
-            sample_position,
-        )?;
-    let recomputed_certificate = decode_bias_field_relaxation_artifact::<
-        crate::types::RecomputedFemLinearizationCertificateV1,
-    >(
-        &relax_run,
-        "equilibrium/recomputed_fem_linearization_certificate.v1.json",
-        sample_position,
-    )?;
+    let accepted_fields_path =
+        crate::types::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+            &sample_plan.material,
+        );
+    let (fields_path, refresh_path) =
+        crate::types::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+            &sample_plan.material,
+        );
+    let (accepted_fields, accepted_fields_json) =
+        decode_bias_field_relaxation_artifact_with_bytes::<
+            crate::types::CertifiedFemEquilibriumFields,
+        >(&relax_run, accepted_fields_path, sample_position)?;
+    let (certified_fields, certified_fields_json) =
+        decode_bias_field_relaxation_artifact_with_bytes::<
+            crate::types::CertifiedFemEquilibriumFields,
+        >(&relax_run, fields_path, sample_position)?;
+    let (recomputed_certificate, recomputed_certificate_json) =
+        decode_bias_field_relaxation_artifact_with_bytes::<
+            crate::types::RecomputedFemLinearizationCertificateV1,
+        >(&relax_run, refresh_path, sample_position)?;
     let source_mesh = crate::types::FemMeshPayload::from(&relax_plan);
-    crate::validate_recomputed_fem_linearization_certificate(
+    let producer_provenance = crate::fem::eigen_equilibrium_contract::
+        fem_relaxation_producer_provenance_from_exact_artifacts(
+        &sample_producer_identity.run_id,
+        &sample_producer_identity.stage_id,
+        &sample_producer_identity.stage_kind,
         &relax_plan,
-        &source_mesh,
         &final_magnetization,
-        &certified_fields,
-        &recomputed_certificate,
+        crate::artifacts::build_identity_json(),
+        accepted_fields_path,
+        &accepted_fields_json,
+        fields_path,
+        &certified_fields_json,
+        refresh_path,
+        &recomputed_certificate_json,
     )?;
-    let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
-        &format!("bias-field-sweep-sample-{sample_position:04}"),
-        &format!("sample-{sample_position:04}-relax"),
-        "bias_field_sweep_relaxation",
+    let producer_provenance_json = serde_json::to_vec_pretty(&producer_provenance).map_err(|error| {
+        RunError {
+            message: format!(
+                "fem_relaxation_producer_provenance_serialization_failed: {error}"
+            ),
+        }
+    })?;
+    let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance(
+        &sample_producer_identity.run_id,
+        &sample_producer_identity.stage_id,
+        &sample_producer_identity.stage_kind,
         true,
         &relax_plan,
         &source_mesh,
         &completion,
         final_magnetization,
+        accepted_fields,
         certified_fields,
+        recomputed_certificate,
+        AcceptedFemRelaxExactArtifacts {
+            accepted_fields_json,
+            certified_fields_json,
+            recomputed_certificate_json,
+        },
+        producer_provenance,
+        producer_provenance_json,
     )?;
     let equilibrium = handoff.equilibrium_magnetization.clone();
     execute_fem_eigen_inner(
@@ -249,6 +326,7 @@ fn execute_bias_field_sample_with_relaxation(
         true,
         progress,
         sample_position,
+        Some(sample_position),
         Some(&equilibrium),
         None,
         Some(&handoff),
@@ -256,27 +334,36 @@ fn execute_bias_field_sample_with_relaxation(
     )
 }
 
-fn decode_bias_field_relaxation_artifact<T: serde::de::DeserializeOwned>(
+pub(crate) fn decode_bias_field_relaxation_artifact_with_bytes<T: serde::de::DeserializeOwned>(
     run: &ExecutedRun,
     relative_path: &str,
     sample_position: usize,
-) -> Result<T, RunError> {
-    let artifact = run
+) -> Result<(T, Vec<u8>), RunError> {
+    let mut matches = run
         .auxiliary_artifacts
         .iter()
-        .find(|artifact| artifact.relative_path == relative_path)
-        .ok_or_else(|| RunError {
+        .filter(|artifact| artifact.relative_path == relative_path);
+    let artifact = matches.next().ok_or_else(|| RunError {
             message: format!(
                 "FEM bias-field sample {} relaxation did not publish {}",
                 sample_position, relative_path
             ),
         })?;
-    serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+    if matches.next().is_some() {
+        return Err(RunError {
+            message: format!(
+                "FEM bias-field sample {} relaxation published duplicate artifacts at {}",
+                sample_position, relative_path
+            ),
+        });
+    }
+    let value = serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
         message: format!(
             "FEM bias-field sample {} relaxation artifact {} is invalid: {}",
             sample_position, relative_path, error
         ),
-    })
+    })?;
+    Ok((value, artifact.bytes.clone()))
 }
 
 /// Build the minimal static FEM plan needed to run the canonical overdamped
@@ -377,10 +464,28 @@ fn validate_planned_execution(
             message: "planned_fem_eigen_resolution_missing_at_execution".to_string(),
         });
     }
-    if !shared_domain_k0_modal_requested(plan) {
+    let bounded_k0 = shared_domain_k0_modal_requested(plan);
+    let bounded_floquet = native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    let dynamic_resolution_scope = execution.resolution().is_some_and(|resolution| {
+        resolution
+            .selection_reason
+            .starts_with("fem_eigen.floquet_airbox_dynamic_demag.")
+    });
+    let resolution_engine = execution
+        .resolution()
+        .map(|resolution| resolution.resolved_engine);
+    let scope_matches = match resolution_engine {
+        Some(fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc) => bounded_k0,
+        Some(fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc) => {
+            bounded_floquet || (bounded_k0 && dynamic_resolution_scope)
+        }
+        Some(fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov) => bounded_k0,
+        Some(fullmag_ir::FemEigenEngineIR::Auto) | None => false,
+    };
+    if !scope_matches {
         return Err(RunError {
             message: format!(
-                "planned_fem_eigen_engine_scope_mismatch: engine={} requires bounded periodic_airbox_k0",
+                "planned_fem_eigen_engine_scope_mismatch: engine={} does not match the bounded modal plan scope",
                 execution.engine_id()
             ),
         });
@@ -401,9 +506,24 @@ pub(crate) fn execute_planned_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
+    execute_planned_fem_eigen_with_producer_identity(execution, plan, outputs, None)
+}
+
+pub(crate) fn execute_planned_fem_eigen_with_producer_identity(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
     validate_planned_execution(execution, plan)?;
     if bias_field_sweep_requested(plan) {
-        return execute_planned_bias_field_sweep(execution, plan, outputs, None);
+        return execute_planned_bias_field_sweep_with_producer_identity(
+            execution,
+            plan,
+            outputs,
+            None,
+            producer_identity,
+        );
     }
     execute_fem_eigen_inner(
         plan,
@@ -412,6 +532,7 @@ pub(crate) fn execute_planned_fem_eigen(
         true,
         None,
         0,
+        None,
         None,
         None,
         None,
@@ -424,6 +545,28 @@ pub(crate) fn execute_planned_fem_eigen_with_handoff(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    execute_planned_fem_eigen_with_handoff_and_progress(
+        execution,
+        plan,
+        outputs,
+        handoff,
+        None,
+        artifact_sample_index,
+        state_artifact_sample_index,
+    )
+}
+
+pub(crate) fn execute_planned_fem_eigen_with_handoff_and_progress(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
 ) -> Result<ExecutedRun, RunError> {
     validate_planned_execution(execution, plan)?;
     if bias_field_sweep_requested(plan) {
@@ -432,15 +575,16 @@ pub(crate) fn execute_planned_fem_eigen_with_handoff(
                 message: "planned_fem_eigen_sweep_does_not_accept_path_handoff".to_string(),
             });
         }
-        return execute_planned_bias_field_sweep(execution, plan, outputs, None);
+        return execute_planned_bias_field_sweep(execution, plan, outputs, progress);
     }
     execute_fem_eigen_inner(
         plan,
         outputs,
         execution.lane() == FemEigenExecutionLane::Gpu,
         true,
-        None,
-        0,
+        progress,
+        artifact_sample_index,
+        state_artifact_sample_index,
         None,
         handoff,
         None,
@@ -454,9 +598,31 @@ pub(crate) fn execute_planned_fem_eigen_with_progress(
     outputs: &[OutputIR],
     progress: &mut FemEigenProgressCallback<'_>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_planned_fem_eigen_with_progress_and_producer_identity(
+        execution,
+        plan,
+        outputs,
+        progress,
+        None,
+    )
+}
+
+pub(crate) fn execute_planned_fem_eigen_with_progress_and_producer_identity(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut FemEigenProgressCallback<'_>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
     validate_planned_execution(execution, plan)?;
     if bias_field_sweep_requested(plan) {
-        return execute_planned_bias_field_sweep(execution, plan, outputs, Some(progress));
+        return execute_planned_bias_field_sweep_with_producer_identity(
+            execution,
+            plan,
+            outputs,
+            Some(progress),
+            producer_identity,
+        );
     }
     execute_fem_eigen_inner(
         plan,
@@ -465,6 +631,7 @@ pub(crate) fn execute_planned_fem_eigen_with_progress(
         true,
         Some(progress),
         0,
+        None,
         None,
         None,
         None,
@@ -478,6 +645,30 @@ pub(crate) fn execute_planned_fem_eigen_with_progress_and_stage_handoff(
     outputs: &[OutputIR],
     progress: &mut FemEigenProgressCallback<'_>,
     handoff: &AcceptedFemRelaxStageHandoff,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    execute_planned_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+        execution,
+        plan,
+        outputs,
+        progress,
+        handoff,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        None,
+    )
+}
+
+pub(crate) fn execute_planned_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut FemEigenProgressCallback<'_>,
+    handoff: &AcceptedFemRelaxStageHandoff,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     if bias_field_sweep_requested(plan) {
         // Each physical sweep sample carries its own relaxed equilibrium.  The
@@ -485,7 +676,13 @@ pub(crate) fn execute_planned_fem_eigen_with_progress_and_stage_handoff(
         // that handoff represents one target only and is invalid for a
         // multi-sample sweep.  Route directly through the planned sweep owner.
         validate_planned_execution(execution, plan)?;
-        return execute_planned_bias_field_sweep(execution, plan, outputs, Some(progress));
+        return execute_planned_bias_field_sweep_with_producer_identity(
+            execution,
+            plan,
+            outputs,
+            Some(progress),
+            producer_identity,
+        );
     }
     let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
     validate_planned_execution(execution, &prepared)?;
@@ -495,13 +692,45 @@ pub(crate) fn execute_planned_fem_eigen_with_progress_and_stage_handoff(
         execution.lane() == FemEigenExecutionLane::Gpu,
         true,
         Some(progress),
-        0,
+        artifact_sample_index,
+        state_artifact_sample_index,
         None,
         None,
         Some(handoff),
         Some(execution),
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
+    Ok(run)
+}
+
+pub(crate) fn execute_planned_fem_eigen_with_stage_handoff(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: &AcceptedFemRelaxStageHandoff,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    if bias_field_sweep_requested(plan) {
+        validate_planned_execution(execution, plan)?;
+        return execute_planned_bias_field_sweep(execution, plan, outputs, None);
+    }
+    let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+    validate_planned_execution(execution, &prepared)?;
+    let mut run = execute_fem_eigen_inner(
+        &prepared,
+        outputs,
+        execution.lane() == FemEigenExecutionLane::Gpu,
+        true,
+        None,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        None,
+        None,
+        Some(handoff),
+        Some(execution),
+    )?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
 }
 
@@ -509,13 +738,69 @@ pub(crate) fn execute_cpu_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
-    execute_cpu_fem_eigen_with_handoff(plan, outputs, None)
+    execute_cpu_fem_eigen_with_producer_identity(plan, outputs, None)
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_producer_identity(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
+    execute_cpu_fem_eigen_with_handoff_and_progress_and_producer_identity(
+        plan,
+        outputs,
+        None,
+        None,
+        0,
+        None,
+        producer_identity,
+    )
 }
 
 pub(crate) fn execute_cpu_fem_eigen_with_handoff(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    execute_cpu_fem_eigen_with_handoff_and_progress(
+        plan,
+        outputs,
+        handoff,
+        None,
+        artifact_sample_index,
+        state_artifact_sample_index,
+    )
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_handoff_and_progress(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    execute_cpu_fem_eigen_with_handoff_and_progress_and_producer_identity(
+        plan,
+        outputs,
+        handoff,
+        progress,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        None,
+    )
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_handoff_and_progress_and_producer_identity(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     if shared_domain_k0_modal_requested(plan)
         && !native_shared_domain_magnetic_assembly_available(plan)
@@ -528,15 +813,22 @@ pub(crate) fn execute_cpu_fem_eigen_with_handoff(
         return Err(error);
     }
     if bias_field_sweep_requested(plan) {
-        return execute_bias_field_sweep(plan, outputs, false, None);
+        return execute_bias_field_sweep_with_producer_identity(
+            plan,
+            outputs,
+            false,
+            progress,
+            producer_identity,
+        );
     }
     execute_fem_eigen_inner(
         plan,
         outputs,
         false,
         native_cpu_modal_window_enabled(plan),
-        None,
-        0,
+        progress,
+        artifact_sample_index,
+        state_artifact_sample_index,
         None,
         handoff,
         None,
@@ -549,6 +841,15 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress(
     outputs: &[OutputIR],
     progress: &mut FemEigenProgressCallback<'_>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_cpu_fem_eigen_with_progress_and_producer_identity(plan, outputs, progress, None)
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_progress_and_producer_identity(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut FemEigenProgressCallback<'_>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
     if shared_domain_k0_modal_requested(plan)
         && !native_shared_domain_magnetic_assembly_available(plan)
     {
@@ -560,7 +861,13 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress(
         return Err(error);
     }
     if bias_field_sweep_requested(plan) {
-        return execute_bias_field_sweep(plan, outputs, false, Some(progress));
+        return execute_bias_field_sweep_with_producer_identity(
+            plan,
+            outputs,
+            false,
+            Some(progress),
+            producer_identity,
+        );
     }
     execute_fem_eigen_inner(
         plan,
@@ -573,6 +880,7 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -581,9 +889,37 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress_and_stage_handoff(
     outputs: &[OutputIR],
     progress: &mut FemEigenProgressCallback<'_>,
     handoff: &AcceptedFemRelaxStageHandoff,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    execute_cpu_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+        plan,
+        outputs,
+        progress,
+        handoff,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        None,
+    )
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut FemEigenProgressCallback<'_>,
+    handoff: &AcceptedFemRelaxStageHandoff,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     if bias_field_sweep_requested(plan) {
-        return execute_bias_field_sweep(plan, outputs, false, Some(progress));
+        return execute_bias_field_sweep_with_producer_identity(
+            plan,
+            outputs,
+            false,
+            Some(progress),
+            producer_identity,
+        );
     }
     let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
     let mut run = execute_fem_eigen_inner(
@@ -592,13 +928,42 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress_and_stage_handoff(
         false,
         native_cpu_modal_window_enabled(&prepared),
         Some(progress),
-        0,
+        artifact_sample_index,
+        state_artifact_sample_index,
         None,
         None,
         Some(handoff),
         None,
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
+    Ok(run)
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_stage_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: &AcceptedFemRelaxStageHandoff,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    if bias_field_sweep_requested(plan) {
+        return execute_bias_field_sweep(plan, outputs, false, None);
+    }
+    let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+    let mut run = execute_fem_eigen_inner(
+        &prepared,
+        outputs,
+        false,
+        native_cpu_modal_window_enabled(&prepared),
+        None,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        None,
+        None,
+        Some(handoff),
+        None,
+    )?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
 }
 
@@ -615,7 +980,24 @@ pub(crate) fn execute_gpu_fem_eigen(
     outputs: &[OutputIR],
     progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
-    execute_gpu_fem_eigen_with_handoff(plan, outputs, progress, None)
+    execute_gpu_fem_eigen_with_producer_identity(plan, outputs, progress, None)
+}
+
+pub(crate) fn execute_gpu_fem_eigen_with_producer_identity(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
+    execute_gpu_fem_eigen_with_handoff_and_progress_and_producer_identity(
+        plan,
+        outputs,
+        progress,
+        None,
+        0,
+        None,
+        producer_identity,
+    )
 }
 
 pub(crate) fn execute_gpu_fem_eigen_with_handoff(
@@ -623,6 +1005,28 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
     outputs: &[OutputIR],
     progress: Option<&mut FemEigenProgressCallback<'_>>,
     handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    execute_gpu_fem_eigen_with_handoff_and_progress_and_producer_identity(
+        plan,
+        outputs,
+        progress,
+        handoff,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        None,
+    )
+}
+
+pub(crate) fn execute_gpu_fem_eigen_with_handoff_and_progress_and_producer_identity(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     if shared_domain_k0_modal_requested(plan)
         && !native_shared_domain_magnetic_assembly_available(plan)
@@ -635,15 +1039,38 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         return Err(error);
     }
     if bias_field_sweep_requested(plan) {
-        return execute_bias_field_sweep(plan, outputs, true, progress);
+        return execute_bias_field_sweep_with_producer_identity(
+            plan,
+            outputs,
+            true,
+            progress,
+            producer_identity,
+        );
     }
     if native_gpu_k0_kittel_modal_supported(plan) {
-        return execute_native_gpu_k0_kittel_modal(plan, outputs, handoff);
+        return execute_native_gpu_k0_kittel_modal(
+            plan,
+            outputs,
+            progress,
+            handoff,
+            artifact_sample_index,
+            state_artifact_sample_index,
+        );
     }
 
     if native_gpu_shared_domain_modal_supported(plan) {
         return execute_fem_eigen_inner(
-            plan, outputs, true, true, progress, 0, None, handoff, None, None,
+            plan,
+            outputs,
+            true,
+            true,
+            progress,
+            artifact_sample_index,
+            state_artifact_sample_index,
+            None,
+            handoff,
+            None,
+            None,
         );
     }
 
@@ -653,6 +1080,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         });
     }
 
+    let solver_policy = native_modal_solver_policy(plan);
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -671,9 +1099,9 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
         frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
         frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
-        residual_tolerance: 1.0e-8,
-        max_outer_iterations: 300,
-        max_linear_iterations: 1000,
+        residual_tolerance: solver_policy.residual_tolerance,
+        max_outer_iterations: solver_policy.max_outer_iterations,
+        max_linear_iterations: solver_policy.max_linear_iterations,
         output_directory: None,
         write_partial_artifacts: false,
         completeness_policy: 0,
@@ -687,6 +1115,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
         shared_domain_problem: None,
+        shared_domain_floquet_periodic_pairs: &[],
     })
     .map_err(|message| RunError { message })?;
 
@@ -703,9 +1132,37 @@ pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff(
     outputs: &[OutputIR],
     progress: Option<&mut FemEigenProgressCallback<'_>>,
     handoff: &AcceptedFemRelaxStageHandoff,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    execute_gpu_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+        plan,
+        outputs,
+        progress,
+        handoff,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        None,
+    )
+}
+
+pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    handoff: &AcceptedFemRelaxStageHandoff,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     if bias_field_sweep_requested(plan) {
-        return execute_bias_field_sweep(plan, outputs, true, progress);
+        return execute_bias_field_sweep_with_producer_identity(
+            plan,
+            outputs,
+            true,
+            progress,
+            producer_identity,
+        );
     }
     let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
     if !native_gpu_shared_domain_modal_supported(&prepared) {
@@ -719,23 +1176,56 @@ pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff(
         true,
         true,
         progress,
-        0,
+        artifact_sample_index,
+        state_artifact_sample_index,
         None,
         None,
         Some(handoff),
         None,
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
+}
+
+pub(crate) fn execute_gpu_fem_eigen_with_stage_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: &AcceptedFemRelaxStageHandoff,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+) -> Result<ExecutedRun, RunError> {
+    execute_gpu_fem_eigen_with_progress_and_stage_handoff(
+        plan,
+        outputs,
+        None,
+        handoff,
+        artifact_sample_index,
+        state_artifact_sample_index,
+    )
 }
 
 fn execute_native_gpu_k0_kittel_modal(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
+    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
 ) -> Result<ExecutedRun, RunError> {
     validate_eigen_equilibrium_certificate(plan, expected_handoff, None)?;
     let initial_magnetization = plan.equilibrium_magnetization.clone();
+    let requested_modes = plan.count as usize;
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "materializing_equilibrium",
+        1,
+        5.0,
+        0,
+        0,
+        requested_modes,
+        requested_modes,
+        0,
+    )?;
     let (problem, equilibrium, relaxation_steps, observables, _source_artifact) =
         materialize_equilibrium(plan, &initial_magnetization, None)?;
     let reduction = build_reduction_map(
@@ -758,6 +1248,18 @@ fn execute_native_gpu_k0_kittel_modal(
 
     let bases = tangent_bases(&equilibrium);
     let active_nodes = reduction.active_nodes.len();
+    let effective_dof = active_nodes.saturating_mul(2);
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "assembling_operator",
+        2,
+        20.0,
+        active_nodes,
+        effective_dof,
+        requested_modes,
+        requested_modes,
+        0,
+    )?;
     let (stiffness_field, mass) = assemble_full_2x2_operator_real(
         plan,
         &problem.topology,
@@ -766,6 +1268,17 @@ fn execute_native_gpu_k0_kittel_modal(
         &equilibrium,
         &bases,
     );
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "solving_dense",
+        3,
+        35.0,
+        active_nodes,
+        stiffness_field.nrows(),
+        requested_modes,
+        requested_modes,
+        0,
+    )?;
     let gpu_result = native_fem::gpu_eigen_dense_solve(
         stiffness_field.as_slice(),
         mass.as_slice(),
@@ -775,13 +1288,24 @@ fn execute_native_gpu_k0_kittel_modal(
     .map_err(|message| RunError {
         message: format!("FEM GPU K0 Kittel modal dense solve failed: {message}"),
     })?;
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "writing_artifacts",
+        4,
+        90.0,
+        active_nodes,
+        stiffness_field.nrows(),
+        requested_modes,
+        gpu_result.eigenvalues.len(),
+        0,
+    )?;
     let field_eigenvalue = select_k0_kittel_gpu_field_eigenvalue(plan, &gpu_result.eigenvalues)?;
     let omega_rad_s = plan.gyromagnetic_ratio * field_eigenvalue;
     let frequency_hz = omega_rad_s / std::f64::consts::TAU;
     validate_native_modal_lambda_frequency_mapping(omega_rad_s, omega_rad_s, frequency_hz)?;
 
     let mut mode_vector = k0_macrospin_modal_vector(active_nodes);
-    normalize_complex_block_mode(&mut mode_vector, &mass, plan.normalization);
+    normalize_complex_block_mode(&mut mode_vector, &mass, plan.normalization)?;
     let tangent_dof = stiffness_field.nrows();
     let stiffness_omega = stiffness_field * plan.gyromagnetic_ratio;
     let gyrotropic_row_major = gyrotropic_matrix_row_major_from_tangent_mass(&mass, active_nodes)?;
@@ -799,17 +1323,34 @@ fn execute_native_gpu_k0_kittel_modal(
         omega_rad_s,
         eigenvalue_real: 0.0,
         eigenvalue_imag: omega_rad_s,
-        residual_absolute_l2,
+        residual_absolute_l2: Some(residual_absolute_l2),
         residual_relative_l2,
-        residual_linf,
+        residual_linf: Some(residual_linf),
         mass_norm: complex_block_mass_norm(&mass, &mode_vector).re,
         block_residual_q: residual_relative_l2,
         block_residual_phi: 0.0,
-        block_residual_gauge: 0.0,
-        backend_reported_residual: residual_relative_l2,
+        block_residual_gauge: None,
+        backend_reported_residual: None,
         vector: mode_vector,
         q_vector: Vec::new(),
         phi_vector: Vec::new(),
+        floquet_descriptor_certified: false,
+        floquet_full_descriptor_certified: false,
+        floquet_seam_frame_certified: false,
+        floquet_gauge_policy_satisfied: false,
+        floquet_geometric_bc_certified: false,
+        floquet_poisson_boundary_kind: None,
+        floquet_poisson_gauge_policy: None,
+        floquet_potential_representation: None,
+        floquet_magnetic_relative_residual: None,
+        floquet_potential_relative_residual: None,
+        floquet_full_magnetic_relative_residual: None,
+        floquet_full_potential_relative_residual: None,
+        floquet_scalar_phase_seam_relative_residual: None,
+        floquet_tangent_frame_seam_relative_residual: None,
+        floquet_cartesian_magnetic_seam_relative_residual: None,
+        floquet_equilibrium_pair_relative_residual: None,
+        floquet_potential_real_split: Vec::new(),
     }];
     let solver_diagnostics = native_gpu_k0_kittel_solver_diagnostics(
         plan,
@@ -831,7 +1372,10 @@ fn execute_native_gpu_k0_kittel_modal(
         relaxation_steps,
         None,
         None,
-        0,
+        None,
+        None,
+        artifact_sample_index,
+        state_artifact_sample_index,
     )?;
 
     let stats = StepStats {
@@ -847,6 +1391,18 @@ fn execute_native_gpu_k0_kittel_modal(
         max_h_demag: observables.max_demag_field_amplitude,
         ..StepStats::default()
     };
+
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "completed",
+        5,
+        100.0,
+        active_nodes,
+        tangent_dof,
+        requested_modes,
+        modes.len(),
+        modes.len(),
+    )?;
 
     Ok(ExecutedRun {
         result: RunResult {
@@ -865,6 +1421,35 @@ fn execute_native_gpu_k0_kittel_modal(
         auxiliary_artifacts,
         provenance: native_gpu_k0_kittel_execution_provenance(plan),
     })
+}
+
+fn emit_native_gpu_k0_kittel_progress(
+    progress: &mut Option<&mut FemEigenProgressCallback<'_>>,
+    phase: &'static str,
+    phase_index: u32,
+    percent: f64,
+    active_nodes: usize,
+    effective_dof: usize,
+    requested_modes: usize,
+    candidate_modes: usize,
+    computed_modes: usize,
+) -> Result<(), RunError> {
+    emit_fem_eigen_progress(
+        progress,
+        FemEigenProgress {
+            phase,
+            phase_index,
+            phase_count: 5,
+            percent,
+            solver_kind: NATIVE_GPU_K0_KITTEL_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            requested_modes,
+            candidate_modes,
+            computed_modes,
+            ..Default::default()
+        },
+    )
 }
 
 fn select_k0_kittel_gpu_field_eigenvalue(
@@ -886,7 +1471,7 @@ fn select_k0_kittel_gpu_field_eigenvalue(
             let rhs = target_field
                 .map(|target| (*right - target).abs())
                 .unwrap_or(*right);
-            lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal)
+            lhs.total_cmp(&rhs)
         })
         .ok_or_else(|| RunError {
             message:
@@ -955,12 +1540,15 @@ pub(super) fn execute_fem_eigen_inner(
     use_native_modal_production: bool,
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
     initial_magnetization_override: Option<&[Vector3]>,
     expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
     source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     validate_eigen_equilibrium_certificate(plan, expected_handoff, source_relax_handoff)?;
+    let gamma0_rad_s_per_a_m = crate::eigen::artifacts::validated_modal_gamma0(plan.gyromagnetic_ratio)
+        .map_err(|error| RunError { message: error.to_string() })?;
     if plan.precision != fullmag_ir::ExecutionPrecision::Double {
         return Err(RunError {
             message: if try_gpu {
@@ -982,7 +1570,18 @@ pub(super) fn execute_fem_eigen_inner(
         }
         return Err(error);
     }
-    reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
+    // Keep the executor tied to the same complete capability predicate as the
+    // planner.  This admits nearest-frequency diagnostics beside the existing
+    // window route without allowing a caller to bypass the Floquet airbox,
+    // Poisson, pair-map or nonzero-k guards.  Nearest remains selected-only;
+    // the native result must not be promoted to a complete spectrum/window.
+    let native_nonzero_k_shared_domain_provider_requested =
+        use_native_modal_production
+            && !try_gpu
+            && native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    if !native_nonzero_k_shared_domain_provider_requested {
+        reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
+    }
     let num_modes = plan.count as usize;
 
     emit_fem_eigen_progress(
@@ -1025,8 +1624,11 @@ pub(super) fn execute_fem_eigen_inner(
     let active_n = reduction.active_nodes.len();
     let is_full_2x2 = matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
     let effective_dof = if is_full_2x2 { 2 * active_n } else { active_n };
-    let use_sparse = effective_dof > SPARSE_EIGEN_THRESHOLD && !try_gpu && !complex_reduction;
-    if effective_dof > 3000 && !use_sparse {
+    let use_sparse = effective_dof > SPARSE_EIGEN_THRESHOLD
+        && !try_gpu
+        && !complex_reduction
+        && !use_native_modal_production;
+    if effective_dof > 3000 && !use_sparse && !use_native_modal_production {
         eprintln!(
             "warning: FEM eigen dense solver has {} effective DOF ({} active nodes, {}) — O(n³) scaling; \
              consider reducing mesh size or awaiting future sparse/Krylov eigensolver",
@@ -1049,7 +1651,7 @@ pub(super) fn execute_fem_eigen_inner(
     } else {
         solver_kind_label(plan)
     };
-    let dense_warning = (effective_dof > 3000 && !use_sparse)
+    let dense_warning = (effective_dof > 3000 && !use_sparse && !use_native_modal_production)
         .then_some("dense_o_n3_eigensolve_without_iteration_progress");
     emit_fem_eigen_progress(
         &mut progress,
@@ -1075,6 +1677,34 @@ pub(super) fn execute_fem_eigen_inner(
     let bases = tangent_bases(&equilibrium);
     let mut dense_orthogonality = None;
 
+    if native_nonzero_k_shared_domain_provider_requested {
+        // Native MFEM owns both the magnetic and magnetostatic sparse blocks.
+        // Do not materialize a dense runner K/M pair before crossing this boundary.
+        return execute_native_modal_window(
+            plan,
+            outputs,
+            initial_magnetization,
+            equilibrium,
+            observables,
+            relaxation_steps,
+            &problem,
+            source_artifact.as_ref(),
+            source_relax_handoff,
+            topology,
+            &reduction,
+            &bases,
+            None,
+            progress,
+            active_n,
+            effective_dof,
+            artifact_sample_index,
+            state_artifact_sample_index,
+            native_fem::NativeModalExecutionTarget::ProductionCpu,
+            planned_execution,
+            expected_handoff,
+        );
+    }
+
     let real_eigenpairs = if complex_reduction {
         Vec::new()
     } else if is_full_2x2 {
@@ -1097,6 +1727,7 @@ pub(super) fn execute_fem_eigen_inner(
                 active_n,
                 effective_dof,
                 artifact_sample_index,
+                state_artifact_sample_index,
                 planned_execution
                     .and_then(PlannedFemEigenExecution::native_target)
                     .unwrap_or(if try_gpu {
@@ -1135,6 +1766,7 @@ pub(super) fn execute_fem_eigen_inner(
                 active_n,
                 effective_dof,
                 artifact_sample_index,
+                state_artifact_sample_index,
                 planned_execution
                     .and_then(PlannedFemEigenExecution::native_target)
                     .unwrap_or(if try_gpu {
@@ -1328,7 +1960,19 @@ pub(super) fn execute_fem_eigen_inner(
             )
         };
         if is_full_2x2 && use_native_modal_production {
-            return execute_native_cpu_modal_window_from_bloch_floquet_complex(
+            let nonshared_floquet_provenance = build_nonshared_floquet_provenance_from_complex(
+                plan,
+                topology,
+                source_artifact.as_ref(),
+                source_relax_handoff,
+                &equilibrium,
+                &observables,
+                &stiffness,
+                &mass,
+                active_n,
+                artifact_sample_index,
+            )?;
+            return execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance(
                 plan,
                 outputs,
                 initial_magnetization,
@@ -1342,6 +1986,11 @@ pub(super) fn execute_fem_eigen_inner(
                 progress,
                 active_n,
                 effective_dof,
+                artifact_sample_index,
+                state_artifact_sample_index,
+                planned_execution,
+                None,
+                Some(nonshared_floquet_provenance),
             );
         }
         solve_complex_hermitian_eigenpairs(plan, stiffness, mass)?
@@ -1349,7 +1998,6 @@ pub(super) fn execute_fem_eigen_inner(
         Vec::new()
     };
 
-    let requested_modes = requested_mode_indices(outputs);
     let wants_spectrum = outputs
         .iter()
         .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
@@ -1363,6 +2011,7 @@ pub(super) fn execute_fem_eigen_inner(
     } else {
         real_eigenpairs.len()
     };
+    let requested_modes = requested_mode_indices_for_result(outputs, total_modes)?;
     let mut modes_summary = Vec::with_capacity(total_modes);
     let participation_context = modal_participation_mesh_context(plan);
     let tangent_leakage_mass_weights = reduction
@@ -1372,8 +2021,7 @@ pub(super) fn execute_fem_eigen_inner(
         .collect::<Vec<_>>();
     let participation_solver_device = if try_gpu { "gpu" } else { "cpu" };
     let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy);
-    let gamma_rad_s_t = plan.gyromagnetic_ratio / MU0;
-    let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
+    let gamma_rad_s_t = gamma0_rad_s_per_a_m / MU0;
     let mu0_t_m_per_a = MU0;
     emit_fem_eigen_progress(
         &mut progress,
@@ -1494,8 +2142,20 @@ pub(super) fn execute_fem_eigen_inner(
                 norm,
             )
         };
+        if !eigenvalue_real.is_finite() || eigenvalue_real < 0.0 {
+            // A negative or non-finite eigenvalue indicates a non-minimum
+            // equilibrium (an unstable/soft mode, or an unconverged
+            // relaxation), never a legitimate zero-frequency acoustic mode.
+            // `sort_and_truncate_{real,complex}_modes` in eigen_solve.rs
+            // already reject these before this loop runs; this guard is
+            // defense-in-depth so a fabricated 0 Hz mode can never be
+            // published even if that upstream invariant is ever violated
+            // (audit finding H7).
+            continue;
+        }
         let angular_frequency_real =
-            angular_frequency_from_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_real);
+            angular_frequency_from_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_real)
+                .expect("eigenvalue_real validated non-negative and finite above");
         let angular_frequency_imag = if eigenvalue_imag.abs() > 0.0 {
             angular_frequency_from_raw_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_imag)
         } else {
@@ -1737,6 +2397,8 @@ pub(super) fn execute_fem_eigen_inner(
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion.csv".to_string(),
             bytes: dispersion_v2_csv(
+                artifact_sample_index,
+                &modal_sample_id(plan, artifact_sample_index),
                 plan.k_sampling.as_ref(),
                 &summary_payload["modes"],
                 &visualizable_mode_indices,
@@ -1744,12 +2406,37 @@ pub(super) fn execute_fem_eigen_inner(
             .into_bytes(),
         });
     }
+
+    if source_relax_handoff.is_some_and(|handoff| handoff.verified_replay().is_some()) {
+        let source_relax_handoff = source_relax_handoff.expect("verified handoff is present");
+        let producer_provenance_path = crate::fem::eigen_equilibrium_contract::
+            fem_relaxation_producer_provenance_sample_relative_path(artifact_sample_index);
+        let producer_provenance_bytes = source_relax_handoff.producer_provenance_sidecar_bytes()?;
+        if let Some(existing) = auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == producer_provenance_path)
+        {
+            if existing.bytes != producer_provenance_bytes {
+                return Err(RunError {
+                    message: format!(
+                        "fem_modal_producer_provenance_path_conflict: {producer_provenance_path}"
+                    ),
+                });
+            }
+        } else {
+            auxiliary_artifacts.push(AuxiliaryArtifact {
+                relative_path: producer_provenance_path,
+                bytes: producer_provenance_bytes,
+            });
+        }
+    }
+
     write_eigen_v2_bundle(
         plan,
         &summary_payload,
         &requested_modes,
         &mut auxiliary_artifacts,
-        0,
+        artifact_sample_index,
     )?;
 
     let stats = StepStats {
@@ -1804,4 +2491,73 @@ pub(super) fn execute_fem_eigen_inner(
         auxiliary_artifacts,
         provenance: execution_provenance(plan, try_gpu),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{emit_native_gpu_k0_kittel_progress, FemEigenProgress, FemEigenProgressCallback};
+    use crate::types::StepAction;
+
+    #[test]
+    fn native_gpu_k0_kittel_progress_reports_boundaries_and_propagates_interrupt() {
+        let mut boundaries = Vec::new();
+        let mut callback = |event: FemEigenProgress| {
+            boundaries.push((event.phase, event.phase_index, event.percent));
+            if event.phase == "solving_dense" {
+                StepAction::Stop
+            } else {
+                StepAction::Continue
+            }
+        };
+        let mut progress = Some(&mut callback as &mut FemEigenProgressCallback<'_>);
+
+        emit_native_gpu_k0_kittel_progress(
+            &mut progress,
+            "materializing_equilibrium",
+            1,
+            5.0,
+            0,
+            0,
+            1,
+            1,
+            0,
+        )
+        .expect("materialization boundary should continue");
+        emit_native_gpu_k0_kittel_progress(
+            &mut progress,
+            "assembling_operator",
+            2,
+            20.0,
+            4,
+            8,
+            1,
+            1,
+            0,
+        )
+        .expect("assembly boundary should continue");
+        let error = emit_native_gpu_k0_kittel_progress(
+            &mut progress,
+            "solving_dense",
+            3,
+            35.0,
+            4,
+            8,
+            1,
+            1,
+            0,
+        )
+        .expect_err("runtime stop should be propagated at the solve boundary");
+
+        assert_eq!(
+            boundaries,
+            vec![
+                ("materializing_equilibrium", 1, 5.0),
+                ("assembling_operator", 2, 20.0),
+                ("solving_dense", 3, 35.0),
+            ]
+        );
+        assert!(error
+            .message
+            .contains("FEM eigen solve was interrupted by runtime control"));
+    }
 }

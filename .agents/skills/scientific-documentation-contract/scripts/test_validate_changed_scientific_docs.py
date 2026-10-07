@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import json
+import test_validate_scientific_docs as contract_fixture
 import tempfile
 import unittest
 from pathlib import Path
@@ -104,6 +106,47 @@ This page reserves the public documentation location for FDM CPU exchange.
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def _write_complete_publication(self) -> tuple[Path, Path]:
+        fixture = contract_fixture.ScientificDocumentationContractTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        page = self.repo / fixture.page_path.relative_to(fixture.repo)
+        source = self.repo / fixture.source_path.relative_to(fixture.repo)
+        page.parent.mkdir(parents=True, exist_ok=True)
+        source.parent.mkdir(parents=True, exist_ok=True)
+        page.write_bytes(fixture.page_path.read_bytes())
+        source.write_bytes(fixture.source_path.read_bytes())
+        page.with_suffix(".source-map.json").write_text(json.dumps(fixture.manifest), encoding="utf-8")
+        return page, source
+
+    def test_revision_validation_ignores_dirty_page_and_source(self) -> None:
+        page, source = self._write_complete_publication()
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "valid publication")
+        page.write_text("# Dirty incomplete page\n", encoding="utf-8")
+        source.write_text("# Dirty source without declarations\n", encoding="utf-8")
+        self.assertEqual(validate_changed(self.repo, self.base, "HEAD"), [])
+
+    def test_dirty_worktree_cannot_repair_a_broken_committed_page(self) -> None:
+        page, _ = self._write_complete_publication()
+        valid = page.read_text(encoding="utf-8")
+        page.write_text("# Broken committed page\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "broken publication")
+        page.write_text(valid, encoding="utf-8")
+        self.assertTrue(any("page missing required section" in error
+                            for error in validate_changed(self.repo, self.base, "HEAD")))
+
+    def test_dirty_worktree_cannot_repair_a_broken_committed_source(self) -> None:
+        _, source = self._write_complete_publication()
+        valid = source.read_text(encoding="utf-8")
+        source.write_text("# Missing committed declaration\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "broken source")
+        source.write_text(valid, encoding="utf-8")
+        self.assertTrue(any("declaration not found" in error
+                            for error in validate_changed(self.repo, self.base, "HEAD")))
 
     def test_new_scientific_page_requires_adjacent_source_map(self) -> None:
         page = self.repo / "public_docs/site/physics/exchange.md"
@@ -252,7 +295,7 @@ Select the mesh policy.
 Invalid mesh requests fail closed.
 
 ## Where this is implemented
-`src/example.py` — `build_mesh`
+`src/example.py` â€” `build_mesh`
 """,
             encoding="utf-8",
         )
@@ -321,7 +364,7 @@ build_mesh()
 ## Control Room workflow
 ## Diagnostics and failure semantics
 ## Where this is implemented
-`src/example.py` — `build_mesh`
+`src/example.py` â€” `build_mesh`
 """,
             encoding="utf-8",
         )

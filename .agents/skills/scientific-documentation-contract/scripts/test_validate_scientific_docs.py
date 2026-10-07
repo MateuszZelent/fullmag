@@ -201,6 +201,75 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
 
         self.assertEqual([], self.errors(manifest))
 
+    def test_rust_function_qualifiers_resolve_only_in_valid_order(self) -> None:
+        source = self.repo / "src/integrator.rs"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0].update(
+            {"path": "src/integrator.rs", "symbol": "heun_trial"}
+        )
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + "\n| qualified trial | src/integrator.rs | heun_trial |\n",
+            encoding="utf-8",
+        )
+
+        for declaration in (
+            "fn heun_trial() {}\n",
+            "pub fn heun_trial() {}\n",
+            "pub(crate) async fn heun_trial() {}\n",
+            "unsafe fn heun_trial() {}\n",
+            "pub async unsafe fn heun_trial() {}\n",
+        ):
+            with self.subTest(declaration=declaration.strip()):
+                source.write_text(declaration, encoding="utf-8")
+                self.assertEqual([], self.errors(manifest))
+
+        source.write_text("pub unsafe async fn heun_trial() {}\n", encoding="utf-8")
+        self.assertTrue(any("declaration not found" in error for error in self.errors(manifest)))
+
+    def test_rust_calls_comments_and_other_identifiers_do_not_resolve(self) -> None:
+        source = self.repo / "src/integrator.rs"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(
+            "// pub async unsafe fn heun_trial() {}\n"
+            "fn caller() { heun_trial(); }\n"
+            "async fn other_heun_trial() {}\n"
+            "pub unsafe async fn heun_trial_extra() {}\n",
+            encoding="utf-8",
+        )
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0].update(
+            {"path": "src/integrator.rs", "symbol": "heun_trial"}
+        )
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + "\n| qualified trial | src/integrator.rs | heun_trial |\n",
+            encoding="utf-8",
+        )
+        errors = self.errors(manifest)
+        self.assertTrue(any("declaration not found" in error for error in errors))
+
+    def test_duplicate_async_rust_declarations_remain_ambiguous(self) -> None:
+        source = self.repo / "src/integrator.rs"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(
+            "pub async fn heun_trial() {}\n"
+            "pub(crate) async unsafe fn heun_trial() {}\n",
+            encoding="utf-8",
+        )
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0].update(
+            {"path": "src/integrator.rs", "symbol": "heun_trial"}
+        )
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + "\n| qualified trial | src/integrator.rs | heun_trial |\n",
+            encoding="utf-8",
+        )
+        errors = self.errors(manifest)
+        self.assertTrue(any("declaration is not unique" in error for error in errors))
+
     def test_typescript_functions_methods_and_test_suites_are_stable_symbols(self) -> None:
         source = self.repo / "src/viewport.ts"
         source.parent.mkdir(exist_ok=True)

@@ -11,6 +11,7 @@ import type {
   FmrPeakPoint,
   FrequencyResponsePoint,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { eigenModeFieldAvailable } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
 
@@ -207,7 +208,7 @@ export function FrequencyDomainModeTable({
               <tr
                 aria-selected={selected}
                 data-selected={selected ? "true" : "false"}
-                data-status={point.modeFieldId ? "ready" : "missing"}
+                data-status={eigenModeFieldAvailable(point) ? "ready" : "missing"}
                 key={modeKey}
               >
                 <td className="fm-frequency-domain-table__selected-cell">
@@ -221,11 +222,11 @@ export function FrequencyDomainModeTable({
                 <td>{formatMHz(point.dampingRateHz)}</td>
                 <td>{formatCompact(point.residualNorm)}</td>
                 <td>{formatCompact(point.tangentLeakageMax)}</td>
-                <td>{point.modeFieldId ? "available" : "missing"}</td>
+                <td>{eigenModeFieldAvailable(point) ? "available" : "missing"}</td>
                 <td className="fm-frequency-domain-table__actions">
                   {MODE_ACTIONS.map((entry) => {
                     const Icon = entry.icon;
-                    const disabled = entry.action !== "inspect" && !point.modeFieldId;
+                    const disabled = entry.action !== "inspect" && !eigenModeFieldAvailable(point);
                     return (
                       <Button
                         aria-label={`${entry.title} for sample ${point.sampleIndex} mode ${point.rawModeIndex}`}

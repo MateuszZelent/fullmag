@@ -17,6 +17,12 @@ constexpr double kTwoPi = 2.0 * kPi;
 
 std::string format_double(double value)
 {
+    // JSON has no NaN/Infinity literals.  Preserve a parseable diagnostic
+    // envelope when a contour point is incomplete; the caller's finite-value
+    // and certification gates remain responsible for rejecting the result.
+    if (!std::isfinite(value)) {
+        return "null";
+    }
     char buffer[64]{};
     const int written = std::snprintf(buffer, sizeof(buffer), "%.17g", value);
     if (written <= 0 || static_cast<std::size_t>(written) >= sizeof(buffer)) {

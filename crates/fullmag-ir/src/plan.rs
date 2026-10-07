@@ -1597,6 +1597,22 @@ pub struct FemEigenDispersionValidationIR {
     pub scenarios: Vec<FemEigenDispersionValidationScenarioIR>,
 }
 
+/// Optional native modal-solver controls carried by a resolved FEM eigen plan.
+///
+/// An omitted value delegates resolution to the native PETSc/SLEPc adapter.
+/// This keeps backend defaults observable instead of silently imposing a
+/// runner-side iteration cap.  Values supplied here are requested limits,
+/// while the native diagnostics remain the authority for resolved limits.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenSolverPolicyIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub residual_tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_outer_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_linear_iterations: Option<u32>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemEigenK0KittelValidationMaterialIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1639,6 +1655,13 @@ pub struct FemEigenK0KittelValidationIR {
 pub enum FemEigenEngineIR {
     Auto,
     K0PoissonAirboxCpuSchurSlepc,
+    /// Bounded CPU engine for the nonzero-k Floquet dynamic-demag lane.
+    ///
+    /// The k-dependent demagnetization operator is assembled by the native
+    /// shared-domain Poisson-airbox provider and consumed by the dense
+    /// SLEPc modal adapter.  It is intentionally distinct from the k=0
+    /// Schur engine so provenance cannot collapse the two physical problems.
+    FloquetAirboxCpuSchurSlepc,
     /// Canonical planner identity for the production GPU modal lane.
     ///
     /// The native PETSc/SLEPc adapter remains an implementation detail of
@@ -1731,6 +1754,8 @@ pub struct FemEigenPlanIR {
     pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k0_kittel_validation: Option<FemEigenK0KittelValidationIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_policy: Option<FemEigenSolverPolicyIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2324,6 +2349,26 @@ mod tests {
         );
         let reencoded = serde_json::to_value(decoded).expect("canonical GPU token serializes");
         assert_eq!(reencoded["resolved_engine"], "gpu_modal_device_krylov");
+    }
+
+    #[test]
+    fn fem_eigen_execution_resolution_serializes_floquet_dynamic_demag_engine_token() {
+        let resolution = FemEigenExecutionResolutionIR {
+            requested_device: ExecutionDevice::Cpu,
+            resolved_device: ExecutionDevice::Cpu,
+            requested_precision: ExecutionPrecision::Double,
+            resolved_precision: ExecutionPrecision::Double,
+            requested_engine: FemEigenEngineIR::Auto,
+            resolved_engine: FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+            fallback_used: false,
+            fallback_reason: None,
+            selection_reason: "fem_eigen.floquet_airbox_dynamic_demag.explicit_cpu".to_string(),
+        };
+        let encoded = serde_json::to_value(&resolution).expect("resolution serializes");
+        assert_eq!(encoded["resolved_engine"], "floquet_airbox_cpu_schur_slepc");
+        let decoded: FemEigenExecutionResolutionIR =
+            serde_json::from_value(encoded).expect("resolution deserializes");
+        assert_eq!(decoded, resolution);
     }
 
     #[test]

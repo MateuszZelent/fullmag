@@ -73,6 +73,9 @@ const stageExecution: StageExecutionResource = {
   active_stage_kind: "relax",
   completed_stage_indexes: [],
   revision: 7,
+  run_id: "run-12",
+  session_epoch: "session-1@0",
+  session_id: "session-1",
   runtime_state: "running",
   stage_statuses: ["running"],
   stages: [{

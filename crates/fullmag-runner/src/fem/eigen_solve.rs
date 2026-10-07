@@ -1,3 +1,4 @@
+use super::eigen_normalization_metric::{checked_mass_quadratic, MassQuadraticEvaluation};
 use super::eigen_math::frequency_from_eigenvalue;
 use super::eigen_progress::{emit_fem_eigen_progress, FemEigenProgress, FemEigenProgressCallback};
 use super::eigen_types::NativeBlochFloquetDensePayload;
@@ -441,7 +442,7 @@ pub(super) fn solve_complex_hermitian_eigenpairs(
         }
         let lifted = l_inv.transpose() * spectrum.eigenvectors.column(index).into_owned();
         let complex = real_block_vector_to_complex(&lifted, active_count);
-        let normalized = normalize_complex_mode(&complex, &mass, &plan.normalization);
+        let normalized = normalize_complex_mode(&complex, &mass, &plan.normalization)?;
         let normalized_block = complex_vector_to_real_block(&normalized);
         let (residual_absolute_l2, residual_relative_l2, residual_linf) =
             generalized_residual_norms(&stiffness_block, &mass_block, *value, &normalized_block);
@@ -752,30 +753,97 @@ fn normalize_real_mode(
     }
 }
 
+pub(super) fn checked_complex_normalization_scale(
+    vector: &[Complex64],
+    quadratic: Option<MassQuadraticEvaluation>,
+    normalization: &EigenNormalizationIR,
+) -> Result<f64, RunError> {
+    if vector.is_empty()
+        || vector
+            .iter()
+            .any(|v| !v.re.is_finite() || !v.im.is_finite())
+    {
+        return Err(RunError {
+            message: "modal normalization requires nonempty finite coefficients".into(),
+        });
+    }
+    let scale = match normalization {
+        EigenNormalizationIR::UnitL2 => {
+            let value = quadratic.ok_or_else(|| RunError {
+                message: "unit_l2 normalization requires the physical mass norm".into(),
+            })?;
+            if !value.value.re.is_finite() || !value.value.im.is_finite() || value.value.re <= 0.0 {
+                return Err(RunError { message: "unit_l2 normalization requires a positive finite mass norm; underflow is not replaced by a floor".into() });
+            }
+            if value.real.lower <= 0.0 || !value.imaginary.contains_zero() {
+                return Err(RunError { message: format!("unit_l2 mass norm is not roundoff-compatible with a positive real norm: real=[{}, {}], imag=[{}, {}], terms={}", value.real.lower, value.real.upper, value.imaginary.lower, value.imaginary.upper, value.terms) });
+            }
+            value.value.re.sqrt()
+        }
+        EigenNormalizationIR::UnitMaxAmplitude => vector
+            .iter()
+            .fold(0.0_f64, |acc, v| acc.max(v.re.hypot(v.im))),
+    };
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(RunError {
+            message: "modal normalization requires a positive finite scale".into(),
+        });
+    }
+    Ok(scale)
+}
+
+pub(super) fn normalize_complex_vector_with_scale(
+    vector: &[Complex64],
+    scale: f64,
+) -> Result<Vec<Complex64>, RunError> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(RunError {
+            message: "modal normalization requires a positive finite scale".into(),
+        });
+    }
+    let normalized: Vec<_> = vector
+        .iter()
+        .map(|v| Complex64::new(v.re / scale, v.im / scale))
+        .collect();
+    if normalized
+        .iter()
+        .any(|v| !v.re.is_finite() || !v.im.is_finite())
+    {
+        return Err(RunError {
+            message: "modal coefficients overflow after normalization".into(),
+        });
+    }
+    Ok(normalized)
+}
+
+pub(super) fn normalize_complex_mode_and_scale(
+    vector: &[Complex64],
+    mass: &[Vec<Complex64>],
+    normalization: &EigenNormalizationIR,
+) -> Result<(Vec<Complex64>, f64), RunError> {
+    if mass.len() != vector.len() || mass.iter().any(|row| row.len() != vector.len()) {
+        return Err(RunError {
+            message: "modal normalization mass metric dimensions do not match the vector".into(),
+        });
+    }
+    let quadratic = match normalization {
+        EigenNormalizationIR::UnitL2 => Some(checked_mass_quadratic(
+            mass.iter().enumerate().flat_map(|(row, entries)| {
+                entries.iter().enumerate().map(move |(col, &weight)| (vector[row], weight, vector[col]))
+            }),
+        )?),
+        EigenNormalizationIR::UnitMaxAmplitude => None,
+    };
+    let scale = checked_complex_normalization_scale(vector, quadratic, normalization)?;
+    Ok((normalize_complex_vector_with_scale(vector, scale)?, scale))
+}
+
 pub(super) fn normalize_complex_mode(
     vector: &[Complex64],
     mass: &[Vec<Complex64>],
     normalization: &EigenNormalizationIR,
-) -> Vec<Complex64> {
-    match normalization {
-        EigenNormalizationIR::UnitL2 => {
-            let mut quadratic = Complex64::new(0.0, 0.0);
-            for row in 0..vector.len() {
-                for col in 0..vector.len() {
-                    quadratic += vector[row].conj() * mass[row][col] * vector[col];
-                }
-            }
-            let scale = quadratic.re.max(1e-30).sqrt();
-            vector.iter().map(|value| *value / scale).collect()
-        }
-        EigenNormalizationIR::UnitMaxAmplitude => {
-            let scale = vector
-                .iter()
-                .fold(0.0_f64, |acc, value| acc.max(value.norm()))
-                .max(1e-30);
-            vector.iter().map(|value| *value / scale).collect()
-        }
-    }
+) -> Result<Vec<Complex64>, RunError> {
+    normalize_complex_mode_and_scale(vector, mass, normalization).map(|(vector, _)| vector)
 }
 
 pub(super) fn complex_mass_norm(mass: &[Vec<Complex64>], vector: &[Complex64]) -> Complex64 {
@@ -791,19 +859,25 @@ pub(super) fn complex_mass_norm(mass: &[Vec<Complex64>], vector: &[Complex64]) -
 }
 
 fn sort_and_truncate_real_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<RealEigenpair>) {
+    // A negative (or non-finite) eigenvalue indicates a non-minimum
+    // equilibrium (an unstable/soft mode, or an unconverged relaxation), not
+    // a legitimate zero-frequency acoustic mode. Reject such eigenpairs
+    // before any target-specific sorting or window filtering runs, so a
+    // corrupted eigenpair can never be silently retained, sorted first by
+    // `Lowest`, or folded to 0 Hz by a frequency window (audit finding H7).
+    eigenpairs.retain(|pair| pair.eigenvalue_real.is_finite() && pair.eigenvalue_real >= 0.0);
     match &plan.target {
-        fullmag_ir::EigenTargetIR::Lowest => eigenpairs.sort_by(|lhs, rhs| {
-            lhs.eigenvalue_real
-                .partial_cmp(&rhs.eigenvalue_real)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
+        fullmag_ir::EigenTargetIR::Lowest => {
+            eigenpairs.sort_by(|lhs, rhs| lhs.eigenvalue_real.total_cmp(&rhs.eigenvalue_real))
+        }
         fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => eigenpairs.sort_by(|lhs, rhs| {
-            let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
-            let rhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
+            let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
+                .expect("eigenvalue_real already filtered non-negative and finite above");
+            let rhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real)
+                .expect("eigenvalue_real already filtered non-negative and finite above");
             (lhs_freq - *frequency_hz)
                 .abs()
-                .partial_cmp(&(rhs_freq - *frequency_hz).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&(rhs_freq - *frequency_hz).abs())
         }),
         fullmag_ir::EigenTargetIR::FrequencyWindow {
             frequency_min_hz,
@@ -811,17 +885,18 @@ fn sort_and_truncate_real_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<Real
         } => {
             eigenpairs.retain(|pair| {
                 let frequency =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real);
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
                 frequency >= *frequency_min_hz && frequency <= *frequency_max_hz
             });
             eigenpairs.sort_by(|lhs, rhs| {
                 let lhs_freq =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
                 let rhs_freq =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
-                lhs_freq
-                    .partial_cmp(&rhs_freq)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
+                lhs_freq.total_cmp(&rhs_freq)
             });
         }
     }
@@ -830,19 +905,22 @@ fn sort_and_truncate_real_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<Real
 }
 
 fn sort_and_truncate_complex_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<ComplexEigenpair>) {
+    // See the identical guard in `sort_and_truncate_real_modes` above (audit
+    // finding H7): reject negative/non-finite eigenvalues before any
+    // target-specific sorting or window filtering runs.
+    eigenpairs.retain(|pair| pair.eigenvalue_real.is_finite() && pair.eigenvalue_real >= 0.0);
     match &plan.target {
-        fullmag_ir::EigenTargetIR::Lowest => eigenpairs.sort_by(|lhs, rhs| {
-            lhs.eigenvalue_real
-                .partial_cmp(&rhs.eigenvalue_real)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
+        fullmag_ir::EigenTargetIR::Lowest => {
+            eigenpairs.sort_by(|lhs, rhs| lhs.eigenvalue_real.total_cmp(&rhs.eigenvalue_real))
+        }
         fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => eigenpairs.sort_by(|lhs, rhs| {
-            let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
-            let rhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
+            let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
+                .expect("eigenvalue_real already filtered non-negative and finite above");
+            let rhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real)
+                .expect("eigenvalue_real already filtered non-negative and finite above");
             (lhs_freq - *frequency_hz)
                 .abs()
-                .partial_cmp(&(rhs_freq - *frequency_hz).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&(rhs_freq - *frequency_hz).abs())
         }),
         fullmag_ir::EigenTargetIR::FrequencyWindow {
             frequency_min_hz,
@@ -850,17 +928,18 @@ fn sort_and_truncate_complex_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<C
         } => {
             eigenpairs.retain(|pair| {
                 let frequency =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real);
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
                 frequency >= *frequency_min_hz && frequency <= *frequency_max_hz
             });
             eigenpairs.sort_by(|lhs, rhs| {
                 let lhs_freq =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
                 let rhs_freq =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
-                lhs_freq
-                    .partial_cmp(&rhs_freq)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
+                lhs_freq.total_cmp(&rhs_freq)
             });
         }
     }

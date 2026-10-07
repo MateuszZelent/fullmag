@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
 import type { SimulationPreparationResource } from "../api/apiTypes";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { useKernel } from "../KernelContext";
 import {
   errorRetryDelayMs,
@@ -15,8 +16,23 @@ import { useSessionStatusSelector } from "./useSessionStatus";
 import { hasSimulationPreparation } from "./simulationResourceAvailability";
 import { useResource } from "./useResource";
 
-function resolvePreparationRevision(data: SimulationPreparationResource) {
-  return data.revision;
+function resolvePreparationRevision(data: SimulationPreparationResource | null) {
+  return data?.revision ?? null;
+}
+
+function ignoreUnavailablePreparation<T>(
+  error: unknown,
+  requiredRevision: number | null,
+): T | null {
+  if (
+    (requiredRevision === null || requiredRevision <= 0) &&
+    error instanceof ControlRoomApiError &&
+    error.status === 404 &&
+    error.message.toLowerCase().includes("simulation preparation unavailable")
+  ) {
+    return null;
+  }
+  throw error;
 }
 
 export function useSimulationPreparation({
@@ -37,11 +53,18 @@ export function useSimulationPreparation({
   const effectiveEnabled = enabled && sessionIdentity !== null && preparationAvailable;
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
-      api.simulation.preparation({ sessionScopeKey, signal }),
-    [api],
+      api.simulation
+        .preparation({ sessionScopeKey, signal })
+        .catch((error) =>
+          ignoreUnavailablePreparation<SimulationPreparationResource>(
+            error,
+            requiredRevision,
+          ),
+        ),
+    [api, requiredRevision],
   );
 
-  const preparation = useResource<SimulationPreparationResource>({
+  const preparation = useResource<SimulationPreparationResource | null>({
     enabled: effectiveEnabled,
     load,
     minRefetchIntervalMs: statusRefreshIntervalMs(),

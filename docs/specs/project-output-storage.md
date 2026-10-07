@@ -65,6 +65,15 @@ rozszerzenie `.h5`. Flagi `--output-dir`, `--temp-dir`, `--data-format`, `--temp
 i `--existing-output` mają pierwszeństwo przed polityką skryptu, a ta przed defaults.
 W notebooku/REPL bez pliku źródłowego punktem odniesienia jest bieżący katalog.
 
+Bezpośrednie obniżanie dokumentu sceny do ProblemIR nie ma oryginalnego pliku
+źródłowego. Techniczny `scene_document.py` używany do odtworzenia DSL nie może
+ustalać nazwy katalogu wyników. Ta trasa zachowuje `output_storage_source_dir`,
+lecz pomija `output_storage_source_stem`; istniejący konsument Python-core
+wybiera wtedy bezpieczny komponent z nazwy modelu przez `storage_slug`. Jawne
+`output_storage.output_dir` zachowuje pierwszeństwo. Skrypt wczytany z pliku
+nadal zachowuje własny basename. Kontrole porównujące fizyczne IR wyłączają
+różnice źródłowego basename dopiero po osobnym sprawdzeniu tego kontraktu.
+
 Requested policy pozostaje niezmieniona w `output_storage`. `resolved_output_storage`
 rejestruje pełne skuteczne ścieżki, prywatny tmp, format i identyfikator wykonania;
 `output_storage_source_dir` wyjaśnia bazę ścieżek względnych. Nie używa się zmiany globalnych

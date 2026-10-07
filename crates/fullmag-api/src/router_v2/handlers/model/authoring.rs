@@ -3017,6 +3017,11 @@ pub async fn patch_authoring_study_runtime(
             NullableU32PatchValue::Null => None,
         };
     }
+    if let Some(value) = req.parallel_execution {
+        scene.study.parallel_execution = value
+            .try_into()
+            .map_err(|error: String| ApiError::bad_request(error))?;
+    }
 
     let committed =
         crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
@@ -4033,6 +4038,7 @@ fn build_study_runtime_resource(scene: &SceneDocument) -> StudyRuntimeResource {
         requested_precision: scene.study.requested_precision.clone(),
         requested_mode: scene.study.requested_mode.clone(),
         requested_cpu_threads: scene.study.requested_cpu_threads,
+        parallel_execution: (&scene.study.parallel_execution).into(),
     }
 }
 

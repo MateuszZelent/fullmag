@@ -28,135 +28,2789 @@
   ],
   "equations": [
     {
+      "id": "eq-tracking-subspace-raw-assignment",
+      "symbols": [
+        "tracking_assignment_rotation",
+        "tracking_assignment_weight",
+        "tracking_assignment_indices",
+        "tracking_assignment_permutations",
+        "tracking_assignment_permutation",
+        "tracking_assignment_tolerance"
+      ],
+      "sources": [
+        "source-tracking-subspace-assignment-weights",
+        "source-tracking-assignment-optimum",
+        "source-tracking-assignment-replay",
+        "source-tracking-assignment-enumeration"
+      ]
+    },
+    {
+      "id": "eq-periodic-mode-seam-relative",
+      "symbols": [
+        "mode_seam_field",
+        "mode_seam_phase",
+        "mode_seam_root",
+        "mode_seam_defect"
+      ],
+      "sources": [
+        "source-periodic-mode-seam-metric",
+        "source-periodic-mode-seam-reader"
+      ]
+    },
+    {
       "id": "eq-fem-dynamic-ansatz",
-      "symbols": ["position", "time", "magnetization", "tangent_maps", "q", "omega", "gamma", "mu0", "complex_operators"],
-      "sources": ["source-dynamic-pencil", "source-contract-regression"]
+      "symbols": [
+        "position",
+        "time",
+        "magnetization",
+        "tangent_maps",
+        "q",
+        "omega",
+        "gamma",
+        "mu0",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-dynamic-pencil",
+        "source-contract-regression",
+        "source-modal-gamma-result",
+        "source-modal-gamma-owner",
+        "source-modal-gamma-guard",
+        "source-modal-gamma-spectrum",
+        "source-modal-gamma-fields",
+        "source-modal-gamma-kittel",
+        "source-modal-gamma-fem-publication",
+        "source-modal-gamma-single-k",
+        "source-modal-gamma-native",
+        "source-modal-gamma-reader",
+        "source-modal-gamma-regression"
+      ]
     },
     {
       "id": "eq-fem-dynamic-pencil",
-      "symbols": ["q", "lambda_shift", "omega", "restoring_operators", "mass_operators", "harmonic_operator", "drive", "tangent_maps", "gamma", "magnetization", "effective_fields", "complex_operators"],
-      "sources": ["source-dynamic-pencil", "source-cpu-schur", "source-gpu-petsc", "source-native-response", "source-contract-regression"]
+      "symbols": [
+        "q",
+        "lambda_shift",
+        "omega",
+        "restoring_operators",
+        "mass_operators",
+        "harmonic_operator",
+        "drive",
+        "tangent_maps",
+        "gamma",
+        "magnetization",
+        "effective_fields",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-dynamic-pencil",
+        "source-cpu-schur",
+        "source-gpu-petsc",
+        "source-native-response",
+        "source-contract-regression"
+      ]
     },
     {
       "id": "eq-fem-gyrotropic-pencil",
-      "symbols": ["potential", "omega", "restoring_operators", "mass_operators", "complex_operators"],
-      "sources": ["source-rotated-pencil", "source-cpu-schur", "source-gpu-petsc", "source-contract-regression"]
+      "symbols": [
+        "potential",
+        "omega",
+        "restoring_operators",
+        "mass_operators",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-rotated-pencil",
+        "source-cpu-schur",
+        "source-gpu-petsc",
+        "source-contract-regression"
+      ]
     },
     {
       "id": "eq-fem-eigen-frequency-mapping",
-      "symbols": ["lambda_shift", "omega", "frequency", "time", "complex_operators"],
-      "sources": ["source-rotated-pencil", "source-cpu-schur", "source-gpu-petsc", "source-contract-regression"]
+      "symbols": [
+        "lambda_shift",
+        "omega",
+        "frequency",
+        "time",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-rotated-pencil",
+        "source-cpu-schur",
+        "source-gpu-petsc",
+        "source-contract-regression"
+      ]
     },
     {
       "id": "eq-fem-dynamic-descriptor",
-      "symbols": ["q", "potential", "restoring_operators", "Aqphi", "Aphiq", "poisson", "mass_operators", "lambda_shift", "gauge", "complex_operators"],
-      "sources": ["source-cpu-schur", "source-gpu-petsc", "source-modal-payload-ownership"]
+      "symbols": [
+        "q",
+        "potential",
+        "restoring_operators",
+        "Aqphi",
+        "Aphiq",
+        "poisson",
+        "mass_operators",
+        "lambda_shift",
+        "gauge",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-gpu-petsc",
+        "source-modal-payload-ownership",
+        "source-floquet-dynamic-demag-k",
+        "source-native-floquet-modal",
+        "source-airbox-source-convention",
+        "source-airbox-dense-source-conversion",
+        "source-airbox-source-convention-regression"
+      ]
     },
     {
       "id": "eq-fem-dynamic-original-residual",
-      "symbols": ["q", "potential", "restoring_operators", "Aqphi", "Aphiq", "poisson", "mass_operators", "lambda_shift", "gauge", "residuals", "normalized_residuals", "norm_operators"],
-      "sources": ["source-cpu-schur", "source-gpu-petsc", "source-native-response"]
+      "symbols": [
+        "q",
+        "potential",
+        "restoring_operators",
+        "Aqphi",
+        "Aphiq",
+        "poisson",
+        "mass_operators",
+        "lambda_shift",
+        "gauge",
+        "residuals",
+        "normalized_residuals",
+        "norm_operators"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-gpu-petsc",
+        "source-native-response"
+      ]
+    },
+    {
+      "id": "eq-fem-floquet-block-residuals",
+      "symbols": [
+        "q",
+        "potential",
+        "restoring_operators",
+        "Aqphi",
+        "Aphiq",
+        "poisson",
+        "mass_operators",
+        "lambda_shift",
+        "normalized_residuals",
+        "norm_operators"
+      ],
+      "sources": [
+        "source-native-floquet-modal"
+      ]
+    },
+    {
+      "id": "eq-fem-floquet-full-projected-residuals",
+      "symbols": [
+        "q",
+        "potential",
+        "constraint_map",
+        "wave_vector",
+        "restoring_operators",
+        "Aqphi",
+        "Aphiq",
+        "poisson",
+        "mass_operators",
+        "lambda_shift",
+        "residuals",
+        "normalized_residuals",
+        "norm_operators",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-native-floquet-full-descriptor",
+        "source-native-floquet-modal-result"
+      ]
     },
     {
       "id": "eq-fem-dynamic-petrov-galerkin",
-      "symbols": ["q", "rom_basis", "harmonic_operator", "drive", "residuals", "complex_operators"],
-      "sources": ["source-dynamic-pencil", "source-response-method-policy", "source-native-response"]
+      "symbols": [
+        "q",
+        "rom_basis",
+        "harmonic_operator",
+        "drive",
+        "residuals",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-dynamic-pencil",
+        "source-response-method-policy",
+        "source-native-response"
+      ]
     },
     {
       "id": "eq-fem-dynamic-floquet-constraint",
-      "symbols": ["phase", "wave_vector", "translation", "tangent_maps", "q", "periodic_transform", "potential", "complex_operators"],
-      "sources": ["source-floquet-validation", "source-modal-payload-ownership", "source-contract-regression"]
+      "symbols": [
+        "phase",
+        "wave_vector",
+        "translation",
+        "tangent_maps",
+        "q",
+        "periodic_transform",
+        "potential",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-floquet-validation",
+        "source-modal-payload-ownership",
+        "source-floquet-modal-frame-map",
+        "source-contract-regression"
+      ]
+    },
+    {
+      "id": "eq-fem-modal-tangent-frame-rotation",
+      "symbols": [
+        "phase",
+        "wave_vector",
+        "translation",
+        "tangent_maps",
+        "tangent_coordinate_rotation",
+        "q",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-floquet-modal-frame-map",
+        "source-contract-regression"
+      ]
+    },
+    {
+      "id": "eq-fem-full-bloch-ansatz",
+      "symbols": [
+        "position",
+        "bloch_envelope",
+        "wave_vector",
+        "lattice_vector",
+        "magnetization",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-full-bloch-contract",
+        "source-floquet-native-prolongation"
+      ]
+    },
+    {
+      "id": "eq-fem-full-bloch-demag",
+      "symbols": [
+        "dynamic_magnetization",
+        "Ms",
+        "bloch_potential",
+        "demag_field",
+        "gradient",
+        "domains"
+      ],
+      "sources": [
+        "source-full-bloch-contract",
+        "source-shared-domain",
+        "source-floquet-neumann-invertibility"
+      ]
+    },
+    {
+      "id": "eq-fem-full-bloch-weak",
+      "symbols": [
+        "test_function",
+        "gradient",
+        "bloch_potential",
+        "dynamic_magnetization",
+        "domains",
+        "volume_measure",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-full-bloch-contract",
+        "source-shared-domain"
+      ]
+    },
+    {
+      "id": "eq-fem-waveguide-envelope-demag",
+      "symbols": [
+        "shifted_gradient",
+        "wave_number",
+        "propagation_axis",
+        "potential",
+        "dynamic_magnetization_transverse",
+        "demag_field",
+        "gradient",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-waveguide-envelope-contract",
+        "source-tetrax-boundary",
+        "source-floquet-waveguide-demag-k"
+      ]
+    },
+    {
+      "id": "eq-fem-waveguide-weak-source-sign",
+      "symbols": [
+        "section_domain",
+        "test_function",
+        "potential",
+        "gradient",
+        "wave_number",
+        "dynamic_magnetization_transverse",
+        "area_measure"
+      ],
+      "sources": [
+        "source-waveguide-weak-sign",
+        "source-waveguide-cross-section",
+        "source-waveguide-sign-oracle",
+        "source-waveguide-section-regression"
+      ]
+    },
+    {
+      "id": "eq-fem-waveguide-section-measure",
+      "symbols": [
+        "section_domain",
+        "extrusion_length",
+        "extruded_domain",
+        "section_basis",
+        "section_indices",
+        "area_measure",
+        "section_mass",
+        "section_stiffness",
+        "gradient",
+        "volume_measure"
+      ],
+      "sources": [
+        "source-waveguide-section-measure",
+        "source-waveguide-cross-section",
+        "source-waveguide-section-regression"
+      ]
+    },
+    {
+      "id": "eq-fem-k0-probe-componentwise-residual",
+      "symbols": [
+        "probe_residual",
+        "row_index",
+        "residuals",
+        "poisson",
+        "potential",
+        "Aphiq",
+        "q",
+        "gauge",
+        "norm_operators"
+      ],
+      "sources": [
+        "source-k0-probe-backward-error",
+        "source-k0-probe-regression"
+      ]
+    },
+    {
+      "id": "eq-de-bv-profile-consistent-mass",
+      "symbols": [
+        "profile_vectors",
+        "profile_wavevector",
+        "profile_positions",
+        "profile_tetra",
+        "profile_mass",
+        "profile_overlap",
+        "profile_inner_product"
+      ],
+      "sources": [
+        "source-tracking-consistent-metric",
+        "source-tracking-consistent-pair",
+        "source-tracking-consistent-subspace",
+        "source-tracking-consistent-fem-adapter",
+        "source-tracking-consistent-basis-regression",
+        "source-profile-packing",
+        "source-profile-mass",
+        "source-profile-overlap",
+        "source-profile-mass-regression",
+        "source-tracking-edge-record",
+        "source-tracking-edge-producer",
+        "source-tracking-edge-writer",
+        "source-tracking-edge-signed-regression",
+        "source-tracking-edge-artifact-validator",
+        "source-comsol-tracking-record-gate",
+        "source-comsol-tracking-record-regression",
+        "source-comsol-tracking-qualification"
+      ]
+    },
+    {
+      "id": "eq-de-bv-profile-overlap",
+      "symbols": [
+        "profile_vectors",
+        "profile_wavevector",
+        "profile_positions",
+        "profile_tetra",
+        "profile_mass",
+        "profile_overlap",
+        "profile_inner_product"
+      ],
+      "sources": [
+        "source-tracking-consistent-metric",
+        "source-tracking-consistent-pair",
+        "source-tracking-consistent-subspace",
+        "source-tracking-consistent-fem-adapter",
+        "source-tracking-consistent-basis-regression",
+        "source-profile-packing",
+        "source-profile-mass",
+        "source-profile-overlap",
+        "source-profile-mass-regression"
+      ]
+    },
+    {
+      "id": "eq-thickness-oracle-kernels",
+      "symbols": [
+        "thickness_a",
+        "thickness_u",
+        "thickness_v",
+        "thickness_basis",
+        "thickness_R",
+        "thickness_S",
+        "thickness_n",
+        "thickness_m"
+      ],
+      "sources": [
+        "source-thickness-oracle-matrices"
+      ]
+    },
+    {
+      "id": "eq-thickness-oracle-demag",
+      "symbols": [
+        "thickness_N",
+        "thickness_R",
+        "thickness_S",
+        "thickness_I",
+        "thickness_k"
+      ],
+      "sources": [
+        "source-thickness-oracle-matrices"
+      ]
+    },
+    {
+      "id": "eq-thickness-oracle-discrete",
+      "symbols": [
+        "thickness_D",
+        "thickness_B0",
+        "thickness_A",
+        "thickness_Ms",
+        "thickness_k",
+        "thickness_n",
+        "thickness_t",
+        "thickness_K",
+        "thickness_mu0",
+        "thickness_N",
+        "thickness_L",
+        "thickness_gamma",
+        "thickness_I",
+        "thickness_lambda",
+        "thickness_omega",
+        "thickness_f"
+      ],
+      "sources": [
+        "source-thickness-oracle-matrices",
+        "source-thickness-oracle-solve"
+      ]
+    },
+    {
+      "id": "eq-oracle-exchange-free-de-limit",
+      "symbols": [
+        "thickness_f",
+        "thickness_gamma",
+        "thickness_mu0",
+        "thickness_B0",
+        "thickness_Ms",
+        "thickness_k",
+        "thickness_t"
+      ],
+      "sources": [
+        "source-oracle-exact-de-limit",
+        "source-thickness-oracle-solve"
+      ]
+    },
+    {
+      "id": "eq-fem-modal-static-field-frame-transport",
+      "symbols": [
+        "mu0",
+        "magnetization",
+        "tangent_maps"
+      ],
+      "sources": [
+        "source-static-field-frame-transport"
+      ]
+    },
+    {
+      "id": "eq-fem-modal-uniaxial-energy-hessian",
+      "symbols": [
+        "uniaxial_ku",
+        "uniaxial_axis",
+        "uniaxial_field",
+        "mu0",
+        "magnetization",
+        "tangent_maps"
+      ],
+      "sources": [
+        "source-native-uniaxial-weak-form",
+        "source-uniaxial-energy-finite-difference",
+        "source-uniaxial-descriptor-builder",
+        "source-uniaxial-ffi-envelope",
+        "source-uniaxial-equilibrium-material-identity",
+        "source-uniaxial-equilibrium-field-owner"
+      ]
+    },
+    {
+      "id": "eq-fem-certified-static-fields-ku",
+      "symbols": [
+        "certified_static_fields"
+      ],
+      "sources": [
+        "source-certified-field-digest",
+        "source-certified-field-copy",
+        "source-certified-field-producer",
+        "source-certified-field-consumer",
+        "source-certified-field-refresh-consumer",
+        "source-certified-field-python-validation",
+        "source-certified-field-path-selector",
+        "source-certified-field-bias-consumer",
+        "source-certified-field-stage-consumer",
+        "source-certified-field-scope-guard"
+      ]
+    },
+    {
+      "id": "eq-k0-window-krylov-oversampling-v2",
+      "symbols": [
+        "k0_window_dim",
+        "k0_window_nev",
+        "k0_window_ncv",
+        "k0_window_chi"
+      ],
+      "sources": [
+        "source-k0-bounded-krylov-policy"
+      ]
     }
   ],
   "symbols": [
-    {"id": "position", "latex": "$\\mathbf r$", "meaning": "spatial position", "si_unit": "$\\mathrm{m}$"},
-    {"id": "time", "latex": "$t$", "meaning": "time", "si_unit": "$\\mathrm{s}$"},
-    {"id": "magnetization", "latex": "$\\mathbf m$, $\\mathbf m_0$, $\\delta\\mathbf m$", "meaning": "normalized magnetization, accepted equilibrium and tangent perturbation", "si_unit": "$1$"},
-    {"id": "tangent_maps", "latex": "$T$, $T_{\\mathrm{src}}$, $T_{\\mathrm{dst}}$", "meaning": "tangent-frame maps from local coefficients to physical perturbations", "si_unit": "$1$"},
-    {"id": "q", "latex": "$q$, $q_{\\mathrm{src}}$, $q_{\\mathrm{dst}}$", "meaning": "tangent-plane coefficient vectors", "si_unit": "$1$"},
-    {"id": "effective_fields", "latex": "$\\mathbf H_{\\mathrm{eff},0}$, $\\delta\\mathbf h$", "meaning": "static effective field and RF field phasor", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "gamma", "latex": "$\\gamma$, $\\gamma_0$", "meaning": "gyromagnetic ratio and $\\mu_0|\\gamma|$ in the A/m convention", "si_unit": "$\\mathrm{rad\\,s^{-1}\\,T^{-1}}$, $\\mathrm{rad\\,s^{-1}\\,(A\\,m^{-1})^{-1}}$"},
-    {"id": "omega", "latex": "$\\omega$, $\\omega_r$, $\\Gamma$, $\\omega_{\\mathrm{target}}$, $\\tau$", "meaning": "complex angular frequency, oscillation part, decay rate, requested angular target and rotated target", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
-    {"id": "frequency", "latex": "$f$", "meaning": "cyclic frequency, $f=\\operatorname{Re}(\\omega)/(2\\pi)$", "si_unit": "$\\mathrm{Hz}$"},
-    {"id": "lambda_shift", "latex": "$\\lambda$, $\\sigma$", "meaning": "generalized eigenvalue and complex spectral shift", "si_unit": "$\\mathrm{s^{-1}}$"},
-    {"id": "shift_parts", "latex": "$\\sigma_{\\mathrm{R}}$, $\\sigma_{\\mathrm{I}}$", "meaning": "real and imaginary parts of the spectral shift", "si_unit": "$\\mathrm{s^{-1}}$, $\\mathrm{rad\\,s^{-1}}$"},
-    {"id": "restoring_operators", "latex": "$L$, $K$, $A_{qq}$", "meaning": "dynamic, energy-Hessian and magnetic restoring operators", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
-    {"id": "mass_operators", "latex": "$B_\\alpha$, $B_{qq}$, $G$", "meaning": "damped gyrotropic/mass operators", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "harmonic_operator", "latex": "$A_\\omega$", "meaning": "driven harmonic operator $\\mathrm{i}\\omega B_\\alpha-L$", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
-    {"id": "drive", "latex": "$b$", "meaning": "projected tangent RF drive", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
-    {"id": "potential", "latex": "$\\phi$, $\\delta\\phi$", "meaning": "scalar-potential coefficient vector and perturbation", "si_unit": "$\\mathrm{A}$"},
-    {"id": "Aqphi", "latex": "$A_{q\\phi}$", "meaning": "potential-to-magnetic coupling block", "si_unit": "$\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$"},
-    {"id": "Aphiq", "latex": "$A_{\\phi q}$", "meaning": "magnetic-to-potential coupling block", "si_unit": "$\\mathrm{A\\,m}$"},
-    {"id": "poisson", "latex": "$P$", "meaning": "scalar Poisson block", "si_unit": "$\\mathrm{m}$"},
-    {"id": "gauge", "latex": "$c$, $\\eta$", "meaning": "mean-zero gauge vector and Lagrange multiplier", "si_unit": "$\\mathrm{m^3}$, $\\mathrm{A\\,m^{-2}}$"},
-    {"id": "residuals", "latex": "$r_q$, $r_\\phi$, $r_g$", "meaning": "magnetic, scalar and gauge residuals", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"},
-    {"id": "normalized_residuals", "latex": "$\\epsilon_q$, $\\epsilon_\\phi$, $\\epsilon_g$, $\\epsilon_{\\mathrm{full}}$", "meaning": "normalized block and full original-operator residuals", "si_unit": "$1$"},
-    {"id": "rom_basis", "latex": "$V$, $W$, $y$", "meaning": "trial basis, test basis and reduced coordinates", "si_unit": "$1$"},
-    {"id": "periodic_transform", "latex": "$Q$", "meaning": "physical vector transformation across a periodic map", "si_unit": "$1$"},
-    {"id": "wave_vector", "latex": "$\\mathbf k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
-    {"id": "translation", "latex": "$\\Delta\\mathbf r$", "meaning": "periodic lattice translation", "si_unit": "$\\mathrm{m}$"},
-    {"id": "phase", "latex": "$p=\\exp(-\\mathrm{i}\\mathbf k\\cdot\\Delta\\mathbf r)$", "meaning": "Floquet phase", "si_unit": "$1$"},
-    {"id": "beta", "latex": "$\\beta$", "meaning": "Robin boundary coefficient", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "complex_operators", "latex": "$\\operatorname{Re}$, $\\exp$, $\\mathrm{i}$, $\\pi$, $(\\cdot)^{\\mathsf T}$, $(\\cdot)^{\\mathsf H}$, $\\times$, $\\cdot$", "meaning": "real-part map, exponential, imaginary unit, circle constant, transpose, Hermitian transpose, cross product and contraction", "si_unit": "$1$"},
-    {"id": "norm_operators", "latex": "$\\lVert\\cdot\\rVert_2$, $|\\cdot|$, $\\max$", "meaning": "norm, absolute-value and maximum operators", "si_unit": "$1$"}
+    {
+      "id": "tracking_assignment_rotation",
+      "latex": "$Q_{\\mathrm{rot}}$",
+      "meaning": "Unitarna rotacja bieżącej bazy do poprzedniej ramy w metryce masy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_weight",
+      "latex": "$w_{ij}$",
+      "meaning": "Moduł współczynnika rotacji, wiersz poprzedniej gałęzi i kolumna bieżącego raw modu",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_indices",
+      "latex": "$d$, $i$, $j$",
+      "meaning": "Rząd grupy i indeksy elementów poprzedniej/bieżącej bazy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_permutations",
+      "latex": "$\\Pi_d$",
+      "meaning": "Zbiór permutacji dla grupy rzędu d",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_permutation",
+      "latex": "$\\pi$, $\\pi_\\star$",
+      "meaning": "Przypisanie gałęzi do raw modów i przypisanie optymalne",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tracking_assignment_tolerance",
+      "latex": "$\\epsilon_{\\mathrm{assign}}$",
+      "meaning": "Tolerancja średniej wagi optimum, równa 1e-9",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "mode_seam_field",
+      "latex": "$\\mathbf v_j$",
+      "meaning": "Fizyczny Cartesian mod na węźle magnetycznym, wspólna dowolna amplituda",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "mode_seam_phase",
+      "latex": "$p_j$",
+      "meaning": "Faza klasy periodycznej",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "mode_seam_root",
+      "latex": "$r(j)$",
+      "meaning": "Indeks reprezentanta klasy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "mode_seam_defect",
+      "latex": "$\\epsilon_{\\mathrm{seam}}$",
+      "meaning": "Względny defekt magnetycznego seam",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "position",
+      "latex": "$\\mathbf r$",
+      "meaning": "spatial position",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "time",
+      "latex": "$t$",
+      "meaning": "time",
+      "si_unit": "$\\mathrm{s}$"
+    },
+    {
+      "id": "magnetization",
+      "latex": "$\\mathbf m$, $\\mathbf m_0$, $\\delta\\mathbf m$",
+      "meaning": "normalized magnetization, accepted equilibrium and tangent perturbation",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tangent_maps",
+      "latex": "$T$, $T_{\\mathrm{src}}$, $T_{\\mathrm{dst}}$",
+      "meaning": "tangent-frame maps from local coefficients to physical perturbations",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "q",
+      "latex": "$q$, $q_r$, $q_{\\mathrm{src}}$, $q_{\\mathrm{dst}}$",
+      "meaning": "full and reduced tangent-plane coefficient vectors",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "effective_fields",
+      "latex": "$\\mathbf H_{\\mathrm{eff},0}$, $\\delta\\mathbf h$",
+      "meaning": "static effective field and RF field phasor",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Ms",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "vacuum permeability",
+      "si_unit": "$\\mathrm{N\\,A^{-2}}$"
+    },
+    {
+      "id": "gamma",
+      "latex": "$\\gamma$, $\\gamma_0$",
+      "meaning": "gyromagnetic ratio and $\\mu_0|\\gamma|$ in the A/m convention",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}\\,T^{-1}}$, $\\mathrm{rad\\,s^{-1}\\,(A\\,m^{-1})^{-1}}$"
+    },
+    {
+      "id": "omega",
+      "latex": "$\\omega$, $\\omega_r$, $\\Gamma$, $\\omega_{\\mathrm{target}}$, $\\tau$",
+      "meaning": "complex angular frequency, oscillation part, decay rate, requested angular target and rotated target",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}}$"
+    },
+    {
+      "id": "frequency",
+      "latex": "$f$",
+      "meaning": "cyclic frequency, $f=\\operatorname{Re}(\\omega)/(2\\pi)$",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "lambda_shift",
+      "latex": "$\\lambda$, $\\sigma$",
+      "meaning": "generalized eigenvalue and complex spectral shift",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "shift_parts",
+      "latex": "$\\sigma_{\\mathrm{R}}$, $\\sigma_{\\mathrm{I}}$",
+      "meaning": "real and imaginary parts of the spectral shift",
+      "si_unit": "$\\mathrm{s^{-1}}$, $\\mathrm{rad\\,s^{-1}}$"
+    },
+    {
+      "id": "restoring_operators",
+      "latex": "$L$, $K$, $A_{qq}$, $A_{qq}^{\\mathrm{full}}$",
+      "meaning": "dynamic, energy-Hessian and full-space magnetic restoring operators",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+    },
+    {
+      "id": "mass_operators",
+      "latex": "$B_\\alpha$, $B_{qq}$, $B_{qq}^{\\mathrm{full}}$, $G$",
+      "meaning": "damped gyrotropic/mass operators",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "harmonic_operator",
+      "latex": "$A_\\omega$",
+      "meaning": "driven harmonic operator $\\mathrm{i}\\omega B_\\alpha-L$",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+    },
+    {
+      "id": "drive",
+      "latex": "$b$",
+      "meaning": "projected tangent RF drive",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+    },
+    {
+      "id": "potential",
+      "latex": "$\\phi$, $\\phi_r$, $\\delta\\phi$",
+      "meaning": "full and reduced scalar-potential coefficient vectors and perturbation",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "Aqphi",
+      "latex": "$A_{q\\phi}$, $A_{q\\phi}^{\\mathrm{full}}$",
+      "meaning": "full/reduced potential-to-magnetic coupling blocks",
+      "si_unit": "$\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$"
+    },
+    {
+      "id": "Aphiq",
+      "latex": "$A_{\\phi q}$, $A_{\\phi q}^{\\mathrm{full}}$",
+      "meaning": "full/reduced magnetic-to-potential coupling blocks",
+      "si_unit": "$\\mathrm{A\\,m}$"
+    },
+    {
+      "id": "poisson",
+      "latex": "$P$, $P^{\\mathrm{full}}$",
+      "meaning": "reduced and full scalar Poisson blocks",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "gauge",
+      "latex": "$c$, $\\eta$",
+      "meaning": "mean-zero gauge vector and Lagrange multiplier",
+      "si_unit": "$\\mathrm{m^3}$, $\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "residuals",
+      "latex": "$r_q$, $r_q^{\\mathrm{full}}$, $r_\\phi$, $r_\\phi^{\\mathrm{full}}$, $r_g$",
+      "meaning": "reduced/full magnetic, reduced/full scalar and gauge residuals",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"
+    },
+    {
+      "id": "normalized_residuals",
+      "latex": "$\\epsilon_q$, $\\epsilon_\\phi$, $\\epsilon_{q,\\mathrm{proj}}$, $\\epsilon_{\\phi,\\mathrm{proj}}$, $\\epsilon_g$, $\\epsilon_{\\mathrm{full}}$",
+      "meaning": "normalized reduced, projected full-block and gauge residuals",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rom_basis",
+      "latex": "$V$, $W$, $y$",
+      "meaning": "trial basis, test basis and reduced coordinates",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "periodic_transform",
+      "latex": "$Q$",
+      "meaning": "physical vector transformation across a periodic map",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tangent_coordinate_rotation",
+      "latex": "$R_{\\mathrm{member}\\leftarrow\\mathrm{rep}}=T_{\\mathrm{member}}^{\\mathsf T}T_{\\mathrm{rep}}$",
+      "meaning": "real coordinate map between local tangent bases for a pure-translation magnetic periodic class",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "wave_vector",
+      "latex": "$\\mathbf k$",
+      "meaning": "Bloch wave vector",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "translation",
+      "latex": "$\\Delta\\mathbf r$",
+      "meaning": "periodic lattice translation",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "phase",
+      "latex": "$p=\\exp(-\\mathrm{i}\\mathbf k\\cdot\\Delta\\mathbf r)$",
+      "meaning": "Floquet phase",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "beta",
+      "latex": "$\\beta$",
+      "meaning": "Robin boundary coefficient",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "complex_operators",
+      "latex": "$\\operatorname{Re}$, $\\exp$, $\\mathrm{i}$, $\\pi$, $(\\cdot)^{\\mathsf T}$, $(\\cdot)^{\\mathsf H}$, $\\times$, $\\cdot$",
+      "meaning": "real-part map, exponential, imaginary unit, circle constant, transpose, Hermitian transpose, cross product and contraction",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "norm_operators",
+      "latex": "$\\lVert\\cdot\\rVert_2$, $|\\cdot|$, $\\max$",
+      "meaning": "norm, absolute-value and maximum operators",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "bloch_envelope",
+      "latex": "$\\mathbf u_{n\\mathbf k}$",
+      "meaning": "periodic envelope of a full Bloch mode",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "constraint_map",
+      "latex": "$C(\\mathbf k)$, $C_q(\\mathbf k)$, $C_\\phi(\\mathbf k)$",
+      "meaning": "complex constraint or prolongation maps from reduced to full Bloch fields",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "dynamic_magnetization",
+      "latex": "$\\widetilde{\\mathbf M}_{n\\mathbf k}$",
+      "meaning": "dynamic magnetization phasor",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "bloch_potential",
+      "latex": "$\\widetilde\\phi_{n\\mathbf k}$",
+      "meaning": "full Bloch scalar-potential phasor",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "demag_field",
+      "latex": "$\\widetilde{\\mathbf h}_{d,n\\mathbf k}$",
+      "meaning": "dynamic demagnetizing-field phasor",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gradient",
+      "latex": "$\\nabla$, $\\nabla_\\perp$",
+      "meaning": "ordinary spatial and transverse gradients",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "shifted_gradient",
+      "latex": "$D_{\\mathbf k}=\\nabla_\\perp-\\mathrm{i}k\\hat{\\mathbf z}$",
+      "meaning": "shifted gradient used only by the transverse waveguide envelope",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "wave_number",
+      "latex": "$k$",
+      "meaning": "signed scalar wave number along the waveguide axis",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "propagation_axis",
+      "latex": "$\\hat{\\mathbf z}$",
+      "meaning": "waveguide propagation direction",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "domains",
+      "latex": "$\\Omega$, $\\Omega_m$, $\\Omega_a$",
+      "meaning": "full cell, magnetic and air subdomains",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "test_function",
+      "latex": "$v$",
+      "meaning": "scalar-potential test function",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "lattice_vector",
+      "latex": "$\\mathbf R$",
+      "meaning": "lattice translation of the periodic envelope",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "volume_measure",
+      "latex": "$\\mathrm dV$",
+      "meaning": "volume integration measure",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "section_domain",
+      "latex": "$\\Sigma$",
+      "meaning": "Przekrój poprzeczny",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "extrusion_length",
+      "latex": "$\\ell$",
+      "meaning": "Długość ekstrudowanego odcinka porównawczego",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "extruded_domain",
+      "latex": "$\\Omega_\\ell$",
+      "meaning": "Domena ekstrudowana",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "section_basis",
+      "latex": "$N_i,N_j$",
+      "meaning": "Bezrozmiarowe funkcje bazowe P1",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "section_indices",
+      "latex": "$i,j$",
+      "meaning": "Indeksy funkcji testowej i próbnej",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "area_measure",
+      "latex": "$\\mathrm dA$",
+      "meaning": "Miara całki po przekroju",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "section_mass",
+      "latex": "$M^\\perp_{ij}$",
+      "meaning": "Skalarna macierz masy przekroju",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "section_stiffness",
+      "latex": "$K^\\perp_{ij}$",
+      "meaning": "Skalarna macierz sztywności przekroju",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "dynamic_magnetization_transverse",
+      "latex": "$\\delta\\mathbf M_\\perp$, $\\delta M_z$",
+      "meaning": "transverse and longitudinal components of the dynamic magnetization in a waveguide section",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "probe_residual",
+      "latex": "$\\epsilon_{\\phi,\\mathrm{probe}}$",
+      "meaning": "maximum componentwise original potential-equation backward error in the K0 probe",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "row_index",
+      "latex": "$i$",
+      "meaning": "row index of original scalar potential equation",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "profile_vectors",
+      "latex": "$u_i,v_i,m_i$",
+      "meaning": "Zespolone wektory węzłowe; $m_i$ jest polem Blocha, $u_i,v_i$ jego odfazowanymi profilami. Normalizacja amplitudy jest dowolna i znosi się w $C$.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "profile_wavevector",
+      "latex": "$\\mathbf{k}$",
+      "meaning": "Wektor falowy.",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "profile_positions",
+      "latex": "$\\mathbf{r}_i$",
+      "meaning": "Pozycja węzła w końcowej kolejności solvera.",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "profile_tetra",
+      "latex": "$T,a,b,V_T$",
+      "meaning": "Tetraedr magnetyczny, lokalne indeksy węzłów i jego dodatnia objętość.",
+      "si_unit": "$1,1,1,\\mathrm{m^3}$"
+    },
+    {
+      "id": "profile_mass",
+      "latex": "$M_T$",
+      "meaning": "Dokładna lokalna macierz masy liniowego tetraedru dla iloczynu wektorów.",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "profile_overlap",
+      "latex": "$\\delta_{ab},\\mathrm{i},C$",
+      "meaning": "Delta Kroneckera, jednostka urojona i kwadrat znormalizowanego nakładania.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "profile_inner_product",
+      "latex": "$\\langle u,v\\rangle_M$",
+      "meaning": "Iloczyn skalarny FE ograniczony do filmu magnetycznego.",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "thickness_t",
+      "latex": "$t$",
+      "meaning": "grubość filmu",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "thickness_k",
+      "latex": "$k$",
+      "meaning": "podpisana składowa wektora falowego",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "thickness_u",
+      "latex": "$u$",
+      "meaning": "współrzędna grubości",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_v",
+      "latex": "$v$",
+      "meaning": "współrzędna całkowania",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_a",
+      "latex": "$a$",
+      "meaning": "iloczyn modułu k i grubości",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_basis",
+      "latex": "$c_n$",
+      "meaning": "ortonormalny profil cosinusowy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_R",
+      "latex": "$R$",
+      "meaning": "podłużny blok dipolowy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_S",
+      "latex": "$S$",
+      "meaning": "antysymetryczny blok mieszany",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_N",
+      "latex": "$\\mathcal N$",
+      "meaning": "tensor demag w bazie profili",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_I",
+      "latex": "$I$",
+      "meaning": "macierz jednostkowa",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_n",
+      "latex": "$n$",
+      "meaning": "indeks wiersza bazy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_m",
+      "latex": "$m$",
+      "meaning": "indeks kolumny bazy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "thickness_A",
+      "latex": "$A$",
+      "meaning": "stała wymiany",
+      "si_unit": "$\\mathrm{J\\,m^{-1}}$"
+    },
+    {
+      "id": "thickness_Ms",
+      "latex": "$M_s$",
+      "meaning": "magnetyzacja nasycenia",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "thickness_B0",
+      "latex": "$B_0$",
+      "meaning": "pole równowagi",
+      "si_unit": "$\\mathrm T$"
+    },
+    {
+      "id": "thickness_D",
+      "latex": "$D$",
+      "meaning": "diagonalny blok wymiany i pola",
+      "si_unit": "$\\mathrm T$"
+    },
+    {
+      "id": "thickness_K",
+      "latex": "$K$",
+      "meaning": "macierz energii liniowej",
+      "si_unit": "$\\mathrm T$"
+    },
+    {
+      "id": "thickness_mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "przenikalność próżni",
+      "si_unit": "$\\mathrm{T\\,m\\,A^{-1}}$"
+    },
+    {
+      "id": "thickness_gamma",
+      "latex": "$\\gamma_0$",
+      "meaning": "dodatnie gamma dla pól H",
+      "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"
+    },
+    {
+      "id": "thickness_L",
+      "latex": "$L$",
+      "meaning": "operator czasowy",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "thickness_lambda",
+      "latex": "$\\lambda$",
+      "meaning": "wartość własna",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "thickness_omega",
+      "latex": "$\\omega$",
+      "meaning": "częstotliwość kątowa",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "thickness_f",
+      "latex": "$f$",
+      "meaning": "częstotliwość dodatniej gałęzi",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "uniaxial_ku",
+      "latex": "$K_u$",
+      "meaning": "first-order uniaxial anisotropy energy density",
+      "si_unit": "$\\mathrm{J\\,m^{-3}}$"
+    },
+    {
+      "id": "uniaxial_axis",
+      "latex": "$\\mathbf u$",
+      "meaning": "normalized uniaxial easy axis",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "uniaxial_field",
+      "latex": "$H_a$",
+      "meaning": "signed uniaxial field coefficient",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "certified_static_fields",
+      "latex": "$\\mathbf H_{\\mathrm{ex},0},\\mathbf H_{\\mathrm{demag},0},\\mathbf H_{K,0},\\mathbf H_{\\mathrm{ext},0}$",
+      "meaning": "certified static exchange, demagnetizing, uniaxial and external fields",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "k0_window_dim",
+      "latex": "$D$",
+      "meaning": "Wymiar operatora real-split",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "k0_window_nev",
+      "latex": "$n_{\\mathrm{ev}}$",
+      "meaning": "Żądana liczba par Ritz",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "k0_window_ncv",
+      "latex": "$n_{\\mathrm{cv}}$",
+      "meaning": "Wymiar przestrzeni Kryłowa",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "k0_window_chi",
+      "latex": "$\\chi$",
+      "meaning": "Mnożnik nadpróbkowania",
+      "si_unit": "$1$"
+    }
   ],
   "sources": [
-    {"id": "source-python-eigen-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "eigenmodes_stage", "responsibility": "Capture the public stage-first modal request."},
-    {"id": "source-python-response-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "frequency_response_stage", "responsibility": "Capture the public stage-first driven-response request and solver policy."},
-    {"id": "source-python-eigenmodes", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Eigenmodes", "responsibility": "Validate modal parameters and serialize the canonical modal study IR."},
-    {"id": "source-python-frequency-response", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FrequencyResponse", "responsibility": "Validate driven parameters and serialize the canonical frequency-response study IR."},
-    {"id": "source-python-response-policy", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FrequencyResponseSolverPolicy", "responsibility": "Validate and lower the requested response method, preconditioner and Krylov controls."},
-    {"id": "source-ir-eigen-roundtrip", "path": "crates/fullmag-ir/tests/ir_tests.rs", "symbol": "eigenmodes_with_spectrum_and_mode_outputs_validate", "responsibility": "Test Rust modal IR deserialization and sampling validation."},
-    {"id": "source-ir-response-roundtrip", "path": "crates/fullmag-ir/tests/ir_tests.rs", "symbol": "frequency_response_round_trips_as_first_class_study", "responsibility": "Test Rust frequency-response IR round-trip as a first-class study."},
-    {"id": "source-dynamic-pencil", "path": "backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp", "symbol": "apply_Aomega", "responsibility": "Declare the canonical harmonic action i omega B_alpha minus L."},
-    {"id": "source-rotated-pencil", "path": "backends/fem/src/frequency_domain/real_frequency_rotated_pencil.cpp", "symbol": "assemble_real_frequency_rotated_pencil", "responsibility": "Assemble the source-visible real-frequency rotated generalized pencil."},
-    {"id": "source-cpu-schur", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp", "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur", "responsibility": "Declare the source-visible CPU Schur descriptor solver and original residual certification."},
-    {"id": "source-gpu-petsc", "path": "backends/fem/include/frequency_domain/modal_gpu_krylov.hpp", "symbol": "solve_poisson_airbox_modal_eigen_gpu_petsc_slepc", "responsibility": "Declare the source-visible GPU PETSc/SLEPc modal adapter without runtime qualification."},
-    {"id": "source-modal-payload-ownership", "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs", "symbol": "validate_native_modal_request_payload_ownership", "responsibility": "Reject ambiguous or missing native modal operator payload ownership."},
-    {"id": "source-response-method-policy", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "frequency_response_solver_method_rejection_reason", "responsibility": "Reject unavailable response method and device combinations before fallback."},
-    {"id": "source-native-response", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "try_execute_fem_frequency_response_native_production_cpu", "responsibility": "Build the native FEM CPU response request and preserve explicit failure and provenance."},
-    {"id": "source-floquet-validation", "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp", "symbol": "validate_driven_response_floquet_phase_constraints", "responsibility": "Validate Floquet phase cycles, tangent-frame matching and drive consistency."},
-    {"id": "source-contract-regression", "path": "scripts/test_frequency_domain_math_contract_docs.py", "symbol": "test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims", "responsibility": "Freeze the text-level algebra, units, lane names and honest status vocabulary; this is not numerical evidence."}
+    {
+      "id": "source-modal-envelope-units",
+      "path": "apps/control-room/src/shared/analysis-charts/frequencyRenderModels.ts",
+      "symbol": "spectralEnvelope",
+      "responsibility": "Compute illustrative Lorentzian profiles in Hz using artifact damping HWHM, without claiming measured intensity"
+    },
+    {
+      "id": "source-modal-progress-units",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "fem_eigen_progress_update",
+      "responsibility": "Separate dimensionless solver progress from physical field metrics and expose exact solver identity"
+    },
+    {
+      "id": "source-modal-progress-display",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "format_stage_progress_line",
+      "responsibility": "Render modal diagnostics separately from physical measurements and preserve missing identity as unknown"
+    },
+    {
+      "id": "source-canonical-material-artifact-identity",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs",
+      "symbol": "shared_domain_artifact_material_identity",
+      "responsibility": "Separate canonical Ku compatibility from raw materialization provenance while preserving legacy raw semantics"
+    },
+    {
+      "id": "source-versioned-equilibrium-artifact-reader",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium.rs",
+      "symbol": "load_certified_equilibrium_artifact",
+      "responsibility": "Reject malformed or masqueraded v8 identity before accepting certified v7/v8 records"
+    },
+    {
+      "id": "source-modal-zero-field-scope",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs",
+      "symbol": "validate_shared_domain_modal_scope",
+      "responsibility": "Accept zero field as a valid stationary state without claiming modal stability or readiness"
+    },
+    {
+      "id": "test-modal-zero-field-curvature",
+      "path": "scripts/test_uniaxial_constrained_energy_hessian.py",
+      "symbol": "test_zero_static_field_retains_easy_plane_and_exchange_curvature",
+      "responsibility": "Independent finite differences of easy-plane and exchange tangent energy with zero equilibrium field"
+    },
+    {
+      "id": "source-modal-thickness-collection-control",
+      "path": "scripts/collect_de_bv_thickness_comparison.py",
+      "symbol": "collect_control",
+      "responsibility": "Independent full validation of six thickness controls and Gamma before signed series evidence is accepted"
+    },
+    {
+      "id": "source-signed-modal-series",
+      "path": "scripts/run_nonzero_k_validation_controller.py",
+      "symbol": "validation_cases",
+      "responsibility": "Actual separately executed signed-k DE/BV points and independent thickness controls"
+    },
+    {
+      "id": "source-signed-modal-collector",
+      "path": "scripts/collect_signed_de_bv_dispersion.py",
+      "symbol": "collect",
+      "responsibility": "Bind actual signed solver samples to source, fields and original residual gates and measure symmetry"
+    },
+    {
+      "id": "source-canonical-modal-reduction-maps",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs",
+      "symbol": "modal_shared_domain_equivalence_classes",
+      "responsibility": "Canonical minimum-member representative and dense periodic class numbering before native assembly"
+    },
+    {
+      "id": "source-canonical-modal-reduction-replay",
+      "path": "scripts/replay_modal_periodic_reduction_maps.py",
+      "symbol": "replay",
+      "responsibility": "Independent graph-components comparison of legacy and minimum-root maps on accepted runtime pair artifacts"
+    },
+    {
+      "id": "source-archived-run-parameters",
+      "path": "scripts/compare_de_bv_mode_profiles.py",
+      "symbol": "validate_record_parameters",
+      "responsibility": "Bind diagnostic material SI parameters and DE/BV geometry to actual hash-bound run metadata"
+    },
+    {
+      "id": "source-archived-poisson-weak",
+      "path": "scripts/audit_de_bv_poisson_weak.py",
+      "symbol": "weak_poisson_residual",
+      "responsibility": "Independent P1 weak Poisson assembly with adjoint Floquet reduction and benchmark Dirichlet classes"
+    },
+    {
+      "id": "source-archived-poisson-inspection",
+      "path": "scripts/audit_de_bv_poisson_weak.py",
+      "symbol": "inspect",
+      "responsibility": "Archive hash binding and diagnostic source scale fit without data correction"
+    },
+    {
+      "id": "source-coupled-mode-window-dedup",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "std::vector<SLEPcModalAcceptedMode> deduplicate_slepc_modes_by_overlap",
+      "responsibility": "Preserve original coupled q/phi scale while normalized copies serve overlap selection"
+    },
+    {
+      "id": "source-archived-potential-gradient",
+      "path": "scripts/audit_de_bv_potential_fields.py",
+      "symbol": "gradient_diagnostics",
+      "responsibility": "Independent P1 Cartesian -grad(phi) consistency, not independent Poisson solve"
+    },
+    {
+      "id": "source-archived-potential-inspection",
+      "path": "scripts/audit_de_bv_potential_fields.py",
+      "symbol": "inspect",
+      "responsibility": "Hash/identity-bound full phi, explicit Floquet pairs and geometric outer-z diagnostic"
+    },
+    {
+      "id": "source-archived-magnetic-pair-seams",
+      "path": "scripts/audit_de_bv_periodic_seams.py",
+      "symbol": "magnetic_pair_seams",
+      "responsibility": "Independent archived physical-field diagnostic on declared oriented magnetic pairs"
+    },
+    {
+      "id": "source-archived-bound-mode-loader",
+      "path": "scripts/compare_de_bv_mode_profiles.py",
+      "symbol": "load_record",
+      "responsibility": "Validate archived descriptor/payload hashes and bind final ordered mode topology"
+    },
+    {
+      "id": "source-periodic-mode-seam-metric",
+      "path": "crates/fullmag-runner/src/eigen/tracking_mass.rs",
+      "symbol": "periodic_seam_relative",
+      "responsibility": "Measure magnetic Cartesian Floquet seam relative to maximum nodal amplitude"
+    },
+    {
+      "id": "source-periodic-mode-seam-reader",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "k0_kittel_mode_periodic_seam",
+      "responsibility": "Read only uniquely bound mesh/sample/mode/frequency/k seam measurement"
+    },
+    {
+      "id": "source-kittel-unmeasured-seam-publication",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "k0_kittel_validation_auxiliary_artifacts",
+      "responsibility": "Separate frequency agreement from missing per-mode seam certificate"
+    },
+    {
+      "id": "source-kittel-declared-metric-selector",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "k0_kittel_mode_uniformity_score",
+      "responsibility": "Honor declared metric without Euclidean or asymmetric lifted fallback"
+    },
+    {
+      "id": "source-kittel-mode-identity-reader",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "find_bias_field_mode_metadata",
+      "responsibility": "Strict sample/raw/Gamma identity and unique metadata lookup"
+    },
+    {
+      "id": "source-tracking-consistent-persist",
+      "path": "crates/fullmag-runner/src/eigen/tracking_mass.rs",
+      "symbol": "from_artifact_json",
+      "responsibility": "Versioned consistent P1 metric restoration with mesh binding"
+    },
+    {
+      "id": "source-tracking-consistent-reload",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "parse_bias_field_mode_vectors",
+      "responsibility": "Physical node selection and consistent metric reload for Gamma"
+    },
+    {
+      "id": "source-tracking-consistent-publication",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs",
+      "symbol": "ModeArtifact",
+      "responsibility": "Published mode metric provenance"
+    },
+    {
+      "id": "source-tracking-consistent-metric",
+      "path": "crates/fullmag-runner/src/eigen/tracking_mass.rs",
+      "symbol": "ConsistentP1TrackingMetric",
+      "responsibility": "Exact consistent tet4 Cartesian embedding and nodal recovery"
+    },
+    {
+      "id": "source-tracking-consistent-pair",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "modal_overlap_views",
+      "responsibility": "Use the bound exact metric before pair assignment without mixed-metric fallback"
+    },
+    {
+      "id": "source-tracking-consistent-subspace",
+      "path": "crates/fullmag-runner/src/eigen/tracking_subspace.rs",
+      "symbol": "mass_weighted_subspace_transport",
+      "responsibility": "Consistent-mass orthonormalization, principal angles and recovered branch frames"
+    },
+    {
+      "id": "source-tracking-consistent-fem-adapter",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "eigen_path_consistent_tracking_metric",
+      "responsibility": "Construct a shared exact metric on every physical magnetic node"
+    },
+    {
+      "id": "source-tracking-consistent-basis-regression",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "exact_consistent_tracking_overlap_includes_offdiagonal_p1_mass",
+      "responsibility": "Uncompiled analytic regression distinguishes consistent and diagonal mass"
+    },
+    {
+      "id": "source-tracking-envelope-payload",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "eigen_path_mode_tracking_vector",
+      "responsibility": "Strict full-node Cartesian payload binding and spatial Bloch envelope preparation"
+    },
+    {
+      "id": "source-tracking-cartesian-parser",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "mode_vector_entries",
+      "responsibility": "Shared finite XYZ parser preserving exact node indices"
+    },
+    {
+      "id": "source-tracking-envelope-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "tracking_unwinds_spatial_bloch_phase_in_selected_node_order",
+      "responsibility": "Uncompiled regression for periodic-envelope reconstruction and node order"
+    },
+    {
+      "id": "source-dense-spectrum-inventory",
+      "path": "scripts/validate_de_smoke_rows.py",
+      "symbol": "load_spectrum_v3_modes",
+      "responsibility": "Strict relative and block certificates and unique sample inventory"
+    },
+    {
+      "id": "source-dense-row-preflight",
+      "path": "scripts/validate_de_smoke_rows.py",
+      "symbol": "validate_rows",
+      "responsibility": "Dense path completeness, Gamma/nonzero operator scope and frozen residual admission"
+    },
+    {
+      "id": "source-dense-contract-regression",
+      "path": "scripts/test_de_smoke_dense_sampling.py",
+      "symbol": "test_dense_certificate_inventory_and_scope_are_strict",
+      "responsibility": "Reject loose or misplaced certificates and extra spectrum records"
+    },
+    {
+      "id": "source-dense-input-regression",
+      "path": "scripts/test_de_smoke_dense_sampling.py",
+      "symbol": "test_dense_path_has_26_samples_and_one_shared_relaxation",
+      "responsibility": "Public DE/BV KPath export and one shared source relaxation"
+    },
+    {
+      "id": "source-python-eigen-stage",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "eigenmodes_stage",
+      "responsibility": "Capture the public stage-first modal request."
+    },
+    {
+      "id": "source-python-response-stage",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "frequency_response_stage",
+      "responsibility": "Capture the public stage-first driven-response request and solver policy."
+    },
+    {
+      "id": "source-python-eigenmodes",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class Eigenmodes",
+      "responsibility": "Validate modal parameters and serialize the canonical modal study IR."
+    },
+    {
+      "id": "source-python-frequency-response",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FrequencyResponse",
+      "responsibility": "Validate driven parameters and serialize the canonical frequency-response study IR."
+    },
+    {
+      "id": "source-python-response-policy",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FrequencyResponseSolverPolicy",
+      "responsibility": "Validate and lower the requested response method, preconditioner and Krylov controls."
+    },
+    {
+      "id": "source-ir-eigen-roundtrip",
+      "path": "crates/fullmag-ir/tests/ir_tests.rs",
+      "symbol": "eigenmodes_with_spectrum_and_mode_outputs_validate",
+      "responsibility": "Test Rust modal IR deserialization and sampling validation."
+    },
+    {
+      "id": "source-ir-response-roundtrip",
+      "path": "crates/fullmag-ir/tests/ir_tests.rs",
+      "symbol": "frequency_response_round_trips_as_first_class_study",
+      "responsibility": "Test Rust frequency-response IR round-trip as a first-class study."
+    },
+    {
+      "id": "source-dynamic-pencil",
+      "path": "backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp",
+      "symbol": "apply_Aomega",
+      "responsibility": "Declare the canonical harmonic action i omega B_alpha minus L."
+    },
+    {
+      "id": "source-rotated-pencil",
+      "path": "backends/fem/src/frequency_domain/real_frequency_rotated_pencil.cpp",
+      "symbol": "assemble_real_frequency_rotated_pencil",
+      "responsibility": "Assemble the source-visible real-frequency rotated generalized pencil."
+    },
+    {
+      "id": "source-cpu-schur",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
+      "responsibility": "Declare the source-visible CPU Schur descriptor solver and original residual certification."
+    },
+    {
+      "id": "source-native-floquet-modal",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context",
+      "responsibility": "Own the nonzero-k shared-domain Floquet sparse SLEPc operator reached from the production CPU modal adapter (the public engine label retains the historical Schur name); use MAT_SHIFT_NONE for the inner Poisson PCLU inverse; materialize the exact demag-aware shifted Schur preconditioner only up to the documented 512-dimensional validation bound and otherwise retain the sparse magnetic-only approximation. Record resolved EPS dimensions, GMRES restart policy and independently measured true shifted KSP residuals; preserve reduced-block residuals separately from reconstructed full-field projected weak-form and periodic seam checks. The descriptor Poisson Schur writer is the separate k=0 branch.",
+      "evidence_status": "Managed build #151 succeeded with exit 0 and its k2 run published a 9.723336314057247 GHz mode with full projected weak-form residual 2.18834e-10, reduced residual 8.85558e-14, passing Floquet seams and dynamic-demag probes. Build #165 passed 9/9 modal contracts, but signed-eleven trials with GMRES restart 8, 10 and 16 still failed through restart discrepancy or incomplete convergence under the magnetic-only preconditioner. The bounded exact-Schur preconditioner is source-visible and awaits a fresh managed build and pilot; physical qualification remains NOT VERIFIED."
+    },
+    {
+      "id": "source-native-floquet-full-descriptor",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "certify_floquet_full_descriptor",
+      "responsibility": "Independently reconstruct the full magnetic and scalar weak equations, project residuals into admissible test spaces, and check scalar phase, tangent-frame, Cartesian magnetic and equilibrium periodic seams together with the boundary-matched nonzero-k Poisson gauge policy.",
+      "evidence_status": "Source-visible; managed build and runtime certificate are pending. Geometric outer-boundary and flux certification remain separate."
+    },
+    {
+      "id": "source-native-floquet-modal-result",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs",
+      "symbol": "native_floquet_physical_mode_certificate_from_json",
+      "responsibility": "Parse the physical complex-coefficient Floquet certificate, require consistent full-descriptor flags and boundary-matched gauge provenance, preserve an inapplicable gauge residual as null, and validate all full-equation and seam residuals before accepting a certificate.",
+      "evidence_status": "Source-visible; Rust compilation/runtime propagation is pending a managed build because unit-test compilation is currently prohibited."
+    },
+    {
+      "id": "source-native-floquet-modal-artifacts",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_artifacts.rs",
+      "symbol": "floquet_certificate_summary",
+      "responsibility": "Publish physical Floquet diagnostics for certified and uncertified modes without promoting an unqualified result; reserve the doubled-real descriptor sidecar contract for that separate representation.",
+      "evidence_status": "Source-visible; canonical runtime artifact validation is pending managed execution."
+    },
+    {
+      "id": "source-gpu-petsc",
+      "path": "backends/fem/include/frequency_domain/modal_gpu_krylov.hpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_gpu_petsc_slepc",
+      "responsibility": "Declare the source-visible GPU PETSc/SLEPc modal adapter without runtime qualification."
+    },
+    {
+      "id": "source-modal-payload-ownership",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "validate_native_modal_request_payload_ownership",
+      "responsibility": "Reject ambiguous or missing native modal operator payload ownership."
+    },
+    {
+      "id": "source-response-method-policy",
+      "path": "crates/fullmag-runner/src/frequency_response.rs",
+      "symbol": "frequency_response_solver_method_rejection_reason",
+      "responsibility": "Reject unavailable response method and device combinations before fallback."
+    },
+    {
+      "id": "source-native-response",
+      "path": "crates/fullmag-runner/src/frequency_response.rs",
+      "symbol": "try_execute_fem_frequency_response_native_production_cpu",
+      "responsibility": "Build the native FEM CPU response request and preserve explicit failure and provenance."
+    },
+    {
+      "id": "source-floquet-validation",
+      "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp",
+      "symbol": "validate_driven_response_floquet_phase_constraints",
+      "responsibility": "Validate Floquet phase cycles, tangent-frame matching and drive consistency."
+    },
+    {
+      "id": "source-floquet-modal-frame-map",
+      "path": "backends/fem/cpu/frequency_domain/floquet_airbox_operator.cpp",
+      "symbol": "build_tangent_constraint_entries",
+      "responsibility": "Construct the local coordinate map T_member^T T_rep and combine it with the Floquet phase for pure translations; require finite orthonormal right-handed frames and matching equilibrium magnetization, and reject unsupported physical spin rotations.",
+      "evidence_status": "source regression added; not compiled or managed-runtime validated"
+    },
+    {
+      "id": "source-contract-regression",
+      "path": "scripts/test_frequency_domain_math_contract_docs.py",
+      "symbol": "test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims",
+      "responsibility": "Freeze the text-level algebra, units, lane names and honest status vocabulary; this is not numerical evidence."
+    },
+    {
+      "id": "source-full-bloch-contract",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:full-bloch-operator-contract",
+      "responsibility": "Define the planned 3D full Bloch representation with ordinary gradients, complex constraints and dynamic demagnetization.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-waveguide-envelope-contract",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:waveguide-envelope-operator-contract",
+      "responsibility": "Define the planned 2.5D translationally invariant waveguide envelope representation.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-tetrax-boundary",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:waveguide-envelope-operator-contract",
+      "responsibility": "Bound the TetraX comparison to a presentation reference; no source-code claim is made.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-shared-domain",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp",
+      "symbol": "assemble_poisson_airbox_shared_domain",
+      "responsibility": "Own the existing shared-domain Poisson assembly boundary; nonzero-k dynamic demagnetization remains unvalidated."
+    },
+    {
+      "id": "source-floquet-neumann-invertibility",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "assemble_poisson_airbox_shared_domain_payload",
+      "responsibility": "Apply pure-Neumann Floquet policy without a universal |k|L cutoff; clear the k=0 gauge and defer solvability to the phase-constrained scalar operator factorization and residual checks."
+    },
+    {
+      "id": "source-floquet-native-prolongation",
+      "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp",
+      "symbol": "class FloquetTangentProlongation",
+      "responsibility": "Provide the newly added foundational tangent-space Floquet prolongation contract; it is uncompiled, unvalidated and not connected to the solver ABI."
+    },
+    {
+      "id": "source-floquet-native-reduced-operator",
+      "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp",
+      "symbol": "class FloquetReducedMagneticOperator",
+      "responsibility": "Provide the newly added foundational C^H A C operator boundary; it is uncompiled, unvalidated and not connected to the solver ABI."
+    },
+    {
+      "id": "source-floquet-dynamic-demag-k",
+      "path": "backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp",
+      "symbol": "build_floquet_dynamic_demag_k_real_split",
+      "responsibility": "Provide the bounded dense Schur oracle for complex nonzero-k dynamic demagnetization; mesh assembly and production qualification remain separate.",
+      "evidence_status": "source_visible / unvalidated"
+    },
+    {
+      "id": "source-floquet-waveguide-demag-k",
+      "path": "backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp",
+      "symbol": "build_floquet_waveguide_demag_k_real_split",
+      "responsibility": "Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate.",
+      "evidence_status": "source_visible / unvalidated"
+    },
+    {
+      "id": "source-waveguide-section-measure",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:waveguide-section-measure",
+      "responsibility": "Define section integration as per-length 3D integration, without a second division by axial length.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-waveguide-cross-section",
+      "path": "backends/fem/cpu/frequency_domain/floquet_waveguide_cross_section.cpp",
+      "symbol": "assemble_floquet_waveguide_cross_section_blocks",
+      "responsibility": "Assemble bounded 2D weak forms independently of comparison length; use negative transverse and axial physical sources in the descriptor P phi + A_phiq q = 0.",
+      "evidence_status": "source_visible / unvalidated"
+    },
+    {
+      "id": "source-waveguide-section-regression",
+      "path": "backends/fem/tests/frequency_domain/floquet_waveguide_cross_section_test.cpp",
+      "symbol": "main",
+      "responsibility": "Check section measure and mixed complex P1 weak-source signs for signed k; native tests prepared without compilation during the current restriction.",
+      "evidence_status": "source_visible / native execution pending"
+    },
+    {
+      "id": "source-airbox-source-convention",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:floquet-airbox-source-convention",
+      "responsibility": "Distinguish physical weak RHS S from descriptor -S without mutating full-field residual owners.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-airbox-dense-source-conversion",
+      "path": "backends/fem/cpu/frequency_domain/floquet_airbox_operator.cpp",
+      "symbol": "assemble_floquet_airbox_dynamic_demag_k",
+      "responsibility": "Convert declared weak RHS once to the reduced descriptor before feedback and physical-potential reconstruction.",
+      "evidence_status": "source_visible / native execution pending"
+    },
+    {
+      "id": "source-airbox-source-convention-regression",
+      "path": "backends/fem/tests/frequency_domain/floquet_airbox_operator_test.cpp",
+      "symbol": "main",
+      "responsibility": "Compare raw and descriptor inputs, physical potential, Schur, non-mutated owner and invalid convention; prepared without native compilation.",
+      "evidence_status": "source_visible / native execution pending"
+    },
+    {
+      "id": "source-airbox-sign-source-check",
+      "path": "scripts/test_floquet_airbox_source_convention.py",
+      "symbol": "test_physical_potential_requires_conversion_while_schur_is_invariant",
+      "responsibility": "Check independent physical-potential algebra and explicit shared-domain routing; interpreted source evidence only.",
+      "evidence_status": "source_visible / native execution pending"
+    },
+    {
+      "id": "source-waveguide-weak-sign",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:waveguide-weak-source-sign",
+      "responsibility": "Derive physical weak RHS and distinguish it from the negative descriptor block.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-waveguide-sign-oracle",
+      "path": "scripts/test_waveguide_axial_sign_source.py",
+      "symbol": "extruded_weak_source",
+      "responsibility": "Independently integrate the physical extruded conjugate-test gradient with mixed complex magnetization; source checks are not native runtime evidence.",
+      "evidence_status": "source_visible / native execution pending"
+    },
+    {
+      "id": "source-k0-probe-backward-error",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp",
+      "symbol": "poisson_probe_componentwise_residual",
+      "responsibility": "Normalize K0 probe residual by uncancelled original CSR contributions.",
+      "evidence_status": "source_visible / managed execution pending"
+    },
+    {
+      "id": "source-k0-probe-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "main",
+      "responsibility": "Check cancellation, material defect, zero rows, gauge and nonfinite input.",
+      "evidence_status": "source_visible / managed execution pending"
+    },
+    {
+      "id": "source-k0-cached-window-preconditioner",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "bool create_production_cached_window_preconditioner",
+      "responsibility": "Cache bounded K0 window preconditioning without replacing the physical MatShell."
+    },
+    {
+      "id": "source-k0-cached-window-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void FrequencyWindowRetainsDemagInBoundedCachedPreconditioner",
+      "responsibility": "Verify coupled window frequencies, independent shifts and fresh contexts; native execution pending."
+    },
+    {
+      "id": "source-k0-cached-window-cancellation-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void FrequencyWindowCancellationDuringCachedPreconditionerPreservesStopReason",
+      "responsibility": "Verify interruption during bounded Schur materialization before EPS without false operator failure; native execution pending."
+    },
+    {
+      "id": "source-multi-k-native-mode-identity",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "eigen_path_native_mode_identities",
+      "responsibility": "Validate unique native mode IDs and explicit finite frequencies before mode tracking and certificate transport."
+    },
+    {
+      "id": "source-multi-k-native-mode-identity-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "native_mode_identity_rejects_missing_fields_and_duplicates",
+      "responsibility": "Reject missing or malformed fields and repeated mode IDs; retain explicit zero frequency and original mode order. Rust execution pending."
+    },
+    {
+      "id": "source-profile-packing",
+      "path": "scripts/compare_de_bv_mode_profiles.py",
+      "symbol": "pack_single_film_mesh",
+      "responsibility": "Recover single-film final ordered topology before comparing fields"
+    },
+    {
+      "id": "source-profile-mass",
+      "path": "scripts/compare_de_bv_mode_profiles.py",
+      "symbol": "consistent_inner_product",
+      "responsibility": "Exact consistent P1 tetrahedral mass inner product"
+    },
+    {
+      "id": "source-profile-overlap",
+      "path": "scripts/compare_de_bv_mode_profiles.py",
+      "symbol": "normalized_overlap",
+      "responsibility": "Phase- and scale-invariant squared overlap"
+    },
+    {
+      "id": "source-profile-mass-regression",
+      "path": "scripts/test_compare_de_bv_mode_profiles.py",
+      "symbol": "test_exact_p1_basis_mass_differs_from_lumping",
+      "responsibility": "Independent analytical P1 basis mass check distinguishes consistent from lumped mass"
+    },
+    {
+      "id": "source-de-thickness-model",
+      "path": "examples/fem_de_smoke_numeric.py",
+      "symbol": "THICKNESS_LAYERS",
+      "responsibility": "Controlled independent through-thickness convergence input and request verification"
+    },
+    {
+      "id": "source-de-thickness-wrapper",
+      "path": "scripts/run_de_100nm_pilot.py",
+      "symbol": "validate_thickness_layers_metadata",
+      "responsibility": "Controlled independent through-thickness convergence input and request verification"
+    },
+    {
+      "id": "source-de-thickness-regression",
+      "path": "scripts/test_de_bv_25_model.py",
+      "symbol": "test_thickness_convergence_preserves_physics",
+      "responsibility": "Controlled independent through-thickness convergence input and request verification"
+    },
+    {
+      "id": "source-box-layer-planes",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_box_airbox_layer_levels",
+      "responsibility": "Exact film planes and independently graded airbox planes in SI"
+    },
+    {
+      "id": "source-box-layer-generator",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_swept_tetrahedral_box_airbox_mesh",
+      "responsibility": "Fixed-layer Tet4 Box realization with explicit supported constraints"
+    },
+    {
+      "id": "source-box-layer-routing",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_realize_fem_domain_mesh_asset_from_components_impl",
+      "responsibility": "Route public film recipe through shared GEO without replacing body resolution by air size"
+    },
+    {
+      "id": "source-box-layer-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_public_de_model_shared_domain_realizes_six_layers",
+      "responsibility": "Real Gmsh shared-domain realization of canonical DE model layer request"
+    },
+    {
+      "id": "source-box-layer-report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_mesh_operation_statuses",
+      "responsibility": "Report realized layered Box method and sweep direction without inferring thickness resolution from lateral hmax"
+    },
+    {
+      "id": "source-box-layer-source-face",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Persistent source face sizing and synchronized Tet4 body-air extrusion"
+    },
+    {
+      "id": "source-box-lateral-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_box_lateral_resolution_survives_final_air_fields",
+      "responsibility": "Independent mesh refinement, volume, oriented translation and Floquet phase regression"
+    },
+    {
+      "id": "source-ring-air-layer-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_ring_air_realizes_graded_vertical_resolution",
+      "responsibility": "Verify actual graded exterior air planes, positive Tet4 volumes and full periodic sides for the antidot cell."
+    },
+    {
+      "id": "source-ring-lateral-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_ring_lateral_resolution_is_independent_of_film_layers",
+      "responsibility": "Verify independent lateral and thickness refinement of the exact-cell antidot mesh."
+    },
+    {
+      "id": "source-thickness-collector",
+      "path": "scripts/collect_de_bv_thickness_comparison.py",
+      "symbol": "collect_record",
+      "responsibility": "Collect original certified modes and actual SI metadata for the six thickness pilots."
+    },
+    {
+      "id": "source-thickness-collector-regression",
+      "path": "scripts/test_collect_de_bv_thickness_comparison.py",
+      "symbol": "test_rejects_wrong_receipt_before_field_loading",
+      "responsibility": "Reject failed, mismatched source identity and incorrect thickness receipts."
+    },
+    {
+      "id": "source-thickness-plot",
+      "path": "scripts/plot_de_bv_thickness_comparison.py",
+      "symbol": "validate_comparison",
+      "responsibility": "Revalidate each certified run before rendering fixed-k thickness data without extrapolation."
+    },
+    {
+      "id": "source-thickness-plot-regression",
+      "path": "scripts/test_plot_de_bv_thickness_comparison.py",
+      "symbol": "test_modified_record_is_rejected_before_plotting",
+      "responsibility": "Reject modified analytical or numerical records before rendering."
+    },
+    {
+      "id": "source-de-pilot-metadata-comparison",
+      "path": "scripts/compare_de_100nm_pilot.py",
+      "symbol": "load_comparison_input",
+      "responsibility": "Bind DE analytic comparison to actual SI metadata, supported sampling and matching successful receipts"
+    },
+    {
+      "id": "source-de-pilot-comparison-tests",
+      "path": "scripts/test_compare_de_100nm_pilot.py",
+      "symbol": "test_supported_de_sampling_includes_k25_and_rejects_bv",
+      "responsibility": "Regression evidence for metadata routing, explicit branch selection and unqualified plotting"
+    },
+    {
+      "id": "source-de-csv-native-coverage",
+      "path": "scripts/compare_de_100nm_pilot.py",
+      "symbol": "read_modes",
+      "responsibility": "Reject incomplete CSV/native mode joins and preserve residual scope"
+    },
+    {
+      "id": "source-de-csv-native-coverage-test",
+      "path": "scripts/test_compare_de_100nm_pilot.py",
+      "symbol": "test_csv_cannot_omit_a_mode_present_in_native_spectrum",
+      "responsibility": "Reject modes omitted from CSV while present in the native spectrum"
+    },
+    {
+      "id": "source-thickness-oracle-matrices",
+      "path": "scripts/thin_film_thickness_oracle.py",
+      "symbol": "modal_matrices",
+      "responsibility": "Cosine-Galerkin open-film demag and exchange matrices"
+    },
+    {
+      "id": "source-thickness-oracle-solve",
+      "path": "scripts/thin_film_thickness_oracle.py",
+      "symbol": "solve_thickness_modes",
+      "responsibility": "Independent small diagnostic LL spectrum and oracle-only residual"
+    },
+    {
+      "id": "source-physical-potential-mode-binding",
+      "path": "scripts/validate_de_physical_potential.py",
+      "symbol": "_validate_declared_mode_binding",
+      "responsibility": "Verifies declared sample/raw-mode identity, source hashes and canonical sidecar paths without a physics qualification claim.",
+      "evidence_status": "python_regression_verified"
+    },
+    {
+      "id": "source-physical-potential-bound-pilot",
+      "path": "scripts/run_de_100nm_pilot.py",
+      "symbol": "validate_smoke_potential_fields",
+      "responsibility": "Requires mode metadata and a consistent declared binding for each published potential.",
+      "evidence_status": "python_regression_verified"
+    },
+    {
+      "id": "source-physical-potential-binding-regression",
+      "path": "scripts/test_de_physical_potential.py",
+      "symbol": "class PhysicalPotentialValidatorTests",
+      "responsibility": "Tests mismatched indices/hashes, sidecar paths, malformed identities and duplicate JSON.",
+      "evidence_status": "python_regression_verified"
+    },
+    {
+      "id": "source-potential-source-mesh-binding",
+      "path": "scripts/validate_de_physical_potential.py",
+      "symbol": "_validate_source_mesh_binding",
+      "responsibility": "Recomputes canonical source topology v3 from metadata without coercing connectivity."
+    },
+    {
+      "id": "source-potential-canonical-topology-v3",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "topology_fingerprint_v3",
+      "responsibility": "Existing canonical topology hash implementation reused by artifact validation."
+    },
+    {
+      "id": "source-oracle-exact-de-limit",
+      "path": "scripts/test_thin_film_thickness_oracle.py",
+      "symbol": "test_exchange_free_surface_branch_converges_to_exact_damon_eshbach",
+      "responsibility": "Tests exchange-free DE surface branch against the independent exact dispersion and basis convergence."
+    },
+    {
+      "id": "source-oracle-gamma-exchange-free-limit",
+      "path": "scripts/test_thin_film_thickness_oracle.py",
+      "symbol": "test_exchange_free_gamma_limit_has_no_artificial_basis_splitting",
+      "responsibility": "Tests Kittel degeneracy at Gamma with zero exchange."
+    },
+    {
+      "id": "source-static-field-frame-transport",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "FrequencyDomainStatus assemble_native_magnetic_a_qq",
+      "responsibility": "Cartesian nodal tangent projection of longitudinal static-field energy Hessian"
+    },
+    {
+      "id": "source-native-uniaxial-weak-form",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "FrequencyDomainStatus assemble_native_magnetic_a_qq",
+      "responsibility": "Negative uniaxial field derivative with both nodal tangent projections and total-field curvature"
+    },
+    {
+      "id": "source-uniaxial-energy-finite-difference",
+      "path": "scripts/test_uniaxial_constrained_energy_hessian.py",
+      "symbol": "sphere_energy",
+      "responsibility": "Independent constrained energy with a transverse-equilibrium-balancing external field; finite differences are not native FEM execution"
+    },
+    {
+      "id": "source-uniaxial-descriptor-builder",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs",
+      "symbol": "build_native_shared_domain_modal_problem",
+      "responsibility": "Own repeated global easy axis, signed field coefficient and content digests; planner legality remains gated"
+    },
+    {
+      "id": "source-uniaxial-ffi-envelope",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "ffi_envelope_contract",
+      "responsibility": "Validate owned anisotropy views, advertised term and digest before shared-domain C ABI transport"
+    },
+    {
+      "id": "source-uniaxial-equilibrium-material-identity",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "equilibrium_material_signature",
+      "responsibility": "Shared Ku-aware equilibrium material preimage and separate v2 namespace; preserve exact Ku-free v1"
+    },
+    {
+      "id": "source-uniaxial-equilibrium-field-owner",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium.rs",
+      "symbol": "materialize_equilibrium",
+      "responsibility": "Evaluate typed anisotropy at accepted equilibrium with separate field and energy channels"
+    },
+    {
+      "id": "source-certified-field-digest",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "certified_equilibrium_fields_sha256",
+      "responsibility": "Bind versioned field arrays to exact little-endian binary bytes"
+    },
+    {
+      "id": "source-certified-field-copy",
+      "path": "backends/fem/cpu/mfem/runtime/state_io.cpp",
+      "symbol": "int context_copy_linearization_field_f64",
+      "responsibility": "Export masked dynamical fields including native uniaxial field"
+    },
+    {
+      "id": "source-certified-field-producer",
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "copy_native_equilibrium_evaluation",
+      "responsibility": "Capture measured native fields without replacing H_eff"
+    },
+    {
+      "id": "source-certified-field-consumer",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "validate_certified_equilibrium_fields",
+      "responsibility": "Validate schema, field counts, digest and native addition order"
+    },
+    {
+      "id": "source-certified-field-refresh-consumer",
+      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "symbol": "validate_recomputed_fem_linearization_certificate",
+      "responsibility": "Bind v2 refresh comparison to Ku material and anisotropy evidence"
+    },
+    {
+      "id": "source-certified-field-python-validation",
+      "path": "scripts/validate_fem_periodic_antidot_relax_eigenmodes_runtime.py",
+      "symbol": "validate_certified_equilibrium_fields",
+      "responsibility": "Independently verify schema-defined field digest and decomposition"
+    },
+    {
+      "id": "source-certified-field-path-selector",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "artifact_paths_for_material",
+      "responsibility": "Select matching v1/v2 producer and consumer artifact paths"
+    },
+    {
+      "id": "source-certified-field-bias-consumer",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_bias_field_sample_with_relaxation",
+      "responsibility": "Consume the correct version in each independently relaxed bias-field sample"
+    },
+    {
+      "id": "source-certified-field-stage-consumer",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "run_script_mode",
+      "responsibility": "Read material-matched field and refresh files in relax-to-eigen stage continuation"
+    },
+    {
+      "id": "source-certified-field-scope-guard",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "validate_supported_relax_source",
+      "responsibility": "Reject unrepresented source physics before field certificate publication"
+    },
+    {
+      "id": "source-k0-bounded-krylov-policy",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "bounded_krylov_dimensions",
+      "responsibility": "Bound nev/ncv to real-split dimension; window NCV4xNEV, standalone NCV2xNEV; preserve Ritz count policy and queried dimensions.",
+      "evidence_status": "source_visible / managed execution pending"
+    },
+    {
+      "id": "source-k0-printf-contract-check",
+      "path": "scripts/check_fem_schur_printf_contract.py",
+      "symbol": "check_source",
+      "responsibility": "Reject literal variadic diagnostic argument-count mismatches without native unit compilation.",
+      "evidence_status": "27 calls checked; source-only"
+    },
+    {
+      "id": "source-k0-bounded-krylov-window-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated",
+      "responsibility": "Check explicit ncv bounds and local retry evidence; native compilation/execution pending."
+    },
+    {
+      "id": "source-k0-failed-eps-counters-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void PreservesFailedSchurEpsCountersWithoutPublishingModes",
+      "responsibility": "Verify performed EPS/Schur/Poisson work survives a failed solve without stale or partial published modes.",
+      "evidence_status": "prepared native regression; compilation and execution NOT VERIFIED"
+    },
+    {
+      "id": "source-r4-identity-preimage-replay",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "signature_digest_and_preimage",
+      "responsibility": "Preserve exact compact preimage bytes for independent replay while retaining legacy v1 and canonical Ku v2 identity hashes.",
+      "evidence_status": "Rust parser PASS; native regressions prepared; runtime and complete R4 replay NOT VERIFIED"
+    },
+    {
+      "id": "source-r4-all-family-preimage-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "equilibrium_and_modal_preimages_replay_all_identity_families",
+      "responsibility": "Prepare exact-byte replay and mutation rejection for material/static/boundary/operator/dynamic-boundary identity families.",
+      "evidence_status": "Rust parser PASS; native compilation/execution NOT VERIFIED"
+    },
+    {
+      "id": "source-r4-remap-single-k-mode-artifacts",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "remap_single_k_mode_artifacts",
+      "evidence_status": "source_visible",
+      "responsibility": "Relocate signed accepted/state/identity sidecars without changing exact payload bytes; mode payloads keep sample remapping."
+    },
+    {
+      "id": "source-r4-retain-selected-eigen-path-mode-artifacts",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "retain_selected_eigen_path_mode_artifacts",
+      "evidence_status": "source_visible",
+      "responsibility": "Keep solved-sample identity evidence independently of optional mode-field selection."
+    },
+    {
+      "id": "source-r4-signed-sidecars-preserve-exact-bytes-across-samples",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "signed_sidecars_preserve_exact_bytes_across_samples",
+      "evidence_status": "source_visible",
+      "responsibility": "Prepared native regression for exact signed bytes, spectrum-only retention and metadata paths across three sample IDs."
+    },
+    {
+      "id": "source-r4-build-eigen-path-frequency-domain-manifest",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs",
+      "symbol": "build_eigen_path_frequency_domain_manifest",
+      "evidence_status": "source_visible",
+      "responsibility": "List only present accepted fields v1/v2 and linearization identity v2 sidecars in the multi-k manifest."
+    },
+    {
+      "id": "source-nearest-floquet-capability",
+      "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
+      "symbol": "native_cpu_modal_window_has_floquet_dynamic_demag_path",
+      "evidence_status": "source/interpreted checks PASS; native compilation and managed runtime pending",
+      "responsibility": "Admit nearest-frequency beside the existing frequency-window target only when the complete Floquet airbox dynamic-demag contract is present, including classified nonzero magnetic and airbox periodic-pair counts."
+    },
+    {
+      "id": "source-nearest-floquet-resolution",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution_resolution.rs",
+      "symbol": "resolve_fem_eigen_execution_resolution",
+      "evidence_status": "source/interpreted checks PASS; native compilation and managed runtime pending",
+      "responsibility": "Bind a nearest-frequency nonzero-k plan to the exact CPU Floquet airbox Schur engine without changing device or precision policy."
+    },
+    {
+      "id": "source-nearest-floquet-execution",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_fem_eigen_inner",
+      "evidence_status": "source/interpreted checks PASS; native compilation and managed runtime pending",
+      "responsibility": "Transfer one global target frequency per single-k or multi-k path to the existing native operator and preserve selected-only completeness."
+    },
+    {
+      "id": "source-nearest-floquet-native-producer-metadata",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "solve_sparse_production_modal_payload",
+      "evidence_status": "source-visible; interpreted regression PASS; native compilation and managed runtime pending",
+      "responsibility": "Publish the actual nearest-frequency Floquet result metadata: target kind and target frequency, selected-only spectrum completeness, window_complete=false, and status-derived solve_complete; leave the frequency-window producer contract separate."
+    },
+    {
+      "id": "source-nearest-floquet-routing-regression",
+      "path": "scripts/test_nearest_floquet_dynamic_demag_routing_source.py",
+      "symbol": "test_native_solver_keeps_residual_and_selected_only_policies",
+      "evidence_status": "interpreted source checks PASS; native compilation, managed runtime and physics qualification pending",
+      "responsibility": "Freeze public target transfer, unchanged residual policies, selected-only output and the prepared Rust single/path regressions."
+    },
+    {
+      "id": "source-tracking-subspace-assignment-weights",
+      "path": "scripts/comsol_tracking_metric.py",
+      "symbol": "transport_with_assignment_weights",
+      "responsibility": "Procrustes rotation magnitudes indexed by previous branch and current raw slot"
+    },
+    {
+      "id": "source-tracking-assignment-optimum",
+      "path": "scripts/comsol_tracking_assignment.py",
+      "symbol": "maximum_weight_assignment",
+      "responsibility": "Independent finite rectangular Hungarian optimum without factorial enumeration or extra dependencies"
+    },
+    {
+      "id": "source-tracking-assignment-replay",
+      "path": "scripts/comsol_tracking_replay.py",
+      "symbol": "replay_recorded_frames",
+      "responsibility": "Reject non-optimal subspace raw assignment while retaining equivalent numerical optima; separate from full-path assignment certificate"
+    },
+    {
+      "id": "source-tracking-assignment-enumeration",
+      "path": "scripts/test_comsol_tracking_assignment.py",
+      "symbol": "test_small_square_and_rectangular_against_enumeration",
+      "responsibility": "Independent exhaustive small-matrix optimum oracle, not solver evidence"
+    },
+    {
+      "id": "source-tracking-frequency-group-candidates",
+      "path": "scripts/comsol_tracking_clusters.py",
+      "symbol": "frequency_group_candidates",
+      "responsibility": "Replay anchored frequency clustering and split transition candidate groups from the full adjacent spectra"
+    },
+    {
+      "id": "source-tracking-frequency-cluster-tests",
+      "path": "scripts/test_comsol_tracking_clusters.py",
+      "symbol": "test_anchor_grouping_does_not_chain_neighbors",
+      "responsibility": "Synthetic threshold, complex distance, singleton boundary ties and transition fixtures; not FEM proof"
+    },
+    {
+      "id": "source-tracking-global-policy-prediction",
+      "path": "scripts/comsol_tracking_global.py",
+      "symbol": "reconstruct_global_assignment",
+      "responsibility": "Compute field-based cluster selection and greedy/Hungarian edge predictions without qualifying recorded assignments"
+    },
+    {
+      "id": "source-tracking-global-policy-tests",
+      "path": "scripts/test_comsol_tracking_global.py",
+      "symbol": "test_hungarian_and_greedy_policies_differ_on_counterexample",
+      "responsibility": "Independent policy, dummy, principal-angle-floor and transported-frame fixtures; no FEM runtime proof"
+    },
+    {
+      "id": "source-tracking-global-table-certificate",
+      "path": "scripts/comsol_tracking_replay.py",
+      "symbol": "verify_global_prediction",
+      "responsibility": "Bind complete recorded assignments and group frames to independent global policy predictions; accept equivalent Hungarian optima"
+    },
+    {
+      "id": "source-tracking-global-table-regression",
+      "path": "scripts/test_comsol_tracking_replay.py",
+      "symbol": "test_locally_valid_but_globally_inferior_pair_assignment_is_rejected",
+      "responsibility": "Reject truthful local edges whose full recorded matching is inferior; synthetic algebra only"
+    },
+    {
+      "id": "source-tracking-initial-field-snapshot",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_tracking_input_hashes",
+      "responsibility": "Bind every candidate header and vector to initial gate bytes; unavailable snapshots fail replay"
+    },
+    {
+      "id": "source-comsol-tracking-path-replay",
+      "path": "scripts/comsol_tracking_replay.py",
+      "symbol": "replay_recorded_frames",
+      "responsibility": "Replay local metrics and full-step assignments for complete continuous branch sets; scientific qualification remains separate"
+    },
+    {
+      "id": "source-comsol-tracking-disk-replay",
+      "path": "scripts/comsol_tracking_replay.py",
+      "symbol": "replay_tracking_fields",
+      "responsibility": "Execute replay from real spectrum, branches and phase-certified field bytes, including dependent cluster branches"
+    },
+    {
+      "id": "source-comsol-tracking-replay-tests",
+      "path": "scripts/test_comsol_tracking_replay.py",
+      "symbol": "test_disk_signed_path_replays_actual_edges",
+      "responsibility": "Synthetic signed disk-path replay; forged scores/verdicts cannot substitute for executed metric replay"
+    },
+    {
+      "id": "source-comsol-tracking-field-reader",
+      "path": "scripts/comsol_tracking_fields.py",
+      "symbol": "load_tracking_fields",
+      "responsibility": "Recheck phase-certified bytes, reconstruct geometry fingerprint and bind consistent metric to explicit magnetic support"
+    },
+    {
+      "id": "source-comsol-tracking-field-tests",
+      "path": "scripts/test_comsol_tracking_fields.py",
+      "symbol": "test_actual_certificate_and_geometry",
+      "responsibility": "Synthetic payload roundtrip and corruption checks, not solver or scientific qualification"
+    },
+    {
+      "id": "source-comsol-tracking-frame-transport",
+      "path": "scripts/comsol_tracking_metric.py",
+      "symbol": "transport",
+      "responsibility": "Independent mass-metric Procrustes frames; does not select or qualify raw branch assignments"
+    },
+    {
+      "id": "source-comsol-tracking-metric-algebra",
+      "path": "scripts/comsol_tracking_metric.py",
+      "symbol": "principal_cosines",
+      "responsibility": "Independent element mass forms, signed Bloch demodulation and principal cosines; no artifact integrity or transport qualification"
+    },
+    {
+      "id": "source-comsol-tracking-metric-tests",
+      "path": "scripts/test_comsol_tracking_metric.py",
+      "symbol": "test_rotated_degenerate_basis",
+      "responsibility": "Analytic consistent-mass, phase, rank and subspace fixtures; no FEM runtime proof"
+    },
+    {
+      "id": "source-comsol-tracking-qualification",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "validate_case",
+      "responsibility": "Execute independent field-metric replay; missing assignment/cluster-selection replay still blocks C1/A1 QUALIFIED"
+    },
+    {
+      "id": "source-comsol-tracking-record-gate",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_branch_tracking_evidence",
+      "responsibility": "Require recorded adjacent consistent-mass edges before the C1/A1 branch gate; field replay remains separate"
+    },
+    {
+      "id": "source-comsol-tracking-record-regression",
+      "path": "scripts/test_comsol_tracking_provenance_gate.py",
+      "symbol": "test_scientific_branch_gate_rejects_complete_table_without_provenance",
+      "responsibility": "Executed regression rejects a complete frequency table lacking assignment evidence"
+    },
+    {
+      "id": "source-tracking-edge-artifact-validator",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_tracking_edge_provenance",
+      "responsibility": "Independent policy, endpoint, gap and principal-angle record validation without qualifying runtime"
+    },
+    {
+      "id": "source-tracking-edge-record",
+      "path": "crates/fullmag-runner/src/eigen/types.rs",
+      "symbol": "TrackingEdgeProvenance",
+      "responsibility": "Assignment-time policy, gap and subspace evidence"
+    },
+    {
+      "id": "source-tracking-edge-producer",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "track_branches",
+      "responsibility": "Record accepted edge before updating transported frames"
+    },
+    {
+      "id": "source-tracking-edge-writer",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs",
+      "symbol": "write_branch_bundle_with_sample_namespace",
+      "responsibility": "Serialize recorded edge and actual consensus policy"
+    },
+    {
+      "id": "source-tracking-edge-signed-regression",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "signed_k_tracking_records_split_transport_without_mutating_raw_modes",
+      "responsibility": "Prepared uncompiled signed-k split/degenerate regression"
+    },
+    {
+      "id": "source-modal-gamma-result",
+      "path": "crates/fullmag-runner/src/eigen/types.rs",
+      "symbol": "PathSolveResult",
+      "responsibility": "Required actual plan gamma0 on solved results"
+    },
+    {
+      "id": "source-modal-gamma-owner",
+      "path": "crates/fullmag-runner/src/eigen/orchestrator.rs",
+      "symbol": "run_path_or_single",
+      "responsibility": "Carry actual plan gamma0 without material fallback"
+    },
+    {
+      "id": "source-modal-gamma-guard",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/common.rs",
+      "symbol": "validated_modal_gamma0",
+      "responsibility": "Reject invalid gamma0 and unrepresentable SI conversion"
+    },
+    {
+      "id": "source-modal-gamma-spectrum",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs",
+      "symbol": "summarize_mode",
+      "responsibility": "Spectrum metadata uses actual gamma0"
+    },
+    {
+      "id": "source-modal-gamma-fields",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/mode_bundle.rs",
+      "symbol": "write_mode_bundle",
+      "responsibility": "Field metadata uses the same validated gamma0"
+    },
+    {
+      "id": "source-modal-gamma-kittel",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "k0_kittel_expected_frequency_hz",
+      "responsibility": "Actual gamma0 and finite positive frequency oracle"
+    },
+    {
+      "id": "source-modal-gamma-fem-publication",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "eigen_path_publication_gamma0",
+      "responsibility": "Validate result and plan before direct FEM JSON publication"
+    },
+    {
+      "id": "source-modal-gamma-single-k",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_fem_eigen_inner",
+      "responsibility": "Validate gamma before single-k execution and metadata publication"
+    },
+    {
+      "id": "source-modal-gamma-native",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_artifacts.rs",
+      "symbol": "native_modal_artifacts",
+      "responsibility": "Independently validate gamma before native modal metadata publication"
+    },
+    {
+      "id": "source-modal-gamma-reader",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_mode_gamma_matches_constants",
+      "responsibility": "Bind mode gamma metadata to execution constants"
+    },
+    {
+      "id": "source-modal-gamma-regression",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/tests.rs",
+      "symbol": "actual_plan_gamma_is_shared_by_spectra_and_mode_fields",
+      "responsibility": "Prepared uncompiled nonreference gamma regression"
+    },
+    {
+      "id": "source-all-mode-python",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveMode",
+      "responsibility": "Validate explicit all_modes intent and serialize without guessed raw IDs"
+    },
+    {
+      "id": "source-all-mode-ir",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "OutputIR",
+      "responsibility": "Additive all_modes bool; absent and false preserve historical selectors"
+    },
+    {
+      "id": "source-all-mode-selection",
+      "path": "crates/fullmag-runner/src/eigen/output_selection.rs",
+      "symbol": "select_eigen_outputs",
+      "responsibility": "Select actual returned IDs with unchanged sample selectors"
+    },
+    {
+      "id": "source-all-mode-native-result",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "requested_mode_indices_for_result",
+      "responsibility": "Export actual returned native vector slots without truncation to requested count"
+    },
+    {
+      "id": "source-all-mode-path-retention",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "eigen_path_candidate_mode_indices",
+      "responsibility": "Retain actual raw candidate IDs parsed from the returned spectrum"
+    },
+    {
+      "id": "source-all-mode-python-test",
+      "path": "packages/fullmag-py/tests/test_problem_ir.py",
+      "symbol": "test_save_all_modes_has_explicit_intent_without_assumed_raw_ids",
+      "responsibility": "Executed Python contract checks; not managed runtime evidence"
+    },
+    {
+      "id": "source-gamma-window-basis-trial",
+      "path": "scripts/de_gamma_krylov_trial.py",
+      "symbol": "_validate_window_basis_policy",
+      "responsibility": "Validate actual queried EPS dimensions for exact requested window policy; configuration proof only"
+    },
+    {
+      "id": "source-gamma-window-basis-trial-tests",
+      "path": "scripts/test_de_gamma_krylov_trial.py",
+      "symbol": "class GammaWindowBasisPolicyTests",
+      "responsibility": "Prepared measured-dimension mutation regressions; executed only in GitHub Actions"
+    },
+    {
+      "id": "source-gamma-policy-pilot-preflight",
+      "path": "scripts/run_de_100nm_pilot.py",
+      "symbol": "_validate_window_policy_request",
+      "responsibility": "Require explicit shiftedKSP and Gamma before CLI/programmatic dispatch"
+    },
+    {
+      "id": "source-gamma-policy-pilot-forward",
+      "path": "scripts/run_de_100nm_pilot.py",
+      "symbol": "_validate_krylov_trials",
+      "responsibility": "Forward requested window policy to actual-query postsolve guard"
+    },
+    {
+      "id": "source-gamma-policy-pilot-routing-tests",
+      "path": "scripts/test_de_gamma_krylov_trial.py",
+      "symbol": "class GammaWindowPolicyPilotRoutingTests",
+      "responsibility": "Prepared forwarding/no-dispatch regressions, GitHub Actions only"
+    }
   ],
   "public_api": {
     "parameters": [
-      {"python": "`add_eigenmodes.count`", "type": "`int`", "default": "`10`", "si_unit": "$1$", "validation": "Positive; non-positive values raise `ValueError`.", "meaning": "Maximum requested mode count.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.count` as an integer."},
-      {"python": "`add_eigenmodes.target`", "type": "`str`", "default": "`\"lowest\"`", "si_unit": "$1$", "validation": "One of `lowest`, `nearest`, `frequency_window`; other values raise `ValueError`.", "meaning": "Spectral selection policy.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.target.kind`."},
-      {"python": "`add_eigenmodes.target_frequency`", "type": "`float | None`", "default": "`None`", "si_unit": "$\\mathrm{Hz}$", "validation": "Required and positive for `nearest`; positive if supplied. With `frequency_window` it is currently accepted but not serialized and therefore must not be relied on.", "meaning": "Nearest-frequency target.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.target.frequency_hz` only for `target=\"nearest\"`; absent for `frequency_window`."},
-      {"python": "`add_eigenmodes.frequency_min`", "type": "`float | None`", "default": "`None`", "si_unit": "$\\mathrm{Hz}$", "validation": "Required, finite-positive through `require_positive`, and less than `frequency_max` for `frequency_window`; rejected for other targets.", "meaning": "Lower frequency-window bound.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.target.frequency_min_hz`."},
-      {"python": "`add_eigenmodes.frequency_max`", "type": "`float | None`", "default": "`None`", "si_unit": "$\\mathrm{Hz}$", "validation": "Required, finite-positive through `require_positive`, and greater than `frequency_min` for `frequency_window`; rejected for other targets.", "meaning": "Upper frequency-window bound.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.target.frequency_max_hz`."},
-      {"python": "`add_eigenmodes.operator`", "type": "`str`", "default": "`\"linearized_llg\"`", "si_unit": "$1$", "validation": "One of `linearized_llg`, `full_2x2`; other values raise `ValueError`.", "meaning": "Physical linearized operator family.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.operator.kind`."},
-      {"python": "`add_eigenmodes.include_demag`", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean authoring value; `periodic_airbox_k0` requires `True`.", "meaning": "Include the dynamic-demag derivative.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.operator.include_demag`."},
-      {"python": "`add_eigenmodes.equilibrium_source`", "type": "`str`", "default": "`\"relax\"`", "si_unit": "$1$", "validation": "One of `provided`, `relax`, `artifact`; other values raise `ValueError`.", "meaning": "Accepted equilibrium source.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.equilibrium.kind`; `relax` normalizes to `relaxed_initial_state`."},
-      {"python": "`add_eigenmodes.equilibrium_artifact`", "type": "`str | None`", "default": "`None`", "si_unit": "$1$", "validation": "Required and non-empty for `equilibrium_source=\"artifact\"`; a supplied value is always normalized as non-empty.", "meaning": "Immutable equilibrium artifact path.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.equilibrium.path` for the artifact variant."},
-      {"python": "`add_eigenmodes.normalization`", "type": "`str`", "default": "`\"unit_l2\"`", "si_unit": "$1$", "validation": "One of `unit_l2`, `unit_max_amplitude`; other values raise `ValueError`.", "meaning": "Mode normalization request.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.normalization`."},
-      {"python": "`add_eigenmodes.damping_policy`", "type": "`str`", "default": "`\"ignore\"`", "si_unit": "$1$", "validation": "One of `ignore`, `include`; `periodic_airbox_k0` requires `ignore`.", "meaning": "Whether Gilbert damping participates in the modal pencil.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.damping_policy`."},
-      {"python": "`add_eigenmodes.k_vector`", "type": "`tuple[float, float, float] | None`", "default": "`None`", "si_unit": "$\\mathrm{rad\\,m^{-1}}$", "validation": "Legacy single-$\\mathbf k$ alias; finite three-vector; conflicts with a non-equivalent `k_sampling`; `periodic_airbox_k0` requires exact zero.", "meaning": "Single Bloch wave vector.", "backend_support": "FEM CPU/GPU authoring; nonzero-k demag remains unsupported", "problem_ir": "`study.k_sampling={\"kind\":\"single\",\"k_vector\":[...]}`."},
-      {"python": "`add_eigenmodes.k_sampling`", "type": "`object | None`", "default": "`None`", "si_unit": "$1$", "validation": "Must lower through `coerce_k_sampling`; a simultaneous non-equivalent `k_vector` is rejected.", "meaning": "Single point, path or declared wave-vector sampling.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.k_sampling`."},
-      {"python": "`add_eigenmodes.bias_field_sweep`", "type": "`BiasFieldSweep | None`", "default": "`None`", "si_unit": "$1$", "validation": "Must be `BiasFieldSweep`; requires single Gamma, demag, `periodic_airbox_k0`, periodic spin-wave BC and ignored damping.", "meaning": "Ordered physical bias-field sweep.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.bias_field_sweep`."},
-      {"python": "`add_eigenmodes.bc`", "type": "`str | PeriodicBC | FloquetBC | dict`", "default": "`\"free\"`", "si_unit": "$1$", "validation": "Must serialize as a supported spin-wave BC; periodic/floquet objects require non-empty pair IDs.", "meaning": "Dynamic magnetic boundary condition.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.spin_wave_bc`."},
-      {"python": "`add_eigenmodes.magnetostatic_bc`", "type": "`str`", "default": "`\"open\"`", "si_unit": "$1$", "validation": "One of `open`, `periodic_airbox_k0`, `floquet_airbox`; `periodic_airbox_k0` additionally requires demag, periodic BC, zero $\\mathbf k$ and ignored damping.", "meaning": "Dynamic magnetostatic boundary model.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.magnetostatic_bc`."},
-      {"python": "`add_frequency_response.frequencies_hz`", "type": "`Sequence[float]`", "default": "required", "si_unit": "$\\mathrm{Hz}$", "validation": "Non-empty sequence of finite positive values; otherwise `ValueError`.", "meaning": "Requested driven-frequency samples.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.frequencies_hz.values_hz` as floats."},
-      {"python": "`add_frequency_response.excitation_field_au_per_m`", "type": "`tuple[float, float, float]`", "default": "`(0.0, 0.0, 1.0)`", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "Exactly three finite components; otherwise `ValueError`.", "meaning": "Complex-drive amplitude before the separate phase.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.excitation.field_au_per_m`."},
-      {"python": "`add_frequency_response.excitation_phase_rad`", "type": "`float`", "default": "`0.0`", "si_unit": "$\\mathrm{rad}$", "validation": "Finite after float conversion; non-finite values raise `ValueError`.", "meaning": "Global RF-drive phase.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.excitation.phase_rad`."},
-      {"python": "`add_frequency_response.observable`", "type": "`str`", "default": "`\"susceptibility_tensor\"`", "si_unit": "$1$", "validation": "Must be accepted by `SaveResponse` when it supplies the implicit response output. Explicit `study.save_response` owns the output instead.", "meaning": "Default driven-response observable.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.sampling.outputs[].observable` only for the implicit response output."},
-      {"python": "`add_frequency_response.include_demag`", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean authoring value; unsupported physical combinations fail in planning/runtime.", "meaning": "Include the dynamic-demag derivative.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.operator.include_demag`; operator kind is `linearized_llg`."},
-      {"python": "`add_frequency_response.equilibrium_source`", "type": "`str`", "default": "`\"provided\"`", "si_unit": "$1$", "validation": "One of `provided`, `relax`, `artifact`; other values raise `ValueError`.", "meaning": "Accepted equilibrium source.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.equilibrium.kind`; `relax` normalizes to `relaxed_initial_state`."},
-      {"python": "`add_frequency_response.equilibrium_artifact`", "type": "`str | None`", "default": "`None`", "si_unit": "$1$", "validation": "Required and non-empty for `equilibrium_source=\"artifact\"`; a supplied value is always normalized as non-empty.", "meaning": "Immutable equilibrium artifact path.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.equilibrium.path` for the artifact variant."},
-      {"python": "`add_frequency_response.normalization`", "type": "`str`", "default": "`\"unit_l2\"`", "si_unit": "$1$", "validation": "One of `unit_l2`, `unit_max_amplitude`; other values raise `ValueError`.", "meaning": "Response-state normalization convention.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.normalization`."},
-      {"python": "`add_frequency_response.damping_policy`", "type": "`str`", "default": "`\"ignore\"`", "si_unit": "$1$", "validation": "One of `ignore`, `include`; other values raise `ValueError`.", "meaning": "Whether Gilbert damping participates in $B_\\alpha$.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.damping_policy`."},
-      {"python": "`add_frequency_response.k_vector`", "type": "`tuple[float, float, float] | None`", "default": "`None`", "si_unit": "$\\mathrm{rad\\,m^{-1}}$", "validation": "Legacy single-$\\mathbf k$ alias; finite three-vector; conflicts with a non-equivalent `k_sampling`.", "meaning": "Single Bloch wave vector.", "backend_support": "FEM CPU/GPU authoring; nonzero-k demag remains unsupported", "problem_ir": "`study.k_sampling={\"kind\":\"single\",\"k_vector\":[...]}`."},
-      {"python": "`add_frequency_response.k_sampling`", "type": "`object | None`", "default": "`None`", "si_unit": "$1$", "validation": "Must lower through `coerce_k_sampling`; a simultaneous non-equivalent `k_vector` is rejected.", "meaning": "Single point or wave-vector sampling request.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.k_sampling`."},
-      {"python": "`add_frequency_response.bc`", "type": "`str | PeriodicBC | FloquetBC | dict`", "default": "`\"free\"`", "si_unit": "$1$", "validation": "Must serialize as a supported spin-wave BC; periodic/floquet objects require non-empty pair IDs.", "meaning": "Dynamic magnetic boundary condition.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.spin_wave_bc`."},
-      {"python": "`add_frequency_response.magnetostatic_bc`", "type": "`str`", "default": "`\"open\"`", "si_unit": "$1$", "validation": "One of `open`, `periodic_airbox_k0`, `floquet_airbox`; unsupported combinations fail closed later.", "meaning": "Dynamic magnetostatic boundary model.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.magnetostatic_bc`."},
-      {"python": "`add_frequency_response.solver_method`", "type": "`str | None`", "default": "`None`", "si_unit": "$1$", "validation": "One of `auto`, `dense_reference`, `cpu_sparse_direct`, `full_coupled_field_split`, `schur_reduced`, `modal_reduced`, `gpu_operator_host_krylov`, `gpu_device_krylov`; invalid names raise `ValueError`.", "meaning": "Requested numerical method, not resolved execution.", "backend_support": "FEM CPU/GPU authoring; runtime rejects unavailable engines", "problem_ir": "`study.solver_policy.method`; omitted when `None`."},
-      {"python": "`add_frequency_response.solver_preconditioner`", "type": "`str | None`", "default": "`None`", "si_unit": "$1$", "validation": "One of `auto`, `graph_demag_coarse`, `demag_coarse`, `block_jacobi`, `none`; invalid names raise `ValueError`.", "meaning": "Requested preconditioner.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.solver_policy.preconditioner`; omitted when `None`."},
-      {"python": "`add_frequency_response.solver_rtol`", "type": "`float | None`", "default": "`None`", "si_unit": "$1$", "validation": "Finite and positive; otherwise `ValueError`.", "meaning": "Requested relative Krylov tolerance.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.solver_policy.rtol`; omitted when `None`."},
-      {"python": "`add_frequency_response.solver_max_iterations`", "type": "`int | None`", "default": "`None`", "si_unit": "$1$", "validation": "Positive non-boolean integer; otherwise `TypeError` or `ValueError`.", "meaning": "Requested iteration limit.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.solver_policy.max_iterations`; omitted when `None`."},
-      {"python": "`add_frequency_response.solver_restart_iterations`", "type": "`int | None`", "default": "`None`", "si_unit": "$1$", "validation": "Positive non-boolean integer and not greater than `solver_max_iterations`; otherwise `TypeError` or `ValueError`.", "meaning": "Requested Krylov restart length.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.solver_policy.restart_iterations`; omitted when `None`."},
-      {"python": "`add_frequency_response.MAX_ITERATIONS`", "type": "`int | None`", "default": "`None`", "si_unit": "$1$", "validation": "Compatibility alias; conflicts with a different `solver_max_iterations` and then raises `ValueError`.", "meaning": "Legacy spelling of the iteration limit.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "Normalized to `study.solver_policy.max_iterations`; never retained as a separate field."}
+      {
+        "python": "`add_eigenmodes.count`",
+        "type": "`int`",
+        "default": "`10`",
+        "si_unit": "$1$",
+        "validation": "Positive; non-positive values raise `ValueError`.",
+        "meaning": "Maximum requested mode count.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.count` as an integer."
+      },
+      {
+        "python": "`add_eigenmodes.target`",
+        "type": "`str`",
+        "default": "`\"lowest\"`",
+        "si_unit": "$1$",
+        "validation": "One of `lowest`, `nearest`, `frequency_window`; other values raise `ValueError`.",
+        "meaning": "Spectral selection policy.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.target.kind`."
+      },
+      {
+        "python": "`add_eigenmodes.target_frequency`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "Required and positive for `nearest`; positive if supplied. With `frequency_window` it is currently accepted but not serialized and therefore must not be relied on.",
+        "meaning": "Nearest-frequency target.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.target.frequency_hz` only for `target=\"nearest\"`; absent for `frequency_window`."
+      },
+      {
+        "python": "`add_eigenmodes.frequency_min`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "Required, finite-positive through `require_positive`, and less than `frequency_max` for `frequency_window`; rejected for other targets.",
+        "meaning": "Lower frequency-window bound.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.target.frequency_min_hz`."
+      },
+      {
+        "python": "`add_eigenmodes.frequency_max`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "Required, finite-positive through `require_positive`, and greater than `frequency_min` for `frequency_window`; rejected for other targets.",
+        "meaning": "Upper frequency-window bound.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.target.frequency_max_hz`."
+      },
+      {
+        "python": "`add_eigenmodes.operator`",
+        "type": "`str`",
+        "default": "`\"linearized_llg\"`",
+        "si_unit": "$1$",
+        "validation": "One of `linearized_llg`, `full_2x2`; other values raise `ValueError`.",
+        "meaning": "Physical linearized operator family.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.operator.kind`."
+      },
+      {
+        "python": "`add_eigenmodes.include_demag`",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "$1$",
+        "validation": "Boolean authoring value; `periodic_airbox_k0` requires `True`.",
+        "meaning": "Include the dynamic-demag derivative.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.operator.include_demag`."
+      },
+      {
+        "python": "`add_eigenmodes.equilibrium_source`",
+        "type": "`str`",
+        "default": "`\"relax\"`",
+        "si_unit": "$1$",
+        "validation": "One of `provided`, `relax`, `artifact`; other values raise `ValueError`.",
+        "meaning": "Accepted equilibrium source.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.equilibrium.kind`; `relax` normalizes to `relaxed_initial_state`."
+      },
+      {
+        "python": "`add_eigenmodes.equilibrium_artifact`",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Required and non-empty for `equilibrium_source=\"artifact\"`; a supplied value is always normalized as non-empty.",
+        "meaning": "Immutable equilibrium artifact path.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.equilibrium.path` for the artifact variant."
+      },
+      {
+        "python": "`add_eigenmodes.normalization`",
+        "type": "`str`",
+        "default": "`\"unit_l2\"`",
+        "si_unit": "$1$",
+        "validation": "One of `unit_l2`, `unit_max_amplitude`; other values raise `ValueError`.",
+        "meaning": "Mode normalization request.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.normalization`."
+      },
+      {
+        "python": "`add_eigenmodes.damping_policy`",
+        "type": "`str`",
+        "default": "`\"ignore\"`",
+        "si_unit": "$1$",
+        "validation": "One of `ignore`, `include`; `periodic_airbox_k0` requires `ignore`.",
+        "meaning": "Whether Gilbert damping participates in the modal pencil.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.damping_policy`."
+      },
+      {
+        "python": "`add_eigenmodes.k_vector`",
+        "type": "`tuple[float, float, float] | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{rad\\,m^{-1}}$",
+        "validation": "Legacy single-$\\mathbf k$ alias; finite three-vector; conflicts with a non-equivalent `k_sampling`; `periodic_airbox_k0` requires exact zero.",
+        "meaning": "Single Bloch wave vector.",
+        "backend_support": "FEM CPU authoring; bounded nearest-frequency Floquet-airbox demag route is source-visible and runtime-unvalidated; GPU remains unsupported",
+        "problem_ir": "`study.k_sampling={\"kind\":\"single\",\"k_vector\":[...]}`."
+      },
+      {
+        "python": "`add_eigenmodes.k_sampling`",
+        "type": "`object | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Must lower through `coerce_k_sampling`; a simultaneous non-equivalent `k_vector` is rejected.",
+        "meaning": "Single point, path or declared wave-vector sampling.",
+        "backend_support": "FEM CPU authoring; bounded nearest-frequency Floquet-airbox demag route is source-visible and runtime-unvalidated; GPU remains unsupported",
+        "problem_ir": "`study.k_sampling`."
+      },
+      {
+        "python": "`add_eigenmodes.bias_field_sweep`",
+        "type": "`BiasFieldSweep | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Must be `BiasFieldSweep`; requires single Gamma, demag, `periodic_airbox_k0`, periodic spin-wave BC and ignored damping.",
+        "meaning": "Ordered physical bias-field sweep.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.bias_field_sweep`."
+      },
+      {
+        "python": "`add_eigenmodes.bc`",
+        "type": "`str | PeriodicBC | FloquetBC | dict`",
+        "default": "`\"free\"`",
+        "si_unit": "$1$",
+        "validation": "Must serialize as a supported spin-wave BC; periodic/floquet objects require non-empty pair IDs.",
+        "meaning": "Dynamic magnetic boundary condition.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.spin_wave_bc`."
+      },
+      {
+        "python": "`add_eigenmodes.magnetostatic_bc`",
+        "type": "`str`",
+        "default": "`\"open\"`",
+        "si_unit": "$1$",
+        "validation": "One of `open`, `periodic_airbox_k0`, `floquet_airbox`; `periodic_airbox_k0` additionally requires demag, periodic BC, zero $\\mathbf k$ and ignored damping.",
+        "meaning": "Dynamic magnetostatic boundary model.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.magnetostatic_bc`."
+      },
+      {
+        "python": "`add_frequency_response.frequencies_hz`",
+        "type": "`Sequence[float]`",
+        "default": "required",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "Non-empty sequence of finite positive values; otherwise `ValueError`.",
+        "meaning": "Requested driven-frequency samples.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.frequencies_hz.values_hz` as floats."
+      },
+      {
+        "python": "`add_frequency_response.excitation_field_au_per_m`",
+        "type": "`tuple[float, float, float]`",
+        "default": "`(0.0, 0.0, 1.0)`",
+        "si_unit": "$\\mathrm{A\\,m^{-1}}$",
+        "validation": "Exactly three finite components; otherwise `ValueError`.",
+        "meaning": "Complex-drive amplitude before the separate phase.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.excitation.field_au_per_m`."
+      },
+      {
+        "python": "`add_frequency_response.excitation_phase_rad`",
+        "type": "`float`",
+        "default": "`0.0`",
+        "si_unit": "$\\mathrm{rad}$",
+        "validation": "Finite after float conversion; non-finite values raise `ValueError`.",
+        "meaning": "Global RF-drive phase.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.excitation.phase_rad`."
+      },
+      {
+        "python": "`add_frequency_response.observable`",
+        "type": "`str`",
+        "default": "`\"susceptibility_tensor\"`",
+        "si_unit": "$1$",
+        "validation": "Must be accepted by `SaveResponse` when it supplies the implicit response output. Explicit `study.save_response` owns the output instead.",
+        "meaning": "Default driven-response observable.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.sampling.outputs[].observable` only for the implicit response output."
+      },
+      {
+        "python": "`add_frequency_response.include_demag`",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "$1$",
+        "validation": "Boolean authoring value; unsupported physical combinations fail in planning/runtime.",
+        "meaning": "Include the dynamic-demag derivative.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.operator.include_demag`; operator kind is `linearized_llg`."
+      },
+      {
+        "python": "`add_frequency_response.equilibrium_source`",
+        "type": "`str`",
+        "default": "`\"provided\"`",
+        "si_unit": "$1$",
+        "validation": "One of `provided`, `relax`, `artifact`; other values raise `ValueError`.",
+        "meaning": "Accepted equilibrium source.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.equilibrium.kind`; `relax` normalizes to `relaxed_initial_state`."
+      },
+      {
+        "python": "`add_frequency_response.equilibrium_artifact`",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Required and non-empty for `equilibrium_source=\"artifact\"`; a supplied value is always normalized as non-empty.",
+        "meaning": "Immutable equilibrium artifact path.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.equilibrium.path` for the artifact variant."
+      },
+      {
+        "python": "`add_frequency_response.normalization`",
+        "type": "`str`",
+        "default": "`\"unit_l2\"`",
+        "si_unit": "$1$",
+        "validation": "One of `unit_l2`, `unit_max_amplitude`; other values raise `ValueError`.",
+        "meaning": "Response-state normalization convention.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.normalization`."
+      },
+      {
+        "python": "`add_frequency_response.damping_policy`",
+        "type": "`str`",
+        "default": "`\"ignore\"`",
+        "si_unit": "$1$",
+        "validation": "One of `ignore`, `include`; other values raise `ValueError`.",
+        "meaning": "Whether Gilbert damping participates in $B_\\alpha$.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.damping_policy`."
+      },
+      {
+        "python": "`add_frequency_response.k_vector`",
+        "type": "`tuple[float, float, float] | None`",
+        "default": "`None`",
+        "si_unit": "$\\mathrm{rad\\,m^{-1}}$",
+        "validation": "Legacy single-$\\mathbf k$ alias; finite three-vector; conflicts with a non-equivalent `k_sampling`.",
+        "meaning": "Single Bloch wave vector.",
+        "backend_support": "FEM CPU/GPU authoring; nonzero-k demag remains unsupported",
+        "problem_ir": "`study.k_sampling={\"kind\":\"single\",\"k_vector\":[...]}`."
+      },
+      {
+        "python": "`add_frequency_response.k_sampling`",
+        "type": "`object | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Must lower through `coerce_k_sampling`; a simultaneous non-equivalent `k_vector` is rejected.",
+        "meaning": "Single point or wave-vector sampling request.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.k_sampling`."
+      },
+      {
+        "python": "`add_frequency_response.bc`",
+        "type": "`str | PeriodicBC | FloquetBC | dict`",
+        "default": "`\"free\"`",
+        "si_unit": "$1$",
+        "validation": "Must serialize as a supported spin-wave BC; periodic/floquet objects require non-empty pair IDs.",
+        "meaning": "Dynamic magnetic boundary condition.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.spin_wave_bc`."
+      },
+      {
+        "python": "`add_frequency_response.magnetostatic_bc`",
+        "type": "`str`",
+        "default": "`\"open\"`",
+        "si_unit": "$1$",
+        "validation": "One of `open`, `periodic_airbox_k0`, `floquet_airbox`; unsupported combinations fail closed later.",
+        "meaning": "Dynamic magnetostatic boundary model.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.magnetostatic_bc`."
+      },
+      {
+        "python": "`add_frequency_response.solver_method`",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "One of `auto`, `dense_reference`, `cpu_sparse_direct`, `full_coupled_field_split`, `schur_reduced`, `modal_reduced`, `gpu_operator_host_krylov`, `gpu_device_krylov`; invalid names raise `ValueError`.",
+        "meaning": "Requested numerical method, not resolved execution.",
+        "backend_support": "FEM CPU/GPU authoring; runtime rejects unavailable engines",
+        "problem_ir": "`study.solver_policy.method`; omitted when `None`."
+      },
+      {
+        "python": "`add_frequency_response.solver_preconditioner`",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "One of `auto`, `graph_demag_coarse`, `demag_coarse`, `block_jacobi`, `none`; invalid names raise `ValueError`.",
+        "meaning": "Requested preconditioner.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.solver_policy.preconditioner`; omitted when `None`."
+      },
+      {
+        "python": "`add_frequency_response.solver_rtol`",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Finite and positive; otherwise `ValueError`.",
+        "meaning": "Requested relative Krylov tolerance.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.solver_policy.rtol`; omitted when `None`."
+      },
+      {
+        "python": "`add_frequency_response.solver_max_iterations`",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Positive non-boolean integer; otherwise `TypeError` or `ValueError`.",
+        "meaning": "Requested iteration limit.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.solver_policy.max_iterations`; omitted when `None`."
+      },
+      {
+        "python": "`add_frequency_response.solver_restart_iterations`",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Positive non-boolean integer and not greater than `solver_max_iterations`; otherwise `TypeError` or `ValueError`.",
+        "meaning": "Requested Krylov restart length.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "`study.solver_policy.restart_iterations`; omitted when `None`."
+      },
+      {
+        "python": "`add_frequency_response.MAX_ITERATIONS`",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "$1$",
+        "validation": "Compatibility alias; conflicts with a different `solver_max_iterations` and then raises `ValueError`.",
+        "meaning": "Legacy spelling of the iteration limit.",
+        "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
+        "problem_ir": "Normalized to `study.solver_policy.max_iterations`; never retained as a separate field."
+      }
     ]
   }
 }

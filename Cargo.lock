@@ -1312,6 +1312,7 @@ name = "fullmag-ir"
 version = "0.1.0"
 dependencies = [
  "fullmag-quantities",
+ "num-bigint",
  "rayon",
  "serde",
  "serde_json",

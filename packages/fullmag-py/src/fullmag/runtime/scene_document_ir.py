@@ -55,6 +55,8 @@ _STUDY_FIELDS = frozenset(
         "requested_precision",
         "requested_mode",
         "requested_cpu_threads",
+        "parallel_execution",
+        "pbc",
         "execution_profile",
         "execution_layers",
         "fem_demag_solver_policy",
@@ -247,7 +249,9 @@ def _scene_capture_to_ir(
     runtime_metadata = result.get("problem_meta", {}).get("runtime_metadata")
     if isinstance(runtime_metadata, dict):
         runtime_metadata["output_storage_source_dir"] = str(capture.source_root)
-        runtime_metadata["output_storage_source_stem"] = capture.source_stem
+        # The capture bootstrap is synthetic, not an authored script filename.
+        # Preserve the Problem-name fallback used by output storage.
+        runtime_metadata.pop("output_storage_source_stem", None)
         study_pipeline = _scene_capture_study_pipeline(capture)
         if study_pipeline is not None:
             runtime_metadata["study_pipeline"] = copy.deepcopy(study_pipeline)

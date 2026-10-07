@@ -258,9 +258,11 @@ void runtime_build_info_v2_is_versioned_and_fails_closed_without_mfem_stack() {
     check(info.struct_size == sizeof(info), "runtime build info V2 struct size");
 #if FULLMAG_HAS_MFEM_STACK
     check(rc == FULLMAG_FEM_OK, "MFEM-stack runtime build info V2 must be available");
+    const std::string header_mfem_version =
+        std::to_string(MFEM_VERSION_MAJOR) + "." + std::to_string(MFEM_VERSION_MINOR);
     check(
-        std::strcmp(info.mfem_version, "4.9") == 0,
-        "runtime build info V2 must expose loaded MFEM 4.9");
+        std::strcmp(info.mfem_version, header_mfem_version.c_str()) == 0,
+        "runtime build info V2 must agree with the installed MFEM headers");
     check(
         std::strcmp(info.hypre_version, "3.1.0") == 0,
         "runtime build info V2 must expose loaded HYPRE 3.1.0");

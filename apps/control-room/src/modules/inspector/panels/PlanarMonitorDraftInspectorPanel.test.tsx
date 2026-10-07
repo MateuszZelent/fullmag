@@ -42,7 +42,8 @@ const sessionA = {
 } as const;
 const sessionAScopeKey = "session=A&epoch=1&request_scope_epoch=1";
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     api: { model: { planarMonitors: { create: mocks.create }, scene: mocks.scene } },
     authoringHistory: mocks.authoringHistory

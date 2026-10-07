@@ -71,21 +71,39 @@ describe("chart renderer owner", () => {
     expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Period [ns]" })]));
   });
 
-  it("keeps explicit invalid points as visual gaps instead of connecting branches", () => {
+  it("renders explicit branch gaps as null sentinels instead of connecting points", () => {
     const option = chartRenderModelToEChartsOption({
       ...model,
       series: [{
         ...model.series[0]!,
         points: [
           { rowIndex: 0, x: 1, y: 0.25 },
-          { rowIndex: 1, x: Number.NaN, y: Number.NaN },
-          { rowIndex: 2, x: 3, y: 0.5 },
+          { breakBefore: true, rowIndex: 2, x: 3, y: 0.5 },
         ],
       }],
     });
 
     expect(option.series).toEqual([
-      expect.objectContaining({ connectNulls: false }),
+      expect.objectContaining({
+        connectNulls: false,
+        data: [[1, 0.25, 0], [3, null, null], [3, 0.5, 2]],
+      }),
+    ]);
+  });
+
+  it("renders requested scatter series with symbols and without a connecting line", () => {
+    const option = chartRenderModelToEChartsOption({
+      ...model,
+      series: [{ ...model.series[0]!, kind: "scatter" }],
+    });
+
+    expect(option.series).toEqual([
+      expect.objectContaining({
+        data: [[1, 0.25, 7]],
+        showSymbol: true,
+        symbol: "circle",
+        type: "scatter",
+      }),
     ]);
   });
 

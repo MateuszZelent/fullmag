@@ -44,6 +44,7 @@ MAX_BODY_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 _BODY_ERROR = object()
 _JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
+_RETENTION_PLAN_ID = re.compile(r"plan-[a-f0-9]{8,32}\Z")
 _SENSITIVE_KEYS = frozenset(
     {
         "authorization",
@@ -127,8 +128,10 @@ class APICallbacks:
     processes: Callable[[], object] | None = None
     alerts: Callable[[], object] | None = None
     events: Callable[[dict], object] | None = None
-    retention_plan_preview: Callable[[], object] | None = None
+    retention_plan_preview: Callable[..., object] | None = None
     retention_plan_apply: Callable[[str], object] | None = None
+    retention_plan_cancel: Callable[[str], object] | None = None
+    retention_plan_get: Callable[[str], object] | None = None
     get_retention_policy: Callable[[], object] | None = None
     put_retention_policy: Callable[[dict], object] | None = None
     pin_resource: Callable[[str, dict], object] | None = None
@@ -157,6 +160,8 @@ class APICallbacks:
             "events",
             "retention_plan_preview",
             "retention_plan_apply",
+            "retention_plan_cancel",
+            "retention_plan_get",
             "get_retention_policy",
             "put_retention_policy",
             "pin_resource",
@@ -370,6 +375,9 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
 
     def _job_id(self, value: str) -> str | None:
         return value if _JOB_ID.fullmatch(value) else None
+
+    def _retention_plan_id(self, value: str) -> str | None:
+        return value if _RETENTION_PLAN_ID.fullmatch(value) else None
 
     def _read_body(self, *, required: bool) -> object | None:
         transfer_encoding = self.headers.get("Transfer-Encoding")
@@ -607,6 +615,11 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
                 self._invoke(self.server.callbacks.get_retention_policy)
             else:
                 self._send(200, {})
+        elif len(parts) == 5 and parts[:4] == ["api", "v1", "retention", "plans"]:
+            if self.server.callbacks.retention_plan_get is not None:
+                self._invoke(self.server.callbacks.retention_plan_get, parts[4])
+            else:
+                self._error(503, "retention_unavailable")
         elif parts == ["api", "v1", "retention", "plans"]:
             if self.server.callbacks.retention_plan_preview is not None:
                 self._invoke(self.server.callbacks.retention_plan_preview)
@@ -683,9 +696,15 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
             if body is _BODY_ERROR:
                 return
             if self.server.callbacks.retention_plan_preview is not None:
-                self._invoke(self.server.callbacks.retention_plan_preview)
+                if body:
+                    self._invoke(self.server.callbacks.retention_plan_preview, body)
+                else:
+                    self._invoke(self.server.callbacks.retention_plan_preview)
             elif self.server.callbacks.retention is not None:
-                self._invoke(self.server.callbacks.retention)
+                if body:
+                    self._error(503, "maintenance_scope_unavailable")
+                else:
+                    self._invoke(self.server.callbacks.retention)
             else:
                 self._error(503, "retention_unavailable")
         elif len(parts) == 6 and parts[:4] == ["api", "v1", "retention", "plans"] and parts[5] == "apply":
@@ -704,6 +723,21 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
                     "reclaimed_bytes": 0,
                     "message": "Operacja w trybie podglądu (preview_only): wykonawca automatycznego usuwania nie jest włączony (cleanup_executor_not_enabled).",
                 })
+        elif len(parts) == 6 and parts[:4] == ["api", "v1", "retention", "plans"] and parts[5] == "cancel":
+            body = self._read_body(required=False)
+            if body is _BODY_ERROR:
+                return
+            plan_id = self._retention_plan_id(parts[4])
+            if plan_id is None:
+                self._error(404, "not_found")
+                return
+            if body not in (None, {}):
+                self._error(400, "empty_body_required")
+                return
+            if self.server.callbacks.retention_plan_cancel is None:
+                self._error(503, "retention_cancel_unavailable")
+            else:
+                self._invoke(self.server.callbacks.retention_plan_cancel, plan_id)
         elif len(parts) == 5 and parts[:3] == ["api", "v1", "resources"] and parts[4] == "pin":
             body = self._read_body(required=False)
             if body is _BODY_ERROR:
@@ -823,6 +857,8 @@ def _coerce_callbacks(callbacks: APICallbacks | Mapping[str, Callable[..., objec
                 events=callbacks.get("events"),
                 retention_plan_preview=callbacks.get("retention_plan_preview"),
                 retention_plan_apply=callbacks.get("retention_plan_apply"),
+                retention_plan_cancel=callbacks.get("retention_plan_cancel"),
+                retention_plan_get=callbacks.get("retention_plan_get"),
                 get_retention_policy=callbacks.get("get_retention_policy"),
                 put_retention_policy=callbacks.get("put_retention_policy"),
                 pin_resource=callbacks.get("pin_resource"),

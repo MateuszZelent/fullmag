@@ -27,18 +27,29 @@ pub(crate) mod eigen_equilibrium;
 pub(crate) mod eigen_equilibrium_contract;
 pub(crate) mod eigen_execution;
 pub(crate) mod eigen_execution_resolution;
+pub(crate) mod eigen_k_pool;
+pub(crate) mod eigen_k_worker;
+pub(crate) mod eigen_mass_metric;
+pub(crate) mod eigen_normalization_metric;
 pub(crate) mod eigen_math;
 pub(crate) mod eigen_native_artifacts;
+mod eigen_nonshared_domain;
 pub(crate) mod eigen_native_result;
 pub(crate) mod eigen_native_window;
 pub(crate) mod eigen_operator;
 pub(crate) mod eigen_output;
 mod eigen_path;
-pub(crate) use eigen_path::execute_fem_eigen_path;
+pub(crate) mod eigen_physical_potential;
+pub(crate) use eigen_path::{
+    execute_fem_eigen_path, execute_fem_eigen_path_with_producer_identity,
+    execute_fem_eigen_path_with_producer_identity_and_parallel_policy,
+    validate_worker_spectrum_artifact,
+};
 #[cfg(test)]
 pub(crate) use eigen_path::test_support;
 pub(crate) mod eigen_policy;
 pub(crate) mod eigen_progress;
+pub(crate) mod single_k_checkpoint;
 pub(crate) mod eigen_projection;
 pub(crate) mod eigen_reduction;
 pub(crate) mod eigen_shared_domain;

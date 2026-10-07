@@ -2,10 +2,15 @@
 
 #include "frequency_domain/modal_eigen_request.hpp"
 
+#include <array>
 #include <complex>
+#include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
+
+struct FloquetSharedDomainSparseModalOperator;
 
 struct SLEPcModalEigenAdapterStatus {
     const char *solver_adapter = "slepc_modal_eigen";
@@ -18,6 +23,7 @@ struct SLEPcModalEigenAdapterStatus {
     const char *ksp_type = "";
     const char *pc_type = "";
     const char *factorization_package = "";
+    const char *factorization_shift_policy = "";
     const char *nullspace_policy = "";
     const char *linear_tolerance_policy = "";
     const char *algebraic_form = "";
@@ -45,6 +51,27 @@ struct SLEPcTinyGyrotropicModalEigenRequest {
 };
 
 struct SLEPcModalAcceptedMode {
+    bool floquet_descriptor_certified = false;
+    bool floquet_seam_frame_certified = false;
+    bool floquet_gauge_policy_satisfied = false;
+    bool floquet_mode_vector_physical_complex = false;
+    std::array<char, 32> floquet_poisson_boundary_kind{};
+    std::array<char, 32> floquet_poisson_gauge_policy{};
+    double floquet_magnetic_residual = 0.0;
+    double floquet_potential_residual = 0.0;
+    double floquet_full_magnetic_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_full_potential_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_scalar_phase_seam_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_tangent_frame_seam_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_cartesian_seam_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double floquet_equilibrium_pair_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    std::vector<std::complex<double>> floquet_potential_real_split;
     int eigenpair_index = -1;
     int positive_frequency_pair_index = -1;
     double lambda_real = 0.0;
@@ -54,33 +81,249 @@ struct SLEPcModalAcceptedMode {
     std::vector<std::complex<double>> mode_vector{};
 };
 
+struct FloquetDemagOperatorProbeSample {
+    bool attempted = false;
+    bool passed = false;
+    double q_l2_norm = 0.0;
+    double potential_relative_residual = 0.0;
+    double self_energy_j = 0.0;
+    double potential_energy_j = 0.0;
+    double energy_form_relative_defect = 0.0;
+};
+
+struct FloquetDemagOperatorProbeResult {
+    bool requested = false;
+    bool available = false;
+    bool passed = false;
+    double hermitian_relative_defect = 0.0;
+    FloquetDemagOperatorProbeSample global_y{};
+    FloquetDemagOperatorProbeSample global_z{};
+};
+
+/*
+ * Opt-in C2 diagnostic for the native shared-domain Floquet Schur pencil.
+ * The fields intentionally live on the result, not on the request: the
+ * environment switch is private and the diagnostic never changes production
+ * mode selection or the public solver contract.
+ */
+struct FloquetDenseOracleDiagnostics {
+    bool requested = false;
+    bool available = false;
+    bool candidate_found = false;
+    bool action_match = false;
+    bool st_shift_zero = false;
+    bool eps_converged_reason_available = false;
+    const char *status = "disabled";
+    const char *reason = "";
+    const char *eps_type = "lapack";
+    const char *problem_type = "gnhep";
+    const char *spectral_transform = "unshifted_shift_of_origin";
+    int q_complex_dof_count = 0;
+    int phi_dof_count = 0;
+    int real_split_dimension = 0;
+    int eps_converged_count = 0;
+    int eps_converged_reason = 0;
+    int action_probe_count = 0;
+    double operator_normalization_scale = 1.0;
+    double action_relative_error_max = std::numeric_limits<double>::quiet_NaN();
+    double poisson_relative_residual_max = std::numeric_limits<double>::quiet_NaN();
+    double eps_absolute_residual = std::numeric_limits<double>::quiet_NaN();
+    double rotated_omega_rad_s = std::numeric_limits<double>::quiet_NaN();
+    double rotated_imaginary_rad_s = std::numeric_limits<double>::quiet_NaN();
+    double frequency_hz = std::numeric_limits<double>::quiet_NaN();
+    double frequency_distance_hz = std::numeric_limits<double>::quiet_NaN();
+    double raw_lambda_real_per_s = std::numeric_limits<double>::quiet_NaN();
+    double raw_lambda_imag_rad_per_s = std::numeric_limits<double>::quiet_NaN();
+    double projected_lambda_real_per_s = std::numeric_limits<double>::quiet_NaN();
+    double projected_lambda_imag_rad_per_s = std::numeric_limits<double>::quiet_NaN();
+    double magnetic_residual_raw = std::numeric_limits<double>::quiet_NaN();
+    double magnetic_residual_projected = std::numeric_limits<double>::quiet_NaN();
+    double potential_residual = std::numeric_limits<double>::quiet_NaN();
+    double q_projection_ratio = std::numeric_limits<double>::quiet_NaN();
+};
+
+/*
+ * Opt-in action-only observation of the production Floquet Schur blocks.
+ * This is deliberately independent from FloquetDemagOperatorProbeResult:
+ * measured linear-action defects are diagnostics, not a demagnetization or
+ * physical-correctness certificate.
+ */
+struct FloquetSchurActionDiagnostic {
+    bool requested = false;
+    bool available = false;
+    bool pre_eps_only = true;
+    bool dense_materialization = false;
+    const char *status = "disabled";
+    const char *reason = "";
+    const char *measurement_phase = "before_eps_solve";
+    const char *workspace_scope = "isolated_clone_of_production_context";
+    int q_complex_dof_count = 0;
+    int real_split_dimension = 0;
+    int context_phase_sign = 0;
+    int action_count = 0;
+    int expected_action_count = 9;
+    int nonzero_signal_count = 0;
+    double operator_normalization_scale = 1.0;
+    double preconditioner_normalization_scale = 1.0;
+    double max_potential_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_repeatability_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double repeatability_first_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double repeatability_second_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_homogeneity_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double homogeneity_half_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double homogeneity_double_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double homogeneity_tiny_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double additivity_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double mat_shell_reconstruction_relative_defect =
+        std::numeric_limits<double>::quiet_NaN();
+    double min_cancellation_ratio =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_magnetic_l2_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_feedback_l2_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    double max_combined_l2_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    double min_rhs_l2_norm = std::numeric_limits<double>::quiet_NaN();
+    double max_rhs_l2_norm = std::numeric_limits<double>::quiet_NaN();
+};
+
 struct SLEPcTinyGyrotropicModalEigenResult {
     bool ok = false;
     const char *status = "unavailable";
     const char *solver_adapter = "slepc_modal_eigen";
+    // The current native modal adapter uses sequential PETSc objects. Keep
+    // this execution scope explicit in every diagnostic result so a passing
+    // solve cannot be mistaken for MPI/distributed scalability evidence.
+    const char *execution_policy = "petsc_sequential_cpu";
+    const char *execution_scope = "single_process_shared_memory";
+    const char *communicator = "PETSC_COMM_SELF";
+    const char *scalability_scope = "single_process_only";
     const char *eps_type = "krylovschur";
     const char *problem_type = "gnhep";
     const char *spectral_transform = "shift_invert";
     const char *which_eigenpairs = "target_magnitude";
     const char *ksp_type = "preonly";
+    const char *ksp_orthogonalization = "";
     const char *pc_type = "lu";
-    const char *factorization_package = "petsc_lu";
+    const char *factorization_package = "petsc_lu_shift_nonzero";
+    const char *factorization_shift_policy =
+        "positive_relative_operator_norm_amount";
+    const char *poisson_ksp_type = "";
+    const char *poisson_pc_type = "";
+    const char *poisson_factorization_package = "";
+    const char *poisson_factorization_shift_policy = "not_applicable";
+    const char *poisson_iteration_semantics = "";
     const char *nullspace_policy = "none";
     const char *unsupported_reason = "";
     int converged_eigenpair_count = 0;
+    bool eps_converged_reason_available = false;
+    int eps_converged_reason = 0;
+    bool eps_dimensions_available = false;
+    int eps_nev = 0;
+    int eps_ncv = 0;
+    int eps_mpd = 0;
+    int eps_monitor_iteration = 0;
+    double eps_first_unconverged_error_estimate =
+        std::numeric_limits<double>::quiet_NaN();
+    int positive_frequency_candidate_count = 0;
+    int frequency_window_candidate_count = 0;
+    int residual_rejection_count = 0;
+    int non_real_rotated_eigenvalue_count = 0;
+    int residual_evaluation_candidate_count = 0;
+    int eigenpair_evaluation_failure_count = 0;
+    int mode_vector_failure_count = 0;
+    int potential_reconstruction_failure_count = 0;
     int accepted_mode_count = 0;
     int selected_eigenpair_index = -1;
     int outer_iterations = 0;
+    int max_outer_iterations = 0;
     int linear_iterations_total = 0;
+    int ksp_last_iterations = 0;
+    bool ksp_diagnostics_available = false;
+    // Iteration-time observations copied by the shifted-KSP monitor. These
+    // remain distinct from post-solve true residuals and final KSP queries.
+    bool ksp_monitor_registered = false;
+    std::uint64_t ksp_monitor_observation_count = 0;
+    bool ksp_monitor_last_iteration_available = false;
+    std::int64_t ksp_monitor_last_iteration = 0;
+    bool ksp_monitor_recursive_residual_available = false;
+    double ksp_monitor_recursive_residual_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    bool ksp_monitor_last_reason_available = false;
+    int ksp_monitor_last_observed_reason = 0;
+    // Observed before EPSSolve; distinct from last-solve residual telemetry.
+    bool shifted_ksp_configuration_before_eps_available = false;
+    int shifted_ksp_pc_side_before_eps = -1;
+    int shifted_ksp_norm_type_before_eps = -1;
+    bool ksp_converged_reason_available = false;
+    int ksp_converged_reason = 0;
     int ksp_max_iterations = 0;
+    int ksp_restart = 0;
+    double ksp_breakdown_tolerance =
+        std::numeric_limits<double>::quiet_NaN();
+    int poisson_ksp_max_iterations = 0;
     double ksp_rtol = 0.0;
     double ksp_atol = 0.0;
+    double poisson_ksp_rtol = 0.0;
+    double poisson_ksp_atol = 0.0;
     double ksp_final_residual = 0.0;
+    bool ksp_last_true_residual_available = false;
+    double ksp_last_true_residual_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    double ksp_last_rhs_norm = std::numeric_limits<double>::quiet_NaN();
+    double ksp_last_true_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    // Per-solve observation of the shifted true residual criterion.
+    std::uint64_t ksp_true_criterion_solve_count = 0;
+    std::uint64_t ksp_true_criterion_measured_count = 0;
+    std::uint64_t ksp_true_criterion_violation_count = 0;
+    std::uint64_t ksp_true_criterion_unavailable_count = 0;
+    double ksp_true_criterion_maximum_tolerance_ratio =
+        std::numeric_limits<double>::quiet_NaN();
+    int ksp_true_residual_sample_count = 0;
+    int ksp_true_residual_measurement_failure_count = 0;
+    double ksp_max_true_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    int ksp_pc_side = -1;
+    int ksp_norm_type = -1;
+    double factorization_shift_amount = 0.0;
+    double operator_normalization_scale = 1.0;
+    double preconditioner_normalization_scale = 1.0;
+    double max_candidate_relative_residual = 0.0;
+    double eps_normalized_absolute_tolerance = 0.0;
+    double max_eps_normalized_absolute_residual = 0.0;
+    double max_floquet_magnetic_relative_residual = 0.0;
+    double max_floquet_potential_relative_residual = 0.0;
+    double worst_candidate_frequency_hz = 0.0;
+    double worst_candidate_eps_normalized_absolute_residual = 0.0;
+    double worst_candidate_floquet_magnetic_relative_residual = 0.0;
+    double worst_candidate_floquet_potential_relative_residual = 0.0;
+    double worst_candidate_unprojected_magnetic_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    double worst_candidate_rotated_imaginary_rad_s =
+        std::numeric_limits<double>::quiet_NaN();
+    double worst_candidate_q_projection_ratio =
+        std::numeric_limits<double>::quiet_NaN();
+    double min_candidate_frequency_hz = 0.0;
+    double max_candidate_frequency_hz = 0.0;
     double lambda_real = 0.0;
     double lambda_imag = 0.0;
     double frequency_hz = 0.0;
     double relative_residual = 0.0;
     double max_relative_residual = 0.0;
+    FloquetDemagOperatorProbeResult dynamic_demag_operator_probe{};
+    FloquetDenseOracleDiagnostics floquet_dense_oracle{};
+    FloquetSchurActionDiagnostic floquet_schur_action_diagnostic{};
     std::vector<SLEPcModalAcceptedMode> accepted_modes{};
 };
 
@@ -99,6 +342,13 @@ struct SLEPcSparseGyrotropicModalEigenRequest {
     double residual_tolerance = 1.0e-10;
     int max_outer_iterations = 64;
     int max_linear_iterations = 128;
+    FrequencyDomainPhaseConvention phase_convention =
+        FrequencyDomainPhaseConvention::exp_i_omega_t;
+    /* Optional native shared-domain Floquet owner.  When present, the
+       stiffness/gyrotropic CSR views above are not materialised by the
+       caller; the owner builds the phase-reduced static blocks and applies
+       the scalar-potential Schur complement through a PETSc MatShell. */
+    const FloquetSharedDomainSparseModalOperator *floquet_shared_domain_operator = nullptr;
 };
 
 SLEPcTinyGyrotropicModalEigenResult

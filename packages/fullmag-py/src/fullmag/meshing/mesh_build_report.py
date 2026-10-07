@@ -31,6 +31,7 @@ def _build_shared_domain_build_report(
     mesh_workflow: Mapping[str, object] | None,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None,
     size_fields: list[dict[str, object]],
+    lower_bound_fields: list[dict[str, object]] | None = None,
     region_markers: list[dict[str, object]],
     build_mode: str,
     fallbacks_triggered: list[str],
@@ -137,28 +138,80 @@ def _build_shared_domain_build_report(
                         if not region.get("enabled", True):
                             continue
                         mesh_policy = region.get("mesh_policy")
-                        if not mesh_policy or mesh_policy.get("maximum_element_size") is None:
+                        if not mesh_policy or not any(
+                            mesh_policy.get(key) is not None
+                            for key in (
+                                "maximum_element_size",
+                                "minimum_element_size",
+                                "hmin",
+                            )
+                        ):
                             continue
                         authored_regions_count += 1
 
-    realized_regions_count = 0
-    for field_desc in (size_fields or []):
-        if not isinstance(field_desc, dict):
-            continue
-        params = field_desc.get("params")
-        if not isinstance(params, dict):
-            continue
-        if params.get("Source") == "region_mesh_policy" and field_desc.get("_gmsh_status") == "applied":
-            realized_regions_count += 1
+    region_outcomes: dict[str, dict[str, bool]] = {}
+    for role, descriptors in (
+        ("upper_target", size_fields or []),
+        ("lower_bound", lower_bound_fields or []),
+    ):
+        for field_desc in descriptors:
+            if not isinstance(field_desc, dict):
+                continue
+            params = field_desc.get("params")
+            if not isinstance(params, dict) or params.get("Source") != "region_mesh_policy":
+                continue
+            region_id = params.get("RegionId")
+            if not isinstance(region_id, str) or not region_id:
+                continue
+            region_outcomes.setdefault(region_id, {})[role] = (
+                field_desc.get("_gmsh_status") == "applied"
+            )
 
-    size_fields_realized = _realized_size_field_report(size_fields)
+    realized_regions_count = 0
+    if isinstance(mesh_workflow, Mapping):
+        raw_mesh_opts = mesh_workflow.get("mesh_options")
+        patch = raw_mesh_opts.get("scene_problem_patch") if isinstance(raw_mesh_opts, Mapping) else None
+        object_regions = patch.get("object_regions") if isinstance(patch, Mapping) else None
+        if isinstance(object_regions, list):
+            for index, region in enumerate(object_regions):
+                if not isinstance(region, Mapping) or not region.get("enabled", True):
+                    continue
+                mesh_policy = region.get("mesh_policy")
+                if not isinstance(mesh_policy, Mapping):
+                    continue
+                has_upper = mesh_policy.get("maximum_element_size") is not None
+                has_lower = any(
+                    mesh_policy.get(key) is not None
+                    for key in ("minimum_element_size", "hmin")
+                )
+                if not (has_upper or has_lower):
+                    continue
+                owner = region.get("owner_object")
+                region_id = str(
+                    region.get("region_id")
+                    or region.get("name")
+                    or f"{owner}:{index}"
+                )
+                outcomes = region_outcomes.get(region_id, {})
+                if (
+                    (not has_upper or outcomes.get("upper_target", False))
+                    and (not has_lower or outcomes.get("lower_bound", False))
+                ):
+                    realized_regions_count += 1
+
+    size_fields_realized = _realized_size_field_report(
+        size_fields,
+        lower_bound_fields=lower_bound_fields,
+    )
     return SharedDomainBuildReport(
         build_mode=build_mode,
         fallbacks_triggered=list(fallbacks_triggered),
         effective_airbox_target=resolved.airbox,
         effective_per_object_targets=per_object_targets,
         region_markers=[dict(region) for region in region_markers],
-        used_size_field_kinds=_unique_size_field_kinds(size_fields),
+        used_size_field_kinds=_unique_size_field_kinds(
+            [*(size_fields or []), *(lower_bound_fields or [])]
+        ),
         size_fields_realized=size_fields_realized,
         operation_statuses=operation_statuses,
         thin_film_diagnostics=thin_film_diagnostics,
@@ -176,9 +229,20 @@ def _build_shared_domain_build_report(
     )
 
 
-def _realized_size_field_report(size_fields: list[dict[str, object]]) -> list[dict[str, object]]:
+def _realized_size_field_report(
+    size_fields: list[dict[str, object]],
+    *,
+    lower_bound_fields: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     realized: list[dict[str, object]] = []
-    for index, field_desc in enumerate(size_fields, start=1):
+    descriptors = [
+        ("upper_target", f"sf{index}", field_desc)
+        for index, field_desc in enumerate(size_fields or [], start=1)
+    ] + [
+        ("lower_bound", f"lb{index}", field_desc)
+        for index, field_desc in enumerate(lower_bound_fields or [], start=1)
+    ]
+    for role, field_id, field_desc in descriptors:
         if not isinstance(field_desc, dict):
             continue
         kind = field_desc.get("kind")
@@ -193,7 +257,8 @@ def _realized_size_field_report(size_fields: list[dict[str, object]]) -> list[di
         )
         realized.append(
             {
-                "id": f"sf{index}",
+                "id": field_id,
+                "role": role,
                 "kind": kind,
                 "target": str(target) if target is not None else None,
                 "status": str(field_desc.get("_gmsh_status", "requested")),
@@ -552,6 +617,7 @@ def _build_mesh_operation_statuses(
     requested_thin_film = _requested_thin_film_method(opts)
     requested_sweep_direction = opts.sweep_direction or "auto"
     if requested_thin_film is not None:
+        exact_box_layers = build_mode == "single_geometry_geo_layered_box"
         for geometry in geometries:
             sweepability = classify_sweepability(geometry)
             scope = getattr(geometry, "geometry_name", type(geometry).__name__)
@@ -560,20 +626,20 @@ def _build_mesh_operation_statuses(
                     kind="thin_film",
                     scope=str(scope),
                     requested=True,
-                    status="applied" if sweepability.sweepable else "skipped",
+                    status="applied" if exact_box_layers or sweepability.sweepable else "skipped",
                     requested_method=requested_thin_film,
                     actual_method=(
-                        "feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral"
+                        "geo_layered_tetrahedral" if exact_box_layers else
+                        ("feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral")
                     ),
-                    reason=None if sweepability.sweepable else sweepability.reason,
+                    reason=None if exact_box_layers or sweepability.sweepable else sweepability.reason,
                     details={
                         "build_mode": build_mode,
                         "through_thickness_elements": opts.through_thickness_elements,
                         "requested_sweep_direction": requested_sweep_direction,
                         "resolved_sweep_direction": (
-                            "xyz"[sweepability.thin_axis]
-                            if sweepability.thin_axis is not None
-                            else None
+                            "z" if exact_box_layers else
+                            ("xyz"[sweepability.thin_axis] if sweepability.thin_axis is not None else None)
                         ),
                         "airbox_present": airbox is not None,
                     },
@@ -722,9 +788,9 @@ def _build_thin_film_diagnostics(
         warnings: list[str] = []
         if opts.through_thickness_elements is not None and opts.through_thickness_elements < 4:
             warnings.append("requested through-thickness layer count is below 4")
-        if estimated_layers is not None and estimated_layers < 4:
+        if actual_method != "geo_layered_tetrahedral" and estimated_layers is not None and estimated_layers < 4:
             warnings.append("estimated layers from maximum element size across thickness is below 4")
-        if hmax_ratio is not None and hmax_ratio > 0.5:
+        if actual_method != "geo_layered_tetrahedral" and hmax_ratio is not None and hmax_ratio > 0.5:
             warnings.append("maximum element size is too large relative to thin-film thickness")
         if opts.smoothing_steps == 0:
             warnings.append("smoothing is disabled for a thin-film mesh")

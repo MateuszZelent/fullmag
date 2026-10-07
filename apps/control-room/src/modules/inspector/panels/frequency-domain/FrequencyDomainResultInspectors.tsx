@@ -46,11 +46,13 @@ import {
   buildEigenBranchSelectionRef,
   buildEigenBranchesModel,
   buildEigenDispersionChartModel,
+  buildEigenDispersionPointSelectionRef,
   buildEigenSpectrumChartModel,
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
   buildFmrModalDrivenComparisonModel,
   buildFmrPeakTableModel,
+  eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
   frequencyResponseSeriesUnit,
   responseFieldResourcesFromManifest,
@@ -862,12 +864,18 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
         nodeId,
         objectId: null,
         ref: {
-          fieldId: point.modeFieldId ?? undefined,
+          fieldId: eigenModeFieldAvailable(point)
+            ? point.modeFieldId ?? undefined
+            : undefined,
           kind: "results.eigen.mode",
+          modeId: point.modeId ?? undefined,
           modeIndex: point.rawModeIndex,
           nodeId,
-          resourceRef: point.modeFieldResourceKey ?? summary.spectrumResource,
+          resourceRef: eigenModeFieldAvailable(point)
+            ? point.modeFieldResourceKey ?? summary.spectrumResource
+            : summary.spectrumResource,
           sampleIndex: point.sampleIndex,
+          sampleId: point.sampleId ?? undefined,
           type: "frequency-domain",
         },
       },
@@ -875,7 +883,7 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
     );
   };
   const plotMode = (point: EigenSpectrumPoint): void => {
-    if (!point.modeFieldId) return;
+    if (!eigenModeFieldAvailable(point) || !point.modeFieldId) return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
@@ -1146,6 +1154,22 @@ export function FrequencyDomainDispersionInspectorPanel(
   void props;
   const summary = useFrequencyDomainDispersionSummary();
   const kernel = useKernel();
+  const selectPoint = (point: EigenDispersionPoint): void => {
+    const ref = buildEigenDispersionPointSelectionRef(point, {
+      calculationMode: "dispersion_modal",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+    });
+    kernel.selection.set(
+      {
+        kind: ref.kind,
+        label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "inspector",
+    );
+  };
   const selectBranch = (branch: EigenBranch): void => {
     const ref = buildEigenBranchSelectionRef(branch);
     kernel.selection.set(
@@ -1207,7 +1231,10 @@ export function FrequencyDomainDispersionInspectorPanel(
         <FieldRow label="Floquet gate" value={summary.floquetGate} />
       </InspectorGroup>
       <InspectorGroup title="Dispersion Chart" badge={summary.badge}>
-        <FrequencyDomainDispersionChart model={summary.dispersionModel} />
+        <FrequencyDomainDispersionChart
+          model={summary.dispersionModel}
+          onSelectPoint={selectPoint}
+        />
       </InspectorGroup>
       <InspectorGroup
         title="Dispersion Branch Table"
@@ -1225,6 +1252,23 @@ export function FrequencyDomainDispersionInspectorPanel(
 export function EigenKPathInspectorPanel(props: InspectorPanelProps) {
   void props;
   const summary = useFrequencyDomainDispersionSummary();
+  const kernel = useKernel();
+  const selectPoint = (point: EigenDispersionPoint): void => {
+    const ref = buildEigenDispersionPointSelectionRef(point, {
+      calculationMode: "dispersion_modal",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+    });
+    kernel.selection.set(
+      {
+        kind: ref.kind,
+        label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "inspector",
+    );
+  };
 
   return (
     <div data-inspector-surface="eigen-k-path">
@@ -1272,7 +1316,10 @@ export function EigenKPathInspectorPanel(props: InspectorPanelProps) {
         />
       </InspectorGroup>
       <InspectorGroup title="Dispersion Chart" badge={summary.badge}>
-        <FrequencyDomainDispersionChart model={summary.dispersionModel} />
+        <FrequencyDomainDispersionChart
+          model={summary.dispersionModel}
+          onSelectPoint={selectPoint}
+        />
       </InspectorGroup>
     </div>
   );
@@ -1346,7 +1393,7 @@ export function EigenSpectrumInspectorPanel(props: InspectorPanelProps) {
     point: EigenSpectrumPoint,
     action: FrequencyDomainModeTableAction = "phase_rotated_real",
   ): void => {
-    if (!point.modeFieldId || action === "inspect") return;
+    if (!eigenModeFieldAvailable(point) || !point.modeFieldId || action === "inspect") return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
@@ -1421,12 +1468,18 @@ export function EigenModesInspectorPanel(props: InspectorPanelProps) {
         nodeId,
         objectId: null,
         ref: {
-          fieldId: point.modeFieldId ?? undefined,
+          fieldId: eigenModeFieldAvailable(point)
+            ? point.modeFieldId ?? undefined
+            : undefined,
           kind: "results.eigen.mode",
+          modeId: point.modeId ?? undefined,
           modeIndex: point.rawModeIndex,
           nodeId,
-          resourceRef: point.modeFieldResourceKey ?? summary.modeTableResource,
+          resourceRef: eigenModeFieldAvailable(point)
+            ? point.modeFieldResourceKey ?? summary.modeTableResource
+            : summary.modeTableResource,
           sampleIndex: point.sampleIndex,
+          sampleId: point.sampleId ?? undefined,
           type: "frequency-domain",
         },
       },
@@ -1441,7 +1494,7 @@ export function EigenModesInspectorPanel(props: InspectorPanelProps) {
       selectMode(point);
       return;
     }
-    if (!point.modeFieldId) return;
+    if (!eigenModeFieldAvailable(point) || !point.modeFieldId) return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
@@ -3572,7 +3625,7 @@ function useFmrResultSummary() {
     responseFieldResourcesFromManifest(manifestPayload).length ||
     responseModel.points.filter((point) => point.fieldId).length;
   const modalFieldCount = spectrumModel.points.filter(
-    (point) => point.modeFieldId,
+    (point) => eigenModeFieldAvailable(point),
   ).length;
   const modalResidualCount = spectrumModel.points.filter(
     (point) => point.residualNorm != null,
@@ -3692,7 +3745,7 @@ function useFrequencyDomainOverviewSummary() {
     responseFieldResourcesFromManifest(manifestPayload).length ||
     responseModel.points.filter((point) => point.fieldId).length;
   const modalFieldCount = spectrumModel.points.filter(
-    (point) => point.modeFieldId,
+    (point) => eigenModeFieldAvailable(point),
   ).length;
   const frequencyValues = [
     ...spectrumModel.points.map((point) => point.frequencyHz),
@@ -3760,7 +3813,7 @@ function useEigenOverviewSummary() {
   const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const dispersionCapabilities = record(capabilities?.dispersion);
   const modalFieldCount = spectrumModel.points.filter(
-    (point) => point.modeFieldId,
+    (point) => eigenModeFieldAvailable(point),
   ).length;
   const trackedPointCount = branchesModel.branches.reduce(
     (count, branch) => count + branch.points.length,
@@ -3793,7 +3846,7 @@ function useEigenStudySummary() {
   const boundaryCapabilities = record(capabilities?.boundary);
   const eigenmodes = manifest.data?.eigenmodes;
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
-  const modeFieldCount = spectrumModel.points.filter((point) => point.modeFieldId)
+  const modeFieldCount = spectrumModel.points.filter((point) => eigenModeFieldAvailable(point))
     .length;
 
   return {
@@ -4033,7 +4086,7 @@ function useFrequencyDomainProvenanceSummary() {
   const responseFieldCount = responseFieldResourcesFromManifest(manifestPayload)
     .length;
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
-  const modeFieldCount = spectrumModel.points.filter((point) => point.modeFieldId)
+  const modeFieldCount = spectrumModel.points.filter((point) => eigenModeFieldAvailable(point))
     .length;
 
   return {
@@ -4116,7 +4169,7 @@ function useFrequencyDomainDispersionSummary() {
     floquetGate: `modal ${capabilityStatus(boundaryCapabilities?.floquet_modal)}; response ${capabilityStatus(boundaryCapabilities?.floquet_response)}`,
     frequencyRange: formatFrequencyRange(frequencies),
     kPathSpan: `${formatNumberRange(pathValues)} rad/m`,
-    modalOverlays: `${spectrumModel.points.filter((point) => point.modeFieldId).length} mode field(s) available from modal spectrum`,
+    modalOverlays: `${spectrumModel.points.filter((point) => eigenModeFieldAvailable(point)).length} mode field(s) available from modal spectrum`,
     pathLabels: pathMetadata.labels,
     pathMetadataArtifact: pathMetadata.artifact,
     pathSampling: pathMetadata.sampling,
@@ -4278,7 +4331,7 @@ function useEigenDiagnosticsSummary() {
     (point) => point.residualNorm != null,
   ).length;
   const fieldOverlayCount = spectrumModel.points.filter(
-    (point) => point.modeFieldId,
+    (point) => eigenModeFieldAvailable(point),
   ).length;
   const modalDiagnostics = eigenDiagnosticTransportSummary(eigenDiagnostics.data);
 
@@ -4392,7 +4445,7 @@ function useEigenSpectrumSummary() {
     (point) => point.residualNorm != null,
   ).length;
   const fieldOverlayCount = spectrumModel.points.filter(
-    (point) => point.modeFieldId,
+    (point) => eigenModeFieldAvailable(point),
   ).length;
   const primaryMode = spectrumModel.points[0] ?? null;
   const payload = record(spectrum.data?.payload);
@@ -4544,10 +4597,10 @@ function useEigenModesSummary() {
   const visualizationCapabilities = record(capabilities?.visualization);
   const modeCount = spectrumModel.points.length;
   const overlayReadyCount = spectrumModel.points.filter(
-    (point) => point.modeFieldId,
+    (point) => eigenModeFieldAvailable(point),
   ).length;
   const firstSelectableMode =
-    spectrumModel.points.find((point) => point.modeFieldId) ??
+    spectrumModel.points.find((point) => eigenModeFieldAvailable(point)) ??
     spectrumModel.points[0] ??
     null;
 
@@ -4582,7 +4635,7 @@ function useFrequencyDomainExportsSummary() {
     responseFieldResourcesFromManifest(manifestPayload).length ||
     responseModel.points.filter((point) => point.fieldId).length;
   const modalFieldCount = spectrumModel.points.filter(
-    (point) => point.modeFieldId,
+    (point) => eigenModeFieldAvailable(point),
   ).length;
   const readyArtifacts = [
     manifest.data?.result_manifest?.artifact_path,
@@ -4655,7 +4708,7 @@ function useCalculationModesSummary() {
     modalEvidence:
       spectrumModel.points.length > 0
         ? `${spectrumModel.points.length} mode(s), ${
-            spectrumModel.points.filter((point) => point.modeFieldId).length
+            spectrumModel.points.filter((point) => eigenModeFieldAvailable(point)).length
           } field-ready`
         : "no modal spectrum loaded",
     modalWorkflows: modalRows.map((row) => row.mode).join(", "),
@@ -5225,7 +5278,7 @@ function useEigenSampleJobSummary() {
     branchesModel,
   );
   const eigenmodes = manifest.data?.eigenmodes;
-  const modeFieldCount = spectrumModel.points.filter((point) => point.modeFieldId)
+  const modeFieldCount = spectrumModel.points.filter((point) => eigenModeFieldAvailable(point))
     .length;
   const trackedPointCount = branchesModel.branches.reduce(
     (count, branch) => count + branch.points.length,
@@ -5430,7 +5483,7 @@ function useFrequencyDomainVisualizationDiagnosticSummary() {
   const responseFieldCount =
     responseFieldResourcesFromManifest(manifestPayload).length ||
     responseModel.points.filter((point) => point.fieldId).length;
-  const modeFieldCount = spectrumModel.points.filter((point) => point.modeFieldId)
+  const modeFieldCount = spectrumModel.points.filter((point) => eigenModeFieldAvailable(point))
     .length;
 
   return {

@@ -154,6 +154,15 @@ payload żądanego eksportu jest błędem writera, nie zerowym wektorem zastępc
 referuje Cartesian complex payload; sam tangent-local vector bez rekonstrukcji
 `global_xyz` nie jest poprawnym `mode_field_id` do wizualizacji.
 
+W artefaktach modalnych namespace identyfikatora odzwierciedla rodzaj osi:
+`bias-field-sample-####` jest zarezerwowany dla planu z jawnym
+`bias_field_samples`, `k-path-sample-####` oznacza punkt rozwiniętej ścieżki
+`KSamplingIR::Path`, a `k-sample-####` pojedynczy wybór `KSamplingIR::Single`
+(także dla niezerowego k). Klient traktuje identyfikator jako nieprzezroczysty
+i korzysta z `k_vector`, `path_s` oraz `external_field_a_per_m` do prezentacji;
+punkt Γ na ścieżce nie może być utożsamiany z próbką sweepu pola wyłącznie na
+podstawie zerowego wektora k.
+
 Każdy zapisany mode field musi ponadto nieść niezmienną
 `source_mesh_identity`: niepusty `mesh_id`, pełny lowercase
 `topology_fingerprint=sha256:<64 hex>`, opcjonalne generation ID i revision,
@@ -678,6 +687,12 @@ damping_rate_hz = frequency_imag_hz
 linewidth_fwhm_hz = 2 * frequency_imag_hz
 ```
 
+An illustrative modal Lorentzian uses `damping_rate_hz` as HWHM, not
+half of that rate. Frequencies and HWHM are evaluated in Hz before conversion
+to a Hz/kHz/MHz/GHz display axis. Unknown display units are unsupported.
+Normalized illustrative weights do not constitute measured FMR/BLS intensity
+or a forced response without drive/detector residues.
+
 A damped `exp_i_omega_t` mode must not publish a negative
 `frequency_imag_hz`. If a solver uses `exp(-i omega t)`, the artifact must
 state that phasor convention and keep the sign mapping self-consistent.
@@ -717,7 +732,18 @@ Required fields:
 - `tracking_score_source`,
 - `modal_overlap_available`,
 - optional `modal_overlap_unavailable_reason`,
-- `branches[]`.
+- `branches[]`,
+- `diagnostics`.
+
+The diagnostics summary may publish an assignment-ambiguity metric as the
+three fields `ambiguous_assignment_count`,
+`ambiguous_assignment_count_available`, and
+`ambiguous_assignment_count_unavailable_reason`. When present, availability is
+authoritative: a computed metric has a non-negative integer count, `true`
+availability, and no unavailable reason. An uncomputed metric has JSON `null`
+for the count, `false` availability, and a non-empty reason. A numeric zero
+must never stand in for a metric that was not computed. Spectrum and branch
+diagnostic summaries use the same rule.
 
 Each branch must include:
 
@@ -750,6 +776,20 @@ tracking from branch continuity alone.
 When `modal_overlap_available = true`, `modal_overlap_unavailable_reason` must
 be absent, `null`, or empty on summaries and branch points.
 
+`tracking_score_source` records the metric actually used for each tracked
+point. `modal_overlap_weighted_score` means an FE mass-weighted vector overlap
+was computed with compatible node weights. `modal_overlap_unweighted_score`
+means both vectors were compared with the Euclidean complex-vector metric
+because neither side supplied node weights. `modal_subspace_transport_score`
+means a frequency-degenerate group was transported with the FE mass-weighted
+principal-angle metric; it has no scalar `overlap_prev`. A point with neither a
+usable overlap nor a mass-weighted subspace transport must report
+`frequency_score_fallback` or `modal_overlap_unavailable`, as applicable.
+Summary values may be `mixed_modal_tracking_methods` when more than one modal
+metric appears, or `mixed_modal_overlap_and_frequency_fallback` when modal
+tracking and frequency fallback both appear. Seed points do not contribute to
+the summary method.
+
 For the production nonzero-k modal k-path acceptance gate
 (`--require-production-modal-k-path`), branch tracking is stricter: every
 non-seed branch point must avoid `frequency_score_fallback`, the branch summary
@@ -759,6 +799,9 @@ report `modal_overlap_available = true` and
 summary sources are not production acceptance evidence. `branches.v2.json` must report
 `tracking_method = "overlap_hungarian"`, and the artifact must include at least
 one `tracking_score_source = "modal_overlap_weighted_score"` branch point.
+Here “weighted” specifically means the FE mass metric; unweighted vector
+overlap and subspace transport remain useful reference tracking evidence but
+do not satisfy this scalar production gate.
 `branches.overlap_floor`, `branches.diagnostics.min_overlap`, and non-seed
 `overlap_prev` / `tracking_confidence` values must be finite values in
 `[0, 1]`. Accepted modal-overlap branch points must not fall below the declared
@@ -784,8 +827,24 @@ hand off to mode-field resources.
 The CSV header must include:
 
 ```text
-sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id
+sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id
 ```
+
+The current FEM path writer publishes `sample_id` in each spectrum sample and
+CSV row, and publishes `sample_id` plus `mode_id` in each branch point. The
+CSV and branch IDs must match the spectrum sample and the stable mode identity
+`sample-<sample_index padded to four digits>/mode-<raw_mode_index padded to
+four digits>`. Production modal k-path validation requires these identity
+columns; legacy artifacts may omit them, but any identity they do publish is
+validated against the spectrum rather than regenerated by a consumer.
+
+`mode_field_available` is the authoritative per-mode field availability bit.
+When it is `true`, the row must include the matching `mode_field_id` and
+`mode_field_resource_key`. When it is `false`, the stable `mode_field_id` may
+remain for identity, but the resource key must be empty. Spectrum and branch
+JSON use the same boolean and encode an unavailable resource key as `null`.
+Legacy artifacts without this boolean infer availability from a published
+resource key, never from an ID alone.
 
 For `KSamplingIR::Path`, public sample count and `path_s_rad_per_m` must follow
 the same path expansion rule used by the runner. Open paths and closed paths
@@ -797,9 +856,26 @@ the final CSV sample therefore has the first control point k-vector at the
 total closed-loop arclength.
 
 The eigen artifact validator treats the identity and numerical columns listed
-above as required. The legacy `mode_field_resource_key` column is optional;
-when present for a mode with a field, its value must match the canonical
-legacy route for that field ID. New direct writers omit that column.
+above as required for current FEM writer output and production modal k-path
+gates. Legacy CSV may omit the triplet `sample_id`, `mode_id`, and
+`mode_field_available` together; a partial triplet is rejected.
+The legacy `mode_field_resource_key` column is optional. When present for an
+available field, it must match the canonical legacy route for that field ID.
+New direct writers omit transport routes; the owning API dataset projects them
+from durable field identities without mutating the hashed artifact payload.
+
+**Authoritative explicit mode sample**
+
+An explicit sample selects only
+`eigen/modes/sample_XXXX/mode_YYYY.json` in the active artifact root.
+`analysis/eigenmodes/modes/{mode_id}` must not replace an explicit `sample_index`
+with the legacy `eigen/modes/mode_YYYY.json` path. Missing artifacts remain
+not-found; read and parse errors are preserved. Only requests without
+`sample_index` select the legacy path. The positional
+`analysis/eigen/modes/{sample_index}/{mode_index}` route follows the same rule.
+The API validates the request session context after the artifact read so that
+an old session cannot publish its result into a new workspace.
+
 Each public mode key `(sample_index, raw_mode_index)` published in
 `eigen/spectrum.v2.json` must appear exactly once in `dispersion.csv`.
 `path_s_rad_per_m`, `kx_rad_per_m`, `ky_rad_per_m`, `kz_rad_per_m`, and
@@ -854,13 +930,16 @@ diagnostic as unavailable.
 `overlap_score` is a required column for branch-tracking quality handoff, but
 its value may be empty for seed points or rows whose tracking score source does
 not have an overlap value. Rows with
-`tracking_score_source = "modal_overlap_weighted_score"` must publish a finite
-`overlap_score` in `[0, 1]`; any non-empty `overlap_score` value must also stay
-inside `[0, 1]`. When `eigen/branches.v2.json` is present, a modal-overlap CSV
-row's `overlap_score` must match the matching branch point's `overlap_prev` for
-the same `(sample_index, raw_mode_index)`.
+`tracking_score_source = "modal_overlap_weighted_score"` or
+`"modal_overlap_unweighted_score"` must publish a finite `overlap_score` in
+`[0, 1]`; any non-empty `overlap_score` value must also stay inside `[0, 1]`.
+When `eigen/branches.v2.json` is present, a scalar modal-overlap CSV row's
+`overlap_score` must match the matching branch point's `overlap_prev` for the
+same `(sample_index, raw_mode_index)`. Subspace-transport points use
+`modal_subspace_transport_score` and leave scalar overlap fields empty.
 `tracking_score_source` must identify whether the row is a seed point,
-modal-overlap-tracked point, or frequency-fallback point. When
+mass-weighted overlap, unweighted overlap, mass-weighted subspace transport,
+frequency-fallback point, or has unavailable tracking provenance. When
 `eigen/branches.v2.json` is present, the CSV `tracking_score_source` must match
 the branch point with the same `(sample_index, raw_mode_index)`.
 `mode_field_id` must match the selected mode payload when a mode field is
@@ -883,11 +962,13 @@ the DE and BV paths when both scenarios need a `k=0` anchor, so each published
 CSV row has one unambiguous validation geometry.
 Writers must derive those analytic columns from the declared DE/BV validation
 intent and the run's material/bias/reference context, not from the solver-model
-name alone. A future production CPU/GPU modal solver that carries the same
-`thin_film_de_bv_low_k` validation intent must therefore publish the same
-analytic reference and relative-error columns; the current
-`reference_thin_film_de_bv_kalinikos_n0` adapter is only one producer of that
-contract.
+name alone. A production CPU/GPU modal solver that carries the same
+`thin_film_de_bv_low_k` validation intent therefore publishes the numeric
+branch together with the independent analytic reference and relative-error
+columns. The standalone
+`scripts/generate_comsol_analytic_reference.py` command is the explicit
+reference-solver route; validation metadata must never select that model in the
+FEM execution path.
 The shared artifact plotter
 `scripts/plot_fem_frequency_domain_eigen_artifacts.py --dispersion-png` must
 use the same columns when present: numerical solver points remain the primary
@@ -928,12 +1009,14 @@ narrow one-dimensional film sweeps in the two standard geometries:
   magnetization;
 - backward-volume (BV): in-plane `k` parallel to the equilibrium magnetization.
 
-The default target range is `|k| <= 2e6..3e6 rad/m` (`2..3 1/um`) with a
-low-GHz modal/frequency window such as `0..5e9 Hz`. Accepted production bundles
-must record enough material, geometry, bias-field, demag-model, and boundary
-provenance for validators to compare the published branch against the applicable
-analytic DE/BV dispersion. Broader k-direction scans may be added as stress or
-coverage tests, but they are not the primary scientific acceptance path.
+The low-k preset uses `|k| <= 2e6..3e6 rad/m` (`2..3 1/um`) with a low-GHz
+modal/frequency window such as `0..5e9 Hz`. These values are a convenient
+default for the slab oracle, not a universal planner limit. Accepted bundles
+must record enough material, geometry, bias-field, demag-model, boundary, and
+model-applicability provenance for validators to compare the published branch
+against the applicable analytic DE/BV dispersion. Broader k-direction scans
+may be added as stress or coverage tests, but they are not the primary
+scientific acceptance path.
 Regression tests should follow the same shape: separate DE and BV fixtures,
 sample only the documented low-k range needed for the analytic comparison, and
 use a modal/frequency window no wider than the low-GHz acceptance band by
@@ -947,19 +1030,21 @@ this acceptance shape. It requires
 `kind = "thin_film_de_bv_low_k"`,
 `analytic_model = "kalinikos_slab_n0"`, `film_thickness_m`,
 `equilibrium_magnetization`, `film_normal`, `frequency_window_hz`,
-`max_k_rad_per_m <= 3e6`, and scenario entries for both `damon_eshbach` and
-`backward_volume`. Each scenario names the `branch_id` and `sample_indices` to
-check; validators reject out-of-range k, out-of-plane k, wrong DE/BV
-orientation, windows above 5 GHz, missing scenarios, and branch frequencies
-whose relative error exceeds the declared tolerance.
+finite positive `max_k_rad_per_m`, and scenario entries for both
+`damon_eshbach` and `backward_volume`. Each scenario names the `branch_id` and
+`sample_indices` to check; validators reject out-of-range k, out-of-plane k,
+wrong DE/BV orientation, samples outside the declared frequency window,
+missing scenarios, material or bias configurations outside the slab model's
+applicability, and branch frequencies whose relative error exceeds the
+declared tolerance.
 Runtime-produced bundles obtain this validation block from authored
 `problem_meta.runtime_metadata.dispersion_validation`; Python scripts should set
 it with `study.dispersion_validation(fm.ThinFilmDEBVDispersionValidation(...))`
 or the equivalent flat `fm.dispersion_validation(...)` helper rather than
 hand-writing backend-plan metadata. The FEM eigen planner copies this payload
 into the typed `FemEigenDispersionValidationIR`
-`backend_plan.dispersion_validation` field, rejecting unsupported shape, broad
-k ranges, missing DE/BV scenarios, invalid vectors, or windows above 5 GHz at
+`backend_plan.dispersion_validation` field, rejecting unsupported shape,
+missing DE/BV scenarios, invalid vectors, or non-positive/non-finite ranges at
 planning time. Runtime modal k-path bundles must also mirror the same payload
 in `frequency_domain/manifest.v1.json.validation.dispersion_validation`, so API
 and Control Room consumers can inspect the declared DE/BV analytic acceptance
@@ -970,19 +1055,17 @@ and checks that exact validation intent against the published branch data.
 The same `validation` object must also state where the published branch
 frequencies came from:
 
-- `dispersion_frequency_source = "analytic_reference_model"` for the current
-  CPU/reference `reference_thin_film_de_bv_kalinikos_n0` slice;
-- `dispersion_reference_model = "kalinikos_slab_n0"` for that analytic
-  reference slice;
-- `dynamic_demag_operator_source =
-  "analytic_thin_film_de_bv_reference_not_fem_demag_k"` for that slice, so
-  validators and Control Room do not mistake it for a numerical FEM
-  dynamic-demag-k operator;
-- future production CPU/GPU modal solvers that emit the same analytic columns
-  must use `dispersion_frequency_source =
-  "numeric_modal_solver_with_analytic_comparison"` and leave
-  `dispersion_reference_model` empty unless they are themselves an analytic
-  reference adapter.
+- `dispersion_frequency_source =
+  "numeric_modal_solver_with_analytic_comparison"` for a FEM branch that was
+  actually solved numerically;
+- `dispersion_reference_model = "kalinikos_slab_n0"` identifies the independent
+  comparison oracle and does not change the FEM solver selection;
+- `dynamic_demag_operator_source = "numeric_modal_solver"` is required for
+  nonzero-k demagnetizing runs, so validators and Control Room can distinguish
+  actual FEM dynamic demag from the separate reference CSV;
+- `analytic_reference_model` and
+  `analytic_thin_film_de_bv_reference_not_fem_demag_k` are legacy values and
+  must not be emitted by the current FEM runner.
 
 ## modes/sample_XXXX/mode_YYYY.json
 
@@ -1059,6 +1142,136 @@ qualified single-precision execution. The array must be compressed by the Zarr
 codec configured for the runtime. If a compatibility `vector.bin` file exists,
 it is a derived/export payload, not the authoritative production store.
 
+### Pełny potencjał modalny na wspólnej siatce
+
+Natywna ścieżka shared-domain publikuje dla wybranych modów plik
+`eigen/mode_fields/sample_XXXX/mode_YYYY/physical_potential.v1.json` oraz
+`potential_full.bin` i `demag_element_full.bin`. Jest to eksport po rekonstrukcji
+`phi_full = C_phi phi_reduced`, z fazami tych samych reprezentantów klas co w
+operatorze natywnym. Potencjał zachowuje wspólną normalizację i fazę modu
+magnetyzacji oraz konwencję czasową `exp(+i omega t)`.
+
+Potencjał ma układ `[source_mesh_node, real|imag]`, jednostkę A i dokładnie
+16 bajtów na węzeł. Pole `h = -grad(phi_full)` ma układ
+`[source_mesh_tet4_element, x|y|z, real|imag]`, jednostkę A/m i 48 bajtów na
+element. Oba pliki używają little-endian float64. Gradient P1 jest stały w
+elemencie; eksport nie uśrednia go pomiędzy elementami ani przez interfejs
+materiałowy. Manifest określa powiązanie z siatką źródłową, operatorem,
+warunkami fazowymi oraz SHA-256 dokładnych bajtów każdego pliku.
+
+Eksport pełnego pola umożliwia porównanie rozwiązań po interpolacji na wspólne
+punkty i uzgodnieniu fazy. Sam zapis plików nie jest dowodem poprawności
+warunków brzegowych, zbieżności siatki ani zgodności z COMSOL.
+
+### Legacy doubled-real Floquet modal potential sidecar
+
+A native nonzero-k Floquet mode using the legacy doubled-real representation
+may publish an algebraic descriptor certificate together with a selected-mode
+coefficient sidecar. The certificate
+is valid only when all of the following scalar fields are present:
+
+```json
+{
+  "floquet_descriptor_certified": true,
+  "floquet_geometric_bc_certified": false,
+  "potential_representation": "doubled_real_split_complex_coefficients",
+  "magnetic_relative_residual": 1.0e-10,
+  "potential_relative_residual": 2.0e-10,
+  "potential_dof_count": 2
+}
+```
+
+`potential_dof_count` is the number of complex coefficients in the native
+doubled real-split vector. It is therefore positive and even (`2*p` for a
+`p`-DOF scalar block); it is not a mesh-node count and does not describe a
+Cartesian field. The two residuals are finite, nonnegative algebraic
+descriptor residuals and must not exceed the native certification tolerance
+of `1e-8`.
+
+For a selected mode, the coefficient vector is persisted at
+`eigen/mode_fields/sample_XXXX/mode_YYYY/potential_real_split.bin`. The binary
+layout is little-endian `f64` pairs in coefficient order:
+
+```text
+[(real_0, imag_0), ..., (real_(N-1), imag_(N-1))]
+```
+
+where `N = potential_dof_count`. Its logical shape is `[N, 2]`, its byte
+length is `N * 16`, `potential_value_count = N * 2`, and metadata must publish
+`potential_payload_encoding = "f64_interleaved_real_imag"` together with
+`potential_binary_layout = "complex_f64_pairs_little_endian"`. The sidecar
+uses exactly the mode normalization and common phase applied to the magnetic
+(`q`) and Cartesian mode payloads; it must not be independently rescaled or
+phase-rotated. Its digest is
+`potential_payload_sha256 = "sha256:<64 lowercase hex>"` over the exact
+sidecar bytes.
+
+The sidecar is a descriptor coefficient payload only. It has no Cartesian
+mesh indexing, node map, geometric boundary certificate, or `mode_field_id`,
+and it must not be placed in `vector_xyz_complex` or used as a rendered mode
+field. `floquet_geometric_bc_certified` remains false even when both residuals
+pass; the certificate does not prove geometric Floquet seams, a full-mesh
+potential reconstruction, or V9 convergence.
+
+Certificate scalar fields may be retained for every certified mode, but the
+binary sidecar and its reference fields are emitted only for modes selected
+for payload export. A selected certified mode requires exactly one sidecar;
+an unselected certified mode has no sidecar reference. The reference path
+must match the `(sample_index, raw_mode_index)` identity, and the digest,
+encoding, layout and value count must match the validated bytes. A mode using
+this legacy representation with `floquet_descriptor_certified = false` must
+not carry its certificate fields or doubled-real coefficient sidecar. This
+fail-closed rule is specific to the legacy representation; the physical
+`complex_coefficients` path below retains diagnostic fields and its
+reconstructed physical-potential payload even when the full certificate is
+false. Inline `potential_vector_real`/`potential_vector_imag` arrays are native
+input only and must never appear in canonical mode metadata.
+
+Legacy coefficient-sidecar writers and readers fail closed on a missing,
+duplicate, malformed, nonfinite, wrong-length or digest-mismatched sidecar; an
+unsupported legacy representation, geometric-BC claim, inconsistent reference
+or non-certified payload is also a publication error. These checks preserve
+the distinction between an algebraically certified descriptor and an
+unqualified geometric/full-mesh result.
+
+### Physical complex-coefficient Floquet certificate
+
+The shared-domain physical path uses
+`potential_representation = "complex_coefficients"`. Its reconstructed scalar
+potential remains in the physical-potential export described above; it is not
+the doubled-real coefficient sidecar. The mode certificate summary carries
+independent reduced/full equation residuals, periodic seam diagnostics, and
+the actual Poisson boundary/gauge provenance. A diagnostic summary is valid
+when certification is false, but it must not be promoted as a certified mode
+or as proof of geometric outer-boundary conditions.
+
+The summary includes the boolean fields
+`floquet_descriptor_certified`, `floquet_full_descriptor_certified`,
+`floquet_seam_frame_certified`, `floquet_gauge_policy_satisfied`, and
+`floquet_geometric_bc_certified`; the representation string;
+`poisson_boundary_kind` (`pure_neumann`, `poisson_robin`, or
+`poisson_dirichlet`); `poisson_gauge_policy` (`require_invertible` or `none`);
+`gauge_constraint_policy = "nonzero_k_poisson_without_mean_constraint"`;
+`gauge_constraint_backward_error = null`; reduced magnetic and potential
+relative residuals; full magnetic and potential relative residuals; and the
+scalar-phase, tangent-frame, Cartesian-magnetic, and equilibrium-pair seam
+residuals. A non-applicable gauge residual is null, never zero. Residual
+diagnostics may be null when unavailable or when the candidate is
+uncertified; a present value must be finite and nonnegative.
+
+The descriptor flags must agree. `floquet_geometric_bc_certified` must remain
+false. The gauge-policy flag must match the actual boundary policy:
+`pure_neumann` requires `require_invertible`, while `poisson_robin` and
+`poisson_dirichlet` require `none`. A true full-descriptor certificate also
+requires the seam-frame and gauge-policy flags and all eight reduced/full
+equation and seam residuals to be finite and no larger than the effective
+certificate tolerance. That tolerance is bounded above by `1e-8` and may be
+tightened by the requested solver residual tolerance. A false full-descriptor
+certificate may retain the diagnostics and physical potential payload, but
+cannot claim algebraic certification. The physical certificate does not
+certify geometric outer-boundary or flux conditions, mesh/airbox convergence,
+or scientific agreement with COMSOL.
+
 `residual_norm` is the legacy alias for `residual_absolute_l2`. The dense
 oracle path must also emit:
 
@@ -1124,7 +1337,7 @@ promoted. Modal eigen manifests must additionally include:
 - optional `artifacts.fmr_kittel_fit_v1_path = "fmr/kittel_fit.v1.json"`
   when the postsolve Kittel comparison is derivable; this artifact remains
   `partial` when statistical covariance is unavailable,
-- `artifacts.equilibrium_artifact_v6_paths[]` and
+- `artifacts.equilibrium_artifact_v7_paths[]` and
   `artifacts.linearization_state_v6_paths[]` for a multi-sample native
   handoff (each path is scoped to `sample_NNNN`),
 - `resources.mode_field_resources[]`,
@@ -1133,6 +1346,189 @@ promoted. Modal eigen manifests must additionally include:
 - `diagnostics.tracking_score_source`,
 - `diagnostics.modal_overlap_available`,
 - optional `diagnostics.modal_overlap_unavailable_reason`.
+
+Native Ku handoffs use `equilibrium_artifact.v8` and `LinearizationState.v7`.
+Their singular manifest keys are `equilibrium_artifact_v8_path` and
+`linearization_state_v7_path`; multi-sample keys are
+`equilibrium_artifact_v8_paths[]` and `linearization_state_v7_paths[]`.
+Kontrakt R4 dodaje tablice `accepted_fem_equilibrium_fields_v1_paths[]`,
+`accepted_fem_equilibrium_fields_v2_paths[]`,
+`linearization_identity_v2_paths[]` oraz
+`linearization_identity_preimage_v1_paths[]`.
+Dodatkowe tablice `certified_fem_equilibrium_fields_v1_paths[]`,
+`certified_fem_equilibrium_fields_v2_paths[]`,
+`recomputed_fem_linearization_certificate_v1_paths[]` oraz
+`recomputed_fem_linearization_certificate_v2_paths[]` zachowują endpoint
+recomputed i certyfikat różnic. Puste tablice nie dowodzą replay; producent
+kontynuacji musi dostarczyć wszystkie payloady przed kwalifikacją R4.
+Wskazują rzeczywiście obecne immutable sidecars w `eigen/metadata/sample_NNNN/`.
+Nowy producer wyznacza coverage z rzeczywistego zbioru
+`eigen/spectrum.v2.json.samples[*].sample_index`; nie wolno zastępować go
+zakresem `0..sample_count` ani największym indeksem. Manifest może dodać
+`artifacts.linearization_identity_sha256_by_sample`, którego klucze są
+indeksami próbek, a wartościami są digesty odczytane i zweryfikowane z
+identity sidecarów. Brak identity/preimage, różny zbiór próbek, mieszana
+rodzina V1/V2, niepełna rodzina certified/recomputed albo niezgodny raw-byte
+digest oznacza `r4_replay.qualification = "NOT_VERIFIED"` i nie może ustawić
+bramki R4 jako gotowej.
+
+Każdy nowy, kompletny pakiet R4 publikuje również surowe bajty planu
+konsumenta w `eigen/metadata/sample_NNNN/consumer_plan_snapshot.v1.json`.
+Są to dokładnie bajty `serde_json::to_vec(FemEigenPlanIR)` użyte do obliczenia
+`linearization_identity.v2.consumer_plan_snapshot_sha256`; sidecar nie ma
+dodatkowej koperty ani alternatywnej kolejności pól. Manifest single-k publikuje
+`artifacts.consumer_plan_snapshot_v1_path` oraz jednoelementową tablicę
+`artifacts.consumer_plan_snapshot_v1_paths[]`, a manifest path publikuje tę
+samą tablicę dla wszystkich rzeczywiście policzonych próbek. Brak próbki,
+dodatkowa próbka, niezgodny raw SHA albo niepoprawny JSON pozostają
+`r4_replay.qualification = "NOT_VERIFIED"`. Historyczne manifesty bez tej
+rodziny zachowują status historyczny i nie są przez to promowane.
+Jeżeli accepted oraz identity/preimage są poprawnie związane, ale rodzina
+certified/recomputed jest niepełna, manifest zachowuje mapę
+`linearization_identity_sha256_by_sample` i publikuje
+`r4_replay.status = "missing_recomputed"` wraz z
+`r4_replay.missing_recomputed_keys[]`; ten dowód identity nie oznacza replay
+payloadu ani kwalifikacji naukowej.
+Konflikt różnych bajtów podpisanych dokumentów pod jedną ścieżką próbki
+jest błędem agregacji; deduplikacja nie wybiera wtedy pierwszego dokumentu.
+Relokacja zachowuje dokładne bajty dokumentu, preimages i source identity;
+selekcja pól modów nie usuwa dowodów stanu równowagi policzonych próbek.
+Jeżeli producer dostarczył zwalidowany sidecar
+`eigen/metadata/sample_NNNN/producer_provenance.v1.json`, manifest publikuje
+`producer_provenance_v1_path` dla pojedynczego sample oraz
+`producer_provenance_v1_paths[]` w kolejności numerycznej `sample_index`.
+Wartość jest oryginalną ścieżką producenta i nie może być rekonstruowana przez
+relokację ani zmianę bajtów sidecara.
+Dla spectrum-only `mode_field_storage_format = "none"`; dokumenty stanu
+nie stanowią payloadów pól modów. Accepted fields są dowodami naukowymi,
+nie dowolnym opaque JSON: wymagają replay obu rodzin V1/V2 oraz związania
+z certificate i identity. Walidacja tych tablic w odbiorniku Python pozostaje
+otwartą bramką pełnego R4; sama obecność list nie kwalifikuje wyniku.
+
+Each pair belongs to the same sample; mixed versions for one sample are invalid.
+Empty legacy path arrays do not declare another handoff. Ku-free writers retain
+`equilibrium_artifact.v7` / `LinearizationState.v6`, their filenames, digest
+preimages and manifest keys. Historical artifacts remain readable in their
+original validation scope; they are not relabelled as canonical Ku evidence.
+
+Both new payloads require `material_identity_kind =
+"canonical_equilibrium_material.v2"`. Their `material_signature` is the existing
+canonical equilibrium material digest and binds native `material_snapshot_id`.
+`material_provenance_signature` is a separate raw MaterialIR digest with mandatory
+`material_provenance_scope = "materialization_plan"`: it identifies the request
+being materialized, not a recovered original relaxation request. Axis sign and
+nonzero scaling may change this raw digest without changing the canonical
+uniaxial material. A provided equilibrium artifact retains its original payload,
+content digest and provenance; the new linearization records the current raw
+request and must match the source canonical identity. Changed Ku or physical axis
+must be rejected. Acceptance certificates, certified fields, mesh/phase binding,
+content digests and equilibrium/state IDs remain mandatory. This migration alone
+does not enable or scientifically qualify the public Ku modal path.
+
+### Kontrakt linearization_identity.v2
+
+Szczegółowy opis naukowy znajduje się w
+docs/physics/r4-linearization-identity-v2.md. Ten artefakt jest addytywnym
+rekordem pochodzenia jednego sample modalnego, a jego obecność nie kwalifikuje
+solvera ani nie zastępuje residualu, zbieżności siatki/airboxu, branch trackingu
+lub dowodu runtime.
+
+Canonical path ma postać
+`eigen/metadata/sample_NNNN/linearization_identity.v2.json`, a jego exact
+preimage jest w
+`eigen/metadata/sample_NNNN/linearization_identity_preimage.v1.json`. Token
+`NNNN` jest minimalną szerokością zgodną z Rust `format!("{index:04}")`:
+`sample_0007` jest poprawne, `sample_00000` jest niepoprawne, a indeks
+`10000` ma ścieżkę `sample_10000`. Manifest publikuje
+tablice artifacts.linearization_identity_v2_paths[] oraz
+artifacts.linearization_identity_preimage_v1_paths[]; kolejność tablic odpowiada
+kolejnym sample_index. Dotyczy to KSamplingIR::Single i każdego punktu
+KSamplingIR::Path. Nie wolno dopisywać brakującego punktu przez symetrię +k/-k.
+
+Identity wiąże następujące grupy pól:
+
+- family: schema_version, sample_index, equilibrium/state/fields/certificate
+  schema pairs;
+- handoff: handoff_schema_version, handoff_content_sha256, source_run_id,
+  source_stage_id i source_stage_kind;
+- source/build: producer_plan_snapshot_sha256,
+  consumer_plan_snapshot_sha256, producer_build_identity,
+  consumer_build_identity, oba source_snapshot_sha256 oraz
+  cross_build_policy=same_source_snapshot_required;
+- geometry/state: source_mesh_topology_sha256,
+  modal_mesh_topology_fingerprint_v3, node_count,
+  equilibrium_content_sha256, equilibrium_artifact_path/digest i
+  linearization_state_path/digest;
+- physical identity: equilibrium_material_signature i preimage,
+  equilibrium_static_physics_signature i preimage oraz
+  equilibrium_boundary_signature i preimage;
+- raw material provenance: material_signature,
+  material_identity_kind, material_provenance_signature/scope/preimage oraz
+  producer_material_provenance_signature/preimage;
+- exact payloads: accepted/certified/recomputed content digests, paths, raw byte
+  digests oraz recomputed_certificate_preimage_json i jego raw digest;
+- own digest: content_sha256.
+
+Rodziny są nieprzenikalne: Ku-free zachowuje equilibrium_artifact.v7,
+LinearizationState.v6, fields/certificate V1 i historyczny raw
+material_signature. Canonical Ku, również jawne Ku=0, wymaga
+equilibrium_artifact.v8, LinearizationState.v7, fields/certificate V2,
+material_identity_kind=canonical_equilibrium_material.v2 i
+material_provenance_scope=materialization_plan. V1 nie może reklamować pól V2,
+a pary V1/V2 nie mogą być mieszane w sample.
+
+Fizyczna sygnatura equilibrium jest oddzielona od raw MaterialIR provenance.
+Damping relaksacji i damping eigen mogą się różnić bez zmiany physical
+material/static/boundary identity; zmiana Ku, canonical axis, statycznego
+materiału lub boundary jest odrzucana. source_mesh_topology_sha256 jest
+topologią źródłowej relaksacji, a modal_mesh_topology_fingerprint_v3 jest
+mieszaną topologią operatora modalnego i nie wolno ich nadpisywać.
+
+content_sha256 identity jest liczony z exact UTF-8 JSON po wyzerowaniu własnego
+content_sha256:
+
+~~~{math}
+p_{\mathrm{id}} =
+\operatorname{JSON}_{\mathrm{serde}}
+\left(I_{\mathrm{v2}}[
+\mathrm{content\_sha256}\leftarrow\text{""}]
+\right),
+\qquad
+D_{\mathrm{id}} =
+\operatorname{SHA256}\left(
+\texttt{linearization\_identity.v2}\Vert\mathtt{0x00}
+\Vert\operatorname{LE}_{64}(|p_{\mathrm{id}}|)
+\Vert p_{\mathrm{id}}
+\right).
+~~~
+
+Exact recomputed-certificate preimage jest przechowywany oddzielnie od jego
+historycznego content digest. Producer publikuje również addytywny
+sample-scoped `linearization_identity_preimage.v1.json` z tablicą
+`artifacts.linearization_identity_preimage_v1_paths[]`. Sidecar ma
+`schema_version = linearization_identity_preimage.v1` oraz pola exact UTF-8
+`identity_preimage_json`, `identity_preimage_sha256` i
+`identity_content_sha256`; jego własny digest nie należy do p_id. Konsument
+porównuje exact preimage, typed semantic equality identity po wyzerowaniu
+`content_sha256` i framed digest. Brak sidecara dla deklarowanego identity jest
+błędem fail-closed. Python replay własnego identity może działać na takim
+artefakcie, lecz pełny R4 i managed runtime nadal mają status NOT VERIFIED.
+
+Odbiornik odrzuca brak payloadu/identity, family mismatch, niezgodny mesh/m0,
+różne source snapshots, różne fizyczne sygnatury, zmienione exact bytes,
+nieznaną politykę, konflikt dokumentów pod jedną ścieżką oraz V2 bez
+canonical kind/provenance. Puste tablice legacy nie deklarują drugiej rodziny.
+
+Nieobecność wszystkich tablic R4 w historycznym manifeście jest stanem
+`r4_replay.status = "historical"` i `qualification = "NOT_VERIFIED"`; pozostaje
+czytelna w dotychczasowym zakresie i nie jest nowym dowodem kwalifikacji
+runtime. Częściowa lub niespójna obecność tablic publikuje przyczynę
+`r4_replay.status = "invalid"`, `missing_identity`, `missing_recomputed` albo
+`missing_accepted`, lecz nie promuje ogólnego manifestu do pełnej kwalifikacji.
+Stan `payload_replay_pending` oznacza wyłącznie poprawne strukturalnie ścieżki
+i exact own-link identity; replay fizycznych pól, residual, siatki i managed
+runtime pozostają osobnymi bramkami.
+
 
 For modal k-path dispersion manifests, `capabilities.dispersion` must publish
 lane-specific status entries for:
@@ -2345,6 +2741,16 @@ Analyze UI must:
   in dispersion inspectors when present, including the analytic model, maximum
   accepted `k`, frequency window, and DE/BV scenario-to-branch mapping,
 - propagate click selection as `{ branchId, sampleIndex, rawModeIndex }`,
+- zachować kompletny skończony wektor z kolumn `kx_rad_per_m`,
+  `ky_rad_per_m`, `kz_rad_per_m` i współrzędną `path_s_rad_per_m` w wyborze
+  punktu dyspersji; wektor klikniętego wiersza ma pierwszeństwo przed
+  kontekstem poprzedniego wyboru,
+- zachować opcjonalne `sample_id` i `mode_id` jako nieprzezroczyste
+  identyfikatory oraz dostarczoną rewizję artefaktu, równowagę i reprezentację;
+  brak tych kolumn w starszym CSV nie upoważnia do wymyślania identyfikatorów,
+- puste opcjonalne komórki liczbowe CSV oznaczają brak danych, nie zero;
+  wiersze bez skończonej częstotliwości/współrzędnej ścieżki lub bez
+  nieujemnych bezpiecznych całkowitych indeksów sample/mode są odrzucane,
 - load mode artifacts by `sample_index` and `raw_mode_index`.
 
 ## API contract
@@ -2358,3 +2764,132 @@ The v2 API must expose:
 
 Missing optional artifacts should produce explicit `404` responses with
 diagnostic messages, not silent empty plots.
+
+
+### Zakres residualu natywnego sparse Floquet
+
+Adapter `floquet_airbox_cpu_schur_slepc` publikuje `eps_q` i `eps_phi` dla
+oryginalnych zredukowanych równań przed eliminacją Schura. `eps_reduced` jest
+ich maksimum (z `eps_gauge`, gdy dla danej polityki istnieje równanie cechowania),
+a nie ogólnym residualem własnym. Przy fizycznym nonzero-k bez więzu średniej
+`eps_gauge` i `gauge_constraint_backward_error` są `null`; brak tego równania
+nie jest residualem równym zero.
+
+Bez certyfikatu pełnego operatora zakres pozostaje
+`reduced_original_blocks_only`: `eps_full` jest `null`,
+`reduced_pencil_certified` może być true, a `certified` i
+`full_descriptor_certified` pozostają false. Po certyfikacji operatora
+`block_residuals.scope` wynosi
+`full_projected_weak_form_and_periodic_seams`; `eps_full` jest maksimum residuali
+pełnych równań magnetycznego i potencjału, a cztery osobne pola w artefakcie
+zachowują residuale szwu fazy skalarnej, ramy stycznej, pola magnetycznego
+kartezjańskiego i pary stanu równowagi. Wtedy
+`residual_relative_l2 = max(eps_reduced, eps_full, cztery residuale szwów)`.
+Certyfikat wymaga zgodnych flag równania, szwów i polityki cechowania oraz
+wszystkich tych residuali nie większych od `certification_tolerance`.
+
+Ten certyfikat dotyczy równań i szwów operatora Floqueta. Sam nie dowodzi
+zbieżności zewnętrznej granicy airboxu, siatki ani zgodności z COMSOL.
+
+### Sonda dynamicznego demagu Floqueta w solve'ach okienkowych
+
+Diagnostyka `floquet_dynamic_demag_operator_probe.v1` sprawdza dla kierunków
+global-y i global-z równanie potencjału zespolonego Blocha oraz zgodność formy
+energii. W solve'ie pojedynczego przesunięcia sonda znajduje się w diagnostyce
+próbki pod `dynamic_demag_operator_probe`. W solve'ie z wieloma podoknami
+częstotliwości każda pozycja `subwindows[]` zawiera własne
+`dynamic_demag_operator_probe`; sonda nie jest właściwością częstotliwości ani
+pojedynczego modu, lecz kontrolą operatora użytego w danym podoknie.
+
+Walidator nonzero-k musi sprawdzić wszystkie podokna: unikalny nieujemny
+`index`, poprawną wersję schematu, `status = "passed"`, jednostki SI,
+residualy potencjału i różnicę energii nie większe od raportowanej tolerancji,
+oraz nieujemną energię z dokładnością tej tolerancji. Brak sondy w choć jednym
+podoknie, nieudana sonda albo niepoprawny rekord blokuje preflight. Nie wolno
+zastępować brakującego rekordu sondą z innego podokna ani podnosić tolerancji
+na podstawie samego residualu solvera własnego.
+
+
+### Integralność certyfikatu Kittel Gamma — 2026-09-30, WIP
+
+`validation/kittel_k0_pbc/points.v1.csv` zachowuje kolumnę
+`max_periodic_seam_mismatch`, ale nieobliczona wartość jest pustą komórką.
+Nie wolno utożsamiać certyfikatu równowagi lub geometrii z certyfikatem
+zespolonego modu. Pełna bramka Kittel wymaga skończonego pomiaru i
+odrzuca pustą komórkę.
+
+`summary.v1.json` publikuje dodatkowe `frequency_comparison_status`,
+`periodic_mode_seam_metrics_complete`, `qualification` i `missing_evidence`.
+Zgodność częstotliwości przy nieobliczonym seam daje `status=partial`,
+`frequency_comparison_status=passed`, `qualification=NOT VERIFIED`.
+Nie jest to dowód periodyczności modu. Konsument nie może zmienić
+partial w sukces na podstawie samej częstotliwości. Obliczenie per-mode
+seam i pełny runtime pozostają otwarte; zgodność formatu nie kwalifikuje
+nowej realizacji solvera.
+
+
+Źródłowy adapter dodatkowo publikuje mode_periodic_seam_measurements
+w solver diagnostics. Definition ID magnetic_cartesian_periodic_seam_max_relative.v1
+oznacza maksimum różnicy XYZ slave/phase-root znormalizowane maksimum
+amplitudy XYZ na fizycznych węzłach magnetycznych. Rekord zawiera
+source_mesh_topology_sha256, sample_index, raw_mode_index, frequency_hz,
+k_vector, dodatni checked_slave_node_count i max_relative_mismatch.
+Kittel używa tylko pojedynczego zgodnego rekordu powiązanego z metryką
+consistent P1 modu. Zakres magnetic_cartesian_field_only nie obejmuje phi.
+Brak rekordu, sprzeczne identity lub duplikat nadal oznaczają brak pomiaru.
+Skończony pomiar nie ustanawia kwalifikacji; próg akceptacji, phi i runtime
+wymagają osobnych bramek. Źródła WIP, NOT VERIFIED.
+
+## Certyfikowane pola stanu równowagi z Ku
+
+`CertifiedFemEquilibriumFields.v1` zachowuje istniejące bytes i namespace
+SHA-256 dla modeli bez Ku. `v2` wymaga `h_anisotropy_a_per_m`, osobnego
+namespace i sumy `((H_ex + H_demag) + H_anisotropy) + H_ext` zgodnej z
+producentem FEM CPU. Pole anizotropii dotyczy pierwszego przyrostu stałego
+jednoosiowego Ku; nie implikuje obsługi pozostałych interakcji.
+V1 nie może nieść widoku anizotropii; v2 nie może go pomijać. Obie wersje
+wymagają kompletnych skończonych pól, pomierzonego H_eff, potencjału i
+zgodnego digestu. Wersja i obecność Ku w materiale muszą się zgadzać.
+Kolejność danych digestu v2: H_ex, H_demag, H_anisotropy, H_ext, H_eff, phi;
+liczniki u64 little-endian, wartości f64 IEEE754 little-endian. V1 nie zmienia
+kolejności ani kodowania. Certyfikat refresh v2 dodaje porównanie H_anisotropy
+oraz wiąże digest pól przyjętych i ponownie obliczonych.
+Pliki `equilibrium/certified_fem_equilibrium_fields.v2.json` oraz
+`equilibrium/recomputed_fem_linearization_certificate.v2.json` są publikowane
+wyłącznie z payloadem v2; ścieżki v1 pozostają dla danych bez Ku.
+Wersjonowanie nie zmienia publicznej legalności ani kwalifikacji CPU/GPU.
+
+Wspólny selector material-version jest używany przez finalizację, bias sweep
+oraz orchestrator etapów. Jawne null w opcjonalnym widoku jest odrzucane;
+brak klucza v1 zachowuje None. Zakres źródła sprawdzany jest przed capture
+certyfikatu. Digest accepted-fields jest ścisłym opaque dowodem producenta;
+nie zastępuje niezależnego sprawdzenia dostarczonego payloadu recomputed.
+
+
+### Dowód przypisania krawędzi trackingu (addytywne rozszerzenie v2)
+
+`branches.v2.json` i zgodny alias `branches.json` mogą zawierać w punkcie
+`tracking_edge`: politykę `ModeTrackingIR`, rzeczywiste `score_source`,
+metrykę, transition, previous_sample_index, skipped_sample_count i subspace.
+Rekord subspace zawiera rank, principal_cosines/minimum, branch_ids i raw
+mode indices obu próbek. Lokalne previous/current_cluster są indeksami
+pomocniczymi; tożsamość wyznaczają próbki i jawne ID modów, nie te indeksy.
+Null oznacza brak historycznego dowodu, a nie udany transport.
+Nowy punkt `new_branch` ma `modal_overlap_unavailable` i nie spełnia
+produkcyjnej bramki ciągłości. Minimum kątów głównych nie zastępuje
+`overlap_prev`. Polityka ogólnego writera pochodzi wyłącznie z zgodnych
+rekordów; `tracking_policy_availability` wynosi complete albo missing_or_mixed.
+Pola method/floor są null w drugim przypadku. Uszkodzone obecne provenance
+jest błędem importu. Dotychczasowa skalarna bramka produkcyjna pozostaje bez zmian.
+
+Niezależny walidator sprawdza obecne rekordy: policy method/floor/window/gap,
+source/metric/transition, previous_sample_index i previous_raw_mode_index,
+rank/ID/principal cosines oraz zgodność obu warstw metadanych polityki.
+Sprawdzenie kontraktu nie jest numerycznym replay pól. Output selection
+może pominąć poprzednik, więc walidator nie wymyśla nowego poprzednika
+z ostatniego opublikowanego punktu.
+Jeśli istnieje `branches.json`, jego punkty, solver_model i wspólna
+polityka muszą być zgodne z v2; różnica schema/diagnostic envelope jest
+dozwolona dla zgodności historycznej. Obecne tracking_edge wymagają jawnego
+tracking_policy_availability. Predecessor nie może pomijać zachowanego
+punktu tej samej gałęzi.

@@ -60,6 +60,7 @@ from fullmag.model.physics_scope import build_physics_graph
 from fullmag.model.parameters import ParameterLibrary
 from fullmag.model.outputs import (
     SaveDispersion,
+    SaveEigenDiagnostics,
     SaveField,
     SaveMode,
     SaveScalar,
@@ -1550,6 +1551,160 @@ class FdmPrecisionPolicy(str, Enum):
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ParallelExecutionPolicy:
+    """Authoring policy for admitting independent work items.
+
+    The CPU and memory percentages are soft admission targets inside the
+    effective process/container allocation.  They do not replace the native
+    runtime's hard resource limits or its existing Rayon pool.
+    """
+
+    mode: str = "serial"
+    max_cpu_percent: float = 90.0
+    max_memory_percent: float = 80.0
+    memory_reserve_bytes: int = 1_073_741_824
+    max_workers: int | None = None
+    threads_per_worker: int = 1
+
+    _U32_MAX = 4_294_967_295
+    _U64_MAX = 18_446_744_073_709_551_615
+
+    def __post_init__(self) -> None:
+        mode = str(self.mode).strip().lower()
+        if mode not in {"serial", "adaptive"}:
+            raise ValueError("parallel execution mode must be 'serial' or 'adaptive'")
+        object.__setattr__(self, "mode", mode)
+
+        if isinstance(self.max_cpu_percent, bool) or not isinstance(
+            self.max_cpu_percent, (int, float)
+        ):
+            raise ValueError("parallel_execution.max_cpu_percent must be numeric")
+        if isinstance(self.max_memory_percent, bool) or not isinstance(
+            self.max_memory_percent, (int, float)
+        ):
+            raise ValueError("parallel_execution.max_memory_percent must be numeric")
+        max_cpu_percent = float(self.max_cpu_percent)
+        max_memory_percent = float(self.max_memory_percent)
+        for name, value in (
+            ("max_cpu_percent", max_cpu_percent),
+            ("max_memory_percent", max_memory_percent),
+        ):
+            if not math.isfinite(value) or value <= 0.0 or value > 100.0:
+                raise ValueError(
+                    f"parallel_execution.{name} must be finite and in (0, 100]"
+                )
+        object.__setattr__(self, "max_cpu_percent", max_cpu_percent)
+        object.__setattr__(self, "max_memory_percent", max_memory_percent)
+
+        memory_reserve_bytes = self._integral_value(
+            self.memory_reserve_bytes,
+            "memory_reserve_bytes",
+            self._U64_MAX,
+        )
+        object.__setattr__(self, "memory_reserve_bytes", memory_reserve_bytes)
+
+        max_workers = None if self.max_workers is None else self._integral_value(
+            self.max_workers,
+            "max_workers",
+            self._U32_MAX,
+        )
+        if max_workers is not None and max_workers < 1:
+            raise ValueError("parallel_execution.max_workers must be >= 1")
+        object.__setattr__(self, "max_workers", max_workers)
+
+        threads_per_worker = self._integral_value(
+            self.threads_per_worker,
+            "threads_per_worker",
+            self._U32_MAX,
+        )
+        if threads_per_worker < 1:
+            raise ValueError("parallel_execution.threads_per_worker must be >= 1")
+        object.__setattr__(self, "threads_per_worker", threads_per_worker)
+
+    @staticmethod
+    def _integral_value(value: object, name: str, maximum: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"parallel_execution.{name} must be an integer")
+        if value < 0 or value > maximum:
+            raise ValueError(
+                f"parallel_execution.{name} must be in the range [0, {maximum}]"
+            )
+        return value
+
+    @classmethod
+    def from_ir(
+        cls,
+        value: "ParallelExecutionPolicy | Mapping[str, object] | None",
+    ) -> "ParallelExecutionPolicy":
+        if value is None:
+            return cls()
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, Mapping):
+            raise TypeError("parallel_execution must be a mapping or ParallelExecutionPolicy")
+        known = {
+            "mode",
+            "max_cpu_percent",
+            "max_memory_percent",
+            "memory_reserve_bytes",
+            "max_workers",
+            "threads_per_worker",
+        }
+        unknown = sorted(str(key) for key in set(value) - known)
+        if unknown:
+            raise ValueError(
+                "parallel_execution contains unknown fields: " + ", ".join(unknown)
+            )
+        defaults = cls()
+        return cls(
+            mode=value.get("mode", defaults.mode),
+            max_cpu_percent=value.get("max_cpu_percent", defaults.max_cpu_percent),
+            max_memory_percent=value.get(
+                "max_memory_percent", defaults.max_memory_percent
+            ),
+            memory_reserve_bytes=value.get(
+                "memory_reserve_bytes", defaults.memory_reserve_bytes
+            ),
+            max_workers=value.get("max_workers", defaults.max_workers),
+            threads_per_worker=value.get(
+                "threads_per_worker", defaults.threads_per_worker
+            ),
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "mode": self.mode,
+            "max_cpu_percent": self.max_cpu_percent,
+            "max_memory_percent": self.max_memory_percent,
+            "memory_reserve_bytes": self.memory_reserve_bytes,
+            "max_workers": self.max_workers,
+            "threads_per_worker": self.threads_per_worker,
+        }
+
+    def validate_for_runtime(self, backend: object, device: object) -> None:
+        """Reject adaptive scheduling outside its qualified FEM CPU lane.
+
+        The native runner additionally checks that the study is an independent
+        eigen k-sweep.  The authoring layers can already fail closed on the
+        requested backend and device, so an adaptive request is never silently
+        ignored by an FDM or GPU realization.
+        """
+        if self.mode != "adaptive":
+            return
+        backend_value = getattr(backend, "value", backend)
+        device_value = getattr(device, "value", device)
+        if (
+            str(backend_value).strip().lower() != "fem"
+            or str(device_value).strip().lower() != "cpu"
+        ):
+            raise ValueError(
+                "unsupported parallel_execution realization: adaptive mode "
+                "requires requested_backend='fem' and requested_device='cpu' "
+                "for independent eigen k execution"
+            )
+
+
 class DeviceTarget(str, Enum):
     AUTO = "auto"
     CPU = "cpu"
@@ -1567,6 +1722,9 @@ class RuntimeSelection:
     execution_mode: ExecutionMode = ExecutionMode.STRICT
     execution_precision: ExecutionPrecision = ExecutionPrecision.DOUBLE
     fdm_precision_policy: FdmPrecisionPolicy | None = None
+    parallel_execution: ParallelExecutionPolicy = field(
+        default_factory=ParallelExecutionPolicy
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "backend_target", BackendTarget(self.backend_target))
@@ -1580,6 +1738,15 @@ class RuntimeSelection:
                 raise ValueError(
                     "fdm_precision_policy conflicts with execution_precision"
                 )
+        object.__setattr__(
+            self,
+            "parallel_execution",
+            ParallelExecutionPolicy.from_ir(self.parallel_execution),
+        )
+        self.parallel_execution.validate_for_runtime(
+            self.backend_target,
+            self.device_target,
+        )
         if self.gpu_count < 0:
             raise ValueError("gpu_count must be >= 0")
         if self.gpu_count > 1:
@@ -1613,6 +1780,7 @@ class RuntimeSelection:
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
             fdm_precision_policy=self.fdm_precision_policy,
+            parallel_execution=self.parallel_execution,
         )
 
     def device(self, index: int) -> "RuntimeSelection":
@@ -1627,6 +1795,7 @@ class RuntimeSelection:
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
             fdm_precision_policy=self.fdm_precision_policy,
+            parallel_execution=self.parallel_execution,
         )
 
     def cpu(self) -> "RuntimeSelection":
@@ -1639,6 +1808,7 @@ class RuntimeSelection:
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
             fdm_precision_policy=self.fdm_precision_policy,
+            parallel_execution=self.parallel_execution,
         )
 
     def cuda(self, gpu_count: int = 1) -> "RuntimeSelection":
@@ -1651,6 +1821,7 @@ class RuntimeSelection:
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
             fdm_precision_policy=self.fdm_precision_policy,
+            parallel_execution=self.parallel_execution,
         )
 
     def gpu(self, gpu_count: int = 1) -> "RuntimeSelection":
@@ -1673,6 +1844,7 @@ class RuntimeSelection:
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
             fdm_precision_policy=self.fdm_precision_policy,
+            parallel_execution=self.parallel_execution,
         )
 
     def mode(self, execution_mode: ExecutionMode | str) -> "RuntimeSelection":
@@ -1688,6 +1860,7 @@ class RuntimeSelection:
             execution_mode=ExecutionMode(normalized_mode),
             execution_precision=self.execution_precision,
             fdm_precision_policy=self.fdm_precision_policy,
+            parallel_execution=self.parallel_execution,
         )
 
     def precision(self, execution_precision: ExecutionPrecision | str) -> "RuntimeSelection":
@@ -1704,6 +1877,7 @@ class RuntimeSelection:
             cpu_threads=self.cpu_threads,
             execution_mode=self.execution_mode,
             execution_precision=ExecutionPrecision(normalized_precision),
+            parallel_execution=self.parallel_execution,
         )
 
     def precision_policy(
@@ -1719,6 +1893,24 @@ class RuntimeSelection:
             execution_mode=self.execution_mode,
             execution_precision=resolved_policy.execution_precision,
             fdm_precision_policy=resolved_policy,
+            parallel_execution=self.parallel_execution,
+        )
+
+    def with_parallel_execution(
+        self,
+        policy: ParallelExecutionPolicy | Mapping[str, object],
+    ) -> "RuntimeSelection":
+        """Return a copy with the independent-work admission policy changed."""
+        return RuntimeSelection(
+            backend_target=self.backend_target,
+            device_target=self.device_target,
+            gpu_count=self.gpu_count,
+            device_index=self.device_index,
+            cpu_threads=self.cpu_threads,
+            execution_mode=self.execution_mode,
+            execution_precision=self.execution_precision,
+            fdm_precision_policy=self.fdm_precision_policy,
+            parallel_execution=ParallelExecutionPolicy.from_ir(policy),
         )
 
     def resolved(
@@ -1751,6 +1943,7 @@ class RuntimeSelection:
         }
         if self.fdm_precision_policy is not None:
             result["fdm_precision_policy"] = self.fdm_precision_policy.to_ir()
+        result["parallel_execution"] = self.parallel_execution.to_ir()
         return result
 
 
@@ -1760,7 +1953,7 @@ backend = RuntimeSelection()
 EnergyTerm = Exchange | Demag | InterfacialDMI | RotatedInterfacialDMI | BulkDMI | Zeeman | StaticFieldMap | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | OerstedField | CubicAnisotropy | ThermalNoise
 CurrentModule = AntennaFieldSource | CurrentTransport
 LegacyOutputSpec = SaveField | SaveScalar | Snapshot
-OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion
+OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion | SaveEigenDiagnostics
 
 
 def _material_has_anisotropy(material: Material) -> bool:
@@ -2704,6 +2897,8 @@ class Problem:
         effective_asset_cache = asset_cache if asset_cache is not None else self.geometry_asset_cache
         runtime_metadata = dict(self.runtime_metadata)
         runtime_metadata["runtime_selection"] = runtime.to_runtime_metadata()
+        if isinstance(self.study, Eigenmodes) and self.study.solver_policy is not None:
+            runtime_metadata["modal_solver_policy"] = self.study.solver_policy.to_ir()
         effective_study_pipeline = _normalize_study_pipeline_value(study_pipeline)
         if effective_study_pipeline is None:
             effective_study_pipeline = _normalize_study_pipeline_value(

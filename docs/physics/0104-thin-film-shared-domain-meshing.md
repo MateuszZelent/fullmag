@@ -57,6 +57,43 @@ through-thickness layers gwarantują wyłącznie liczbę warstw 3D i ich płaszc
 **nie** gwarantują structured in-plane meshing. Wspólne równania, znaki, jednostki
 i obserwable FEM CPU/GPU pozostają backend-neutral.
 
+(thin-film-scoped-lower-bound-contract)=
+### Zakres dolnych ograniczeń — kontrakt naprawy 2026-10-07
+
+Dolne ograniczenie obiektu obowiązuje w jego rzeczywistej domenie geometrycznej,
+a dolne ograniczenie regionu w przecięciu geometrycznego rdzenia regionu i domeny
+jego właściciela. W rdzeniu oba ograniczenia są eligible i równanie
+`eq-thin-film-size-composition` zachowuje większe z nich. Poza własnym zakresem
+wkład regionalnego lub obiektowego lower field wynosi zero, neutralne dla
+agregacji `Max`. Jawne globalne minimum nadal obowiązuje globalnie.
+
+`ObjectRegion.mesh.transition_distance` opisuje istniejące przejście górnego
+celu rozmiaru do celu obiektu. Nie rozszerza geometrycznego członkostwa regionu
+ani nie definiuje interpolacji dolnego ograniczenia. W halo przejścia obowiązuje
+lower obiektu, jeśli punkt należy do obiektu; lower regionu pozostaje ograniczony
+do rdzenia. Nie zmienia to materiałów, interakcji ani stanu równowagi.
+
+Realizacja wymaga exact component ownership. Fallback bez przypisanych volume
+tags nie może zastępować go AABB, które obejmuje również inne obiekty lub
+powietrze. Dla żądanego scoped lower i brakującego exact owner binding kontrakt
+wymaga jawnego błędu przed generacją, zamiast ignorowania wartości lub cichego
+obniżenia globalnego minimum. Pełne wsparcie tego fallbacku pozostaje otwarte.
+
+Owner kompozycji to
+`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py::_configure_mesh_size_fields`;
+caller `_apply_mesh_options`, producent `_size_field_plan.py::_build_field_stack`.
+Należy wykorzystać istniejące `Min` upper, `Max` lower i końcowe `Max`.
+Zakres musi być neutralny poza domeną również po ograniczeniu polem Gmsh;
+nie należy wymyślać opcji `OutsideValue` dla `Restrict`. Opcje `Restrict` oraz
+semantykę `Threshold` określa [oficjalny manual Gmsh](https://gmsh.info/doc/texinfo/gmsh.html).
+
+Stan źródeł po review 2026-10-07: scoped producer/consumer, lower-only region
+i exact owner propagation są zaimplementowane; regresje oczekują świeżego CI.
+FEM CPU/GPU: zamierzona wspólna semantyka generatora; kwalifikacja obu realizacji
+pozostaje **NOT VERIFIED**. FDM CPU/GPU: nie dotyczy siatki Gmsh. Wymagane są
+regresje scope/precedence/lower-only/hscale, rzeczywisty rozkład rozmiarów elementów
+oraz managed meshing evidence. Zielony parser dokumentacji nie zamyka tych bramek.
+
 (thin-film-mesh-python-api)=
 ## Python API
 
@@ -188,3 +225,42 @@ nie kwalifikuje operatora ani managed runtime.
 | Sweep | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | ograniczona mixed-P1 realizacja box |
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
+
+
+(thin-film-periodic-tetrahedral-layer-realization)=
+## Warstwowa triangulacja periodyczna — korekta realizacji
+
+Dla ograniczonego przypadku Box lub Box minus współosiowy Cylinder, z airboxem
+współbieżnym bocznie, GEO generuje pomocnicze pryzmaty z zadaną liczbą warstw.
+Jedna reguła podziału obejmuje wszystkie magnetic i air volumes oraz ich ściany:
+trzy wierzchołki dolnej podstawy porządkuje się leksykograficznie po współrzędnych
+w płaszczyźnie filmu, a górne odpowiadają im po przesunięciu wzdłuż z.
+Pryzmat o podstawie a,b,c i górze A,B,C dzieli się na tetraedry
+(a,b,c,C), (a,b,B,C), (a,A,B,C). Wspólna pionowa ściana między a i b ma
+przekątną a–B. Ten sam wybór stosuje się do powierzchni zapisanej w Gmsh.
+Kolejność lokalna komórki nie steruje wyborem przekątnej. Orientacja tetraedrów
+jest dodatnia; zerowy wyznacznik jest błędem.
+
+Reguła nie dodaje węzłów i zachowuje płaszczyzny warstw oraz regiony.
+Współrzędne bliskie w granicach błędu maszynowego klasyfikuje się do wspólnych
+rang osi; tolerancja służy wyłącznie deterministycznemu porządkowaniu geometrii,
+nie akceptacji błędnego certyfikatu. Dla par osiowych translacja nie zmienia
+kolejności końców krawędzi, więc nie zmienia przekątnej. Inne rodziny komórek,
+podstawy niepoziome i sweep inny niż z nie należą do tej realizacji.
+
+Owner: `packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_tetrahedra.py::
+subdivide_layered_prisms`; caller `_generate_coincident_ring_airbox_mesh`.
+Publiczne Python/ProblemIR nie zmieniają semantyki: końcowy mesh nadal jest
+tet4/tri3 z exact layers. FEM CPU i FEM GPU konsumują tę samą topologię;
+nie jest to dowód wykonania GPU. FDM CPU/GPU: nie dotyczy.
+
+Regresja `test_layered_periodic_triangles_are_conforming` wymaga certyfikatu
+par obu osi, zgodności facet–cell, objętości, dodatnich wyznaczników i dokładnych
+płaszczyzn dla 3/6/9 warstw Box oraz 1/2/3 warstw filmu z otworem (obecny limit ring). Status przed poprawką: RED,
+niepełna bijekcja x_faces. Po poprawce: 31 lekkich testów PASS (26 integracyjnych i 5 podziału); nie jest to
+kwalifikacja runtime. Granicę zewnętrzną wybiera się z brzegu połączonych volumes,
+co usuwa interfejsy magnetic–air z Gamma_out. Każdy facet interfejsu musi mieć
+incydencję dwóch komórek, a każdy facet exterior/periodic jedną. Jednowłaścicielskie
+ściany komórek muszą dokładnie pokrywać exterior/periodic facets; brak takiej
+równości oznacza szczelinę lub błędną klasyfikację. Status managed runtime i Rust v6: NOT VERIFIED;
+nie wolno utożsamiać lekkiej kontroli Gmsh z wynikiem eigensolve.

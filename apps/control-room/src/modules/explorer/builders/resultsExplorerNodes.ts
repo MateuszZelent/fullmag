@@ -7,6 +7,7 @@ import {
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
+  eigenModeFieldAvailable,
   responseFieldResourcesFromManifest,
   type FrequencyDomainJsonArtifactLike,
   type FrequencyDomainTextArtifactLike,
@@ -313,8 +314,13 @@ function modalFieldTargets({
 }): PhysicsFirstAnalysisFieldTarget[] {
   if (kSampling?.kind === "path") {
     return buildEigenDispersionChartModel(dispersionArtifact(dispersion)).points.flatMap((point) => {
-      if (!point.modeFieldId) return [];
-      const wavevectorKf = pathWavevectorAtSample(dispersion?.path_metadata, point.sampleIndex);
+      if (
+        !eigenModeFieldAvailable(point) ||
+        !point.modeFieldId ||
+        !point.modeFieldResourceKey
+      ) return [];
+      const wavevectorKf = point.wavevectorKf ??
+        pathWavevectorAtSample(dispersion?.path_metadata, point.sampleIndex);
       if (!wavevectorKf || !Number.isFinite(point.pathS)) return [];
       return [{
         fieldId: point.modeFieldId,
@@ -323,7 +329,7 @@ function modalFieldTargets({
         label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
         modeIndex: point.rawModeIndex,
         representation: "complex-vector-xyz" as const,
-        resourceRef: point.modeFieldResourceKey ?? fieldVectorResourceKey(point.modeFieldId),
+        resourceRef: point.modeFieldResourceKey,
         sampleIndex: point.sampleIndex,
         source: "eigen-mode" as const,
         view: "phase_rotated_real" as const,
@@ -333,14 +339,16 @@ function modalFieldTargets({
   }
   const fixedWavevector = kSampling?.kind === "single" ? kSampling.vectorRadPerM : undefined;
   return buildEigenSpectrumChartModel(jsonArtifact(spectrum)).points.flatMap((point) =>
-    point.modeFieldId
+    eigenModeFieldAvailable(point) &&
+    point.modeFieldId &&
+    point.modeFieldResourceKey
       ? [{
           fieldId: point.modeFieldId,
           frequencyHz: point.frequencyHz,
           label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
           modeIndex: point.rawModeIndex,
           representation: "complex-vector-xyz" as const,
-          resourceRef: point.modeFieldResourceKey ?? fieldVectorResourceKey(point.modeFieldId),
+          resourceRef: point.modeFieldResourceKey,
           sampleIndex: point.sampleIndex,
           source: "eigen-mode" as const,
           view: "phase_rotated_real" as const,

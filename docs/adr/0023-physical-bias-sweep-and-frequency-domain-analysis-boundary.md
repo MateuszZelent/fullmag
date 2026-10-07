@@ -117,3 +117,74 @@ it is never upgraded into a physical sweep. New writes use
 `BiasFieldSweepIR` and the frozen field-sweep axis. Rollback may hide the
 derived analysis view; it must not restore oracle-driven physical inputs or
 make Results a solver.
+
+## Scoped extension: constant first-order uniaxial source identity
+
+The source equilibrium and its modal consumer must bind the same signed Ku
+and canonical rank-one axis. The material builder keeps the existing v1
+serialization and namespace exactly for requests without Ku; requests with
+Ku use `EquilibriumMaterialSignaturePreimage.v2`. The unit axis is normalized,
+its first nonzero component is positive, and signed zero is canonicalized.
+The v2 preimage includes Ku in SI and all existing material fields. Both
+relaxation and eigen plans use this single builder. Previously rejected Ku
+requests have no valid historical v1 handoff to migrate; an old source cannot
+be reinterpreted as a Ku source. This is a scoped provenance extension, not
+a new execution lane or a promotion of backend readiness.
+
+The equilibrium observer uses the typed uniaxial interaction so its field
+and energy stay separate from Zeeman. Native CPU assembly uses the constrained
+energy derivative and total accepted-field curvature in note 0831. Uniform Ms,
+constant first-order Ku and a global axis define this increment. Spatial Ku,
+second-order/cubic/surface terms and DMI remain gated. Public planner guards
+stay until end-to-end identity, field, payload and managed scientific checks
+are available. FDM/GPU, OpenAPI and frontend contracts receive no extension.
+
+Owners: `crates/fullmag-runner/src/fem/equilibrium_identity.rs`,
+`eigen_equilibrium.rs`, `eigen_shared_domain.rs`, native shared-domain operator,
+and `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`.
+Rust regression sources must exercise Ku/axis mutations, equivalent axes,
+producer/consumer equality, legacy v1 bytes and unsupported material views.
+Native unit compilation remains prohibited by the current repository rule;
+source checks do not replace managed build/runtime evidence. Rollback may
+keep Ku planner-gated but must not reuse a Ku-free handoff for Ku.
+
+### Ku-aware static field certificates
+
+Keep the Ku-free CertifiedFemEquilibriumFields.v1 serialization and digest.
+Ku requests publish v2 with a mandatory separate h_anisotropy_a_per_m view,
+a separate digest namespace and exact native CPU decomposition order.
+Unknown schemas or schema/view/material mismatches fail closed. The measured
+H_eff is verified, never replaced by a synthesized sum. The v2 refresh
+certificate binds the anisotropy comparison and both field digests; filenames
+match their actual versions. Existing v1 refresh bytes remain unchanged.
+The shared Rust envelope supports these versioned records and validators
+require coherent schema/optional-field pairs. This is an internal compatibility
+reader, owned by runner types and equilibrium validation; no public Ku
+capability or GPU readiness is promoted by it.
+
+Required owners: runner types, native state_io linearization copy, relaxation
+finalize/refresh producer, eigen handoff and field consumers, and the runtime
+artifact validator. Required regressions cover legacy bytes, independent v2
+binary digest, missing/forged anisotropy, shape/nonfinite errors and measured
+field decomposition. Native unit compilation remains prohibited; runtime
+qualification is still required before promotion.
+
+### Canonical versus raw material artifacts
+
+The user-authorized bounded Ku route adds equilibrium_artifact.v8 and
+LinearizationState.v7. Their material_signature and native material_snapshot_id
+use the existing canonical equilibrium_material_signature. A separate
+material_provenance_signature hashes the raw MaterialIR of the materialization
+plan, explicitly scoped as materialization_plan. The identity kind is
+canonical_equilibrium_material.v2. Provided v8 records preserve their own
+source raw provenance; newly generated states bind the current plan's raw
+hash. Equivalent axes may differ in raw hashes but must share physical identity.
+
+Ku-free writes retain v7/v6 and historical digest preimages. Legacy records
+cannot be reinterpreted as Ku sources. All acceptance, completion, field,
+mesh, phase and content-digest gates remain. Actual schemas determine paths
+and single-/multi-sample manifest keys. Owners are the shared-domain producer,
+equilibrium loader, native artifact/manifest producers, Python verifier and
+COMSOL state readers. Compatibility readers are retained for archived records;
+rollback keeps Ku gated rather than relabeling artifacts. This extension does
+not change public Ku legality or assert native CPU/GPU qualification.

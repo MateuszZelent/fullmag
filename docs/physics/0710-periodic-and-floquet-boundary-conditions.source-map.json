@@ -1,0 +1,97 @@
+{
+  "document": {
+    "path": "docs/physics/0710-periodic-and-floquet-boundary-conditions.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-visible / unvalidated"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-visible / unvalidated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "source-visible / separate periodic realization"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "source-visible / separate periodic realization"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-0710-phase",
+      "symbols": ["p", "k", "delta_r"],
+      "sources": ["source-phase-ir", "source-python-floquet"]
+    },
+    {
+      "id": "eq-0710-tangent-transport",
+      "symbols": ["q", "p", "tangent_transport"],
+      "sources": ["source-python-floquet"]
+    },
+    {
+      "id": "eq-0710-gamma-classification",
+      "symbols": ["k"],
+      "sources": ["source-gamma-tolerance", "source-k-path"]
+    }
+  ],
+  "symbols": [
+    {"id": "k", "latex": "$k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "delta_r", "latex": "$\\Delta\\mathbf r$", "meaning": "source-to-destination translation", "si_unit": "$\\mathrm{m}$"},
+    {"id": "p", "latex": "$p$", "meaning": "Floquet phase", "si_unit": "$1$"},
+    {"id": "q", "latex": "$q$", "meaning": "tangent coefficients", "si_unit": "$1$"},
+    {"id": "tangent_transport", "latex": "$T_{\\mathrm{dst}}^\\mathsf{T}T_{\\mathrm{src}}$", "meaning": "tangent transport", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {
+      "id": "source-python-periodic",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class PeriodicBC",
+      "responsibility": "Validate explicit periodic pair identities."
+    },
+    {
+      "id": "source-python-floquet",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FloquetBC",
+      "responsibility": "Preserve the Floquet phase convention and pair identities."
+    },
+    {
+      "id": "source-phase-ir",
+      "path": "crates/fullmag-ir/src/eigen_contract.rs",
+      "symbol": "PhaseConventionIR",
+      "responsibility": "Serialize the canonical phase convention."
+    },
+    {
+      "id": "source-k-path",
+      "path": "crates/fullmag-runner/src/eigen/path.rs",
+      "symbol": "expand_k_sampling",
+      "responsibility": "Expand open and closed k paths deterministically."
+    },
+    {
+      "id": "source-gamma-tolerance",
+      "path": "crates/fullmag-runner/src/fem/eigen_constants.rs",
+      "symbol": "GAMMA_K_TOLERANCE_RAD_PER_M",
+      "responsibility": "Define the numerical Gamma routing threshold."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.pbc(x, y, z)",
+        "type": "tuple[bool, bool, bool]",
+        "default": "(False, False, False)",
+        "si_unit": "$1$",
+        "validation": "boolean axes and matching pair metadata",
+        "meaning": "periodic cell topology",
+        "backend_support": "FEM/FDM authoring; execution lane gated",
+        "problem_ir": "study.periodic_boundary_conditions.axes"
+      }
+    ]
+  }
+}

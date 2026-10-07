@@ -9,6 +9,18 @@ fn env_flag(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn explicit_env_flag(name: &str) -> Option<bool> {
+    match std::env::var(name) {
+        Ok(value) => Some(match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "on" | "true" | "yes" => true,
+            "0" | "off" | "false" | "no" => false,
+            _ => panic!("{name} must be an explicit boolean"),
+        }),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => panic!("{name} is invalid: {error}"),
+    }
+}
+
 fn rerun_if_changed_tree(path: impl AsRef<std::path::Path>) {
     let path = path.as_ref();
     println!("cargo:rerun-if-changed={}", path.display());
@@ -78,7 +90,31 @@ fn emit_unix_runtime_rpath(path: &str) {
 fn main() {
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     generate_gpu_execution_receipt_abi_assertions(&out_dir);
+    // Capsules preserve source mtimes. A later capture can therefore contain
+    // changed C++ older than objects built by an earlier concurrent job.
+    println!("cargo:rerun-if-env-changed=FULLMAG_SOURCE_SNAPSHOT_SHA256");
+    let source_snapshot = std::env::var("FULLMAG_SOURCE_SNAPSHOT_SHA256").unwrap_or_default();
+    if !source_snapshot.is_empty()
+        && (source_snapshot.len() != 64
+            || !source_snapshot
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+    {
+        panic!("FULLMAG_SOURCE_SNAPSHOT_SHA256 must be a lowercase SHA-256 digest");
+    }
     println!("cargo:rerun-if-env-changed=FULLMAG_CUDA_ARCHITECTURES");
+    for name in [
+        "CMAKE_PREFIX_PATH",
+        "PKG_CONFIG_PATH",
+        "PETSC_DIR",
+        "PETSC_ARCH",
+        "SLEPC_DIR",
+        "CPATH",
+        "LIBRARY_PATH",
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+
     if let Ok(lib_dir) = std::env::var("FULLMAG_FEM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
         println!("cargo:rustc-link-lib=dylib=fullmag_fem");
@@ -102,6 +138,7 @@ fn main() {
     rerun_if_changed_tree("../../backends/fem/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
     println!("cargo:rerun-if-env-changed=FULLMAG_USE_MFEM_STACK");
+    println!("cargo:rerun-if-env-changed=FULLMAG_FEM_NATIVE_CUDA");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_DEPENDENCY_PREFIX");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_REQUIRE_GPU");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_ENABLE_CUDA");
@@ -127,14 +164,19 @@ fn main() {
     };
     let use_mfem_stack = env_flag("FULLMAG_USE_MFEM_STACK");
     let require_gpu = env_flag("FULLMAG_FEM_REQUIRE_GPU");
-    // Preserve legacy defaults while allowing an explicit CPU-only MFEM build.
-    let enable_cuda = if std::env::var_os("FULLMAG_FEM_ENABLE_CUDA").is_some() {
-        env_flag("FULLMAG_FEM_ENABLE_CUDA")
-    } else {
-        use_mfem_stack
-    };
+    let native_cuda = explicit_env_flag("FULLMAG_FEM_NATIVE_CUDA");
+    let configured_cuda = explicit_env_flag("FULLMAG_FEM_ENABLE_CUDA");
+    if let (Some(native), Some(configured)) = (native_cuda, configured_cuda) {
+        if native != configured {
+            panic!("FULLMAG_FEM_NATIVE_CUDA and FULLMAG_FEM_ENABLE_CUDA must agree");
+        }
+    }
+    let enable_cuda = native_cuda.or(configured_cuda).unwrap_or(use_mfem_stack);
+    if enable_cuda && !use_mfem_stack {
+        panic!("CUDA-enabled FEM requires FULLMAG_USE_MFEM_STACK=ON");
+    }
     if require_gpu && !enable_cuda {
-        panic!("FULLMAG_FEM_REQUIRE_GPU=1 conflicts with FULLMAG_FEM_ENABLE_CUDA=OFF");
+        panic!("FULLMAG_FEM_REQUIRE_GPU=1 requires CUDA to be enabled");
     }
     let enable_nvtx = env_flag("FULLMAG_ENABLE_NVTX");
     let with_slepc = std::env::var("FULLMAG_FEM_WITH_SLEPC").unwrap_or_else(|_| {
@@ -155,7 +197,17 @@ fn main() {
         .arg(&native_root)
         .arg("-B")
         .arg(&build_dir)
+        // Re-resolve dependencies on every configure; a retained CMake cache
+        // must not pin a former CPU/GPU prefix after the execution policy changes.
+        .arg("-UPETSc_*")
+        .arg("-USLEPc_*")
+        .arg("-UMFEM_DIR")
+        .arg("-UCMAKE_PREFIX_PATH")
         .arg(format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type))
+        .arg(format!(
+            "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256={}",
+            source_snapshot
+        ))
         .arg(format!(
             "-DFULLMAG_ENABLE_CUDA={}",
             if enable_cuda { "ON" } else { "OFF" }

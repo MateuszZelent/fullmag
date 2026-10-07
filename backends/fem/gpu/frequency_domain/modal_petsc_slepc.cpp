@@ -73,6 +73,62 @@ bool string_equals(const char *actual, const char *expected) noexcept
     return actual != nullptr && expected != nullptr && std::strcmp(actual, expected) == 0;
 }
 
+// JSON has no NaN/Infinity literals.  A failed or incomplete modal solve can
+// still leave non-finite diagnostic scalars; normalize those tokens to null so
+// the Rust finite-value gate can reject the result explicitly instead of
+// failing while parsing the diagnostics envelope.
+void sanitize_nonfinite_json(char *json, std::size_t capacity) noexcept
+{
+    if (json == nullptr || capacity == 0u) {
+        return;
+    }
+    std::size_t length = 0u;
+    while (length < capacity && json[length] != '\0') {
+        ++length;
+    }
+    if (length == capacity) {
+        return;
+    }
+    for (std::size_t index = 0u; index < length;) {
+        std::size_t token_length = 0u;
+        if (index + 4u <= length && json[index] == '-' &&
+            (std::strncmp(json + index + 1u, "nan", 3u) == 0 ||
+             std::strncmp(json + index + 1u, "inf", 3u) == 0)) {
+            token_length = 4u;
+        } else if (index + 3u <= length &&
+                   (std::strncmp(json + index, "nan", 3u) == 0 ||
+                    std::strncmp(json + index, "inf", 3u) == 0)) {
+            token_length = 3u;
+        }
+        if (token_length == 0u) {
+            ++index;
+            continue;
+        }
+
+        constexpr char replacement[] = "null";
+        constexpr std::size_t replacement_length = sizeof(replacement) - 1u;
+        if (length + replacement_length - token_length + 1u <= capacity) {
+            std::memmove(
+                json + index + replacement_length,
+                json + index + token_length,
+                length - index - token_length + 1u);
+            std::memcpy(json + index, replacement, replacement_length);
+            length += replacement_length - token_length;
+            index += replacement_length;
+        } else {
+            // Preserve a valid envelope even if the diagnostics buffer is
+            // full: collapse the token in place and shift the tail left.
+            json[index] = '0';
+            std::memmove(
+                json + index + 1u,
+                json + index + token_length,
+                length - index - token_length + 1u);
+            length -= token_length - 1u;
+            ++index;
+        }
+    }
+}
+
 void publish_hypre_device_policy(
     const HypreDevicePolicySnapshot &snapshot,
     PoissonAirboxModalEigenResult *result) noexcept
@@ -2216,6 +2272,7 @@ FrequencyDomainStatus fail(
         static_cast<unsigned long long>(result->hot_loop_d2h_bytes),
         static_cast<unsigned long long>(result->setup_h2d_transfer_count),
         static_cast<unsigned long long>(result->final_d2h_transfer_count));
+    sanitize_nonfinite_json(result->diagnostics_json, sizeof(result->diagnostics_json));
     return status;
 }
 
@@ -2596,6 +2653,7 @@ void write_success_diagnostics(
         problem.gauge_policy != nullptr ? problem.gauge_policy : "",
         problem.gauge_reason != nullptr ? problem.gauge_reason : "",
         result.full_residual_certified ? "true" : "false");
+    sanitize_nonfinite_json(out->diagnostics_json, sizeof(out->diagnostics_json));
 }
 
 FrequencyDomainStatus solve_gpu_frequency_window(

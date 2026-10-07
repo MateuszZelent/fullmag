@@ -71,9 +71,10 @@ from fullmag.model.geometry import (
     Union,
 )
 from fullmag.model.output_storage import OutputStorage
-from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer
+from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer, _parallel_execution_lane
 from fullmag.model.outputs import (
     SaveDispersion,
+    SaveEigenDiagnostics,
     SaveField,
     SaveMode,
     SaveResponse,
@@ -81,7 +82,7 @@ from fullmag.model.outputs import (
     SaveSpectrum,
     Snapshot,
 )
-from fullmag.model.problem import Problem
+from fullmag.model.problem import FdmPbc, ParallelExecutionPolicy, Problem
 from fullmag.model.study import (
     DEFAULT_RELAXATION_MAX_STEPS,
     DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
@@ -245,6 +246,13 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     exact_max_err = (
         adaptive_policy is not None and _is_exact_max_err_policy(adaptive_policy)
     )
+    pbc = base_problem.pbc
+    if isinstance(pbc, FdmPbc):
+        pbc_ir = pbc.to_ir()
+    elif pbc is None:
+        pbc_ir = None
+    else:
+        pbc_ir = FdmPbc(tuple(bool(value) for value in pbc)).to_ir()
 
     draft = {
         "revision": 1,
@@ -255,6 +263,8 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "requested_precision": base_problem.runtime.execution_precision.value,
         "requested_mode": base_problem.runtime.execution_mode.value,
         "cpu_threads": base_problem.runtime.cpu_threads,
+        "parallel_execution": base_problem.runtime.parallel_execution.to_ir(),
+        "pbc": pbc_ir,
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
         "exchange_enabled": _problem_has_exchange(base_problem),
         "demag_enabled": _problem_has_demag(base_problem),
@@ -594,7 +604,14 @@ def render_loaded_problem_as_script(
     lines.append("")
     lines.extend(_render_solver(base_problem, overrides=overrides, surface=surface))
 
-    output_lines = _render_outputs(base_problem, magnet_vars, surface=surface)
+    output_problem = base_problem
+    if not _study_outputs(base_problem.study):
+        for stage in stages:
+            candidate_study = getattr(stage.problem, "study", None)
+            if _study_outputs(candidate_study):
+                output_problem = stage.problem
+                break
+    output_lines = _render_outputs(output_problem, magnet_vars, surface=surface)
     if output_lines:
         lines.append("")
         lines.extend(output_lines)
@@ -986,6 +1003,9 @@ def _render_scene_document_bootstrap(
         cpu_threads = _positive_int(builder.get("cpu_threads"))
         if cpu_threads is not None:
             lines.append(f"study.threads({cpu_threads})")
+    parallel_policy = builder.get("parallel_execution")
+    if isinstance(parallel_policy, Mapping):
+        lines.append(f"study.parallel_execution({_python_keyword_args(dict(parallel_policy))})")
     lines.extend(_render_output_storage(builder.get("output_storage"), surface="study"))
 
     solver = builder.get("solver")
@@ -1376,6 +1396,12 @@ def _render_scene_stage_bootstrap(
                 "gamma",
                 "g",
                 "eigen_count",
+                "eigen_solver_rtol",
+                "eigen_solver_residual_tolerance",
+                "eigen_solver_max_outer_iterations",
+                "max_outer_iterations",
+                "eigen_solver_max_linear_iterations",
+                "max_linear_iterations",
                 "eigen_target",
                 "eigen_target_frequency",
                 "eigen_frequency_min",
@@ -1394,9 +1420,13 @@ def _render_scene_stage_bootstrap(
                 "eigen_bias_field_sweep",
             },
         )
+        raw_count = stage.get("eigen_count")
+        count = 10 if raw_count in (None, "") else _positive_int(raw_count)
+        if count is None:
+            raise ValueError(f"SceneDocument eigenmodes stage {index} has invalid eigen_count.")
         kwargs: dict[str, object] = {}
         values: tuple[tuple[str, object], ...] = (
-            ("count", _positive_int(stage.get("eigen_count")) or 10),
+            ("count", count),
             ("target", _text_value(stage.get("eigen_target")) or "lowest"),
             ("operator", _text_value(stage.get("eigen_operator")) or "linearized_llg"),
             ("include_demag", stage.get("eigen_include_demag", True)),
@@ -1414,12 +1444,52 @@ def _render_scene_stage_bootstrap(
         )
         for target, source in optional_numbers:
             value = _finite_number(stage.get(source))
-            if value is not None:
+            if stage.get(source) not in (None, ""):
+                if value is None:
+                    raise ValueError(f"SceneDocument eigenmodes stage {index} has invalid {source}.")
                 kwargs[target] = value
         equilibrium_artifact = _text_value(stage.get("eigen_equilibrium_artifact"))
         if equilibrium_artifact:
             kwargs["equilibrium_artifact"] = equilibrium_artifact
-        k_vector = _scene_float_sequence(stage.get("eigen_k_vector"), count=3)
+        solver_fields = (
+            ("solver_rtol", "eigen_solver_rtol", ("eigen_solver_residual_tolerance",)),
+            (
+                "solver_max_outer_iterations",
+                "eigen_solver_max_outer_iterations",
+                ("max_outer_iterations",),
+            ),
+            (
+                "solver_max_linear_iterations",
+                "eigen_solver_max_linear_iterations",
+                ("max_linear_iterations",),
+            ),
+        )
+        for field, key, aliases in solver_fields:
+            raw_value = stage.get(key)
+            if raw_value in (None, ""):
+                for alias in aliases:
+                    raw_value = stage.get(alias)
+                    if raw_value not in (None, ""):
+                        break
+            if raw_value in (None, ""):
+                continue
+            value = (
+                _finite_number(raw_value)
+                if field == "solver_rtol"
+                else _positive_int(raw_value)
+            )
+            if value is None:
+                raise ValueError(
+                    f"SceneDocument eigenmodes stage {index} has invalid {key}."
+                )
+            kwargs[field] = value
+
+        raw_vector = stage.get("eigen_k_vector")
+        if isinstance(raw_vector, str):
+            raw_vector = [item.strip() for item in raw_vector.split(",")] if raw_vector.strip() else None
+        k_vector = _scene_float_sequence(raw_vector, count=3)
+        if raw_vector not in (None, "") and k_vector is None:
+            raise ValueError(f"SceneDocument eigenmodes stage {index} has invalid eigen_k_vector.")
         if k_vector is not None:
             kwargs["k_vector"] = k_vector
         if stage.get("eigen_bias_field_sweep") not in (None, "", {}, []):
@@ -1427,6 +1497,8 @@ def _render_scene_stage_bootstrap(
                 "SceneDocument eigenmodes bias_field_sweep requires the typed canonical renderer"
             )
         raw_k_path = stage.get("eigen_k_path")
+        if raw_k_path not in (None, "") and k_vector is not None:
+            raise ValueError(f"SceneDocument eigenmodes stage {index} cannot set both eigen_k_path and eigen_k_vector.")
         rendered_k_path = (
             _render_stage_k_path_expr(raw_k_path)
             if raw_k_path not in (None, "")
@@ -1439,7 +1511,10 @@ def _render_scene_stage_bootstrap(
         ]
         if rendered_k_path is not None:
             call_parts.append(f"k_sampling={rendered_k_path}")
-        bc = stage.get("eigen_spin_wave_bc_config") or stage.get("eigen_spin_wave_bc")
+        raw_bc = stage.get("eigen_spin_wave_bc_config")
+        bc = dict(raw_bc) if isinstance(raw_bc, Mapping) else stage.get("eigen_spin_wave_bc")
+        if isinstance(bc, dict) and isinstance(stage.get("eigen_spin_wave_bc"), str):
+            bc["kind"] = stage["eigen_spin_wave_bc"]
         if isinstance(bc, (str, Mapping)) and bc:
             call_parts.append(f"bc={_render_spin_wave_bc_expr(bc)}")
         spec = f"fm.eigenmodes_stage({', '.join(call_parts)})"
@@ -2505,6 +2580,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         return payload
     dynamics = study.dynamics
     if isinstance(study, Eigenmodes):
+        solver_policy = study.solver_policy
         return {
             "kind": "eigenmodes",
             "entrypoint_kind": stage.entrypoint_kind,
@@ -2531,6 +2607,21 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
             "eigen_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
             "eigen_magnetostatic_bc": study.magnetostatic_bc,
+            "eigen_solver_rtol": _text_number(
+                solver_policy.residual_tolerance if solver_policy is not None else None
+            ),
+            "eigen_solver_max_outer_iterations": (
+                str(solver_policy.max_outer_iterations)
+                if solver_policy is not None
+                and solver_policy.max_outer_iterations is not None
+                else ""
+            ),
+            "eigen_solver_max_linear_iterations": (
+                str(solver_policy.max_linear_iterations)
+                if solver_policy is not None
+                and solver_policy.max_linear_iterations is not None
+                else ""
+            ),
         }
     if isinstance(study, FrequencyResponse):
         return {
@@ -2864,11 +2955,28 @@ def _render_runtime(
             lines.append(f"{_surface_call(surface, 'device')}({_py_repr(device_spec)})")
         if cpu_threads is not None:
             lines.append(f"{_surface_call(surface, 'threads')}({cpu_threads})")
+    # Presence is significant: null explicitly restores the canonical default.
+    # Validate before rendering so an invalid edit cannot replace the source.
+    parallel_policy = ParallelExecutionPolicy.from_ir(
+        runtime_override["parallel_execution"]
+        if runtime_override and "parallel_execution" in runtime_override
+        else runtime.parallel_execution
+    )
+    parallel_policy.validate_for_runtime(*_parallel_execution_lane(runtime_metadata, runtime.backend_target, runtime.device_target))
+    lines.append(
+        f"{_surface_call(surface, 'parallel_execution')}({_python_keyword_args(parallel_policy.to_ir())})"
+    )
 
     # PBC is part of the canonical physical problem, not an implicit backend
     # mesh option. Keep the authored axes and demag realization explicit in the
     # exported script so UI/Python round-trips cannot silently drop it.
     pbc = problem.pbc
+    if "pbc" in overrides:
+        # SceneDocument uses field presence to distinguish an explicit reset
+        # from an absent override that should retain the loaded Problem value.
+        from fullmag.runtime.scene_document import _scene_pbc_from_ir
+
+        pbc = _scene_pbc_from_ir(overrides["pbc"])
     if pbc is not None:
         raw_axes = getattr(pbc, "axes", pbc)
         axes = tuple(bool(value) for value in raw_axes)
@@ -6762,14 +6870,58 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
                 )
             continue
         if isinstance(output, SaveSpectrum):
-            lines.append(f"{_surface_call(surface, 'save')}(\"spectrum\")")
+            kwargs: list[str] = []
+            if output.quantity != "eigenfrequency":
+                kwargs.append(f"spectrum_quantity={_py_repr(output.quantity)}")
+            if output.scope != "per_sample":
+                kwargs.append(f"spectrum_scope={_py_repr(output.scope)}")
+            suffix = f", {', '.join(kwargs)}" if kwargs else ""
+            lines.append(f"{_surface_call(surface, 'save')}(\"spectrum\"{suffix})")
             continue
         if isinstance(output, SaveMode):
-            indices_repr = repr(list(output.indices))
-            lines.append(f"{_surface_call(surface, 'save')}(\"mode\", indices={indices_repr})")
+            kwargs: list[str] = []
+            if output.all_modes:
+                kwargs.append("all_modes=True")
+            if output.field != "mode":
+                kwargs.append(f"field={_py_repr(output.field)}")
+            if output.indices:
+                kwargs.append(f"indices={_py_literal(list(output.indices))}")
+            if output.branches:
+                kwargs.append(f"branches={_py_literal(list(output.branches))}")
+            if output.sample_indices:
+                kwargs.append(
+                    f"sample_indices={_py_literal(list(output.sample_indices))}"
+                )
+            if output.sample_labels:
+                kwargs.append(
+                    f"sample_labels={_py_literal(list(output.sample_labels))}"
+                )
+            lines.append(
+                f"{_surface_call(surface, 'save')}(\"mode\", {', '.join(kwargs)})"
+            )
             continue
         if isinstance(output, SaveDispersion):
-            lines.append(f"{_surface_call(surface, 'save')}(\"dispersion\")")
+            kwargs = []
+            if output.name != "dispersion":
+                kwargs.append(f"name={_py_repr(output.name)}")
+            if not output.include_branch_table:
+                kwargs.append("include_branch_table=False")
+            suffix = f", {', '.join(kwargs)}" if kwargs else ""
+            lines.append(f"{_surface_call(surface, 'save')}(\"dispersion\"{suffix})")
+            continue
+        if isinstance(output, SaveEigenDiagnostics):
+            kwargs = []
+            for name, value, default in (
+                ("include_tracking", output.include_tracking, True),
+                ("include_residuals", output.include_residuals, True),
+                ("include_overlaps", output.include_overlaps, True),
+                ("include_tangent_leakage", output.include_tangent_leakage, True),
+                ("include_orthogonality", output.include_orthogonality, True),
+            ):
+                if value != default:
+                    kwargs.append(f"{name}={_py_literal(value)}")
+            suffix = f", {', '.join(kwargs)}" if kwargs else ""
+            lines.append(f"{_surface_call(surface, 'save')}(\"diagnostics\"{suffix})")
             continue
         if isinstance(output, SaveResponse):
             lines.append(
@@ -7118,7 +7270,13 @@ def _render_stages(
         previous_dynamics_signature = dynamics_signature
 
         if isinstance(study, Eigenmodes):
-            count = _override_int(stage_override, "eigen_count", study.count) or study.count
+            raw_count = stage_override.get("eigen_count")
+            if raw_count in (None, ""):
+                count = study.count
+            else:
+                count = _positive_int(raw_count)
+                if count is None:
+                    raise ValueError("canonical rewrite received an invalid eigen_count")
             target = _override_string(stage_override, "eigen_target", study.target) or study.target
             operator = _override_string(stage_override, "eigen_operator", study.operator) or study.operator
             include_demag_ov = stage_override.get("eigen_include_demag")
@@ -7130,6 +7288,8 @@ def _render_stages(
                 f"count={count}",
                 f"target={_py_repr(target)}",
             ]
+            if stage.stage_id is not None:
+                call_parts.insert(0, f"stage_id={_py_repr(stage.stage_id)}")
             target_frequency = _override_number(stage_override, "eigen_target_frequency", study.target_frequency)
             if target_frequency is not None:
                 call_parts.append(f"target_frequency={_py_number(target_frequency)}")
@@ -7170,19 +7330,48 @@ def _render_stages(
             ) or study.magnetostatic_bc
             if magnetostatic_bc != "open":
                 call_parts.append(f"magnetostatic_bc={_py_repr(magnetostatic_bc)}")
-            k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
+            if study.solver_policy is not None:
+                if study.solver_policy.residual_tolerance is not None:
+                    call_parts.append(
+                        "solver_rtol="
+                        f"{_py_number(study.solver_policy.residual_tolerance)}"
+                    )
+                if study.solver_policy.max_outer_iterations is not None:
+                    call_parts.append(
+                        "solver_max_outer_iterations="
+                        f"{study.solver_policy.max_outer_iterations}"
+                    )
+                if study.solver_policy.max_linear_iterations is not None:
+                    call_parts.append(
+                        "solver_max_linear_iterations="
+                        f"{study.solver_policy.max_linear_iterations}"
+                    )
+            k_path_raw = _override_string(stage_override, "eigen_k_path", None)
             k_path_expr = _render_stage_k_path_expr(
-                _override_string(stage_override, "eigen_k_path", None)
+                k_path_raw
             )
+            if k_path_raw is not None and k_path_raw.strip() and k_path_expr is None:
+                raise ValueError("canonical rewrite received an invalid eigen_k_path")
+            k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
+            if k_path_expr is not None and k_vector_raw is not None and k_vector_raw.strip():
+                raise ValueError(
+                    "canonical rewrite cannot set both eigen_k_path and eigen_k_vector"
+                )
             if k_path_expr is not None:
                 call_parts.append(f"k_sampling={k_path_expr}")
             elif k_vector_raw is not None and k_vector_raw.strip():
+                components = [component.strip() for component in k_vector_raw.split(",")]
+                if len(components) != 3:
+                    raise ValueError("canonical rewrite received an invalid eigen_k_vector")
                 try:
-                    parsed = tuple(float(component.strip()) for component in k_vector_raw.split(","))
-                    if len(parsed) == 3:
-                        call_parts.append(f"k_vector={parsed!r}")
-                except ValueError:
-                    pass
+                    parsed = tuple(float(component) for component in components)
+                except ValueError as exc:
+                    raise ValueError(
+                        "canonical rewrite received an invalid eigen_k_vector"
+                    ) from exc
+                if not all(math.isfinite(component) for component in parsed):
+                    raise ValueError("canonical rewrite received an invalid eigen_k_vector")
+                call_parts.append(f"k_vector={parsed!r}")
             elif study.k_vector is not None:
                 call_parts.append(f"k_vector={study.k_vector!r}")
             elif study.k_sampling is not None:
@@ -9160,9 +9349,9 @@ def _normalize_bounds_pair(
 
 
 def _study_outputs(
-    study: TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse,
+    study: TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse | None,
 ) -> Sequence[object]:
-    return tuple(study.outputs)
+    return tuple(study.outputs) if study is not None else ()
 
 
 def _study_table_autosave(

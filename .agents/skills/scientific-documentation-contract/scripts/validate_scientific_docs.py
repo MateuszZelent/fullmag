@@ -6,7 +6,7 @@ import ast
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 
 REQUIRED_SECTIONS = (
@@ -122,7 +122,7 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
     elif path.endswith(".rs"):
         pattern = re.compile(
             rf"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:"
-            rf"(?:unsafe\s+)?fn\s+{escaped}(?:<[^>\n]+>)?\s*\("
+            rf"(?:async\s+)?(?:unsafe\s+)?fn\s+{escaped}(?:<[^>\n]+>)?\s*\("
             rf"|(?:struct|enum|type|trait|const|static)\s+{escaped}\b)",
             re.MULTILINE,
         )
@@ -153,7 +153,13 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
     return pattern.findall(text)
 
 
-def validate_page(repo_root: Path, manifest: object, rendered_html: Path | None = None) -> list[str]:
+def validate_page(
+    repo_root: Path,
+    manifest: object,
+    rendered_html: Path | None = None,
+    *,
+    read_file: Callable[[str], bytes | None] | None = None,
+) -> list[str]:
     errors: list[str] = []
     if not isinstance(manifest, dict):
         return ["manifest must be an object"]
@@ -163,11 +169,17 @@ def validate_page(repo_root: Path, manifest: object, rendered_html: Path | None 
     if not isinstance(document, dict):
         return ["document must be an object"]
     page_name = _safe_path(document.get("path"), "document.path", errors)
-    page_path = repo_root / page_name if page_name else None
-    if page_path is None or not page_path.is_file():
+    def read_content(path: str) -> bytes | None:
+        if read_file is not None:
+            return read_file(path)
+        source = repo_root / path
+        return source.read_bytes() if source.is_file() else None
+
+    page_bytes = read_content(page_name) if page_name else None
+    if page_bytes is None:
         errors.append("document page does not exist")
         return errors
-    page = page_path.read_text(encoding="utf-8")
+    page = page_bytes.decode("utf-8")
 
     if PLACEHOLDER_RE.search(page):
         errors.append("page contains a forbidden placeholder")
@@ -201,11 +213,11 @@ def validate_page(repo_root: Path, manifest: object, rendered_html: Path | None 
         if not isinstance(symbol, str) or not symbol.strip():
             errors.append(f"{label} requires stable path + symbol; line ranges alone are forbidden")
         elif path:
-            source_file = repo_root / path
-            if not source_file.is_file():
+            source_bytes = read_content(path)
+            if source_bytes is None:
                 errors.append(f"{label} source path does not exist: {path}")
             else:
-                source_text = source_file.read_text(encoding="utf-8", errors="replace")
+                source_text = source_bytes.decode("utf-8", errors="replace")
                 declarations = _source_symbol_declarations(path, source_text, symbol)
                 if not declarations:
                     errors.append(f"{label} declaration not found in {path}: {symbol}")

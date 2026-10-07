@@ -357,7 +357,7 @@ export interface SimulationPreparationViewModel {
 }
 
 export function resolveSimulationPreparationViewModel(
-  preparation: ResourceResult<SimulationPreparationResource>,
+  preparation: ResourceResult<SimulationPreparationResource | null>,
   sessionStatus: ResourceResult<LiveStatusResource>,
   nowUnixMs: number | null,
 ): SimulationPreparationViewModel {
@@ -539,7 +539,7 @@ export function resolvePreparationFailureCauses(
 }
 
 function resolveMissingPreparationModel(
-  preparation: ResourceResult<SimulationPreparationResource>,
+  preparation: ResourceResult<SimulationPreparationResource | null>,
   sessionStatus: ResourceResult<LiveStatusResource>,
 ): SimulationPreparationViewModel {
   const solverState = sessionStatus.data?.solver.state?.toLowerCase() ?? "";
@@ -603,7 +603,7 @@ function resolveMissingPreparationModel(
 }
 
 function resolvePreparationResourceError(
-  preparation: ResourceResult<SimulationPreparationResource>,
+  preparation: ResourceResult<SimulationPreparationResource | null>,
   hasPublishedPreparationRevision: boolean,
 ): SimulationPreparationViewModel | null {
   if (preparation.status !== "error" || !preparation.error) {

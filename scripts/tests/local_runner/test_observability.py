@@ -81,7 +81,7 @@ class ObservabilityTests(unittest.TestCase):
 
     def test_storage_volumes_structure_and_thresholds(self):
         vols = self.hub.get_storage_volumes()
-        self.assertEqual(2, len(vols))
+        self.assertGreaterEqual(len(vols), 1)  # Docker backing storage need not be mounted here.
         storage_vol = vols[0]
         self.assertEqual("storage-root", storage_vol["id"])
         self.assertGreater(storage_vol["total_bytes"], 0)
@@ -184,6 +184,14 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual("preview", persisted["mode"])
         self.assertEqual(48, persisted["ttl_success_hours"])
 
+    def test_runtime_minimum_requires_bounded_integer(self):
+        for invalid in (0, 21, 1.5, True, "3", None):
+            with self.subTest(value=invalid):
+                with self.assertRaises(ValueError):
+                    self.hub.set_retention_policy({'min_artifacts_to_keep': invalid})
+        self.assertEqual(3, self.hub.get_retention_policy()['min_artifacts_to_keep'])
+        self.assertEqual(1, self.hub.set_retention_policy({'min_artifacts_to_keep': 1})['min_artifacts_to_keep'])
+
     def test_build_job_timeline_decomposition(self):
         job = {
             "job_id": "job-timeline-test",
@@ -240,7 +248,8 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(8.5, stages_from_receipt[3]["duration_seconds"])
         self.assertEqual("succeeded", stages_from_receipt[4]["status"])
         self.assertEqual(15.0, stages_from_receipt[4]["duration_seconds"])
-        self.assertEqual("succeeded", stages_from_receipt[5]["status"])  # receipt verification
+        self.assertEqual("running", stages_from_receipt[5]["status"])  # coordinator verification still pending
+        self.assertEqual("pending", stages_from_receipt[6]["status"])
 
         # Succeeded terminal job
         job["state"] = "succeeded"
@@ -346,7 +355,9 @@ class ObservabilityTests(unittest.TestCase):
             def list(self, owner=None, limit=1000):
                 return []
 
-        plan = self.hub.generate_retention_plan(queue=EmptyQueue())
+        with patch('local_runner.observability._fast_dir_size') as scan:
+            plan = self.hub.generate_retention_plan(queue=EmptyQueue())
+            scan.assert_not_called()
         # The unindexed execution directory MUST NOT be a candidate!
         self.assertEqual(0, plan["candidates_count"])
         # It MUST be retained and protected
@@ -354,7 +365,7 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIn("exec-wt-unindexed-job-unindexed", retained_ids)
         retained_item = next(r for r in plan["retained"] if r["resource_id"] == "exec-wt-unindexed-job-unindexed")
         self.assertIn("ochrona przed usunięciem", retained_item["why_retained"])
-        self.assertEqual(2048, retained_item["size_bytes"])
+        self.assertIsNone(retained_item["size_bytes"])
 
     def test_timeline_progress_from_worker_log(self):
         job = {

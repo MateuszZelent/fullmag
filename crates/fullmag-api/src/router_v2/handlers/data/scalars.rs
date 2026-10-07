@@ -64,6 +64,13 @@ pub async fn get_scalars(
     } else {
         &[]
     };
+    // Filter diagnostics before tail/limit selection. Original revision and
+    // source cursor offsets are preserved; persisted rows are not rewritten.
+    let physical_window: Vec<_> = window
+        .iter()
+        .filter(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+        .collect();
+    let window = &physical_window[..];
     let window = if query.tail.unwrap_or(false) {
         let limit = query.limit.unwrap_or(1) as usize;
         let start = window.len().saturating_sub(limit);

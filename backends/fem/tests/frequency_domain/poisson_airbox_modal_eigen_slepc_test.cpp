@@ -20,6 +20,16 @@
 #include <string>
 #include <vector>
 
+#if defined(FULLMAG_FEM_WITH_SLEPC) && FULLMAG_FEM_WITH_SLEPC
+#include <petscsys.h>
+#ifndef PETSC_USE_REAL_DOUBLE
+#error "SLEPc modal contract requires PETSC_USE_REAL_DOUBLE"
+#endif
+static_assert(
+    sizeof(PetscReal) == sizeof(double),
+    "SLEPc modal contract requires an eight-byte PetscReal");
+#endif
+
 namespace fd = fullmag::fem::frequency_domain;
 
 extern "C" int fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action(
@@ -1421,6 +1431,39 @@ void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
               result.diagnostics_json,
               "\"operator_context_setup_count\":") == 1.0,
           "a complete CPU window must configure one persistent operator context");
+    check(result.split_dof_count_available &&
+              result.split_dof_count == 2u * result.q_dof_count,
+          "CPU Schur diagnostics must expose the actual real-split dimension");
+    check(result.exact_preconditioner_dimension_available &&
+              result.exact_preconditioner_dimension == result.split_dof_count,
+          "a materialized frequency-window cache must expose its exact dimension");
+    check(!result.exact_preconditioner_shift_failure_observed,
+          "a clean synthetic frequency window must not report a cache-shift failure");
+    check(contains(result.diagnostics_json, "\"q_dof_count\":"),
+          "CPU Schur diagnostics must publish q degrees of freedom");
+    check(contains(result.diagnostics_json, "\"split_dof_count\":"),
+          "CPU Schur diagnostics must publish split degrees of freedom");
+    check(contains(result.diagnostics_json, "\"phi_dof_count\":"),
+          "CPU Schur diagnostics must publish phi degrees of freedom");
+    check(contains(result.diagnostics_json, "\"augmented_dof_count\":"),
+          "CPU Schur diagnostics must publish augmented degrees of freedom");
+    check(contains(result.diagnostics_json, "\"exact_preconditioner\":{"),
+          "CPU Schur diagnostics must publish exact-preconditioner observability");
+    check(contains(result.diagnostics_json,
+                   "\"shift_failure_observed\":"),
+          "CPU Schur diagnostics must publish preserved cache-shift failure state");
+    check(contains(result.diagnostics_json,
+                   "\"construction_poisson_solve_count\":"),
+          "CPU Schur diagnostics must publish exact-cache Poisson work");
+    check(contains(result.diagnostics_json, "\"construction_seconds\":"),
+          "CPU Schur diagnostics must publish exact-cache construction timing");
+    check(contains(result.diagnostics_json, "\"shifted_setup_seconds\":"),
+          "CPU Schur diagnostics must publish per-shift setup timing");
+    check(contains(result.diagnostics_json, "\"eps_solve_seconds\":"),
+          "CPU Schur diagnostics must publish per-shift EPS timing");
+    check(contains(result.diagnostics_json,
+                   "\"subwindows\":[{"),
+          "CPU frequency-window diagnostics must retain per-shift telemetry");
     check(json_number_after(
               result.diagnostics_json,
               "\"poisson_factorization_setup_count\":") == 1.0,
@@ -1504,6 +1547,56 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
     check(contains(result.window_certificate_json, "\"requested_nev\":8") &&
               contains(result.window_certificate_json, "\"refined_nev\":16"),
           "window certificate must publish the effective base/refinement nev");
+    check(count_occurrences(
+              result.executed_subwindows_json,
+              "\"requested_ncv\":") == 50u,
+          "every planned subwindow must publish its explicit SLEPc ncv");
+    check(contains(result.window_certificate_json,
+                   "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\""),
+          "window certificate must name the bounded Krylov-subspace policy");
+    const std::uint64_t split_dimension = 2u * result.q_dof_count;
+    const std::uint64_t requested_nev = static_cast<std::uint64_t>(
+        json_number_after(result.window_certificate_json, "\"requested_nev\":"));
+    const std::uint64_t requested_ncv = static_cast<std::uint64_t>(
+        json_number_after(result.window_certificate_json, "\"requested_ncv\":"));
+    const std::uint64_t expected_ncv = std::min(
+        split_dimension,
+        std::max(requested_nev + 1u, 4u * requested_nev));
+    check(requested_ncv == expected_ncv && requested_ncv <= split_dimension,
+          "base ncv must follow the explicit bounded policy and not exceed dimension");
+    const char *cursor = result.executed_subwindows_json;
+    std::uint32_t checked_subwindow_dimensions = 0u;
+    while (const char *nev_entry = std::strstr(cursor, "\"requested_nev\":")) {
+        const char *ncv_entry = std::strstr(nev_entry, "\"requested_ncv\":");
+        const char *next_nev_entry = std::strstr(
+            nev_entry + 1, "\"requested_nev\":");
+        check(ncv_entry != nullptr &&
+                  (next_nev_entry == nullptr || ncv_entry < next_nev_entry),
+              "every subwindow must bind ncv to its own nev");
+        if (ncv_entry == nullptr ||
+            (next_nev_entry != nullptr && ncv_entry >= next_nev_entry)) {
+            break;
+        }
+        const std::uint64_t local_nev = static_cast<std::uint64_t>(
+            json_number_after(nev_entry, "\"requested_nev\":"));
+        const std::uint64_t local_ncv = static_cast<std::uint64_t>(
+            json_number_after(ncv_entry, "\"requested_ncv\":"));
+        check(local_ncv > local_nev && local_ncv <= split_dimension &&
+                  local_ncv == std::min(
+                      split_dimension,
+                      std::max(local_nev + 1u, 4u * local_nev)),
+              "each subwindow ncv must follow the bounded policy");
+        ++checked_subwindow_dimensions;
+        cursor = ncv_entry + 1;
+    }
+    check(checked_subwindow_dimensions == 50u,
+          "all 50 subwindow dimension pairs must be checked");
+    check(json_number_after(result.window_certificate_json, "\"requested_ncv\":") >
+              json_number_after(result.window_certificate_json, "\"requested_nev\":"),
+          "window certificate must publish a bounded base ncv greater than nev");
+    check(json_number_after(result.window_certificate_json, "\"refined_ncv\":") >
+              json_number_after(result.window_certificate_json, "\"refined_nev\":"),
+          "window certificate must publish a bounded refinement ncv greater than nev");
 }
 
 void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
@@ -1535,6 +1628,15 @@ void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
         "\"refined_nev\":");
     check(requested_nev == 16.0 && refined_nev > requested_nev,
           "refinement must start above the effective base request after retry");
+    const std::uint64_t split_dimension = 2u * result.q_dof_count;
+    const std::uint64_t expected_base_ncv = std::min(
+        split_dimension,
+        std::max<std::uint64_t>(
+            static_cast<std::uint64_t>(requested_nev) + 1u,
+            4u * static_cast<std::uint64_t>(requested_nev)));
+    check(json_number_after(result.window_certificate_json, "\"requested_ncv\":") ==
+              static_cast<double>(expected_base_ncv),
+          "local retry must publish the resolved ncv for its larger effective nev");
     const double refined_requested_mode_count = json_number_after(
         result.window_certificate_json,
         "\"refined_requested_mode_count\":");
@@ -1607,6 +1709,90 @@ void FrequencyWindowRetriesUntilBothClippedEdgesAreCovered()
               upper_edge,
               "\"lower_edge_covered\":true,\"upper_edge_covered\":true"),
           "upper refinement subwindow must certify both interval endpoints independently");
+}
+
+void FrequencyWindowUsesCertifiedSignedGuardBelowFundamentalMode()
+{
+    std::vector<double> frequencies_hz{9.3e9};
+    for (unsigned int index = 0; index < 31; ++index) {
+        frequencies_hz.push_back(32.1e9 + index * 2.0e9);
+    }
+    const WindowSpectrumFixture fixture = make_window_spectrum_fixture(frequencies_hz);
+    const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
+        8.5e9, 12.0e9, 1);
+    fd::PoissonAirboxModalEigenResult result{};
+    check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+              fd::FrequencyDomainStatus::ok && result.window_complete,
+          "signed physical guards certify a gap below the fundamental positive mode");
+    check(result.accepted_modes.size() == 1 &&
+              std::abs(result.accepted_modes[0].frequency_hz - 9.3e9) < 1.0e4,
+          "negative guards never become published positive modes");
+    check(contains(result.executed_subwindows_json,
+                   "\"coverage_guard_kind\":\"original_descriptor_certified_signed_ritz\"") &&
+              contains(result.executed_subwindows_json, "\"lower_edge_covered\":true"),
+          "window diagnostics identify signed coverage evidence");
+}
+
+void FrequencyWindowRetainsDemagInBoundedCachedPreconditioner()
+{
+    std::vector<double> frequencies_hz{9.3e9};
+    for (unsigned int index = 0; index < 31; ++index) {
+        frequencies_hz.push_back(32.1e9 + index * 2.0e9);
+    }
+    WindowSpectrumFixture fixture = make_window_spectrum_fixture(frequencies_hz);
+    // Preserve the known Schur spectrum while making omitted demag feedback
+    // material: Aqq - Aqphi P^-1 Aphiq must retain the original first diagonal.
+    const double coupling = std::sqrt(0.2 * kTwoPi * frequencies_hz.front());
+    fixture.a_qphi.values.front() = coupling;
+    fixture.a_phiq.values.front() = coupling;
+    fixture.a_qq.values.front() += coupling * coupling;
+    for (const double lower_edge_hz : {8.5e9, 9.0e9}) {
+        const fd::PoissonAirboxEigenBlockProblem problem =
+            fixture.problem(lower_edge_hz, 12.0e9, 1);
+        fd::PoissonAirboxModalEigenResult result{};
+        check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+                  fd::FrequencyDomainStatus::ok && result.window_complete,
+              "coupled small windows must retain the known certified Schur spectrum");
+        check(result.accepted_modes.size() == 1 &&
+                  std::abs(result.accepted_modes[0].frequency_hz - 9.3e9) < 1.0e4,
+              "cached shifts must not accumulate or replace the physical operator");
+        check(std::strcmp(result.shifted_preconditioner_kind,
+                          "exact_shifted_schur_action") == 0,
+              "small K0 windows must include demag in the shifted preconditioner");
+        check(result.operator_context_setup_count == 1u &&
+                  result.poisson_factorization_setup_count == 1u &&
+                  result.shift_solver_setup_count > 1u,
+              "multiple shifts must reuse one window-owned Poisson context");
+        check(result.full_residual_certified,
+              "cached preconditioning never substitutes for physical certification");
+    }
+}
+
+void FrequencyWindowCancellationDuringCachedPreconditionerPreservesStopReason()
+{
+    std::vector<double> frequencies_hz;
+    for (unsigned int index = 0; index < 32; ++index) {
+        frequencies_hz.push_back(9.3e9 + index * 2.0e9);
+    }
+    WindowSpectrumFixture fixture = make_window_spectrum_fixture(frequencies_hz);
+    fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(8.5e9, 12.0e9, 1);
+    unsigned int cancel_polls = 0;
+    problem.cancel_user_data = &cancel_polls;
+    problem.cancel_requested = [](void *user_data) -> int {
+        return ++(*static_cast<unsigned int *>(user_data)) >= 8u ? 1 : 0;
+    };
+    fd::PoissonAirboxModalEigenResult result{};
+    check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+              fd::FrequencyDomainStatus::interrupted,
+          "cancellation during cached Schur construction must preserve interruption");
+    check(result.shift_solver_setup_count > 0u && result.outer_iterations == 0u,
+          "the cancellation fixture must enter shift setup before starting EPS");
+    check(result.window_cancelled && !result.window_complete &&
+              !result.window_failed_subwindow && result.window_failed_subwindow_count == 0u,
+          "cancelled cache construction is neither coverage nor an operator failure");
+    check(std::strcmp(result.stop_reason, "cancel_requested") == 0 &&
+              result.accepted_modes.empty(),
+          "cancelled cache construction must not publish accepted modes");
 }
 
 void FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges()
@@ -2169,8 +2355,44 @@ void SolvesSharedDomainCpuSchurModalFixture()
                    "\"samples\":[{"),
           "raw Ritz diagnostics must retain bounded per-pair samples");
     check(contains(result.diagnostics_json,
-                   "\"ksp_type\":\"preonly\""),
-          "bounded shared-domain CPU Schur diagnostics must report the exact direct shifted solve");
+                   "\"ksp_type\":\"gmres\""),
+          "bounded shared-domain CPU Schur must report GMRES with exact shifted preconditioning");
+}
+
+void PreservesFailedSchurEpsCountersWithoutPublishingModes()
+{
+    const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
+        {0.25e9, 0.6e9, 1.1e9, 1.7e9, 2.3e9, 3.2e9,
+         4.3e9, 5.5e9, 6.9e9, 8.4e9, 10.2e9, 12.1e9});
+    fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(0.0, 14.0e9, 3);
+    problem.target_kind = "nearest_frequency";
+    problem.target_frequency_hz = 2.7e9;
+    problem.max_outer_iterations = 1;
+    problem.residual_tolerance = 1.0e-10;
+    fd::PoissonAirboxModalEigenResult result{};
+    // Reused caller-owned results must not retain a mode from an earlier solve.
+    result.accepted_modes.resize(1u);
+    result.accepted_mode_count = 1u;
+    result.frequency_hz = 42.0e9;
+    const fd::FrequencyDomainStatus status =
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result);
+    check(status == fd::FrequencyDomainStatus::solve_error,
+          "one outer iteration must not certify this unresolved spectrum");
+    check(result.slepc_converged_reason_code <= 0 && result.outer_iterations > 0u,
+          "incomplete EPS must retain its performed outer iterations");
+    check(result.operator_apply_count > 0u && result.poisson_solve_count > 0u,
+          "failed EPS must preserve actual Schur and Poisson work");
+    check(result.accepted_modes.empty() && result.accepted_mode_count == 0u &&
+              result.frequency_hz == 0.0 && !result.full_residual_certified,
+          "partial Ritz diagnostics must never publish a physical mode");
+    check(contains(result.stop_reason, "slepc_diverged") ||
+              contains(result.stop_reason, "slepc_not_converged"),
+          "failed solve must retain its actual incomplete EPS stop reason");
+    if (result.converged_eigenpair_count > 0u) {
+        check(contains(result.raw_ritz_classification_json,
+                       "\"reconstructed_samples\":"),
+              "partial convergence must retain bounded reconstruction diagnostics");
+    }
 }
 
 void solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(
@@ -2179,7 +2401,7 @@ void solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(
 {
     // The production exact shifted preconditioner is capped at split dimension
     // 8192. Use the smallest even q-space whose real split is genuinely above
-    // that cap so this fixture cannot silently fall back to PREONLY.
+    // that cap so this fixture exercises the iterative preconditioner path.
     constexpr std::uint64_t q_count = 4098;
     constexpr std::uint64_t pair_count = q_count / 2;
     CsrOwned a_qq{};
@@ -2267,6 +2489,23 @@ void solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(
           "dimensionless CPU scaling must preserve the physical two-gigahertz mode");
     check(contains(result.diagnostics_json, "\"ksp_type\":\"gmres\""),
           "fixture above the exact-preconditioner cap must exercise GMRES convergence");
+    check(result.split_dof_count_available &&
+              result.split_dof_count == 2u * result.q_dof_count,
+          "above-cap fixture must publish the configured real-split dimension");
+    check(!result.exact_preconditioner_dimension_available,
+          "above-cap fixture must report unavailable exact dimension");
+    check(contains(result.diagnostics_json,
+                   "\"exact_preconditioner\":{\"enabled\":false"),
+          "above-cap fixture must report that exact materialization was disabled");
+    check(contains(result.diagnostics_json,
+                   "\"shift_failure_observed\":false"),
+          "above-cap fixture must report no attempted cache-shift failure");
+    check(contains(result.diagnostics_json, "\"column_count\":null"),
+          "above-cap fixture must report unavailable exact columns as null");
+    check(contains(result.diagnostics_json, "\"dimension\":null"),
+          "above-cap fixture must report unavailable exact dimension as null");
+    check(contains(result.diagnostics_json, "\"construction_seconds\":null"),
+          "above-cap fixture must report unavailable construction time as null");
     check(contains(result.diagnostics_json, "\"refinement_attempted_count\":"),
           "shared-domain CPU Schur diagnostics must publish Ritz refinement attempts");
     check(contains(result.diagnostics_json, "\"refinement_succeeded_count\":"),
@@ -2619,10 +2858,46 @@ void SolvesSharedDomainGpuArnoldiModalFixture()
           "GPU Arnoldi modal fixture must publish only modes inside the requested window");
 }
 
+void CertifiesChargeFreeProbeWithoutDividingByCancelledSource()
+{
+    const std::uint32_t offsets[] = {0, 2};
+    const std::uint32_t columns[] = {0, 1};
+    const double values[] = {1.0, -1.0};
+    fd::CsrMatrixView matrix{};
+    matrix.row_count = 1;
+    matrix.column_count = 2;
+    matrix.row_offsets = offsets;
+    matrix.row_offsets_len = 2;
+    matrix.column_indices = columns;
+    matrix.column_indices_len = 2;
+    matrix.values = values;
+    matrix.values_len = 2;
+    std::vector<double> scale;
+    check(fd::poisson_probe_absolute_csr_action(matrix, {1.0, 1.0}, &scale) &&
+              scale.size() == 1 && scale[0] == 2.0,
+          "charge-free signed cancellation retains the original assembly scale");
+    check(fd::poisson_probe_componentwise_residual({1.0e-16}, {0.0}, scale) < 1.0e-8,
+          "roundoff in a zero-charge probe passes the unchanged backward-error gate");
+    check(fd::poisson_probe_componentwise_residual({1.0e-4}, {0.0}, scale) > 1.0e-8,
+          "a material potential-equation defect remains rejected");
+    check(fd::poisson_probe_componentwise_residual({0.0}, {0.0}, {0.0}) == 0.0 &&
+              std::isinf(fd::poisson_probe_componentwise_residual(
+                  {1.0e-16}, {0.0}, {0.0})),
+          "exact zero rows pass only for an exactly zero residual");
+    const double weights[] = {2.0};
+    check(std::abs(fd::poisson_probe_componentwise_residual(
+              {1.0}, {0.0}, {0.0}, weights, 1.0) - 0.5) < 1.0e-15,
+          "augmented gauge action participates in the equation scale");
+    check(!fd::poisson_probe_absolute_csr_action(
+              matrix, {1.0, std::numeric_limits<double>::quiet_NaN()}, &scale),
+          "nonfinite probe coefficients fail closed");
+}
+
 } // namespace
 
 int main()
 {
+    CertifiesChargeFreeProbeWithoutDividingByCancelledSource();
     // Hosts without a CUDA driver may run the CPU/SLEPc contract explicitly;
     // GPU qualification remains a separate device-backed test lane.
     const bool skip_gpu_tests = std::getenv("FULLMAG_SKIP_GPU_TESTS") != nullptr;
@@ -2646,6 +2921,10 @@ int main()
         FrequencyWindowCancellationPreservesStopReason();
         return 0;
     }
+    FrequencyWindowUsesCertifiedSignedGuardBelowFundamentalMode();
+    FrequencyWindowRetainsDemagInBoundedCachedPreconditioner();
+    FrequencyWindowCancellationDuringCachedPreconditionerPreservesStopReason();
+    PreservesFailedSchurEpsCountersWithoutPublishingModes();
     ReturnsRequestedSharedDomainCpuSchurModes();
     SolvesSharedDomainCpuSchurModalFixture();
     SolvesSharedDomainCpuSchurModalFixtureAboveExactPreconditionerCap();

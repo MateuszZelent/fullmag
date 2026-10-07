@@ -1,14 +1,21 @@
 //! FEM eigen path orchestration and dispersion artifacts.
 
-use fullmag_ir::{FemEigenPlanIR, OutputIR};
+use fullmag_ir::{FemEigenPlanIR, OutputIR, ParallelExecutionModeIR, ParallelExecutionPolicyIR};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap};
+use std::path::Path;
 
 use crate::dispatch::FemEngine;
+use crate::eigen::output_selection::{select_eigen_outputs, SampleModeId};
+use crate::eigen::{KSampleDescriptor, SingleKModeResult, SingleKSolveResult};
+use crate::fem::eigen_capability::native_cpu_modal_window_enabled;
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
+use crate::fem::eigen_k_pool::{prepare_process_pool_samples, PrecomputedSingleK};
+use crate::fem::eigen_reduction::{build_reduction_map, ReductionMap};
 use crate::fem_eigen;
 use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError};
+use fullmag_engine::fem::MeshTopology;
 
 #[path = "eigen_path_artifacts.rs"]
 mod eigen_path_artifacts;
@@ -17,12 +24,216 @@ mod eigen_path_guards;
 #[path = "eigen_path_manifest.rs"]
 mod eigen_path_manifest;
 use eigen_path_artifacts::*;
+pub(super) use eigen_path_guards::eigen_path_single_k_point_plan;
 use eigen_path_guards::*;
 use eigen_path_manifest::*;
+
+fn eigen_path_sample_id_prefix(plan: &FemEigenPlanIR) -> &'static str {
+    if bias_field_sweep_requested(plan) {
+        "bias-field-sample"
+    } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
+        "k-path-sample"
+    } else {
+        "k-sample"
+    }
+}
+
+pub(super) fn eigen_path_reduced_node_mass_weights(
+    topology: &MeshTopology,
+    reduction: &ReductionMap,
+    physical_node_weights: &[f64],
+) -> Result<Vec<f64>, RunError> {
+    if physical_node_weights.len() == reduction.active_nodes.len() {
+        return Ok(physical_node_weights.to_vec());
+    }
+    let physical_nodes = topology
+        .magnetic_node_volumes
+        .iter()
+        .enumerate()
+        .filter_map(|(node, volume)| (*volume > 0.0).then_some(node))
+        .collect::<Vec<_>>();
+    if physical_node_weights.len() != physical_nodes.len() {
+        return Err(RunError {
+            message: format!(
+                "eigen path FE mass metadata has {} weights for {} physical and {} reduced tracking nodes",
+                physical_node_weights.len(),
+                physical_nodes.len(),
+                reduction.active_nodes.len(),
+            ),
+        });
+    }
+
+    let mut reduced_weights = vec![0.0; reduction.active_nodes.len()];
+    for (node, weight) in physical_nodes.into_iter().zip(physical_node_weights) {
+        if !(weight.is_finite() && *weight > 0.0) {
+            return Err(RunError {
+                message: "eigen path FE mass metadata contains a non-positive or non-finite weight"
+                    .to_string(),
+            });
+        }
+        if let Some(reduced_index) = reduction.node_map[node] {
+            reduced_weights[reduced_index] += *weight;
+        }
+    }
+    if reduced_weights
+        .iter()
+        .any(|weight| !(weight.is_finite() && *weight > 0.0))
+    {
+        return Err(RunError {
+            message:
+                "eigen path FE mass reduction produced a non-positive or non-finite class weight"
+                    .to_string(),
+        });
+    }
+    Ok(reduced_weights)
+}
+
+pub(super) fn eigen_path_consistent_tracking_metric(
+    topology: &MeshTopology,
+    mesh: &fullmag_ir::MeshIR,
+) -> Result<std::sync::Arc<crate::eigen::types::ConsistentP1TrackingMetric>, RunError> {
+    let fail = |message: String| RunError {
+        message: format!("eigen path consistent mass: {message}"),
+    };
+    let nodes = topology
+        .magnetic_node_volumes
+        .iter()
+        .enumerate()
+        .filter_map(|(node, volume)| (*volume > 0.0).then_some(node))
+        .collect::<Vec<_>>();
+    let mut mapping = vec![None; topology.n_nodes];
+    for (local, node) in nodes.iter().copied().enumerate() {
+        mapping[node] = Some(local);
+    }
+    let mut tetra = Vec::new();
+    let mut volumes = Vec::new();
+    for (index, cell) in topology.elements.iter().enumerate() {
+        if !topology.magnetic_element_mask[index] {
+            continue;
+        }
+        let mut mapped = [0; 4];
+        for (slot, node) in cell.iter().copied().enumerate() {
+            mapped[slot] = mapping
+                .get(node as usize)
+                .copied()
+                .flatten()
+                .ok_or_else(|| {
+                    fail("magnetic tetra node is not in the physical indexing".into())
+                })?;
+        }
+        tetra.push(mapped);
+        volumes.push(topology.element_volumes[index]);
+    }
+    let identity = mesh.mixed_topology_fingerprint_v3().map_err(fail)?;
+    let metric =
+        crate::eigen::types::ConsistentP1TrackingMetric::new(identity, nodes, tetra, &volumes)
+            .map_err(fail)?;
+    Ok(std::sync::Arc::new(metric))
+}
+
+fn eigen_path_sample_id(plan: &FemEigenPlanIR, sample: &KSampleDescriptor) -> String {
+    format!(
+        "{}-{:04}",
+        eigen_path_sample_id_prefix(plan),
+        sample.sample_index
+    )
+}
+
+fn eigen_path_sample_id_for_index(plan: &FemEigenPlanIR, sample_index: usize) -> String {
+    format!("{}-{sample_index:04}", eigen_path_sample_id_prefix(plan))
+}
+
+fn eigen_path_native_mode_identities(
+    native_modes: &[Value],
+    sample_index: usize,
+) -> Result<Vec<(usize, f64)>, RunError> {
+    let mut seen = BTreeSet::new();
+    native_modes
+        .iter()
+        .enumerate()
+        .map(|(position, mode)| {
+            let raw_mode_index = mode["index"]
+                .as_u64()
+                .and_then(|index| usize::try_from(index).ok())
+                .ok_or_else(|| RunError {
+                    message: format!(
+                        "single-k spectrum sample={sample_index} mode_position={position} has no valid raw mode index"
+                    ),
+                })?;
+            if !seen.insert(raw_mode_index) {
+                return Err(RunError {
+                    message: format!(
+                        "single-k spectrum sample={sample_index} repeats raw mode index {raw_mode_index}"
+                    ),
+                });
+            }
+            let frequency_hz = mode["frequency_real_hz"]
+                .as_f64()
+                .filter(|frequency| frequency.is_finite())
+                .ok_or_else(|| RunError {
+                    message: format!(
+                        "single-k spectrum sample={sample_index} raw_mode={raw_mode_index} has no finite frequency_real_hz"
+                    ),
+                })?;
+            Ok((raw_mode_index, frequency_hz))
+        })
+        .collect()
+}
+
+fn eigen_path_mode_id(sample_index: usize, raw_mode_index: usize) -> String {
+    format!("sample-{sample_index:04}/mode-{raw_mode_index:04}")
+}
+
+pub(super) fn relax_stage_handoff_for_path_sample<'a>(
+    path_plan: &FemEigenPlanIR,
+    source_relax_handoff: Option<&'a fem_eigen::AcceptedFemRelaxStageHandoff>,
+) -> Option<&'a fem_eigen::AcceptedFemRelaxStageHandoff> {
+    if bias_field_sweep_requested(path_plan) {
+        None
+    } else {
+        source_relax_handoff
+    }
+}
+
+pub(super) fn reuse_promoted_eigen_handoff(
+    source_relax_handoff_available: bool,
+    promoted_eigen_handoff_available: bool,
+) -> bool {
+    promoted_eigen_handoff_available && !source_relax_handoff_available
+}
 
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
+
+    #[test]
+    fn native_mode_identity_rejects_missing_fields_and_duplicates() {
+        for invalid in [
+            serde_json::json!({"frequency_real_hz": 1.0e9}),
+            serde_json::json!({"index": -1, "frequency_real_hz": 1.0e9}),
+            serde_json::json!({"index": 1.5, "frequency_real_hz": 1.0e9}),
+            serde_json::json!({"index": 2}),
+            serde_json::json!({"index": 2, "frequency_real_hz": "1e9"}),
+            serde_json::json!({"index": 2, "frequency_real_hz": null}),
+        ] {
+            assert!(super::eigen_path_native_mode_identities(&[invalid], 3).is_err());
+        }
+        let explicit_zero = serde_json::json!({"index": 7, "frequency_real_hz": 0.0});
+        assert_eq!(
+            super::eigen_path_native_mode_identities(&[explicit_zero.clone()], 3).unwrap(),
+            vec![(7, 0.0)]
+        );
+        let duplicate = serde_json::json!({"index": 7, "frequency_real_hz": 1.0e9});
+        assert!(super::eigen_path_native_mode_identities(&[explicit_zero, duplicate], 3).is_err());
+        let unordered = [
+            serde_json::json!({"index": 9, "frequency_real_hz": 2.0e9}),
+            serde_json::json!({"index": 1, "frequency_real_hz": 1.0e9}),
+        ];
+        assert_eq!(
+            super::eigen_path_native_mode_identities(&unordered, 3).unwrap(),
+            vec![(9, 2.0e9), (1, 1.0e9)]
+        );
+    }
 
     pub(crate) fn bind_eigen_path_handoff_diagnostics(
         diagnostics: &mut serde_json::Value,
@@ -34,6 +245,7 @@ pub(crate) mod test_support {
             diagnostics,
             sample_index,
             handoff_sha256,
+            source_mesh_topology_sha256,
             source_mesh_topology_sha256,
         );
     }
@@ -94,7 +306,21 @@ pub(crate) mod test_support {
         result: &crate::eigen::PathSolveResult,
         published_mode_indices: &BTreeSet<u32>,
     ) -> serde_json::Value {
-        super::eigen_path_solver_diagnostics(engine, plan, result, published_mode_indices)
+        let selected = result
+            .samples
+            .iter()
+            .flat_map(|sample| {
+                sample
+                    .modes
+                    .iter()
+                    .filter(|mode| {
+                        published_mode_indices
+                            .contains(&u32::try_from(mode.raw_mode_index).unwrap_or(u32::MAX))
+                    })
+                    .map(|mode| SampleModeId::new(sample.sample.sample_index, mode.raw_mode_index))
+            })
+            .collect();
+        super::eigen_path_solver_diagnostics(engine, plan, result, &selected)
     }
 
     pub(crate) fn eigen_path_mode_json(
@@ -142,7 +368,22 @@ pub(crate) mod test_support {
         mode_artifacts: &[crate::types::AuxiliaryArtifact],
         plan: &FemEigenPlanIR,
     ) -> serde_json::Value {
-        super::build_eigen_path_frequency_domain_manifest(engine, result, mode_artifacts, plan)
+        let outputs = vec![
+            OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".into(),
+            },
+            OutputIR::DispersionCurve {
+                name: "dispersion".into(),
+                include_branch_table: true,
+            },
+        ];
+        super::build_eigen_path_frequency_domain_manifest(
+            engine,
+            result,
+            mode_artifacts,
+            plan,
+            &outputs,
+        )
     }
 
     pub(crate) fn append_eigen_path_k0_kittel_validation_artifacts(
@@ -187,11 +428,233 @@ pub(crate) mod test_support {
     }
 }
 
+/// Parse one completed process-worker payload through the same spectrum,
+/// mode-vector and seam contracts as the in-process path.  The worker only
+/// owns native execution and artifact production; branch tracking remains in
+/// this parent process so completion order cannot change branch identities.
+pub(crate) fn parse_worker_single_k_result(
+    plan: &FemEigenPlanIR,
+    point_plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    sample: &KSampleDescriptor,
+    engine: FemEngine,
+    artifacts: &[AuxiliaryArtifact],
+    tracking_topology: &MeshTopology,
+    tracking_reduction: &ReductionMap,
+    tracking_metric: &std::sync::Arc<crate::eigen::types::ConsistentP1TrackingMetric>,
+) -> Result<(SingleKSolveResult, Vec<AuxiliaryArtifact>), RunError> {
+    let spectrum_bytes = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.json")
+        .map(|artifact| &artifact.bytes)
+        .ok_or_else(|| RunError {
+            message: "single-k worker did not produce eigen/spectrum.json".to_string(),
+        })?;
+    let spectrum: Value = serde_json::from_slice(spectrum_bytes).map_err(|error| RunError {
+        message: format!("failed to parse worker spectrum.json: {error}"),
+    })?;
+    let relaxation_steps = spectrum["relaxation_steps"].as_u64().unwrap_or(0);
+    let solver_kind = spectrum["solver_kind"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    let modes_array = spectrum["modes"].as_array().ok_or_else(|| RunError {
+        message: "worker spectrum.json has no modes array".to_string(),
+    })?;
+    if modes_array.is_empty() {
+        return Err(RunError {
+            message: format!(
+                "worker spectrum.json sample={} has no accepted modes",
+                sample.sample_index
+            ),
+        });
+    }
+    let native_mode_identities =
+        eigen_path_native_mode_identities(modes_array, sample.sample_index)?;
+    let available_mode_indices = native_mode_identities
+        .iter()
+        .map(|(raw, _)| {
+            u32::try_from(*raw).map_err(|_| RunError {
+                message: "native raw mode identity exceeds output selector range".to_string(),
+            })
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let published = eigen_path_candidate_mode_indices(outputs, sample, &available_mode_indices);
+    let mode_artifacts = remap_single_k_mode_artifacts(artifacts, sample.sample_index, &published)?;
+    let tracking_active_nodes = tracking_metric.node_indices();
+    let mut modes = Vec::with_capacity(modes_array.len());
+    for (mode_json, (raw_mode_index, frequency_real_hz)) in
+        modes_array.iter().zip(native_mode_identities)
+    {
+        let solver_device = if engine == FemEngine::NativeGpu {
+            "gpu"
+        } else {
+            "cpu"
+        };
+        let component_participation = eigen_path_component_participation_from_json(
+            mode_json.get("component_participation"),
+            solver_device,
+        )?;
+        modes.push(SingleKModeResult {
+            raw_mode_index,
+            branch_id: None,
+            frequency_real_hz,
+            frequency_imag_hz: mode_json["frequency_imag_hz"].as_f64().unwrap_or(0.0),
+            angular_frequency_rad_per_s: mode_json["angular_frequency_rad_per_s"]
+                .as_f64()
+                .unwrap_or(0.0),
+            eigenvalue_real: mode_json["eigenvalue_real"].as_f64().unwrap_or(0.0),
+            eigenvalue_imag: mode_json["eigenvalue_imag"].as_f64().unwrap_or(0.0),
+            norm: mode_json["norm"].as_f64().unwrap_or(0.0),
+            mass_norm: mode_json["mass_norm"].as_f64(),
+            max_amplitude: mode_json["max_amplitude"].as_f64().unwrap_or(0.0),
+            residual_relative_l2: mode_json["residual_relative_l2"].as_f64(),
+            residual_norm: mode_json["residual_norm"].as_f64(),
+            residual_linf: mode_json["residual_linf"].as_f64(),
+            tangent_leakage_mean_abs: mode_json["tangent_leakage_mean_abs"].as_f64(),
+            tangent_leakage_max_abs: mode_json["tangent_leakage_max_abs"].as_f64(),
+            tangent_leakage_weighted_relative_l2: mode_json
+                .get("tangent_leakage_weighted_relative_l2")
+                .and_then(Value::as_f64),
+            dominant_polarization: mode_json["dominant_polarization"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
+            reduced_vector: eigen_path_mode_tracking_vector(
+                artifacts,
+                raw_mode_index,
+                Some(tracking_active_nodes),
+                &tracking_topology.coords,
+                sample.k_vector,
+                matches!(
+                    point_plan.spin_wave_bc.kind(),
+                    fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+                ),
+                tracking_metric.mesh_identity(),
+            )?,
+            lifted_real: None,
+            lifted_imag: None,
+            amplitude: None,
+            phase: None,
+            node_mass_weights: None,
+            consistent_p1_metric: Some(tracking_metric.clone()),
+            component_participation,
+        });
+    }
+    let mut seam_records = Vec::new();
+    if matches!(
+        point_plan.spin_wave_bc.kind(),
+        fullmag_ir::SpinWaveBoundaryKindIR::Periodic | fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+    ) {
+        for mode in &modes {
+            if let Some(vector) = mode.reduced_vector.as_deref() {
+                if let Some((checked_nodes, relative)) = tracking_metric
+                    .periodic_seam_relative(
+                        vector,
+                        &tracking_topology.coords,
+                        sample.k_vector,
+                        &tracking_reduction.node_map,
+                        &tracking_reduction.active_nodes,
+                        &tracking_reduction.node_phases,
+                    )
+                    .map_err(|message| RunError { message })?
+                {
+                    seam_records.push(serde_json::json!({
+                        "definition_id": "magnetic_cartesian_periodic_seam_max_relative.v1",
+                        "sample_index": sample.sample_index,
+                        "raw_mode_index": mode.raw_mode_index,
+                        "frequency_hz": mode.frequency_real_hz,
+                        "k_vector": sample.k_vector,
+                        "source_mesh_topology_sha256": tracking_metric.mesh_identity(),
+                        "checked_slave_node_count": checked_nodes,
+                        "max_relative_mismatch": relative,
+                        "scope": "magnetic_cartesian_field_only",
+                        "execution_lane": "postprocess_cpu",
+                    }));
+                }
+            }
+        }
+    }
+    let mut solver_diagnostics = spectrum.get("solver_diagnostics").cloned();
+    if let Some(diagnostics) = solver_diagnostics.as_mut().and_then(Value::as_object_mut) {
+        let records = modes_array
+            .iter()
+            .filter_map(|native_mode| {
+                let blocks = native_mode.get("block_residuals")?;
+                Some(serde_json::json!({
+                    "sample_index": sample.sample_index,
+                    "raw_mode_index": native_mode["index"],
+                    "frequency_hz": native_mode["frequency_real_hz"],
+                    "block_residuals": blocks,
+                }))
+            })
+            .collect::<Vec<_>>();
+        diagnostics.insert(
+            "mode_periodic_seam_measurements".into(),
+            Value::Array(seam_records),
+        );
+        diagnostics.insert(
+            "tracking_mass_metric".into(),
+            serde_json::json!({
+                "definition_id": "consistent_p1_tet4_cartesian_nodal_envelope.v1",
+                "source_mesh_topology_sha256": tracking_metric.mesh_identity(),
+                "physical_magnetic_node_count": tracking_active_nodes.len(),
+                "projection_scope": "nodal_P1_envelope",
+                "execution_lane": "postprocess_cpu",
+                "qualification": "runtime_unqualified"
+            }),
+        );
+        diagnostics.insert("native_mode_block_residuals".into(), Value::Array(records));
+    }
+    Ok((
+        SingleKSolveResult {
+            sample: sample.clone(),
+            modes,
+            relaxation_steps,
+            solver_model: eigen_path_single_k_solver_model(point_plan, artifacts),
+            solver_notes: vec![solver_kind],
+            solver_diagnostics,
+        },
+        mode_artifacts,
+    ))
+}
+
+/// Validate the minimum accepted-mode contract before a process result can
+/// participate in adaptive-resource calibration.  The full parser below
+/// still performs tracking/seam validation, but calibration must never be
+/// unlocked by a completed process that only emitted an empty spectrum.
+pub(crate) fn validate_worker_spectrum_artifact(
+    artifacts: &[AuxiliaryArtifact],
+    sample_index: usize,
+) -> Result<(), RunError> {
+    let spectrum_bytes = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.json")
+        .map(|artifact| &artifact.bytes)
+        .ok_or_else(|| RunError {
+            message: "single-k worker did not produce eigen/spectrum.json".to_string(),
+        })?;
+    let spectrum: Value = serde_json::from_slice(spectrum_bytes).map_err(|error| RunError {
+        message: format!("failed to parse worker spectrum.json: {error}"),
+    })?;
+    let modes_array = spectrum["modes"].as_array().ok_or_else(|| RunError {
+        message: "worker spectrum.json has no modes array".to_string(),
+    })?;
+    if modes_array.is_empty() {
+        return Err(RunError {
+            message: format!("worker spectrum.json sample={sample_index} has no accepted modes"),
+        });
+    }
+    let _ = eigen_path_native_mode_identities(modes_array, sample_index)?;
+    Ok(())
+}
+
 fn bind_eigen_path_handoff_diagnostics(
     diagnostics: &mut serde_json::Value,
     sample_index: usize,
     handoff_sha256: &str,
-    source_mesh_topology_sha256: &str,
+    handoff_source_mesh_topology_sha256: &str,
+    modal_source_mesh_topology_sha256: &str,
 ) {
     let bind = |value: &mut serde_json::Value| {
         if let Some(object) = value.as_object_mut() {
@@ -200,8 +663,12 @@ fn bind_eigen_path_handoff_diagnostics(
                 serde_json::json!(handoff_sha256),
             );
             object.insert(
+                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                serde_json::json!(handoff_source_mesh_topology_sha256),
+            );
+            object.insert(
                 "source_mesh_topology_sha256".to_string(),
-                serde_json::json!(source_mesh_topology_sha256),
+                serde_json::json!(modal_source_mesh_topology_sha256),
             );
         }
     };
@@ -232,7 +699,55 @@ pub(crate) fn execute_fem_eigen_path(
     execution: PlannedFemEigenExecution<'_>,
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
+    source_relax_handoff: Option<&fem_eigen::AcceptedFemRelaxStageHandoff>,
+    progress: Option<&mut fem_eigen::FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_path_with_producer_identity(
+        execution,
+        plan,
+        outputs,
+        source_relax_handoff,
+        progress,
+        None,
+    )
+}
+
+pub(crate) fn execute_fem_eigen_path_with_producer_identity(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    source_relax_handoff: Option<&fem_eigen::AcceptedFemRelaxStageHandoff>,
+    progress: Option<&mut fem_eigen::FemEigenProgressCallback<'_>>,
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
+        execution,
+        plan,
+        outputs,
+        source_relax_handoff,
+        progress,
+        producer_identity,
+        &ParallelExecutionPolicyIR::default(),
+        None,
+    )
+}
+
+pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    source_relax_handoff: Option<&fem_eigen::AcceptedFemRelaxStageHandoff>,
+    mut progress: Option<&mut fem_eigen::FemEigenProgressCallback<'_>>,
+    producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
+    parallel_policy: &ParallelExecutionPolicyIR,
+    process_root: Option<&Path>,
+) -> Result<ExecutedRun, RunError> {
+    reject_reference_solver_for_dispersion_validation(plan)?;
+    crate::eigen::artifacts::validated_modal_gamma0(plan.gyromagnetic_ratio).map_err(|error| {
+        RunError {
+            message: error.to_string(),
+        }
+    })?;
     let engine = match execution.lane() {
         FemEigenExecutionLane::Cpu => FemEngine::CpuNative,
         FemEigenExecutionLane::Gpu => FemEngine::NativeGpu,
@@ -240,8 +755,10 @@ pub(crate) fn execute_fem_eigen_path(
     if engine == FemEngine::NativeGpu && !gpu_modal_k0_kittel_path_supported(plan) {
         return Err(gpu_modal_dispersion_path_unavailable_error(plan));
     }
-    if !de_bv_low_k_analytic_reference_enabled(plan)
-        && !(k0_kittel_synthetic_demag_factor_enabled(plan) && !bias_field_sweep_requested(plan))
+    let native_cpu_floquet_demag_path =
+        engine == FemEngine::CpuNative && native_cpu_modal_window_enabled(plan);
+    if !(k0_kittel_synthetic_demag_factor_enabled(plan) && !bias_field_sweep_requested(plan))
+        && !native_cpu_floquet_demag_path
     {
         fem_eigen::reject_unsupported_floquet_dynamic_demag(
             &plan.spin_wave_bc,
@@ -255,73 +772,275 @@ pub(crate) fn execute_fem_eigen_path(
     use crate::types::AuxiliaryArtifact;
     use std::cell::RefCell;
 
-    struct KSolverAdapter<'a> {
+    struct KSolverAdapter<'a, 'p, 'c> {
+        progress: std::sync::Mutex<Option<&'p mut fem_eigen::FemEigenProgressCallback<'c>>>,
         execution: PlannedFemEigenExecution<'a>,
         engine: FemEngine,
         mode_artifacts: RefCell<Vec<AuxiliaryArtifact>>,
-        mode_artifact_indices: BTreeSet<u32>,
-        relax_handoff: RefCell<Option<fem_eigen::AcceptedFemEigenEquilibriumHandoff>>,
+        checkpoint_root: Option<std::path::PathBuf>,
+        publication_outputs: Vec<OutputIR>,
+        tracking_metric:
+            RefCell<Option<std::sync::Arc<crate::eigen::types::ConsistentP1TrackingMetric>>>,
+        source_relax_handoff: Option<fem_eigen::AcceptedFemRelaxStageHandoff>,
+        producer_identity: Option<fem_eigen::FemRelaxationProducerStageIdentity>,
+        previous_accepted_magnetization: RefCell<Option<Vec<[f64; 3]>>>,
         periodic_airbox_k0_metrics:
             RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
+        precomputed: RefCell<HashMap<usize, PrecomputedSingleK>>,
+        parallel_report: Option<crate::eigen::k_process_pool::ProcessPoolReportV1>,
     }
 
-    impl SingleKSolver for KSolverAdapter<'_> {
+    impl SingleKSolver for KSolverAdapter<'_, '_, '_> {
         fn solve_single_k(
             &self,
             plan: &FemEigenPlanIR,
             outputs: &[OutputIR],
             sample: &KSampleDescriptor,
         ) -> Result<SingleKSolveResult, crate::types::RunError> {
-            if de_bv_low_k_analytic_reference_enabled(plan) {
-                return solve_de_bv_low_k_analytic_reference_single_k(plan, sample);
+            {
+                let mut sink = self.progress.lock().map_err(|_| RunError {
+                    message: "eigen path progress callback lock poisoned".to_string(),
+                })?;
+                super::eigen_progress::emit_fem_eigen_progress(
+                    &mut *sink,
+                    fem_eigen::FemEigenProgress {
+                        phase: "preparing_k_path_sample",
+                        requested_modes: plan.count as usize,
+                        ..Default::default()
+                    },
+                )?;
             }
             if k0_kittel_synthetic_demag_factor_enabled(plan) && plan.bias_field_samples.is_empty()
             {
                 return solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample);
             }
 
-            let existing_handoff = self.relax_handoff.borrow().clone();
-            let mut accepted_handoff = existing_handoff.clone();
-            let point_plan = eigen_path_single_k_point_plan(
-                plan,
-                sample,
-                existing_handoff.is_some(),
-                existing_handoff.as_ref(),
-            )?;
+            if let Some(precomputed) = self.precomputed.borrow_mut().remove(&sample.sample_index) {
+                if precomputed.final_magnetization.len() != plan.mesh.nodes.len()
+                    || precomputed
+                        .final_magnetization
+                        .iter()
+                        .flatten()
+                        .any(|value| !value.is_finite())
+                {
+                    return Err(RunError {
+                        message: format!(
+                            "adaptive worker sample {} did not produce a finite accepted equilibrium",
+                            sample.sample_index
+                        ),
+                    });
+                }
+                if let Some(metrics) =
+                    eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts(
+                        plan,
+                        &precomputed.mode_artifacts,
+                    )?
+                {
+                    eigen_path_merge_periodic_airbox_k0_metrics(
+                        &mut self.periodic_airbox_k0_metrics.borrow_mut(),
+                        metrics,
+                    )?;
+                }
+                self.mode_artifacts
+                    .borrow_mut()
+                    .extend(precomputed.mode_artifacts);
+                *self.previous_accepted_magnetization.borrow_mut() =
+                    Some(precomputed.final_magnetization);
+                return Ok(precomputed.result);
+            }
 
-            let executed = if self.execution.resolution().is_some() {
-                fem_eigen::execute_planned_fem_eigen_with_handoff(
-                    self.execution,
+            let source_stage_handoff =
+                relax_stage_handoff_for_path_sample(plan, self.source_relax_handoff.as_ref());
+            let mut point_plan = eigen_path_single_k_point_plan(plan, sample, false, None)?;
+            if bias_field_sweep_requested(plan) {
+                let declared_sample = plan
+                    .bias_field_samples
+                    .get(sample.sample_index)
+                    .ok_or_else(|| RunError {
+                        message: format!(
+                            "FEM bias_field_samples has no bias field for sample {}",
+                            sample.sample_index
+                        ),
+                    })?;
+                let prepared = super::eigen_sweep::prepare_bias_field_sample_plan(
+                    plan,
+                    declared_sample,
+                    &plan.equilibrium_magnetization,
+                    self.previous_accepted_magnetization.borrow().as_deref(),
+                )?;
+                // Keep the path's single-k/Floquet normalization while importing
+                // the canonical sweep preparation's field and equilibrium seed.
+                point_plan.external_field = prepared.external_field;
+                point_plan.equilibrium = prepared.equilibrium;
+                point_plan.equilibrium_magnetization = prepared.equilibrium_magnetization;
+                point_plan.bias_field_samples = prepared.bias_field_samples;
+                point_plan.k0_kittel_validation = prepared.k0_kittel_validation;
+            }
+            let tracking_topology =
+                MeshTopology::from_ir(&point_plan.mesh).map_err(|error| RunError {
+                    message: format!("eigen path tracking mesh topology: {error}"),
+                })?;
+            let tracking_reduction = build_reduction_map(
+                &tracking_topology,
+                &point_plan.spin_wave_bc,
+                point_plan.k_sampling.as_ref(),
+            )?;
+            let expected_tracking_mesh =
+                point_plan
+                    .mesh
+                    .mixed_topology_fingerprint_v3()
+                    .map_err(|message| RunError {
+                        message: format!("eigen path tracking mesh identity: {message}"),
+                    })?;
+            let cached_tracking_metric = self.tracking_metric.borrow().clone();
+            let tracking_metric = match cached_tracking_metric {
+                Some(metric) if metric.mesh_identity() != expected_tracking_mesh.as_str() => {
+                    return Err(RunError {
+                        message: "eigen path tracking mesh changed between samples".into(),
+                    });
+                }
+                Some(metric) => metric,
+                None => {
+                    let metric = eigen_path_consistent_tracking_metric(
+                        &tracking_topology,
+                        &point_plan.mesh,
+                    )?;
+                    *self.tracking_metric.borrow_mut() = Some(metric.clone());
+                    metric
+                }
+            };
+            let tracking_active_nodes = tracking_metric.node_indices();
+            // A non-sweep path consumes the immutable Relax-stage handoff for
+            // every k point. A bias-field path owns a separate accepted
+            // equilibrium and therefore takes the per-sample relaxation route
+            // below instead of reusing a summary-only continuation.
+            let progress_sink = &self.progress;
+            // Keep cancellation and native EPS/KSP telemetry connected for every
+            // path sample, including the first relax-stage continuation.
+            let mut forward = |event| match progress_sink.lock() {
+                Ok(mut sink) => sink
+                    .as_deref_mut()
+                    .map_or(crate::types::StepAction::Continue, |callback| {
+                        callback(event)
+                    }),
+                Err(_) => crate::types::StepAction::Stop,
+            };
+            let executed = if bias_field_sweep_requested(plan) {
+                let lane = match self.engine {
+                    FemEngine::CpuNative => FemEigenExecutionLane::Cpu,
+                    FemEngine::NativeGpu => FemEigenExecutionLane::Gpu,
+                };
+                super::eigen_execution::execute_bias_field_sample_with_relaxation(
                     &point_plan,
                     outputs,
-                    existing_handoff.as_ref(),
+                    lane,
+                    Some(&mut forward),
+                    sample.sample_index,
+                    self.execution.resolution().map(|_| self.execution),
+                    self.producer_identity.as_ref(),
                 )?
-            } else {
-                match self.engine {
-                    FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen_with_handoff(
+            } else if self.execution.resolution().is_some() {
+                if let Some(handoff) = source_stage_handoff {
+                    fem_eigen::execute_planned_fem_eigen_with_progress_and_stage_handoff(
+                        self.execution,
                         &point_plan,
                         outputs,
-                        existing_handoff.as_ref(),
-                    )?,
-                    FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen_with_handoff(
+                        &mut forward,
+                        handoff,
+                        sample.sample_index,
+                        Some(sample.sample_index),
+                    )?
+                } else {
+                    fem_eigen::execute_planned_fem_eigen_with_handoff_and_progress(
+                        self.execution,
                         &point_plan,
                         outputs,
                         None,
-                        existing_handoff.as_ref(),
-                    )?,
+                        Some(&mut forward),
+                        sample.sample_index,
+                        Some(sample.sample_index),
+                    )?
+                }
+            } else {
+                match self.engine {
+                    FemEngine::CpuNative => {
+                        if let Some(handoff) = source_stage_handoff {
+                            fem_eigen::execute_cpu_fem_eigen_with_progress_and_stage_handoff(
+                                &point_plan,
+                                outputs,
+                                &mut forward,
+                                handoff,
+                                sample.sample_index,
+                                Some(sample.sample_index),
+                            )?
+                        } else {
+                            fem_eigen::execute_cpu_fem_eigen_with_handoff_and_progress(
+                                &point_plan,
+                                outputs,
+                                None,
+                                Some(&mut forward),
+                                sample.sample_index,
+                                Some(sample.sample_index),
+                            )?
+                        }
+                    }
+                    FemEngine::NativeGpu => {
+                        if let Some(handoff) = source_stage_handoff {
+                            fem_eigen::execute_gpu_fem_eigen_with_progress_and_stage_handoff(
+                                &point_plan,
+                                outputs,
+                                Some(&mut forward),
+                                handoff,
+                                sample.sample_index,
+                                Some(sample.sample_index),
+                            )?
+                        } else {
+                            fem_eigen::execute_gpu_fem_eigen_with_handoff(
+                                &point_plan,
+                                outputs,
+                                Some(&mut forward),
+                                None,
+                                sample.sample_index,
+                                Some(sample.sample_index),
+                            )?
+                        }
+                    }
                 }
             };
-            if existing_handoff.is_none()
-                && !bias_field_sweep_requested(plan)
-                && matches!(
-                    plan.equilibrium,
-                    fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
+            // Preserve the native bytes before parsing can fail or a later k
+            // aborts the campaign. This is diagnostic, never sample acceptance.
+            if let Some(root) = self.checkpoint_root.as_deref() {
+                let _checkpoint_manifest = super::single_k_checkpoint::write_raw_single_k_checkpoint(
+                    root,
+                    sample.sample_index,
+                    sample.k_vector,
+                    &point_plan,
+                    &executed.auxiliary_artifacts,
                 )
+                .map_err(|error| RunError {
+                    message: format!(
+                        "failed to preserve raw FEM sample {}: {error}",
+                        sample.sample_index
+                    ),
+                })?;
+            }
             {
-                let accepted =
-                    fem_eigen::accepted_relax_to_eigen_handoff_from_run(&point_plan, &executed)?;
-                accepted_handoff = Some(accepted.clone());
-                *self.relax_handoff.borrow_mut() = Some(accepted);
+                let final_magnetization = &executed.result.final_magnetization;
+                if final_magnetization.len() != plan.mesh.nodes.len()
+                    || final_magnetization
+                        .iter()
+                        .flatten()
+                        .any(|component| !component.is_finite())
+                {
+                    return Err(RunError {
+                        message: format!(
+                            "FEM eigen path sample {} did not produce a finite accepted equilibrium",
+                            sample.sample_index
+                        ),
+                    });
+                }
+                *self.previous_accepted_magnetization.borrow_mut() =
+                    Some(final_magnetization.clone());
             }
             if let Some(metrics) = eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts(
                 plan,
@@ -332,14 +1051,6 @@ pub(crate) fn execute_fem_eigen_path(
                     metrics,
                 )?;
             }
-            self.mode_artifacts
-                .borrow_mut()
-                .extend(remap_single_k_mode_artifacts(
-                    &executed.auxiliary_artifacts,
-                    sample.sample_index,
-                    &self.mode_artifact_indices,
-                )?);
-
             // Parse the spectrum artifact to extract mode results
             let spectrum_bytes = executed
                 .auxiliary_artifacts
@@ -365,11 +1076,32 @@ pub(crate) fn execute_fem_eigen_path(
                     .ok_or_else(|| crate::types::RunError {
                         message: "spectrum.json has no modes array".to_string(),
                     })?;
-            let node_mass_weights =
-                eigen_path_node_mass_weights_from_json(&spectrum["node_mass_weights"]);
-
+            let native_mode_identities =
+                eigen_path_native_mode_identities(modes_array, sample.sample_index)?;
+            let available_mode_indices = native_mode_identities
+                .iter()
+                .map(|(raw, _)| {
+                    u32::try_from(*raw).map_err(|_| RunError {
+                        message: "native raw mode identity exceeds output selector range"
+                            .to_string(),
+                    })
+                })
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            self.mode_artifacts
+                .borrow_mut()
+                .extend(remap_single_k_mode_artifacts(
+                    &executed.auxiliary_artifacts,
+                    sample.sample_index,
+                    &eigen_path_candidate_mode_indices(
+                        &self.publication_outputs,
+                        sample,
+                        &available_mode_indices,
+                    ),
+                )?);
             let mut modes = Vec::with_capacity(modes_array.len());
-            for mode_json in modes_array {
+            for (mode_json, (raw_mode_index, frequency_real_hz)) in
+                modes_array.iter().zip(native_mode_identities)
+            {
                 let solver_device = if self.engine == FemEngine::NativeGpu {
                     "gpu"
                 } else {
@@ -380,9 +1112,9 @@ pub(crate) fn execute_fem_eigen_path(
                     solver_device,
                 )?;
                 modes.push(SingleKModeResult {
-                    raw_mode_index: mode_json["index"].as_u64().unwrap_or(0) as usize,
+                    raw_mode_index,
                     branch_id: None,
-                    frequency_real_hz: mode_json["frequency_real_hz"].as_f64().unwrap_or(0.0),
+                    frequency_real_hz,
                     frequency_imag_hz: mode_json["frequency_imag_hz"].as_f64().unwrap_or(0.0),
                     angular_frequency_rad_per_s: mode_json["angular_frequency_rad_per_s"]
                         .as_f64()
@@ -392,6 +1124,7 @@ pub(crate) fn execute_fem_eigen_path(
                     norm: mode_json["norm"].as_f64().unwrap_or(0.0),
                     mass_norm: mode_json["mass_norm"].as_f64(),
                     max_amplitude: mode_json["max_amplitude"].as_f64().unwrap_or(0.0),
+                    residual_relative_l2: mode_json["residual_relative_l2"].as_f64(),
                     residual_norm: mode_json["residual_norm"].as_f64(),
                     residual_linf: mode_json["residual_linf"].as_f64(),
                     tangent_leakage_mean_abs: mode_json["tangent_leakage_mean_abs"].as_f64(),
@@ -405,26 +1138,94 @@ pub(crate) fn execute_fem_eigen_path(
                         .to_string(),
                     reduced_vector: eigen_path_mode_tracking_vector(
                         &executed.auxiliary_artifacts,
-                        mode_json["index"].as_u64().unwrap_or(0) as usize,
-                    ),
+                        raw_mode_index,
+                        Some(tracking_active_nodes),
+                        &tracking_topology.coords,
+                        sample.k_vector,
+                        matches!(
+                            point_plan.spin_wave_bc.kind(),
+                            fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+                        ),
+                        tracking_metric.mesh_identity(),
+                    )?,
                     lifted_real: None,
                     lifted_imag: None,
                     amplitude: None,
                     phase: None,
-                    node_mass_weights: node_mass_weights.clone(),
+                    node_mass_weights: None,
+                    consistent_p1_metric: Some(tracking_metric.clone()),
                     component_participation,
                 });
             }
 
+            let mut seam_records = Vec::new();
+            if matches!(
+                point_plan.spin_wave_bc.kind(),
+                fullmag_ir::SpinWaveBoundaryKindIR::Periodic
+                    | fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+            ) {
+                for mode in &modes {
+                    if let Some(vector) = mode.reduced_vector.as_deref() {
+                        if let Some((checked_nodes, relative)) = tracking_metric
+                            .periodic_seam_relative(
+                                vector,
+                                &tracking_topology.coords,
+                                sample.k_vector,
+                                &tracking_reduction.node_map,
+                                &tracking_reduction.active_nodes,
+                                &tracking_reduction.node_phases,
+                            )
+                            .map_err(|message| RunError { message })?
+                        {
+                            seam_records.push(serde_json::json!({
+                            "definition_id": "magnetic_cartesian_periodic_seam_max_relative.v1",
+                            "sample_index": sample.sample_index, "raw_mode_index": mode.raw_mode_index,
+                            "frequency_hz": mode.frequency_real_hz, "k_vector": sample.k_vector,
+                            "source_mesh_topology_sha256": tracking_metric.mesh_identity(),
+                            "checked_slave_node_count": checked_nodes, "max_relative_mismatch": relative,
+                            "scope": "magnetic_cartesian_field_only", "execution_lane": "postprocess_cpu",
+                        }));
+                        }
+                    }
+                }
+            }
             let mut solver_diagnostics = spectrum.get("solver_diagnostics").cloned();
-            if let (Some(diagnostics), Some(handoff)) =
-                (solver_diagnostics.as_mut(), accepted_handoff.as_ref())
+            // Preserve the original per-mode certificate before tracking
+            // collapses the single-k result into common modal quantities.
+            if let Some(diagnostics) = solver_diagnostics
+                .as_mut()
+                .and_then(serde_json::Value::as_object_mut)
             {
-                bind_eigen_path_handoff_diagnostics(
-                    diagnostics,
-                    sample.sample_index,
-                    handoff.content_sha256(),
-                    handoff.source_mesh_topology_sha256(),
+                let records = modes_array
+                    .iter()
+                    .filter_map(|native_mode| {
+                        let blocks = native_mode.get("block_residuals")?;
+                        Some(serde_json::json!({
+                            "sample_index": sample.sample_index,
+                            "raw_mode_index": native_mode["index"],
+                            "frequency_hz": native_mode["frequency_real_hz"],
+                            "block_residuals": blocks,
+                        }))
+                    })
+                    .collect::<Vec<_>>();
+                diagnostics.insert(
+                    "mode_periodic_seam_measurements".into(),
+                    serde_json::Value::Array(seam_records),
+                );
+                diagnostics.insert(
+                    "tracking_mass_metric".into(),
+                    serde_json::json!({
+                        "definition_id": "consistent_p1_tet4_cartesian_nodal_envelope.v1",
+                        "source_mesh_topology_sha256": tracking_metric.mesh_identity(),
+                        "physical_magnetic_node_count": tracking_active_nodes.len(),
+                        "projection_scope": "nodal_P1_envelope",
+                        "execution_lane": "postprocess_cpu",
+                        "qualification": "runtime_unqualified"
+                    }),
+                );
+                diagnostics.insert(
+                    "native_mode_block_residuals".into(),
+                    serde_json::Value::Array(records),
                 );
             }
 
@@ -443,17 +1244,71 @@ pub(crate) fn execute_fem_eigen_path(
     }
 
     let tracking_outputs = eigen_path_tracking_outputs(outputs, plan.count);
-    let published_mode_indices = eigen_path_public_mode_indices(outputs, plan.count);
-    let mode_artifact_indices = eigen_path_mode_artifact_indices(outputs);
-    let mode_fields_requested = !mode_artifact_indices.is_empty();
+    let mode_fields_requested = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenMode { .. }));
     let wants_dispersion = eigen_path_wants_dispersion(outputs);
+    if bias_field_sweep_requested(plan) {
+        let samples = super::eigen_sweep::validate_bias_field_samples(plan)?;
+        let expanded_samples = crate::eigen::expand_k_sampling(plan.k_sampling.as_ref())
+            .map_err(|message| RunError { message })?;
+        if expanded_samples.len() != samples.len() {
+            return Err(RunError {
+                message: format!(
+                    "FEM bias-field path has {} k samples but {} bias_field_samples entries",
+                    expanded_samples.len(),
+                    samples.len()
+                ),
+            });
+        }
+    }
+    // Resolve and preflight before the first native solve. Each invocation
+    // owns a fresh raw namespace, so retrying an output directory preserves
+    // old checkpoint bytes without colliding with sample zero.
+    let absolute_process_root = process_root
+        .map(super::single_k_checkpoint::prepare_checkpoint_process_root)
+        .transpose()
+        .map_err(|error| RunError {
+            message: format!("prepare FEM checkpoint output root: {error}"),
+        })?;
+    let checkpoint_root = absolute_process_root
+        .as_deref()
+        .map(super::single_k_checkpoint::create_raw_checkpoint_attempt)
+        .transpose()
+        .map_err(|error| RunError {
+            message: format!("prepare FEM raw checkpoint attempt: {error}"),
+        })?;
+    let (precomputed, parallel_report) =
+        if parallel_policy.mode == ParallelExecutionModeIR::Adaptive {
+            let (precomputed, report) = prepare_process_pool_samples(
+                execution,
+                plan,
+                &tracking_outputs,
+                parallel_policy,
+                absolute_process_root.as_deref(),
+                checkpoint_root.as_deref(),
+                source_relax_handoff,
+                producer_identity,
+                &mut progress,
+            )?;
+            (precomputed, Some(report))
+        } else {
+            (HashMap::new(), None)
+        };
     let adapter = KSolverAdapter {
+        progress: std::sync::Mutex::new(progress),
         execution,
         engine,
         mode_artifacts: RefCell::new(Vec::new()),
-        mode_artifact_indices,
-        relax_handoff: RefCell::new(None),
+        checkpoint_root,
+        publication_outputs: outputs.to_vec(),
+        tracking_metric: RefCell::new(None),
+        source_relax_handoff: source_relax_handoff.cloned(),
+        producer_identity: producer_identity.cloned(),
+        previous_accepted_magnetization: RefCell::new(None),
         periodic_airbox_k0_metrics: RefCell::new(None),
+        precomputed: RefCell::new(precomputed),
+        parallel_report,
     };
     let mut path_result = run_path_or_single(
         &adapter,
@@ -463,6 +1318,20 @@ pub(crate) fn execute_fem_eigen_path(
         None,
         plan.mode_tracking.as_ref(),
     )?;
+    // Guard before any spectrum or mode JSON can serialize nonfinite gamma to null.
+    eigen_path_publication_gamma0(plan, &path_result)?;
+    let last_accepted_magnetization = adapter.previous_accepted_magnetization.into_inner();
+    let final_magnetization = if bias_field_sweep_requested(plan) {
+        last_accepted_magnetization.ok_or_else(|| RunError {
+            message: "FEM bias-field path completed without an accepted equilibrium".to_string(),
+        })?
+    } else {
+        last_accepted_magnetization.unwrap_or_else(|| {
+            source_relax_handoff
+                .map(|handoff| handoff.equilibrium_magnetization.clone())
+                .unwrap_or_else(|| plan.equilibrium_magnetization.clone())
+        })
+    };
     path_result.k0_kittel_periodic_airbox_demag = adapter.periodic_airbox_k0_metrics.into_inner();
     if path_result.k0_kittel_periodic_airbox_demag.is_some() && engine == FemEngine::CpuNative {
         path_result.solver_model = crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
@@ -470,20 +1339,35 @@ pub(crate) fn execute_fem_eigen_path(
     if periodic_airbox_k0_runtime_supported(plan) && engine == FemEngine::NativeGpu {
         path_result.solver_model = crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov;
     }
+    let selection = select_eigen_outputs(&path_result, outputs).map_err(|error| RunError {
+        message: format!("invalid eigen output selection: {error}"),
+    })?;
+    let published_mode_ids: BTreeSet<SampleModeId> = selection
+        .spectrum_mode_ids()
+        .union(selection.field_mode_ids())
+        .copied()
+        .collect();
+    let branch_table_requested = selection.branch_table_requested();
+    let parallel_report = adapter.parallel_report;
     let mut mode_artifacts = adapter.mode_artifacts.into_inner();
-    deduplicate_auxiliary_artifacts_by_path(&mut mode_artifacts);
-    // Analytic reference solvers do not synthesize topology-bound mode fields
-    // unless the caller explicitly requested EigenMode output.  In particular,
-    // an EigenSpectrum-only K0 field sweep must not trigger a hidden mode-bundle
-    // write and then fail on a mesh identity that was never requested.
+    deduplicate_auxiliary_artifacts_by_path(&mut mode_artifacts)?;
+    // The synthetic K0 validation oracle does not synthesize topology-bound mode
+    // fields unless the caller explicitly requested EigenMode output. In
+    // particular, an EigenSpectrum-only K0 field sweep must not trigger a
+    // hidden mode-bundle write and then fail on a mesh identity that was never
+    // requested. DE/BV validation always reaches this point through the native
+    // FEM solve and therefore never needs a synthetic mode fallback.
     if mode_artifacts.is_empty()
         && mode_fields_requested
-        && (de_bv_low_k_analytic_reference_enabled(plan)
-            || (k0_kittel_synthetic_demag_factor_enabled(plan)
-                && !bias_field_sweep_requested(plan)))
+        && k0_kittel_synthetic_demag_factor_enabled(plan)
+        && !bias_field_sweep_requested(plan)
     {
         mode_artifacts = eigen_path_mode_artifacts_from_result(&path_result)?;
     }
+
+    retain_selected_eigen_path_mode_artifacts(&mut mode_artifacts, selection.field_mode_ids());
+    validate_eigen_path_selected_mode_artifacts(&mode_artifacts, selection.field_mode_ids())?;
+    bind_eigen_path_tracked_mode_metadata(&mut mode_artifacts, &path_result)?;
 
     // Build the ExecutedRun with both V2 and legacy-compatible artifacts
     let mut auxiliary_artifacts = Vec::new();
@@ -494,6 +1378,7 @@ pub(crate) fn execute_fem_eigen_path(
         .iter()
         .map(|s| {
             serde_json::json!({
+                "sample_id": eigen_path_sample_id(plan, &s.sample),
                 "sample_index": s.sample.sample_index,
                 "label": s.sample.label,
                 "k_vector": s.sample.k_vector,
@@ -503,15 +1388,15 @@ pub(crate) fn execute_fem_eigen_path(
                 "modes": s
                     .modes
                     .iter()
-                    .filter(|m| published_mode_indices.contains(&(m.raw_mode_index as u32)))
+                    .filter(|m| published_mode_ids.contains(&SampleModeId::new(s.sample.sample_index, m.raw_mode_index)))
                     .map(|m| {
-                        eigen_path_mode_json(
+                        eigen_path_mode_publication_json(eigen_path_mode_json(
                             plan,
                             &s.sample,
                             m,
                             path_result.solver_model,
                             s.solver_diagnostics.as_ref(),
-                        )
+                        ), s.sample.sample_index, m.raw_mode_index, selection.field_mode_ids())
                     })
                     .collect::<Vec<_>>(),
             })
@@ -523,11 +1408,6 @@ pub(crate) fn execute_fem_eigen_path(
         "sample_count": v2_samples.len(),
         "samples": v2_samples.clone(),
     });
-    let tracking_cfg = plan.mode_tracking.clone().unwrap_or_default();
-    let tracking_method = serde_json::to_value(tracking_cfg.method)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| "overlap_hungarian".to_string());
     let phase_convention = serde_json::to_value(plan.spin_wave_bc.phase_convention())
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
@@ -539,7 +1419,10 @@ pub(crate) fn execute_fem_eigen_path(
             branch
                 .points
                 .iter()
-                .filter(|point| published_mode_indices.contains(&(point.raw_mode_index as u32)))
+                .filter(|point| {
+                    published_mode_ids
+                        .contains(&SampleModeId::new(point.sample_index, point.raw_mode_index))
+                })
                 .filter_map(|point| point.overlap_prev)
         })
         .collect::<Vec<_>>();
@@ -552,15 +1435,31 @@ pub(crate) fn execute_fem_eigen_path(
         eigen_path_tracking_score_summary(&path_result);
     let modal_overlap_unavailable_reason = if modal_overlap_available {
         serde_json::Value::Null
+    } else if path_result
+        .branches
+        .iter()
+        .flat_map(|branch| &branch.points)
+        .any(|point| {
+            point.tracking_edge.as_ref().is_some_and(|edge| {
+                matches!(
+                    edge.transition,
+                    crate::eigen::types::TrackingTransition::NewBranch
+                )
+            })
+        })
+    {
+        serde_json::json!("tracking_restart_without_predecessor")
+    } else if tracking_score_source == "frequency_score_fallback" {
+        serde_json::json!("mode_vectors_unavailable")
     } else {
-        serde_json::json!("mode_vectors_not_carried_by_multi_k_orchestrator")
+        serde_json::json!("tracking_metric_or_edge_evidence_unavailable")
     };
     let gap_count = path_result
         .branches
         .iter()
         .map(|branch| v2_samples.len().saturating_sub(branch.points.len()))
         .sum::<usize>();
-    let public_mode_count = eigen_path_public_mode_count(&path_result, &published_mode_indices);
+    let public_mode_count = eigen_path_public_mode_count(&path_result, &published_mode_ids);
     let diagnostics_v2 = serde_json::json!({
         "schema_version": "eigen_diagnostics.v2",
         "dispersion": {
@@ -573,7 +1472,10 @@ pub(crate) fn execute_fem_eigen_path(
             "modal_overlap_available": modal_overlap_available,
             "modal_overlap_unavailable_reason": modal_overlap_unavailable_reason,
             "gap_count": gap_count,
-            "ambiguous_assignment_count": 0,
+            "ambiguous_assignment_count": Option::<u64>::None,
+            "ambiguous_assignment_count_available": false,
+            "ambiguous_assignment_count_unavailable_reason":
+                "assignment_ambiguity_metric_not_computed",
         },
     });
     let spectrum_v2 = serde_json::json!({
@@ -590,7 +1492,7 @@ pub(crate) fn execute_fem_eigen_path(
         .iter()
         .map(|sample| {
             serde_json::json!({
-                "sample_id": format!("bias-field-sample-{:04}", sample.sample.sample_index),
+                "sample_id": eigen_path_sample_id(plan, &sample.sample),
                 "sample_index": sample.sample.sample_index,
                 "label": sample.sample.label,
                 "k_vector": sample.sample.k_vector,
@@ -600,15 +1502,15 @@ pub(crate) fn execute_fem_eigen_path(
                 "modes": sample
                     .modes
                     .iter()
-                    .filter(|mode| published_mode_indices.contains(&(mode.raw_mode_index as u32)))
+                    .filter(|mode| published_mode_ids.contains(&SampleModeId::new(sample.sample.sample_index, mode.raw_mode_index)))
                     .map(|mode| {
-                        eigen_path_mode_v3_json(
+                        eigen_path_mode_publication_json(eigen_path_mode_v3_json(
                             plan,
                             &sample.sample,
                             mode,
                             path_result.solver_model,
                             sample.solver_diagnostics.as_ref(),
-                        )
+                        ), sample.sample.sample_index, mode.raw_mode_index, selection.field_mode_ids())
                     })
                     .collect::<Vec<_>>(),
             })
@@ -645,12 +1547,14 @@ pub(crate) fn execute_fem_eigen_path(
                 .points
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| published_mode_indices.contains(&(p.raw_mode_index as u32)))
+                .filter(|(_, p)| published_mode_ids.contains(&SampleModeId::new(p.sample_index, p.raw_mode_index)))
                 .map(|(point_index, p)| {
                     let mode = eigen_path_mode_for_branch_point(&path_result, p);
                     let point_modal_overlap_available =
                         eigen_path_branch_point_modal_overlap_available(&path_result, b, point_index);
                     serde_json::json!({
+                        "sample_id": eigen_path_sample_id_for_index(plan, p.sample_index),
+                        "mode_id": eigen_path_mode_id(p.sample_index, p.raw_mode_index),
                         "sample_index": p.sample_index,
                         "raw_mode_index": p.raw_mode_index,
                         "frequency_hz": p.frequency_real_hz,
@@ -661,6 +1565,7 @@ pub(crate) fn execute_fem_eigen_path(
                             .unwrap_or(p.frequency_real_hz * std::f64::consts::TAU),
                         "tracking_confidence": p.tracking_confidence,
                         "overlap_prev": p.overlap_prev,
+                        "tracking_edge": p.tracking_edge,
                         "tracking_score_source": eigen_path_branch_point_tracking_score_source(
                             &path_result,
                             b,
@@ -676,10 +1581,7 @@ pub(crate) fn execute_fem_eigen_path(
                             p.sample_index,
                             p.raw_mode_index,
                         ),
-                        "mode_field_resource_key": eigen_path_mode_field_resource_key(
-                            p.sample_index,
-                            p.raw_mode_index,
-                        ),
+                        "mode_field_available": selection.contains_field_mode(p.sample_index, p.raw_mode_index),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -693,13 +1595,20 @@ pub(crate) fn execute_fem_eigen_path(
             }))
         })
         .collect();
+    let recorded_policy = crate::eigen::tracking::recorded_tracking_policy(&path_result);
+    let tracking_policy_availability = if recorded_policy.is_some() {
+        "complete"
+    } else {
+        "missing_or_mixed"
+    };
     let branches_v2 = serde_json::json!({
         "schema_version": "eigen_branches.v2",
-        "tracking_method": tracking_method,
+        "tracking_policy_availability": tracking_policy_availability,
+        "tracking_method": recorded_policy.map(|policy| policy.method),
         "tracking_score_source": tracking_score_source,
         "modal_overlap_available": modal_overlap_available,
-        "overlap_floor": tracking_cfg.overlap_floor,
-        "frequency_window_hz": tracking_cfg.frequency_window_hz,
+        "overlap_floor": recorded_policy.map(|policy| policy.overlap_floor),
+        "frequency_window_hz": recorded_policy.and_then(|policy| policy.frequency_window_hz),
         "branches": v2_branches.clone(),
         "diagnostics": {
             "min_overlap": min_overlap,
@@ -708,45 +1617,66 @@ pub(crate) fn execute_fem_eigen_path(
             "modal_overlap_available": modal_overlap_available,
             "modal_overlap_unavailable_reason": modal_overlap_unavailable_reason,
             "gap_count": gap_count,
-            "ambiguous_assignment_count": 0,
+            "ambiguous_assignment_count": Option::<u64>::None,
+            "ambiguous_assignment_count_available": false,
+            "ambiguous_assignment_count_unavailable_reason":
+                "assignment_ambiguity_metric_not_computed",
         },
     });
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: "eigen/branches.v2.json".to_string(),
-        bytes: serde_json::to_vec_pretty(&branches_v2).unwrap_or_default(),
-    });
+    if branch_table_requested {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/branches.v2.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&branches_v2).unwrap_or_default(),
+        });
+    }
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "eigen/diagnostics.v2.json".to_string(),
         bytes: serde_json::to_vec_pretty(&diagnostics_v2).unwrap_or_default(),
     });
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: "eigen/branches.json".to_string(),
-        bytes: serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": "2",
-            "solver_model": path_result.solver_model.as_str(),
-            "branches": v2_branches,
-        }))
-        .unwrap_or_default(),
-    });
+    if branch_table_requested {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/branches.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": "2",
+                "tracking_policy_availability": tracking_policy_availability,
+                "solver_model": path_result.solver_model.as_str(),
+                "tracking_method": recorded_policy.map(|policy| policy.method),
+                "overlap_floor": recorded_policy.map(|policy| policy.overlap_floor),
+                "frequency_window_hz": recorded_policy.and_then(|policy| policy.frequency_window_hz),
+                "branches": v2_branches,
+            }))
+            .unwrap_or_default(),
+        });
+    }
 
     // Legacy-compatible spectrum.json from the first sample
     if let Some(first_sample) = path_result.samples.first() {
         let modes_summary: Vec<serde_json::Value> = first_sample
             .modes
             .iter()
-            .filter(|m| published_mode_indices.contains(&(m.raw_mode_index as u32)))
+            .filter(|m| {
+                published_mode_ids.contains(&SampleModeId::new(
+                    first_sample.sample.sample_index,
+                    m.raw_mode_index,
+                ))
+            })
             .map(|m| {
-                eigen_path_mode_v3_json(
-                    plan,
-                    &first_sample.sample,
-                    m,
-                    path_result.solver_model,
-                    first_sample.solver_diagnostics.as_ref(),
+                eigen_path_mode_publication_json(
+                    eigen_path_mode_v3_json(
+                        plan,
+                        &first_sample.sample,
+                        m,
+                        path_result.solver_model,
+                        first_sample.solver_diagnostics.as_ref(),
+                    ),
+                    first_sample.sample.sample_index,
+                    m.raw_mode_index,
+                    selection.field_mode_ids(),
                 )
             })
             .collect();
         let solver_diagnostics =
-            eigen_path_solver_diagnostics(engine, plan, &path_result, &published_mode_indices);
+            eigen_path_solver_diagnostics(engine, plan, &path_result, &published_mode_ids);
         let production_path = matches!(
             path_result.solver_model,
             crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
@@ -796,39 +1726,51 @@ pub(crate) fn execute_fem_eigen_path(
 
         if wants_dispersion {
             // Legacy dispersion CSV with all samples × modes
-            let mut csv_lines =
-                vec!["mode_index,kx,ky,kz,frequency_hz,angular_frequency_rad_per_s".to_string()];
+            let mut csv_lines = vec![
+                "mode_index,kx,ky,kz,frequency_hz,angular_frequency_rad_per_s,sample_id,mode_id"
+                    .to_string(),
+            ];
             for sample_result in &path_result.samples {
                 let k = sample_result.sample.k_vector;
                 for mode in &sample_result.modes {
-                    if !published_mode_indices.contains(&(mode.raw_mode_index as u32)) {
+                    if !published_mode_ids.contains(&SampleModeId::new(
+                        sample_result.sample.sample_index,
+                        mode.raw_mode_index,
+                    )) {
                         continue;
                     }
                     csv_lines.push(format!(
-                        "{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{}",
                         mode.raw_mode_index,
                         k[0],
                         k[1],
                         k[2],
                         mode.frequency_real_hz,
                         mode.angular_frequency_rad_per_s,
+                        eigen_path_sample_id(plan, &sample_result.sample),
+                        eigen_path_mode_id(sample_result.sample.sample_index, mode.raw_mode_index,),
                     ));
                 }
             }
-            auxiliary_artifacts.push(AuxiliaryArtifact {
-                relative_path: "eigen/dispersion/branch_table.csv".to_string(),
-                bytes: csv_lines.join("\n").into_bytes(),
-            });
+            if branch_table_requested {
+                auxiliary_artifacts.push(AuxiliaryArtifact {
+                    relative_path: "eigen/dispersion/branch_table.csv".to_string(),
+                    bytes: csv_lines.join("\n").into_bytes(),
+                });
+            }
 
             let mut dispersion_v2_lines = vec![
-            "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
+            "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id"
                 .to_string(),
         ];
             for sample_result in &path_result.samples {
                 let k = sample_result.sample.k_vector;
                 let label = sample_result.sample.label.clone().unwrap_or_default();
                 for mode in &sample_result.modes {
-                    if !published_mode_indices.contains(&(mode.raw_mode_index as u32)) {
+                    if !published_mode_ids.contains(&SampleModeId::new(
+                        sample_result.sample.sample_index,
+                        mode.raw_mode_index,
+                    )) {
                         continue;
                     }
                     let branch_point = eigen_path_branch_point_for_mode(
@@ -853,17 +1795,23 @@ pub(crate) fn execute_fem_eigen_path(
                         .unwrap_or_default();
                     let line_width_hz =
                         eigen_path_line_width_hz(mode.frequency_imag_hz).unwrap_or_default();
+                    let mode_field_available = selection.contains_field_mode(
+                        sample_result.sample.sample_index,
+                        mode.raw_mode_index,
+                    );
                     let validation_columns =
                         eigen_path_de_bv_analytic_csv_columns(plan, &sample_result.sample, mode);
                     dispersion_v2_lines.push(format!(
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                         sample_result.sample.sample_index,
+                        eigen_path_sample_id(plan, &sample_result.sample),
                         sample_result.sample.path_s,
                         k[0],
                         k[1],
                         k[2],
                         label,
                         mode.raw_mode_index,
+                        eigen_path_mode_id(sample_result.sample.sample_index, mode.raw_mode_index,),
                         mode.branch_id
                             .map(|branch_id| branch_id.to_string())
                             .unwrap_or_default(),
@@ -878,11 +1826,8 @@ pub(crate) fn execute_fem_eigen_path(
                             .unwrap_or_default(),
                         overlap_score,
                         tracking_score_source,
+                        mode_field_available,
                         eigen_path_mode_field_id(
-                            sample_result.sample.sample_index,
-                            mode.raw_mode_index,
-                        ),
-                        eigen_path_mode_field_resource_key(
                             sample_result.sample.sample_index,
                             mode.raw_mode_index,
                         ),
@@ -912,18 +1857,27 @@ pub(crate) fn execute_fem_eigen_path(
             &path_result,
             &mode_artifacts,
             plan,
+            outputs,
         ))
         .map_err(|error| RunError {
             message: format!("failed to serialize k-path frequency-domain manifest: {error}"),
         })?,
     });
     auxiliary_artifacts.extend(mode_artifacts);
+    if let Some(report) = parallel_report {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/parallel_execution.v1.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&report).map_err(|error| RunError {
+                message: format!("failed to serialize adaptive process-pool report: {error}"),
+            })?,
+        });
+    }
 
     Ok(ExecutedRun {
         result: crate::types::RunResult {
             status: crate::types::RunStatus::Completed,
             steps: vec![],
-            final_magnetization: plan.equilibrium_magnetization.clone(),
+            final_magnetization,
             completion: Some(crate::relaxation::resolve_stage_completion(
                 crate::types::RunStatus::Completed,
                 None,

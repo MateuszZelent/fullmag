@@ -116,6 +116,40 @@ for (const method of expectedApiMethods) {
 }
 console.log(`✓ All ${expectedApiMethods.length} API client methods verified`);
 
+// Verify that a stalled request is aborted and retried without leaking the
+// timeout/retry-only options into the FetchInit object.
+const originalFetch = globalThis.fetch;
+let timeoutFetchAttempts = 0;
+globalThis.fetch = (_url, options = {}) => {
+  timeoutFetchAttempts += 1;
+  assert(!Object.prototype.hasOwnProperty.call(options, 'timeoutMs'), 'timeoutMs must stay client-side');
+  assert(!Object.prototype.hasOwnProperty.call(options, 'retries'), 'retries must stay client-side');
+  if (timeoutFetchAttempts === 1) {
+    return new Promise((_, reject) => {
+      const rejectAborted = () => {
+        const err = new Error('request aborted by test');
+        err.name = 'AbortError';
+        reject(err);
+      };
+      options.signal?.addEventListener('abort', rejectAborted, { once: true });
+      setTimeout(rejectAborted, 50);
+    });
+  }
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    headers: { get: () => 'application/json' },
+    json: async () => ({ attempts: timeoutFetchAttempts }),
+  });
+};
+try {
+  const timeoutRetryResult = await api.request('/timeout-retry-test', { timeoutMs: 5, retries: 1 });
+  assert.strictEqual(timeoutRetryResult.attempts, 2, 'timed out requests must retry once');
+} finally {
+  globalThis.fetch = originalFetch;
+}
+console.log('✓ api.js timeout abort and retry verified');
+
 // 5. Setup synthetic DOM environment to test component and view renders
 class MockElement {
   constructor(tag = 'div', id = '') {
@@ -378,6 +412,58 @@ api.getStorageResources = async () => ({
 
 const storageContainer = new MockElement('div');
 const storageMod = await import('./src/views/StorageView.js');
+
+// A slow resources scan must not hold back the fast volumes response.
+let resolveStorageResources;
+let pendingStorageRequests = 0;
+api.getStorageResources = () => new Promise(resolve => {
+  pendingStorageRequests += 1;
+  resolveStorageResources = resolve;
+});
+const deferredStorageContainer = new MockElement('div');
+const deferredStorageHandle = storageMod.renderStorageView(deferredStorageContainer);
+deferredStorageHandle.update();
+deferredStorageHandle.update();
+await new Promise(r => setTimeout(r, 20));
+const deferredVolumesEl = deferredStorageContainer.querySelector('#volumes-table-container');
+const deferredCategoriesEl = deferredStorageContainer.querySelector('#categories-breakdown-container');
+assert(deferredVolumesEl.innerHTML.includes('Root Volume'), 'StorageView must render volumes before resource scan completes');
+assert(deferredCategoriesEl.innerHTML.includes('Wczytywanie podziału klas storage'), 'StorageView must keep resource sections loading independently');
+assert.strictEqual(pendingStorageRequests, 1, 'Repeated updates must share the pending storage request');
+resolveStorageResources({ total_measured_bytes: 1, categories: [], resources: [] });
+await new Promise(r => setTimeout(r, 20));
+assert(deferredCategoriesEl.innerHTML.includes('Brak danych inwentaryzacji klas storage'), 'StorageView must render resource response after deferred scan resolves');
+deferredStorageHandle.destroy();
+
+// Leaving the view must prevent a late response from writing into its old DOM.
+let resolveLateStorageResources;
+let lateStorageRequests = 0;
+api.getStorageResources = () => new Promise(resolve => {
+  lateStorageRequests += 1;
+  resolveLateStorageResources = resolve;
+});
+const lateStorageContainer = new MockElement('div');
+const lateStorageHandle = storageMod.renderStorageView(lateStorageContainer);
+await new Promise(r => setTimeout(r, 20));
+const lateCategoriesEl = lateStorageContainer.querySelector('#categories-breakdown-container');
+const beforeDestroy = lateCategoriesEl.innerHTML;
+lateStorageHandle.destroy();
+lateStorageHandle.update();
+resolveLateStorageResources({ total_measured_bytes: 1, categories: [], resources: [] });
+await new Promise(r => setTimeout(r, 20));
+assert.strictEqual(lateCategoriesEl.innerHTML, beforeDestroy, 'Destroyed StorageView must discard late resource response');
+assert.strictEqual(lateStorageRequests, 1, 'Destroyed StorageView must not start new requests');
+
+
+api.getStorageResources = async () => ({
+  total_measured_bytes: 20e9,
+  measured_at: new Date().toISOString(),
+  categories: [
+    { name: 'Execution', logical_bytes: 10e9, file_count: 150, completeness: 'partial', eligible_cleanup_bytes: 5e9, reclaimable_bytes: 5e9 },
+    { name: 'Artifacts', logical_bytes: 10e9, file_count: 50, completeness: 'complete', eligible_cleanup_bytes: 0, reclaimable_bytes: 0 },
+  ],
+  resources: [],
+});
 storageMod.renderStorageView(storageContainer);
 await new Promise(r => setTimeout(r, 20));
 
@@ -464,3 +550,30 @@ await assert.rejects(
 console.log('✓ api.js error honesty verified (no synthetic fallback on 500)');
 
 console.log('[test] All Runner Console unit and smoke tests passed successfully!');
+
+// Queue pagination must retrieve active jobs in FIFO order without history.
+const { renderQueueView } = await import('./src/views/QueueView.js');
+const originalGetJobs = api.getJobs;
+const queueRequests = [];
+api.getJobs = async (params) => {
+  queueRequests.push(params);
+  return { items: [{job_id: `queue-page-${params.page}`, state: 'queued', created_at: 10}],
+    page: params.page, pages: 2, is_truncated: false };
+};
+const queueContainer = new MockElement('div');
+renderQueueView(queueContainer);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.deepEqual(queueRequests, [
+  {status: 'queue', sort: 'oldest', limit: 200, page: 1},
+  {status: 'queue', sort: 'oldest', limit: 200, page: 2},
+]);
+const queueHtml = queueContainer.querySelector('#queue-table-card').innerHTML;
+assert(queueHtml.includes('queue-page-1') && queueHtml.includes('queue-page-2'));
+assert(queueHtml.indexOf('queue-page-1') < queueHtml.indexOf('queue-page-2'));
+api.getJobs = async () => ({items: [], page: 1, pages: 1, is_truncated: true});
+const truncatedQueue = new MockElement('div');
+renderQueueView(truncatedQueue);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert(truncatedQueue.querySelector('#queue-table-card').innerHTML.includes('niekompletna'));
+api.getJobs = originalGetJobs;
+console.log('✓ Queue active-only FIFO pagination and incomplete response verified');

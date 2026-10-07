@@ -245,11 +245,16 @@ install-cli install-cli-dev install-cli-static:
 	fi; \
 	if [ -n "$$fdm_dir" ]; then cp -a "$$fdm_dir"/libfullmag_fdm.so* .fullmag/local/lib/ 2>/dev/null || true; fi; \
 	if [ "$$build_mode" = "cuda-fem-gpu" ] || [ "$$build_mode" = "fem-cpu" ]; then \
-		fem_dir=$$(find "$$cargo_target_dir/release/build" -path '*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
-		if [ -z "$$fem_dir" ]; then \
-			fem_dir=$$(find "$$cargo_target_dir" -path '*native-build/backends/fem/libfullmag_fem.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
+		if [ -n "$${FULLMAG_SOURCE_SNAPSHOT_SHA256:-}" ]; then \
+			fem_dir=$$(python3 scripts/select_managed_fem_library.py --cargo-target "$$cargo_target_dir" --snapshot "$${FULLMAG_SOURCE_SNAPSHOT_SHA256}"); \
+			cp -a "$$fem_dir"/libfullmag_fem.so* .fullmag/local/lib/; \
+		else \
+			fem_dir=$$(find "$$cargo_target_dir/release/build" -path '*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
+			if [ -z "$$fem_dir" ]; then \
+				fem_dir=$$(find "$$cargo_target_dir" -path '*native-build/backends/fem/libfullmag_fem.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
+			fi; \
+			if [ -n "$$fem_dir" ]; then cp -a "$$fem_dir"/libfullmag_fem.so* .fullmag/local/lib/ 2>/dev/null || true; fi; \
 		fi; \
-		if [ -n "$$fem_dir" ]; then cp -a "$$fem_dir"/libfullmag_fem.so* .fullmag/local/lib/ 2>/dev/null || true; fi; \
 	fi; \
 	printf '%s\n' "$$build_mode" > .fullmag/local/launcher-build-mode
 	@mkdir -p .fullmag/local/bin

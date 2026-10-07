@@ -1,5 +1,7 @@
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
+#include "cpu/frequency_domain/modal_krylov_tuning.hpp"
+#include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/real_frequency_rotated_pencil.hpp"
 
@@ -96,6 +98,46 @@ void copy_message(char *destination, std::size_t destination_size, const char *m
     destination[destination_size - 1] = '\0';
 }
 
+void format_nullable_u64_json(
+    char *destination,
+    std::size_t destination_size,
+    bool available,
+    std::uint64_t value) noexcept
+{
+    if (destination == nullptr || destination_size == 0u) {
+        return;
+    }
+    const int written = available
+        ? std::snprintf(
+              destination,
+              destination_size,
+              "%llu",
+              static_cast<unsigned long long>(value))
+        : std::snprintf(destination, destination_size, "%s", "null");
+    if (written < 0 || static_cast<std::size_t>(written) >= destination_size) {
+        copy_message(destination, destination_size, "null");
+    }
+}
+
+void format_nullable_double_json(
+    char *destination,
+    std::size_t destination_size,
+    bool available,
+    double value) noexcept
+{
+    if (destination == nullptr || destination_size == 0u) {
+        return;
+    }
+    if (!available || !std::isfinite(value)) {
+        copy_message(destination, destination_size, "null");
+        return;
+    }
+    const int written = std::snprintf(destination, destination_size, "%.17g", value);
+    if (written < 0 || static_cast<std::size_t>(written) >= destination_size) {
+        copy_message(destination, destination_size, "null");
+    }
+}
+
 bool production_string_equals(const char *actual, const char *expected) noexcept
 {
     return actual != nullptr && expected != nullptr && std::strcmp(actual, expected) == 0;
@@ -189,6 +231,34 @@ double production_modal_eigensolver_tolerance(double residual_tolerance) noexcep
     return std::max(
         1.0e-12,
         std::min(1.0e-8, 1.0e-3 * std::max(residual_tolerance, 0.0)));
+}
+
+struct BoundedKrylovDimensions {
+    std::uint64_t nev = 0;
+    std::uint64_t ncv = 0;
+    bool valid = false;
+};
+
+BoundedKrylovDimensions bounded_krylov_dimensions(
+    std::uint64_t dimension,
+    std::uint64_t requested_nev,
+    bool frequency_window = false) noexcept
+{
+    if (dimension < 2u || requested_nev == 0u) {
+        return {};
+    }
+    const std::uint64_t nev = std::min(dimension - 1u, requested_nev);
+    // Window coverage requests retain extra Ritz pairs even in empty local
+    // intervals. Reserve a larger basis for that solve, without changing nev,
+    // tolerances or the completeness certificate. Standalone shifts keep 2x.
+    // Bound before multiplication to avoid overflow near the u64 limit.
+    const std::uint64_t basis_multiplier = frequency_window ? 4u : 2u;
+    const std::uint64_t oversampled_nev =
+        nev > dimension / basis_multiplier ? dimension : basis_multiplier * nev;
+    const std::uint64_t ncv = std::min(
+        dimension,
+        std::max(nev + 1u, oversampled_nev));
+    return {nev, ncv, ncv > nev && ncv <= dimension};
 }
 
 double complex_l2_norm(const std::vector<Complex> &values) noexcept
@@ -807,6 +877,15 @@ std::mutex &pa_e3_slepc_mutex()
     return mutex;
 }
 
+// Access only while pa_e3_slepc_mutex() is held.  Once a production K0
+// EPS solve returns a hard PETSc error, no later production K0 solve may
+// create or query another SLEPc graph in this process.
+bool &production_k0_slepc_process_quarantined()
+{
+    static bool quarantined = false;
+    return quarantined;
+}
+
 bool ensure_slepc_initialized(char error_message[256])
 {
     PetscBool initialized = PETSC_FALSE;
@@ -1189,14 +1268,18 @@ struct ProductionSplitContext {
 
 struct ProductionCpuSolveControl {
     PoissonAirboxEigenBlockProblem callback_problem{};
+    std::chrono::steady_clock::time_point callback_started_at{};
     bool armed = false;
     bool cancellation_observed = false;
     bool cancel_poll_enabled = true;
     bool progress_enabled = true;
 
-    void arm(const PoissonAirboxEigenBlockProblem &problem) noexcept
+    void arm(
+        const PoissonAirboxEigenBlockProblem &problem,
+        std::chrono::steady_clock::time_point started_at) noexcept
     {
         callback_problem = problem;
+        callback_started_at = started_at;
         armed = true;
         cancellation_observed = false;
         cancel_poll_enabled = true;
@@ -1206,6 +1289,7 @@ struct ProductionCpuSolveControl {
     void disarm() noexcept
     {
         callback_problem = PoissonAirboxEigenBlockProblem{};
+        callback_started_at = {};
         armed = false;
         cancellation_observed = false;
         cancel_poll_enabled = true;
@@ -1215,6 +1299,8 @@ struct ProductionCpuSolveControl {
 
 struct ProductionKspConvergenceContext {
     ProductionCpuSolveControl *solve_control = nullptr;
+    PoissonAirboxModalLinearSolverRole linear_solver_role =
+        PoissonAirboxModalLinearSolverRole::unknown;
     void *default_context = nullptr;
 };
 
@@ -1266,24 +1352,47 @@ PetscErrorCode production_modal_ksp_convergence_test(
                "missing production modal callback problem");
     ProductionCpuSolveControl *solve_control = context->solve_control;
     const PoissonAirboxEigenBlockProblem &problem = solve_control->callback_problem;
-    if (solve_control->cancel_poll_enabled &&
-        poisson_airbox_modal_cancel_requested(problem)) {
-        solve_control->cancellation_observed = true;
-        if (reason != nullptr) {
-            *reason = KSP_DIVERGED_USER;
-        }
-        if (solve_control->progress_enabled) {
-            poisson_airbox_modal_emit_progress(
+    auto emit_linear_progress =
+        [&](const char *phase, const char *stop_reason) noexcept {
+            if (!solve_control->progress_enabled ||
+                problem.progress_callback == nullptr) {
+                return;
+            }
+            const char *ksp_type = nullptr;
+            const PetscErrorCode ksp_type_status =
+                ksp != nullptr ? KSPGetType(ksp, &ksp_type) : PETSC_ERR_ARG_NULL;
+            if (ksp_type_status != PETSC_SUCCESS) {
+                ksp_type = nullptr;
+            }
+            const PoissonAirboxModalLinearProgress linear_progress{
+                context->linear_solver_role,
+                ksp_type,
+                static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
+                static_cast<double>(residual_norm)};
+            const auto progress_problem = poisson_airbox_modal_progress_with_elapsed(
                 problem,
-                "cancelling_shift_invert",
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - solve_control->callback_started_at)
+                    .count());
+            poisson_airbox_modal_emit_progress(
+                progress_problem,
+                phase,
                 "production_cpu",
                 static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
                 0,
                 0,
                 static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
                 static_cast<double>(residual_norm),
-                "cancel_requested");
+                stop_reason,
+                &linear_progress);
+        };
+    if (solve_control->cancel_poll_enabled &&
+        poisson_airbox_modal_cancel_requested(problem)) {
+        solve_control->cancellation_observed = true;
+        if (reason != nullptr) {
+            *reason = KSP_DIVERGED_USER;
         }
+        emit_linear_progress("cancelling_shift_invert", "cancel_requested");
         PetscFunctionReturn(PETSC_SUCCESS);
     }
     // The same ST KSP is reused for every shift solve and for post-EPS Ritz
@@ -1296,23 +1405,14 @@ PetscErrorCode production_modal_ksp_convergence_test(
     }
     PetscCall(KSPConvergedDefault(
         ksp, iteration, residual_norm, reason, context->default_context));
-    if (solve_control->progress_enabled) {
-        poisson_airbox_modal_emit_progress(
-            problem,
-            "solving_shift_invert",
-            "production_cpu",
-            static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-            0,
-            0,
-            static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-            static_cast<double>(residual_norm));
-    }
+    emit_linear_progress("solving_shift_invert", nullptr);
     PetscFunctionReturn(PETSC_SUCCESS);
 }
 
 PetscErrorCode install_production_modal_ksp_convergence_test(
     KSP ksp,
-    ProductionCpuSolveControl *solve_control)
+    ProductionCpuSolveControl *solve_control,
+    PoissonAirboxModalLinearSolverRole linear_solver_role)
 {
     PetscFunctionBeginUser;
     PetscCheck(ksp != nullptr && solve_control != nullptr,
@@ -1325,6 +1425,7 @@ PetscErrorCode install_production_modal_ksp_convergence_test(
                PETSC_ERR_MEM,
                "failed to allocate production modal KSP convergence context");
     context->solve_control = solve_control;
+    context->linear_solver_role = linear_solver_role;
     PetscErrorCode status = KSPConvergedDefaultCreate(&context->default_context);
     if (status == PETSC_SUCCESS) {
         status = KSPSetConvergenceTest(
@@ -1705,7 +1806,8 @@ bool configure_production_context(
         KSPSetErrorIfNotConverged(context->poisson_ksp, PETSC_TRUE) != 0 ||
         install_production_modal_ksp_convergence_test(
             context->poisson_ksp,
-            solve_control) != 0 ||
+            solve_control,
+            PoissonAirboxModalLinearSolverRole::poisson) != 0 ||
         KSPSetUp(context->poisson_ksp) != 0) {
         return false;
     }
@@ -1838,6 +1940,230 @@ bool solve_production_phi(
     VecRestoreArray(context->phi_solution, &phi_values);
     VecRestoreArrayRead(context->poisson_solution, &solution_values);
     return true;
+}
+
+bool apply_probe_csr(
+    const CsrMatrixView &matrix,
+    const std::vector<double> &input,
+    std::vector<double> *output)
+{
+    if (output == nullptr || matrix.row_offsets == nullptr ||
+        matrix.column_indices == nullptr || matrix.values == nullptr ||
+        matrix.column_count != input.size() ||
+        matrix.row_offsets_len != matrix.row_count + 1u ||
+        matrix.column_indices_len != matrix.values_len ||
+        matrix.row_offsets[0] != 0u ||
+        matrix.row_offsets[matrix.row_count] != matrix.values_len) {
+        return false;
+    }
+    output->assign(static_cast<std::size_t>(matrix.row_count), 0.0);
+    for (std::uint64_t row = 0u; row < matrix.row_count; ++row) {
+        const std::uint32_t begin = matrix.row_offsets[row];
+        const std::uint32_t end = matrix.row_offsets[row + 1u];
+        if (begin > end || end > matrix.values_len) {
+            return false;
+        }
+        long double value = 0.0L;
+        for (std::uint32_t entry = begin; entry < end; ++entry) {
+            const std::uint32_t column = matrix.column_indices[entry];
+            if (column >= matrix.column_count ||
+                !std::isfinite(matrix.values[entry]) ||
+                !std::isfinite(input[column])) {
+                return false;
+            }
+            value += static_cast<long double>(matrix.values[entry]) * input[column];
+        }
+        (*output)[static_cast<std::size_t>(row)] = static_cast<double>(value);
+        if (!std::isfinite((*output)[static_cast<std::size_t>(row)])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+double probe_vector_dot(
+    const std::vector<double> &left,
+    const std::vector<double> &right) noexcept
+{
+    if (left.size() != right.size()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    long double sum = 0.0L;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        sum += static_cast<long double>(left[index]) * right[index];
+    }
+    return static_cast<double>(sum);
+}
+
+double probe_vector_l2(const std::vector<double> &values) noexcept
+{
+    long double sum = 0.0L;
+    for (double value : values) {
+        if (!std::isfinite(value)) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        sum += static_cast<long double>(value) * value;
+    }
+    return std::sqrt(static_cast<double>(sum));
+}
+
+bool run_k0_demag_probe_sample(
+    ProductionSchurContext *context,
+    const PoissonAirboxEigenBlockProblem &problem,
+    const std::vector<double> &q_values,
+    const std::vector<double> &field_functional,
+    double magnetization_integral,
+    double energy_scale,
+    double magnetic_volume,
+    bool observable,
+    PoissonAirboxK0DemagProbeSample *sample,
+    char failure_reason[96])
+{
+    if (sample == nullptr) {
+        copy_message(failure_reason, 96, "probe_result_missing");
+        return false;
+    }
+    *sample = PoissonAirboxK0DemagProbeSample{};
+    if (!observable) {
+        return true;
+    }
+    sample->attempted = true;
+    sample->q_l2_norm = probe_vector_l2(q_values);
+    if (context == nullptr || problem.k0_demag_probe == nullptr ||
+        q_values.size() != static_cast<std::size_t>(problem.q_dof_count) ||
+        field_functional.size() != static_cast<std::size_t>(problem.phi_dof_count) ||
+        !std::isfinite(sample->q_l2_norm) || sample->q_l2_norm <= 1.0e-12 ||
+        !std::isfinite(magnetization_integral) ||
+        !std::isfinite(energy_scale) || energy_scale <= 0.0 ||
+        !std::isfinite(magnetic_volume) || magnetic_volume <= 0.0 ||
+        !std::isfinite(problem.k0_demag_probe->mu0_t_m_a) ||
+        problem.k0_demag_probe->mu0_t_m_a <= 0.0) {
+        copy_message(failure_reason, 96, "probe_input_invalid");
+        return false;
+    }
+
+    Vec q = nullptr;
+    if (VecCreateSeq(PETSC_COMM_SELF, context->q_count, &q) != 0) {
+        copy_message(failure_reason, 96, "probe_q_vector_create_failed");
+        return false;
+    }
+    PetscScalar *q_array = nullptr;
+    bool q_copied = VecGetArray(q, &q_array) == 0;
+    if (q_copied) {
+        for (PetscInt index = 0; index < context->q_count; ++index) {
+            q_array[index] = static_cast<PetscScalar>(
+                q_values[static_cast<std::size_t>(index)]);
+        }
+        q_copied = VecRestoreArray(q, &q_array) == 0;
+    }
+    std::vector<double> phi;
+    double eta = 0.0;
+    const bool solved = q_copied &&
+        solve_production_phi(context, q, &phi, &eta);
+    VecDestroy(&q);
+    if (!solved) {
+        copy_message(failure_reason, 96, "probe_poisson_solve_failed");
+        return false;
+    }
+
+    std::vector<double> a_phiq_q;
+    std::vector<double> p_phi;
+    std::vector<double> a_qphi_phi;
+    if (!apply_probe_csr(problem.A_phiq, q_values, &a_phiq_q) ||
+        !apply_probe_csr(problem.A_phiphi, phi, &p_phi) ||
+        !apply_probe_csr(problem.A_qphi, phi, &a_qphi_phi)) {
+        copy_message(failure_reason, 96, "probe_original_csr_action_failed");
+        return false;
+    }
+    std::vector<double> potential_residual(p_phi.size(), 0.0);
+    for (std::size_t index = 0; index < potential_residual.size(); ++index) {
+        potential_residual[index] = p_phi[index] + a_phiq_q[index];
+        if (context->gauge_augmented) {
+            if (problem.phi_mean_weights == nullptr ||
+                problem.phi_mean_weights_count != potential_residual.size()) {
+                copy_message(failure_reason, 96, "probe_gauge_weights_missing");
+                return false;
+            }
+            potential_residual[index] +=
+                problem.phi_mean_weights[index] * eta;
+        }
+    }
+    double gauge_weight_l2 = 0.0;
+    if (context->gauge_augmented) {
+        long double gauge_weight_squared = 0.0L;
+        for (std::size_t index = 0; index < phi.size(); ++index) {
+            gauge_weight_squared +=
+                static_cast<long double>(problem.phi_mean_weights[index]) *
+                problem.phi_mean_weights[index];
+        }
+        gauge_weight_l2 = std::sqrt(static_cast<double>(gauge_weight_squared));
+    }
+    const double residual_denominator =
+        probe_vector_l2(p_phi) + probe_vector_l2(a_phiq_q) +
+        (context->gauge_augmented ? std::abs(eta) * gauge_weight_l2 : 0.0);
+    sample->potential_action_relative_residual = probe_vector_l2(potential_residual) /
+        std::max(residual_denominator, 1.0e-300);
+    std::vector<double> poisson_scale;
+    std::vector<double> source_scale;
+    if (!poisson_probe_absolute_csr_action(problem.A_phiphi, phi, &poisson_scale) ||
+        !poisson_probe_absolute_csr_action(problem.A_phiq, q_values, &source_scale)) {
+        copy_message(failure_reason, 96, "probe_residual_scale_failed");
+        return false;
+    }
+    // Componentwise backward error remains meaningful for a charge-free
+    // in-plane probe, where signed source terms cancel to roundoff.
+    sample->potential_relative_residual = poisson_probe_componentwise_residual(
+        potential_residual, poisson_scale, source_scale,
+        context->gauge_augmented ? problem.phi_mean_weights : nullptr, eta);
+    if (context->gauge_augmented) {
+        long double gauge_value = 0.0L;
+        for (std::size_t index = 0; index < phi.size(); ++index) {
+            gauge_value += static_cast<long double>(problem.phi_mean_weights[index]) *
+                phi[index];
+        }
+        sample->gauge_constraint_abs = std::abs(static_cast<double>(gauge_value));
+    }
+    const double field_integral = probe_vector_dot(field_functional, phi);
+    sample->mean_field_a_per_m = field_integral / magnetic_volume;
+    sample->mean_magnetization_a_per_m = magnetization_integral / magnetic_volume;
+    if (std::abs(sample->mean_magnetization_a_per_m) <= 1.0e-14) {
+        copy_message(failure_reason, 96, "probe_magnetization_not_observable");
+        return false;
+    }
+    sample->demag_factor = -sample->mean_field_a_per_m /
+        sample->mean_magnetization_a_per_m;
+    const double potential_quadratic = probe_vector_dot(phi, p_phi);
+    const double magnetic_quadratic = probe_vector_dot(q_values, a_qphi_phi);
+    const double mu0 = problem.k0_demag_probe->mu0_t_m_a;
+    sample->potential_energy_j = 0.5 * mu0 * potential_quadratic;
+    sample->magnetic_energy_j = 0.5 * magnetic_quadratic;
+    sample->energy_form_relative_defect =
+        std::abs(sample->potential_energy_j - sample->magnetic_energy_j) /
+        std::max({energy_scale,
+                  std::abs(sample->potential_energy_j),
+                  std::abs(sample->magnetic_energy_j),
+                  1.0e-300});
+    const double gauge_scale = context->gauge_augmented
+        ? std::max(probe_vector_l2(phi) * gauge_weight_l2, 1.0e-300)
+        : 1.0;
+    sample->passed =
+        std::isfinite(sample->potential_relative_residual) &&
+        sample->potential_relative_residual <= 1.0e-8 &&
+        std::isfinite(sample->gauge_constraint_abs) &&
+        sample->gauge_constraint_abs <= 1.0e-8 * gauge_scale &&
+        std::isfinite(sample->mean_field_a_per_m) &&
+        std::isfinite(sample->mean_magnetization_a_per_m) &&
+        std::isfinite(sample->demag_factor) &&
+        std::isfinite(sample->potential_energy_j) &&
+        std::isfinite(sample->magnetic_energy_j) &&
+        std::isfinite(sample->energy_form_relative_defect) &&
+        sample->energy_form_relative_defect <= 1.0e-8 &&
+        sample->potential_energy_j >= -1.0e-8 * energy_scale &&
+        sample->magnetic_energy_j >= -1.0e-8 * energy_scale;
+    if (!sample->passed) {
+        copy_message(failure_reason, 96, "probe_physical_operator_check_failed");
+    }
+    return sample->passed;
 }
 
 // Apply the Schur operator while retaining the reconstructed scalar solution
@@ -1989,6 +2315,7 @@ struct ProductionCpuOperatorContext {
     ProductionSplitContext split{};
     Mat schur_shell = nullptr;
     Mat split_mass = nullptr;
+    Mat cached_window_schur = nullptr;
     PetscInt split_count = 0;
     double descriptor_mass_norm = 0.0;
     double descriptor_operator_norm = 0.0;
@@ -1998,6 +2325,18 @@ struct ProductionCpuOperatorContext {
     std::uint32_t operator_context_setup_count = 0;
     std::uint32_t poisson_factorization_setup_count = 0;
     std::uint32_t shift_solver_setup_count = 0;
+    bool exact_cache_construction_attempted = false;
+    bool exact_cache_construction_succeeded = false;
+    bool exact_cache_shift_failure_observed = false;
+    char exact_cache_status[64]{};
+    std::uint64_t exact_cache_dimension = 0;
+    std::uint64_t exact_cache_column_count = 0;
+    std::uint64_t exact_cache_construction_poisson_solve_count = 0;
+    double exact_cache_construction_seconds = 0.0;
+    bool k0_demag_probe_completed = false;
+    PoissonAirboxK0DemagProbeResult k0_demag_operator_probe{};
+    bool invalidated = false;
+    bool eps_lifetime_unsafe = false;
     bool ready = false;
 
     ProductionCpuOperatorContext() = default;
@@ -2007,13 +2346,98 @@ struct ProductionCpuOperatorContext {
     ProductionCpuOperatorContext &operator=(ProductionCpuOperatorContext &&) = delete;
 };
 
+void copy_exact_cache_observability(
+    const ProductionCpuOperatorContext &context,
+    PoissonAirboxModalEigenResult *out_result) noexcept
+{
+    if (out_result == nullptr) {
+        return;
+    }
+    out_result->exact_preconditioner_shift_failure_observed =
+        context.exact_cache_shift_failure_observed;
+    if (context.exact_cache_construction_attempted) {
+        out_result->exact_preconditioner_column_count_available = true;
+        out_result->exact_preconditioner_column_count =
+            context.exact_cache_column_count;
+        out_result->exact_preconditioner_construction_metrics_available = true;
+        out_result->exact_preconditioner_construction_poisson_solve_count =
+            context.exact_cache_construction_poisson_solve_count;
+        out_result->exact_preconditioner_construction_timing_available = true;
+        out_result->exact_preconditioner_construction_seconds =
+            context.exact_cache_construction_seconds;
+    }
+}
+
+bool run_k0_demag_operator_probe(
+    const PoissonAirboxEigenBlockProblem &problem,
+    ProductionCpuOperatorContext *context) noexcept
+{
+    if (context == nullptr || problem.k0_demag_probe == nullptr) {
+        return false;
+    }
+    PoissonAirboxK0DemagProbeResult &result = context->k0_demag_operator_probe;
+    result = PoissonAirboxK0DemagProbeResult{};
+    result.requested = true;
+    try {
+        const PoissonAirboxK0DemagProbeAssembly &assembly = *problem.k0_demag_probe;
+        result.magnetic_volume_m3 = assembly.magnetic_volume_m3;
+        result.mu0_t_m_a = assembly.mu0_t_m_a;
+        result.robin_beta = assembly.robin_beta;
+        copy_message(
+            result.outer_boundary_kind,
+            sizeof(result.outer_boundary_kind),
+            problem.outer_boundary_kind != nullptr ? problem.outer_boundary_kind : "");
+        const bool global_y_ok = run_k0_demag_probe_sample(
+            &context->schur,
+            problem,
+            assembly.q_global_y,
+            assembly.h_functional_global_y,
+            assembly.magnetization_integral_global_y_a_per_m_m3,
+            assembly.magnetic_energy_scale_global_y_j,
+            assembly.magnetic_volume_m3,
+            assembly.global_y_observable,
+            &result.global_y,
+            result.failure_reason);
+        const bool global_z_ok = run_k0_demag_probe_sample(
+            &context->schur,
+            problem,
+            assembly.q_global_z,
+            assembly.h_functional_global_z,
+            assembly.magnetization_integral_global_z_a_per_m_m3,
+            assembly.magnetic_energy_scale_global_z_j,
+            assembly.magnetic_volume_m3,
+            assembly.global_z_observable,
+            &result.global_z,
+            result.failure_reason);
+        result.available = result.global_y.attempted || result.global_z.attempted;
+        result.passed = result.available && assembly.global_y_observable &&
+            assembly.global_z_observable && global_y_ok && global_z_ok;
+        if (!result.available) {
+            copy_message(result.failure_reason, sizeof(result.failure_reason),
+                         "no_global_transverse_direction_observable");
+        } else if (!result.passed && result.failure_reason[0] == '\0') {
+            copy_message(result.failure_reason, sizeof(result.failure_reason),
+                         "global_direction_probe_failed");
+        }
+    } catch (...) {
+        result.available = false;
+        result.passed = false;
+        copy_message(result.failure_reason, sizeof(result.failure_reason),
+                     "probe_allocation_or_diagnostic_failure");
+    }
+    return result.passed;
+}
+
 void destroy_production_cpu_operator_context(
     ProductionCpuOperatorContext *context) noexcept
 {
-    if (context == nullptr) {
+    if (context == nullptr || context->eps_lifetime_unsafe) {
         return;
     }
     context->solve_control.disarm();
+    if (context->cached_window_schur != nullptr) {
+        MatDestroy(&context->cached_window_schur);
+    }
     if (context->schur_shell != nullptr) {
         MatDestroy(&context->schur_shell);
     }
@@ -2042,8 +2466,12 @@ bool configure_production_cpu_operator_context(
     const PoissonAirboxEigenBlockProblem &problem,
     ProductionCpuOperatorContext *context) noexcept
 {
-    if (context == nullptr || context->ready) {
-        return context != nullptr && context->ready;
+    if (context == nullptr || context->invalidated ||
+        context->eps_lifetime_unsafe) {
+        return false;
+    }
+    if (context->ready) {
+        return true;
     }
     ++context->operator_context_setup_count;
     if (!configure_production_context(
@@ -2117,27 +2545,33 @@ struct ProductionCpuSolveControlScope {
     }
 };
 
-struct ProductionCpuOwnedOperatorScope {
-    ProductionCpuOperatorContext *context = nullptr;
-
-    ~ProductionCpuOwnedOperatorScope()
+struct ProductionCpuOperatorContextDeleter {
+    void operator()(ProductionCpuOperatorContext *context) const noexcept
     {
-        if (context != nullptr) {
-            destroy_production_cpu_operator_context(context);
+        if (context == nullptr || context->eps_lifetime_unsafe) {
+            // An unsafe graph is intentionally retained until process exit;
+            // PETSc/SLEPc teardown may touch borrowed DS views after EPSSolve fails.
+            return;
         }
+        destroy_production_cpu_operator_context(context);
+        delete context;
     }
 };
 
+using ProductionCpuOperatorContextOwner =
+    std::unique_ptr<ProductionCpuOperatorContext,
+                    ProductionCpuOperatorContextDeleter>;
+
 struct ProductionCpuWindowOperatorScope {
     ProductionCpuOperatorContext *previous = nullptr;
-    ProductionCpuOperatorContext *context = nullptr;
 
     ~ProductionCpuWindowOperatorScope()
     {
         active_cpu_window_operator_context = previous;
-        destroy_production_cpu_operator_context(context);
     }
 };
+
+constexpr PetscInt kProductionExactPreconditionerMaxDimension = 8192;
 
 // For the bounded CPU qualification scope, materialize only the shifted
 // Schur *preconditioner* by applying the production MatShell to basis
@@ -2150,15 +2584,20 @@ bool create_production_exact_shift_preconditioner(
     Mat split_mass,
     PetscInt dimension,
     double shift,
-    Mat *matrix)
+    Mat *matrix,
+    ProductionCpuSolveControl *solve_control,
+    std::uint64_t *completed_column_count)
 {
+    if (completed_column_count != nullptr) {
+        *completed_column_count = 0u;
+    }
     // This bounded exact materialization is used for a single selected shift
     // (nearest_frequency) as a qualification/reference path.  A frequency
-    // window keeps the scalable magnetic preconditioner and persistent
-    // operator context; it must not repeat this O(n^2) setup per subwindow.
-    constexpr PetscInt kMaximumDimension = 8192;
+    // window uses this helper only once at zero shift for its bounded cache;
+    // larger windows retain the scalable magnetic preconditioner.
     if (matrix == nullptr || schur_shell == nullptr || split_mass == nullptr ||
-        dimension <= 0 || dimension > kMaximumDimension || !std::isfinite(shift)) {
+        dimension <= 0 || dimension > kProductionExactPreconditionerMaxDimension ||
+        !std::isfinite(shift)) {
         return false;
     }
     if (MatCreateSeqAIJ(
@@ -2199,6 +2638,15 @@ bool create_production_exact_shift_preconditioner(
     const PetscScalar *schur_values = nullptr;
     const PetscScalar *mass_values = nullptr;
     for (PetscInt column = 0; column < dimension && ok; ++column) {
+        // Direct Poisson solves need not invoke iterative KSP callbacks.
+        // Poll explicitly so cancellation is observed during materialization.
+        if (solve_control != nullptr && solve_control->armed &&
+            solve_control->cancel_poll_enabled &&
+            poisson_airbox_modal_cancel_requested(solve_control->callback_problem)) {
+            solve_control->cancellation_observed = true;
+            ok = false;
+            break;
+        }
         ok = VecGetArray(basis, &basis_values) == 0;
         if (!ok) {
             break;
@@ -2237,6 +2685,9 @@ bool create_production_exact_shift_preconditioner(
         VecRestoreArrayRead(schur_action, &schur_values);
         schur_values = nullptr;
         mass_values = nullptr;
+        if (ok && completed_column_count != nullptr) {
+            *completed_column_count = static_cast<std::uint64_t>(column + 1);
+        }
     }
     if (basis_values != nullptr) {
         VecRestoreArray(basis, &basis_values);
@@ -2249,6 +2700,104 @@ bool create_production_exact_shift_preconditioner(
         MatDestroy(matrix);
         return false;
     }
+    return true;
+}
+
+constexpr PetscInt kProductionWindowExactPreconditionerMaxDimension = 512;
+
+// Cache only the small-window preconditioner. EPS continues to apply the
+// original MatShell, and every shift has its own independently owned matrix.
+bool create_production_cached_window_preconditioner(
+    ProductionCpuOperatorContext *context,
+    double shift,
+    Mat *matrix,
+    double *shift_setup_seconds,
+    bool *shift_setup_timing_available)
+{
+    if (shift_setup_seconds != nullptr) {
+        *shift_setup_seconds = 0.0;
+    }
+    if (shift_setup_timing_available != nullptr) {
+        *shift_setup_timing_available = false;
+    }
+    if (context == nullptr || matrix == nullptr || *matrix != nullptr ||
+        context->split_count <= 0 ||
+        context->split_count > kProductionWindowExactPreconditionerMaxDimension ||
+        !std::isfinite(shift)) {
+        return false;
+    }
+    bool constructed_now = false;
+    // Preserve the pre-observability retry semantics: if materialization did
+    // not produce a cache, the next caller may try the same production path
+    // again.  The failed attempt is still reported through the latest
+    // execution metrics; never pass a null cache to MatDuplicate.
+    if (context->cached_window_schur == nullptr) {
+        constructed_now = true;
+        context->exact_cache_construction_attempted = true;
+        context->exact_cache_dimension = static_cast<std::uint64_t>(
+            context->split_count);
+        context->exact_cache_column_count = static_cast<std::uint64_t>(
+            context->split_count);
+        const std::uint64_t poisson_solve_count_before =
+            context->schur.poisson_solve_count;
+        const auto construction_started_at = std::chrono::steady_clock::now();
+        const bool constructed = create_production_exact_shift_preconditioner(
+            context->schur_shell,
+            context->split_mass,
+            context->split_count,
+            0.0,
+            &context->cached_window_schur,
+            &context->solve_control,
+            &context->exact_cache_column_count);
+        context->exact_cache_construction_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - construction_started_at)
+                .count();
+        context->exact_cache_construction_poisson_solve_count =
+            context->schur.poisson_solve_count - poisson_solve_count_before;
+        context->exact_cache_construction_succeeded = constructed;
+        copy_message(
+            context->exact_cache_status,
+            sizeof(context->exact_cache_status),
+            constructed ? "cache_built" : "cache_construction_failed");
+        if (!constructed) {
+            return false;
+        }
+    }
+    const auto shift_setup_started_at = std::chrono::steady_clock::now();
+    bool shift_matrix_ok =
+        MatDuplicate(context->cached_window_schur, MAT_COPY_VALUES, matrix) == 0;
+    if (shift_matrix_ok) {
+        shift_matrix_ok = MatAXPY(
+            *matrix,
+            static_cast<PetscScalar>(-shift),
+            context->split_mass,
+            DIFFERENT_NONZERO_PATTERN) == 0;
+    }
+    if (!shift_matrix_ok) {
+        if (*matrix != nullptr) {
+            MatDestroy(matrix);
+        }
+        context->exact_cache_shift_failure_observed = true;
+        copy_message(
+            context->exact_cache_status,
+            sizeof(context->exact_cache_status),
+            "cache_shift_matrix_failed");
+        return false;
+    }
+    if (shift_setup_seconds != nullptr) {
+        *shift_setup_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - shift_setup_started_at).count();
+    }
+    if (shift_setup_timing_available != nullptr) {
+        *shift_setup_timing_available = true;
+    }
+    copy_message(
+        context->exact_cache_status,
+        sizeof(context->exact_cache_status),
+        context->exact_cache_shift_failure_observed
+            ? "cache_reused_after_shift_failure"
+            : (constructed_now ? "cache_built" : "cache_reused"));
     return true;
 }
 
@@ -2453,9 +3002,8 @@ bool configure_production_refinement_ksp(
         std::min(
             static_cast<PetscReal>(1.0e-10),
             static_cast<PetscReal>(1.0e-2) * eigensolver_tolerance));
-    const PetscInt refinement_max_iterations = std::max<PetscInt>(
-        1000,
-        max_linear_iterations > 0 ? max_linear_iterations : 0);
+    const PetscInt refinement_max_iterations =
+        max_linear_iterations > 0 ? max_linear_iterations : 1000;
     bool configured =
         KSPCreate(PETSC_COMM_SELF, &refinement_ksp) == 0 &&
         KSPSetOperators(
@@ -2763,7 +3311,49 @@ void write_production_schur_diagnostics(
     if (out == nullptr) {
         return;
     }
-    std::snprintf(
+    char exact_preconditioner_dimension_json[32]{};
+    char exact_preconditioner_column_count_json[32]{};
+    char exact_preconditioner_poisson_solve_count_json[32]{};
+    char split_dof_count_json[32]{};
+    char exact_preconditioner_construction_seconds_json[64]{};
+    char shifted_preconditioner_setup_seconds_json[64]{};
+    char eps_solve_seconds_json[64]{};
+    format_nullable_u64_json(
+        exact_preconditioner_dimension_json,
+        sizeof(exact_preconditioner_dimension_json),
+        result.exact_preconditioner_dimension_available,
+        result.exact_preconditioner_dimension);
+    format_nullable_u64_json(
+        exact_preconditioner_column_count_json,
+        sizeof(exact_preconditioner_column_count_json),
+        result.exact_preconditioner_column_count_available,
+        result.exact_preconditioner_column_count);
+    format_nullable_u64_json(
+        exact_preconditioner_poisson_solve_count_json,
+        sizeof(exact_preconditioner_poisson_solve_count_json),
+        result.exact_preconditioner_construction_metrics_available,
+        result.exact_preconditioner_construction_poisson_solve_count);
+    format_nullable_u64_json(
+        split_dof_count_json,
+        sizeof(split_dof_count_json),
+        result.split_dof_count_available,
+        result.split_dof_count);
+    format_nullable_double_json(
+        exact_preconditioner_construction_seconds_json,
+        sizeof(exact_preconditioner_construction_seconds_json),
+        result.exact_preconditioner_construction_timing_available,
+        result.exact_preconditioner_construction_seconds);
+    format_nullable_double_json(
+        shifted_preconditioner_setup_seconds_json,
+        sizeof(shifted_preconditioner_setup_seconds_json),
+        result.shifted_preconditioner_setup_timing_available,
+        result.shifted_preconditioner_setup_seconds);
+    format_nullable_double_json(
+        eps_solve_seconds_json,
+        sizeof(eps_solve_seconds_json),
+        result.eps_solve_timing_available,
+        result.eps_solve_seconds);
+    const int diagnostics_written = std::snprintf(
         out->diagnostics_json,
         sizeof(out->diagnostics_json),
         "{"
@@ -2776,6 +3366,11 @@ void write_production_schur_diagnostics(
         "\"slepc_converged_reason\":\"%s\","
         "\"slepc_converged_reason_code\":%d,"
         "\"stop_reason\":\"%s\","
+        "\"eps_solve_error_code_available\":%s,"
+        "\"eps_solve_error_code\":%d,"
+        "\"slepc_process_quarantined\":%s,"
+        "\"operator_context_invalidated\":%s,"
+        "\"eps_lifetime_unsafe\":%s,"
         "\"study_product\":\"modal_eigen\","
         "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_slepc\","
         "\"engine_id\":\"native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1\","
@@ -2790,6 +3385,12 @@ void write_production_schur_diagnostics(
         "\"operator_context_setup_count\":%u,"
         "\"poisson_factorization_setup_count\":%u,"
         "\"shift_solver_setup_count\":%u,"
+        "\"exact_preconditioner\":{\"enabled\":%s,\"status\":\"%s\","
+        "\"shift_failure_observed\":%s,"
+        "\"dimension\":%s,\"column_count\":%s,"
+        "\"construction_poisson_solve_count\":%s,"
+        "\"construction_seconds\":%s,"
+        "\"shifted_setup_seconds\":%s,\"eps_solve_seconds\":%s},"
         "\"gpu_device_resident_modal_eigensolver\":false,"
         "\"per_iteration_h2d_transfer_count\":0,"
         "\"per_iteration_d2h_transfer_count\":0,"
@@ -2802,6 +3403,7 @@ void write_production_schur_diagnostics(
         "\"gauge_policy\":\"%s\","
         "\"gauge_reason\":\"%s\","
         "\"residual_tolerance\":%.17g,"
+        "\"modal_krylov_tuning\":%s,"
         "\"phasor_convention\":\"%s\","
         "\"eigenvalue_convention\":\"%s\","
         "\"algebraic_form\":\"schur_reduced_descriptor\","
@@ -2826,7 +3428,7 @@ void write_production_schur_diagnostics(
         "\"slepc\":{\"eps_type\":\"krylovschur\",\"problem_type\":\"gnhep\","
         "\"spectral_transform\":\"shift_invert\",\"which_eigenpairs\":\"target_magnitude\","
         "\"ksp_type\":\"%s\",\"pc_type\":\"lu\",\"pc_matrix\":\"%s\","
-        "\"converged_eigenpair_count\":%u,\"accepted_mode_count\":%u,\"outer_iterations\":%u},"
+        "\"converged_eigenpair_count\":%u,\"accepted_mode_count\":%u,\"outer_iterations\":%s},"
         "\"operator_apply_count\":%llu,\"poisson_solve_count\":%llu,"
         "\"poisson_iteration_count\":%llu,\"shift_linear_iteration_count\":%llu,"
         "\"eps_restart_count\":null,"
@@ -2846,7 +3448,8 @@ void write_production_schur_diagnostics(
         "\"refinement_failed_count\":%u,"
         "\"refinement_linear_iteration_count\":%llu,"
         "\"refinement_last_ksp_reason_code\":%d,"
-        "\"q_dof_count\":%llu,\"phi_dof_count\":%llu,\"augmented_dof_count\":%llu,"
+        "\"q_dof_count\":%llu,\"split_dof_count\":%s,"
+        "\"phi_dof_count\":%llu,\"augmented_dof_count\":%llu,"
         "\"periodic_mesh_certificate\":{\"schema_version\":\"%s\","
         "\"magnetic_pair_count\":%llu,\"airbox_pair_count\":%llu},"
         "\"metrics\":{\"full_residual_reconstruction_relative_error\":%.17g,"
@@ -2901,6 +3504,11 @@ void write_production_schur_diagnostics(
         result.stop_reason[0] != '\0'
             ? result.stop_reason
             : (reason != nullptr ? reason : "not_available"),
+        result.eps_solve_error_code_available ? "true" : "false",
+        static_cast<int>(result.eps_solve_error_code),
+        result.slepc_process_quarantined ? "true" : "false",
+        result.operator_context_invalidated ? "true" : "false",
+        result.eps_lifetime_unsafe ? "true" : "false",
         problem.solver_adapter != nullptr ? problem.solver_adapter : "",
         problem.production_shared_domain ? "true" : "false",
         problem.production_shared_domain ? "false" : "true",
@@ -2910,6 +3518,17 @@ void write_production_schur_diagnostics(
         result.operator_context_setup_count,
         result.poisson_factorization_setup_count,
         result.shift_solver_setup_count,
+        result.exact_preconditioner_enabled ? "true" : "false",
+        result.exact_preconditioner_status[0] != '\0'
+            ? result.exact_preconditioner_status
+            : "not_available",
+        result.exact_preconditioner_shift_failure_observed ? "true" : "false",
+        exact_preconditioner_dimension_json,
+        exact_preconditioner_column_count_json,
+        exact_preconditioner_poisson_solve_count_json,
+        exact_preconditioner_construction_seconds_json,
+        shifted_preconditioner_setup_seconds_json,
+        eps_solve_seconds_json,
         problem.demag_kind != nullptr ? problem.demag_kind : "",
         problem.assembly_kind != nullptr ? problem.assembly_kind : "",
         problem.outer_boundary_kind != nullptr ? problem.outer_boundary_kind : "",
@@ -2917,6 +3536,8 @@ void write_production_schur_diagnostics(
         problem.gauge_policy != nullptr ? problem.gauge_policy : "",
         problem.gauge_reason != nullptr ? problem.gauge_reason : "",
         problem.residual_tolerance,
+        result.modal_krylov_tuning_json[0] != '\0'
+            ? result.modal_krylov_tuning_json : "null",
         problem.phasor_convention != nullptr ? problem.phasor_convention : "",
         problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
         problem.target_kind != nullptr ? problem.target_kind : "",
@@ -2941,15 +3562,15 @@ void write_production_schur_diagnostics(
         result.raw_ritz_classification_json[0] != '\0'
             ? result.raw_ritz_classification_json
             : "{\"available\":false,\"samples\":[]}",
-        std::strcmp(result.shifted_preconditioner_kind, "exact_shifted_schur_action") == 0
-            ? "preonly"
-            : "gmres",
+        result.configured_shifted_ksp_type[0] != '\0'
+            ? result.configured_shifted_ksp_type : "not_configured",
         result.shifted_preconditioner_kind[0] != '\0'
             ? result.shifted_preconditioner_kind
             : "not_configured",
         result.converged_eigenpair_count,
         result.accepted_mode_count,
-        result.outer_iterations,
+        result.slepc_process_quarantined
+            ? "null" : std::to_string(result.outer_iterations).c_str(),
         static_cast<unsigned long long>(result.operator_apply_count),
         static_cast<unsigned long long>(result.poisson_solve_count),
         static_cast<unsigned long long>(result.poisson_iteration_count),
@@ -2971,6 +3592,7 @@ void write_production_schur_diagnostics(
         static_cast<unsigned long long>(result.refinement_linear_iteration_count),
         result.refinement_last_ksp_reason_code,
         static_cast<unsigned long long>(result.q_dof_count),
+        split_dof_count_json,
         static_cast<unsigned long long>(result.phi_dof_count),
         static_cast<unsigned long long>(result.augmented_dof_count),
         problem.periodic_mesh_certificate_schema != nullptr
@@ -3031,6 +3653,23 @@ void write_production_schur_diagnostics(
         result.window_certificate_json[0] != '\0'
             ? result.window_certificate_json
             : "null");
+    if (diagnostics_written < 0 ||
+        static_cast<std::size_t>(diagnostics_written) >=
+            sizeof(out->diagnostics_json)) {
+        constexpr char kDiagnosticsTruncatedJson[] =
+            "{\"schema_version\":\"poisson_airbox_modal_eigen_schur_slepc.v1\","
+            "\"status\":\"unavailable\",\"complete\":false,"
+            "\"solve_succeeded\":false,\"fields_available\":false,"
+            "\"reason\":\"diagnostics_json_truncated\","
+            "\"diagnostics_json_truncated\":true}";
+        static_assert(
+            sizeof(kDiagnosticsTruncatedJson) <= sizeof(out->diagnostics_json),
+            "diagnostics truncation fallback must fit the result buffer");
+        std::memcpy(
+            out->diagnostics_json,
+            kDiagnosticsTruncatedJson,
+            sizeof(kDiagnosticsTruncatedJson));
+    }
 }
 
 FrequencyDomainStatus fail_production_schur(
@@ -3060,10 +3699,79 @@ FrequencyDomainStatus fail_production_schur(
 
 } // namespace
 
+bool format_poisson_airbox_subwindow_termination_json(
+    const PoissonAirboxModalEigenResult &result,
+    char *destination,
+    std::size_t destination_size) noexcept
+{
+    if (destination == nullptr || destination_size == 0u) {
+        return false;
+    }
+    const bool available = result.eps_reason_available &&
+        !(result.eps_solve_error_code_available &&
+          result.eps_solve_error_code != 0) &&
+        !result.slepc_process_quarantined &&
+        !result.operator_context_invalidated &&
+        !result.eps_lifetime_unsafe;
+    const int written = available
+        ? std::snprintf(
+              destination,
+              destination_size,
+              "\"eps_reason_available\":true,"
+              "\"slepc_converged_reason_code\":%d,"
+              "\"outer_iterations\":%u",
+              result.slepc_converged_reason_code,
+              result.outer_iterations)
+        : std::snprintf(
+              destination,
+              destination_size,
+              "\"eps_reason_available\":false,"
+              "\"slepc_converged_reason_code\":null,"
+              "\"outer_iterations\":null");
+    if (written < 0 || static_cast<std::size_t>(written) >= destination_size) {
+        destination[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
+bool format_poisson_airbox_eps_dimensions_json(
+    bool query_succeeded,
+    std::int64_t nev,
+    std::int64_t ncv,
+    std::int64_t mpd,
+    char *destination,
+    std::size_t destination_size) noexcept
+{
+    if (destination == nullptr || destination_size == 0u) {
+        return false;
+    }
+    const int written = query_succeeded
+        ? std::snprintf(
+              destination,
+              destination_size,
+              "\"eps_dimensions\":{\"query_succeeded\":true,"
+              "\"nev\":%lld,\"ncv\":%lld,\"mpd\":%lld}",
+              static_cast<long long>(nev),
+              static_cast<long long>(ncv),
+              static_cast<long long>(mpd))
+        : std::snprintf(
+              destination,
+              destination_size,
+              "\"eps_dimensions\":{\"query_succeeded\":false,"
+              "\"nev\":null,\"ncv\":null,\"mpd\":null}");
+    if (written < 0 || static_cast<std::size_t>(written) >= destination_size) {
+        destination[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     const PoissonAirboxEigenBlockProblem &problem,
     PoissonAirboxModalEigenResult *out_result) noexcept
 {
+    const auto callback_started_at = std::chrono::steady_clock::now();
     if (out_result == nullptr) {
         return FrequencyDomainStatus::validation_error;
     }
@@ -3112,6 +3820,30 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         "production shared-domain K0 Schur lane requires a real PETSc scalar runtime",
         "complex_petsc_scalar_unsupported");
 #else
+    const auto petsc_integer_max = static_cast<std::uint64_t>(
+        std::numeric_limits<PetscInt>::max());
+    if (static_cast<std::uint64_t>(problem.max_linear_iterations) > petsc_integer_max ||
+        static_cast<std::uint64_t>(problem.max_outer_iterations) > petsc_integer_max) {
+        return fail_production_schur(problem, out_result,
+            FrequencyDomainStatus::validation_error,
+            "production K0 Schur iteration budget exceeds the PETSc integer range",
+            "k0_modal_iteration_budget_out_of_range");
+    }
+    const double default_eigensolver_tolerance =
+        production_modal_eigensolver_tolerance(problem.residual_tolerance);
+    const ModalKrylovTuning default_tuning{
+        default_eigensolver_tolerance,
+        std::max(1.0e-13, std::min(1.0e-10,
+            1.0e-3 * default_eigensolver_tolerance)),
+        256,
+        "gmres"};
+    ModalKrylovTuning resolved_tuning{};
+    if (!resolve_modal_krylov_tuning(default_tuning, false, &resolved_tuning)) {
+        return fail_production_schur(
+            problem, out_result, FrequencyDomainStatus::validation_error,
+            "production K0 Schur diagnostic Krylov options are invalid",
+            "k0_modal_krylov_option_invalid");
+    }
     if (problem.requested_mode_count == 0u) {
         return fail_production_schur(
             problem,
@@ -3161,6 +3893,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         problem.frequency_min_hz >= 0.0 &&
         problem.frequency_max_hz > problem.frequency_min_hz) {
         const std::lock_guard<std::mutex> window_lock(pa_e3_slepc_mutex());
+        if (production_k0_slepc_process_quarantined()) {
+            out_result->slepc_process_quarantined = true;
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::solve_error,
+                "production K0 SLEPc graph is quarantined; process restart required",
+                "k0_slepc_process_quarantined");
+        }
         if (!ensure_slepc_initialized(out_result->error_message)) {
             return fail_production_schur(
                 problem,
@@ -3169,10 +3910,21 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 out_result->error_message,
                 "slepc_initialization_failed");
         }
-        ProductionCpuOperatorContext window_operator_context{};
+        ProductionCpuOperatorContextOwner window_operator_context_owner(
+            new (std::nothrow) ProductionCpuOperatorContext{},
+            ProductionCpuOperatorContextDeleter{});
+        if (!window_operator_context_owner) {
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::operator_error,
+                "production K0 window operator context allocation failed",
+                "production_operator_context_allocation_failed");
+        }
+        ProductionCpuOperatorContext &window_operator_context =
+            *window_operator_context_owner;
         ProductionCpuWindowOperatorScope window_operator_scope{
-            active_cpu_window_operator_context,
-            &window_operator_context};
+            active_cpu_window_operator_context};
         active_cpu_window_operator_context = &window_operator_context;
         copy_message(
             out_result->operator_context_scope,
@@ -3206,6 +3958,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             return std::min<std::uint64_t>(
                 maximum_nev,
                 4u * static_cast<std::uint64_t>(requested_count));
+        };
+        const auto resolved_ncv = [split_dimension](std::uint64_t nev) {
+            return bounded_krylov_dimensions(split_dimension, nev, true).ncv;
         };
         if (problem.requested_mode_count >
                 std::numeric_limits<std::uint32_t>::max() / 4u ||
@@ -3406,7 +4161,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     0u,
                     0u,
                     0u,
-                    0.0);
+                    std::numeric_limits<double>::quiet_NaN());
                 auto shifted_result_storage =
                     std::make_unique<PoissonAirboxModalEigenResult>();
                 FrequencyDomainStatus shifted_status =
@@ -3431,15 +4186,21 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 for (;;) {
                     shifted_problem.requested_mode_count =
                         subwindow_requested_mode_count;
+                    const auto attempt_started_at = std::chrono::steady_clock::now();
                     shifted_problem.progress_subwindow_elapsed_seconds =
-                        std::chrono::duration<double>(
-                            std::chrono::steady_clock::now() - subwindow_started_at)
+                        std::chrono::duration<double>(attempt_started_at - subwindow_started_at)
+                            .count();
+                    shifted_problem.progress_window_elapsed_seconds =
+                        std::chrono::duration<double>(attempt_started_at - window_started_at)
                             .count();
                     shifted_result_storage =
                         std::make_unique<PoissonAirboxModalEigenResult>();
                     shifted_status = solve_poisson_airbox_modal_eigen_cpu_schur(
                         shifted_problem,
                         shifted_result_storage.get());
+                    if (window_operator_context.invalidated) {
+                        break;
+                    }
                     const PoissonAirboxModalEigenResult &attempted_result =
                         *shifted_result_storage;
                     std::size_t local_accepted_mode_count = 0u;
@@ -3473,6 +4234,20 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         selected_frequency_max_hz = std::max(
                             selected_frequency_max_hz,
                             mode.frequency_hz);
+                    }
+                    // Publication truncation and positive-branch filtering
+                    // must not discard an independently certified lower guard
+                    // below the fundamental positive frequency.
+                    for (double guard_frequency_hz :
+                         attempted_result.certified_spectral_guard_frequencies_hz) {
+                        selected_frequency_min_hz = std::min(
+                            selected_frequency_min_hz, guard_frequency_hz);
+                        selected_frequency_max_hz = std::max(
+                            selected_frequency_max_hz, guard_frequency_hz);
+                        selected_coverage_radius_hz = std::max(
+                            selected_coverage_radius_hz,
+                            std::abs(guard_frequency_hz -
+                                     shifted_problem.target_frequency_hz));
                     }
                     const double local_coverage_tolerance_hz = std::max(
                         1.0,
@@ -3514,7 +4289,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     const bool nev_limit_reached =
                         attempted_nev >= maximum_nev;
                     const bool selected_frequency_range_available =
-                        !attempted_result.accepted_modes.empty() &&
+                        (!attempted_result.accepted_modes.empty() ||
+                         !attempted_result.certified_spectral_guard_frequencies_hz.empty()) &&
                         std::isfinite(selected_frequency_min_hz) &&
                         std::isfinite(selected_frequency_max_hz);
                     const bool lower_edge_covered =
@@ -3610,6 +4386,122 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                             subwindow_requested_mode_count);
                     ++subwindow_retry_count;
                 }
+                if (window_operator_context.invalidated) {
+                    const PoissonAirboxModalEigenResult &failed_result =
+                        *shifted_result_storage;
+                    const bool failure_interrupted =
+                        shifted_status == FrequencyDomainStatus::interrupted;
+                    const char *failure_stop_reason =
+                        failure_interrupted ? "cancel_requested" : "slepc_solve_failed";
+                    ++pass_failed_subwindow_count[pass_index];
+                    ++out_result->window_failed_subwindow_count;
+                    pass_cancelled[pass_index] = failure_interrupted;
+                    window_failed = true;
+                    window_interrupted = failure_interrupted;
+                    out_result->window_subwindow_count =
+                        base_subwindow_count + refinement_subwindow_count;
+                    out_result->window_failed_subwindow = true;
+                    out_result->window_cancelled = failure_interrupted;
+                    out_result->window_complete = false;
+                    out_result->window_empty_subwindow_count =
+                        window_empty_subwindow_count;
+                    out_result->operator_context_setup_count =
+                        window_operator_context.operator_context_setup_count;
+                    out_result->poisson_factorization_setup_count =
+                        window_operator_context.poisson_factorization_setup_count;
+                    out_result->shift_solver_setup_count =
+                        window_operator_context.shift_solver_setup_count;
+                    out_result->operator_apply_count =
+                        window_operator_context.schur.operator_apply_count;
+                    out_result->poisson_solve_count =
+                        window_operator_context.schur.poisson_solve_count;
+                    out_result->poisson_iteration_count =
+                        window_operator_context.schur.poisson_iteration_count;
+                    out_result->outer_iterations = 0u;
+                    out_result->converged_eigenpair_count = 0u;
+                    out_result->accepted_mode_count = 0u;
+                    out_result->accepted_modes.clear();
+                    out_result->certified_spectral_guard_frequencies_hz.clear();
+                    out_result->slepc_process_quarantined = true;
+                    out_result->operator_context_invalidated = true;
+                    out_result->eps_lifetime_unsafe = true;
+                    out_result->eps_solve_error_code_available =
+                        failed_result.eps_solve_error_code_available;
+                    out_result->eps_solve_error_code =
+                        failed_result.eps_solve_error_code;
+                    out_result->eps_solve_timing_available =
+                        failed_result.eps_solve_timing_available;
+                    out_result->eps_solve_seconds =
+                        failed_result.eps_solve_seconds;
+                    out_result->eps_reason_available = false;
+                    out_result->eps_stop_reason[0] = '\0';
+                    copy_message(
+                        out_result->eps_stop_reason,
+                        sizeof(out_result->eps_stop_reason),
+                        failure_stop_reason);
+                    copy_message(
+                        out_result->stop_reason,
+                        sizeof(out_result->stop_reason),
+                        failure_stop_reason);
+                    copy_message(
+                        out_result->operator_context_scope,
+                        sizeof(out_result->operator_context_scope),
+                        "frequency_window");
+                    copy_message(
+                        out_result->configured_shifted_ksp_type,
+                        sizeof(out_result->configured_shifted_ksp_type),
+                        failed_result.configured_shifted_ksp_type);
+                    copy_message(
+                        out_result->modal_krylov_tuning_json,
+                        sizeof(out_result->modal_krylov_tuning_json),
+                        failed_result.modal_krylov_tuning_json);
+                    out_result->k0_demag_operator_probe =
+                        window_operator_context.k0_demag_operator_probe;
+                    copy_exact_cache_observability(
+                        window_operator_context,
+                        out_result);
+                    out_result->window_certificate_json[0] = '\0';
+                    const int failure_code =
+                        static_cast<int>(failed_result.eps_solve_error_code);
+                    char termination_fields_json[128]{};
+                    const bool termination_fields_formatted =
+                        format_poisson_airbox_subwindow_termination_json(
+                            failed_result,
+                            termination_fields_json,
+                            sizeof(termination_fields_json));
+                    append_subwindow_json(
+                        "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
+                        "\"status\":\"failed\",\"stop_reason\":\"%s\","
+                        "\"eps_solve_error_code_available\":%s,"
+                        "\"eps_solve_error_code\":%d,"
+                        "%s,"
+                        "\"slepc_process_quarantined\":true,"
+                        "\"operator_context_invalidated\":true,"
+                        "\"eps_lifetime_unsafe\":true,"
+                        "\"accepted_mode_count\":0,"
+                        "\"window_complete\":false}",
+                        executed_subwindows_size == 1u ? "" : ",",
+                        pass_index == 0u ? "base" : "refinement",
+                        subwindow_index,
+                        failure_stop_reason,
+                        failed_result.eps_solve_error_code_available
+                            ? "true" : "false",
+                        failure_code,
+                        termination_fields_formatted
+                            ? termination_fields_json
+                            : "\"eps_reason_available\":false,"
+                              "\"slepc_converged_reason_code\":null,"
+                              "\"outer_iterations\":null");
+                    finalize_subwindow_json();
+                    return fail_production_schur(
+                        problem,
+                        out_result,
+                        shifted_status,
+                        failed_result.error_message[0] != '\0'
+                            ? failed_result.error_message
+                            : "production K0 EPSSolve failed and its graph was quarantined",
+                        failure_stop_reason);
+                }
                 pass_effective_requested_mode_count[pass_index] = std::max(
                     pass_effective_requested_mode_count[pass_index],
                     subwindow_requested_mode_count);
@@ -3692,10 +4584,65 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         in_window_modes.push_back(&mode);
                     }
                 }
+                const std::uint64_t resolved_subwindow_nev =
+                    resolved_nev(subwindow_requested_mode_count);
+                const std::uint64_t resolved_subwindow_ncv =
+                    resolved_ncv(resolved_subwindow_nev);
+                char subwindow_exact_dimension_json[32]{};
+                char subwindow_exact_column_count_json[32]{};
+                char subwindow_exact_poisson_solve_count_json[32]{};
+                char subwindow_split_dof_count_json[32]{};
+                char subwindow_exact_construction_seconds_json[64]{};
+                char subwindow_shifted_setup_seconds_json[64]{};
+                char subwindow_eps_solve_seconds_json[64]{};
+                format_nullable_u64_json(
+                    subwindow_exact_dimension_json,
+                    sizeof(subwindow_exact_dimension_json),
+                    shifted_result.exact_preconditioner_dimension_available,
+                    shifted_result.exact_preconditioner_dimension);
+                format_nullable_u64_json(
+                    subwindow_exact_column_count_json,
+                    sizeof(subwindow_exact_column_count_json),
+                    shifted_result.exact_preconditioner_column_count_available,
+                    shifted_result.exact_preconditioner_column_count);
+                format_nullable_u64_json(
+                    subwindow_exact_poisson_solve_count_json,
+                    sizeof(subwindow_exact_poisson_solve_count_json),
+                    shifted_result.exact_preconditioner_construction_metrics_available,
+                    shifted_result.exact_preconditioner_construction_poisson_solve_count);
+                format_nullable_u64_json(
+                    subwindow_split_dof_count_json,
+                    sizeof(subwindow_split_dof_count_json),
+                    shifted_result.split_dof_count_available,
+                    shifted_result.split_dof_count);
+                format_nullable_double_json(
+                    subwindow_exact_construction_seconds_json,
+                    sizeof(subwindow_exact_construction_seconds_json),
+                    shifted_result.exact_preconditioner_construction_timing_available,
+                    shifted_result.exact_preconditioner_construction_seconds);
+                format_nullable_double_json(
+                    subwindow_shifted_setup_seconds_json,
+                    sizeof(subwindow_shifted_setup_seconds_json),
+                    shifted_result.shifted_preconditioner_setup_timing_available,
+                    shifted_result.shifted_preconditioner_setup_seconds);
+                format_nullable_double_json(
+                    subwindow_eps_solve_seconds_json,
+                    sizeof(subwindow_eps_solve_seconds_json),
+                    shifted_result.eps_solve_timing_available,
+                    shifted_result.eps_solve_seconds);
+                char termination_fields_json[128]{};
+                const bool termination_fields_formatted =
+                    format_poisson_airbox_subwindow_termination_json(
+                        shifted_result,
+                        termination_fields_json,
+                        sizeof(termination_fields_json));
                 append_subwindow_json(
                     "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
                     "\"shift_frequency_hz\":%.17g,\"requested_nev\":%llu,"
+                    "\"requested_ncv\":%llu,"
+                    "\"modal_krylov_tuning\":%s,"
                     "\"status\":\"%s\",\"converged_eigenpair_count\":%u,"
+                    "%s,"
                     "\"candidate_mode_count\":%u,"
                     "\"candidate_mode_count_kind\":\"raw_ritz_in_window\","
                     "\"raw_ritz_in_window_count\":%u,"
@@ -3716,6 +4663,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     "\"selected_coverage_radius_hz\":%.17g,"
                     "\"selected_frequency_min_hz\":%.17g,"
                     "\"selected_frequency_max_hz\":%.17g,"
+                    "\"coverage_guard_kind\":\"original_descriptor_certified_signed_ritz\","
+                    "\"certified_spectral_guard_count\":%zu,"
                     "\"result_truncated_at_requested_count\":%s,"
                     "\"raw_ritz_pool_saturated\":%s,"
                     "\"accepted_candidate_pool_saturated\":%s,"
@@ -3733,19 +4682,37 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     "\"requested_mode_count\":%u,"
                     "\"retry_count\":%u,"
                     "\"elapsed_seconds\":%.17g,"
+                    "\"q_dof_count\":%llu,\"split_dof_count\":%s,"
+                    "\"phi_dof_count\":%llu,"
+                    "\"augmented_dof_count\":%llu,"
+                    "\"exact_preconditioner\":{\"enabled\":%s,"
+                    "\"shift_failure_observed\":%s,"
+                    "\"status\":\"%s\",\"dimension\":%s,"
+                    "\"column_count\":%s,"
+                    "\"construction_poisson_solve_count\":%s,"
+                    "\"construction_seconds\":%s,"
+                    "\"shifted_setup_seconds\":%s,"
+                    "\"eps_solve_seconds\":%s},"
                     "\"stop_reason\":\"%s\",\"raw_ritz_classification\":%s,"
                     "\"accepted_frequencies_hz\":[",
                     pass_index == 0u && subwindow_index == 0u ? "" : ",",
                     pass_index == 0u ? "base" : "refinement",
                     subwindow_index,
                     shifted_problem.target_frequency_hz,
-                    static_cast<unsigned long long>(
-                        resolved_nev(subwindow_requested_mode_count)),
+                    static_cast<unsigned long long>(resolved_subwindow_nev),
+                    static_cast<unsigned long long>(resolved_subwindow_ncv),
+                    shifted_result.modal_krylov_tuning_json[0] != '\0'
+                        ? shifted_result.modal_krylov_tuning_json : "null",
                     shifted_status == FrequencyDomainStatus::ok &&
                             !subwindow_coverage_failed
                         ? "ok"
                         : "failed",
                     shifted_result.converged_eigenpair_count,
+                    termination_fields_formatted
+                        ? termination_fields_json
+                        : "\"eps_reason_available\":false,"
+                          "\"slepc_converged_reason_code\":null,"
+                          "\"outer_iterations\":null",
                     shifted_result.raw_ritz_in_window_count,
                     shifted_result.raw_ritz_in_window_count,
                     shifted_result.action_residual_evaluated_count,
@@ -3765,6 +4732,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     final_selected_coverage_radius_hz,
                     final_selected_frequency_min_hz,
                     final_selected_frequency_max_hz,
+                    shifted_result.certified_spectral_guard_frequencies_hz.size(),
                     final_result_truncated_at_requested_count ? "true" : "false",
                     final_raw_ritz_pool_saturated ? "true" : "false",
                     final_accepted_candidate_pool_saturated ? "true" : "false",
@@ -3786,6 +4754,23 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     subwindow_requested_mode_count,
                     subwindow_retry_count,
                     subwindow_elapsed_seconds,
+                    static_cast<unsigned long long>(shifted_result.q_dof_count),
+                    subwindow_split_dof_count_json,
+                    static_cast<unsigned long long>(shifted_result.phi_dof_count),
+                    static_cast<unsigned long long>(shifted_result.augmented_dof_count),
+                    shifted_result.exact_preconditioner_enabled ? "true" : "false",
+                    shifted_result.exact_preconditioner_shift_failure_observed
+                        ? "true"
+                        : "false",
+                    shifted_result.exact_preconditioner_status[0] != '\0'
+                        ? shifted_result.exact_preconditioner_status
+                        : "not_available",
+                    subwindow_exact_dimension_json,
+                    subwindow_exact_column_count_json,
+                    subwindow_exact_poisson_solve_count_json,
+                    subwindow_exact_construction_seconds_json,
+                    subwindow_shifted_setup_seconds_json,
+                    subwindow_eps_solve_seconds_json,
                     subwindow_coverage_failed
                         ? "frequency_window_local_coverage_not_certified"
                         : coverage_deferred_to_refinement
@@ -3954,9 +4939,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
                 "\"status\":\"%s\","
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
+                "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
-                "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
-                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+                "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
+                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
                 "\"base_schedule\":{\"state\":\"%s\","
                 "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
                 "\"failed_subwindow_count\":%u,\"cancelled\":%s},"
@@ -3975,8 +4961,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 problem.frequency_max_hz,
                 problem.requested_mode_count,
                 static_cast<unsigned long long>(requested_nev),
+                static_cast<unsigned long long>(resolved_ncv(requested_nev)),
                 pass_effective_requested_mode_count[1],
                 static_cast<unsigned long long>(refined_nev),
+                static_cast<unsigned long long>(resolved_ncv(refined_nev)),
                 pass_state(0u),
                 pass_planned_subwindow_count[0],
                 pass_completed_subwindow_count[0],
@@ -4296,9 +5284,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
                 "\"status\":\"%s\","
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
+                "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
-                "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
-                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+                "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
+                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
                 "\"discovered_mode_count\":%zu,\"accepted_mode_count\":0,"
                 "\"base_schedule\":{\"state\":\"%s\","
                 "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
@@ -4319,8 +5308,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 problem.frequency_max_hz,
                 problem.requested_mode_count,
                 static_cast<unsigned long long>(requested_nev),
+                static_cast<unsigned long long>(resolved_ncv(requested_nev)),
                 pass_effective_requested_mode_count[1],
                 static_cast<unsigned long long>(refined_nev),
+                static_cast<unsigned long long>(resolved_ncv(refined_nev)),
                 discovered_mode_count,
                 pass_state(0u),
                 pass_planned_subwindow_count[0],
@@ -4530,6 +5521,59 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             window_operator_context.poisson_factorization_setup_count;
         aggregate.shift_solver_setup_count =
             window_operator_context.shift_solver_setup_count;
+        aggregate.q_dof_count = static_cast<std::uint64_t>(
+            std::max<PetscInt>(window_operator_context.schur.q_count, 0));
+        aggregate.phi_dof_count = static_cast<std::uint64_t>(
+            std::max<PetscInt>(window_operator_context.schur.phi_count, 0));
+        aggregate.augmented_dof_count = aggregate.q_dof_count +
+            aggregate.phi_dof_count +
+            (window_operator_context.schur.gauge_augmented ? 1u : 0u);
+        aggregate.split_dof_count_available =
+            window_operator_context.split_count > 0;
+        aggregate.split_dof_count = aggregate.split_dof_count_available
+            ? static_cast<std::uint64_t>(window_operator_context.split_count)
+            : 0u;
+        aggregate.exact_preconditioner_shift_failure_observed =
+            window_operator_context.exact_cache_shift_failure_observed;
+        aggregate.exact_preconditioner_enabled =
+            window_operator_context.cached_window_schur != nullptr &&
+            window_operator_context.exact_cache_construction_succeeded &&
+            !window_operator_context.exact_cache_shift_failure_observed;
+        aggregate.exact_preconditioner_dimension_available =
+            aggregate.exact_preconditioner_enabled;
+        aggregate.exact_preconditioner_dimension =
+            aggregate.exact_preconditioner_enabled
+                ? aggregate.split_dof_count
+                : 0u;
+        if (window_operator_context.exact_cache_construction_attempted) {
+            copy_exact_cache_observability(window_operator_context, &aggregate);
+            copy_message(
+                aggregate.exact_preconditioner_status,
+                sizeof(aggregate.exact_preconditioner_status),
+                window_operator_context.exact_cache_status[0] != '\0'
+                    ? window_operator_context.exact_cache_status
+                    : (window_operator_context.exact_cache_shift_failure_observed
+                           ? "cache_shift_matrix_failed"
+                           : (aggregate.exact_preconditioner_enabled
+                                  ? "cache_available"
+                                  : "cache_construction_failed")));
+        } else {
+            copy_message(
+                aggregate.exact_preconditioner_status,
+                sizeof(aggregate.exact_preconditioner_status),
+                aggregate.split_dof_count_available &&
+                        window_operator_context.split_count <=
+                            kProductionWindowExactPreconditionerMaxDimension
+                    ? "cache_not_attempted"
+                    : "disabled_dimension_cap");
+        }
+        // Aggregate diagnostics describe the whole window; per-shift timing
+        // stays in executed_subwindows_json and is intentionally unavailable
+        // here rather than being mistaken for a sum or an average.
+        aggregate.shifted_preconditioner_setup_timing_available = false;
+        aggregate.shifted_preconditioner_setup_seconds = 0.0;
+        aggregate.eps_solve_timing_available = false;
+        aggregate.eps_solve_seconds = 0.0;
         const bool refinement_local_coverage_complete =
             pass_local_coverage_uncertified_count[1] == 0u;
         aggregate.window_complete =
@@ -4574,9 +5618,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
             "\"status\":\"%s\","
             "\"method\":\"shift_nev_refinement_subspace_v1\","
+            "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
             "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
-            "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
-            "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+            "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
+            "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
             "\"discovered_mode_count\":%zu,\"accepted_mode_count\":%u,"
             "\"base_schedule\":{\"state\":\"%s\","
             "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
@@ -4599,8 +5644,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             problem.frequency_max_hz,
             problem.requested_mode_count,
             static_cast<unsigned long long>(requested_nev),
+            static_cast<unsigned long long>(resolved_ncv(requested_nev)),
             pass_effective_requested_mode_count[1],
             static_cast<unsigned long long>(refined_nev),
+            static_cast<unsigned long long>(resolved_ncv(refined_nev)),
             discovered_mode_count,
             aggregate.accepted_mode_count,
             pass_state(0u),
@@ -4665,6 +5712,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             sizeof(aggregate.executed_subwindows_json),
             executed_subwindows_json.data());
         *out_result = std::move(aggregate);
+        out_result->k0_demag_operator_probe =
+            window_operator_context.k0_demag_operator_probe;
         write_production_schur_diagnostics(
             problem,
             *out_result,
@@ -4685,6 +5734,17 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     if (!borrowed_window_operator) {
         lock.lock();
     }
+    // The window recursion already owns pa_e3_slepc_mutex(); standalone
+    // calls own the unique_lock above.  Read the process latch only here.
+    if (production_k0_slepc_process_quarantined()) {
+        out_result->slepc_process_quarantined = true;
+        return fail_production_schur(
+            problem,
+            out_result,
+            FrequencyDomainStatus::solve_error,
+            "production K0 SLEPc graph is quarantined; process restart required",
+            "k0_slepc_process_quarantined");
+    }
     if (!ensure_slepc_initialized(out_result->error_message)) {
         return fail_production_schur(
             problem,
@@ -4694,14 +5754,26 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "slepc_initialization_failed");
     }
 
-    ProductionCpuOperatorContext owned_operator_context{};
-    ProductionCpuOwnedOperatorScope owned_operator_scope{
-        borrowed_window_operator ? nullptr : &owned_operator_context};
+    ProductionCpuOperatorContextOwner owned_operator_context_owner(
+        nullptr,
+        ProductionCpuOperatorContextDeleter{});
+    if (!borrowed_window_operator) {
+        owned_operator_context_owner.reset(
+            new (std::nothrow) ProductionCpuOperatorContext{});
+        if (!owned_operator_context_owner) {
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::operator_error,
+                "production K0 operator context allocation failed",
+                "production_operator_context_allocation_failed");
+        }
+    }
     ProductionCpuOperatorContext *operator_context =
         borrowed_window_operator
             ? active_cpu_window_operator_context
-            : &owned_operator_context;
-    operator_context->solve_control.arm(problem);
+            : owned_operator_context_owner.get();
+    operator_context->solve_control.arm(problem, callback_started_at);
     ProductionCpuSolveControlScope solve_control_scope{
         &operator_context->solve_control};
     if (!configure_production_cpu_operator_context(
@@ -4714,6 +5786,25 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "production shared-domain K0 Schur Poisson factorization setup failed",
             "poisson_factorization_setup_failed");
     }
+    if (problem.k0_demag_probe != nullptr &&
+        !operator_context->k0_demag_probe_completed) {
+        const bool probe_passed =
+            run_k0_demag_operator_probe(problem, operator_context);
+        operator_context->k0_demag_probe_completed = true;
+        out_result->k0_demag_operator_probe =
+            operator_context->k0_demag_operator_probe;
+        if (!probe_passed) {
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::operator_error,
+                "production shared-domain K0 demag operator probe failed before SLEPc",
+                "k0_demag_operator_probe_failed");
+        }
+    } else if (operator_context->k0_demag_probe_completed) {
+        out_result->k0_demag_operator_probe =
+            operator_context->k0_demag_operator_probe;
+    }
     ++operator_context->shift_solver_setup_count;
 
     ProductionSchurContext &context = operator_context->schur;
@@ -4721,6 +5812,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     Mat split_mass = operator_context->split_mass;
     const PetscInt base_count = context.q_count;
     const PetscInt split_count = operator_context->split_count;
+    out_result->split_dof_count_available = split_count > 0;
+    out_result->split_dof_count = split_count > 0
+        ? static_cast<std::uint64_t>(split_count)
+        : 0u;
     const double mass_norm = operator_context->descriptor_mass_norm;
     const double operator_norm = operator_context->descriptor_operator_norm;
     const double angular_frequency_scale =
@@ -4754,40 +5849,169 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         operator_context->poisson_factorization_setup_count;
     out_result->shift_solver_setup_count =
         operator_context->shift_solver_setup_count;
-    const PetscInt requested_pairs = std::max<PetscInt>(
-        1,
-        // Each physical mode is a two-dimensional J-equivalence class in the
-        // rotated-real pencil, and its conjugate branch contributes another
-        // two real Ritz vectors.  Request both branches so target-magnitude
-        // ties cannot return only the negative-frequency half.
-        static_cast<PetscInt>(std::max<std::uint32_t>(1u, problem.requested_mode_count) * 4u));
-    // Krylov-Schur requires a proper subspace: asking for the complete
-    // spectrum (nev == n) reaches an invalid dense projected problem in
-    // SLEPc/LAPACK and may terminate through XERBLA before the caller can
-    // observe a failure.  The production lane is selected-spectrum only.
-    const PetscInt nev = std::min(split_count - 1, requested_pairs);
+    // split_dof_count is always a resolved operator dimension.  The exact
+    // preconditioner dimension remains null until its matrix is actually
+    // materialized and usable for this shift.
+    out_result->exact_preconditioner_dimension_available = false;
+    out_result->exact_preconditioner_dimension = 0u;
+    if (borrowed_window_operator) {
+        copy_message(
+            out_result->exact_preconditioner_status,
+            sizeof(out_result->exact_preconditioner_status),
+            split_count <= kProductionWindowExactPreconditionerMaxDimension
+                ? "pending_window_cache"
+                : "disabled_dimension_cap");
+    } else {
+        copy_message(
+            out_result->exact_preconditioner_status,
+            sizeof(out_result->exact_preconditioner_status),
+            split_count <= kProductionExactPreconditionerMaxDimension
+                ? "pending_single_shift"
+                : "disabled_dimension_limit");
+    }
+    // A standalone positive target needs the two-vector J-equivalence class.
+    // Window subcalls use the same target enum but retain four-vector coverage.
+    const std::uint64_t requested_pairs =
+        std::max<std::uint64_t>(1u, problem.requested_mode_count) *
+        (nearest_target && !borrowed_window_operator &&
+                 problem.target_frequency_hz > 0.0
+             ? 2u
+             : 4u);
+    const BoundedKrylovDimensions dimensions = bounded_krylov_dimensions(
+        split_count >= 2 ? static_cast<std::uint64_t>(split_count) : 0u,
+        requested_pairs,
+        borrowed_window_operator);
+    if (!dimensions.valid) {
+        return fail_production_schur(
+            problem,
+            out_result,
+            FrequencyDomainStatus::validation_error,
+            "production shared-domain K0 Schur could not resolve bounded nev/ncv",
+            "production_krylov_dimensions_invalid");
+    }
+    const PetscInt nev = static_cast<PetscInt>(dimensions.nev);
+    const PetscInt ncv = static_cast<PetscInt>(dimensions.ncv);
     const PetscReal tolerance = static_cast<PetscReal>(problem.residual_tolerance);
-    const PetscReal eigensolver_tolerance = static_cast<PetscReal>(
-        production_modal_eigensolver_tolerance(problem.residual_tolerance));
+    const PetscReal eigensolver_tolerance =
+        static_cast<PetscReal>(resolved_tuning.eps_prefilter_abs);
+    const PetscReal shifted_ksp_tolerance =
+        static_cast<PetscReal>(resolved_tuning.shifted_ksp_rtol);
+    const PetscInt shifted_restart = std::min<PetscInt>(
+        split_count, static_cast<PetscInt>(resolved_tuning.gmres_restart));
+    const PetscInt shifted_max_iterations = problem.max_linear_iterations > 0
+        ? static_cast<PetscInt>(problem.max_linear_iterations) : 1000;
     const PetscInt max_outer = problem.max_outer_iterations > 0
         ? static_cast<PetscInt>(problem.max_outer_iterations)
         : PETSC_DEFAULT;
     Mat shifted_preconditioner = nullptr;
-    bool exact_shifted_preconditioner = !borrowed_window_operator &&
-        create_production_exact_shift_preconditioner(
-                schur_shell,
-                split_mass,
-                split_count,
+    const bool bounded_window_preconditioner =
+        borrowed_window_operator &&
+        split_count <= kProductionWindowExactPreconditionerMaxDimension;
+    const bool exact_preconditioner_eligible =
+        borrowed_window_operator
+            ? bounded_window_preconditioner
+            : split_count <= kProductionExactPreconditionerMaxDimension;
+    const std::uint64_t preconditioner_poisson_solve_count_before =
+        context.poisson_solve_count;
+    double window_shift_setup_seconds = 0.0;
+    bool window_shift_setup_timing_available = false;
+    bool exact_shifted_preconditioner = false;
+    if (bounded_window_preconditioner) {
+        exact_shifted_preconditioner =
+            create_production_cached_window_preconditioner(
+                operator_context,
                 target_eigenvalue,
-                &shifted_preconditioner);
+                &shifted_preconditioner,
+                &window_shift_setup_seconds,
+                &window_shift_setup_timing_available);
+        out_result->shifted_preconditioner_setup_timing_available =
+            window_shift_setup_timing_available;
+        out_result->shifted_preconditioner_setup_seconds =
+            window_shift_setup_seconds;
+    } else if (!borrowed_window_operator) {
+        const auto exact_construction_started_at = std::chrono::steady_clock::now();
+        exact_shifted_preconditioner = create_production_exact_shift_preconditioner(
+            schur_shell,
+            split_mass,
+            split_count,
+            target_eigenvalue,
+            &shifted_preconditioner,
+            &operator_context->solve_control,
+            &out_result->exact_preconditioner_column_count);
+        const double exact_construction_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - exact_construction_started_at).count();
+        if (exact_preconditioner_eligible) {
+            out_result->exact_preconditioner_construction_timing_available = true;
+            out_result->exact_preconditioner_construction_seconds =
+                exact_construction_seconds;
+        }
+    }
+    if (borrowed_window_operator) {
+        copy_exact_cache_observability(*operator_context, out_result);
+        if (operator_context->exact_cache_construction_attempted) {
+            copy_message(
+                out_result->exact_preconditioner_status,
+                sizeof(out_result->exact_preconditioner_status),
+                operator_context->exact_cache_status[0] != '\0'
+                    ? operator_context->exact_cache_status
+                    : (exact_shifted_preconditioner
+                           ? "cache_reused"
+                           : "cache_failed"));
+        }
+    } else if (exact_preconditioner_eligible) {
+        out_result->exact_preconditioner_column_count_available = true;
+        out_result->exact_preconditioner_construction_metrics_available = true;
+        out_result->exact_preconditioner_construction_poisson_solve_count =
+            context.poisson_solve_count - preconditioner_poisson_solve_count_before;
+        copy_message(
+            out_result->exact_preconditioner_status,
+            sizeof(out_result->exact_preconditioner_status),
+            exact_shifted_preconditioner
+                ? "single_shift_materialized"
+                : "single_shift_materialization_failed");
+    }
+    out_result->exact_preconditioner_enabled = exact_shifted_preconditioner;
+    if (exact_shifted_preconditioner) {
+        out_result->exact_preconditioner_dimension_available = true;
+        out_result->exact_preconditioner_dimension =
+            static_cast<std::uint64_t>(split_count);
+    }
+    if (!exact_shifted_preconditioner &&
+        (operator_context->solve_control.cancellation_observed ||
+         poisson_airbox_modal_cancel_requested(problem))) {
+        if (shifted_preconditioner != nullptr) {
+            MatDestroy(&shifted_preconditioner);
+        }
+        return fail_production_schur(
+            problem,
+            out_result,
+            FrequencyDomainStatus::interrupted,
+            "production shared-domain K0 Schur preconditioner setup was cancelled",
+            "cancel_requested");
+    }
+    if (bounded_window_preconditioner && !exact_shifted_preconditioner) {
+        return fail_production_schur(
+            problem,
+            out_result,
+            FrequencyDomainStatus::operator_error,
+            "production shared-domain K0 cached window preconditioner setup failed",
+            "cached_window_preconditioner_setup_failed");
+    }
     if (!exact_shifted_preconditioner) {
         exact_shifted_preconditioner = false;
-        if (!create_production_shift_preconditioner(
+        const auto fallback_setup_started_at = std::chrono::steady_clock::now();
+        const bool fallback_setup_succeeded = create_production_shift_preconditioner(
                 problem.A_qq,
                 problem.B_qq,
                 target_omega,
                 operator_scale,
-                &shifted_preconditioner)) {
+                &shifted_preconditioner);
+        out_result->shifted_preconditioner_setup_timing_available = true;
+        out_result->shifted_preconditioner_setup_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - fallback_setup_started_at)
+                .count();
+        if (!fallback_setup_succeeded) {
             destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
             if (shifted_preconditioner != nullptr) {
                 MatDestroy(&shifted_preconditioner);
@@ -4799,6 +6023,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "production shared-domain K0 Schur shifted preconditioner setup failed",
                 "shifted_preconditioner_setup_failed");
         }
+    }
+    if (!exact_shifted_preconditioner &&
+        !borrowed_window_operator && exact_preconditioner_eligible) {
+        copy_message(
+            out_result->exact_preconditioner_status,
+            sizeof(out_result->exact_preconditioner_status),
+            "single_shift_materialization_failed_fallback");
     }
     std::snprintf(
         out_result->shifted_preconditioner_kind,
@@ -4839,7 +6070,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         EPSSetOperators(eps, schur_shell, split_mass) == 0 &&
         EPSSetProblemType(eps, EPS_GNHEP) == 0 &&
         EPSSetType(eps, EPSKRYLOVSCHUR) == 0 &&
-        EPSSetDimensions(eps, nev, PETSC_DEFAULT, PETSC_DEFAULT) == 0 &&
+        EPSSetDimensions(eps, nev, ncv, PETSC_DEFAULT) == 0 &&
         EPSSetWhichEigenpairs(eps, EPS_TARGET_MAGNITUDE) == 0 &&
         EPSSetTarget(eps, static_cast<PetscScalar>(target_eigenvalue)) == 0 &&
         EPSSetTrueResidual(eps, PETSC_TRUE) == 0 &&
@@ -4855,15 +6086,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         STSetPreconditionerMat(st, shifted_preconditioner) == 0 &&
         STGetKSP(st, &st_ksp) == 0;
     if (configured) {
-        // Shift-invert is one uniform GMRES contract for both the exact
-        // materialized preconditioner and the scalable magnetic fallback.
-        // The former converges in a short iteration sequence; retaining
-        // GMRES keeps its residual and restart semantics observable and
-        // avoids a separate PREONLY production lane.
-        configured = KSPSetType(st_ksp, KSPGMRES) == 0 &&
-            KSPGMRESSetRestart(
-                st_ksp,
-                std::min<PetscInt>(split_count, static_cast<PetscInt>(256))) == 0;
+        // Defaults preserve the existing GMRES path. An explicit common
+        // runtime override also applies to Gamma within a Floquet sweep.
+        configured = KSPSetType(st_ksp, resolved_tuning.shifted_ksp_type) == 0 &&
+            KSPGMRESSetRestart(st_ksp, shifted_restart) == 0;
+        if (configured && std::strcmp(resolved_tuning.shifted_ksp_type, "fgmres") == 0) {
+            configured = KSPSetPCSide(st_ksp, PC_RIGHT) == 0 &&
+                KSPSetNormType(st_ksp, KSP_NORM_UNPRECONDITIONED) == 0;
+        }
     }
     configured = configured &&
         KSPGetPC(st_ksp, &st_pc) == 0 &&
@@ -4878,22 +6108,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         PCFactorSetShiftType(st_pc, MAT_SHIFT_NONE) == 0 &&
         KSPSetTolerances(
             st_ksp,
-            std::max(
-                1.0e-13,
-                std::min(
-                    1.0e-10,
-                    1.0e-3 * static_cast<double>(eigensolver_tolerance))),
+            shifted_ksp_tolerance,
             PETSC_DEFAULT,
             PETSC_DEFAULT,
-            std::max<PetscInt>(
-                1000,
-                problem.max_linear_iterations > 0
-                    ? static_cast<PetscInt>(problem.max_linear_iterations)
-                    : 0)) == 0 &&
+            shifted_max_iterations) == 0 &&
         KSPSetErrorIfNotConverged(st_ksp, PETSC_TRUE) == 0 &&
         install_production_modal_ksp_convergence_test(
             st_ksp,
-            &operator_context->solve_control) == 0 &&
+            &operator_context->solve_control,
+            PoissonAirboxModalLinearSolverRole::shift_invert) == 0 &&
         VecCreateSeq(PETSC_COMM_SELF, split_count, &xr) == 0 &&
         VecCreateSeq(PETSC_COMM_SELF, split_count, &xi) == 0;
     if (!configured) {
@@ -4907,12 +6130,136 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "slepc_solver_configuration_failed");
     }
 
+    auto capture_krylov_configuration = [&](const char *phase) noexcept {
+        PetscReal eps_tol = 0.0, ksp_rtol = 0.0;
+        PetscInt eps_max = 0, ksp_max = 0, restart = 0;
+        PetscInt queried_nev = 0, queried_ncv = 0, queried_mpd = 0;
+        const bool eps_dimensions_query_succeeded =
+            EPSGetDimensions(eps, &queried_nev, &queried_ncv, &queried_mpd) == 0;
+        const char *ksp_type = nullptr;
+        if (EPSGetTolerances(eps, &eps_tol, &eps_max) != 0 ||
+            KSPGetTolerances(st_ksp, &ksp_rtol, nullptr, nullptr, &ksp_max) != 0 ||
+            KSPGetType(st_ksp, &ksp_type) != 0 || ksp_type == nullptr ||
+            KSPGMRESGetRestart(st_ksp, &restart) != 0 ||
+            std::strcmp(ksp_type, resolved_tuning.shifted_ksp_type) != 0 ||
+            eps_tol != eigensolver_tolerance || ksp_rtol != shifted_ksp_tolerance ||
+            restart != shifted_restart || ksp_max != shifted_max_iterations ||
+            (problem.max_outer_iterations > 0 && eps_max != max_outer)) {
+            return false;
+        }
+        char eps_max_json[32]{};
+        format_nullable_u64_json(eps_max_json, sizeof(eps_max_json),
+            eps_max > 0, eps_max > 0 ? static_cast<std::uint64_t>(eps_max) : 0u);
+        char eps_dimensions_json[192]{};
+        const bool eps_dimensions_formatted =
+            format_poisson_airbox_eps_dimensions_json(
+                eps_dimensions_query_succeeded,
+                static_cast<std::int64_t>(queried_nev),
+                static_cast<std::int64_t>(queried_ncv),
+                static_cast<std::int64_t>(queried_mpd),
+                eps_dimensions_json,
+                sizeof(eps_dimensions_json));
+        const char *eps_dimensions_fields = eps_dimensions_formatted
+            ? eps_dimensions_json
+            : "\"eps_dimensions\":{\"query_succeeded\":false,"
+              "\"nev\":null,\"ncv\":null,\"mpd\":null}";
+        const int written = std::snprintf(
+            out_result->modal_krylov_tuning_json,
+            sizeof(out_result->modal_krylov_tuning_json),
+            "{\"phase\":\"%s\",\"eps_tolerance\":%.17g,"
+            "\"eps_max_iterations\":%s,\"shifted_ksp_type\":\"%s\","
+            "\"shifted_ksp_rtol\":%.17g,\"shifted_ksp_max_iterations\":%lld,"
+            "\"shifted_ksp_restart\":%lld,%s}",
+            phase, static_cast<double>(eps_tol), eps_max_json,
+            resolved_tuning.shifted_ksp_type, static_cast<double>(ksp_rtol),
+            static_cast<long long>(ksp_max), static_cast<long long>(restart),
+            eps_dimensions_fields);
+        if (written < 0 || static_cast<std::size_t>(written) >=
+                sizeof(out_result->modal_krylov_tuning_json)) {
+            out_result->modal_krylov_tuning_json[0] = '\0';
+            return false;
+        }
+        copy_message(out_result->configured_shifted_ksp_type,
+            sizeof(out_result->configured_shifted_ksp_type),
+            resolved_tuning.shifted_ksp_type);
+        return true;
+    };
+    if (!capture_krylov_configuration("configured_before_eps")) {
+        destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
+        MatDestroy(&shifted_preconditioner);
+        return fail_production_schur(problem, out_result,
+            FrequencyDomainStatus::solve_error,
+            "production K0 Schur Krylov configuration query failed",
+            "k0_modal_krylov_configuration_mismatch");
+    }
+
     PetscInt outer_iterations = 0;
     PetscInt converged = 0;
+    const auto eps_started_at = std::chrono::steady_clock::now();
     const PetscErrorCode eps_solve_status = EPSSolve(eps);
-    const bool solve_interrupted =
+    out_result->eps_solve_timing_available = true;
+    out_result->eps_solve_seconds =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - eps_started_at)
+            .count();
+    bool solve_interrupted =
         operator_context->solve_control.cancellation_observed ||
         poisson_airbox_modal_cancel_requested(problem);
+    if (eps_solve_status != PETSC_SUCCESS) {
+        operator_context->eps_lifetime_unsafe = true;
+        operator_context->invalidated = true;
+        operator_context->solve_control.disarm();
+        production_k0_slepc_process_quarantined() = true;
+        const char *failure_stop_reason =
+            solve_interrupted ? "cancel_requested" : "slepc_solve_failed";
+        out_result->eps_solve_error_code_available = true;
+        out_result->eps_solve_error_code =
+            static_cast<std::int32_t>(eps_solve_status);
+        out_result->slepc_process_quarantined = true;
+        out_result->operator_context_invalidated = true;
+        out_result->eps_lifetime_unsafe = true;
+        out_result->eps_reason_available = false;
+        out_result->outer_iterations = 0u;
+        out_result->converged_eigenpair_count = 0u;
+        out_result->accepted_mode_count = 0u;
+        out_result->accepted_modes.clear();
+        out_result->certified_spectral_guard_frequencies_hz.clear();
+        out_result->window_complete = false;
+        out_result->operator_apply_count =
+            context.operator_apply_count - operator_apply_count_before;
+        out_result->poisson_solve_count =
+            context.poisson_solve_count - poisson_solve_count_before;
+        out_result->poisson_iteration_count = context.poisson_iteration_count;
+        out_result->shift_linear_iteration_count = 0u;
+        copy_exact_cache_observability(*operator_context, out_result);
+        copy_message(
+            out_result->eps_stop_reason,
+            sizeof(out_result->eps_stop_reason),
+            failure_stop_reason);
+        char failure_message[256]{};
+        std::snprintf(
+            failure_message,
+            sizeof(failure_message),
+            "production shared-domain K0 EPSSolve failed with PetscErrorCode %d",
+            static_cast<int>(eps_solve_status));
+        return fail_production_schur(
+            problem,
+            out_result,
+            solve_interrupted
+                ? FrequencyDomainStatus::interrupted
+                : FrequencyDomainStatus::solve_error,
+            failure_message,
+            failure_stop_reason);
+    }
+    const bool tuning_snapshot_ok = capture_krylov_configuration("queried_after_eps");
+    if (!tuning_snapshot_ok && !solve_interrupted) {
+        destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
+        MatDestroy(&shifted_preconditioner);
+        return fail_production_schur(problem, out_result,
+            FrequencyDomainStatus::solve_error,
+            "production K0 Schur Krylov configuration changed during EPS",
+            "k0_modal_krylov_configuration_mismatch");
+    }
     EPSConvergedReason eps_reason = EPS_CONVERGED_ITERATING;
     const PetscErrorCode iteration_status = EPSGetIterationNumber(eps, &outer_iterations);
     const PetscErrorCode converged_status = EPSGetConverged(eps, &converged);
@@ -4935,12 +6282,33 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             solve_interrupted ? "cancel_requested" : "slepc_solve_failed");
     }
     out_result->slepc_converged_reason_code = static_cast<int>(eps_reason);
+    out_result->eps_reason_available = true;
     copy_message(
         out_result->slepc_converged_reason,
         sizeof(out_result->slepc_converged_reason),
         eps_reason > 0 ? "eps_converged" :
             eps_reason < 0 ? "eps_diverged" : "eps_iterating");
-    if (!solve_interrupted && eps_reason <= 0) {
+    // Preserve work actually performed even when EPS exhausts its iteration
+    // budget.  A failed solve must not serialize default zero counters.
+    out_result->outer_iterations = static_cast<std::uint32_t>(
+        std::max<PetscInt>(0, outer_iterations));
+    out_result->converged_eigenpair_count = static_cast<std::uint32_t>(
+        std::max<PetscInt>(0, converged));
+    out_result->operator_apply_count =
+        context.operator_apply_count - operator_apply_count_before;
+    out_result->poisson_solve_count =
+        context.poisson_solve_count - poisson_solve_count_before;
+    out_result->poisson_iteration_count = context.poisson_iteration_count;
+    PetscInt shift_linear_iterations = 0;
+    if (KSPGetTotalIterations(st_ksp, &shift_linear_iterations) == 0) {
+        out_result->shift_linear_iteration_count = static_cast<std::uint64_t>(
+            std::max<PetscInt>(0, shift_linear_iterations));
+    }
+    // Extract and certify the converged Ritz vectors even when EPS did not
+    // reach its requested nev.  These observations are diagnostic only: the
+    // incomplete solve still returns solve_error before mode selection.
+    const bool incomplete_eps = !solve_interrupted && eps_reason <= 0;
+    if (incomplete_eps && converged == 0) {
         destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
         MatDestroy(&shifted_preconditioner);
         return fail_production_schur(
@@ -4984,8 +6352,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     copy_message(
         out_result->stop_reason,
         sizeof(out_result->stop_reason),
-        solve_interrupted ? "cancel_requested" : "converged");
-    PetscInt shift_linear_iterations = 0;
+        solve_interrupted ? "cancel_requested" :
+            incomplete_eps ? (eps_reason < 0 ? "slepc_diverged" : "slepc_not_converged") :
+                "converged");
     if (KSPGetTotalIterations(st_ksp, &shift_linear_iterations) == 0) {
         out_result->shift_linear_iteration_count = static_cast<std::uint64_t>(
             std::max<PetscInt>(0, shift_linear_iterations));
@@ -5033,6 +6402,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     std::size_t raw_ritz_samples_size = 1u;
     std::uint32_t raw_ritz_sample_count = 0u;
     bool raw_ritz_samples_complete = true;
+    char reconstructed_samples[1536]{'['};
+    std::size_t reconstructed_samples_size = 1u;
+    std::uint32_t reconstructed_sample_count = 0u;
+    bool reconstructed_samples_complete = true;
     const auto append_raw_ritz_sample = [&](PetscInt index,
                                             double kr_scaled,
                                             double ki_scaled,
@@ -5144,13 +6517,18 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 scaled_imaginary,
                 in_window ? "positive_in_window" : "positive_out_of_window");
         }
-        if (!select_positive_frequency_mode(
-                kinematics,
-                ZeroFrequencyModePolicy::exclude)) {
+        const bool publish_positive = select_positive_frequency_mode(
+            kinematics, ZeroFrequencyModePolicy::exclude);
+        const bool certify_signed_guard =
+            problem.progress_total_subwindows > 0u &&
+            !kinematics.zero_frequency_mode;
+        if (!publish_positive && !certify_signed_guard) {
             continue;
         }
-        saw_positive = true;
-        ++out_result->positive_frequency_eigenpair_count;
+        if (publish_positive) {
+            saw_positive = true;
+            ++out_result->positive_frequency_eigenpair_count;
+        }
         if (frequency_window &&
             (kinematics.frequency_hz < problem.frequency_min_hz ||
              kinematics.frequency_hz > problem.frequency_max_hz)) {
@@ -5342,7 +6720,39 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             ++out_result->full_residual_rejected_count;
             continue;
         }
+        if (certify_signed_guard) {
+            out_result->certified_spectral_guard_frequencies_hz.push_back(
+                kinematics.frequency_hz);
+        }
+        if (!publish_positive) {
+            // This eigenpair proves signed spectral coverage only. Keep it
+            // out of public positive modes, cluster ranks and branch tracking.
+            continue;
+        }
         ++out_result->full_residual_accepted_count;
+        if (reconstructed_samples_complete && reconstructed_sample_count < 4u) {
+            const int written = std::snprintf(
+                reconstructed_samples + reconstructed_samples_size,
+                sizeof(reconstructed_samples) - reconstructed_samples_size,
+                "%s{\"index\":%d,\"frequency_hz\":%.17g,"
+                "\"full_backward_error\":%.17g,\"magnetic_backward_error\":%.17g,"
+                "\"poisson_backward_error\":%.17g,\"gauge_backward_error\":%.17g}",
+                reconstructed_sample_count == 0u ? "" : ",",
+                static_cast<int>(index),
+                kinematics.frequency_hz,
+                metrics.reconstructed_full_descriptor_backward_error,
+                metrics.magnetic_block_backward_error,
+                metrics.poisson_block_backward_error,
+                metrics.gauge_constraint_backward_error);
+            if (written <= 0 ||
+                static_cast<std::size_t>(written) >=
+                    sizeof(reconstructed_samples) - reconstructed_samples_size) {
+                reconstructed_samples_complete = false;
+            } else {
+                reconstructed_samples_size += static_cast<std::size_t>(written);
+                ++reconstructed_sample_count;
+            }
+        }
         candidates.push_back(Candidate{
             index,
             std::abs(kinematics.omega_rad_s - target_omega),
@@ -5363,8 +6773,16 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     } else {
         copy_message(raw_ritz_samples, sizeof(raw_ritz_samples), "[]");
     }
+    if (reconstructed_samples_complete &&
+        reconstructed_samples_size + 2u <= sizeof(reconstructed_samples)) {
+        reconstructed_samples[reconstructed_samples_size++] = ']';
+        reconstructed_samples[reconstructed_samples_size] = '\0';
+    } else {
+        reconstructed_samples_complete = false;
+        copy_message(reconstructed_samples, sizeof(reconstructed_samples), "[]");
+    }
     const bool raw_ritz_range_available = out_result->raw_ritz_finite_count > 0u;
-    std::snprintf(
+    const int raw_ritz_json_size = std::snprintf(
         out_result->raw_ritz_classification_json,
         sizeof(out_result->raw_ritz_classification_json),
         "{\"available\":true,\"retrieval_failed_count\":%u,"
@@ -5374,7 +6792,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         "\"in_window_count\":%u,\"out_of_window_count\":%u,"
         "\"kr_scaled_range\":[%.17g,%.17g],"
         "\"ki_scaled_range\":[%.17g,%.17g],"
-        "\"sample_limit\":4,\"samples\":%s}",
+        "\"sample_limit\":4,\"samples\":%s,"
+        "\"reconstructed_sample_limit\":4,\"reconstructed_samples_available\":%s,"
+        "\"reconstructed_samples\":%s}",
         out_result->raw_ritz_retrieval_failed_count,
         out_result->raw_ritz_nonfinite_count,
         out_result->raw_ritz_finite_count,
@@ -5389,7 +6809,17 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         raw_ritz_range_available ? kr_scaled_max : 0.0,
         raw_ritz_range_available ? ki_scaled_min : 0.0,
         raw_ritz_range_available ? ki_scaled_max : 0.0,
-        raw_ritz_samples);
+        raw_ritz_samples,
+        reconstructed_samples_complete ? "true" : "false",
+        reconstructed_samples);
+    if (raw_ritz_json_size < 0 ||
+        static_cast<std::size_t>(raw_ritz_json_size) >=
+            sizeof(out_result->raw_ritz_classification_json)) {
+        copy_message(
+            out_result->raw_ritz_classification_json,
+            sizeof(out_result->raw_ritz_classification_json),
+            "{\"available\":false,\"reason\":\"diagnostic_buffer_exhausted\"}");
+    }
 
     out_result->operator_apply_count =
         context.operator_apply_count - operator_apply_count_before;
@@ -5402,6 +6832,24 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     }
     destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
     MatDestroy(&shifted_preconditioner);
+
+    // Cancellation can arrive while reconstructing diagnostic partial Ritz vectors.
+    solve_interrupted = solve_interrupted ||
+        operator_context->solve_control.cancellation_observed ||
+        poisson_airbox_modal_cancel_requested(problem);
+    if (incomplete_eps) {
+        destroy_refinement_ksp();
+        return fail_production_schur(
+            problem,
+            out_result,
+            solve_interrupted ? FrequencyDomainStatus::interrupted
+                              : FrequencyDomainStatus::solve_error,
+            solve_interrupted
+                ? "production shared-domain K0 Schur diagnostic reconstruction was cancelled"
+                : "production shared-domain K0 Schur SLEPc did not report convergence",
+            solve_interrupted ? "cancel_requested"
+                              : (eps_reason < 0 ? "slepc_diverged" : "slepc_not_converged"));
+    }
 
     std::sort(
         candidates.begin(),

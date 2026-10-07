@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(super) struct ModeSummaryArtifact {
     mode_id: String,
     raw_mode_index: usize,
+    mode_field_available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch_id: Option<usize>,
     mode_field_id: String,
@@ -35,8 +36,9 @@ pub(super) struct ModeSummaryArtifact {
     max_amplitude: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_norm: Option<f64>,
-    residual_absolute_l2: f64,
-    residual_relative_l2: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    residual_absolute_l2: Option<f64>,
+    residual_relative_l2: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_linf: Option<f64>,
     mass_norm: f64,
@@ -83,6 +85,8 @@ struct PathArtifact<'a> {
 
 #[derive(Debug, Clone, Serialize)]
 struct BranchPointArtifact {
+    sample_id: String,
+    mode_id: String,
     sample_index: usize,
     raw_mode_index: usize,
     frequency_hz: f64,
@@ -92,8 +96,10 @@ struct BranchPointArtifact {
     tracking_confidence: f64,
     tracking_score_source: &'static str,
     modal_overlap_available: bool,
+    mode_field_available: bool,
     mode_field_id: String,
     overlap_prev: Option<f64>,
+    tracking_edge: Option<crate::eigen::types::TrackingEdgeProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     modal_overlap_unavailable_reason: Option<&'static str>,
 }
@@ -108,6 +114,10 @@ struct BranchArtifact {
 
 #[derive(Debug, Clone, Serialize)]
 struct BranchesArtifact {
+    tracking_policy_availability: &'static str,
+    tracking_method: Option<fullmag_ir::ModeTrackingMethodIR>,
+    overlap_floor: Option<f64>,
+    frequency_window_hz: Option<f64>,
     schema_version: &'static str,
     solver_model: String,
     tracking_score_source: &'static str,
@@ -134,11 +144,18 @@ pub(super) fn summarize_mode(
     sample: &SingleKSolveResult,
     mode: &SingleKModeResult,
     solver_model: EigenSolverModel,
+    gamma0_rad_s_per_a_m: f64,
 ) -> ModeSummaryArtifact {
     let mode_field_id = eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
-    let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
-    let residual_relative_l2 = residual_absolute_l2;
-    let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
+    let residual_absolute_l2 = mode
+        .residual_norm
+        .filter(|value| value.is_finite() && *value >= 0.0);
+    let residual_relative_l2 = mode
+        .residual_relative_l2
+        .filter(|value| value.is_finite() && *value >= 0.0);
+    let residual_linf = mode
+        .residual_linf
+        .filter(|value| value.is_finite() && *value >= 0.0);
     let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
     let tangent_leakage_max_abs = finite_or_default(mode.tangent_leakage_max_abs, 0.0);
     let diagnostics = sample_native_solver_diagnostics(sample);
@@ -148,6 +165,7 @@ pub(super) fn summarize_mode(
             sample.sample.sample_index, mode.raw_mode_index
         ),
         raw_mode_index: mode.raw_mode_index,
+        mode_field_available: true,
         branch_id: mode.branch_id,
         mode_field_id,
         frequency_hz: mode.frequency_real_hz,
@@ -160,16 +178,16 @@ pub(super) fn summarize_mode(
         eigenvalue_mapping: modal_eigenvalue_mapping(solver_model),
         norm: mode.norm,
         max_amplitude: mode.max_amplitude,
-        residual_norm: Some(residual_absolute_l2),
+        residual_norm: residual_absolute_l2,
         residual_absolute_l2,
         residual_relative_l2,
-        residual_linf: Some(residual_linf),
+        residual_linf,
         mass_norm: resolved_mode_mass_norm(mode),
         tangent_leakage_mean_abs: Some(tangent_leakage_mean_abs),
         tangent_leakage_max_abs: Some(tangent_leakage_max_abs.max(tangent_leakage_mean_abs)),
         omega_rad_s: mode.angular_frequency_rad_per_s,
-        gamma_rad_s_t: reference_modal_gamma_rad_s_t(),
-        gamma0_rad_s_per_a_m: REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M,
+        gamma_rad_s_t: gamma0_rad_s_per_a_m / crate::MU0,
+        gamma0_rad_s_per_a_m,
         mu0_t_m_per_a: crate::MU0,
         dominant_polarization: mode.dominant_polarization.clone(),
         k_vector: sample.sample.k_vector,
@@ -186,29 +204,11 @@ fn branch_point_modal_overlap_available(
     branch: &TrackedBranch,
     point_index: usize,
 ) -> bool {
-    if point_index == 0 {
-        return false;
-    }
-    let Some(previous_point) = branch.points.get(point_index - 1) else {
-        return false;
-    };
-    let Some(current_point) = branch.points.get(point_index) else {
-        return false;
-    };
-    let previous_mode = result_mode(
-        result,
-        previous_point.sample_index,
-        previous_point.raw_mode_index,
-    );
-    let current_mode = result_mode(
-        result,
-        current_point.sample_index,
-        current_point.raw_mode_index,
-    );
     matches!(
-        (previous_mode, current_mode),
-        (Some(previous), Some(current))
-            if previous.reduced_vector.is_some() && current.reduced_vector.is_some()
+        branch_point_tracking_score_source(result, branch, point_index),
+        "modal_overlap_weighted_score"
+            | "modal_overlap_unweighted_score"
+            | "modal_subspace_transport_score"
     )
 }
 
@@ -217,14 +217,25 @@ fn branch_point_tracking_score_source(
     branch: &TrackedBranch,
     point_index: usize,
 ) -> &'static str {
+    let Some(point) = branch.points.get(point_index) else {
+        return "modal_overlap_unavailable";
+    };
+    if let Some(edge) = &point.tracking_edge {
+        return edge.score_source.as_str();
+    }
     if point_index == 0 {
         return "seed";
     }
-    if branch_point_modal_overlap_available(result, branch, point_index) {
-        "modal_overlap_weighted_score"
-    } else {
-        "frequency_score_fallback"
-    }
+    let previous_mode = branch
+        .points
+        .get(point_index - 1)
+        .and_then(|previous| result_mode(result, previous.sample_index, previous.raw_mode_index));
+    let current_mode = result_mode(result, point.sample_index, point.raw_mode_index);
+    crate::eigen::tracking::tracking_score_source_for_modes(
+        previous_mode,
+        current_mode,
+        point.overlap_prev,
+    )
 }
 
 fn branch_point_tracking_unavailable_reason(
@@ -232,10 +243,13 @@ fn branch_point_tracking_unavailable_reason(
     branch: &TrackedBranch,
     point_index: usize,
 ) -> Option<&'static str> {
-    if point_index == 0 || branch_point_modal_overlap_available(result, branch, point_index) {
-        None
-    } else {
-        Some("mode_vectors_unavailable")
+    match branch_point_tracking_score_source(result, branch, point_index) {
+        "seed"
+        | "modal_overlap_weighted_score"
+        | "modal_overlap_unweighted_score"
+        | "modal_subspace_transport_score" => None,
+        "frequency_score_fallback" => Some("mode_vectors_unavailable"),
+        _ => Some("tracking_metric_unavailable"),
     }
 }
 
@@ -268,37 +282,26 @@ fn mode_tracking_score_source(
 }
 
 fn tracking_summary(result: &PathSolveResult) -> TrackingDiagnosticsArtifact {
-    let mut saw_modal_overlap = false;
-    let mut saw_frequency_fallback = false;
-    let mut saw_non_seed = false;
+    let mut score_sources = Vec::new();
     let mut modal_overlaps = Vec::new();
     for branch in &result.branches {
         for point_index in 0..branch.points.len() {
-            match branch_point_tracking_score_source(result, branch, point_index) {
-                "modal_overlap_weighted_score" => {
-                    saw_modal_overlap = true;
-                    saw_non_seed = true;
+            let score_source = branch_point_tracking_score_source(result, branch, point_index);
+            score_sources.push(score_source);
+            match score_source {
+                "modal_overlap_weighted_score" | "modal_overlap_unweighted_score" => {
                     if let Some(overlap) = branch.points[point_index].overlap_prev {
                         if overlap.is_finite() {
                             modal_overlaps.push(overlap);
                         }
                     }
                 }
-                "frequency_score_fallback" => {
-                    saw_frequency_fallback = true;
-                    saw_non_seed = true;
-                }
                 _ => {}
             }
         }
     }
-    let tracking_score_source = match (saw_modal_overlap, saw_frequency_fallback, saw_non_seed) {
-        (true, true, _) => "mixed_modal_overlap_and_frequency_fallback",
-        (true, false, _) => "modal_overlap_weighted_score",
-        (false, true, _) => "frequency_score_fallback",
-        (false, false, false) => "seed_only",
-        (false, false, true) => "frequency_score_fallback",
-    };
+    let (tracking_score_source, modal_overlap_available) =
+        crate::eigen::tracking::tracking_score_source_summary(&score_sources);
     modal_overlaps.sort_by(f64::total_cmp);
     let min_overlap = modal_overlaps.first().copied();
     let median_overlap = if modal_overlaps.is_empty() {
@@ -313,48 +316,37 @@ fn tracking_summary(result: &PathSolveResult) -> TrackingDiagnosticsArtifact {
     };
     TrackingDiagnosticsArtifact {
         tracking_score_source,
-        modal_overlap_available: saw_modal_overlap,
+        modal_overlap_available,
         min_overlap,
         median_overlap,
-        modal_overlap_unavailable_reason: (!saw_modal_overlap && saw_frequency_fallback)
-            .then_some("mode_vectors_unavailable"),
+        modal_overlap_unavailable_reason: (!modal_overlap_available
+            && score_sources.contains(&"frequency_score_fallback"))
+        .then_some("mode_vectors_unavailable"),
     }
 }
 
 fn tracking_summary_from_branch_artifacts(
     branches: &[BranchArtifact],
 ) -> TrackingDiagnosticsArtifact {
-    let mut saw_modal_overlap = false;
-    let mut saw_frequency_fallback = false;
-    let mut saw_non_seed = false;
+    let mut score_sources = Vec::new();
     let mut modal_overlaps = Vec::new();
     for branch in branches {
         for point in &branch.points {
+            score_sources.push(point.tracking_score_source);
             match point.tracking_score_source {
-                "modal_overlap_weighted_score" => {
-                    saw_modal_overlap = true;
-                    saw_non_seed = true;
+                "modal_overlap_weighted_score" | "modal_overlap_unweighted_score" => {
                     if let Some(overlap) = point.overlap_prev {
                         if overlap.is_finite() {
                             modal_overlaps.push(overlap);
                         }
                     }
                 }
-                "frequency_score_fallback" => {
-                    saw_frequency_fallback = true;
-                    saw_non_seed = true;
-                }
                 _ => {}
             }
         }
     }
-    let tracking_score_source = match (saw_modal_overlap, saw_frequency_fallback, saw_non_seed) {
-        (true, true, _) => "mixed_modal_overlap_and_frequency_fallback",
-        (true, false, _) => "modal_overlap_weighted_score",
-        (false, true, _) => "frequency_score_fallback",
-        (false, false, false) => "seed_only",
-        (false, false, true) => "frequency_score_fallback",
-    };
+    let (tracking_score_source, modal_overlap_available) =
+        crate::eigen::tracking::tracking_score_source_summary(&score_sources);
     modal_overlaps.sort_by(f64::total_cmp);
     let min_overlap = modal_overlaps.first().copied();
     let median_overlap = if modal_overlaps.is_empty() {
@@ -369,11 +361,12 @@ fn tracking_summary_from_branch_artifacts(
     };
     TrackingDiagnosticsArtifact {
         tracking_score_source,
-        modal_overlap_available: saw_modal_overlap,
+        modal_overlap_available,
         min_overlap,
         median_overlap,
-        modal_overlap_unavailable_reason: (!saw_modal_overlap && saw_frequency_fallback)
-            .then_some("mode_vectors_unavailable"),
+        modal_overlap_unavailable_reason: (!modal_overlap_available
+            && score_sources.contains(&"frequency_score_fallback"))
+        .then_some("mode_vectors_unavailable"),
     }
 }
 
@@ -417,29 +410,20 @@ fn write_eigen_solver_diagnostics_artifact(
 
 fn dispersion_frequency_source(result: &PathSolveResult) -> Option<&'static str> {
     result.dispersion_validation.as_ref()?;
-    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        Some("analytic_reference_model")
-    } else {
-        Some("numeric_modal_solver_with_analytic_comparison")
-    }
+    // The validation block declares an independent comparison oracle. It is
+    // evaluated after the native modal solve and must never select an analytic
+    // replacement for that solve.
+    Some("numeric_modal_solver_with_analytic_comparison")
 }
 
 fn dispersion_reference_model(result: &PathSolveResult) -> Option<&'static str> {
-    result.dispersion_validation.as_ref()?;
-    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        Some("kalinikos_slab_n0")
-    } else {
-        None
-    }
+    let validation = result.dispersion_validation.as_ref()?;
+    (validation.analytic_model == "kalinikos_slab_n0").then_some("kalinikos_slab_n0")
 }
 
 fn dispersion_dynamic_demag_operator_source(result: &PathSolveResult) -> Option<&'static str> {
     result.dispersion_validation.as_ref()?;
-    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        Some("analytic_thin_film_de_bv_reference_not_fem_demag_k")
-    } else {
-        Some("numeric_modal_solver")
-    }
+    Some("numeric_modal_solver")
 }
 
 pub fn write_frequency_domain_eigen_manifest(
@@ -642,13 +626,29 @@ fn eigen_mode_metadata_paths(result: &PathSolveResult) -> Vec<String> {
 }
 
 pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
+    write_path_bundle_with_sample_namespace(base_dir, result, false)
+}
+
+/// Write the path bundle while preserving the identity of the solved sample
+/// axis.  Bias-field samples use the legacy field-sweep namespace because the
+/// field-sweep readers already key on it; k-path samples use an explicit
+/// k-path namespace so a zero-k Gamma point cannot be mistaken for a field
+/// sample.  The explicit flag comes from the plan, where the runner can still
+/// distinguish a physical bias sweep from a k-path whose vectors happen to be
+/// zero.
+pub fn write_path_bundle_with_sample_namespace(
+    base_dir: &Path,
+    result: &PathSolveResult,
+    bias_field_sweep: bool,
+) -> std::io::Result<()> {
+    let gamma0_rad_s_per_a_m = validated_modal_gamma0(result.gamma0_rad_s_per_a_m)?;
     let eigen_dir = base_dir.join("eigen");
     fs::create_dir_all(&eigen_dir)?;
     let samples: Vec<SampleArtifact> = result
         .samples
         .iter()
         .map(|sample| SampleArtifact {
-            sample_id: format!("bias-field-sample-{:04}", sample.sample.sample_index),
+            sample_id: path_sample_id(sample, bias_field_sweep),
             sample_index: sample.sample.sample_index,
             label: sample.sample.label.clone(),
             k_vector: sample.sample.k_vector,
@@ -658,7 +658,7 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
             modes: sample
                 .modes
                 .iter()
-                .map(|mode| summarize_mode(sample, mode, result.solver_model))
+                .map(|mode| summarize_mode(sample, mode, result.solver_model, gamma0_rad_s_per_a_m))
                 .collect(),
         })
         .collect();
@@ -681,7 +681,7 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 .iter()
                 .map(|mode| {
                     let mut value =
-                        serde_json::to_value(summarize_mode(sample, mode, result.solver_model))
+                        serde_json::to_value(summarize_mode(sample, mode, result.solver_model, gamma0_rad_s_per_a_m))
                             .expect("mode summary must serialize");
                     value["component_participation"] =
                         serde_json::to_value(&mode.component_participation)
@@ -690,10 +690,7 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 })
                 .collect::<Vec<_>>();
             serde_json::json!({
-                "sample_id": format!(
-                    "bias-field-sample-{:04}",
-                    sample.sample.sample_index
-                ),
+                "sample_id": path_sample_id(sample, bias_field_sweep),
                 "sample_index": sample.sample.sample_index,
                 "label": sample.sample.label,
                 "k_vector": sample.sample.k_vector,
@@ -731,7 +728,46 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
     Ok(())
 }
 
+fn path_sample_id(sample: &SingleKSolveResult, bias_field_sweep: bool) -> String {
+    let prefix = if bias_field_sweep {
+        "bias-field-sample"
+    } else if sample.sample.segment_index.is_some() {
+        "k-path-sample"
+    } else {
+        "k-sample"
+    };
+    format!("{prefix}-{:04}", sample.sample.sample_index)
+}
+
+fn path_sample_id_for_index(
+    result: &PathSolveResult,
+    sample_index: usize,
+    bias_field_sweep: bool,
+) -> String {
+    result
+        .samples
+        .iter()
+        .find(|sample| sample.sample.sample_index == sample_index)
+        .map(|sample| path_sample_id(sample, bias_field_sweep))
+        .unwrap_or_else(|| {
+            let prefix = if bias_field_sweep {
+                "bias-field-sample"
+            } else {
+                "k-sample"
+            };
+            format!("{prefix}-{sample_index:04}")
+        })
+}
+
 pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
+    write_branch_bundle_with_sample_namespace(base_dir, result, false)
+}
+
+pub fn write_branch_bundle_with_sample_namespace(
+    base_dir: &Path,
+    result: &PathSolveResult,
+    bias_field_sweep: bool,
+) -> std::io::Result<()> {
     let eigen_dir = base_dir.join("eigen");
     fs::create_dir_all(&eigen_dir)?;
     let branches: Vec<BranchArtifact> = result
@@ -745,9 +781,17 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                 .iter()
                 .enumerate()
                 .map(|(point_index, point)| {
+                    let sample_id =
+                        path_sample_id_for_index(result, point.sample_index, bias_field_sweep);
+                    let mode_id = format!(
+                        "sample-{:04}/mode-{:04}",
+                        point.sample_index, point.raw_mode_index
+                    );
                     let mode_field_id =
                         eigen_mode_field_id(point.sample_index, point.raw_mode_index);
                     BranchPointArtifact {
+                        sample_id,
+                        mode_id,
                         sample_index: point.sample_index,
                         raw_mode_index: point.raw_mode_index,
                         frequency_hz: point.frequency_real_hz,
@@ -766,8 +810,10 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                             branch,
                             point_index,
                         ),
+                        mode_field_available: true,
                         mode_field_id,
                         overlap_prev: point.overlap_prev,
+                        tracking_edge: point.tracking_edge.clone(),
                         modal_overlap_unavailable_reason: branch_point_tracking_unavailable_reason(
                             result,
                             branch,
@@ -779,7 +825,12 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
         })
         .collect();
     let tracking = tracking_summary_from_branch_artifacts(&branches);
+    let policy = crate::eigen::tracking::recorded_tracking_policy(result);
     let branches_v2 = BranchesArtifact {
+        tracking_policy_availability: if policy.is_some() { "complete" } else { "missing_or_mixed" },
+        tracking_method: policy.map(|p| p.method),
+        overlap_floor: policy.map(|p| p.overlap_floor),
+        frequency_window_hz: policy.and_then(|p| p.frequency_window_hz),
         schema_version: "eigen_branches.v2",
         solver_model: result.solver_model.as_str().to_string(),
         tracking_score_source: tracking.tracking_score_source,
@@ -793,6 +844,10 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
         serde_json::to_vec_pretty(&branches_v2).unwrap(),
     )?;
     let payload = BranchesArtifact {
+        tracking_policy_availability: if policy.is_some() { "complete" } else { "missing_or_mixed" },
+        tracking_method: policy.map(|p| p.method),
+        overlap_floor: policy.map(|p| p.overlap_floor),
+        frequency_window_hz: policy.and_then(|p| p.frequency_window_hz),
         schema_version: "2",
         solver_model: result.solver_model.as_str().to_string(),
         tracking_score_source: tracking.tracking_score_source,
@@ -809,16 +864,21 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
     let mut csv = Vec::<u8>::new();
     writeln!(
         &mut csv,
-        "sample_index,branch_id,raw_mode_index,frequency_real_hz,frequency_imag_hz,tracking_confidence,overlap_prev"
+        "sample_index,sample_id,branch_id,raw_mode_index,mode_id,frequency_real_hz,frequency_imag_hz,tracking_confidence,overlap_prev,mode_field_available,mode_field_id"
     )?;
     for branch in &result.branches {
         for point in &branch.points {
             writeln!(
                 &mut csv,
-                "{},{},{},{:.16e},{:.16e},{:.6},{}",
+                "{},{},{},{},{},{:.16e},{:.16e},{:.6},{},{},{}",
                 point.sample_index,
+                path_sample_id_for_index(result, point.sample_index, bias_field_sweep),
                 branch.branch_id,
                 point.raw_mode_index,
+                format!(
+                    "sample-{0:04}/mode-{1:04}",
+                    point.sample_index, point.raw_mode_index
+                ),
                 point.frequency_real_hz,
                 point.frequency_imag_hz,
                 point.tracking_confidence,
@@ -826,6 +886,8 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                     .overlap_prev
                     .map(|value| format!("{value:.6}"))
                     .unwrap_or_default(),
+                true,
+                eigen_mode_field_id(point.sample_index, point.raw_mode_index),
             )?;
         }
     }
@@ -834,7 +896,7 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
     let mut dispersion = Vec::<u8>::new();
     writeln!(
         &mut dispersion,
-        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id"
+        "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id"
     )?;
     for sample in &result.samples {
         let k = sample.sample.k_vector;
@@ -843,14 +905,19 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
             let validation_columns = de_bv_analytic_csv_columns(result, &sample.sample, mode);
             writeln!(
                 &mut dispersion,
-                "{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{},{},{},{},{},{}",
+                "{},{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{},{:.16e},{:.16e},{},{},{},{},{},{},{},{},{}",
                 sample.sample.sample_index,
+                path_sample_id(sample, bias_field_sweep),
                 sample.sample.path_s,
                 k[0],
                 k[1],
                 k[2],
                 label,
                 mode.raw_mode_index,
+                format!(
+                    "sample-{0:04}/mode-{1:04}",
+                    sample.sample.sample_index, mode.raw_mode_index
+                ),
                 mode.branch_id
                     .map(|branch_id| branch_id.to_string())
                     .unwrap_or_default(),
@@ -865,6 +932,7 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                     .unwrap_or_default(),
                 resolve_overlap_score(result, sample.sample.sample_index, mode),
                 mode_tracking_score_source(result, sample.sample.sample_index, mode.raw_mode_index),
+                true,
                 eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index),
             )?;
         }
@@ -984,12 +1052,8 @@ pub(super) fn kalinikos_slab_n0_frequency_hz(
 ) -> f64 {
     let exchange_field = 2.0 * exchange_stiffness_j_per_m * k_norm * k_norm
         / (crate::MU0 * saturation_magnetisation_a_per_m);
-    let p_factor = if k_norm == 0.0 {
-        0.0
-    } else {
-        let kd = k_norm * film_thickness_m;
-        1.0 - (1.0 - (-kd).exp()) / kd
-    };
+    let kd = k_norm * film_thickness_m;
+    let p_factor = crate::fem::eigen_math::thin_film_p00(kd);
     let common = bias_field_a_per_m + exchange_field;
     let (factor_a, factor_b) = match geometry {
         "damon_eshbach" => (

@@ -1554,7 +1554,8 @@ fn field_sweep_item(
             mode.mode_artifact_path.as_deref().filter(|path| !path.trim().is_empty())?;
             modal_field_vector_resource_key(mode.mode_field_id.as_deref())
         });
-    let field_ready = mode.field_status.as_deref() == Some("ready")
+    let field_ready = mode.extra.0.get("mode_field_available").and_then(Value::as_bool) != Some(false)
+        && mode.field_status.as_deref() == Some("ready")
         && mode
             .mode_field_id
             .as_deref()
@@ -2754,7 +2755,8 @@ fn spectrum_v3_item(
     let field_resource_key = mode.mode_field_resource_key.as_ref()
         .filter(|key| !key.trim().is_empty()).cloned()
         .or_else(|| modal_field_vector_resource_key(mode.mode_field_id.as_deref()));
-    let field_ready = mode.mode_field_id.as_deref().is_some_and(|id| !id.trim().is_empty())
+    let field_ready = mode.extra.0.get("mode_field_available").and_then(Value::as_bool) != Some(false)
+        && mode.mode_field_id.as_deref().is_some_and(|id| !id.trim().is_empty())
         && field_resource_key.is_some();
     let item_id = mode.mode_id.clone();
     AnalysisResultSpectralItemSummary {
@@ -2778,7 +2780,7 @@ fn spectrum_v3_item(
             None,
         ),
         quality: AnalysisResultQualitySummary {
-            residual_relative_l2: Some(mode.residual_relative_l2),
+            residual_relative_l2: mode.residual_relative_l2,
             tracking_score: None,
             qualification: "unvalidated".to_string(),
         },
@@ -3478,7 +3480,7 @@ fn dataset_summary(dataset: &ResultDatasetIndex) -> AnalysisResultDatasetSummary
 
 /// Read once, then derive both the decoded value and revision from those bytes.
 /// A pathname replaced between hash and decode must never pair two generations.
-fn read_result_artifact_snapshot(
+pub(super) fn read_result_artifact_snapshot(
     artifact_dir: &Path,
     artifact_path: &str,
 ) -> Result<Option<(Value, String)>, ApiError> {
@@ -4476,6 +4478,12 @@ mod tests {
             durable_payload
         );
 
+        let mut unavailable_mode = durable_mode.clone();
+        unavailable_mode.extra.0.insert("mode_field_available".to_string(), Value::Bool(false));
+        let unavailable_item = field_sweep_item("run/1", "dataset/1", "sample/1", "revision-1", unavailable_mode, mesh_ref.clone());
+        assert!(unavailable_item.field_ref.is_none());
+        assert_eq!(unavailable_item.status.completeness, "spectrum_only");
+
         let item = field_sweep_item(
             "run/1",
             "dataset/1",
@@ -4581,6 +4589,11 @@ mod tests {
         assert_eq!(item.field_ref.as_ref().unwrap().resource_key,
             "/v2/sessions/current/data/fields/analysis%3Aeigen%3Afield%2F%CE%B1/samples/vector?phase_rad=0&view=phase_rotated_real");
         assert_eq!(serde_json::to_value(&mode).unwrap(), before);
+        let mut unavailable_mode = mode.clone();
+        unavailable_mode.extra.0.insert("mode_field_available".to_string(), Value::Bool(false));
+        let unavailable_item = spectrum_v3_item("run", "dataset", "sample", "revision", unavailable_mode, None);
+        assert!(unavailable_item.field_ref.is_none());
+        assert_eq!(unavailable_item.status.completeness, "spectrum_only");
     }
 
     #[test]

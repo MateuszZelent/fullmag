@@ -458,4 +458,3 @@ Porównanie fingerprintów 21 kluczowych źródeł podczas składania raportu wy
 | `apps/control-room/src/kernel/api/ControlRoomApi.ts` | `ae7909f520f0cae9ab2a7e87914de2e280e32719ff351b2c7697be8b4b8a588b` |
 | `docs/plans/active/refactor_runtime/final/03-plan-refaktoryzacji.md` | `b330ff6144f4d87b9f7eb0907f6c5d265af40eb313cf2d269d0aaf909da54315` |
 | `docs/plans/active/compute-execution-20261004/implementation-checkpoint.md` | `f9a97949192f401f5deaf6bd044deca554de2ae1f878dde7ad7b42618c4e0ba6` |
-

@@ -61,7 +61,12 @@ ALLOWED_PROFILES = (
 )
 CPU_CONTRACT_PROFILES = (*ALLOWED_PROFILES, "fem-cpu-current-contracts-v1")
 CURRENT_CONTRACT_PROFILES = (*CPU_CONTRACT_PROFILES, "fem-gpu-current-contracts-v1")
-SLEPC_MODAL_PROFILES = (*CURRENT_CONTRACT_PROFILES, "fem-cpu-slepc-modal-v1")
+SLEPC_MODAL_PROFILES = (
+    *CURRENT_CONTRACT_PROFILES,
+    "fem-cpu-slepc-modal-v1",
+    "fem-cpu-slepc-runtime-v1",
+    "fem-cpu-slepc-runtime-v2",
+)
 _PROFILE_LISTS = (
     ALLOWED_PROFILES,
     CPU_CONTRACT_PROFILES,
@@ -326,6 +331,7 @@ def configure(
     image: str | None = None,
     enable_current_contracts: bool = False,
     enable_slepc_modal: bool = False,
+    enable_slepc_runtime_v2: bool = False,
 ) -> dict[str, Any]:
     """Install or update host configuration without contacting Docker.
 
@@ -338,9 +344,10 @@ def configure(
         image_id = image
     elif image is not None:
         raise ContainerClientError("Specify only one coordinator image ID")
-    if not isinstance(enable_current_contracts, bool) or not isinstance(enable_slepc_modal, bool):
+    if not all(isinstance(flag, bool) for flag in
+               (enable_current_contracts, enable_slepc_modal, enable_slepc_runtime_v2)):
         raise ContainerClientError("Profile activation flags must be boolean")
-    if enable_current_contracts and enable_slepc_modal:
+    if sum((enable_current_contracts, enable_slepc_modal, enable_slepc_runtime_v2)) > 1:
         raise ContainerClientError("Choose only one profile activation set")
     operator = _owner(owner)
     image = _image_id(image_id)
@@ -387,10 +394,15 @@ def configure(
                     port = CONTAINER_PORT
             port = _port(port)
             token = secrets.token_urlsafe(48)
-        if enable_slepc_modal:
+        if enable_slepc_runtime_v2:
+            if "fem-cpu-slepc-runtime-v2" not in selected_profiles:
+                selected_profiles.append("fem-cpu-slepc-runtime-v2")
+        elif enable_slepc_modal:
             selected_profiles = list(SLEPC_MODAL_PROFILES)
-        elif enable_current_contracts and "fem-cpu-slepc-modal-v1" not in selected_profiles:
-            selected_profiles = list(CURRENT_CONTRACT_PROFILES)
+        elif enable_current_contracts:
+            for profile in CURRENT_CONTRACT_PROFILES:
+                if profile not in selected_profiles:
+                    selected_profiles.append(profile)
         public = _public_record(storage, operator, image, port, allowed_profiles=selected_profiles)
         secret = _secret_record(storage, operator, token, port, allowed_profiles=selected_profiles)
         atomic_json(secret_path, secret)
@@ -827,9 +839,13 @@ def stop(layout: Mapping[str, object], owner: str) -> Any:
     return request(layout, owner, "POST", "/stop", {})
 
 
-def _assert_replacement_health(health: object) -> None:
+def _assert_replacement_health(health: object, *, readonly_preview_verified: bool = False) -> None:
     if not isinstance(health, Mapping):
         raise ContainerClientError("Coordinator health did not confirm a healthy service")
+    if health.get('retention_busy', False) is not False and not readonly_preview_verified:
+        raise ContainerClientError('Coordinator retention is active; replacement is refused')
+    if 'retention_busy' in health and health.get('retention_draining') is not True:
+        raise ContainerClientError('Coordinator retention must be drained before replacement')
     service = health.get('coordinator')
     # Upgrade compatibility: old Application.run discarded the normal stopped
     # result. Accept only a completed intentional stop, never a crashed worker
@@ -852,11 +868,48 @@ def _assert_replacement_health(health: object) -> None:
         raise ContainerClientError("Coordinator must be stopped or paused before replacement")
 
 
+def _verify_readonly_preview_abandonment(layout, operator, plan_id, health):
+    """Authorize only an explicitly named, drained, unapplied execution preview."""
+    from local_runner.retention import _checked_child, _read_json, _PathIssue
+    if not isinstance(plan_id, str) or re.fullmatch(r'plan-[a-f0-9]{8,32}', plan_id) is None:
+        raise ContainerClientError('Invalid read-only preview ID')
+    if (not isinstance(health, Mapping) or health.get('retention_busy') is not True
+            or health.get('retention_draining') is not True or health.get('worker_alive') is not False
+            or health.get('accepting_jobs') is not False or health.get('stop_requested') is not True
+            or health.get('worker_error') is not None or health.get('active_jobs') != []
+            or health.get('legacy_jobs') != []):
+        raise ContainerClientError('Read-only preview abandonment requires completed drain')
+    service = health.get('coordinator')
+    if not isinstance(service, Mapping) or service.get('active_job_ids') != [] or service.get('last_error') is not None:
+        raise ContainerClientError('Coordinator state is not quiescent')
+    policy = request(layout, operator, 'GET', '/api/v1/retention/policy')
+    if not isinstance(policy, Mapping) or policy.get('mode') != 'preview':
+        raise ContainerClientError('Automatic retention cannot be abandoned as a read-only preview')
+    public = request(layout, operator, 'GET', '/api/v1/retention/plans/' + plan_id)
+    storage = Path(layout['storage_root']).resolve(strict=True)
+    try:
+        path = _checked_child(storage, ('index', 'retention-plans', plan_id + '.json'), kind='file')
+        raw = dict(_read_json(path))
+    except _PathIssue as error:
+        raise ContainerClientError('Unverified read-only preview record') from error
+    expected = {'plan_id': plan_id, 'scope': 'execution', 'status': 'planning', 'applied': False}
+    if (not isinstance(public, Mapping) or any(public.get(key) != value for key, value in expected.items())
+            or any(raw.get(key) != value for key, value in expected.items())
+            or public.get('applied') is not False or raw.get('applied') is not False):
+        raise ContainerClientError('Only a live, unapplied execution preview can be abandoned')
+    if (os.path.lexists(storage / 'index/retention-operations' / (plan_id + '.json'))
+            or os.path.lexists(storage / 'locks/retention-admission')):
+        raise ContainerClientError('A mutation or admission gate exists; preview abandonment is refused')
+    _assert_replacement_health(health, readonly_preview_verified=True)
+    return path, raw
+
+
 def _replace_unlocked(
     layout: Mapping[str, object],
     image_id: str,
     owner: str,
     *,
+    abandon_readonly_preview: str | None = None,
     docker_call: Callable[[list[str]], object] | None = None,
     call: Callable[[list[str]], object] | None = None,
 ) -> dict[str, Any]:
@@ -884,7 +937,12 @@ def _replace_unlocked(
 
     # This is an external loopback HTTP request.  It does not use the Docker
     # socket and cannot be satisfied by a Docker inspect result.
-    _assert_replacement_health(request(layout, operator, "GET", "/health"))
+    health = request(layout, operator, "GET", "/health")
+    abandoned = None
+    if abandon_readonly_preview is not None:
+        abandoned = _verify_readonly_preview_abandonment(layout, operator, abandon_readonly_preview, health)
+    else:
+        _assert_replacement_health(health)
 
     _docker_text(docker, ["stop", "--time", "10", current["container_id"]])
     terminal = _attest(
@@ -896,6 +954,21 @@ def _replace_unlocked(
     )
     if terminal["running"] or terminal["state"] != "exited":
         raise ContainerClientError("Coordinator did not reach an exited terminal state")
+
+    if abandoned is not None:
+        from local_runner.retention import _checked_child, _read_json
+        path, original = abandoned
+        path = _checked_child(storage, ('index', 'retention-plans', abandon_readonly_preview + '.json'), kind='file')
+        final = dict(_read_json(path))
+        if (final.get('status') not in ('planning', 'preview') or final.get('scope') != 'execution'
+                or final.get('plan_id') != abandon_readonly_preview
+                or not (final.get('applied') is False or (final.get('status') == 'preview' and 'applied' not in final))
+                or os.path.lexists(storage / 'index/retention-operations' / (abandon_readonly_preview + '.json'))
+                or os.path.lexists(storage / 'locks/retention-admission')):
+            raise ContainerClientError('Preview state changed; preserve the stopped coordinator for reconciliation')
+        final.update(status='blocked', applied=False, abandoned_readonly_preview=True,
+                     error='Read-only preview abandoned for coordinator maintenance; create a fresh plan')
+        atomic_json(path, final)
 
     # Explicit replacement is the only lifecycle path allowed to remove this
     # reserved container.  Never add -f/-v and never remove by name.
@@ -919,6 +992,7 @@ def replace(
     image_id: str,
     owner: str,
     *,
+    abandon_readonly_preview: str | None = None,
     docker_call: Callable[[list[str]], object] | None = None,
     call: Callable[[list[str]], object] | None = None,
 ) -> dict[str, Any]:
@@ -933,6 +1007,7 @@ def replace(
                 layout,
                 image_id,
                 owner,
+                abandon_readonly_preview=abandon_readonly_preview,
                 docker_call=docker_call,
                 call=call,
             )

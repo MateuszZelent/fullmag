@@ -35,7 +35,8 @@ const mocks = vi.hoisted(() => ({
   setSelection: vi.fn(),
 }));
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     api: {
       data: { domain: { meta: mocks.domainMeta } },

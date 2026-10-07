@@ -38,8 +38,33 @@ pub(crate) fn build_quantities(
         .and_then(|value| serde_json::from_value::<ExecutionPlanIR>(value.clone()).ok());
     let dynamic_available =
         |quantity_id: &str| dynamic_supported.iter().any(|id| id == quantity_id);
+    let current_is_modal = live_state.map_or_else(
+        || {
+            scalar_rows
+                .last()
+                .is_some_and(|row| row.per_object_scalars.contains_key("fem_eigen_progress"))
+        },
+        |state| {
+            state
+                .latest_step
+                .per_object_scalars
+                .contains_key("fem_eigen_progress")
+        },
+    );
     let scalar_available = |run_value: Option<f64>| {
-        !scalar_rows.is_empty() || live_state.is_some() || run_value.is_some()
+        if current_is_modal {
+            return false;
+        }
+        scalar_rows
+            .iter()
+            .any(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+            || live_state.is_some_and(|state| {
+                !state
+                    .latest_step
+                    .per_object_scalars
+                    .contains_key("fem_eigen_progress")
+            })
+            || run_value.is_some()
     };
 
     quantity_specs()

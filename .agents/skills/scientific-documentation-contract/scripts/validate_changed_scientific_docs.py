@@ -365,7 +365,7 @@ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
             for error in (
                 _validate_numerical_method_manifest(repo, head, manifest_path, manifest)
                 if _is_numerical_method_page(expected_page)
-                else validate_page(repo, manifest)
+                else validate_page(repo, manifest, read_file=lambda path: _read(repo, head, path))
             )
         )
     return errors

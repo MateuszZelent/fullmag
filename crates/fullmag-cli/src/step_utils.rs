@@ -435,6 +435,10 @@ pub(crate) fn running_run_manifest_from_update(
     artifact_dir: &Path,
     update: &fullmag_runner::StepUpdate,
 ) -> RunManifest {
+    let physical = !update
+        .stats
+        .per_object_scalars
+        .contains_key("fem_eigen_progress");
     RunManifest {
         run_id: run_id.to_string(),
         session_id: session_id.to_string(),
@@ -443,15 +447,21 @@ pub(crate) fn running_run_manifest_from_update(
         } else {
             "running".to_string()
         },
-        total_steps: update.stats.step as usize,
-        final_time: Some(update.stats.time),
-        final_e_ex: Some(update.stats.e_ex),
-        final_e_demag: Some(update.stats.e_demag),
-        final_e_ext: Some(update.stats.e_ext),
-        final_e_ani: Some(update.stats.e_ani),
-        final_e_dmi: Some(update.stats.e_dmi),
-        final_e_rotated_dmi: Some(update.stats.e_rotated_dmi),
-        final_e_total: Some(update.stats.e_total),
+        // Modal iteration/phase counters belong to progress diagnostics, not
+        // the number of accepted physical time-integration steps.
+        total_steps: if physical {
+            update.stats.step as usize
+        } else {
+            0
+        },
+        final_time: physical.then_some(update.stats.time),
+        final_e_ex: physical.then_some(update.stats.e_ex),
+        final_e_demag: physical.then_some(update.stats.e_demag),
+        final_e_ext: physical.then_some(update.stats.e_ext),
+        final_e_ani: physical.then_some(update.stats.e_ani),
+        final_e_dmi: physical.then_some(update.stats.e_dmi),
+        final_e_rotated_dmi: physical.then_some(update.stats.e_rotated_dmi),
+        final_e_total: physical.then_some(update.stats.e_total),
         artifact_dir: artifact_dir.display().to_string(),
     }
 }
@@ -6053,7 +6063,10 @@ mod tests {
             },
             fullmag_ir::OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0, 1],
+                branches: vec![],
+                sample_selector: None,
             },
         ];
         target_ir.study = fullmag_ir::StudyIR::Eigenmodes {
@@ -6301,7 +6314,10 @@ mod tests {
                 },
                 fullmag_ir::OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![0, 1, 7],
+                    branches: vec![],
+                    sample_selector: None,
                 },
             ];
         }
@@ -6401,7 +6417,10 @@ mod tests {
             },
             fullmag_ir::OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0, 1, 7],
+                branches: vec![],
+                sample_selector: None,
             },
         ];
         base.study = fullmag_ir::StudyIR::TimeEvolution {

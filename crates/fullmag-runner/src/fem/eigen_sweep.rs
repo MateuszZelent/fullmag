@@ -428,6 +428,7 @@ fn append_physical_k0_kittel_artifacts(
     let generated =
         crate::eigen::artifacts::k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
             validation,
+            plan.gyromagnetic_ratio,
             &spectrum,
             &branches,
             &diagnostics,
@@ -782,17 +783,33 @@ pub(super) fn build_native_field_sweep_artifact(
                 .get("mode_field_resource_key")
                 .and_then(serde_json::Value::as_str)
                 .filter(|value| !value.trim().is_empty());
-            if mode_field_id.is_some() != mode_field_resource_key.is_some() {
+            let explicit_mode_field_available = mode
+                .get("mode_field_available")
+                .and_then(serde_json::Value::as_bool);
+            let mode_field_available = explicit_mode_field_available
+                .unwrap_or(mode_field_id.is_some() && mode_field_resource_key.is_some());
+            if explicit_mode_field_available != Some(false)
+                && mode_field_id.is_some() != mode_field_resource_key.is_some()
+            {
                 return Err(RunError {
                     message: format!(
                         "native field sweep sample {sample_index} mode {raw_mode_index} has an incomplete field reference"
                     ),
                 });
             }
+            if mode_field_available
+                && (mode_field_id.is_none() || mode_field_resource_key.is_none())
+            {
+                return Err(RunError {
+                    message: format!(
+                        "native field sweep sample {sample_index} mode {raw_mode_index} marks field available without a complete field reference"
+                    ),
+                });
+            }
             let branch_id = branch_ids_by_mode
                 .get(&(sample_index, raw_mode_index))
                 .copied();
-            if mode_field_id.is_some() && branch_id.is_none() {
+            if mode_field_available && branch_id.is_none() {
                 return Err(RunError {
                     message: format!(
                         "native field sweep sample {sample_index} mode {raw_mode_index} has no branch mapping"
@@ -813,13 +830,15 @@ pub(super) fn build_native_field_sweep_artifact(
                 "angular_frequency_rad_per_s": mode.get("angular_frequency_rad_per_s").cloned().unwrap_or(serde_json::Value::Null),
                 "residual_relative_l2": mode.get("residual_relative_l2").cloned().unwrap_or(serde_json::Value::Null),
                 "source_revision": spectrum_revision,
-                "field_status": if mode_field_id.is_some() { "ready" } else { "spectrum-only" },
+                "mode_field_available": mode_field_available,
+                "field_status": if mode_field_available { "ready" } else { "spectrum-only" },
                 "status": sample_status,
             });
             if let Some(object) = output_mode.as_object_mut() {
-                if let (Some(mode_field_id), Some(mode_field_resource_key)) =
-                    (mode_field_id, mode_field_resource_key)
-                {
+                if mode_field_available {
+                    let mode_field_id = mode_field_id.expect("available mode field id validated");
+                    let mode_field_resource_key = mode_field_resource_key
+                        .expect("available mode field resource key validated");
                     object.insert(
                         "mode_artifact_path".to_string(),
                         serde_json::json!(mode_metadata_path(
@@ -1280,10 +1299,14 @@ fn merge_bias_field_sweep_runs_with_terminal(
     )?);
 
     let mut dispersion = String::from(
-        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key\n",
+        "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id,mode_field_resource_key\n",
     );
     for sample in spectrum["samples"].as_array().into_iter().flatten() {
         let sample_index = sample["sample_index"].as_u64().unwrap_or(0);
+        let sample_id = sample["sample_id"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("bias-field-sample-{sample_index:04}"));
         let path_s = sample["path_s"].as_f64().unwrap_or(0.0);
         let label = sample["label"].as_str().unwrap_or("");
         let k = sample["k_vector"].as_array();
@@ -1301,16 +1324,36 @@ fn merge_bias_field_sweep_runs_with_terminal(
             .unwrap_or(0.0);
         for mode in sample["modes"].as_array().into_iter().flatten() {
             let raw_mode_index = mode["raw_mode_index"].as_u64().unwrap_or(0);
+            let mode_id = mode["mode_id"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("sample-{sample_index:04}/mode-{raw_mode_index:04}"));
+            let mode_field_available =
+                mode["mode_field_available"].as_bool().unwrap_or_else(|| {
+                    mode["mode_field_id"].as_str().is_some()
+                        && mode["mode_field_resource_key"].as_str().is_some()
+                });
+            let mode_field_id = if mode_field_available {
+                mode["mode_field_id"].as_str().unwrap_or("")
+            } else {
+                ""
+            };
+            let mode_field_resource_key = if mode_field_available {
+                mode["mode_field_resource_key"].as_str().unwrap_or("")
+            } else {
+                ""
+            };
             dispersion.push_str(&format!(
-                "{sample_index},{path_s:.16e},{kx:.16e},{ky:.16e},{kz:.16e},{label},{raw_mode_index},{},{:.16e},{:.16e},{},{},{},seed,{},{}\n",
+                "{sample_index},{sample_id},{path_s:.16e},{kx:.16e},{ky:.16e},{kz:.16e},{label},{raw_mode_index},{mode_id},{},{:.16e},{:.16e},{},{},{},seed,{},{},{}\n",
                 mode["branch_id"].as_u64().unwrap_or(raw_mode_index),
                 mode["frequency_hz"].as_f64().unwrap_or(0.0),
                 mode["angular_frequency_rad_per_s"].as_f64().unwrap_or(0.0),
                 mode["frequency_imag_hz"].as_f64().map(|v| 2.0 * v).unwrap_or(0.0),
                 mode["residual_norm"].as_f64().unwrap_or(0.0),
                 "",
-                mode["mode_field_id"].as_str().unwrap_or(""),
-                mode["mode_field_resource_key"].as_str().unwrap_or(""),
+                mode_field_available,
+                mode_field_id,
+                mode_field_resource_key,
             ));
         }
     }

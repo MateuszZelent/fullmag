@@ -2,6 +2,7 @@ use super::eigen_certificate::{
     build_owned_modal_certificate_v6_binding, modal_v6_error, MODAL_CERTIFICATE_BINDING_ACCEPTED,
 };
 use super::eigen_constants::{
+    MODAL_LINEARIZATION_TERM_ANISOTROPY,
     MODAL_LINEARIZATION_TERM_DEMAG, MODAL_LINEARIZATION_TERM_EXCHANGE,
     MODAL_LINEARIZATION_TERM_FIELD, SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_DETAIL,
     SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON,
@@ -9,9 +10,10 @@ use super::eigen_constants::{
 #[cfg(test)]
 use super::eigen_digest::sha256_text;
 use super::eigen_digest::{is_sha256_digest, shared_domain_content_digest};
+use super::eigen_equilibrium::max_vector_field_difference_on_magnetic_nodes;
 use super::eigen_equilibrium_contract::{
     validate_certified_equilibrium_fields, AcceptedFemEigenEquilibriumHandoff,
-    AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifactV7,
+    AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifact,
 };
 use super::eigen_math::vector_norm;
 use super::eigen_policy::{
@@ -19,6 +21,7 @@ use super::eigen_policy::{
     resolved_demag_realization,
 };
 use super::eigen_projection::tangent_bases;
+use super::eigen_reduction::validate_shared_domain_tangent_frame_transport;
 use super::eigen_reduction::ReductionMap;
 use super::eigen_shared_domain_geometry::{
     build_modal_certificate_map_binding, modal_shared_domain_equivalence_classes,
@@ -26,6 +29,7 @@ use super::eigen_shared_domain_geometry::{
     OwnedModalEigenCsrMatrix, OwnedModalEigenPoissonAirboxBlockProblem,
 };
 use super::eigen_types::SharedDomainLinearizationState;
+use super::equilibrium_identity::equilibrium_material_signature;
 use crate::native_fem;
 use crate::types::RunError;
 use fullmag_engine::fem::FemLlgProblem;
@@ -37,6 +41,36 @@ use fullmag_ir::EquilibriumSourceIR;
 use fullmag_ir::FemEigenPlanIR;
 use nalgebra::DMatrix;
 use num_complex::Complex64;
+
+pub(super) fn shared_domain_artifact_material_identity(
+    material: &fullmag_ir::MaterialIR,
+    source: Option<&serde_json::Value>,
+) -> Result<(String, String, bool), RunError> {
+    let canonical = material.uniaxial_anisotropy.is_some();
+    if source.is_some_and(|source| {
+        source["schema_version"].as_str()
+            != Some(if canonical {
+                "equilibrium_artifact.v8"
+            } else {
+                "equilibrium_artifact.v7"
+            })
+    }) {
+        return Err(RunError { message: "equilibrium_material_identity_version_mismatch: Ku requires v8; legacy material requires v7".to_string() });
+    }
+    let raw = shared_domain_content_digest("material_signature", material)?;
+    let physical = if canonical {
+        equilibrium_material_signature(material)?
+    } else {
+        raw.clone()
+    };
+    if source.is_some_and(|source| source["material_signature"].as_str() != Some(physical.as_str()))
+    {
+        return Err(RunError {
+            message: "equilibrium_material_hash_mismatch".to_string(),
+        });
+    }
+    Ok((physical, raw, canonical))
+}
 
 pub(super) fn reduced_shared_domain_tangent_mass(
     topology: &MeshTopology,
@@ -175,7 +209,14 @@ pub(super) fn validation_oracle_full_interleaved_modal_a_qq_csr(
 }
 
 pub(super) fn max_vector_field_difference(left: &[Vector3], right: &[Vector3]) -> Option<f64> {
-    if left.len() != right.len() {
+    if left.is_empty()
+        || left.len() != right.len()
+        || left
+            .iter()
+            .chain(right.iter())
+            .flatten()
+            .any(|value| !value.is_finite())
+    {
         return None;
     }
     Some(
@@ -191,7 +232,13 @@ pub(super) fn max_vector_field_difference(left: &[Vector3], right: &[Vector3]) -
 }
 
 fn max_scalar_field_difference(left: &[f64], right: &[f64]) -> Option<f64> {
-    if left.len() != right.len() {
+    if left.is_empty()
+        || left.len() != right.len()
+        || left
+            .iter()
+            .chain(right.iter())
+            .any(|value| !value.is_finite())
+    {
         return None;
     }
     Some(
@@ -219,11 +266,38 @@ pub(super) fn extend_equilibrium_m0_to_air_nodes(
         .collect()
 }
 
+/// Hash the fields that are actually persisted, independently of replay roundoff.
+fn shared_domain_static_demag_signature(
+    realization: Option<&str>,
+    recomputed_h_demag0: &[Vector3],
+    recomputed_phi0: &[f64],
+    stored_fields: Option<(&[Vector3], &[f64])>,
+) -> Result<String, RunError> {
+    let (h_demag0, phi0) = stored_fields.unwrap_or((recomputed_h_demag0, recomputed_phi0));
+    if h_demag0.is_empty()
+        || h_demag0.len() != phi0.len()
+        || h_demag0.iter().flatten().any(|value| !value.is_finite())
+        || phi0.iter().any(|value| !value.is_finite())
+    {
+        return Err(RunError {
+            message: "equilibrium_static_demag_preimage_invalid".to_string(),
+        });
+    }
+    shared_domain_content_digest(
+        "static_demag_signature",
+        &serde_json::json!({
+            "realization": realization,
+            "h_demag0_a_per_m": h_demag0,
+            "phi0_a": phi0,
+        }),
+    )
+}
+
 pub(super) fn build_shared_domain_linearization_state(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
     problem: &FemLlgProblem,
-    source_artifact: Option<&LoadedEquilibriumArtifactV7>,
+    source_artifact: Option<&LoadedEquilibriumArtifact>,
     source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     equilibrium: &[Vector3],
     observables: &EffectiveFieldObservables,
@@ -275,7 +349,21 @@ pub(super) fn build_shared_domain_linearization_state(
     }
 
     let mesh_signature = plan.mesh.topology_fingerprint_v6();
-    let material_signature = shared_domain_content_digest("material_signature", &plan.material)?;
+    let (material_signature, material_provenance_signature, canonical_material) =
+        shared_domain_artifact_material_identity(
+            &plan.material,
+            source_artifact.map(|source| &source.value),
+        )?;
+    let equilibrium_schema = if canonical_material {
+        "equilibrium_artifact.v8"
+    } else {
+        "equilibrium_artifact.v7"
+    };
+    let linearization_schema = if canonical_material {
+        "LinearizationState.v7"
+    } else {
+        "LinearizationState.v6"
+    };
     let physics_signature = shared_domain_content_digest(
         "physics_signature",
         &serde_json::json!({
@@ -298,14 +386,11 @@ pub(super) fn build_shared_domain_linearization_state(
             "periodic_boundary_pairs": plan.mesh.periodic_boundary_pairs,
         }),
     )?;
-    let static_demag_signature = shared_domain_content_digest(
-        "static_demag_signature",
-        &serde_json::json!({
-            "realization": resolved_demag_realization(plan)
-                .map(|value| value.provenance_name()),
-            "h_demag0_a_per_m": observables.demag_field,
-            "phi0_a": phi0,
-        }),
+    let static_demag_signature = shared_domain_static_demag_signature(
+        resolved_demag_realization(plan).map(|value| value.provenance_name()),
+        &observables.demag_field,
+        &phi0,
+        source_artifact.map(|source| (source.h_demag0.as_slice(), source.phi0.as_slice())),
     )?;
 
     if let Some(source_artifact) = source_artifact {
@@ -313,7 +398,7 @@ pub(super) fn build_shared_domain_linearization_state(
             let Some(difference) = difference else {
                 return Err(RunError {
                     message: format!(
-                        "equilibrium_{label}_comparison_failed: stored field shape does not match the requested mesh"
+                        "equilibrium_{label}_comparison_failed: stored/recomputed field is incomplete or non-finite"
                     ),
                 });
             };
@@ -333,7 +418,11 @@ pub(super) fn build_shared_domain_linearization_state(
         )?;
         compare(
             "h_eff0",
-            max_vector_field_difference(&source_artifact.h_eff0, &observables.effective_field),
+            max_vector_field_difference_on_magnetic_nodes(
+                &source_artifact.h_eff0,
+                &observables.effective_field,
+                &topology.magnetic_node_volumes,
+            ),
             1.0e-8,
         )?;
         compare(
@@ -534,7 +623,7 @@ pub(super) fn build_shared_domain_linearization_state(
                 serde_json::json!(source_relax_handoff.completion_sha256),
             );
         let mut artifact = serde_json::json!({
-            "schema_version": "equilibrium_artifact.v7",
+            "schema_version": equilibrium_schema,
             "accepted_for_linearization": true,
             "acceptance_certificate": acceptance_certificate,
             "completion_sha256": source_relax_handoff.completion_sha256,
@@ -565,13 +654,21 @@ pub(super) fn build_shared_domain_linearization_state(
                 .unwrap_or("none"),
             "periodic_mesh_certificate": periodic_certificate_json,
         });
-        let digest = shared_domain_content_digest("equilibrium_artifact_v7", &artifact)?;
+        if canonical_material {
+            artifact["material_identity_kind"] =
+                serde_json::json!("canonical_equilibrium_material.v2");
+            artifact["material_provenance_signature"] =
+                serde_json::json!(material_provenance_signature);
+            artifact["material_provenance_scope"] = serde_json::json!("materialization_plan");
+        }
+        let digest = shared_domain_content_digest(equilibrium_schema, &artifact)?;
         if let Some(object) = artifact.as_object_mut() {
             object.insert("content_sha256".to_string(), serde_json::json!(digest));
             object.insert(
                 "equilibrium_id".to_string(),
                 serde_json::json!(format!(
-                    "equilibrium_artifact.v7:{}",
+                    "{}:{}",
+                    equilibrium_schema,
                     digest.strip_prefix("sha256:").unwrap_or(&digest)
                 )),
             );
@@ -648,7 +745,7 @@ pub(super) fn build_shared_domain_linearization_state(
 
     let operator_m0 = extend_equilibrium_m0_to_air_nodes(topology, equilibrium);
     let mut linearization_state = serde_json::json!({
-        "schema_version": "LinearizationState.v6",
+        "schema_version": linearization_schema,
         "source_equilibrium_artifact": equilibrium_artifact_digest,
         "source_equilibrium_id": equilibrium_id,
         "operator_dictionary": "FrequencyOperatorDictionary.v1",
@@ -693,8 +790,16 @@ pub(super) fn build_shared_domain_linearization_state(
         "producer_run_id": producer_run_id,
         "demag_model": demag_model,
     });
+    if canonical_material {
+        linearization_state["material_identity_kind"] =
+            serde_json::json!("canonical_equilibrium_material.v2");
+        linearization_state["material_provenance_signature"] =
+            serde_json::json!(material_provenance_signature);
+        linearization_state["material_provenance_scope"] =
+            serde_json::json!("materialization_plan");
+    }
     let linearization_state_digest =
-        shared_domain_content_digest("linearization_state_v6", &linearization_state)?;
+        shared_domain_content_digest(linearization_schema, &linearization_state)?;
     if let Some(object) = linearization_state.as_object_mut() {
         object.insert(
             "content_sha256".to_string(),
@@ -703,7 +808,8 @@ pub(super) fn build_shared_domain_linearization_state(
         object.insert(
             "linearization_state_id".to_string(),
             serde_json::json!(format!(
-                "LinearizationState.v6:{}",
+                "{}:{}",
+                linearization_schema,
                 linearization_state_digest
                     .strip_prefix("sha256:")
                     .unwrap_or(&linearization_state_digest)
@@ -763,12 +869,6 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
     if !plan.enable_demag || !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
         return Err(RunError {
             message: "shared-domain modal payload requires full2x2 dynamic demag".to_string(),
-        });
-    }
-    if plan.material.ms_field.is_some() {
-        return Err(RunError {
-            message: "shared-domain modal production scope currently requires uniform material Ms"
-                .to_string(),
         });
     }
     validate_shared_domain_modal_scope(plan, topology, equilibrium, observables)?;
@@ -860,6 +960,11 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
                 .to_string(),
         });
     }
+    validate_shared_domain_tangent_frame_transport(
+        plan,
+        topology,
+        &linearization_state.equilibrium_m0,
+    )?;
     let mesh_certificate_digest = linearization_state.periodic_mesh_certificate_digest.clone();
     let ms_values = plan.material.ms_field.clone().unwrap_or_default();
     if !ms_values.is_empty() && ms_values.len() != topology.n_nodes {
@@ -933,6 +1038,40 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
         "linearization_field_term",
         &external_field_h_ext0_xyz,
     )?);
+    let (uniaxial_axis_xyz, uniaxial_anisotropy_field_a_per_m) = if let Some((ku, normalized)) =
+        super::equilibrium_identity::constant_uniaxial_descriptor(&plan.material)?
+    {
+        if !ms_values.is_empty() {
+            return Err(RunError {
+                message: "shared-domain constant anisotropy field requires uniform Ms".to_string(),
+            });
+        }
+        let field = 2.0 * (ku / (MU0 * plan.material.saturation_magnetisation));
+        if !field.is_finite() {
+            return Err(RunError {
+                message: "shared-domain uniaxial field is not finite".to_string(),
+            });
+        }
+        (
+            (0..topology.n_nodes)
+                .flat_map(|_| normalized)
+                .collect::<Vec<f64>>(),
+            vec![field],
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let anisotropy_term_digest = if uniaxial_anisotropy_field_a_per_m.is_empty() {
+        None
+    } else {
+        Some(shared_domain_content_digest(
+            "linearization_uniaxial_term",
+            &(
+                uniaxial_axis_xyz.as_slice(),
+                uniaxial_anisotropy_field_a_per_m.as_slice(),
+            ),
+        )?)
+    };
     let demag_term_digest = Some(shared_domain_content_digest(
         "linearization_demag_term",
         &(
@@ -946,7 +1085,8 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
     } else {
         0
     }) | MODAL_LINEARIZATION_TERM_FIELD
-        | MODAL_LINEARIZATION_TERM_DEMAG;
+        | MODAL_LINEARIZATION_TERM_DEMAG
+        | if anisotropy_term_digest.is_some() { MODAL_LINEARIZATION_TERM_ANISOTROPY } else { 0 };
     let operator_input_digest = shared_domain_content_digest(
         "linearization_operator_input",
         &(
@@ -955,12 +1095,17 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
             term_presence_mask,
             exchange_term_digest.as_deref(),
             field_term_digest.as_deref(),
+            anisotropy_term_digest.as_deref(),
+            uniaxial_axis_xyz.as_slice(),
+            uniaxial_anisotropy_field_a_per_m.as_slice(),
             demag_term_digest.as_deref(),
             tangent_frame_xyz.as_slice(),
             linearization_m0_xyz.as_slice(),
             linearization_h_eff0_xyz.as_slice(),
             external_field_h_ext0_xyz.as_slice(),
             alpha_per_node.as_slice(),
+            ms_values.as_slice(),
+            plan.material.saturation_magnetisation,
         ),
     )?;
     let certificate_binding_v6 = build_owned_modal_certificate_v6_binding(
@@ -1013,6 +1158,9 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
         term_presence_mask,
         exchange_term_digest,
         field_term_digest,
+        anisotropy_term_digest,
+        uniaxial_axis_xyz,
+        uniaxial_anisotropy_field_a_per_m,
         demag_term_digest,
         operator_input_digest: operator_input_digest.clone(),
         demag_provider_signature: Some(operator_input_digest),
@@ -1160,8 +1308,12 @@ pub(super) fn validate_shared_domain_modal_scope(
                 .to_string(),
         });
     }
-    if observables.max_effective_field_amplitude <= 0.0
+    // A stationary state may have zero effective field and nonzero energy
+    // curvature. Spectral admission must use the assembled tangent operator,
+    // not a strictly positive static-field diagnostic.
+    if observables.max_effective_field_amplitude < 0.0
         || !observables.max_effective_field_amplitude.is_finite()
+        || observables.max_torque_Apm < 0.0
         || !observables.max_torque_Apm.is_finite()
     {
         return Err(RunError {
@@ -1443,6 +1595,27 @@ pub(super) fn validate_eigen_equilibrium_certificate(
         }
         _ => {}
     }
+    if let Some(handoff) = source_relax_handoff {
+        match plan.equilibrium {
+            EquilibriumSourceIR::RelaxedInitialState => {
+                handoff.validate_target_plan(plan)?;
+            }
+            EquilibriumSourceIR::Provided => {
+                // Stage continuation changes the source marker after the
+                // accepted relaxation has been checked.  Revalidate the
+                // resulting Provided plan so a multi-k point cannot carry a
+                // forged m0, mesh, material, static-field or boundary binding.
+                handoff.validate_provided_continuation_plan(plan)?;
+            }
+            _ => {
+                return Err(RunError {
+                    message:
+                        "relax_stage_handoff_requires_relaxed_or_provided_equilibrium_target"
+                            .to_string(),
+                });
+            }
+        }
+    }
     if let Some(handoff) = expected_handoff {
         if !matches!(plan.equilibrium, EquilibriumSourceIR::Provided) {
             return Err(RunError {
@@ -1472,4 +1645,105 @@ pub(super) fn validation_only_raw_provided_fixture_handoff(
         sha256_text("validation-only raw provided equilibrium artifact"),
         sha256_text("validation-only raw provided linearization state"),
     )
+}
+
+
+#[cfg(test)]
+mod static_demag_preimage_tests {
+    use super::*;
+
+    #[test]
+    fn replay_roundoff_preserves_persisted_static_demag_digest() {
+        let stored_h = [[4.7458289441396646e-11, 0.0, 0.0]];
+        let stored_phi = [1.318713395737503e-18];
+        let replay_h = [[stored_h[0][0] + 1.40556e-24, 0.0, 0.0]];
+        let replay_phi = [stored_phi[0] + 6.20e-31];
+        assert!(max_vector_field_difference(&stored_h, &replay_h).unwrap() < 1e-8);
+        assert!(max_scalar_field_difference(&stored_phi, &replay_phi).unwrap() < 1e-10);
+        let original = shared_domain_static_demag_signature(
+            Some("fem_poisson_dirichlet"),
+            &stored_h,
+            &stored_phi,
+            None,
+        )
+        .unwrap();
+        let imported = shared_domain_static_demag_signature(
+            Some("fem_poisson_dirichlet"),
+            &replay_h,
+            &replay_phi,
+            Some((&stored_h, &stored_phi)),
+        )
+        .unwrap();
+        let numerical = shared_domain_static_demag_signature(
+            Some("fem_poisson_dirichlet"),
+            &replay_h,
+            &replay_phi,
+            None,
+        )
+        .unwrap();
+        assert_eq!(original, imported);
+        assert_ne!(original, numerical);
+    }
+
+    #[test]
+    fn fresh_producer_digest_binds_its_actual_fields() {
+        let h = [[1.0, 2.0, 3.0]];
+        let phi = [4.0];
+        let actual = shared_domain_static_demag_signature(None, &h, &phi, None).unwrap();
+        let expected = shared_domain_content_digest(
+            "static_demag_signature",
+            &serde_json::json!({"realization": null, "h_demag0_a_per_m": h, "phi0_a": phi}),
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn replay_digest_still_rejects_a_changed_realization() {
+        let h = [[0.0; 3]];
+        let phi = [0.0];
+        let dirichlet = shared_domain_static_demag_signature(
+            Some("fem_poisson_dirichlet"),
+            &h,
+            &phi,
+            Some((&h, &phi)),
+        )
+        .unwrap();
+        let robin = shared_domain_static_demag_signature(
+            Some("fem_poisson_robin"),
+            &h,
+            &phi,
+            Some((&h, &phi)),
+        )
+        .unwrap();
+        assert_ne!(dirichlet, robin);
+    }
+
+    #[test]
+    fn full_domain_replay_rejects_invalid_recomputed_or_stored_fields() {
+        let finite = [[0.0; 3]; 2];
+        let invalid = [[0.0; 3], [f64::NAN, 0.0, 0.0]];
+        assert!(max_vector_field_difference(&finite, &invalid).is_none());
+        assert!(max_vector_field_difference(&invalid, &finite).is_none());
+        assert!(max_vector_field_difference(&finite, &finite[..1]).is_none());
+        assert!(max_vector_field_difference(&[], &[]).is_none());
+        assert!(max_scalar_field_difference(&[0.0, 0.0], &[0.0, f64::NAN]).is_none());
+        assert!(max_scalar_field_difference(&[f64::INFINITY], &[0.0]).is_none());
+        assert!(max_scalar_field_difference(&[0.0], &[]).is_none());
+        assert!(max_scalar_field_difference(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn static_demag_digest_rejects_malformed_persisted_fields() {
+        assert!(shared_domain_static_demag_signature(None, &[], &[], None).is_err());
+        assert!(shared_domain_static_demag_signature(None, &[[0.0; 3]], &[], None).is_err());
+        assert!(
+            shared_domain_static_demag_signature(None, &[[f64::NAN, 0.0, 0.0]], &[0.0], None)
+                .is_err()
+        );
+        assert!(
+            shared_domain_static_demag_signature(None, &[[0.0; 3]], &[f64::INFINITY], None)
+                .is_err()
+        );
+    }
 }

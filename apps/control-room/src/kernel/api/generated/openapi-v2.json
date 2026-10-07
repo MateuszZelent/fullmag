@@ -12603,15 +12603,18 @@
                 "type": "integer"
               },
               "residual_relative_l2": {
+                "description": "Missing solver evidence remains unavailable, never an inferred zero.",
                 "format": "double",
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               }
             },
             "required": [
               "mode_id",
               "raw_mode_index",
               "frequency_hz",
-              "residual_relative_l2",
               "component_participation"
             ],
             "type": "object"
@@ -23389,6 +23392,183 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "ParallelExecutionModeResource": {
+        "enum": [
+          "serial",
+          "adaptive"
+        ],
+        "type": "string"
+      },
+      "ParallelExecutionResource": {
+        "additionalProperties": false,
+        "properties": {
+          "max_cpu_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "max_memory_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "max_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_reserve_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ParallelExecutionModeResource"
+          },
+          "threads_per_worker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mode",
+          "max_cpu_percent",
+          "max_memory_percent",
+          "memory_reserve_bytes",
+          "threads_per_worker"
+        ],
+        "type": "object"
+      },
+      "ParallelExecutionTelemetryResource": {
+        "properties": {
+          "active_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "admission_desired_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "admission_pending_samples": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "admission_reason": {
+            "type": "string"
+          },
+          "admission_worker_limit": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "allocated_cpu_cores": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cpu_available_cores": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cpu_busy_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cpu_target_kind": {
+            "type": "string"
+          },
+          "cpu_target_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "memory_available_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_limit_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_reserve_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_target_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "resolved_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sampled_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "terminal": {
+            "type": "boolean"
+          },
+          "worker_peak_cpu_cores": {
+            "description": "Admission CPU demand envelope, including a conservative resolved-team\nbound when a short or sparsely observed worker lacks CPU sampling coverage.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "worker_peak_rss_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sampled_at_unix_ms",
+          "active_workers",
+          "admission_desired_workers",
+          "admission_pending_samples",
+          "cpu_target_percent",
+          "memory_target_percent",
+          "memory_reserve_bytes",
+          "cpu_target_kind",
+          "admission_reason",
+          "terminal"
+        ],
         "type": "object"
       },
       "PeriodicValidationStatus": {
@@ -37280,6 +37460,16 @@
               "null"
             ]
           },
+          "parallel_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ParallelExecutionTelemetryResource"
+              }
+            ]
+          },
           "progress_detail": {
             "type": [
               "string",
@@ -37411,7 +37601,21 @@
             "minimum": 0,
             "type": "integer"
           },
+          "run_id": {
+            "description": "Explicit null means no run; omission is not accepted by the live UI.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "runtime_state": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Identity of the same locked snapshot that owns the stage records.",
             "type": "string"
           },
           "stage_statuses": {
@@ -37433,6 +37637,9 @@
           }
         },
         "required": [
+          "session_id",
+          "session_epoch",
+          "run_id",
           "revision",
           "runtime_state",
           "total_stages",
@@ -38073,6 +38280,16 @@
       },
       "StudyRuntimePatchRequest": {
         "properties": {
+          "parallel_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ParallelExecutionResource"
+              }
+            ]
+          },
           "requested_backend": {
             "type": [
               "string",
@@ -38118,6 +38335,9 @@
               "null"
             ]
           },
+          "parallel_execution": {
+            "$ref": "#/components/schemas/ParallelExecutionResource"
+          },
           "requested_backend": {
             "type": "string"
           },
@@ -38143,7 +38363,8 @@
           "requested_backend",
           "requested_device",
           "requested_precision",
-          "requested_mode"
+          "requested_mode",
+          "parallel_execution"
         ],
         "type": "object"
       },

@@ -121,7 +121,8 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     api: {
       model: {

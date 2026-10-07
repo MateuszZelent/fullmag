@@ -182,6 +182,42 @@ fn validate_scene_document_with_mode(
             scene.study.requested_mode
         )));
     }
+    scene
+        .study
+        .parallel_execution
+        .validate()
+        .map_err(SceneDocumentValidationError::new)?;
+    if scene.study.parallel_execution.mode == fullmag_ir::ParallelExecutionModeIR::Adaptive
+        && (!scene.study.requested_backend.eq_ignore_ascii_case("fem")
+            || !scene.study.requested_device.eq_ignore_ascii_case("cpu"))
+    {
+        return Err(SceneDocumentValidationError::new(
+            concat!(
+                "unsupported parallel_execution realization: adaptive mode requires ",
+                "requested_backend='fem' and requested_device='cpu' for independent eigen k execution",
+            ),
+        ));
+    }
+    if let Some(pbc) = &scene.study.pbc {
+        if pbc.demag != fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
+            && pbc.image_counts.is_some()
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.pbc.image_counts require demag='truncated_images'",
+            ));
+        }
+        if pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0
+            && pbc.axes != [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+            ]
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.pbc.demag='periodic_airbox_k0' requires x/y periodic axes and open z",
+            ));
+        }
+    }
     validate_solver_state(&scene.study.solver, false, "study.solver")?;
     validate_fdm_discretization(scene.study.fdm.as_ref())?;
     let fdm_lane = scene.study.requested_backend.eq_ignore_ascii_case("fdm")
@@ -3335,6 +3371,31 @@ mod tests {
             .expect("geometry may be authored before material and texture assignment");
         validate_scene_document(&scene)
             .expect_err("execution validation must still require material and texture");
+    }
+
+    #[test]
+    fn adaptive_parallel_execution_requires_explicit_fem_cpu_lane() {
+        let mut scene = SceneDocument::default();
+        scene.study.parallel_execution.mode = fullmag_ir::ParallelExecutionModeIR::Adaptive;
+
+        for (backend, device) in [("fdm", "cpu"), ("fem", "gpu"), ("auto", "cpu")] {
+            scene.study.requested_backend = backend.to_string();
+            scene.study.requested_device = device.to_string();
+            let error = validate_scene_document_for_authoring(&scene)
+                .expect_err("unsupported adaptive lane must fail closed");
+            assert!(
+                error
+                    .message
+                    .contains("unsupported parallel_execution realization"),
+                "{}",
+                error.message
+            );
+        }
+
+        scene.study.requested_backend = "fem".to_string();
+        scene.study.requested_device = "cpu".to_string();
+        validate_scene_document_for_authoring(&scene)
+            .expect("explicit FEM CPU adaptive authoring should remain valid");
     }
 
     #[test]

@@ -172,7 +172,7 @@ def _configure_sampling(
         fields: list[dict[str, object]] = [
             {
                 "kind": "field_autosave",
-                "quantity": "magnetization",
+                "quantity": "m",
                 "every_steps": 100,
             }
         ]
@@ -187,7 +187,7 @@ def _configure_sampling(
             fields = [
                 {
                     "kind": "field_autosave",
-                    "quantity": "magnetization",
+                    "quantity": "m",
                     "every_seconds": cadence,
                 }
             ]

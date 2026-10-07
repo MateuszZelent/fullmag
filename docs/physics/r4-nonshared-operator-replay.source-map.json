@@ -1,0 +1,62 @@
+{
+  "document": {
+    "path": "docs/physics/r4-nonshared-operator-replay.md",
+    "status": "interpreted_source_only"
+  },
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "interpreted_source_only"},
+    {"solver": "FEM", "device": "GPU", "status": "interpreted_source_only", "reason": "Brak dowodu managed runtime i native GPU."},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "Sidecary dotyczą runnerowego operatora FEM non-shared."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "Sidecary dotyczą runnerowego operatora FEM non-shared."}
+  ],
+  "equations": [
+    {"id": "eq-nonshared-replay-pencil", "symbols": ["K-omega", "B", "k", "lambda", "q"], "sources": ["nonshared-replay", "eigen-nonshared-domain"]},
+    {"id": "eq-nonshared-replay-gamma", "symbols": ["K-field", "K-omega", "gamma-0"], "sources": ["nonshared-replay", "eigen-nonshared-domain"]},
+    {"id": "eq-nonshared-replay-gyro", "symbols": ["G", "M-t"], "sources": ["nonshared-replay", "eigen-native-window"]},
+    {"id": "eq-nonshared-replay-phase", "symbols": ["k", "Delta-r", "phi"], "sources": ["nonshared-replay", "eigen-nonshared-domain"]}
+  ],
+  "symbols": [
+    {"id": "K-field", "latex": "K_{\\mathrm{field}}", "meaning": "macierz pola liniaryzacji przed skalowaniem", "si_unit": "`A/m` w reprezentacji mass-weighted"},
+    {"id": "K-omega", "latex": "K_{\\omega}", "meaning": "macierz przekazana do pencilu modalnego", "si_unit": "`rad/s`"},
+    {"id": "B", "latex": "B", "meaning": "macierz po prawej stronie pencilu", "si_unit": "zależna od normalizacji FEM"},
+    {"id": "M-t", "latex": "M_t", "meaning": "powtarzalna masa styczna", "si_unit": "zależna od dyskretyzacji FEM"},
+    {"id": "gamma-0", "latex": "\\gamma_0", "meaning": "współczynnik przejścia pola do częstości kątowej", "si_unit": "`rad s⁻¹ /(A m⁻¹)`; `gamma0_rad_s_per_A_m`"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "tłumienie planu eigen", "si_unit": "`1`"},
+    {"id": "k", "latex": "\\mathbf{k}", "meaning": "wektor falowy", "si_unit": "`rad/m`"},
+    {"id": "Delta-r", "latex": "\\Delta\\mathbf{r}", "meaning": "translacja pary periodycznej", "si_unit": "`m`"},
+    {"id": "phi", "latex": "\\phi", "meaning": "faza Floqueta", "si_unit": "rad"},
+    {"id": "lambda", "latex": "\\lambda", "meaning": "wartość własna pencilu", "si_unit": "`s⁻¹`"},
+    {"id": "q", "latex": "q", "meaning": "wektor perturbacji modalnej", "si_unit": "`1`"},
+    {"id": "G", "latex": "G", "meaning": "blok żyrotropowy z masy stycznej", "si_unit": "zależna od normalizacji FEM"}
+  ],
+  "sources": [
+    {"id": "nonshared-canonical-path-tests", "path": "scripts/test_fem_nonshared_canonical_paths.py", "symbol": "class NonsharedCanonicalPathTests", "responsibility": "Reject dot and empty POSIX components before path normalization."},
+    {"id": "nonshared-matrix-tolerance", "path": "scripts/fem_nonshared_operator_replay.py", "symbol": "_matrix_close", "responsibility": "Scale-aware matrix comparisons without a unit-sized absolute floor."},
+    {"id": "nonshared-scaled-tests", "path": "scripts/test_fem_nonshared_scaled_matrix_replay.py", "symbol": "class NonsharedScaledMatrixReplayTests", "responsibility": "Reject relative corruption of small mass-weighted FEM matrices after exact preimage rehash."},
+    {"id": "nonshared-coverage", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_nonshared_floquet_sidecars", "responsibility": "Separate historical flat three-sidecar coverage from nested native-input pair coverage and single-k manifest declarations without scientific qualification."},
+    {"id": "nonshared-path-manifest", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Multi-k sample arrays and single-sample aliases for both historical flat and nested native-input families."},
+    {"id": "nonshared-remap", "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs", "symbol": "remap_single_k_mode_artifacts", "responsibility": "Exact bytes retained with canonical sample paths and traversal rejection."},
+    {"id": "nonshared-routing", "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py", "symbol": "validate_nonshared_operator_replay", "responsibility": "Separate historical three-sidecar and nested native-input pair arrays, bind actual sample/path fields, and route unqualified algebraic replay."},
+    {"id": "nonshared-routing-tests", "path": "scripts/test_fem_nonshared_operator_routing.py", "symbol": "class NonsharedOperatorRoutingTests", "responsibility": "Real interpreted fixture routing, nested/flattened path and boolean sample-binding regressions without scientific promotion."},
+    {"id": "nonshared-replay", "path": "scripts/fem_nonshared_operator_replay.py", "symbol": "replay_nonshared_operator", "responsibility": "Exact refs, raw bytes, mesh sample/path/length/encoding/SHA binding, final C ABI diagnostics, matrix relations, alpha, gamma and seam phase."},
+    {"id": "nonshared-replay-tests", "path": "scripts/test_fem_nonshared_operator_replay.py", "symbol": "class NonSharedOperatorReplayTests", "responsibility": "Frozen literal, mesh-ref mutation, legacy absence and fail-closed interpreted regressions."},
+    {"id": "nonshared-native-input-tests", "path": "scripts/test_fem_nonshared_native_input_diagnostics.py", "symbol": "class NonSharedNativeInputDiagnosticsTests", "responsibility": "Exact final C ABI payload, preimage, external raw refs and fail-closed mutation regressions."},
+    {"id": "nonshared-native-input-source-tests", "path": "scripts/test_nonshared_native_input_diagnostics_source.py", "symbol": "class NonSharedNativeInputDiagnosticsSourceTests", "responsibility": "Source-only ordering check for finalization before both native C ABI calls."},
+    {"id": "eigen-nonshared-domain", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "build_nonshared_floquet_provenance", "responsibility": "Producer schema, exact operator/matrix/mesh refs, identity/source sidecars and final C ABI diagnostic bytes."},
+    {"id": "eigen-native-input-finalizer", "path": "crates/fullmag-runner/src/fem/eigen_nonshared_domain.rs", "symbol": "finalize_native_input_diagnostics", "responsibility": "Acyclic preimage/raw digest publication for the exact final operator_diagnostics_json."},
+    {"id": "eigen-native-window", "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs", "symbol": "gyrotropic_matrix_row_major_from_tangent_mass", "responsibility": "Native units and direct tangent-mass block convention."},
+    {"id": "eigen-output-nonshared-manifest", "path": "crates/fullmag-runner/src/fem/eigen_output.rs", "symbol": "inspect_nonshared_floquet_sidecars", "responsibility": "Canonical three-family coverage, separate native-input diagnostic coverage, duplicate-path rejection and NOT_VERIFIED diagnostics."},
+    {"id": "eigen-path-manifest-nonshared", "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs", "symbol": "build_eigen_path_frequency_domain_manifest", "responsibility": "Multi-k transport of historical arrays plus the additive native-input diagnostic pair and single-sample aliases."},
+    {"id": "nonshared-manifest-source-tests", "path": "scripts/test_nonshared_floquet_manifest_contract_source.py", "symbol": "class NonsharedFloquetManifestContractSourceTests", "responsibility": "Source-only selector, nested naming, duplicate and legacy-coverage regressions."},
+    {"id": "eigen-path-artifacts-nonshared", "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs", "symbol": "single_k_signed_state_artifact", "responsibility": "Retain and remap immutable non-shared sidecar bytes."}
+  ],
+  "public_api": {
+    "parameters": [],
+    "note": "Brak zmian publicznego Python API i ProblemIR; adapter jest narzędziem weryfikacji artefaktów."
+  },
+  "validation": {
+    "command": "python -B -m unittest -v scripts.test_fem_nonshared_native_input_diagnostics scripts.test_nonshared_native_input_diagnostics_source scripts.test_fem_nonshared_operator_replay scripts.test_fem_nonshared_operator_routing scripts.test_nonshared_floquet_manifest_contract_source",
+    "result": "44 tests PASS; legacy main verifier 213 tests PASS",
+    "runtime": "NOT VERIFIED"
+  }
+}

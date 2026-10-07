@@ -2064,6 +2064,136 @@ class ProblemApiTests(unittest.TestCase):
             },
         )
 
+    def test_eigen_output_selectors_round_trip_through_script_builder(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen_output_selectors")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.01
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.save("spectrum", spectrum_scope="global")
+        study.save(
+            "mode",
+            field="mode_complex",
+            indices=[0, 2],
+            branches=[4],
+            sample_indices=[0, 2],
+            sample_labels=["Gamma", "X"],
+        )
+        study.save("dispersion", name="bands", include_branch_table=False)
+        study.save(
+            "diagnostics",
+            include_tracking=False,
+            include_overlaps=False,
+        )
+        study.stages.add_eigenmodes(count=5, include_demag=False)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source = root / "eigen_output_selectors.py"
+            source.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+            original_ir = loaded.stages[0].problem.study.to_ir()
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = root / "eigen_output_selectors_rewritten.py"
+            rewritten.write_text(rendered, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(
+                rewritten,
+                lightweight_assets=True,
+            )
+
+        self.assertIn('study.save("mode", field="mode_complex"', rendered)
+        self.assertIn("branches=[4]", rendered)
+        self.assertIn("sample_indices=[0, 2]", rendered)
+        self.assertIn('sample_labels=["Gamma", "X"]', rendered)
+        self.assertIn(
+            'study.save("dispersion", name="bands", include_branch_table=False)',
+            rendered,
+        )
+        self.assertIn(
+            'study.save("diagnostics", include_tracking=False, include_overlaps=False)',
+            rendered,
+        )
+        self.assertEqual(reloaded.stages[0].problem.study.to_ir(), original_ir)
+
+    def test_study_save_mode_accepts_numpy_and_sequence_selectors(self) -> None:
+        cases = (
+            (
+                {"indices": np.array([0, 2], dtype=np.int64)},
+                {"kind": "eigen_mode", "field": "mode", "indices": [0, 2]},
+            ),
+            (
+                {"indices": np.array([0], dtype=np.int64)},
+                {"kind": "eigen_mode", "field": "mode", "indices": [0]},
+            ),
+            (
+                {
+                    "indices": (0,),
+                    "branches": np.array([3, 1], dtype=np.int64),
+                    "sample_indices": np.array([0, 2], dtype=np.int64),
+                    "sample_labels": np.array(["Gamma", "X"]),
+                },
+                {
+                    "kind": "eigen_mode",
+                    "field": "mode",
+                    "indices": [0],
+                    "branches": [3, 1],
+                    "sample_selector": {
+                        "sample_indices": [0, 2],
+                        "sample_labels": ["Gamma", "X"],
+                    },
+                },
+            ),
+            (
+                {
+                    "indices": range(1, 3),
+                    "sample_indices": (2, 0),
+                    "sample_labels": ["X", "M"],
+                },
+                {
+                    "kind": "eigen_mode",
+                    "field": "mode",
+                    "indices": [1, 2],
+                    "sample_selector": {
+                        "sample_indices": [2, 0],
+                        "sample_labels": ["X", "M"],
+                    },
+                },
+            ),
+        )
+        for selectors, expected in cases:
+            with self.subTest(selectors=tuple(selectors)):
+                fm.reset()
+                try:
+                    fm.study("numpy_save_mode").save("mode", **selectors)
+                    outputs = flat_world._state._outputs
+                    self.assertEqual(len(outputs), 1)
+                    self.assertEqual(outputs[0].to_ir(), expected)
+                finally:
+                    fm.reset()
+
+    def test_study_save_mode_preserves_empty_and_invalid_selectors(
+        self,
+    ) -> None:
+        invalid_cases = (
+            ({"indices": np.array([], dtype=np.int64)}, "requires at least one"),
+            ({"indices": np.array([-1], dtype=np.int64)}, "must be >= 0"),
+            ({"indices": np.array([True])}, "integers"),
+        )
+        for selectors, error in invalid_cases:
+            with self.subTest(selectors=tuple(selectors)):
+                fm.reset()
+                try:
+                    with self.assertRaisesRegex(ValueError, error):
+                        fm.study("invalid_save_mode").save("mode", **selectors)
+                finally:
+                    fm.reset()
+
     def test_eigenmodes_rejects_frequency_response_outputs(self) -> None:
         with self.assertRaisesRegex(ValueError, "Eigenmodes outputs"):
             fm.Eigenmodes(outputs=[fm.SaveResponse("susceptibility_tensor")])
@@ -2804,6 +2934,55 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(runtime["gpu_count"], 1)
         self.assertEqual(runtime["device_index"], 0)
         self.assertEqual(runtime["cpu_threads"], 8)
+
+    def test_parallel_execution_policy_survives_runtime_selection_copies(self) -> None:
+        policy = fm.ParallelExecutionPolicy(
+            mode="adaptive",
+            max_cpu_percent=90.0,
+            max_memory_percent=80.0,
+            memory_reserve_bytes=1_073_741_824,
+            max_workers=3,
+            threads_per_worker=2,
+        )
+        runtime = fm.backend.cpu().engine("fem").with_parallel_execution(policy)
+        for copied in (
+            runtime.engine("fem"),
+            runtime.threads(4),
+            runtime.mode("extended"),
+            runtime.precision("double"),
+        ):
+            self.assertEqual(copied.parallel_execution, policy)
+        metadata = runtime.to_runtime_metadata()
+        self.assertEqual(metadata["parallel_execution"], policy.to_ir())
+
+        for unsupported in (
+            fm.backend.cpu().engine("fdm"),
+            fm.backend.cuda(1).engine("fem"),
+            fm.backend.cpu(),
+        ):
+            with self.subTest(runtime=unsupported):
+                with self.assertRaisesRegex(ValueError, "unsupported parallel_execution realization"):
+                    unsupported.with_parallel_execution(policy)
+
+    def test_parallel_execution_policy_rejects_non_integral_or_unknown_fields(self) -> None:
+        invalid_values = (
+            {"max_cpu_percent": True},
+            {"max_memory_percent": float("nan")},
+            {"max_memory_percent": float("inf")},
+            {"max_workers": True},
+            {"threads_per_worker": 1.0},
+            {"memory_reserve_bytes": 2**64},
+            {"max_workers": 2**32},
+            {"unknown": 1},
+        )
+        for overrides in invalid_values:
+            with self.subTest(overrides=overrides):
+                with self.assertRaises((TypeError, ValueError)):
+                    fm.ParallelExecutionPolicy.from_ir(overrides)
+        with self.assertRaises((TypeError, ValueError)):
+            build_scene_document_from_builder(
+                {"parallel_execution": {"unknown": 1}}
+            )
 
     def test_fdm_precision_policy_round_trips_through_public_authoring(self) -> None:
         problem = self._build_problem()
@@ -4299,6 +4478,42 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIsNone(scene["editor"]["selected_entity_id"])
         self.assertIsNone(scene["editor"]["focused_entity_id"])
         self.assertEqual(scene["editor"]["mesh_entity_view_state"], {})
+
+    def test_scene_document_round_trips_parallel_execution_policy(self) -> None:
+        builder = {
+            "revision": 1,
+            "backend": "fem",
+            "requested_device": "cpu",
+            "parallel_execution": {
+                "mode": "adaptive",
+                "max_cpu_percent": 90.0,
+                "max_memory_percent": 80.0,
+                "memory_reserve_bytes": 1_073_741_824,
+                "max_workers": 4,
+                "threads_per_worker": 1,
+            },
+            "solver": {},
+            "mesh": {},
+            "universe": None,
+            "stages": [],
+            "initial_state": None,
+            "geometries": [
+                {
+                    "name": "film",
+                    "geometry_kind": "Box",
+                    "geometry_params": {"size": [20e-9, 20e-9, 10e-9]},
+                    "material": {"Ms": 800e3, "Aex": 13e-12, "alpha": 0.1},
+                    "magnetization": {"kind": "uniform", "value": [1.0, 0.0, 0.0]},
+                    "mesh": {"mode": "inherit", "hmax": ""},
+                }
+            ],
+            "current_modules": [],
+            "excitation_analysis": None,
+        }
+        scene = build_scene_document_from_builder(builder)
+        self.assertEqual(scene["study"]["parallel_execution"], builder["parallel_execution"])
+        rebuilt = build_builder_from_scene_document(scene)
+        self.assertEqual(rebuilt["parallel_execution"], builder["parallel_execution"])
 
     def test_scene_document_preserves_preset_texture_round_trip(self) -> None:
         builder = {
@@ -7292,17 +7507,44 @@ class ProblemApiTests(unittest.TestCase):
             {"backward_volume", "damon_eshbach"},
         )
 
-    def test_thin_film_de_bv_dispersion_validation_rejects_broad_k_range(self) -> None:
-        with self.assertRaisesRegex(ValueError, "max_k_rad_per_m"):
-            fm.ThinFilmDEBVDispersionValidation(
-                film_thickness_m=80e-9,
-                equilibrium_magnetization=(1.0, 0.0, 0.0),
-                scenarios=[
-                    fm.DispersionValidationScenario("bv", "branch_0", [0, 1, 2]),
-                    fm.DispersionValidationScenario("de", "branch_0", [0, 3, 4]),
-                ],
-                max_k_rad_per_m=4.0e6,
-            )
+    def test_numeric_de_bv_example_has_far_dirichlet_boundaries(self) -> None:
+        import math
+        example = Path(__file__).resolve().parents[3] / "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+        loaded = fm.load_problem_from_script(example, lightweight_assets=True)
+        ir = loaded.problem.to_ir(requested_backend="fem", execution_mode="strict", execution_precision="double", include_geometry_assets=False)
+        metadata = ir["problem_meta"]["runtime_metadata"]
+        thickness = metadata["dispersion_validation"]["film_thickness_m"]
+        height = metadata["study_universe"]["size"][2]
+        padding = (height - thickness) / 2
+        self.assertAlmostEqual(padding, 2e-6, delta=1e-15)
+        # Independent uniform-slab Gamma boundary estimate, not a FEM run.
+        h = 0.05 / (4 * math.pi * 1e-7)
+        ms = 140e3
+        nz = 1 - thickness / height
+        boundary_error = 1 - math.sqrt((h + ms * nz) / (h + ms))
+        self.assertLess(boundary_error, 0.01)
+
+    def test_thin_film_de_bv_dispersion_validation_accepts_c1_range(self) -> None:
+        validation = fm.ThinFilmDEBVDispersionValidation(
+            film_thickness_m=10e-9,
+            equilibrium_magnetization=(1.0, 0.0, 0.0),
+            scenarios=[
+                fm.DispersionValidationScenario("bv", "branch_0", [0, 1, 2]),
+                fm.DispersionValidationScenario("de", "branch_0", [0, 3, 4]),
+            ],
+            max_k_rad_per_m=1.5707963267948966e7,
+            frequency_window_hz=(0.0, 15e9),
+        )
+        self.assertEqual(validation.to_ir()["frequency_window_hz"], {"min": 0.0, "max": 15e9})
+        self.assertEqual(validation.to_ir()["max_k_rad_per_m"], 1.5707963267948966e7)
+        for bounds in [(0.0, float("nan")), (0.0, float("inf")), (float("nan"), 15e9)]:
+            with self.assertRaisesRegex(ValueError, "finite"):
+                fm.ThinFilmDEBVDispersionValidation(
+                    film_thickness_m=10e-9,
+                    equilibrium_magnetization=(1.0, 0.0, 0.0),
+                    scenarios=validation.scenarios,
+                    frequency_window_hz=bounds,
+                )
 
     def test_study_k0_kittel_validation_lowers_to_runtime_metadata(self) -> None:
         script = """

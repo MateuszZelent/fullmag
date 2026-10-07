@@ -93,6 +93,42 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(Path(layout["storage_root"]), custom)
         self.assertNotEqual(layout["build_root"], self.resolve()["build_root"])
 
+    def test_cargo_intermediate_override_cannot_escape_profile(self):
+        self.env["CARGO_BUILD_BUILD_DIR"] = str(self.project / "outside")
+        with self.assertRaises(storage.StorageError):
+            self.resolve(profile="windows-native-fdm-cpu-dev")
+        self.assertFalse((self.project / "storage").exists())
+
+    def test_windows_intermediates_are_short_isolated_and_keep_final_target(self):
+        for profile in storage.WINDOWS_WORKSPACE_STORAGE_PROFILES.values():
+            layout = self.resolve(profile=profile)
+            with self.subTest(profile=profile):
+                self.assertEqual(Path(layout["env"]["CARGO_BUILD_BUILD_DIR"]), Path(layout["build_root"]) / "b")
+                self.assertEqual(Path(layout["env"]["CARGO_TARGET_DIR"]), Path(layout["build_root"]) / "cargo-target")
+        self.assertNotIn("CARGO_BUILD_BUILD_DIR", self.resolve()["env"])
+        self.env["CARGO_BUILD_BUILD_DIR"] = str(Path(layout["build_root"]) / "custom")
+        self.assertEqual(self.resolve(profile=profile)["env"]["CARGO_BUILD_BUILD_DIR"], self.env["CARGO_BUILD_BUILD_DIR"])
+
+    def test_cargo_default_intermediates_reject_redirect_before_and_after_resolve(self):
+        layout = self.resolve(profile="windows-native-fdm-cpu-dev")
+        intermediate = Path(layout["env"]["CARGO_BUILD_BUILD_DIR"])
+        outside = self.project / "outside"
+        outside.mkdir()
+        intermediate.parent.mkdir(parents=True)
+        try:
+            intermediate.symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            if os.name != "nt":
+                raise
+            result = subprocess.run(["cmd", "/c", "mklink", "/J", str(intermediate), str(outside)], capture_output=True)
+            if result.returncode:
+                self.skipTest(f"Host cannot create a symlink/junction: {error}")
+        with self.assertRaises(storage.StorageError):
+            self.resolve(profile="windows-native-fdm-cpu-dev")
+        with self.assertRaises(storage.StorageError):
+            storage.initialize(layout)
+        self.assertEqual(list(outside.iterdir()), [])
+
     def test_override_outside_storage_is_rejected_before_creation(self):
         self.env["CARGO_TARGET_DIR"] = str(self.project / "random-target")
         with self.assertRaises(storage.StorageError):

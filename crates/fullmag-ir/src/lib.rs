@@ -6,6 +6,7 @@ pub mod constraint;
 pub mod compute_resources;
 pub mod eigen_contract;
 pub mod execution;
+pub mod parallel_execution;
 pub mod execution_profile;
 pub mod frequency_response_contract;
 pub mod mechanics;
@@ -25,11 +26,26 @@ pub mod selection;
 pub mod spectral_validation;
 pub mod spin_transport;
 pub mod study;
+pub mod study_v04;
+mod v04_material_wire;
+mod v04_spectral_wire;
+pub mod waveguide_frame;
+pub mod waveguide_mesh;
+pub mod waveguide_mesh_contours;
+pub mod waveguide_mesh_elements;
+pub mod waveguide_mesh_embedding;
+pub mod waveguide_mesh_incidence;
+pub(crate) mod waveguide_mesh_bindings;
+pub(crate) mod waveguide_mesh_dirichlet;
+pub(crate) mod waveguide_mesh_world;
+pub(crate) mod waveguide_mesh_identity;
+mod floating_point_guard;
 mod validation;
 pub use constraint::*;
 pub use compute_resources::*;
 pub use eigen_contract::*;
 pub use execution::*;
+pub use parallel_execution::*;
 pub use execution_profile::*;
 pub use frequency_response_contract::*;
 pub use mechanics::*;
@@ -50,6 +66,12 @@ pub use selection::*;
 pub use spectral_validation::BlochWavevectorIR;
 pub use spin_transport::*;
 pub use study::*;
+pub use study_v04::*;
+pub use waveguide_frame::{
+    validate_waveguide_frame, CanonicalWaveguideFrameIR, ValidatedWaveguideFrameIR,
+    WaveguideFrameIR, WaveguideFrameValidationError, WaveguideSignedKIR,
+    WAVEGUIDE_GEOMETRY_TOLERANCE,
+};
 use validation::*;
 
 pub const IR_VERSION: &str = "0.3.0";
@@ -288,13 +310,34 @@ fn migrate_v0_2_to_v0_3(value: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject future spatial intent before the legacy typed study can discard it.
+/// Missing fields retain historical 3D semantics; null is explicit presence.
+fn reject_unversioned_spatial_representation(value: &Value) -> Result<(), String> {
+    if value
+        .get("study")
+        .and_then(Value::as_object)
+        .is_some_and(|study| study.contains_key("spatial_representation"))
+    {
+        return Err(
+            concat!(
+                "/study/spatial_representation requires the typed ProblemIRV04 study contract; ",
+                "the legacy StudyIR wire cannot represent this intent"
+            )
+            .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn migrate_problem_ir_json_value_for_direct_read(value: &mut Value) -> Result<bool, String> {
     match problem_ir_version(value)? {
         CURRENT_IR_VERSION => {
+            reject_unversioned_spatial_representation(value)?;
             validate_public_metadata_versions(value, CURRENT_IR_VERSION)?;
             Ok(false)
         }
         PREVIOUS_PUBLIC_IR_VERSION => {
+            reject_unversioned_spatial_representation(value)?;
             migrate_v0_2_to_v0_3(value)?;
             Ok(true)
         }
@@ -309,6 +352,13 @@ fn migrate_problem_ir_json_value_for_direct_read(value: &mut Value) -> Result<bo
 /// migrations in order.
 pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> {
     let version = problem_ir_version(value)?.to_string();
+    if matches!(
+        version.as_str(),
+        CURRENT_IR_VERSION | PREVIOUS_PUBLIC_IR_VERSION | LEGACY_PUBLIC_IR_VERSION
+    ) {
+        // Reject before the explicit chain can mutate historical data.
+        reject_unversioned_spatial_representation(value)?;
+    }
     if version == CURRENT_IR_VERSION {
         return Ok(false);
     }
@@ -942,15 +992,47 @@ impl ProblemIR {
                         errors.push("eigen_spectrum quantity must not be empty".to_string());
                     }
                 }
-                OutputIR::EigenMode { field, indices } => {
+                OutputIR::EigenMode {
+                    field,
+                    all_modes,
+                    indices,
+                    branches,
+                    sample_selector,
+                } => {
                     if field.trim().is_empty() {
                         errors.push("eigen_mode field must not be empty".to_string());
                     }
-                    if indices.is_empty() {
-                        errors.push("eigen_mode must contain at least one mode index".to_string());
+                    if !all_modes && indices.is_empty() && branches.is_empty() {
+                        errors.push(
+                            "eigen_mode must contain at least one mode index or branch index"
+                                .to_string(),
+                        );
+                    }
+                    if *all_modes && (!indices.is_empty() || !branches.is_empty()) {
+                        errors.push("eigen_mode all_modes cannot be combined with indices or branches".to_string());
+                    }
+                    if indices
+                        .iter()
+                        .enumerate()
+                        .any(|(index, value)| indices[index + 1..].contains(value))
+                    {
+                        errors.push("eigen_mode indices must be unique".to_string());
+                    }
+                    if branches
+                        .iter()
+                        .enumerate()
+                        .any(|(index, value)| branches[index + 1..].contains(value))
+                    {
+                        errors.push("eigen_mode branches must be unique".to_string());
+                    }
+                    if let Some(selector) = sample_selector {
+                        errors.extend(selector.validation_errors("eigen_mode.sample_selector"));
                     }
                 }
-                OutputIR::DispersionCurve { name } => {
+                OutputIR::DispersionCurve {
+                    name,
+                    include_branch_table: _,
+                } => {
                     if name.trim().is_empty() {
                         errors.push("dispersion_curve name must not be empty".to_string());
                     }
@@ -1217,26 +1299,8 @@ impl ProblemIR {
                         );
                     }
                 }
-                if let Some(KSamplingIR::Single { k_vector }) = k_sampling {
-                    if !k_vector.iter().all(|value| value.is_finite()) {
-                        errors.push(
-                            "eigenmodes.k_sampling.k_vector must contain finite values".to_string(),
-                        );
-                    }
-                }
-                if let Some(KSamplingIR::Path {
-                    points,
-                    samples_per_segment,
-                    closed,
-                }) = k_sampling
-                {
-                    validate_k_sampling_path(
-                        "eigenmodes.k_sampling.path",
-                        points,
-                        samples_per_segment,
-                        *closed,
-                        &mut errors,
-                    );
+                if let Some(k_sampling) = k_sampling {
+                    errors.extend(k_sampling.validation_errors("eigenmodes.k_sampling"));
                 }
                 if let Some(sweep) = bias_field_sweep {
                     if sweep.samples_a_per_m.is_empty() {
@@ -1387,9 +1451,25 @@ impl ProblemIR {
                     .outputs
                     .iter()
                     .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
-                if !has_mode_output && !has_spectrum_output {
+                let has_dispersion_output = self
+                    .study
+                    .sampling()
+                    .outputs
+                    .iter()
+                    .any(|output| matches!(output, OutputIR::DispersionCurve { .. }));
+                let has_diagnostics_output = self
+                    .study
+                    .sampling()
+                    .outputs
+                    .iter()
+                    .any(|output| matches!(output, OutputIR::EigenDiagnostics { .. }));
+                if !has_mode_output
+                    && !has_spectrum_output
+                    && !has_dispersion_output
+                    && !has_diagnostics_output
+                {
                     errors.push(
-                        "eigenmodes study requires at least one eigen_spectrum or eigen_mode output"
+                        "eigenmodes study requires at least one eigen_spectrum, eigen_mode, dispersion_curve, or eigen_diagnostics output"
                             .to_string(),
                     );
                 }
@@ -1434,27 +1514,8 @@ impl ProblemIR {
                         );
                     }
                 }
-                if let Some(KSamplingIR::Single { k_vector }) = k_sampling {
-                    if !k_vector.iter().all(|value| value.is_finite()) {
-                        errors.push(
-                            "frequency_response.k_sampling.k_vector must contain finite values"
-                                .to_string(),
-                        );
-                    }
-                }
-                if let Some(KSamplingIR::Path {
-                    points,
-                    samples_per_segment,
-                    closed,
-                }) = k_sampling
-                {
-                    validate_k_sampling_path(
-                        "frequency_response.k_sampling.path",
-                        points,
-                        samples_per_segment,
-                        *closed,
-                        &mut errors,
-                    );
+                if let Some(k_sampling) = k_sampling {
+                    errors.extend(k_sampling.validation_errors("frequency_response.k_sampling"));
                 }
                 if !excitation
                     .field_au_per_m
@@ -2290,39 +2351,6 @@ mod absorbing_boundary_tests {
         assert!(errors
             .iter()
             .any(|error| error.contains("faces must not contain duplicates")));
-    }
-}
-
-fn validate_k_sampling_path(
-    prefix: &str,
-    points: &[KPointIR],
-    samples_per_segment: &[u32],
-    closed: bool,
-    errors: &mut Vec<String>,
-) {
-    if points.len() < 2 {
-        errors.push(format!("{prefix} requires at least two control points"));
-    }
-    for point in points {
-        if !point.k_vector.iter().all(|v| v.is_finite()) {
-            errors.push(format!(
-                "{prefix} point k_vector must contain finite values"
-            ));
-        }
-    }
-    let expected_segments = if closed {
-        points.len()
-    } else {
-        points.len().saturating_sub(1)
-    };
-    if samples_per_segment.len() != expected_segments {
-        errors.push(format!(
-            "{prefix} expected {expected_segments} samples_per_segment entries, got {}",
-            samples_per_segment.len()
-        ));
-    }
-    if samples_per_segment.iter().any(|n| *n == 0) {
-        errors.push(format!("{prefix} samples_per_segment entries must be > 0"));
     }
 }
 

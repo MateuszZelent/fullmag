@@ -289,6 +289,17 @@ pub(crate) fn parse_eigen_dispersion_csv(
     let kz_col = find_column(&["kz", "kz_rad_per_m"])?;
     let frequency_col = find_column(&["frequency_hz"])?;
     let angular_frequency_col = find_column(&["angular_frequency_rad_per_s", "omega_rad_s"])?;
+    let optional_column = |labels: &[&str]| {
+        labels
+            .iter()
+            .find_map(|label| headers.iter().position(|header| header == label))
+    };
+    let sample_id_col = optional_column(&["sample_id", "sampleId"]);
+    let mode_id_col = optional_column(&["mode_id", "modeId"]);
+    let mode_field_available_col = optional_column(&["mode_field_available", "modeFieldAvailable"]);
+    let mode_field_id_col = optional_column(&["mode_field_id", "modeFieldId"]);
+    let mode_field_resource_key_col =
+        optional_column(&["mode_field_resource_key", "modeFieldResourceKey"]);
 
     let mut rows = Vec::new();
     for (line_number, line) in content.lines().enumerate() {
@@ -331,7 +342,26 @@ pub(crate) fn parse_eigen_dispersion_csv(
                 ))
             })
         };
+        let optional_column_value = |index: Option<usize>| {
+            index
+                .and_then(|index| columns.get(index).copied())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        };
+        let mode_field_available = optional_column_value(mode_field_available_col)
+            .map(|raw| match raw.to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => Ok(true),
+                "false" | "0" | "no" => Ok(false),
+                _ => Err(ApiError::internal(format!(
+                    "invalid mode_field_available value '{}' in dispersion row {}",
+                    raw,
+                    line_number + 1
+                ))),
+            })
+            .transpose()?;
         rows.push(EigenDispersionRow {
+            sample_id: optional_column_value(sample_id_col).map(ToOwned::to_owned),
+            mode_id: optional_column_value(mode_id_col).map(ToOwned::to_owned),
             mode_index: parse_u32("mode_index", column("mode_index", mode_index_col)?)?,
             kx: parse_f64("kx", column("kx", kx_col)?)?,
             ky: parse_f64("ky", column("ky", ky_col)?)?,
@@ -341,6 +371,10 @@ pub(crate) fn parse_eigen_dispersion_csv(
                 "angular_frequency_rad_per_s",
                 column("angular_frequency_rad_per_s", angular_frequency_col)?,
             )?,
+            mode_field_available,
+            mode_field_id: optional_column_value(mode_field_id_col).map(ToOwned::to_owned),
+            mode_field_resource_key: optional_column_value(mode_field_resource_key_col)
+                .map(ToOwned::to_owned),
         });
     }
     Ok(rows)

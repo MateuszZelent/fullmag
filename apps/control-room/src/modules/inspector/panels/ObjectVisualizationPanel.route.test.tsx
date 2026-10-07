@@ -18,8 +18,8 @@ function resourceCall(name: string, enabled: boolean): void {
   testState.resourceCalls.push({ enabled, name });
 }
 
-vi.mock("@/kernel/KernelContext", async () => ({
-  KernelContext: (await import("react")).createContext(null),
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     api: {},
     resources: {

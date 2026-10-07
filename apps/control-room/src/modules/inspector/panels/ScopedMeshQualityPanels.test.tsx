@@ -12,7 +12,8 @@ vi.mock("../InspectorTabState", () => ({
   useInspectorActiveTab: () => "policy",
 }));
 
-vi.mock("@/kernel/KernelContext", async () => {
+vi.mock("@/kernel/KernelContext", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/kernel/KernelContext")>();
   const { createContext } = await import("react");
   const kernel = {
     api: {
@@ -32,6 +33,7 @@ vi.mock("@/kernel/KernelContext", async () => {
     },
   };
   return {
+    ...original,
     KernelContext: createContext<unknown>(kernel),
     useKernel: () => kernel,
   };

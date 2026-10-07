@@ -1,7 +1,9 @@
+use super::eigen_constants::GAMMA_K_TOLERANCE_RAD_PER_M;
 use super::eigen_constants::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON;
 use super::eigen_policy::{
     k_sampling_is_single_k0, native_cpu_modal_window_has_bloch_floquet_payload_path,
-    native_modal_target_frequency_hz, shared_domain_k0_modal_requested,
+    native_cpu_modal_window_has_periodic_k0_runner_operator_path, native_modal_target_frequency_hz,
+    shared_domain_k0_modal_requested,
 };
 use super::eigen_reduction::{is_gamma_k_sampling, k_sampling_contains_nonzero};
 use super::eigen_shared_domain::native_shared_domain_magnetic_assembly_available;
@@ -37,6 +39,12 @@ pub(super) fn native_cpu_modal_window_enabled(plan: &FemEigenPlanIR) -> bool {
     if shared_domain_k0_modal_requested(plan) {
         return native_shared_domain_cpu_modal_supported(plan);
     }
+    if native_cpu_modal_window_has_periodic_k0_runner_operator_path(plan) {
+        return true;
+    }
+    if native_cpu_modal_window_has_floquet_dynamic_demag_path(plan) {
+        return true;
+    }
     let base_window_supported =
         matches!(
             plan.target,
@@ -54,7 +62,73 @@ pub(super) fn native_cpu_modal_window_enabled(plan: &FemEigenPlanIR) -> bool {
             || native_cpu_modal_window_has_bloch_floquet_payload_path(plan))
 }
 
-fn native_shared_domain_cpu_modal_supported(plan: &FemEigenPlanIR) -> bool {
+/// The bounded CPU nonzero-k demag lane is selected only for a fully explicit
+/// Poisson-airbox plan. The provider and certificate checks remain at the
+/// native boundary; this predicate only selects that production entrypoint.
+pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
+    plan: &FemEigenPlanIR,
+) -> bool {
+    if !plan.enable_demag
+        || !plan.operator.include_demag
+        || !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        || !matches!(
+            plan.damping_policy,
+            fullmag_ir::EigenDampingPolicyIR::Ignore
+        )
+        || !native_cpu_modal_floquet_target_supported(&plan.target)
+        || !matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet)
+        || plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+        || plan.air_box_config.is_none()
+        || !plan
+            .demag_realization
+            .is_some_and(|realization| realization.is_poisson())
+        || !native_shared_domain_mesh_metadata_valid(plan)
+    {
+        return false;
+    }
+
+    match plan.k_sampling.as_ref() {
+        Some(fullmag_ir::KSamplingIR::Single { k_vector }) => {
+            k_vector.iter().all(|value| value.is_finite())
+                && k_vector
+                    .iter()
+                    .any(|value| value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M)
+        }
+        Some(fullmag_ir::KSamplingIR::Path { points, .. }) => {
+            !points.is_empty()
+                && points
+                    .iter()
+                    .all(|point| point.k_vector.iter().all(|value| value.is_finite()))
+                && points.iter().any(|point| {
+                    point
+                        .k_vector
+                        .iter()
+                        .any(|value| value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M)
+                })
+        }
+        None => false,
+    }
+}
+
+/// The native Floquet Schur operator supports two spectral selection modes:
+/// a bounded frequency window and a diagnostic nearest-frequency request.
+/// `Nearest` deliberately remains selected-only; it does not imply a complete
+/// window or a complete spectrum certificate.
+fn native_cpu_modal_floquet_target_supported(target: &fullmag_ir::EigenTargetIR) -> bool {
+    match target {
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. } => true,
+        // Keep this boundary fail-closed even when a plan was assembled
+        // directly instead of passing through the public IR validator.  The
+        // public contract requires a finite positive nearest target; NaN and
+        // infinity must never reach the native target-distance calculation.
+        fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => {
+            frequency_hz.is_finite() && *frequency_hz > 0.0
+        }
+        fullmag_ir::EigenTargetIR::Lowest => false,
+    }
+}
+
+pub(super) fn native_shared_domain_cpu_modal_supported(plan: &FemEigenPlanIR) -> bool {
     if !shared_domain_k0_modal_requested(plan)
         || plan.count == 0
         || !native_shared_domain_mesh_metadata_valid(plan)
@@ -91,10 +165,7 @@ pub(crate) fn native_cpu_modal_window_rejection_reason(
     if shared_domain_k0_modal_requested(plan) {
         return Some("production_cpu_modal_periodic_airbox_k0_payload_missing");
     }
-    if matches!(
-        plan.target,
-        fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
-    ) && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+    if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
         && matches!(
             plan.damping_policy,
             fullmag_ir::EigenDampingPolicyIR::Ignore
@@ -105,6 +176,9 @@ pub(crate) fn native_cpu_modal_window_rejection_reason(
         )
         && k_sampling_contains_nonzero(plan.k_sampling.as_ref())
     {
+        if !native_cpu_modal_floquet_target_supported(&plan.target) {
+            return Some("production_cpu_modal_unsupported_floquet_target");
+        }
         if plan.operator.include_demag {
             return Some("production_cpu_modal_dynamic_demag_k_operator_missing");
         }

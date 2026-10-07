@@ -74,6 +74,11 @@ impl Writer {
             .lock()
             .map_err(|_| anyhow::anyhow!("writer mutex poisoned"))?;
         if let Some(active) = held.as_mut() {
+            if active.depth == 0 {
+                // A failed explicit unlock leaves a depth-zero sentinel and
+                // keeps the native descriptor open until this Writer drops.
+                return Err(StoreWriterBusy.into());
+            }
             if active.thread != std::thread::current().id() {
                 return Err(StoreWriterBusy.into());
             }
@@ -143,14 +148,23 @@ impl Drop for WriteTransaction {
             tracing::error!("refusing release of a different writer owner token");
             return;
         }
+        if active.depth == 0 {
+            tracing::error!("refusing release after writer lease depth already reached zero");
+            return;
+        }
         active.depth -= 1;
         if active.depth == 0 {
             active.record.released = true;
             active.record.heartbeat_at = chrono::Utc::now();
             if let Err(error) = write_owner_record(&self.writer.root, &active.record) {
-                tracing::error!(%error, "could not persist writer release; native handle still closes");
+                tracing::error!(%error, "could not persist writer release before native unlock");
             }
-            // Closing our own descriptor releases only our own native lock.
+            // Unlock the shared open-file-description lock before closing our
+            // descriptor. Cloned/inherited descriptors can outlive this token.
+            if let Err(error) = active.file.unlock() {
+                tracing::error!(%error, "could not unlock native writer descriptor; retaining it fail-closed");
+                return;
+            }
             *held = None;
         }
     }
@@ -360,6 +374,48 @@ mod tests {
             std::fs::read(root.join(LOCK_DESCRIPTOR_PATH)).unwrap(),
             LOCK_DESCRIPTOR
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn final_lease_unlocks_shared_file_description_before_duplicate_closes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("store");
+        std::fs::create_dir_all(&root).unwrap();
+        let owner = Writer::new(root.clone());
+        let other = Writer::new(root.clone());
+        let third = Writer::new(root);
+
+        let outer = owner.acquire().unwrap();
+        let duplicate = owner
+            .held
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .file
+            .try_clone()
+            .unwrap();
+        assert!(matches!(
+            other.acquire(),
+            Err(error) if error.downcast_ref::<StoreWriterBusy>().is_some()
+        ));
+
+        let nested = owner.acquire().unwrap();
+        drop(nested);
+        assert!(matches!(
+            other.acquire(),
+            Err(error) if error.downcast_ref::<StoreWriterBusy>().is_some()
+        ));
+
+        drop(outer);
+        let new_owner = other.acquire().unwrap();
+        drop(duplicate);
+        assert!(matches!(
+            third.acquire(),
+            Err(error) if error.downcast_ref::<StoreWriterBusy>().is_some()
+        ));
+        drop(new_owner);
     }
 
     #[test]

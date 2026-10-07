@@ -3,25 +3,32 @@
 The planner is deliberately an inventory operation.  It never removes files,
 changes queue state, calls Docker, or follows links.  A run is eligible only
 when the queue record and its durable coordinator journal identify the same
-job, owner, source digest, and full container ID.  Only the ``execution``
-tree is measured; artifacts, logs, source capsules, and shared caches are
-outside the retention scope.
+job, owner, source digest, and full container ID.  Only retention-eligible
+``execution`` trees are measured; artifacts, logs, source capsules, and shared
+caches are outside the retention scope. The byte summary describes measured
+job executions, not a complete physical inventory.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
 import re
 import stat
+import time
 from typing import Any
 
 
 class RetentionError(ValueError):
     """The planner received an invalid storage root or retention policy."""
+
+
+class PreviewCancelled(Exception):
+    """Cooperative cancellation of a read-only execution retention preview."""
 
 
 _TERMINAL_STATES = frozenset(("succeeded", "failed", "cancelled"))
@@ -33,6 +40,20 @@ _SCHEMA = "fullmag.local-runner.retention-plan.v1"
 _JOURNAL_SCHEMA = "fullmag.local-runner.coordinator.v1"
 _MAX_JSON_BYTES = 4 * 1024 * 1024
 _REPARSE_POINT = 0x400
+
+
+def _check_cancelled(cancelled: object | None) -> None:
+    if cancelled is None:
+        return
+    is_set = getattr(cancelled, "is_set", None)
+    if callable(is_set):
+        requested = is_set()
+    elif callable(cancelled):
+        requested = cancelled()
+    else:
+        requested = bool(cancelled)
+    if requested:
+        raise PreviewCancelled("Retention preview was cancelled")
 
 
 class _PathIssue(Exception):
@@ -159,9 +180,11 @@ def _read_json(path: Path) -> Mapping[str, Any]:
     return value
 
 
-def _safe_execution_bytes(root: Path) -> int:
-    """Count regular files below ``root`` without crossing links or mounts."""
+def inspect_execution(root: Path, *, cancelled: object | None = None,
+                      progress: Any | None = None) -> dict[str, Any]:
+    """Bind a private tree to its no-follow metadata inventory, not link targets."""
 
+    _check_cancelled(cancelled)
     try:
         root_info = os.lstat(root)
     except OSError as error:
@@ -172,21 +195,72 @@ def _safe_execution_bytes(root: Path) -> int:
         raise _PathIssue("invalid_execution_tree")
     root_device = getattr(root_info, "st_dev", None)
     total = 0
+    fingerprint = hashlib.sha256()
+    files = 0
+    links = 0
+    enumerated_entries = 0
+    completed_stat_entries = 0
+    last_progress = None
+
+    def report(phase: str, *, force: bool = False) -> None:
+        nonlocal last_progress
+        if progress is None:
+            return
+        now = time.monotonic()
+        if not force and last_progress is not None and now - last_progress < 0.5:
+            return
+        progress({
+            "tree_phase": phase,
+            "tree_entries_enumerated": enumerated_entries,
+            "tree_stat_entries": completed_stat_entries,
+            "tree_files": files,
+            "tree_logical_bytes": total,
+        })
+        last_progress = now
+
     pending = [root]
     while pending:
+        _check_cancelled(cancelled)
         current = pending.pop()
+        report("enumerating")
+        entries = []
         try:
-            entries = list(os.scandir(current))
+            with os.scandir(current) as iterator:
+                for entry in iterator:
+                    _check_cancelled(cancelled)
+                    entries.append(entry)
+                    enumerated_entries += 1
+                    report("enumerating")
         except OSError as error:
             raise _PathIssue("unreadable_execution_tree") from error
+
+        # Preserve the original deterministic name ordering, with cancellation
+        # checks on both sides of Python's non-interruptible in-memory sort.
+        _check_cancelled(cancelled)
+        entries.sort(key=lambda item: item.name)
+        _check_cancelled(cancelled)
+        report("stat")
         for entry in entries:
+            _check_cancelled(cancelled)
             path = Path(entry.path)
             try:
                 info = entry.stat(follow_symlinks=False)
             except OSError as error:
                 raise _PathIssue("unreadable_execution_tree") from error
-            if stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT):
-                raise _PathIssue("unsafe_execution_tree")
+            completed_stat_entries += 1
+            record = [path.relative_to(root).as_posix(), info.st_mode, info.st_size,
+                      info.st_mtime_ns, info.st_ctime_ns, info.st_ino]
+            fingerprint.update(json.dumps(record, ensure_ascii=True).encode("ascii") + b"\n")
+            if stat.S_ISLNK(info.st_mode):
+                links += 1
+                continue
+            if bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT):
+                # A junction is a leaf for cleanup. Unknown reparse providers
+                # (for example offline/cloud files) require explicit support.
+                if getattr(info, "st_reparse_tag", None) not in (0xA0000003, 0xA000000C):
+                    raise _PathIssue("unsafe_execution_tree")
+                links += 1
+                continue
             if stat.S_ISDIR(info.st_mode):
                 # A mount placed inside an execution tree is outside the exact
                 # job directory even when it is not represented as a symlink.
@@ -195,15 +269,25 @@ def _safe_execution_bytes(root: Path) -> int:
                 # while ``lstat`` reports the volume identity.  Device-boundary
                 # protection is meaningful on POSIX; reparse checks above are
                 # the corresponding Windows boundary.
-                if (os.name != "nt" and root_device is not None
+                if os.path.ismount(path) or (os.name != "nt" and root_device is not None
                         and entry_device not in (None, 0, root_device)):
                     raise _PathIssue("unsafe_execution_tree")
                 pending.append(path)
             elif stat.S_ISREG(info.st_mode):
                 total += info.st_size
+                files += 1
             else:
                 raise _PathIssue("unsafe_execution_tree")
-    return total
+            report("stat")
+    _check_cancelled(cancelled)
+    report("complete", force=True)
+    return {"logical_bytes": total, "files": files, "links": links,
+            "fingerprint": fingerprint.hexdigest(),
+            "root_device": root_info.st_dev, "root_inode": root_info.st_ino}
+
+
+def _safe_execution_bytes(root: Path) -> int:
+    return inspect_execution(root)["logical_bytes"]
 
 
 def _record(*, job_id: str | None, worktree_id: str | None, state: str | None,
@@ -261,7 +345,8 @@ def _sort_key(value: Mapping[str, Any]) -> tuple[str, str, str]:
 
 
 def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now: float,
-         success_hours: float = 24, failed_hours: float = 168) -> dict[str, Any]:
+         success_hours: float = 24, failed_hours: float = 168,
+         cancelled: object | None = None, progress: Any | None = None) -> dict[str, Any]:
     """Build a deterministic, read-only retention inventory.
 
     ``jobs`` is normally the queue's public record list.  A candidate is
@@ -290,6 +375,7 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
     scanned_bytes = 0
 
     for raw in records:
+        _check_cancelled(cancelled)
         if not isinstance(raw, Mapping):
             retained.append(_record(job_id=None, worktree_id=None, state=None,
                                     execution=None, container_id=None,
@@ -377,8 +463,29 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
         hours = success_hours if state == "succeeded" else failed_hours
         expiry = timestamp + float(hours) * 3600
 
+        if _pin_present(run_root):
+            retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
+                                    execution=execution, container_id=container_id,
+                                    reason="pinned", expiry=expiry))
+            continue
+        if float(now) < expiry:
+            retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
+                                    execution=execution, container_id=container_id,
+                                    reason="not_expired", expiry=expiry))
+            continue
+
         try:
-            size = _safe_execution_bytes(execution)
+            inspect_options = {}
+            if cancelled is not None:
+                inspect_options["cancelled"] = cancelled
+            if progress is not None:
+                inspect_options["progress"] = lambda fields, job_id=job_id: progress({
+                    **fields, "current_job_id": job_id,
+                })
+            inventory = inspect_execution(execution, **inspect_options)
+            size = inventory["logical_bytes"]
+        except PreviewCancelled:
+            raise
         except _PathIssue as issue:
             retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
                                     execution=execution, container_id=container_id,
@@ -387,26 +494,21 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
         retained_bytes += size
         scanned_bytes += size
 
-        if _pin_present(run_root):
-            retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
-                                    execution=execution, container_id=container_id,
-                                    reason="pinned", expiry=expiry, size=size))
-            continue
-        if float(now) < expiry:
-            retained.append(_record(job_id=job_id, worktree_id=worktree_id, state=state,
-                                    execution=execution, container_id=container_id,
-                                    reason="not_expired", expiry=expiry, size=size))
-            continue
-
         candidate = _record(job_id=job_id, worktree_id=worktree_id, state=state,
                             execution=execution, container_id=container_id,
                             reason=f"{state}_expired", expiry=expiry, size=size)
+        candidate["tree_identity"] = inventory
+        candidate["source_digest"] = raw["source_digest"]
         candidates.append(candidate)
         candidate_bytes += size
         retained_bytes -= size
 
+    _check_cancelled(cancelled)
     candidates.sort(key=_sort_key)
+    _check_cancelled(cancelled)
     retained.sort(key=_sort_key)
+    _check_cancelled(cancelled)
+    unmeasured_retained_count = sum(1 for item in retained if "bytes" not in item)
     return {
         "schema": _SCHEMA,
         "generated_at": float(now),
@@ -418,8 +520,12 @@ def plan(storage: str | os.PathLike[str], jobs: Iterable[Mapping[str, Any]], now
             "scanned_bytes": scanned_bytes,
             "candidate_count": len(candidates),
             "retained_count": len(retained),
+            # Completeness covers measured eligible job executions only, not all
+            # paths or physical storage volumes in the host inventory.
+            "unmeasured_retained_count": unmeasured_retained_count,
+            "measurement_complete": unmeasured_retained_count == 0,
         },
     }
 
 
-__all__ = ["RetentionError", "plan"]
+__all__ = ["PreviewCancelled", "RetentionError", "inspect_execution", "plan"]

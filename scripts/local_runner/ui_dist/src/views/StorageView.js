@@ -8,6 +8,11 @@ export function renderStorageView(container) {
   let activePlan = null;
   let volumesError = null;
   let resourcesError = null;
+  let storageLoadGeneration = 0;
+  let storageLoadPromise = null;
+  let destroyed = false;
+  let planObservation = 0;
+  const savedPlanKey = 'fullmag-runner-retention-plan';
 
   container.innerHTML = `
     <div class="view-container storage-view">
@@ -17,6 +22,12 @@ export function renderStorageView(container) {
           <p class="view-subtitle">Zarządzanie wolumenami dyskowymi, alokacją klas danych i audytowalną retencją</p>
         </div>
         <div class="header-btns">
+          <label for="retention-scope">Zakres:</label>
+          <select id="retention-scope" class="form-select">
+            <option value="execution">Zakończone kopie robocze</option>
+            <option value="sources">Współdzielenie źródeł</option>
+            <option value="runtime">Stare paczki programu</option>
+          </select>
           <button class="btn btn-secondary btn-sm" id="btn-storage-refresh">↻ Odśwież stan</button>
           <button class="btn btn-primary btn-sm" id="btn-create-plan">🔍 Przygotuj plan retencji</button>
         </div>
@@ -26,11 +37,12 @@ export function renderStorageView(container) {
       <section class="section-card retention-plan-card" id="retention-plan-section" style="display: none;">
         <div class="card-header-flex">
           <div>
-            <h2 class="section-title">Podgląd planu retencji (Audytowany preview)</h2>
+            <h2 class="section-title" id="plan-title">Plan obsługi danych</h2>
             <span class="section-subtitle" id="plan-metadata"></span>
           </div>
           <div>
-            <button class="btn btn-secondary btn-sm" id="btn-apply-plan">⚡ Wykonaj plan (Tryb podglądu / Preview)</button>
+            <button class="btn btn-secondary btn-sm" id="btn-plan-refresh">Odśwież wynik operacji</button>
+            <button class="btn btn-secondary btn-sm" id="btn-apply-plan" disabled>Usuń wskazane kopie robocze</button>
           </div>
         </div>
         <div id="plan-content-container"></div>
@@ -65,13 +77,17 @@ export function renderStorageView(container) {
 
   // Attach button actions
   container.querySelector('#btn-storage-refresh')?.addEventListener('click', () => loadStorageData());
+  container.querySelector('#btn-plan-refresh')?.addEventListener('click', async () => {
+    if (!activePlan?.plan_id) return;
+    try { await observePlan(await api.getRetentionPlan(activePlan.plan_id)); }
+    catch (err) { alert(`Nie udało się odczytać operacji ${activePlan.plan_id}: ${err.message}`); }
+  });
   container.querySelector('#btn-create-plan')?.addEventListener('click', async () => {
     const btn = container.querySelector('#btn-create-plan');
     if (btn) btn.disabled = true;
     try {
-      const plan = await api.createRetentionPlan();
-      activePlan = plan;
-      renderPlan(plan);
+      const scope = container.querySelector('#retention-scope')?.value || 'execution';
+      activePlan = await observePlan(await api.createRetentionPlan(scope));
     } catch (err) {
       alert('Błąd generowania planu: ' + err.message);
     } finally {
@@ -81,13 +97,22 @@ export function renderStorageView(container) {
 
   container.querySelector('#btn-apply-plan')?.addEventListener('click', async () => {
     if (!activePlan) return;
-    if (confirm(`Czy na pewno wykonać plan retencji ${activePlan.plan_id}? Operacja jest restartowalna i bezpieczna.`)) {
+    if (activePlan.status !== 'preview') return;
+    const question = activePlan.scope === 'sources'
+      ? `Współdzielić identyczną treść wskazanych źródeł z planu ${activePlan.plan_id}? Każda kapsuła zachowa swój manifest i zawartość.`
+      : activePlan.scope === 'runtime'
+        ? `Usunąć wskazane stare paczki programu z planu ${activePlan.plan_id}? Ponownie sprawdzimy odwołania wyników, instancje i ochronę paczek.`
+        : `Usunąć wskazane kopie robocze z planu ${activePlan.plan_id}? Przed usunięciem ponownie sprawdzimy ich użycie. Wyniki, źródła i cache pozostaną zachowane.`;
+    if (confirm(question)) {
+      const btn = container.querySelector('#btn-apply-plan');
+      if (btn) btn.disabled = true;
       try {
-        const res = await api.applyRetentionPlan(activePlan.plan_id);
+        const res = await observePlan(await api.applyRetentionPlan(activePlan.plan_id));
+        if (destroyed) return;
         if (res && res.status === 'preview_only') {
           alert(`Tryb podglądu (Preview): ${res.message || 'Wykonawca automatycznego usuwania nie jest włączony.'}`);
           activePlan.status = 'preview_only';
-          renderPlan();
+          renderPlan(activePlan);
           return;
         }
         if (!res || res.applied !== true) {
@@ -95,7 +120,10 @@ export function renderStorageView(container) {
           alert('Błąd wykonania retencji: ' + errMsg);
           return;
         }
-        alert(res.message || 'Plan retencji został pomyślnie wykonany w trybie bezpiecznym.');
+        const outcome = activePlan.scope === 'sources'
+          ? `Współdzielono zawartość ${res.items?.filter(item => item.status === 'compacted').length || 0} kapsuł źródeł.`
+          : `Usunięto wskazane zasoby o rozmiarze logicznym ${formatBytes(res.removed_logical_bytes)}.`;
+        alert(`${outcome} Zmiana wolnego miejsca: ${formatBytes(res.disk_free_change_bytes)}. Pomiar miejsca może obejmować równoległe zapisy innych programów.`);
         loadStorageData();
       } catch (err) {
         alert('Błąd wykonania retencji: ' + err.message);
@@ -103,39 +131,75 @@ export function renderStorageView(container) {
     }
   });
 
-  async function loadStorageData() {
+  async function observePlan(initial) {
+    const observation = ++planObservation;
+    let current = initial;
+    while (!destroyed && observation === planObservation) {
+      activePlan = activePlan?.plan_id === current.plan_id ? { ...activePlan, ...current } : current;
+      if (current.plan_id) {
+        try { sessionStorage.setItem(savedPlanKey, current.plan_id); } catch (_) { /* Storage may be disabled. */ }
+      }
+      renderPlan(activePlan);
+      if (!['planning', 'accepted', 'running'].includes(current.status)) return activePlan;
+      // Poll the same operation. A network error preserves its ID and never
+      // retries the mutation or creates a replacement plan.
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      if (destroyed || observation !== planObservation) return activePlan;
+      current = await api.getRetentionPlan(current.plan_id);
+    }
+    return activePlan;
+  }
+
+  function loadStorageData() {
+    if (destroyed) return Promise.resolve();
+    if (storageLoadPromise) return storageLoadPromise;
+    const generation = ++storageLoadGeneration;
     volumesError = null;
     resourcesError = null;
-    try {
-      const [volsRes, resDataRes] = await Promise.allSettled([
-        api.getStorageVolumes(),
-        api.getStorageResources(),
-      ]);
 
-      if (volsRes.status === 'fulfilled') {
-        volumes = volsRes.value;
-      } else {
-        volumesError = volsRes.reason;
+    // Keep the last good response visible during a refresh. On the initial
+    // load the null values leave the individual sections on their own spinner.
+    renderVolumes(volumes, volumesError);
+    renderCategories(resourcesData, resourcesError);
+    renderResourcesTable(resourcesData, resourcesError);
+
+    // The volume endpoint is cheap and must render even when the recursive
+    // resource scan is slow or unavailable. Do not await either request here:
+    // each section owns its response, error state, and timeout.
+    const volumesRequest = Promise.resolve()
+      .then(() => api.getStorageVolumes({ timeoutMs: 5000, retries: 1 }))
+      .then((value) => {
+        if (generation !== storageLoadGeneration) return;
+        volumes = value;
+        volumesError = null;
+        renderVolumes(volumes, volumesError);
+      })
+      .catch((err) => {
+        if (generation !== storageLoadGeneration) return;
         volumes = null;
-      }
+        volumesError = err;
+        renderVolumes(null, volumesError);
+      });
 
-      if (resDataRes.status === 'fulfilled') {
-        resourcesData = resDataRes.value;
-      } else {
-        resourcesError = resDataRes.reason;
+    const resourcesRequest = Promise.resolve()
+      .then(() => api.getStorageResources({ timeoutMs: 7000, retries: 1 }))
+      .then((value) => {
+        if (generation !== storageLoadGeneration) return;
+        resourcesData = value;
+        resourcesError = null;
+        renderCategories(resourcesData, resourcesError);
+        renderResourcesTable(resourcesData, resourcesError);
+      })
+      .catch((err) => {
+        if (generation !== storageLoadGeneration) return;
         resourcesData = null;
-      }
-
-      renderVolumes(volumes, volumesError);
-      renderCategories(resourcesData, resourcesError);
-      renderResourcesTable(resourcesData, resourcesError);
-    } catch (err) {
-      volumesError = err;
-      resourcesError = err;
-      renderVolumes(null, volumesError);
-      renderCategories(null, resourcesError);
-      renderResourcesTable(null, resourcesError);
-    }
+        resourcesError = err;
+        renderCategories(null, resourcesError);
+        renderResourcesTable(null, resourcesError);
+      });
+    storageLoadPromise = Promise.allSettled([volumesRequest, resourcesRequest])
+      .finally(() => { storageLoadPromise = null; });
+    return storageLoadPromise;
   }
 
   function renderVolumes(vols, err = null) {
@@ -305,16 +369,35 @@ export function renderStorageView(container) {
     if (!sec || !content) return;
 
     sec.style.display = 'block';
-    meta.textContent = `ID: ${plan.plan_id} • Polityka v${plan.policy_version} • Data: ${formatTimestamp(plan.created_at)}`;
+    const sourceScope = plan.scope === 'sources';
+    const title = container.querySelector('#plan-title');
+    if (title) title.textContent = sourceScope ? 'Współdzielenie źródeł'
+      : plan.scope === 'runtime' ? 'Retencja starych paczek programu' : 'Retencja kopii roboczych';
+    meta.textContent = `ID: ${plan.plan_id || 'nie przyjęto operacji'} • Status: ${plan.status} • Data: ${formatTimestamp(plan.created_at)}`;
+    const applyButton = container.querySelector('#btn-apply-plan');
+    if (applyButton) {
+      applyButton.disabled = plan.status !== 'preview' || !plan.candidates_count;
+      applyButton.textContent = sourceScope ? 'Współdziel wskazane źródła'
+        : plan.scope === 'runtime' ? 'Usuń wskazane paczki programu' : 'Usuń wskazane kopie robocze';
+    }
+    if (['planning', 'accepted', 'running'].includes(plan.status)) {
+      content.textContent = plan.status === 'planning'
+        ? `Trwa przygotowanie wykazu. Żadne dane nie są jeszcze usuwane.${Number.isInteger(plan.processed_jobs) && Number.isInteger(plan.total_jobs) ? ` Sprawdzono ${plan.processed_jobs} z ${plan.total_jobs} zadań.` : ''}`
+        : 'Trwa sprawdzanie i sprzątanie. Wynik zostanie zapisany dla tego identyfikatora operacji.';
+      return;
+    }
 
     content.innerHTML = `
+      ${plan.error ? `<p class="error-box">${escapeHtml(plan.error)}</p>` : ''}
+      ${plan.items ? `<h3>Wynik wykonania</h3><ul>${plan.items.map(item => `<li>${escapeHtml(item.job_id)}: ${escapeHtml(item.status)} ${escapeHtml(item.reason || '')}</li>`).join('')}</ul>` : ''}
+      ${plan.reference_errors?.length ? `<p class="error-box">Kontrola odwołań wykryła ${plan.reference_errors.length} problemów. Paczki objęte niepewną kontrolą pozostają chronione.</p>` : ''}
       <div class="plan-summary-grid">
         <div class="plan-summary-box">
-          <span class="plan-box-label">Szacowane zwolnione miejsce:</span>
+          <span class="plan-box-label">Rozmiar logiczny kandydatów (estymata):</span>
           <span class="plan-box-val text-success font-mono font-bold">${formatBytes(plan.estimated_reclaimed_bytes)}</span>
         </div>
         <div class="plan-summary-box">
-          <span class="plan-box-label">Liczba kandydatów do usunięcia:</span>
+          <span class="plan-box-label">Liczba wskazanych zasobów:</span>
           <span class="plan-box-val font-mono">${plan.candidates_count}</span>
         </div>
         <div class="plan-summary-box">
@@ -323,7 +406,7 @@ export function renderStorageView(container) {
         </div>
       </div>
 
-      <h3 class="subsection-title">Kandydaci do usunięcia w tym planie:</h3>
+      <h3 class="subsection-title">Zasoby objęte tym planem:</h3>
       ${plan.candidates && plan.candidates.length > 0 ? `
         <div class="table-responsive">
           <table class="data-table">
@@ -348,8 +431,11 @@ export function renderStorageView(container) {
           </table>
         </div>
       ` : `
-        <p class="empty-hint">Brak kwalifikujących się zasobów do usunięcia w tym planie.</p>
+        <p class="empty-hint">Brak kwalifikujących się zasobów w tym planie.</p>
       `}
+      ${plan.retained?.length ? `<h3>Zasoby zachowane</h3><ul>${plan.retained.slice(0, 50).map(item =>
+        `<li>${escapeHtml(item.name || item.job_id || item.path)}: ${escapeHtml(item.why_retained || item.reason || '')}</li>`).join('')}</ul>
+        ${plan.retained.length > 50 ? `<p>Pozostałe ${plan.retained.length - 50} zapisano w raporcie operacji.</p>` : ''}` : ''}
     `;
   }
 
@@ -434,11 +520,24 @@ export function renderStorageView(container) {
   }
 
   loadStorageData();
+  try {
+    const savedId = sessionStorage.getItem(savedPlanKey);
+    if (savedId && /^plan-[a-f0-9]{8,32}$/.test(savedId)) {
+      activePlan = { plan_id: savedId, status: 'reconnecting' };
+      renderPlan(activePlan);
+      api.getRetentionPlan(savedId).then(observePlan).catch(error => {
+        if (!destroyed) renderPlan({ ...activePlan, error: `Nie udało się odczytać zapisanego wyniku: ${error.message}` });
+      });
+    }
+  } catch (_) { /* Browser storage availability does not gate the API. */ }
 
   return {
     update: () => {
       loadStorageData();
     },
-    destroy: () => {},
+    destroy: () => {
+      destroyed = true;
+      storageLoadGeneration += 1;
+    },
   };
 }

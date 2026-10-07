@@ -1,0 +1,206 @@
+{
+  "document": {
+    "path": "docs/physics/r4-equilibrium-identity-preimage-replay.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "This interpreted replay increment has no managed GPU runtime or device evidence."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The five preimages belong to the FEM equilibrium/modal identity artifact."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The five preimages belong to the FEM equilibrium/modal identity artifact."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-r4-identity-framed-digest",
+      "symbols": ["N", "p", "p_len", "D_N"],
+      "sources": ["framed-producer"]
+    },
+    {
+      "id": "eq-r4-identity-raw-material-digest",
+      "symbols": ["p", "D_raw"],
+      "sources": ["raw-digest"]
+    },
+    {
+      "id": "eq-r4-identity-replay-tuple",
+      "symbols": ["R", "D_eq_mat", "D_stat", "D_bnd", "D_raw"],
+      "sources": ["identity-fields", "main-identity-gate"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "namespace ramki digestu preimage'u fizycznego",
+      "si_unit": "1"
+    },
+    {
+      "id": "p",
+      "latex": "p",
+      "meaning": "exact UTF-8 bytes preimage'u",
+      "si_unit": "1"
+    },
+    {
+      "id": "p_len",
+      "latex": "|p|",
+      "meaning": "liczba bajtów preimage'u",
+      "si_unit": "1"
+    },
+    {
+      "id": "D_N",
+      "latex": "D_N",
+      "meaning": "framed SHA-256 preimage'u fizycznego",
+      "si_unit": "1"
+    },
+    {
+      "id": "D_raw",
+      "latex": "D_{\\mathrm{raw}}",
+      "meaning": "surowy SHA-256 `MaterialIR`",
+      "si_unit": "1"
+    },
+    {
+      "id": "R",
+      "latex": "\\mathcal R",
+      "meaning": "pięcioelementowy wynik replay",
+      "si_unit": "1"
+    },
+    {
+      "id": "D_eq_mat",
+      "latex": "D_{\\mathrm{eq\\text{-}mat}}",
+      "meaning": "canonicalny digest materiału równowagi",
+      "si_unit": "1"
+    },
+    {
+      "id": "D_stat",
+      "latex": "D_{\\mathrm{stat}}",
+      "meaning": "digest statyki fizycznej",
+      "si_unit": "1"
+    },
+    {
+      "id": "D_bnd",
+      "latex": "D_{\\mathrm{bnd}}",
+      "meaning": "digest boundary i metadanych periodycznych",
+      "si_unit": "1"
+    },
+    {
+      "id": "M_s",
+      "latex": "M_s",
+      "meaning": "magnetyzacja nasycenia",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "A_ex",
+      "latex": "A_{\\mathrm{ex}}",
+      "meaning": "stała wymiany",
+      "si_unit": "\\mathrm{J\\,m^{-1}}"
+    },
+    {
+      "id": "K_u",
+      "latex": "K_u",
+      "meaning": "stała anizotropii jednoosiowej",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "u",
+      "latex": "\\mathbf u",
+      "meaning": "kanoniczna oś jednoosiowa",
+      "si_unit": "1"
+    },
+    {
+      "id": "H_ext",
+      "latex": "\\mathbf H_{\\mathrm{ext}}",
+      "meaning": "pole zewnętrzne",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "alpha",
+      "latex": "\\alpha",
+      "meaning": "damping w raw `MaterialIR` planu",
+      "si_unit": "1"
+    },
+    {
+      "id": "k",
+      "latex": "\\mathbf k",
+      "meaning": "wektor falowy próbki modalnej",
+      "si_unit": "\\mathrm{rad\\,m^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "framed-producer",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "signature_digest_and_preimage",
+      "responsibility": "Defines the namespace, NUL separator, little-endian byte length and exact JSON bytes for physical identity.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "physical-replay",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "equilibrium_material_signature_digest_from_preimage",
+      "responsibility": "Decodes and validates the material V1/V2 physical preimage before hashing its untouched bytes.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "raw-digest",
+      "path": "crates/fullmag-runner/src/fem/eigen_digest.rs",
+      "symbol": "shared_domain_content_digest",
+      "responsibility": "Hashes the producer-serialized raw MaterialIR bytes without adding the diagnostic label.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "identity-fields",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "LinearizationIdentityV2",
+      "responsibility": "Carries the five preimage/signature pairs for one modal sample.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "main-identity-gate",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_r4_signed_sidecars",
+      "responsibility": "Runs the full own identity validation before invoking the five-pair physical/raw replay and propagates digest status.",
+      "evidence_status": "interpreted_pass"
+    },
+    {
+      "id": "raw-producer",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
+      "symbol": "raw_material_provenance_from_eigen_plan",
+      "responsibility": "Publishes the consumer MaterialIR exact preimage and digest.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "independent-helper",
+      "path": "scripts/fem_equilibrium_identity_replay.py",
+      "symbol": "replay_preimage_json",
+      "responsibility": "Performs typed Python replay while preserving exact source bytes.",
+      "evidence_status": "interpreted_tested"
+    },
+    {
+      "id": "independent-tests",
+      "path": "scripts/test_fem_equilibrium_identity_replay.py",
+      "symbol": "class EquilibriumIdentityReplayTests",
+      "responsibility": "Covers golden V1/V2/Ku-zero, raw damping separation and fail-closed mutations.",
+      "evidence_status": "interpreted_pass"
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

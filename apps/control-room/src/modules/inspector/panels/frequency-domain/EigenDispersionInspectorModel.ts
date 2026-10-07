@@ -13,6 +13,7 @@ import {
   buildEigenBranchesModel,
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
+  eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -34,7 +35,7 @@ export function buildEigenDispersionPointViewModel(
 ): EigenDispersionPointViewModel {
   return {
     branchId: point.branchId ?? "unassigned",
-    fieldAvailable: Boolean(point.modeFieldId ?? point.modeFieldResourceKey),
+    fieldAvailable: eigenModeFieldAvailable(point),
     frequencyHz: point.frequencyHz,
     kLabel: point.sampleLabel ?? null,
     linewidthHz: point.linewidthHz,
@@ -86,7 +87,7 @@ export function useEigenDispersionInspectorSummary() {
     floquetGate: `modal ${capabilityStatus(boundaryCapabilities?.floquet_modal)}; response ${capabilityStatus(boundaryCapabilities?.floquet_response)}`,
     frequencyRange: formatFrequencyRange(frequencies),
     kPathSpan: `${formatNumberRange(pathValues)} rad/m`,
-    modalOverlays: `${spectrumModel.points.filter((point) => point.modeFieldId).length} mode field(s) available from modal spectrum`,
+    modalOverlays: `${spectrumModel.points.filter(eigenModeFieldAvailable).length} mode field(s) available from modal spectrum`,
     pathLabels: pathMetadata.labels,
     pathMetadataArtifact: pathMetadata.artifact,
     pathSampling: pathMetadata.sampling,

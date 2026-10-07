@@ -1,0 +1,594 @@
+{
+  "schema": "fullmag.waveguide-frame-cases.v1",
+  "geometry_tolerance": 1e-12,
+  "oracle": "independent_decimal_100_digits",
+  "cases": [
+    {
+      "name": "gamma",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": 0.0
+    },
+    {
+      "name": "positive",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        10000000.0
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": 10000000.0
+    },
+    {
+      "name": "negative",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        -10000000.0
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": -10000000.0
+    },
+    {
+      "name": "axis_reversal",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        10000000.0
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": -10000000.0
+    },
+    {
+      "name": "left_handed",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "frame_valid": false,
+      "k_valid": false
+    },
+    {
+      "name": "zero_axis",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "frame_valid": false,
+      "k_valid": false
+    },
+    {
+      "name": "nonunit_axis",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.001
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "frame_valid": false,
+      "k_valid": false
+    },
+    {
+      "name": "parallel_axes",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "frame_valid": false,
+      "k_valid": false
+    },
+    {
+      "name": "near_unit_scales",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0000000000005,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          0.9999999999995,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0000000000005
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        10000000.0
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": 10000000.0
+    },
+    {
+      "name": "tiny_transverse",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "k_vector": [
+        1e-310,
+        0.0,
+        0.0
+      ],
+      "frame_valid": true,
+      "k_valid": false
+    },
+    {
+      "name": "tiny_collinear",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        2.5e-323
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": 2.5e-323
+    },
+    {
+      "name": "subnormal_diagonal",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          0.7071067811865475,
+          -0.7071067811865475,
+          0.0
+        ],
+        "e_v": [
+          0.4082482904638631,
+          0.4082482904638631,
+          -0.8164965809277261
+        ],
+        "axis_unit": [
+          0.5773502691896258,
+          0.5773502691896258,
+          0.5773502691896258
+        ]
+      },
+      "k_vector": [
+        5e-324,
+        5e-324,
+        5e-324
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": 1e-323
+    },
+    {
+      "name": "large_collinear",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          0.7071067811865475,
+          -0.7071067811865475,
+          0.0
+        ],
+        "e_v": [
+          0.4082482904638631,
+          0.4082482904638631,
+          -0.8164965809277261
+        ],
+        "axis_unit": [
+          0.5773502691896258,
+          0.5773502691896258,
+          0.5773502691896258
+        ]
+      },
+      "k_vector": [
+        8.988465674311579e+307,
+        8.988465674311579e+307,
+        8.988465674311579e+307
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": 1.5568479229996504e+308
+    },
+    {
+      "name": "scalar_overflow",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          0.7071067811865475,
+          -0.7071067811865475,
+          0.0
+        ],
+        "e_v": [
+          0.4082482904638631,
+          0.4082482904638631,
+          -0.8164965809277261
+        ],
+        "axis_unit": [
+          0.5773502691896258,
+          0.5773502691896258,
+          0.5773502691896258
+        ]
+      },
+      "k_vector": [
+        1.0786158809173893e+308,
+        1.0786158809173893e+308,
+        1.0786158809173893e+308
+      ],
+      "frame_valid": true,
+      "k_valid": false
+    },
+    {
+      "name": "rotated_signed",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          0.7071067811865475,
+          -0.7071067811865475,
+          0.0
+        ],
+        "e_v": [
+          0.4082482904638631,
+          0.4082482904638631,
+          -0.8164965809277261
+        ],
+        "axis_unit": [
+          0.5773502691896258,
+          0.5773502691896258,
+          0.5773502691896258
+        ]
+      },
+      "k_vector": [
+        -20000000.0,
+        -20000000.0,
+        -20000000.0
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": -34641016.151377544
+    },
+    {
+      "name": "relative_transverse_within_tolerance",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "k_vector": [
+        5e-13,
+        0.0,
+        1.0
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": 1.0
+    },
+    {
+      "name": "relative_transverse_outside_tolerance",
+      "frame": {
+        "origin_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "k_vector": [
+        2e-12,
+        0.0,
+        1.0
+      ],
+      "frame_valid": true,
+      "k_valid": false
+    },
+    {
+      "name": "large_origin",
+      "frame": {
+        "origin_m": [
+          1e+308,
+          -1e+308,
+          1e+308
+        ],
+        "e_u": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "e_v": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "axis_unit": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "k_vector": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "frame_valid": true,
+      "k_valid": true,
+      "expected_signed_k_rad_per_m": 1.0
+    }
+  ]
+}

@@ -11,6 +11,13 @@ import math
 import sys
 from pathlib import Path
 
+from fem_linearization_identity_replay import (
+    IdentityReplayError, replay_identity_preimage, strict_json_object,
+)
+from fem_equilibrium_identity_replay import (
+    EquilibriumIdentityReplayError, replay_equilibrium_identity_preimages,
+)
+
 
 TWO_PI = 2.0 * math.pi
 MU0 = 1.2566370614359173e-6
@@ -42,16 +49,26 @@ ALLOWED_TRACKING_SCORE_SUMMARY_SOURCES = {
     "seed_only",
     "frequency_score_fallback",
     "modal_overlap_weighted_score",
+    "modal_overlap_unweighted_score",
+    "modal_subspace_transport_score",
+    "modal_overlap_unavailable",
     "mixed_modal_overlap_and_frequency_fallback",
+    "mixed_modal_tracking_methods",
 }
 ALLOWED_TRACKING_SCORE_POINT_SOURCES = {
     "seed",
     "frequency_score_fallback",
     "modal_overlap_weighted_score",
+    "modal_overlap_unweighted_score",
+    "modal_subspace_transport_score",
+    "modal_overlap_unavailable",
 }
 TRACKING_SOURCES_REQUIRING_MODAL_OVERLAP = {
     "modal_overlap_weighted_score",
+    "modal_overlap_unweighted_score",
+    "modal_subspace_transport_score",
     "mixed_modal_overlap_and_frequency_fallback",
+    "mixed_modal_tracking_methods",
 }
 PRODUCTION_MODAL_K_PATH_SUMMARY_TRACKING_SOURCES = {
     "modal_overlap_weighted_score",
@@ -85,6 +102,69 @@ REFERENCE_FULL_2X2_FLOQUET_REJECTION_CONTRACTS = {
         "dynamic_demag_operator_source": "missing_numeric_fem_demag_k",
         "modal_periodic_pair_contract_available": False,
     },
+}
+
+# R4 discovery binds paths and sample coverage. The additive own-identity
+# preimage is replayed exactly when published; full physical payload replay
+# remains a separate, explicitly unqualified gate.
+R4_SIGNED_SIDECAR_DEFINITIONS = {
+    "accepted_fem_equilibrium_fields_v1_paths": (
+        "accepted_fem_equilibrium_fields.v1.json",
+        "v7",
+    ),
+    "accepted_fem_equilibrium_fields_v2_paths": (
+        "accepted_fem_equilibrium_fields.v2.json",
+        "v8",
+    ),
+    "linearization_identity_v2_paths": (
+        "linearization_identity.v2.json",
+        "v8",
+    ),
+    "certified_fem_equilibrium_fields_v1_paths": (
+        "certified_fem_equilibrium_fields.v1.json",
+        "v7",
+    ),
+    "certified_fem_equilibrium_fields_v2_paths": (
+        "certified_fem_equilibrium_fields.v2.json",
+        "v8",
+    ),
+    "recomputed_fem_linearization_certificate_v1_paths": (
+        "recomputed_fem_linearization_certificate.v1.json",
+        "v7",
+    ),
+    "recomputed_fem_linearization_certificate_v2_paths": (
+        "recomputed_fem_linearization_certificate.v2.json",
+        "v8",
+    ),
+}
+
+R4_ACCEPTED_SIDECAR_KEYS = (
+    "accepted_fem_equilibrium_fields_v1_paths",
+    "accepted_fem_equilibrium_fields_v2_paths",
+)
+R4_IDENTITY_SIDECAR_KEY = "linearization_identity_v2_paths"
+R4_IDENTITY_PREIMAGE_KEY = "linearization_identity_preimage_v1_paths"
+R4_NEW_SIDECAR_KEYS = (
+    "certified_fem_equilibrium_fields_v1_paths",
+    "certified_fem_equilibrium_fields_v2_paths",
+    "recomputed_fem_linearization_certificate_v1_paths",
+    "recomputed_fem_linearization_certificate_v2_paths",
+)
+R4_SIDECAR_FAMILY = {
+    "accepted_fem_equilibrium_fields_v1_paths": "v1",
+    "accepted_fem_equilibrium_fields_v2_paths": "v2",
+    "certified_fem_equilibrium_fields_v1_paths": "v1",
+    "certified_fem_equilibrium_fields_v2_paths": "v2",
+    "recomputed_fem_linearization_certificate_v1_paths": "v1",
+    "recomputed_fem_linearization_certificate_v2_paths": "v2",
+}
+
+R4_DISCOVERY_STATUSES = {
+    "historical",
+    "missing_accepted",
+    "missing_identity",
+    "missing_recomputed",
+    "payload_replay_pending",
 }
 
 
@@ -245,36 +325,115 @@ def equilibrium_artifact_v7_digest(artifact: dict) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
 
 
-def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
-    declared_path = manifest.get("artifacts", {}).get(
-        "equilibrium_artifact_v7_path"
-    )
-    if declared_path is None:
-        return
-    relative_path, artifact_path = require_bundle_path(
-        root,
-        declared_path,
-        "manifest.artifacts.equilibrium_artifact_v7_path",
+def equilibrium_artifact_v8_digest(artifact: dict) -> str:
+    """Return the v8 content digest without changing the frozen v7 helper."""
+    preimage = dict(artifact)
+    preimage.pop("content_sha256", None)
+    preimage.pop("equilibrium_id", None)
+    try:
+        canonical_bytes = serde_json_compact_bytes(preimage)
+    except (TypeError, ValueError) as error:
+        fail(
+            "equilibrium_artifact_v8 cannot be canonically serialized for "
+            f"content_sha256 validation: {error}"
+        )
+    return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
+
+
+def linearization_state_v7_digest(state: dict) -> str:
+    """Return the canonical content digest used by LinearizationState.v7."""
+    preimage = dict(state)
+    preimage.pop("content_sha256", None)
+    preimage.pop("linearization_state_id", None)
+    try:
+        canonical_bytes = serde_json_compact_bytes(preimage)
+    except (TypeError, ValueError) as error:
+        fail(
+            "LinearizationState.v7 cannot be canonically serialized for "
+            f"content_sha256 validation: {error}"
+        )
+    return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
+
+
+CANONICAL_EQUILIBRIUM_MATERIAL_IDENTITY_KIND = "canonical_equilibrium_material.v2"
+CANONICAL_EQUILIBRIUM_MATERIAL_PROVENANCE_SCOPE = "materialization_plan"
+V8_MATERIAL_IDENTITY_FIELDS = (
+    "material_signature",
+    "material_identity_kind",
+    "material_provenance_signature",
+    "material_provenance_scope",
+)
+
+
+def validate_canonical_equilibrium_material_identity(
+    payload: dict, name: str
+) -> tuple[str, str]:
+    """Validate the four-field v8/v7 canonical/raw material identity contract."""
+    if not isinstance(payload, dict):
+        fail(f"{name} must be an object")
+    canonical_signature = require_sha256_token(
+        payload.get("material_signature"), f"{name}.material_signature"
     )
     require_equal(
-        relative_path,
-        "eigen/metadata/equilibrium_artifact.v7.json",
-        "manifest.artifacts.equilibrium_artifact_v7_path",
+        payload.get("material_identity_kind"),
+        CANONICAL_EQUILIBRIUM_MATERIAL_IDENTITY_KIND,
+        f"{name}.material_identity_kind",
     )
-    artifact = load_json(artifact_path)
+    provenance_signature = require_sha256_token(
+        payload.get("material_provenance_signature"),
+        f"{name}.material_provenance_signature",
+    )
+    require_equal(
+        payload.get("material_provenance_scope"),
+        CANONICAL_EQUILIBRIUM_MATERIAL_PROVENANCE_SCOPE,
+        f"{name}.material_provenance_scope",
+    )
+    return canonical_signature, provenance_signature
+
+
+def _reject_v8_material_identity_fields(payload: dict, name: str) -> None:
+    for field_name in V8_MATERIAL_IDENTITY_FIELDS[1:]:
+        if field_name in payload:
+            fail(
+                f"{name}.{field_name} is not allowed in the frozen legacy "
+                "schema"
+            )
+
+
+def _require_non_negative_finite_number(value: object, name: str) -> float:
+    if isinstance(value, bool):
+        fail(f"{name} must be a finite number")
+    number = require_finite_number(value, name)
+    if number < 0.0:
+        fail(f"{name} must be non-negative")
+    return number
+
+
+def validate_equilibrium_artifact_v7_payload(
+    artifact: dict, expected_content_sha256: object | None = None
+) -> None:
+    """Validate an equilibrium v7 payload independently of its bundle path."""
+    if not isinstance(artifact, dict):
+        fail("equilibrium_artifact must be an object")
     schema_version = artifact.get("schema_version")
     if schema_version == "equilibrium_artifact.v6":
         fail(
             "equilibrium_artifact_v6_uncertified: rerun relaxation or migrate "
             "with source completion evidence"
         )
+    if isinstance(artifact, dict):
+        _reject_v8_material_identity_fields(artifact, "equilibrium_artifact")
     require_equal(
         schema_version,
         "equilibrium_artifact.v7",
         "equilibrium_artifact.schema_version",
     )
-    require_equal(
+    accepted_for_linearization = require_boolean(
         artifact.get("accepted_for_linearization"),
+        "equilibrium_artifact.accepted_for_linearization",
+    )
+    require_equal(
+        accepted_for_linearization,
         True,
         "equilibrium_artifact.accepted_for_linearization",
     )
@@ -309,20 +468,24 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
         "completed",
         "equilibrium_artifact.acceptance_certificate.status",
     )
-    require_equal(
+    converged = require_boolean(
         certificate.get("converged"),
+        "equilibrium_artifact.acceptance_certificate.converged",
+    )
+    require_equal(
+        converged,
         True,
         "equilibrium_artifact.acceptance_certificate.converged",
     )
-    metric_value = require_finite_number(
+    metric_value = _require_non_negative_finite_number(
         certificate.get("metric_value"),
         "equilibrium_artifact.acceptance_certificate.metric_value",
     )
-    threshold = require_finite_number(
+    threshold = _require_non_negative_finite_number(
         certificate.get("threshold"),
         "equilibrium_artifact.acceptance_certificate.threshold",
     )
-    if threshold < 0.0 or metric_value > threshold:
+    if metric_value > threshold:
         fail(
             "equilibrium_artifact.acceptance_certificate.metric_value must "
             "satisfy its non-negative threshold"
@@ -345,36 +508,1418 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
         equilibrium_artifact_v7_digest(artifact),
         "equilibrium_artifact.content_sha256",
     )
+    if expected_content_sha256 is not None:
+        expected_content_sha256 = require_sha256_token(
+            expected_content_sha256,
+            "expected_content_sha256",
+        )
+        require_equal(
+            content_sha256,
+            expected_content_sha256,
+            "expected_content_sha256",
+        )
     require_equal(
         artifact.get("equilibrium_id"),
         "equilibrium_artifact.v7:" + content_sha256.removeprefix("sha256:"),
         "equilibrium_artifact.equilibrium_id",
     )
-    manifest_digest = manifest.get("equilibrium_artifact_sha256")
-    require_equal(
-        manifest_digest,
-        content_sha256,
-        "manifest.equilibrium_artifact_sha256",
-    )
     observables = artifact.get("observables")
     if not isinstance(observables, dict):
         fail("equilibrium_artifact.observables must be an object")
     for field_name in ["max_torque_Apm", "max_torque_T", "max_torque_relative"]:
-        require_finite_number(
+        _require_non_negative_finite_number(
             observables.get(field_name),
             f"equilibrium_artifact.observables.{field_name}",
         )
     integrity = artifact.get("representation_integrity")
     if not isinstance(integrity, dict):
         fail("equilibrium_artifact.representation_integrity must be an object")
-    m0_norm_tolerance = require_finite_number(
+    _require_non_negative_finite_number(
         integrity.get("m0_norm_tolerance"),
         "equilibrium_artifact.representation_integrity.m0_norm_tolerance",
     )
-    if m0_norm_tolerance < 0.0:
+
+
+def validate_equilibrium_artifact_v8_payload(
+    artifact: dict, expected_content_sha256: object | None = None
+) -> None:
+    """Validate v8 and its canonical/raw equilibrium material identity."""
+    if not isinstance(artifact, dict):
+        fail("equilibrium_artifact must be an object")
+    require_equal(
+        artifact.get("schema_version"),
+        "equilibrium_artifact.v8",
+        "equilibrium_artifact.schema_version",
+    )
+    require_equal(
+        require_boolean(
+            artifact.get("accepted_for_linearization"),
+            "equilibrium_artifact.accepted_for_linearization",
+        ),
+        True,
+        "equilibrium_artifact.accepted_for_linearization",
+    )
+    certificate = artifact.get("acceptance_certificate")
+    if not isinstance(certificate, dict):
+        fail("equilibrium_artifact.acceptance_certificate must be an object")
+    expected = {
+        "torque": ("max_torque_apm", "A/m", "torque"),
+        "energy": ("total_energy_plateau_range_j", "J", "energy"),
+    }.get(certificate.get("criterion"))
+    if expected is None:
+        fail("equilibrium_artifact.acceptance_certificate.criterion is invalid")
+    metric_kind, unit, stop_reason = expected
+    require_equal(
+        certificate.get("metric_kind"),
+        metric_kind,
+        "equilibrium_artifact.acceptance_certificate.metric_kind",
+    )
+    require_equal(
+        certificate.get("unit"), unit,
+        "equilibrium_artifact.acceptance_certificate.unit",
+    )
+    require_equal(
+        certificate.get("stop_reason"), stop_reason,
+        "equilibrium_artifact.acceptance_certificate.stop_reason",
+    )
+    require_equal(
+        certificate.get("status"), "completed",
+        "equilibrium_artifact.acceptance_certificate.status",
+    )
+    require_equal(
+        require_boolean(
+            certificate.get("converged"),
+            "equilibrium_artifact.acceptance_certificate.converged",
+        ),
+        True,
+        "equilibrium_artifact.acceptance_certificate.converged",
+    )
+    metric_value = _require_non_negative_finite_number(
+        certificate.get("metric_value"),
+        "equilibrium_artifact.acceptance_certificate.metric_value",
+    )
+    threshold = _require_non_negative_finite_number(
+        certificate.get("threshold"),
+        "equilibrium_artifact.acceptance_certificate.threshold",
+    )
+    if metric_value > threshold:
         fail(
-            "equilibrium_artifact.representation_integrity.m0_norm_tolerance "
-            "must be non-negative"
+            "equilibrium_artifact.acceptance_certificate.metric_value must "
+            "satisfy its non-negative threshold"
+        )
+    completion_sha256 = require_sha256_token(
+        certificate.get("completion_sha256"),
+        "equilibrium_artifact.acceptance_certificate.completion_sha256",
+    )
+    require_equal(
+        artifact.get("completion_sha256"), completion_sha256,
+        "equilibrium_artifact.completion_sha256",
+    )
+    content_sha256 = require_sha256_token(
+        artifact.get("content_sha256"),
+        "equilibrium_artifact.content_sha256",
+    )
+    require_equal(
+        content_sha256,
+        equilibrium_artifact_v8_digest(artifact),
+        "equilibrium_artifact.content_sha256",
+    )
+    if expected_content_sha256 is not None:
+        require_equal(
+            content_sha256,
+            require_sha256_token(expected_content_sha256, "expected_content_sha256"),
+            "expected_content_sha256",
+        )
+    require_equal(
+        artifact.get("equilibrium_id"),
+        "equilibrium_artifact.v8:" + content_sha256.removeprefix("sha256:"),
+        "equilibrium_artifact.equilibrium_id",
+    )
+    observables = artifact.get("observables")
+    if not isinstance(observables, dict):
+        fail("equilibrium_artifact.observables must be an object")
+    for field_name in ["max_torque_Apm", "max_torque_T", "max_torque_relative"]:
+        _require_non_negative_finite_number(
+            observables.get(field_name),
+            f"equilibrium_artifact.observables.{field_name}",
+        )
+    integrity = artifact.get("representation_integrity")
+    if not isinstance(integrity, dict):
+        fail("equilibrium_artifact.representation_integrity must be an object")
+    _require_non_negative_finite_number(
+        integrity.get("m0_norm_tolerance"),
+        "equilibrium_artifact.representation_integrity.m0_norm_tolerance",
+    )
+    validate_canonical_equilibrium_material_identity(
+        artifact, "equilibrium_artifact"
+    )
+
+
+def validate_linearization_state_v7_payload(
+    state: dict,
+    equilibrium: dict,
+    expected_content_sha256: object | None = None,
+) -> None:
+    """Validate v7 state and bind canonical material to the v8 source."""
+    if not isinstance(state, dict):
+        fail("linearization_state must be an object")
+    require_equal(
+        state.get("schema_version"),
+        "LinearizationState.v7",
+        "linearization_state.schema_version",
+    )
+    require_equal(
+        require_boolean(
+            state.get("accepted_for_frequency_operator"),
+            "linearization_state.accepted_for_frequency_operator",
+        ),
+        True,
+        "linearization_state.accepted_for_frequency_operator",
+    )
+    if not isinstance(equilibrium, dict):
+        fail("linearization_state source equilibrium must be an object")
+    require_equal(
+        equilibrium.get("schema_version"),
+        "equilibrium_artifact.v8",
+        "linearization_state.source_equilibrium_schema",
+    )
+    equilibrium_digest = require_sha256_token(
+        equilibrium.get("content_sha256"),
+        "equilibrium_artifact.content_sha256",
+    )
+    equilibrium_id = require_non_empty_string(
+        equilibrium.get("equilibrium_id"),
+        "equilibrium_artifact.equilibrium_id",
+    )
+    require_equal(
+        state.get("source_equilibrium_artifact"),
+        equilibrium_digest,
+        "linearization_state.source_equilibrium_artifact",
+    )
+    require_equal(
+        state.get("source_equilibrium_id"),
+        equilibrium_id,
+        "linearization_state.source_equilibrium_id",
+    )
+    content_sha256 = require_sha256_token(
+        state.get("content_sha256"),
+        "linearization_state.content_sha256",
+    )
+    require_equal(
+        content_sha256,
+        linearization_state_v7_digest(state),
+        "linearization_state.content_sha256",
+    )
+    if expected_content_sha256 is not None:
+        require_equal(
+            content_sha256,
+            require_sha256_token(
+                expected_content_sha256, "expected_linearization_state_sha256"
+            ),
+            "expected_linearization_state_sha256",
+        )
+    require_equal(
+        state.get("linearization_state_id"),
+        "LinearizationState.v7:" + content_sha256.removeprefix("sha256:"),
+        "linearization_state.linearization_state_id",
+    )
+    equilibrium_material_signature, _ = validate_canonical_equilibrium_material_identity(
+        equilibrium, "equilibrium_artifact"
+    )
+    state_material_signature, _ = validate_canonical_equilibrium_material_identity(
+        state, "linearization_state"
+    )
+    require_equal(
+        state_material_signature,
+        equilibrium_material_signature,
+        "linearization_state.material_signature",
+    )
+
+
+def validate_linearization_state_v6_payload(
+    state: dict,
+    equilibrium: dict,
+    expected_content_sha256: object | None = None,
+) -> None:
+    """Validate the frozen legacy v6 state binding without v8 identity fields."""
+    if not isinstance(state, dict):
+        fail("linearization_state must be an object")
+    require_equal(
+        state.get("schema_version"),
+        "LinearizationState.v6",
+        "linearization_state.schema_version",
+    )
+    _reject_v8_material_identity_fields(state, "linearization_state")
+    require_equal(
+        require_boolean(
+            state.get("accepted_for_frequency_operator"),
+            "linearization_state.accepted_for_frequency_operator",
+        ),
+        True,
+        "linearization_state.accepted_for_frequency_operator",
+    )
+    if not isinstance(equilibrium, dict):
+        fail("linearization_state source equilibrium must be an object")
+    require_equal(
+        equilibrium.get("schema_version"),
+        "equilibrium_artifact.v7",
+        "linearization_state.source_equilibrium_schema",
+    )
+    equilibrium_digest = require_sha256_token(
+        equilibrium.get("content_sha256"),
+        "equilibrium_artifact.content_sha256",
+    )
+    equilibrium_id = require_non_empty_string(
+        equilibrium.get("equilibrium_id"),
+        "equilibrium_artifact.equilibrium_id",
+    )
+    require_equal(
+        state.get("source_equilibrium_artifact"),
+        equilibrium_digest,
+        "linearization_state.source_equilibrium_artifact",
+    )
+    require_equal(
+        state.get("source_equilibrium_id"),
+        equilibrium_id,
+        "linearization_state.source_equilibrium_id",
+    )
+    content_sha256 = require_sha256_token(
+        state.get("content_sha256"),
+        "linearization_state.content_sha256",
+    )
+    require_equal(
+        content_sha256,
+        linearization_state_v7_digest(state),
+        "linearization_state.content_sha256",
+    )
+    if expected_content_sha256 is not None:
+        require_equal(
+            content_sha256,
+            require_sha256_token(
+                expected_content_sha256, "expected_linearization_state_sha256"
+            ),
+            "expected_linearization_state_sha256",
+        )
+    require_equal(
+        state.get("linearization_state_id"),
+        "LinearizationState.v6:" + content_sha256.removeprefix("sha256:"),
+        "linearization_state.linearization_state_id",
+    )
+
+
+def _state_sample_key(relative_path: str, filename: str) -> str:
+    normalized = Path(relative_path).as_posix()
+    prefix = "eigen/metadata/"
+    if not normalized.startswith(prefix) or not normalized.endswith(filename):
+        fail(
+            f"state artifact path must be under eigen/metadata and end with "
+            f"{filename}"
+        )
+    middle = normalized[len(prefix) : -len(filename)]
+    if middle.endswith("/"):
+        middle = middle[:-1]
+    return middle
+
+
+def _r4_sidecar_sample_index(relative_path: str, filename: str, name: str) -> int:
+    """Return the canonical sample index from one R4 sidecar path.
+
+    The path is part of the signed multi-k manifest contract.  Keep this
+    check stricter than the generic bundle-path resolver: accepting an
+    arbitrary directory below ``eigen/metadata`` would make the sample
+    binding ambiguous, even when the file itself exists.
+    """
+    normalized = Path(relative_path).as_posix()
+    if relative_path != normalized:
+        fail(f"{name} must use canonical forward-slash separators")
+    prefix = "eigen/metadata/sample_"
+    suffix = f"/{filename}"
+    if not normalized.startswith(prefix) or not normalized.endswith(suffix):
+        fail(
+            f"{name} must use eigen/metadata/sample_NNNN/{filename}"
+        )
+    token = normalized[len(prefix) : -len(suffix)]
+    if not token.isdigit():
+        fail(f"{name} has an invalid sample index")
+    sample_index = int(token)
+    if token != f"{sample_index:04d}":
+        fail(f"{name} must use the canonical sample_{sample_index:04d} directory")
+    return sample_index
+
+
+def _declared_r4_sidecar_paths(
+    root: Path,
+    artifacts: dict,
+    key: str,
+    filename: str,
+) -> dict[int, tuple[str, Path]] | None:
+    """Resolve one optional R4 plural sidecar array.
+
+    ``None`` means that a historical manifest does not know this key.  An
+    explicitly present empty list is valid for a newer spectrum-only
+    manifest.  Non-empty arrays are required to contain existing canonical
+    paths, one path per sample index, without traversal or duplicates.
+    """
+    if key not in artifacts:
+        return None
+    value = artifacts[key]
+    if not isinstance(value, list):
+        fail(f"manifest.artifacts.{key} must be a list")
+    if any(not isinstance(item, str) for item in value):
+        fail(f"manifest.artifacts.{key} must be a list of paths")
+    if len(set(value)) != len(value):
+        fail(f"manifest.artifacts.{key} must not contain duplicate paths")
+    result: dict[int, tuple[str, Path]] = {}
+    for index, item in enumerate(value):
+        relative_path, artifact_path = require_bundle_path(
+            root, item, f"manifest.artifacts.{key}[{index}]"
+        )
+        sample_index = _r4_sidecar_sample_index(
+            relative_path,
+            filename,
+            f"manifest.artifacts.{key}[{index}]",
+        )
+        if sample_index in result:
+            fail(
+                f"manifest.artifacts.{key} contains duplicate sample index "
+                f"{sample_index}"
+            )
+        result[sample_index] = (relative_path, artifact_path)
+    return result
+
+
+def _native_input_diagnostics_sample_index(
+    relative_path: str, filename: str, name: str
+) -> int:
+    """Return the sample index from the nested native-input sidecar path."""
+    normalized = Path(relative_path).as_posix()
+    if relative_path != normalized:
+        fail(f"{name} must use canonical forward-slash separators")
+    prefix = "eigen/metadata/sample_"
+    suffix = f"/nonshared_source/{filename}"
+    if not normalized.startswith(prefix) or not normalized.endswith(suffix):
+        fail(
+            f"{name} must use "
+            f"eigen/metadata/sample_NNNN/nonshared_source/{filename}"
+        )
+    token = normalized[len(prefix) : -len(suffix)]
+    if not token.isdigit():
+        fail(f"{name} has an invalid sample index")
+    sample_index = int(token)
+    if token != f"{sample_index:04d}":
+        fail(f"{name} must use the canonical sample_{sample_index:04d} directory")
+    return sample_index
+
+
+def _declared_nonshared_native_input_diagnostics_paths(
+    root: Path,
+    artifacts: dict,
+    computed_sample_indices: set[int] | None,
+) -> dict[str, object]:
+    """Validate the additive final-C-ABI pair independently of old sidecars.
+
+    The three historical non-shared sidecar arrays are intentionally not
+    consulted here.  This keeps old manifests readable while making any
+    explicitly declared native-input pair fail closed on partial coverage,
+    wrong nesting, duplicate paths, or a sidecar whose own binding fields do
+    not name the manifest path and sample.
+    """
+    definitions = (
+        (
+            "nonshared_floquet_native_input_diagnostics_v1_paths",
+            "native_input_operator_diagnostics.v1.json",
+            "nonshared_floquet_native_input_diagnostics_v1_path",
+        ),
+        (
+            "nonshared_floquet_native_input_diagnostics_preimage_v1_paths",
+            "native_input_operator_diagnostics_preimage.v1.json",
+            "nonshared_floquet_native_input_diagnostics_preimage_v1_path",
+        ),
+    )
+    present = [key in artifacts for key, _, _ in definitions]
+    aliases_present = [alias in artifacts for _, _, alias in definitions]
+    if not any(present) and not any(aliases_present):
+        return {
+            "status": "historical",
+            "reason": "native-input diagnostic path arrays are absent",
+            "sample_indices": [],
+            "structural_complete": False,
+            "qualification": "NOT_VERIFIED",
+        }
+    if present != [True, True]:
+        fail(
+            "manifest.artifacts native-input diagnostic path arrays must "
+            "declare both final and preimage families together"
+        )
+    paths_by_key: dict[str, dict[int, tuple[str, Path]]] = {}
+    for key, filename, alias in definitions:
+        declared = artifacts[key]
+        if not isinstance(declared, list):
+            fail(f"manifest.artifacts.{key} must be a list")
+        if any(not isinstance(item, str) for item in declared):
+            fail(f"manifest.artifacts.{key} must be a list of paths")
+        if len(set(declared)) != len(declared):
+            fail(f"manifest.artifacts.{key} must not contain duplicate paths")
+        paths: dict[int, tuple[str, Path]] = {}
+        for position, item in enumerate(declared):
+            relative, artifact_path = require_bundle_path(
+                root, item, f"manifest.artifacts.{key}[{position}]"
+            )
+            sample_index = _native_input_diagnostics_sample_index(
+                relative, filename, f"manifest.artifacts.{key}[{position}]"
+            )
+            if sample_index in paths:
+                fail(
+                    f"manifest.artifacts.{key} contains duplicate sample index "
+                    f"{sample_index}"
+                )
+            paths[sample_index] = (relative, artifact_path)
+        if list(paths) != sorted(paths):
+            fail(f"manifest.artifacts.{key} must be ordered by sample index")
+        paths_by_key[key] = paths
+        alias_value = artifacts.get(alias)
+        if alias not in artifacts:
+            if len(paths) == 1:
+                fail(
+                    f"manifest.artifacts.{alias} is required for a complete "
+                    "single-sample native-input pair"
+                )
+        elif alias_value is not None:
+            alias_relative, alias_path = require_bundle_path(
+                root, alias_value, f"manifest.artifacts.{alias}"
+            )
+            alias_sample = _native_input_diagnostics_sample_index(
+                alias_relative, filename, f"manifest.artifacts.{alias}"
+            )
+            if len(paths) != 1 or alias_sample not in paths:
+                fail(
+                    f"manifest.artifacts.{alias} must be null unless its "
+                    "plural family contains exactly one sample"
+                )
+            if paths[alias_sample][0] != alias_relative or paths[alias_sample][1] != alias_path:
+                fail(
+                    f"manifest.artifacts.{alias} differs from its plural "
+                    "sample set"
+                )
+        elif len(paths) == 1:
+            fail(
+                f"manifest.artifacts.{alias} cannot be null for a complete "
+                "single-sample native-input pair"
+            )
+
+    final_key, preimage_key = (definitions[0][0], definitions[1][0])
+    final_paths = paths_by_key[final_key]
+    preimage_paths = paths_by_key[preimage_key]
+    if set(final_paths) != set(preimage_paths):
+        fail(
+            "manifest.artifacts native-input final and preimage sample "
+            "index sets must match"
+        )
+    sample_indices = set(final_paths)
+    if computed_sample_indices is not None and sample_indices != computed_sample_indices:
+        fail(
+            "manifest.artifacts native-input diagnostic sample index set "
+            "must match computed spectrum samples"
+        )
+    if not sample_indices:
+        return {
+            "status": "historical",
+            "reason": "native-input diagnostic path arrays are explicitly empty",
+            "sample_indices": [],
+            "structural_complete": False,
+            "qualification": "NOT_VERIFIED",
+        }
+
+    for sample_index in sorted(sample_indices):
+        final_relative, final_path = final_paths[sample_index]
+        preimage_relative, _preimage_path = preimage_paths[sample_index]
+        try:
+            final = strict_json_object(
+                final_path.read_bytes(), "native-input diagnostic manifest sidecar"
+            )
+        except (IdentityReplayError, OSError) as error:
+            fail(f"native-input diagnostic manifest sidecar is invalid: {error}")
+        require_equal(
+            final.get("nonshared_floquet_native_input_diagnostics_schema"),
+            "nonshared_floquet_native_input_diagnostics.v1",
+            "native-input diagnostic sidecar schema",
+        )
+        final_sample_index = final.get(
+            "nonshared_floquet_native_input_diagnostics_sample_index"
+        )
+        if type(final_sample_index) is not int:
+            fail("native-input diagnostic sidecar sample_index must be an integer")
+        require_equal(
+            final_sample_index,
+            sample_index,
+            "native-input diagnostic sidecar sample_index",
+        )
+        require_equal(
+            final.get("nonshared_floquet_native_input_diagnostics_path"),
+            final_relative,
+            "native-input diagnostic sidecar path binding",
+        )
+        require_equal(
+            final.get("nonshared_floquet_native_input_diagnostics_preimage_path"),
+            preimage_relative,
+            "native-input diagnostic sidecar preimage binding",
+        )
+    return {
+        "status": "path_coverage_complete",
+        "reason": "native-input diagnostic arrays and sidecar bindings cover every computed sample",
+        "sample_indices": sorted(sample_indices),
+        "structural_complete": True,
+        "qualification": "NOT_VERIFIED",
+    }
+
+
+def _legacy_state_sample_indices(
+    root: Path, artifacts: dict, schema: str
+) -> set[int]:
+    """Return the sample indices of one existing v7/v6 or v8/v7 pair."""
+    pairs = _state_path_pairs(root, {"artifacts": artifacts}, schema=schema)
+    indices: set[int] = set()
+    for _, _, _, sample_key in pairs:
+        if sample_key == "":
+            sample_index = 0
+        else:
+            token = sample_key.removeprefix("sample_")
+            if not token.isdigit() or token != f"{int(token):04d}":
+                fail(
+                    f"manifest.artifacts {schema} state paths have an invalid "
+                    f"sample key {sample_key!r}"
+                )
+            sample_index = int(token)
+        if sample_index in indices:
+            fail(
+                f"manifest.artifacts {schema} state paths contain duplicate "
+                f"sample index {sample_index}"
+            )
+        indices.add(sample_index)
+    return indices
+
+
+def _r4_discovery_result(
+    status: str,
+    reason: str,
+    *,
+    accepted_family: str | None = None,
+    accepted_sample_indices: set[int] | None = None,
+    identity_sample_indices: set[int] | None = None,
+    missing_recomputed_keys: list[str] | None = None,
+    computed_sample_indices: set[int] | None = None,
+    identity_content_sha256_by_sample: dict[str, str] | None = None,
+    equilibrium_preimage_sha256_by_sample: dict[str, dict[str, str]] | None = None,
+) -> dict[str, object]:
+    if status not in R4_DISCOVERY_STATUSES:
+        raise ValueError(f"unknown R4 discovery status: {status}")
+    return {
+        "status": status,
+        "reason": reason,
+        "accepted_family": accepted_family,
+        "accepted_sample_indices": sorted(accepted_sample_indices or set()),
+        "identity_sample_indices": sorted(identity_sample_indices or set()),
+        "missing_recomputed_keys": sorted(missing_recomputed_keys or []),
+        "computed_sample_indices": (
+            None
+            if computed_sample_indices is None
+            else sorted(computed_sample_indices)
+        ),
+        "identity_content_digest_status": (
+            "verified_exact_preimage"
+            if identity_content_sha256_by_sample else "unverified_missing_preimage"
+        ),
+        "identity_content_sha256_by_sample": dict(identity_content_sha256_by_sample or {}),
+        "equilibrium_preimage_digest_status": (
+            "verified_five_exact_preimages"
+            if equilibrium_preimage_sha256_by_sample else "unverified_missing_preimage"
+        ),
+        "equilibrium_preimage_sha256_by_sample": dict(equilibrium_preimage_sha256_by_sample or {}),
+    }
+
+
+def _state_family_has_paths(artifacts: dict, schema: str) -> bool:
+    if schema == "v8":
+        keys = (
+            "equilibrium_artifact_v8_path",
+            "equilibrium_artifact_v8_paths",
+            "linearization_state_v7_path",
+            "linearization_state_v7_paths",
+        )
+    else:
+        keys = (
+            "equilibrium_artifact_v7_path",
+            "equilibrium_artifact_v7_paths",
+            "linearization_state_v6_path",
+            "linearization_state_v6_paths",
+        )
+    return any(
+        key in artifacts and artifacts.get(key) not in (None, "", [])
+        for key in keys
+    )
+
+
+def _computed_sample_indices_from_spectrum(spectrum: object) -> set[int]:
+    """Return every sample the path producer actually published.
+
+    The path producers in ``fem/eigen_path.rs`` and
+    ``fem/eigen_output.rs`` (with the modal manifest adapter in
+    ``eigen/artifacts/modal_manifest.rs``) publish ``sample_count`` and
+    explicit ``sample_index`` records.  Use those records as the coverage
+    contract; never infer a contiguous range from the largest index or from
+    selected mode fields.  ``eigen/artifacts/common.rs`` only carries the
+    source-revision helpers and is not the spectrum payload producer.
+    """
+    if not isinstance(spectrum, dict):
+        fail("eigen/spectrum.v2.json must be an object")
+    samples = require_object_list(spectrum.get("samples"), "spectrum.samples")
+    sample_count = require_non_negative_int(
+        spectrum.get("sample_count"), "spectrum.sample_count"
+    )
+    require_equal(sample_count, len(samples), "spectrum.sample_count")
+    indices: set[int] = set()
+    for position, sample in enumerate(samples):
+        sample_index = require_non_negative_int(
+            sample.get("sample_index"),
+            f"spectrum.samples[{position}].sample_index",
+        )
+        if sample_index in indices:
+            fail(f"spectrum.samples contains duplicate sample_index {sample_index}")
+        indices.add(sample_index)
+    return indices
+
+
+def validate_r4_signed_sidecars(
+    root: Path,
+    artifacts: object,
+    computed_sample_indices: set[int] | None = None,
+) -> dict[str, object]:
+    """Validate R4 sidecar discovery and family/sample binding.
+
+    Historical manifests omit all R4 keys and remain valid.  A producer may
+    publish an accepted sidecar family before the identity-v2 producer is
+    available; that state is reported as ``missing_identity`` rather than
+    being treated as a certified result.  This function validates only path
+    identity and family/sample-set consistency; when supplied, the explicit
+    spectrum sample set is the complete computed-sample contract. Published
+    exact identity preimages are checked cryptographically. Accepted/recomputed
+    physical field replay and linked source/state checks remain separate gates.
+    """
+    if not isinstance(artifacts, dict):
+        return _r4_discovery_result(
+            "historical",
+            "R4 sidecar arrays are absent from a historical manifest",
+            computed_sample_indices=computed_sample_indices,
+        )
+    keys = tuple(R4_SIGNED_SIDECAR_DEFINITIONS)
+    present = [key for key in keys if key in artifacts]
+    preimage_present = R4_IDENTITY_PREIMAGE_KEY in artifacts
+    if not present and not preimage_present:
+        return _r4_discovery_result(
+            "historical",
+            "R4 sidecar arrays are absent from a historical manifest",
+            computed_sample_indices=computed_sample_indices,
+        )
+    old_keys = (*R4_ACCEPTED_SIDECAR_KEYS, R4_IDENTITY_SIDECAR_KEY)
+    new_present = [key for key in R4_NEW_SIDECAR_KEYS if key in artifacts]
+    missing_old = [key for key in old_keys if key not in artifacts]
+    if missing_old:
+        fail(
+            "manifest.artifacts R4 signed sidecars must declare all plural "
+            f"arrays; missing {', '.join(missing_old)}"
+        )
+    if new_present:
+        missing_new = [key for key in R4_NEW_SIDECAR_KEYS if key not in artifacts]
+        if missing_new:
+            fail(
+                "manifest.artifacts R4 certified/recomputed sidecars must "
+                "declare all four plural arrays; missing "
+                f"{', '.join(missing_new)}"
+            )
+
+    declared = {
+        key: _declared_r4_sidecar_paths(
+            root,
+            artifacts,
+            key,
+            R4_SIGNED_SIDECAR_DEFINITIONS[key][0],
+        )
+        for key in present
+    }
+    accepted_v1 = declared.get("accepted_fem_equilibrium_fields_v1_paths") or {}
+    accepted_v2 = declared.get("accepted_fem_equilibrium_fields_v2_paths") or {}
+    identity_v2 = declared.get(R4_IDENTITY_SIDECAR_KEY) or {}
+    identity_preimages = _declared_r4_sidecar_paths(
+        root, artifacts, R4_IDENTITY_PREIMAGE_KEY,
+        "linearization_identity_preimage.v1.json",
+    )
+    new_sidecars = {
+        key: declared.get(key) or {}
+        for key in R4_NEW_SIDECAR_KEYS
+    }
+    missing_declared_new_keys = [
+        key for key in R4_NEW_SIDECAR_KEYS if not new_sidecars[key]
+    ]
+
+    if not accepted_v1 and not accepted_v2:
+        if identity_v2 or identity_preimages or any(new_sidecars.values()):
+            fail(
+                "manifest.artifacts R4 identity/certified/recomputed sidecars "
+                "cannot be declared without an accepted FEM equilibrium "
+                "sidecar family"
+            )
+        return _r4_discovery_result(
+            "missing_accepted",
+            "R4 accepted FEM equilibrium sidecars are missing",
+            identity_sample_indices=set(identity_v2),
+            missing_recomputed_keys=missing_declared_new_keys,
+            computed_sample_indices=computed_sample_indices,
+        )
+    if accepted_v1 and accepted_v2:
+        fail(
+            "manifest.artifacts R4 sidecars mix accepted FEM equilibrium "
+            "field families v1 and v2"
+        )
+    accepted_family = "v1" if accepted_v1 else "v2"
+    accepted_sample_indices = set(accepted_v1 or accepted_v2)
+    if (
+        computed_sample_indices is not None
+        and accepted_sample_indices != set(computed_sample_indices)
+    ):
+        fail(
+            "manifest.artifacts accepted FEM equilibrium sidecar sample index "
+            "set must match the computed spectrum sample index set"
+        )
+    required_new_keys = [
+        key for key in R4_NEW_SIDECAR_KEYS
+        if R4_SIDECAR_FAMILY[key] == accepted_family
+    ]
+    missing_recomputed_keys = [
+        key for key in required_new_keys if not new_sidecars[key]
+    ]
+    if identity_v2 and set(accepted_sample_indices) != set(identity_v2):
+        fail(
+            "manifest.artifacts accepted fields and linearization identity "
+            "sample index sets must match"
+        )
+    # Historical bundles omit the additive exact-preimage array. Once it is
+    # declared beside actual identities it must cover the complete sample set.
+    if identity_preimages is not None:
+        if set(identity_preimages) != set(identity_v2):
+            fail("manifest.artifacts identity preimage and identity sample index sets must match")
+        if identity_v2 and set(identity_preimages) != accepted_sample_indices:
+            fail("manifest.artifacts identity preimage sample index set must match accepted fields")
+
+    identity_digests: dict[str, str] = {}
+    equilibrium_digests: dict[str, dict[str, str]] = {}
+    for sample_index, (_, preimage_path) in (identity_preimages or {}).items():
+        identity_path = identity_v2[sample_index][1]
+        try:
+            identity_bytes = identity_path.read_bytes()
+            identity = strict_json_object(identity_bytes, "identity")
+            if require_non_negative_int(identity.get("sample_index"), "identity.sample_index") != sample_index:
+                fail("linearization identity sample_index must match its canonical sidecar path")
+            identity_digests[str(sample_index)] = replay_identity_preimage(
+                identity_bytes, preimage_path.read_bytes(),
+            )
+            equilibrium_digests[str(sample_index)] = replay_equilibrium_identity_preimages(identity_bytes)
+        except (IdentityReplayError, OSError) as error:
+            fail(f"sample {sample_index} identity exact preimage replay failed: {error}")
+        except EquilibriumIdentityReplayError as error:
+            fail(f"sample {sample_index} equilibrium exact preimage replay failed: {error}")
+
+    # Keep the already-existing state-pair binding when those sidecars are
+    # declared, but do not turn their absence into a new R4 qualification
+    # failure while the producer migration is still in progress.
+    state_schema = "v7" if accepted_v1 else "v8"
+    opposite_state_schema = "v8" if accepted_v1 else "v7"
+    if _state_family_has_paths(artifacts, opposite_state_schema):
+        fail(
+            "manifest.artifacts accepted fields and state paths use mixed "
+            "schema families"
+        )
+    if _state_family_has_paths(artifacts, state_schema):
+        expected_state_samples = _legacy_state_sample_indices(
+            root, artifacts, state_schema
+        )
+        if set(accepted_sample_indices) != expected_state_samples:
+            fail(
+                "manifest.artifacts accepted fields and state sample "
+                "index sets must match"
+            )
+
+    for key, paths in new_sidecars.items():
+        if not paths:
+            continue
+        expected_family = R4_SIDECAR_FAMILY[key]
+        if expected_family != accepted_family:
+            fail(
+                "manifest.artifacts R4 certified/recomputed sidecar "
+                f"{key} uses family {expected_family}, but accepted fields "
+                f"use family {accepted_family}"
+            )
+        if set(paths) != accepted_sample_indices:
+            fail(
+                "manifest.artifacts R4 certified/recomputed sidecar "
+                f"{key} sample index set must match accepted fields"
+            )
+
+    if not identity_v2 and missing_recomputed_keys:
+        return _r4_discovery_result(
+            "missing_recomputed",
+            "R4 linearization identity v2 and certified/recomputed sidecar "
+            "arrays are missing or empty; accepted field payload replay is "
+            "not verified",
+            accepted_family=accepted_family,
+            accepted_sample_indices=accepted_sample_indices,
+            missing_recomputed_keys=missing_recomputed_keys,
+            computed_sample_indices=computed_sample_indices,
+            identity_content_sha256_by_sample=identity_digests,
+            equilibrium_preimage_sha256_by_sample=equilibrium_digests,
+        )
+    if not identity_v2:
+        return _r4_discovery_result(
+            "missing_identity",
+            "R4 linearization identity v2 sidecars are missing; accepted "
+            "field payload replay is not verified",
+            accepted_family=accepted_family,
+            accepted_sample_indices=accepted_sample_indices,
+            missing_recomputed_keys=missing_recomputed_keys,
+            computed_sample_indices=computed_sample_indices,
+            identity_content_sha256_by_sample=identity_digests,
+            equilibrium_preimage_sha256_by_sample=equilibrium_digests,
+        )
+    if missing_recomputed_keys:
+        return _r4_discovery_result(
+            "missing_recomputed",
+            "R4 certified/recomputed sidecar arrays are missing or empty; "
+            "accepted field payload replay is not verified",
+            accepted_family=accepted_family,
+            accepted_sample_indices=accepted_sample_indices,
+            identity_sample_indices=set(identity_v2),
+            missing_recomputed_keys=missing_recomputed_keys,
+            computed_sample_indices=computed_sample_indices,
+            identity_content_sha256_by_sample=identity_digests,
+            equilibrium_preimage_sha256_by_sample=equilibrium_digests,
+        )
+    return _r4_discovery_result(
+        "payload_replay_pending",
+        "R4 sidecar paths are structurally consistent; source payload replay "
+        "is reported separately and independent operator replay remains pending",
+        accepted_family=accepted_family,
+        accepted_sample_indices=accepted_sample_indices,
+        identity_sample_indices=set(identity_v2),
+        computed_sample_indices=computed_sample_indices,
+        identity_content_sha256_by_sample=identity_digests,
+        equilibrium_preimage_sha256_by_sample=equilibrium_digests,
+    )
+
+
+def validate_producer_provenance_discovery(
+    root: Path,
+    artifacts: dict,
+    computed_sample_indices: set[int] | None,
+) -> dict[str, object]:
+    """Bind additive producer paths to actual samples without qualifying payloads.
+
+    Shared and non-shared operators use the same immutable producer record.
+    Historical absence is reported, while partial coverage or a conflicting
+    singular alias is rejected before any physical replay can use the paths.
+    """
+    paths = _declared_r4_sidecar_paths(
+        root, artifacts, "producer_provenance_v1_paths", "producer_provenance.v1.json"
+    )
+    singular = artifacts.get("producer_provenance_v1_path")
+    if singular is not None:
+        relative, _ = require_bundle_path(
+            root, singular, "manifest.artifacts.producer_provenance_v1_path"
+        )
+        index = _r4_sidecar_sample_index(
+            relative, "producer_provenance.v1.json",
+            "manifest.artifacts.producer_provenance_v1_path",
+        )
+        if not paths or index not in paths or paths[index][0] != relative:
+            fail("producer provenance singular path must belong to its plural sample set")
+    if not paths:
+        return {
+            "status": "unverified_missing_producer_provenance",
+            "sample_indices": [],
+            "payload_replay_status": "NOT_VERIFIED",
+        }
+    indices = list(paths)
+    if indices != sorted(indices):
+        fail("producer provenance paths must be ordered by sample_index")
+    if computed_sample_indices is not None and set(indices) != computed_sample_indices:
+        fail("producer provenance sample index set must match computed spectrum samples")
+    return {
+        "status": "producer_paths_bound",
+        "sample_indices": indices,
+        "payload_replay_status": "NOT_VERIFIED",
+    }
+
+
+def validate_consumer_plan_exact_replay(
+    root: Path, artifacts: dict, computed_sample_indices: set[int] | None,
+) -> dict[str, object]:
+    """Bind raw consumer plan bytes to identity, without qualifying IR or assembly.
+
+    The sidecar is the original compact serde_json plan, not an envelope.
+    Parsing checks duplicate keys and non-finite values; hashing always uses
+    the retained bytes, including their original field order and whitespace.
+    """
+    paths = _declared_r4_sidecar_paths(
+        root, artifacts, "consumer_plan_snapshot_v1_paths", "consumer_plan_snapshot.v1.json"
+    ) or {}
+    singular = artifacts.get("consumer_plan_snapshot_v1_path")
+    if singular is not None:
+        relative, _ = require_bundle_path(root, singular, "consumer_plan_snapshot_v1_path")
+        index = _r4_sidecar_sample_index(relative, "consumer_plan_snapshot.v1.json", "consumer plan alias")
+        if index not in paths or paths[index][0] != relative:
+            fail("consumer plan singular path must belong to its plural sample set")
+    if not paths:
+        return {"status": "NOT_VERIFIED", "reason": "exact consumer plan bytes absent"}
+    if list(paths) != sorted(paths):
+        fail("consumer plan paths must be ordered by sample_index")
+    if computed_sample_indices is not None and set(paths) != computed_sample_indices:
+        fail("consumer plan sample index set must match computed spectrum samples")
+    identities = _declared_r4_sidecar_paths(
+        root, artifacts, R4_IDENTITY_SIDECAR_KEY, "linearization_identity.v2.json"
+    ) or {}
+    if set(paths) != set(identities):
+        fail("consumer plan sample index set must match linearization identities")
+    digests = {}
+    for index, (_, plan_path) in paths.items():
+        raw = plan_path.read_bytes()
+        try:
+            strict_json_object(raw, "exact consumer plan")
+            identity = strict_json_object(identities[index][1].read_bytes(), "linearization identity")
+        except IdentityReplayError as error:
+            fail(f"consumer plan replay sample {index}: {error}")
+        if type(identity.get("sample_index")) is not int or identity["sample_index"] != index:
+            fail("consumer plan identity sample_index differs from its canonical path")
+        digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        require_equal(identity.get("consumer_plan_snapshot_sha256"), digest, "consumer plan raw digest")
+        digests[str(index)] = digest
+    return {
+        "status": "consumer_plan_exact_bytes_replayed", "raw_sha256_by_sample": digests,
+        "plan_semantics_status": "NOT_VERIFIED", "operator_replay_status": "NOT_VERIFIED",
+    }
+
+
+def validate_nonshared_operator_replay(
+    root: Path, artifacts: dict, computed_sample_indices: set[int] | None,
+) -> dict[str, object]:
+    """Replay declared nonshared samples without qualifying native FEM assembly."""
+    from fem_nonshared_operator_replay import NonSharedReplayError, replay_nonshared_operator
+
+    native_input_coverage = _declared_nonshared_native_input_diagnostics_paths(
+        root, artifacts, computed_sample_indices
+    )
+
+    families = (
+        "nonshared_floquet_operator_identity",
+        "nonshared_floquet_operator_identity_preimage",
+        "nonshared_floquet_source_state",
+    )
+    paths = {}
+    for family in families:
+        key = f"{family}_v1_paths"
+        declared = _declared_r4_sidecar_paths(root, artifacts, key, f"{family}.v1.json") or {}
+        alias = artifacts.get(f"{family}_v1_path")
+        if alias is not None and (len(declared) != 1 or alias != next(iter(declared.values()))[0]):
+            fail(f"manifest.artifacts.{family}_v1_path differs from its single-sample array")
+        if list(declared) != sorted(declared):
+            fail(f"manifest.artifacts.{key} must be ordered by sample index")
+        paths[family] = declared
+    if not any(paths.values()):
+        if any(f"{family}_v1_paths" in artifacts for family in families):
+            fail("explicit nonshared operator replay arrays must cover computed samples")
+        return {
+            "status": "NOT_VERIFIED",
+            "reason": "nonshared exact sidecar declarations absent",
+            "native_input_diagnostics": native_input_coverage,
+        }
+    indices = set(paths[families[0]])
+    if not indices or any(set(paths[family]) != indices for family in families):
+        fail("nonshared operator replay sidecars have incomplete sample coverage")
+    if computed_sample_indices is not None and indices != computed_sample_indices:
+        fail("nonshared operator replay sidecars differ from computed sample coverage")
+    native_indices = set(native_input_coverage["sample_indices"])
+    if native_input_coverage["structural_complete"] and native_indices != indices:
+        fail(
+            "manifest.artifacts native-input diagnostic sample index set must "
+            "match nonshared operator replay samples"
+        )
+    reports = {}
+    for index in sorted(indices):
+        try:
+            report = replay_nonshared_operator(
+                root, sample_index=index,
+                identity_path=Path(paths[families[0]][index][0]),
+                identity_preimage_path=Path(paths[families[1]][index][0]),
+                source_state_path=Path(paths[families[2]][index][0]),
+            )
+        except NonSharedReplayError as error:
+            fail(f"nonshared operator replay sample {index}: {error}")
+        reports[str(index)] = report.as_dict()
+        if native_input_coverage["structural_complete"] and "native_input_diagnostics" not in report.exact_refs_verified:
+            fail(
+                f"nonshared operator replay sample {index} did not verify the "
+                "declared native-input diagnostic sidecar"
+            )
+    return {
+        "status": "nonshared_exact_operator_relations_replayed",
+        "reports_by_sample": reports,
+        "native_input_diagnostics": native_input_coverage,
+        "native_operator_replay_status": "NOT_VERIFIED",
+        "scientific_qualification": "NOT_VERIFIED",
+    }
+
+
+def validate_producer_payload_replay(root: Path, manifest: dict) -> dict[str, object]:
+    """Replay producer payloads when v2 identity is available, independently of assembly.
+
+    This source-only gate neither validates the modal assembly family nor
+    replaces the later equilibrium/state validators or operator replay.
+    Nonshared bundles without this identity need their separate source-state
+    replay; no shared identity is inferred or fabricated for them.
+    """
+    root = root.resolve()
+    artifacts = manifest.get("artifacts", {})
+    producers = _declared_r4_sidecar_paths(
+        root, artifacts, "producer_provenance_v1_paths", "producer_provenance.v1.json"
+    )
+    if not producers:
+        return {"status": "NOT_VERIFIED", "reason": "producer provenance absent"}
+    identities = _declared_r4_sidecar_paths(
+        root, artifacts, R4_IDENTITY_SIDECAR_KEY, "linearization_identity.v2.json"
+    )
+    if not identities:
+        return {"status": "NOT_VERIFIED", "reason": "shared identity absent; nonshared replay required"}
+    preimages = _declared_r4_sidecar_paths(
+        root, artifacts, R4_IDENTITY_PREIMAGE_KEY, "linearization_identity_preimage.v1.json"
+    )
+    if not preimages:
+        return {"status": "NOT_VERIFIED", "reason": "identity exact preimage absent"}
+    pairs = _state_path_pairs(root, manifest, schema="v8") or _state_path_pairs(
+        root, manifest, schema="v7"
+    )
+    if not pairs:
+        return {"status": "NOT_VERIFIED", "reason": "equilibrium/state artifacts absent"}
+    state_by_index = {
+        (_r4_sidecar_sample_index(relative, eq.name, "producer replay equilibrium path") if key else 0): (relative, eq, state)
+        for relative, eq, state, key in pairs
+    }
+    if set(producers) != set(identities) or set(producers) != set(preimages) or set(producers) != set(state_by_index):
+        fail("producer payload replay sample coverage differs from identity/equilibrium/state")
+    from fem_producer_provenance_replay import (
+        ProducerArtifactPaths, ProducerProvenanceReplayError, replay_producer_provenance,
+    )
+    reports = {}
+    for index, (_, producer_path) in producers.items():
+        identity_path = identities[index][1]
+        try:
+            identity = strict_json_object(identity_path.read_bytes(), "linearization identity")
+        except IdentityReplayError as error:
+            fail(f"producer payload replay sample {index}: {error}")
+        if type(identity.get("sample_index")) is not int:
+            fail("producer replay identity sample_index must be an integer")
+        require_equal(identity.get("sample_index"), index, "producer replay identity sample_index")
+        relative, eq_path, state_path = state_by_index[index]
+        eq, state = load_json(eq_path), load_json(state_path)
+        for prefix, path, payload in (
+            ("equilibrium_artifact", eq_path, eq), ("linearization_state", state_path, state),
+        ):
+            require_equal(identity.get(prefix + "_path"), path.relative_to(root).as_posix(), prefix + " replay path")
+            require_equal(identity.get(prefix + "_sha256"), payload.get("content_sha256"), prefix + " replay content")
+            require_equal(identity.get(prefix + "_schema"), payload.get("schema_version"), prefix + " replay schema")
+        payload_paths = {}
+        for name, field in (
+            ("accepted_fields", "accepted_fields_path"),
+            ("certified_fields", "certified_fields_path"),
+            ("recomputed_certificate", "recomputed_certificate_path"),
+        ):
+            payload_paths[name] = require_bundle_path(root, identity.get(field), field)[1]
+        try:
+            report = replay_producer_provenance(
+                ProducerArtifactPaths(
+                    producer_root=root.resolve(), provenance_path=producer_path,
+                    equilibrium_magnetization_path=eq_path, identity_path=identity_path,
+                    identity_preimage_path=preimages[index][1], payload_paths=payload_paths,
+                ),
+                expected_source_run_id=identity.get("source_run_id"),
+                expected_source_stage_id=identity.get("source_stage_id"),
+                expected_source_stage_kind=identity.get("source_stage_kind"),
+                expected_source_snapshot_sha256=identity.get("consumer_source_snapshot_sha256"),
+            )
+        except ProducerProvenanceReplayError as error:
+            fail(f"producer payload replay sample {index}: {error}")
+        reports[str(index)] = {
+            "status": report.status, "identity_content_sha256": report.identity_content_sha256,
+            "producer_sidecar_raw_sha256": report.sidecar_raw_sha256,
+            "scientific_qualification": report.scientific_qualification,
+        }
+    return {"status": "source_payloads_replayed", "samples": reports, "operator_replay_status": "NOT_VERIFIED"}
+
+
+def _declared_state_paths(
+    root: Path, artifacts: object, stem: str, filename: str
+) -> list[tuple[str, Path, str]]:
+    if not isinstance(artifacts, dict):
+        return []
+    singular_key = stem + "_path"
+    plural_key = stem + "_paths"
+    singular = artifacts.get(singular_key)
+    plural = artifacts.get(plural_key)
+    if singular is not None and plural is not None:
+        fail(f"manifest.artifacts.{singular_key} and {plural_key} are ambiguous")
+    if singular is not None:
+        relative_path, artifact_path = require_bundle_path(
+            root, singular, f"manifest.artifacts.{singular_key}"
+        )
+        require_equal(
+            relative_path,
+            f"eigen/metadata/{filename}",
+            f"manifest.artifacts.{singular_key}",
+        )
+        return [(relative_path, artifact_path, "")]
+    if plural is None:
+        return []
+    if (
+        not isinstance(plural, list)
+        or not plural
+        or any(not isinstance(item, str) for item in plural)
+        or len(set(plural)) != len(plural)
+    ):
+        fail(f"manifest.artifacts.{plural_key} must be a non-empty unique list")
+    result: list[tuple[str, Path, str]] = []
+    sample_keys: set[str] = set()
+    for index, item in enumerate(plural):
+        relative_path, artifact_path = require_bundle_path(
+            root, item, f"manifest.artifacts.{plural_key}[{index}]"
+        )
+        sample_key = _state_sample_key(relative_path, filename)
+        if sample_key in sample_keys:
+            fail(
+                f"manifest.artifacts.{plural_key} contains duplicate sample key "
+                f"{sample_key!r}"
+            )
+        sample_keys.add(sample_key)
+        result.append((relative_path, artifact_path, sample_key))
+    return result
+
+
+def _state_path_pairs(root: Path, manifest: dict, *, schema: str) -> list[tuple[str, Path, Path, str]]:
+    artifacts = manifest.get("artifacts")
+    if schema == "v8":
+        equilibrium_stem, equilibrium_filename = (
+            "equilibrium_artifact_v8",
+            "equilibrium_artifact.v8.json",
+        )
+        state_stem, state_filename = (
+            "linearization_state_v7",
+            "linearization_state.v7.json",
+        )
+    else:
+        equilibrium_stem, equilibrium_filename = (
+            "equilibrium_artifact_v7",
+            "equilibrium_artifact.v7.json",
+        )
+        state_stem, state_filename = (
+            "linearization_state_v6",
+            "linearization_state.v6.json",
+        )
+    equilibria = _declared_state_paths(
+        root, artifacts, equilibrium_stem, equilibrium_filename
+    )
+    states = _declared_state_paths(root, artifacts, state_stem, state_filename)
+    if bool(equilibria) != bool(states):
+        fail(
+            f"manifest.artifacts {schema} equilibrium/state paths must be "
+            "declared together"
+        )
+    if not equilibria:
+        return []
+    equilibrium_by_key = {sample_key: (relative, path) for relative, path, sample_key in equilibria}
+    state_by_key = {sample_key: (relative, path) for relative, path, sample_key in states}
+    if set(equilibrium_by_key) != set(state_by_key):
+        fail(
+            f"manifest.artifacts {schema} equilibrium/state sample filename keys "
+            "do not match"
+        )
+    return [
+        (equilibrium_by_key[key][0], equilibrium_by_key[key][1], state_by_key[key][1], key)
+        for key in sorted(equilibrium_by_key)
+    ]
+
+
+def validate_linearization_handoff_diagnostics(
+    payload: object, *, expected_equilibrium_schema: str, expected_state_schema: str, name: str
+) -> bool:
+    if not isinstance(payload, dict) or "linearization_handoff" not in payload:
+        return False
+    handoff = payload.get("linearization_handoff")
+    if not isinstance(handoff, dict):
+        fail(f"{name}.linearization_handoff must be an object")
+    require_equal(
+        handoff.get("equilibrium_artifact_schema"),
+        expected_equilibrium_schema,
+        f"{name}.linearization_handoff.equilibrium_artifact_schema",
+    )
+    require_equal(
+        handoff.get("linearization_state_schema"),
+        expected_state_schema,
+        f"{name}.linearization_handoff.linearization_state_schema",
+    )
+    if "accepted_for_frequency_operator" in handoff:
+        require_equal(
+            require_boolean(
+                handoff.get("accepted_for_frequency_operator"),
+                f"{name}.linearization_handoff.accepted_for_frequency_operator",
+            ),
+            True,
+            f"{name}.linearization_handoff.accepted_for_frequency_operator",
+        )
+    return True
+
+
+def validate_equilibrium_artifacts(
+    root: Path,
+    manifest: dict,
+    solver_diagnostics: dict | None = None,
+    *,
+    computed_sample_indices: set[int] | None = None,
+) -> dict[str, object]:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return _r4_discovery_result(
+            "historical",
+            "R4 sidecar arrays are absent from a historical manifest",
+            computed_sample_indices=computed_sample_indices,
+        )
+    r4_discovery = validate_r4_signed_sidecars(
+        root,
+        artifacts,
+        computed_sample_indices=computed_sample_indices,
+    )
+    r4_discovery["producer_provenance_discovery"] = validate_producer_provenance_discovery(
+        root, artifacts, computed_sample_indices,
+    )
+    r4_discovery["consumer_plan_replay"] = validate_consumer_plan_exact_replay(
+        root, artifacts, computed_sample_indices,
+    )
+    r4_discovery["producer_payload_replay"] = validate_producer_payload_replay(root, manifest)
+    r4_discovery["nonshared_operator_replay"] = validate_nonshared_operator_replay(
+        root, artifacts, computed_sample_indices,
+    )
+    def has_declared_path(keys: tuple[str, ...]) -> bool:
+        return any(
+            key in artifacts
+            and artifacts.get(key) is not None
+            and artifacts.get(key) != []
+            for key in keys
+        )
+
+    v8_keys = {
+        "equilibrium_artifact_v8_path",
+        "equilibrium_artifact_v8_paths",
+        "linearization_state_v7_path",
+        "linearization_state_v7_paths",
+    }
+    v7_keys = {
+        "equilibrium_artifact_v7_path",
+        "equilibrium_artifact_v7_paths",
+        "linearization_state_v6_path",
+        "linearization_state_v6_paths",
+    }
+    for key in v8_keys | v7_keys:
+        if key not in artifacts:
+            continue
+        value = artifacts.get(key)
+        if key.endswith("_paths"):
+            if not isinstance(value, list):
+                fail(f"manifest.artifacts.{key} must be a list")
+        elif not isinstance(value, str) or not value.strip():
+            fail(f"manifest.artifacts.{key} must be a non-empty path")
+
+    has_v8 = has_declared_path(tuple(v8_keys))
+    has_v7 = has_declared_path(tuple(v7_keys))
+    if has_v8 and has_v7:
+        fail("manifest.artifacts cannot mix v8/v7 and legacy v7/v6 state paths")
+    if has_v8:
+        pairs = _state_path_pairs(root, manifest, schema="v8")
+        expected_equilibrium_sha = manifest.get("equilibrium_artifact_sha256")
+        expected_state_sha = manifest.get("linearization_state_sha256")
+        for index, (relative, equilibrium_path, state_path, sample_key) in enumerate(pairs):
+            equilibrium = load_json(equilibrium_path)
+            state = load_json(state_path)
+            expected_eq = expected_equilibrium_sha if len(pairs) == 1 else None
+            expected_state = expected_state_sha if len(pairs) == 1 else None
+            validate_equilibrium_artifact_v8_payload(equilibrium, expected_eq)
+            validate_linearization_state_v7_payload(state, equilibrium, expected_state)
+        handoff_found = False
+        for name, payload in (
+            ("manifest.diagnostics", manifest.get("diagnostics")),
+            ("solver_diagnostics", solver_diagnostics),
+        ):
+            handoff_found = validate_linearization_handoff_diagnostics(
+                payload,
+                expected_equilibrium_schema="equilibrium_artifact.v8",
+                expected_state_schema="LinearizationState.v7",
+                name=name,
+            ) or handoff_found
+        if not handoff_found:
+            fail("v8/v7 artifacts require linearization_handoff diagnostics")
+        return r4_discovery
+    if has_v7:
+        validate_equilibrium_artifact_v7(root, manifest)
+        has_v7_state = any(
+            key in artifacts
+            for key in (
+                "linearization_state_v6_path",
+                "linearization_state_v6_paths",
+            )
+        )
+        if not has_v7_state:
+            return r4_discovery
+        pairs = _state_path_pairs(root, manifest, schema="v7")
+        expected_equilibrium_sha = manifest.get("equilibrium_artifact_sha256")
+        expected_state_sha = manifest.get("linearization_state_sha256")
+        for relative, equilibrium_path, state_path, sample_key in pairs:
+            equilibrium = load_json(equilibrium_path)
+            state = load_json(state_path)
+            expected_eq = expected_equilibrium_sha if len(pairs) == 1 else None
+            expected_state = expected_state_sha if len(pairs) == 1 else None
+            validate_equilibrium_artifact_v7_payload(equilibrium, expected_eq)
+            validate_linearization_state_v6_payload(state, equilibrium, expected_state)
+        handoff_found = False
+        for name, payload in (
+            ("manifest.diagnostics", manifest.get("diagnostics")),
+            ("solver_diagnostics", solver_diagnostics),
+        ):
+            handoff_found = validate_linearization_handoff_diagnostics(
+                payload,
+                expected_equilibrium_schema="equilibrium_artifact.v7",
+                expected_state_schema="LinearizationState.v6",
+                name=name,
+            ) or handoff_found
+    return r4_discovery
+
+
+def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
+    paths = _declared_state_paths(
+        root,
+        manifest.get("artifacts"),
+        "equilibrium_artifact_v7",
+        "equilibrium_artifact.v7.json",
+    )
+    if not paths:
+        return
+    expected_content_sha256 = manifest.get("equilibrium_artifact_sha256")
+    for _, artifact_path, _ in paths:
+        validate_equilibrium_artifact_v7_payload(
+            load_json(artifact_path),
+            expected_content_sha256 if len(paths) == 1 else None,
         )
 
 
@@ -405,6 +1950,13 @@ def validate_periodic_mesh_certificate(
         certificate.get("magnetic_pair_map_sha256"),
         f"{name}.magnetic_pair_map_sha256",
     )
+
+
+def report_r4_discovery(result: dict[str, object]) -> None:
+    """Report the separate, currently unverified R4 replay gate."""
+    status = require_non_empty_string(result.get("status"), "R4 discovery.status")
+    reason = require_non_empty_string(result.get("reason"), "R4 discovery.reason")
+    print(f"R4 replay NOT VERIFIED [{status}]: {reason}", file=sys.stderr)
 
 
 def require_finite_number(value: object, name: str) -> float:
@@ -458,7 +2010,7 @@ def median(values: list[float]) -> float:
 
 
 def require_non_negative_int(value: object, name: str) -> int:
-    if not isinstance(value, int) or value < 0:
+    if type(value) is not int or value < 0:
         fail(f"{name} must be a non-negative integer")
     return value
 
@@ -537,6 +2089,105 @@ def require_mode_field_handoff(
             expected_resource_key,
             f"{name}.mode_field_resource_key",
         )
+
+
+def expected_mode_id(sample_index: int, raw_mode_index: int) -> str:
+    return f"sample-{sample_index:04d}/mode-{raw_mode_index:04d}"
+
+
+def validate_artifact_mode_identity(
+    payload: dict,
+    name: str,
+    sample_index: int,
+    raw_mode_index: int,
+    sample_ids_by_index: dict[int, str],
+    *,
+    required: bool = False,
+) -> None:
+    publishes_identity = "sample_id" in payload or "mode_id" in payload
+    if not required and not publishes_identity:
+        return
+    expected_sample_id = sample_ids_by_index.get(sample_index)
+    if expected_sample_id is None:
+        fail(
+            f"{name}.sample_id cannot be verified because spectrum sample "
+            f"{sample_index} has no stable sample_id"
+        )
+    require_equal(payload.get("sample_id"), expected_sample_id, f"{name}.sample_id")
+    require_equal(
+        payload.get("mode_id"),
+        expected_mode_id(sample_index, raw_mode_index),
+        f"{name}.mode_id",
+    )
+
+
+def validate_json_mode_field_availability(
+    payload: dict,
+    name: str,
+    sample_index: int,
+    raw_mode_index: int,
+) -> bool:
+    if "mode_field_available" in payload:
+        available = require_boolean(
+            payload.get("mode_field_available"),
+            f"{name}.mode_field_available",
+        )
+    else:
+        # Current durable artifacts omit transport routes. An explicit false
+        # remains authoritative; legacy availability follows the stable ID.
+        available = payload.get("mode_field_id") is not None
+    expected_field_id = mode_field_id(sample_index, raw_mode_index)
+    resource_key = payload.get("mode_field_resource_key")
+    if available:
+        require_mode_field_handoff(payload, name, sample_index, raw_mode_index)
+    else:
+        field_id = payload.get("mode_field_id")
+        if field_id is not None:
+            require_equal(field_id, expected_field_id, f"{name}.mode_field_id")
+        if resource_key is not None:
+            fail(
+                f"{name}.mode_field_resource_key must be null when "
+                "mode_field_available is false"
+            )
+    return available
+
+
+def require_csv_boolean(value: object, name: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    fail(f"{name} must be the CSV boolean 'true' or 'false'")
+
+
+def validate_csv_mode_field_availability(
+    row: dict[str, str],
+    name: str,
+    sample_index: int,
+    raw_mode_index: int,
+    expected_available: bool,
+    *,
+    has_explicit_availability: bool,
+) -> None:
+    available = (
+        require_csv_boolean(row.get("mode_field_available"), f"{name}.mode_field_available")
+        if has_explicit_availability
+        else expected_available
+    )
+    require_equal(available, expected_available, f"{name}.mode_field_available")
+    expected_field_id = mode_field_id(sample_index, raw_mode_index)
+    field_id = row.get("mode_field_id", "").strip()
+    resource_key = row.get("mode_field_resource_key", "").strip()
+    if available:
+        require_mode_field_handoff(row, name, sample_index, raw_mode_index)
+    else:
+        if field_id:
+            require_equal(field_id, expected_field_id, f"{name}.mode_field_id")
+        if resource_key:
+            fail(
+                f"{name}.mode_field_resource_key must be empty when "
+                "mode_field_available is false"
+            )
 
 
 def require_tracking_summary(payload: dict, name: str) -> None:
@@ -923,6 +2574,17 @@ def validate_manifest_physics(manifest: dict) -> None:
     )
 
 
+def validate_mode_gamma_matches_constants(mode: dict, constants: dict, name: str) -> None:
+    """Bind modal gamma provenance to the execution constants, not merely to its SI conversion."""
+    for field in ("gamma0_rad_s_per_A_m", "gamma_rad_s_T", "mu0_T_m_per_A"):
+        actual = require_finite_number(mode.get(field), f"{name}.{field}")
+        expected = require_finite_number(constants.get(field), f"execution.constants.{field}")
+        if actual <= 0 or expected <= 0:
+            fail(f"{name}.{field} and execution.constants.{field} must be positive")
+        require_close(actual, expected, f"{name}.{field} vs execution constants",
+                      relative_tolerance=1e-12, absolute_tolerance=0.0)
+
+
 def validate_mode_diagnostics_fields(
     payload: dict,
     payload_path: str,
@@ -1215,13 +2877,17 @@ def validate_mode_summary(
     has_resource_key = mode.get("mode_field_resource_key") is not None
     if has_resource_key and not has_field_id:
         fail("mode.mode_field_id is required for a legacy mode field resource key")
-    if has_field_id:
-        require_equal(mode.get("mode_field_id"), expected_field_id, "mode.mode_field_id")
+    field_available = (
+        require_boolean(mode.get("mode_field_available"), "mode.mode_field_available")
+        if "mode_field_available" in mode else has_field_id
+    )
+    if field_available:
+        require_mode_field_handoff(mode, "mode", sample_index, raw_mode_index)
+    else:
+        if has_field_id:
+            require_equal(mode.get("mode_field_id"), expected_field_id, "mode.mode_field_id")
         if has_resource_key:
-            require_equal(
-                mode.get("mode_field_resource_key"),
-                expected_resource_key,
-                "mode.mode_field_resource_key",
+            fail("mode.mode_field_resource_key must be null when mode.mode_field_available is false"
             )
     frequency_hz = require_finite_number(mode.get("frequency_hz"), "mode.frequency_hz")
     require_frequency_inside_window(frequency_hz, requested_window_hz, "mode.frequency_hz")
@@ -1244,7 +2910,7 @@ def validate_mode_summary(
     validate_mode_diagnostics_fields(mode, "mode", frequency_hz)
     require_non_empty_string(mode.get("dominant_polarization"), "mode.dominant_polarization")
 
-    if not has_field_id:
+    if not field_available:
         return (
             sample_index,
             raw_mode_index,
@@ -1432,6 +3098,7 @@ def validate_eigen_summary(
             spectrum_mode,
             summary_mode_path,
         )
+        validate_mode_gamma_matches_constants(mode, constants, summary_mode_path)
         validate_mode_diagnostics_fields(
             mode,
             summary_mode_path,
@@ -2690,6 +4357,37 @@ def validate_production_k_path_solver_subwindows(
             )
 
 
+def validate_assignment_ambiguity_metric(diagnostics: dict, prefix: str) -> None:
+    metric_fields = (
+        "ambiguous_assignment_count",
+        "ambiguous_assignment_count_available",
+        "ambiguous_assignment_count_unavailable_reason",
+    )
+    if not any(field in diagnostics for field in metric_fields):
+        return
+    available = diagnostics.get("ambiguous_assignment_count_available")
+    if not isinstance(available, bool):
+        fail(f"{prefix}.ambiguous_assignment_count_available must be boolean")
+    count = diagnostics.get("ambiguous_assignment_count")
+    reason = diagnostics.get("ambiguous_assignment_count_unavailable_reason")
+    if available:
+        require_non_negative_int(count, f"{prefix}.ambiguous_assignment_count")
+        if reason not in (None, ""):
+            fail(
+                f"{prefix}.ambiguous_assignment_count_unavailable_reason must be "
+                "null or empty when the metric is available"
+            )
+    else:
+        if count is not None:
+            fail(
+                f"{prefix}.ambiguous_assignment_count must be null when unavailable"
+            )
+        require_non_empty_string(
+            reason,
+            f"{prefix}.ambiguous_assignment_count_unavailable_reason",
+        )
+
+
 def validate_production_modal_k_path_branch_tracking(
     manifest_diagnostics: dict,
     branches: dict,
@@ -3816,6 +5514,51 @@ def vector_dot(
     return sum(left * right for left, right in zip(lhs, rhs))
 
 
+def p00_demag_factor(k_norm: float, film_thickness_m: float) -> float:
+    """Stable slab P00; dimensionless argument k*t, with the Kittel limit."""
+    if not math.isfinite(k_norm) or k_norm < 0.0:
+        raise ValueError("k_norm must be finite and non-negative")
+    if not math.isfinite(film_thickness_m) or film_thickness_m <= 0.0:
+        raise ValueError("film_thickness_m must be finite and positive")
+    kd = k_norm * film_thickness_m
+    if not math.isfinite(kd):
+        raise ValueError("k*t must be finite")
+    if kd < 1.0e-4:
+        return kd * (0.5 + kd * (-1.0 / 6.0 + kd * (1.0 / 24.0 + kd * (-1.0 / 120.0 + kd / 720.0))))
+    return 1.0 + math.expm1(-kd) / kd
+
+
+def require_kalinikos_slab_n0_material_and_bias(
+    plan: dict, material: dict, magnetization_direction: tuple[float, float, float]
+) -> None:
+    """Reject physics omitted by the homogeneous, field-aligned slab oracle."""
+    bias_direction = unit_vector(require_vector3(plan.get("external_field"), "external_field"), "external_field")
+    if vector_dot(bias_direction, magnetization_direction) < 1.0 - 1.0e-6:
+        fail("Kalinikos n=0 requires bias aligned with equilibrium magnetization")
+    for field in ("interfacial_dmi", "bulk_dmi"):
+        value = plan.get(field)
+        if value is not None and require_finite_number(value, field) != 0.0:
+            fail(f"Kalinikos n=0 does not include {field}")
+    for field in ("uniaxial_anisotropy", "uniaxial_anisotropy_k2", "cubic_anisotropy_kc1", "cubic_anisotropy_kc2", "cubic_anisotropy_kc3"):
+        value = material.get(field)
+        if value is not None and require_finite_number(value, field) != 0.0:
+            fail(f"Kalinikos n=0 does not include {field}")
+    for field, scalar in (("ms_field", "saturation_magnetisation"), ("a_field", "exchange_stiffness")):
+        values = material.get(field)
+        if values is not None:
+            if not isinstance(values, list) or not values:
+                fail(f"Kalinikos n=0 requires a nonempty uniform {field}")
+            expected = require_finite_number(material.get(scalar), scalar)
+            for value in values:
+                if not math.isclose(require_finite_number(value, field), expected, rel_tol=1e-12, abs_tol=0.0):
+                    fail(f"Kalinikos n=0 requires uniform {field} matching {scalar}")
+    for field in ("ku_field", "ku2_field", "kc1_field", "kc2_field", "kc3_field", "dind_field", "dbulk_field"):
+        values = material.get(field)
+        if values is not None:
+            if not isinstance(values, list) or any(require_finite_number(value, field) != 0.0 for value in values):
+                fail(f"Kalinikos n=0 does not include {field}")
+
+
 def kalinikos_slab_n0_frequency_hz(
     *,
     k_norm: float,
@@ -3833,11 +5576,7 @@ def kalinikos_slab_n0_frequency_hz(
         * k_norm
         / (MU0 * saturation_magnetisation_a_per_m)
     )
-    if k_norm == 0.0:
-        p_factor = 0.0
-    else:
-        kd = k_norm * film_thickness_m
-        p_factor = 1.0 - (1.0 - math.exp(-kd)) / kd
+    p_factor = p00_demag_factor(k_norm, film_thickness_m)
     common = bias_field_a_per_m + exchange_field
     if geometry == "damon_eshbach":
         factor_a = common + saturation_magnetisation_a_per_m * (1.0 - p_factor)
@@ -3882,6 +5621,150 @@ def require_int_list(value: object, name: str) -> list[int]:
     if not isinstance(value, list) or any(not isinstance(item, int) for item in value):
         fail(f"{name} must be an integer list")
     return value
+
+
+def validate_tracking_alias(branches: dict, alias: dict) -> None:
+    """Check the common contract; legacy schema/diagnostic envelopes may differ."""
+    keys = ["branches", "solver_model"]
+    if "tracking_policy_availability" in branches or "tracking_policy_availability" in alias:
+        keys.extend(["tracking_method", "overlap_floor", "frequency_window_hz", "tracking_policy_availability"])
+    for key in keys:
+        require_equal(alias.get(key), branches.get(key), f"branches.json alias {key}")
+
+
+def validate_tracking_edge_provenance(branches: dict, sample_order: list[int]) -> None:
+    """Validate optional assignment evidence without qualifying a subspace as pair overlap."""
+    positions = {sample: position for position, sample in enumerate(sample_order)}
+    policies = []
+    missing = False
+    for branch in require_object_list(branches.get("branches"), "branches.branches"):
+        branch_id = require_non_negative_int(branch.get("branch_id"), "branch_id")
+        points = require_object_list(branch.get("points"), "branch.points")
+        by_sample = {require_non_negative_int(point.get("sample_index"), "branch point.sample_index"): point
+                     for point in points}
+        if len(by_sample) != len(points) and any(point.get("tracking_edge") is not None for point in points):
+            fail("tracking_edge branch cannot contain duplicate sample points")
+        for point in points:
+            edge = point.get("tracking_edge")
+            if edge is None:
+                missing = True
+                continue  # historical artifact: no edge evidence is claimed
+            if not isinstance(edge, dict):
+                fail("tracking_edge must be an object or null")
+            policy = edge.get("policy")
+            if not isinstance(policy, dict):
+                fail("tracking_edge.policy must be an object")
+            method = policy.get("method")
+            if method not in {"overlap_greedy", "overlap_hungarian"}:
+                fail("tracking_edge.policy.method is unsupported")
+            floor = require_finite_number(policy.get("overlap_floor"), "tracking_edge.overlap_floor")
+            if not 0 <= floor <= 1:
+                fail("tracking_edge.overlap_floor must be in [0, 1]")
+            window = policy.get("frequency_window_hz")
+            if window is not None and require_finite_number(window, "tracking_edge.frequency_window_hz") <= 0:
+                fail("tracking_edge.frequency_window_hz must be positive")
+            max_gap = require_non_negative_int(policy.get("max_branch_gap"), "tracking_edge.max_branch_gap")
+            policies.append(policy)
+            require_equal(edge.get("score_source"), point.get("tracking_score_source"), "tracking_edge.score_source")
+            transition = edge.get("transition")
+            source = edge.get("score_source")
+            sample = require_non_negative_int(point.get("sample_index"), "tracking_edge sample")
+            if sample not in positions:
+                fail("tracking_edge current sample is unknown")
+            gap = require_non_negative_int(edge.get("skipped_sample_count"), "tracking_edge.skipped_sample_count")
+            metric = edge.get("metric")
+            if metric not in {"consistent_p1_tet4_cartesian_nodal_envelope", "diagonal_nodal_mass",
+                              "euclidean", "unavailable"}:
+                fail("tracking_edge.metric is unsupported")
+            if transition in {"seed", "new_branch"}:
+                require_equal(source, "seed" if transition == "seed" else "modal_overlap_unavailable",
+                              "tracking_edge seed/restart source")
+                if transition == "seed" and positions[sample] != 0:
+                    fail("tracking_edge seed must belong to the first sample")
+                if transition == "new_branch" and positions[sample] == 0:
+                    fail("tracking_edge new_branch cannot be an initial seed")
+                if points[0] is not point or edge.get("previous_sample_index") is not None or \
+                        edge.get("previous_raw_mode_index") is not None or gap or edge.get("subspace") is not None:
+                    fail("tracking_edge seed/restart cannot claim a predecessor or subspace")
+                require_equal(metric, "unavailable", "tracking_edge seed metric")
+                if point.get("overlap_prev") is not None:
+                    fail("tracking_edge seed/restart cannot claim pair overlap")
+                continue
+            previous = require_non_negative_int(edge.get("previous_sample_index"), "tracking_edge.previous_sample_index")
+            previous_raw = require_non_negative_int(edge.get("previous_raw_mode_index"), "tracking_edge.previous_raw_mode_index")
+            if previous not in positions or positions[previous] >= positions[sample]:
+                fail("tracking_edge predecessor must be an earlier known sample")
+            if any(positions[previous] < positions[retained] < positions[sample]
+                   for retained in by_sample if retained in positions):
+                fail("tracking_edge predecessor cannot skip a retained branch point")
+            require_equal(gap, positions[sample] - positions[previous] - 1, "tracking_edge gap")
+            if gap > max_gap:
+                fail("tracking_edge gap exceeds recorded policy")
+            if previous in by_sample:
+                require_equal(previous_raw, by_sample[previous].get("raw_mode_index"), "tracking_edge predecessor raw mode")
+            # Output selection may omit the predecessor; never invent an endpoint from the retained array.
+            subspace = edge.get("subspace")
+            if transition == "pair":
+                if subspace is not None:
+                    fail("tracking_edge pair cannot claim a subspace")
+                if source == "frequency_score_fallback":
+                    require_equal(metric, "unavailable", "tracking_edge fallback metric")
+                    if point.get("overlap_prev") is not None:
+                        fail("tracking_edge frequency fallback cannot claim pair overlap")
+                elif source in {"modal_overlap_weighted_score", "modal_overlap_unweighted_score"}:
+                    expected_metrics = {"consistent_p1_tet4_cartesian_nodal_envelope", "diagonal_nodal_mass"} \
+                        if source == "modal_overlap_weighted_score" else {"euclidean"}
+                    if metric not in expected_metrics:
+                        fail("tracking_edge pair metric disagrees with score source")
+                    overlap = require_finite_number(point.get("overlap_prev"), "tracking_edge pair overlap")
+                    if not floor <= overlap <= 1:
+                        fail("tracking_edge pair overlap violates recorded floor")
+                else:
+                    fail("tracking_edge pair source is unsupported")
+                continue
+            if transition not in {"degenerate_to_degenerate", "split_to_degenerate", "degenerate_to_split"}:
+                fail("tracking_edge transition is unsupported")
+            require_equal(source, "modal_subspace_transport_score", "tracking_edge subspace source")
+            if metric == "unavailable" or point.get("overlap_prev") is not None or not isinstance(subspace, dict):
+                fail("tracking_edge subspace requires a metric and separate principal-angle evidence")
+            rank = require_non_negative_int(subspace.get("rank"), "tracking_edge subspace rank")
+            if rank < 2:
+                fail("tracking_edge subspace rank must be at least two")
+            arrays = {}
+            for key in ("branch_ids", "previous_raw_mode_indices", "current_raw_mode_indices"):
+                values = subspace.get(key)
+                if not isinstance(values, list) or len(values) != rank:
+                    fail(f"tracking_edge subspace {key} must match rank")
+                arrays[key] = [require_non_negative_int(value, key) for value in values]
+                if len(set(arrays[key])) != rank:
+                    fail(f"tracking_edge subspace {key} must be unique")
+            if branch_id not in arrays["branch_ids"]:
+                fail("tracking_edge subspace does not contain current branch")
+            slot = arrays["branch_ids"].index(branch_id)
+            require_equal(arrays["previous_raw_mode_indices"][slot], previous_raw, "tracking_edge subspace predecessor raw mode")
+            if point.get("raw_mode_index") not in arrays["current_raw_mode_indices"]:
+                fail("tracking_edge subspace does not contain current raw mode")
+            cosines = subspace.get("principal_cosines")
+            if not isinstance(cosines, list) or len(cosines) != rank:
+                fail("tracking_edge principal cosines must match rank")
+            cosines = [require_finite_number(value, "tracking_edge principal cosine") for value in cosines]
+            if any(not 0 <= value <= 1 for value in cosines):
+                fail("tracking_edge principal cosines must be in [0, 1]")
+            minimum = require_finite_number(subspace.get("principal_minimum"), "tracking_edge principal minimum")
+            require_close(minimum, min(cosines), "tracking_edge principal minimum", absolute_tolerance=1e-12)
+            if minimum < floor:
+                fail("tracking_edge principal minimum violates recorded floor")
+            for key in ("previous_cluster", "current_cluster"):
+                require_non_negative_int(subspace.get(key), key)
+    availability = branches.get("tracking_policy_availability")
+    if policies and availability is None:
+        fail("tracking_edge evidence requires tracking_policy_availability")
+    if availability is not None:
+        complete = bool(policies) and not missing and all(policy == policies[0] for policy in policies)
+        require_equal(availability, "complete" if complete else "missing_or_mixed", "tracking policy availability")
+        for key in ("tracking_method", "overlap_floor", "frequency_window_hz"):
+            policy_key = "method" if key == "tracking_method" else key
+            require_equal(branches.get(key), policies[0].get(policy_key) if complete else None, key)
 
 
 def require_branch_id(value: object, name: str) -> int:
@@ -3945,11 +5828,9 @@ def validate_low_k_de_bv_analytic_dispersion(
             "analytic_thin_film_de_bv_reference_not_fem_demag_k",
             "manifest.validation.dynamic_demag_operator_source",
         )
-    elif reference_model not in (None, ""):
-        fail(
-            "manifest.validation.dispersion_reference_model must be empty for "
-            "numeric modal solver DE/BV comparison artifacts"
-        )
+    else:
+        require_equal(reference_model, "kalinikos_slab_n0", "manifest.validation.dispersion_reference_model")
+        require_equal(dynamic_demag_source, "numeric_modal_solver", "manifest.validation.dynamic_demag_operator_source")
     require_equal(
         canonical_dispersion_validation(
             manifest_validation,
@@ -3975,14 +5856,12 @@ def validate_low_k_de_bv_analytic_dispersion(
         validation.get("frequency_window_hz"),
         "metadata.execution_plan.backend_plan.dispersion_validation.frequency_window_hz",
     )
-    if frequency_window_hz[1] > 5.0e9:
-        fail("DE/BV low-k analytic dispersion frequency window must not exceed 5 GHz")
     max_k = require_finite_number(
         validation.get("max_k_rad_per_m"),
         "metadata.execution_plan.backend_plan.dispersion_validation.max_k_rad_per_m",
     )
-    if max_k <= 0.0 or max_k > 3.0e6:
-        fail("DE/BV low-k analytic dispersion max_k_rad_per_m must be in (0, 3e6]")
+    if max_k <= 0.0:
+        fail("DE/BV low-k analytic dispersion max_k_rad_per_m must be positive")
     film_thickness = require_finite_number(
         validation.get("film_thickness_m"),
         "metadata.execution_plan.backend_plan.dispersion_validation.film_thickness_m",
@@ -4044,6 +5923,7 @@ def validate_low_k_de_bv_analytic_dispersion(
     )
     if abs(vector_dot(magnetization_direction, film_normal)) > 1.0e-6:
         fail("DE/BV low-k analytic dispersion requires in-plane equilibrium magnetization")
+    require_kalinikos_slab_n0_material_and_bias(plan, material, magnetization_direction)
 
     scenarios = require_object_list(
         validation.get("scenarios"),
@@ -4079,6 +5959,7 @@ def validate_low_k_de_bv_analytic_dispersion(
             fail(f"DE/BV scenario {geometry} requires at least three samples")
         branch_errors: list[float] = []
         nonzero_samples = 0
+        frequency_points: list[tuple[float, float, float, int]] = []
         for sample_index in sample_indices:
             if sample_index not in known_samples:
                 fail(f"DE/BV scenario {geometry} references unknown sample_index {sample_index}")
@@ -4132,6 +6013,7 @@ def validate_low_k_de_bv_analytic_dispersion(
             )
             relative_error = abs(frequency_hz - expected_hz) / max(abs(expected_hz), 1.0)
             branch_errors.append(relative_error)
+            frequency_points.append((k_norm, frequency_hz, expected_hz, sample_index))
             row = dispersion_rows_by_mode.get(mode_key)
             if row is None:
                 fail(
@@ -4176,6 +6058,19 @@ def validate_low_k_de_bv_analytic_dispersion(
             )
         if nonzero_samples < 2:
             fail(f"DE/BV scenario {geometry} requires at least two nonzero k samples")
+        frequency_points.sort(key=lambda point: (point[0], point[3]))
+        for left, right in zip(frequency_points, frequency_points[1:]):
+            expected_delta = right[2] - left[2]
+            observed_delta = right[1] - left[1]
+            continuity_error = abs(observed_delta - expected_delta) / max(
+                abs(left[2]), abs(right[2]), 1.0
+            )
+            if continuity_error > max_relative_error:
+                fail(
+                    f"DE/BV low-k frequency continuity error is too large for {geometry} "
+                    f"between sample_index {left[3]} and {right[3]}: "
+                    f"got {continuity_error:.6g}, expected <= {max_relative_error:.6g}"
+                )
         branch_error = max(branch_errors)
         if branch_error > max_relative_error:
             fail(
@@ -4191,9 +6086,12 @@ def validate_dispersion(
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
     known_mode_summaries: dict[tuple[int, int], dict],
     known_samples: dict[int, tuple[float, tuple[float, float, float], str]],
+    sample_ids_by_index: dict[int, str],
     branch_ids_by_mode: dict[tuple[int, int], int],
     tracking_sources_by_mode: dict[tuple[int, int], str],
     overlap_by_mode: dict[tuple[int, int], float],
+    *,
+    require_stable_ids: bool,
 ) -> dict[tuple[int, int], dict[str, str]]:
     path = root / "eigen/dispersion.csv"
     require_file(path)
@@ -4216,6 +6114,10 @@ def validate_dispersion(
         "tracking_score_source",
         "mode_field_id",
     }
+    identity_columns = {"sample_id", "mode_id", "mode_field_available"}
+    publishes_identity_columns = bool(identity_columns.intersection(reader.fieldnames or []))
+    if require_stable_ids or publishes_identity_columns:
+        required_columns.update(identity_columns)
     missing = required_columns.difference(reader.fieldnames or [])
     if missing:
         fail(f"eigen/dispersion.csv missing columns: {sorted(missing)!r}")
@@ -4249,6 +6151,14 @@ def validate_dispersion(
                 "eigen/dispersion.csv references unknown sample "
                 f"sample={sample_index}"
             )
+        validate_artifact_mode_identity(
+            row,
+            f"dispersion row {row_index}",
+            sample_index,
+            raw_mode_index,
+            sample_ids_by_index,
+            required=require_stable_ids,
+        )
         expected_path_s, expected_k_vector, expected_label = sample_metadata
         path_s = require_finite_number(
             float(row["path_s_rad_per_m"]),
@@ -4312,10 +6222,13 @@ def validate_dispersion(
             f"dispersion row {row_index}.tracking_score_source",
         )
         overlap_score_text = row.get("overlap_score", "").strip()
-        if tracking_score_source == "modal_overlap_weighted_score" and not overlap_score_text:
+        if tracking_score_source in {
+            "modal_overlap_weighted_score",
+            "modal_overlap_unweighted_score",
+        } and not overlap_score_text:
             fail(
                 f"dispersion row {row_index}.overlap_score must be present "
-                "for modal_overlap_weighted_score"
+                f"for {tracking_score_source}"
             )
         if overlap_score_text:
             overlap_score = require_finite_number(
@@ -4337,31 +6250,20 @@ def validate_dispersion(
                     f"dispersion row {row_index}.overlap_score",
                     absolute_tolerance=1.0e-12,
                 )
-        if known_mode_summaries[mode_key].get("mode_field_id") is None:
-            require_equal(
-                row.get("mode_field_id"),
-                "",
-                f"dispersion row {row_index}.mode_field_id",
-            )
-            require_equal(
-                row.get("mode_field_resource_key", ""),
-                "",
-                f"dispersion row {row_index}.mode_field_resource_key",
-            )
-        else:
-            expected_field_id = mode_field_id(sample_index, raw_mode_index)
-            expected_resource_key = mode_field_resource_key(expected_field_id)
-            require_equal(
-                row.get("mode_field_id"),
-                expected_field_id,
-                f"dispersion row {row_index}.mode_field_id",
-            )
-            if "mode_field_resource_key" in row:
-                require_equal(
-                    row.get("mode_field_resource_key"),
-                    expected_resource_key,
-                    f"dispersion row {row_index}.mode_field_resource_key",
-                )
+        expected_field_available = validate_json_mode_field_availability(
+            known_mode_summaries[mode_key],
+            f"spectrum mode {sample_index}/{raw_mode_index}",
+            sample_index,
+            raw_mode_index,
+        )
+        validate_csv_mode_field_availability(
+            row,
+            f"dispersion row {row_index}",
+            sample_index,
+            raw_mode_index,
+            expected_field_available,
+            has_explicit_availability="mode_field_available" in (reader.fieldnames or []),
+        )
         frequency_hz = require_finite_number(
             float(row["frequency_hz"]),
             f"dispersion row {row_index}.frequency_hz",
@@ -4829,8 +6731,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help=(
             "require realistic thin-film low-k Damon-Eshbach and "
-            "backward-volume dispersion scenarios with |k| <= 3e6 rad/m, "
-            "frequency window <= 5 GHz, and Kalinikos n=0 analytic agreement"
+            "backward-volume dispersion scenarios within the homogeneous thin-film "
+            "Kalinikos n=0 model applicability, with analytic agreement"
+        ),
+    )
+    parser.add_argument(
+        "--require-r4-replay",
+        action="store_true",
+        help=(
+            "require the accepted/recomputed FEM equilibrium and linearization "
+            "identity replay gate; this remains unavailable until its payload "
+            "consumer is implemented"
         ),
     )
     return parser.parse_args(argv)
@@ -4864,19 +6775,41 @@ def main(argv: list[str] | None = None) -> int:
 
     spectrum = load_json(root / "eigen/spectrum.v2.json")
     branches = load_json(root / "eigen/branches.v2.json")
+    legacy_branches_path = root / "eigen/branches.json"
+    if legacy_branches_path.exists():
+        validate_tracking_alias(branches, load_json(legacy_branches_path))
     summary = load_json(root / "eigen/metadata/eigen_summary.json")
     manifest = load_json(root / "frequency_domain/manifest.v1.json")
     solver_diagnostics = load_json(root / "eigen/diagnostics/solver.v1.json")
 
     require_equal(spectrum.get("schema_version"), "eigen_spectrum.v2", "spectrum.schema_version")
     require_equal(branches.get("schema_version"), "eigen_branches.v2", "branches.schema_version")
+    spectrum_diagnostics_summary = spectrum.get("diagnostics_summary")
+    if spectrum_diagnostics_summary is not None:
+        if not isinstance(spectrum_diagnostics_summary, dict):
+            fail("spectrum.diagnostics_summary must be an object")
+        validate_assignment_ambiguity_metric(
+            spectrum_diagnostics_summary, "spectrum.diagnostics_summary"
+        )
     require_equal(
         manifest.get("schema_version"),
         "frequency_domain_manifest.v1",
         "manifest.schema_version",
     )
     require_equal(manifest.get("stage_kind"), "eigenmodes", "manifest.stage_kind")
-    validate_equilibrium_artifact_v7(root, manifest)
+    computed_sample_indices = _computed_sample_indices_from_spectrum(spectrum)
+    r4_discovery = validate_equilibrium_artifacts(
+        root,
+        manifest,
+        solver_diagnostics,
+        computed_sample_indices=computed_sample_indices,
+    )
+    report_r4_discovery(r4_discovery)
+    if args.require_r4_replay:
+        fail(
+            "R4 replay NOT VERIFIED "
+            f"[{r4_discovery['status']}]: {r4_discovery['reason']}"
+        )
     validate_manifest_physics(manifest)
     require_equal(
         manifest.get("artifacts", {}).get("solver_diagnostics_path"),
@@ -5000,6 +6933,8 @@ def main(argv: list[str] | None = None) -> int:
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]] = {}
     known_mode_summaries: dict[tuple[int, int], dict] = {}
     known_samples: dict[int, tuple[float, tuple[float, float, float], str]] = {}
+    sample_ids_by_index: dict[int, str] = {}
+    sample_indices_by_id: dict[str, int] = {}
     published_mode_counts: list[int] = []
     for sample_position, sample in enumerate(samples):
         sample_index = require_non_negative_int(
@@ -5023,6 +6958,15 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(label, str):
             fail(f"spectrum.samples[{sample_position}].label must be a string or null")
         known_samples[sample_index] = (path_s, k_vector, label)
+        if "sample_id" in sample or args.require_production_modal_k_path or args.require_production_gamma_k_path:
+            sample_id = require_non_empty_string(
+                sample.get("sample_id"),
+                f"spectrum.samples[{sample_position}].sample_id",
+            )
+            if sample_id in sample_indices_by_id and sample_indices_by_id[sample_id] != sample_index:
+                fail(f"duplicate spectrum sample_id {sample_id!r}")
+            sample_ids_by_index[sample_index] = sample_id
+            sample_indices_by_id[sample_id] = sample_index
         modes = require_object_list(sample.get("modes"), f"spectrum.samples[{sample_position}].modes")
         published_mode_counts.append(len(modes))
         for mode in modes:
@@ -5054,8 +6998,14 @@ def main(argv: list[str] | None = None) -> int:
     if mode_field_storage_format == "none":
         if manifest_mode_paths or manifest_mode_resources:
             fail("spectrum-only manifest must not declare mode metadata paths or field resources")
-        if any(mode.get("mode_field_id") is not None for mode in known_mode_summaries.values()):
-            fail("spectrum-only manifest must not publish mode field handoffs")
+        for (sample_index, raw_mode_index), mode in known_mode_summaries.items():
+            if validate_json_mode_field_availability(
+                mode,
+                f"spectrum mode {sample_index}/{raw_mode_index}",
+                sample_index,
+                raw_mode_index,
+            ):
+                fail("spectrum-only manifest must not publish available mode fields")
     spectrum_mode_count = require_non_negative_int(
         spectrum.get("mode_count"),
         "spectrum.mode_count",
@@ -5101,6 +7051,7 @@ def main(argv: list[str] | None = None) -> int:
         require_production_gamma_k_path=args.require_production_gamma_k_path,
     )
 
+    validate_tracking_edge_provenance(branches, list(known_samples))
     branch_modes: set[tuple[int, int]] = set()
     branch_ids_by_mode: dict[tuple[int, int], int] = {}
     tracking_sources_by_mode: dict[tuple[int, int], str] = {}
@@ -5110,6 +7061,9 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(branch_diagnostics, dict):
         fail("branches.diagnostics must be an object")
     require_tracking_summary(branch_diagnostics, "branches.diagnostics")
+    validate_assignment_ambiguity_metric(
+        branch_diagnostics, "branches.diagnostics"
+    )
     for branch_index, branch in enumerate(require_object_list(branches.get("branches"), "branches.branches")):
         branch_id = require_non_negative_int(branch.get("branch_id"), f"branches[{branch_index}].branch_id")
         for point in require_object_list(branch.get("points"), f"branches[{branch_index}].points"):
@@ -5119,6 +7073,17 @@ def main(argv: list[str] | None = None) -> int:
                 "branch point.raw_mode_index",
             )
             branch_mode_key = (sample_index, raw_mode_index)
+            validate_artifact_mode_identity(
+                point,
+                "branch point",
+                sample_index,
+                raw_mode_index,
+                sample_ids_by_index,
+                required=(
+                    args.require_production_modal_k_path
+                    or args.require_production_gamma_k_path
+                ),
+            )
             branch_modes.add(branch_mode_key)
             existing_branch_id = branch_ids_by_mode.get(branch_mode_key)
             if existing_branch_id is not None and existing_branch_id != branch_id:
@@ -5136,8 +7101,11 @@ def main(argv: list[str] | None = None) -> int:
             if tracking_confidence < 0.0 or tracking_confidence > 1.0:
                 fail("branch point.tracking_confidence must be in [0, 1]")
             overlap_prev = point.get("overlap_prev")
-            if tracking_source == "modal_overlap_weighted_score" and overlap_prev is None:
-                fail("branch point.overlap_prev is required for modal_overlap_weighted_score")
+            if tracking_source in {
+                "modal_overlap_weighted_score",
+                "modal_overlap_unweighted_score",
+            } and overlap_prev is None:
+                fail(f"branch point.overlap_prev is required for {tracking_source}")
             if overlap_prev is not None:
                 overlap_by_mode[branch_mode_key] = require_finite_number(
                     overlap_prev,
@@ -5154,16 +7122,23 @@ def main(argv: list[str] | None = None) -> int:
                     )
             if branch_mode_key in known_modes:
                 spectrum_mode = known_mode_summaries[branch_mode_key]
-                if spectrum_mode.get("mode_field_id") is None:
-                    if point.get("mode_field_id") is not None or point.get("mode_field_resource_key") is not None:
-                        fail("spectrum-only mode must not acquire a branch mode field handoff")
-                else:
-                    require_mode_field_handoff(
-                        point,
-                        "branch point",
-                        sample_index,
-                        raw_mode_index,
-                    )
+                spectrum_field_available = validate_json_mode_field_availability(
+                    spectrum_mode,
+                    f"spectrum mode {sample_index}/{raw_mode_index}",
+                    sample_index,
+                    raw_mode_index,
+                )
+                branch_field_available = validate_json_mode_field_availability(
+                    point,
+                    "branch point",
+                    sample_index,
+                    raw_mode_index,
+                )
+                require_equal(
+                    branch_field_available,
+                    spectrum_field_available,
+                    "branch point.mode_field_available",
+                )
                 frequency_hz = require_finite_number(
                     point.get("frequency_hz"),
                     "branch point.frequency_hz",
@@ -5214,9 +7189,14 @@ def main(argv: list[str] | None = None) -> int:
         known_modes,
         known_mode_summaries,
         known_samples,
+        sample_ids_by_index,
         branch_ids_by_mode,
         tracking_sources_by_mode,
         overlap_by_mode,
+        require_stable_ids=(
+            args.require_production_modal_k_path
+            or args.require_production_gamma_k_path
+        ),
     )
     validate_typed_modal_field_sweep(
         root,

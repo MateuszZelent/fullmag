@@ -15,6 +15,7 @@ from local_runner.build_source import bind_identity
 from local_runner.worker_entrypoint import canonical, SCHEMA
 from local_runner.coordinator import inspect_owned
 from local_runner.retention import plan as retention_plan
+from local_runner.retention_service import RetentionService
 from local_runner.service import (
     RunnerService,
     ServicePaths,
@@ -34,6 +35,18 @@ from local_runner.observability import (
 
 
 _RETENTION_QUEUE_LIMIT = 1000
+_JOB_SUMMARY_FIELDS = (
+    'sequence', 'job_id', 'owner', 'request_key', 'worktree_id',
+    'source_digest', 'profile', 'operation', 'state', 'created_at',
+    'updated_at', 'coordinator', 'exit_code',
+)
+_QUEUE_STATES = ('running', 'queued', 'cancel_requested')
+
+
+def _job_summary(job):
+    # Source capsules belong to the detail resource, not paginated tables.
+    return {key: job[key] for key in _JOB_SUMMARY_FIELDS if key in job}
+
 
 
 def _timestamp() -> str:
@@ -64,15 +77,28 @@ def submission_manifest(source, expected_digest):
 
 class Application:
     def __init__(self, config):
+        profiles = config.get('allowed_profiles')
+        if (not isinstance(profiles, list) or not profiles
+                or any(not isinstance(profile, str) for profile in profiles)
+                or len(set(profiles)) != len(profiles)):
+            raise ValueError('Coordinator requires an explicit unique profile allow-list')
+        for profile in profiles:
+            profile_lane(profile)
+        self.allowed_profiles = frozenset(profiles)
         self.storage = Path('/storage')
         self.owner = config['operator']
         self.layout = {'storage_root': '/storage', 'container_coordinator': True,
+                       'host_storage_root': config['host_storage_root'],
                        'daemon_storage_root': desktop_daemon_root(config['host_storage_root'])}
         for name in ('index', 'locks'):
             validate_path(self.storage / name, self.storage).mkdir(exist_ok=True)
         self.queue = JobQueue(validate_path(self.storage / 'index' / 'runner-jobs.sqlite', self.storage))
         self.paths = ServicePaths.from_storage(self.storage)
         self.hub = ObservabilityHub(self.storage, owner=self.owner)
+        self.retention_service = RetentionService(self.hub, self.queue, self.layout,
+                                                  owner=self.owner, call=docker)
+        if read_stop_request(self.paths) is not None:
+            self.retention_service.drain()
         self._lifecycle_lock = threading.RLock()
         self._worker_thread = None
         self._worker_state = 'starting'
@@ -81,6 +107,7 @@ class Application:
         self._worker_started_at = None
         self._worker_finished_at = None
         self._worker_samples_by_job = {}
+        self._worker_io_baselines = {}
 
     def _service_record(self):
         if not self.paths.state_path.exists():
@@ -180,6 +207,8 @@ class Application:
         if set(payload) != {'worktree_id', 'source_digest', 'profile', 'operation', 'request_key', 'payload'} or payload['operation'] != 'build':
             raise ValueError('Only catalogued build requests are accepted')
         profile_lane(payload['profile'])
+        if payload['profile'] not in self.allowed_profiles:
+            raise ValueError('Build profile is not enabled by the operator configuration')
         detail = payload['payload']
         if set(detail) != {'source_mode', 'capsule_relative', 'origin_repo', 'capture_id', 'native_source_identity'}:
             raise ValueError('Unknown source request fields')
@@ -243,13 +272,20 @@ class Application:
         journal_path = validate_path(root / 'coordinator.json', self.storage)
         if journal_path.exists():
             journal = json.loads(journal_path.read_text())
-            if journal.get('container_id'):
+            terminal = job.get('state') in ('succeeded', 'failed', 'cancelled')
+            saved = validate_path(root / 'worker.log', self.storage)
+            if terminal and saved.is_file():
+                with saved.open('rb') as stream:
+                    stream.seek(max(0, saved.stat().st_size - 16000))
+                    parts.append(stream.read(16000).decode(errors='replace'))
+            elif journal.get('container_id'):
                 inspect_owned(docker, journal['container_id'], job_id)
                 parts.append(docker(['logs', '--tail', '100', journal['container_id']]))
         return {'job_id': job_id, 'tail': '\n'.join(parts)}
 
     def stop(self):
         with self._lifecycle_lock:
+            self.retention_service.drain()
             existing = read_stop_request(self.paths)
             if existing is None:
                 existing = request_stop(self.paths, requested_by=self.owner)
@@ -275,6 +311,7 @@ class Application:
                     'reason': 'worker is finishing its stop; retry resume after it exits',
                 }
             clear_stop_request(self.paths, reason='operator resumed the service')
+            self.retention_service.resume()
             started = self._start_worker_locked()
             health = self._health_snapshot()
             if started:
@@ -318,13 +355,22 @@ class Application:
             'legacy_jobs': snapshot['legacy_jobs'],
             'stop_requested': snapshot['stop_requested'],
             'storage_free_bytes': free_bytes,
-            'allowed_profiles': list(PROFILES.keys()),
+            'retention_busy': self.retention_service.busy,
+            'retention_draining': self.retention_service.stopping,
+            'allowed_profiles': sorted(self.allowed_profiles),
             'qualification': 'NOT VERIFIED',
         }
 
     def _inspect_worker_metrics(self, current_job=None):
         if not current_job:
-            return {'container_id': None, 'memory_mb': None, 'limit_mb': None, 'cpu_percent': None, 'io_mb_s': None}
+            return {
+                'container_id': None,
+                'container_verified': False,
+                'memory_mb': None,
+                'limit_mb': None,
+                'cpu_percent': None,
+                'io_mb_s': None,
+            }
         wt = current_job.get('worktree_id', '')
         job_id = current_job.get('job_id', '')
         journal_path = self.storage / 'runs' / wt / job_id / 'coordinator.json'
@@ -337,28 +383,43 @@ class Application:
                 pass
 
         if not container_id:
-            return {'container_id': None, 'memory_mb': None, 'limit_mb': None, 'cpu_percent': None, 'io_mb_s': None}
+            return {
+                'container_id': None,
+                'container_verified': False,
+                'memory_mb': None,
+                'limit_mb': None,
+                'cpu_percent': None,
+                'io_mb_s': None,
+            }
 
         mem_mb = None
         limit_mb = None
         cpu_pct = None
         io_rate = None
+        container_verified = False
+
+        def _parse_bytes(value):
+            value = value.strip().upper()
+            mult = 1
+            if value.endswith(('KIB', 'KB')):
+                mult = 1024
+            elif value.endswith(('MIB', 'MB')):
+                mult = 1024**2
+            elif value.endswith(('GIB', 'GB')):
+                mult = 1024**3
+            elif value.endswith('B'):
+                mult = 1
+            number = re.findall(r'[\d.]+', value)
+            return float(number[0]) * mult if number else None
+
         try:
             inspect_owned(docker, container_id, job_id)
+            container_verified = True
             stats_raw = docker(['stats', '--no-stream', '--no-trunc', '--format', '{{.MemUsage}}|{{.CPUPerc}}|{{.BlockIO}}', container_id])
             if stats_raw and '|' in stats_raw:
                 parts = stats_raw.strip().split('|')
                 if len(parts) >= 1 and '/' in parts[0]:
                     usage_part, limit_part = parts[0].split('/', 1)
-                    def _parse_bytes(s):
-                        s = s.strip().upper()
-                        mult = 1
-                        if s.endswith('KIB') or s.endswith('KB'): mult = 1024
-                        elif s.endswith('MIB') or s.endswith('MB'): mult = 1024**2
-                        elif s.endswith('GIB') or s.endswith('GB'): mult = 1024**3
-                        elif s.endswith('B'): mult = 1
-                        num = re.findall(r'[\d\.]+', s)
-                        return float(num[0]) * mult if num else None
                     u_b = _parse_bytes(usage_part)
                     l_b = _parse_bytes(limit_part)
                     if u_b is not None:
@@ -371,11 +432,30 @@ class Application:
                         cpu_pct = round(float(cpu_raw), 1)
                     except Exception:
                         pass
+                if len(parts) >= 3 and '/' in parts[2]:
+                    read_part, write_part = parts[2].split('/', 1)
+                    read_b = _parse_bytes(read_part)
+                    write_b = _parse_bytes(write_part)
+                    if read_b is not None and write_b is not None:
+                        now = time.monotonic()
+                        baselines = getattr(self, '_worker_io_baselines', None)
+                        if baselines is None:
+                            baselines = {}
+                            self._worker_io_baselines = baselines
+                        previous = baselines.get(container_id)
+                        baselines[container_id] = (now, read_b, write_b)
+                        if previous is not None:
+                            elapsed = now - previous[0]
+                            read_delta = read_b - previous[1]
+                            write_delta = write_b - previous[2]
+                            if elapsed > 0 and read_delta >= 0 and write_delta >= 0:
+                                io_rate = round((read_delta + write_delta) / (1024 * 1024) / elapsed, 2)
         except Exception:
             pass
 
         return {
             'container_id': container_id,
+            'container_verified': container_verified,
             'memory_mb': mem_mb,
             'limit_mb': limit_mb,
             'cpu_percent': cpu_pct,
@@ -427,12 +507,14 @@ class Application:
                 'memory_mb': worker_metrics['memory_mb'],
                 'limit_mb': worker_metrics['limit_mb'],
                 'cpu_percent': worker_metrics['cpu_percent'],
+                'io_mb_s': worker_metrics['io_mb_s'],
             },
             'storage': volumes[0] if volumes else {},
             'last_cleanup': {
                 'candidates_count': last_plan['candidates_count'] if last_plan else None,
                 'estimated_reclaimed_bytes': last_plan['estimated_reclaimed_bytes'] if last_plan else None,
-                'reclaimed_bytes': last_plan.get('actual_reclaimed_bytes', 0) if last_plan and last_plan.get('applied') else 0,
+                'reclaimed_bytes': last_plan.get('reclaimed_bytes') if last_plan else None,
+                'removed_logical_bytes': last_plan.get('removed_logical_bytes') if last_plan else None,
                 'status': last_plan['status'] if last_plan else 'brak',
             },
             'trends': trends,
@@ -466,7 +548,9 @@ class Application:
             params = [self.owner, self.owner]
 
             if status and status != 'all':
-                if status in ('history', 'terminal'):
+                if status == 'queue':
+                    where_clauses.append("state IN ('running', 'queued', 'cancel_requested')")
+                elif status in ('history', 'terminal'):
                     where_clauses.append("state IN ('succeeded', 'failed', 'cancelled')")
                 else:
                     where_clauses.append("state = ?")
@@ -502,8 +586,9 @@ class Application:
 
                 offset = (page - 1) * limit
                 query_params = list(params) + [limit, offset]
-                rows = db.execute(f"SELECT * FROM jobs{where_sql} {order_sql} LIMIT ? OFFSET ?", query_params).fetchall()
-                items = [self.queue.record(r) for r in rows]
+                columns = ", ".join(_JOB_SUMMARY_FIELDS)
+                rows = db.execute(f"SELECT {columns} FROM jobs{where_sql} {order_sql} LIMIT ? OFFSET ?", query_params).fetchall()
+                items = [dict(r) for r in rows]
 
             return {
                 'items': items,
@@ -525,7 +610,10 @@ class Application:
             filtered = []
             for j in all_jobs:
                 if status and status != 'all':
-                    if status in ('history', 'terminal'):
+                    if status == 'queue':
+                        if j.get('state') not in _QUEUE_STATES:
+                            continue
+                    elif status in ('history', 'terminal'):
                         if j.get('state') not in ('succeeded', 'failed', 'cancelled'):
                             continue
                     elif j.get('state') != status:
@@ -551,7 +639,7 @@ class Application:
 
             total = len(filtered)
             start = (page - 1) * limit
-            items = filtered[start : start + limit]
+            items = [_job_summary(job) for job in filtered[start : start + limit]]
             return {
                 'items': items,
                 'total': total,
@@ -615,11 +703,8 @@ class Application:
         }
 
     def job_events(self, job_id):
+        job = self.get(job_id)
         events = self.hub.get_events(limit=100, job_id=job_id)
-        try:
-            job = self.get(job_id)
-        except Exception:
-            return events
 
         wt = job.get('worktree_id', '')
         journal = {}
@@ -716,16 +801,21 @@ class Application:
         return events
 
     def job_metrics(self, job_id):
+        self.get(job_id)
         if not hasattr(self, '_worker_samples_by_job'):
             self._worker_samples_by_job = {}
         active = self.queue.active()
         current_job = active[0] if active else None
         if current_job and current_job.get('job_id') == job_id:
             wm = self._inspect_worker_metrics(current_job)
-            if wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None:
+            if (wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None
+                    or wm.get('io_mb_s') is not None):
                 samples = self._worker_samples_by_job.setdefault(job_id, [])
                 now_iso = datetime.now(timezone.utc).isoformat()
-                if not samples or samples[-1].get('ram_mb') != wm.get('memory_mb') or samples[-1].get('cpu_percent') != wm.get('cpu_percent'):
+                if (not samples
+                        or samples[-1].get('ram_mb') != wm.get('memory_mb')
+                        or samples[-1].get('cpu_percent') != wm.get('cpu_percent')
+                        or samples[-1].get('io_mb_s') != wm.get('io_mb_s')):
                     samples.append({
                         'timestamp': now_iso,
                         'scope': 'worker',
@@ -733,6 +823,7 @@ class Application:
                         'ram_mb': wm.get('memory_mb'),
                         'ram_limit_mb': wm.get('limit_mb'),
                         'cpu_percent': wm.get('cpu_percent'),
+                        'io_mb_s': wm.get('io_mb_s'),
                         'storage_growth_mb': None,
                     })
                     if len(samples) > 120:
@@ -802,6 +893,12 @@ class Application:
             w_limit = f"{wm['limit_mb']} MiB" if wm.get('limit_mb') is not None else "niedostępne"
             w_cpu = f"{wm['cpu_percent']:.1f}%" if wm.get('cpu_percent') is not None else "niedostępne"
             w_io = f"{wm['io_mb_s']:.2f} MB/s" if wm.get('io_mb_s') is not None else "niedostępne"
+            if not wm.get('container_verified'):
+                worker_status = 'unverified'
+            elif not health.get('worker_alive'):
+                worker_status = health.get('worker_state') or 'unavailable'
+            else:
+                worker_status = 'running'
             rows.append({
                 'id': worker_id,
                 'role': 'Kompilator (Build Worker)',
@@ -814,7 +911,7 @@ class Application:
                 'io': w_io,
                 'paths': f"{self.storage}/runs/{current_job['worktree_id']}/{current_job['job_id']}/execution",
                 'cmd': f"fullmag-build-worker --profile {current_job['profile']}",
-                'status': 'running',
+                'status': worker_status,
             })
         else:
             rows.append({
@@ -895,11 +992,20 @@ class Application:
         job_id = query.get('job_id')
         return self.hub.get_events(limit=limit, level=level, job_id=job_id)
 
-    def retention_plan_preview(self):
-        return self.hub.generate_retention_plan(queue=self.queue)
+    def retention_plan_preview(self, payload=None):
+        payload = {} if payload is None else payload
+        if not isinstance(payload, dict) or set(payload) - {'scope', 'job_ids'}:
+            raise ValueError('Invalid maintenance preview request')
+        return self.retention_service.preview(**payload)
 
     def retention_plan_apply(self, plan_id):
-        return self.hub.apply_retention_plan(plan_id)
+        return self.retention_service.apply(plan_id)
+
+    def retention_plan_cancel(self, plan_id):
+        return self.retention_service.cancel(plan_id)
+
+    def retention_plan_get(self, plan_id):
+        return self.retention_service.get(plan_id)
 
     def get_retention_policy(self):
         return self.hub.get_retention_policy()
@@ -913,18 +1019,32 @@ class Application:
         return self.hub.set_pinned(resource_id, pinned, reason)
 
     def _execute_next(self):
+        self.retention_service.tick()
+        with self.retention_service.build_slot() as admitted:
+            if not admitted:
+                return {'state': 'retention_running'}
+            result = self._execute_next_reserved()
+        if isinstance(result, dict) and result.get('state') in ('succeeded', 'failed', 'cancelled', 'blocked'):
+            self.retention_service.tick(force=True)
+        return result
+
+    def _execute_next_reserved(self):
         queued = self.queue.next_queued(self.owner)
         if queued is not None and queued.get('operation') != 'build':
             raise APIUnavailable('Legacy queued job requires manual recovery')
-        if queued is not None:
+        def record_claim(claimed):
             self.hub.record_event(
                 "INFO",
                 "job_claimed",
-                f"Rozpoczęto kompilację zadania {queued['job_id']} (profil: {queued.get('profile')})",
-                job_id=queued["job_id"],
-                profile=queued.get("profile"),
+                f"Przejęto zadanie {claimed['job_id']} do przygotowania (profil: {claimed.get('profile')})",
+                job_id=claimed["job_id"],
+                profile=claimed.get("profile"),
             )
-        result = execute_build(self.layout, owner=self.owner, call=docker)
+        result = execute_build(
+            self.layout, owner=self.owner, call=docker,
+            expected_job_id=queued["job_id"] if queued is not None else None,
+            on_claim=record_claim,
+        )
         if queued is not None and isinstance(result, dict):
             state = result.get('state')
             if state in ('succeeded', 'failed', 'cancelled', 'blocked'):
@@ -951,10 +1071,14 @@ class Application:
             if jid and current_job.get('operation') == 'build':
                 try:
                     wm = self._inspect_worker_metrics(current_job)
-                    if wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None:
+                    if (wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None
+                            or wm.get('io_mb_s') is not None):
                         samples = self._worker_samples_by_job.setdefault(jid, [])
                         now_iso = datetime.now(timezone.utc).isoformat()
-                        if not samples or samples[-1].get('ram_mb') != wm.get('memory_mb') or samples[-1].get('cpu_percent') != wm.get('cpu_percent'):
+                        if (not samples
+                                or samples[-1].get('ram_mb') != wm.get('memory_mb')
+                                or samples[-1].get('cpu_percent') != wm.get('cpu_percent')
+                                or samples[-1].get('io_mb_s') != wm.get('io_mb_s')):
                             samples.append({
                                 'timestamp': now_iso,
                                 'scope': 'worker',
@@ -962,6 +1086,7 @@ class Application:
                                 'ram_mb': wm.get('memory_mb'),
                                 'ram_limit_mb': wm.get('limit_mb'),
                                 'cpu_percent': wm.get('cpu_percent'),
+                                'io_mb_s': wm.get('io_mb_s'),
                                 'storage_growth_mb': None,
                             })
                             if len(samples) > 120:
@@ -989,7 +1114,8 @@ def main():
         'submit', 'list', 'get', 'logs', 'cancel', 'stop', 'health', 'resume', 'retention',
         'overview', 'paginated_jobs', 'job_detail', 'job_events', 'job_metrics', 'job_resources',
         'storage_volumes', 'storage_resources', 'processes', 'alerts', 'events',
-        'retention_plan_preview', 'retention_plan_apply', 'get_retention_policy',
+        'retention_plan_preview', 'retention_plan_apply', 'retention_plan_cancel',
+        'retention_plan_get', 'get_retention_policy',
         'put_retention_policy', 'pin_resource',
     )
     callbacks = {name: getattr(app, name) for name in callback_names}

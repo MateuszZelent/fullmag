@@ -1249,14 +1249,16 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
         .cloned()
         .collect();
     for output in &mut outputs {
-        if let fullmag_ir::OutputIR::EigenMode { indices, .. } = output {
-            indices.retain(|index| *index < mode_count);
+        if let fullmag_ir::OutputIR::EigenMode { indices, all_modes, .. } = output {
+            if !*all_modes {
+                indices.retain(|index| *index < mode_count);
+            }
         }
     }
     outputs.retain(|output| {
         !matches!(
             output,
-            fullmag_ir::OutputIR::EigenMode { indices, .. } if indices.is_empty()
+            fullmag_ir::OutputIR::EigenMode { all_modes, indices, branches, .. } if !all_modes && indices.is_empty() && branches.is_empty()
         )
     });
     if !outputs.iter().any(|output| {
@@ -3463,4 +3465,42 @@ fn linear_sweep_values(start: f64, stop: f64, steps: u64) -> Result<Vec<f64>> {
             start + (stop - start) * t
         })
         .collect())
+}
+
+#[cfg(test)]
+mod eigen_sampling_selector_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_all_and_branch_selectors_while_clipping_explicit_indices() {
+        let mode = |all_modes, indices, branches| fullmag_ir::OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes,
+            indices,
+            branches,
+            sample_selector: None,
+        };
+        let base = fullmag_ir::SamplingIR {
+            outputs: vec![
+                mode(true, vec![], vec![]),
+                mode(false, vec![], vec![8]),
+                mode(false, vec![0, 3], vec![]),
+                mode(false, vec![3], vec![]),
+                mode(false, vec![], vec![]),
+            ],
+            table_autosave: None,
+            stage_autosave: None,
+        };
+        let sampled = eigen_sampling_from(&base, 2);
+        let modes: Vec<_> = sampled.outputs.iter().filter_map(|output| match output {
+            fullmag_ir::OutputIR::EigenMode { all_modes, indices, branches, .. } =>
+                Some((*all_modes, indices.clone(), branches.clone())),
+            _ => None,
+        }).collect();
+        assert_eq!(modes, vec![
+            (true, vec![], vec![]),
+            (false, vec![], vec![8]),
+            (false, vec![0], vec![]),
+        ]);
+    }
 }

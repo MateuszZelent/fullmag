@@ -37,10 +37,9 @@ const mocks = vi.hoisted(() => ({
   publishCommittedScene: vi.fn(),
 }));
 
-vi.mock("@/kernel/KernelContext", async () => {
-  const React = await import("react");
+vi.mock("@/kernel/KernelContext", async (importOriginal) => {
   return {
-    KernelContext: React.createContext(null),
+    ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
     useKernel: () => ({
       api: { model: { commitTransaction: mocks.commitTransaction, scene: mocks.readScene } },
       authoringHistory: {

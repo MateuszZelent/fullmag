@@ -85,6 +85,12 @@ pub struct ReachabilityReport {
     /// graph cannot be advertised as solved or resumable.
     pub warnings: Vec<String>,
     pub complete: bool,
+    /// True when incompleteness comes only from the two known project
+    /// documents whose object references are intentionally opaque today.
+    pub opaque_project_documents_only: bool,
+    /// Monotonic safety bit for missing payloads and unknown references.
+    /// Once set, the report cannot become visualization-safe again.
+    pub has_blocking_incompleteness: bool,
     /// Number of checkpoints and material primary/restart payloads proved by
     /// the walk.  These counters let archive inspection downgrade honestly
     /// instead of treating a descriptor-only checkpoint as resumable.
@@ -110,18 +116,51 @@ impl ReachabilityReport {
     }
 
     fn missing(&mut self, message: impl Into<String>) -> Result<()> {
-        self.conservative(message);
+        let message = message.into();
+        self.complete = false;
+        self.has_blocking_incompleteness = true;
+        self.opaque_project_documents_only = false;
+        self.warnings.push(message.clone());
         Ok(())
     }
 
-    fn conservative(&mut self, message: impl Into<String>) {
+    fn mark_blocking_incomplete(&mut self, message: impl Into<String>) {
         self.complete = false;
+        self.has_blocking_incompleteness = true;
+        self.opaque_project_documents_only = false;
         self.warnings.push(message.into());
+    }
+
+    fn mark_opaque_project_document(&mut self, message: impl Into<String>) {
+        self.complete = false;
+        if !self.has_blocking_incompleteness {
+            self.opaque_project_documents_only = true;
+        }
+        self.warnings.push(message.into());
+    }
+
+    fn conservative(&mut self, message: impl Into<String>) {
+        self.mark_blocking_incomplete(message);
     }
 
     /// Refuse to publish a graph which is missing a required payload.
     pub fn require_complete(&self) -> Result<()> {
         if self.complete {
+            return Ok(());
+        }
+        bail!(
+            "incomplete session object graph: {}",
+            self.warnings.join("; ")
+        )
+    }
+
+    /// Allow only the known opaque project documents during a read-only
+    /// visualization import. Missing files, checkpoint payloads, and unknown
+    /// references remain fail-closed.
+    pub fn require_visualization_safe(&self) -> Result<()> {
+        if self.complete
+            || (self.opaque_project_documents_only && !self.has_blocking_incompleteness)
+        {
             return Ok(());
         }
         bail!(
@@ -501,8 +540,7 @@ impl StoreWalker {
                         self.walk_project_namespace(&entry.path())?;
                     } else {
                         self.walk_arbitrary_files(&entry.path(), &name)?;
-                        self.report.complete = false;
-                        self.report.warnings.push(format!(
+                        self.report.mark_blocking_incomplete(format!(
                             "untyped session document root `{name}` requires conservative GC"
                         ));
                     }
@@ -568,20 +606,17 @@ impl StoreWalker {
                         }
                     }
                     crate::typed_documents::TypedInspection::Untyped(reason) => {
-                        self.report.complete = false;
-                        self.report.warnings.push(format!(
+                        self.report.mark_opaque_project_document(format!(
                             "project document `{relative}` has untyped object references ({reason}); conservative GC required"
                         ));
                     }
                 }
             } else if !KNOWN_LEAFS.contains(&name.as_str()) {
-                self.report.complete = false;
-                self.report.warnings.push(format!(
+                self.report.mark_blocking_incomplete(format!(
                     "unknown project document `{relative}` requires conservative GC"
                 ));
             } else if name == "asset_index.json" {
-                self.report.complete = false;
-                self.report.warnings.push(format!(
+                self.report.mark_opaque_project_document(format!(
                     "project document `{relative}` has untyped object references; conservative GC required"
                 ));
             }
@@ -2233,8 +2268,7 @@ impl StoreWalker {
                 // this walker cannot interpret.  Retaining the file itself is
                 // insufficient for a safe mark set, so GC/export stays
                 // incomplete until the document schema gets a typed walker.
-                self.report.complete = false;
-                self.report.warnings.push(format!(
+                self.report.mark_blocking_incomplete(format!(
                     "untyped session reference `{source}` requires conservative retention"
                 ));
             }
@@ -2594,7 +2628,7 @@ impl<'a> ArchiveWalker<'a> {
                 }
             }
             crate::typed_documents::TypedInspection::Untyped(reason) => {
-                self.report.conservative(format!(
+                self.report.mark_opaque_project_document(format!(
                     "archive project document `{NAME}` has untyped object references ({reason}); conservative retention required"
                 ));
             }
@@ -2631,13 +2665,11 @@ impl<'a> ArchiveWalker<'a> {
                 }
                 "project" => {
                     if !KNOWN_PROJECT_LEAFS.contains(&remainder) {
-                        self.report.complete = false;
-                        self.report.warnings.push(format!(
+                        self.report.mark_blocking_incomplete(format!(
                             "unknown archive project document `{name}` requires conservative retention"
                         ));
                     } else if remainder == "asset_index.json" {
-                        self.report.complete = false;
-                        self.report.warnings.push(format!(
+                        self.report.mark_opaque_project_document(format!(
                             "archive project document `{name}` has untyped object references; conservative retention required"
                         ));
                     }
@@ -3832,8 +3864,7 @@ impl<'a> ArchiveWalker<'a> {
                 }
             }
             ReferenceKind::Unknown => {
-                self.report.complete = false;
-                self.report.warnings.push(format!(
+                self.report.mark_blocking_incomplete(format!(
                     "untyped archive reference `{source}` requires conservative retention"
                 ));
             }
@@ -4181,6 +4212,28 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn conservative_after_opaque_project_document_blocks_visualization() {
+        let mut report = ReachabilityReport::new();
+        report.mark_opaque_project_document("opaque project document");
+        report.conservative("unknown run document");
+
+        assert!(report.has_blocking_incompleteness);
+        assert!(!report.opaque_project_documents_only);
+        assert!(report.require_visualization_safe().is_err());
+    }
+
+    #[test]
+    fn opaque_project_document_after_conservative_blocks_visualization() {
+        let mut report = ReachabilityReport::new();
+        report.conservative("unknown run document");
+        report.mark_opaque_project_document("opaque project document");
+
+        assert!(report.has_blocking_incompleteness);
+        assert!(!report.opaque_project_documents_only);
+        assert!(report.require_visualization_safe().is_err());
+    }
 
     fn digest(letter: char) -> String {
         format!("sha256:{}", letter.to_string().repeat(64))

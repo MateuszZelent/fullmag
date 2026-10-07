@@ -257,7 +257,9 @@ pub(crate) fn build_live_status(
     });
 
     let ls = snapshot.live_state.as_ref();
-    let latest = ls.map(|l| &l.latest_step);
+    let latest = ls
+        .map(|l| &l.latest_step)
+        .filter(|step| !step.per_object_scalars.contains_key("fem_eigen_progress"));
     let max_torque_apm = latest.and_then(|step| canonical_torque_apm(step.max_torque_Apm));
     let completion = snapshot
         .stage_execution
@@ -419,7 +421,7 @@ pub(crate) fn lifecycle_contract(
     runtime_accepts_commands: bool,
     connectivity: SessionConnectivity,
 ) -> crate::schemas::status::SessionLifecycleSummary {
-    let terminal = matches!(solver, "completed" | "failed" | "cancelled" | "closed");
+    let terminal = terminal_solver_lifecycle(solver);
     crate::schemas::status::SessionLifecycleSummary {
         solver: solver.to_string(),
         session_resource: if terminal {
@@ -436,6 +438,20 @@ pub(crate) fn lifecycle_contract(
             crate::schemas::status::SessionCommandability::Forbidden
         },
     }
+}
+
+fn terminal_solver_lifecycle(solver: &str) -> bool {
+    matches!(solver, "completed" | "failed" | "cancelled" | "closed")
+}
+
+pub(crate) fn snapshot_session_epoch(snapshot: &SessionStateResponse) -> String {
+    let solver = crate::session::effective_runtime_status_code(snapshot);
+    session_epoch(
+        &snapshot.session.session_id,
+        snapshot.session.started_at_unix_ms,
+        snapshot.session.finished_at_unix_ms,
+        terminal_solver_lifecycle(&solver),
+    )
 }
 
 pub(crate) fn session_epoch(

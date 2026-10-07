@@ -128,7 +128,7 @@ describe("frequency surface mismatch", () => {
             mesh_identity: "mesh-1",
             requested_execution: {
               boundary_context: "finite_open",
-              calculation_mode: "fmr_response",
+              calculation_mode: "fmr_modal_driven",
             },
             run_id: "run-1",
             stage_id: "stage-1",

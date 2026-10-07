@@ -2461,7 +2461,27 @@ pub(crate) fn read_artifacts_from_dir(
     Ok(artifacts)
 }
 
+/// A modal callback is diagnostic state, not a current physical observation.
+pub(crate) fn has_modal_latest_step(snapshot: &SessionStateResponse) -> bool {
+    snapshot.live_state.as_ref().map_or_else(
+        || {
+            snapshot
+                .scalar_rows
+                .last()
+                .is_some_and(|row| row.per_object_scalars.contains_key("fem_eigen_progress"))
+        },
+        |live| {
+            live.latest_step
+                .per_object_scalars
+                .contains_key("fem_eigen_progress")
+        },
+    )
+}
+
 pub(crate) fn upsert_scalar_row(rows: &mut Vec<ScalarRow>, row: ScalarRow) -> bool {
+    if row.per_object_scalars.contains_key("fem_eigen_progress") {
+        return false;
+    }
     match rows.last_mut() {
         Some(last) if row.step < last.step => false,
         Some(last) if row.step == last.step => {
@@ -2950,6 +2970,34 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1].step, 2);
         assert_eq!(rows[1].e_total, 3.0);
+    }
+
+    #[test]
+    fn upsert_scalar_row_rejects_modal_diagnostics_without_replacing_physical_sample() {
+        let mut rows = vec![scalar_row(1, 1.25)];
+        let mut modal = scalar_row(2, 0.0);
+        modal
+            .per_object_scalars
+            .insert("fem_eigen_progress".into(), Default::default());
+        assert!(!upsert_scalar_row(&mut rows, modal));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].e_total, 1.25);
+    }
+
+    #[test]
+    fn modal_current_state_is_unavailable_but_physical_history_is_preserved() {
+        let mut current = test_current_snapshot();
+        current.scalar_rows.push(scalar_row(1, 1.25));
+        assert!(!has_modal_latest_step(&current));
+        let mut modal = scalar_row(2, 0.0);
+        modal
+            .per_object_scalars
+            .insert("fem_eigen_progress".into(), Default::default());
+        current.scalar_rows.push(modal);
+        assert!(has_modal_latest_step(&current));
+        assert_eq!(current.scalar_rows[0].e_total, 1.25);
+        current.scalar_rows.push(scalar_row(3, 0.0));
+        assert!(!has_modal_latest_step(&current));
     }
 
     #[test]
@@ -3574,6 +3622,7 @@ mod tests {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -4314,6 +4363,7 @@ mod tests {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![StageLifecycleState::Paused],
             active_stage_index: Some(0),
@@ -4369,6 +4419,7 @@ mod tests {
                         current_settle_step_index: None,
                         current_settle_step_kind: None,
                         current_settle_step_method: None,
+                        parallel_execution: None,
                     }],
                     stage_statuses: vec![StageLifecycleState::Completed],
                     active_stage_index: None,
@@ -4937,6 +4988,7 @@ mod tests {
                 current_settle_step_index: None,
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
+                parallel_execution: None,
             }],
             stage_statuses: vec![stage_status],
             active_stage_index,

@@ -192,7 +192,7 @@ export class TestElement extends TestNode {
   readonly attributes = new TestNamedNodeMap();
   clientHeight = 0;
   clientWidth = 0;
-  readonly namespaceURI = "http://www.w3.org/1999/xhtml";
+  readonly namespaceURI: string;
   offsetHeight = 0;
   offsetWidth = 0;
   scrollHeight = 0;
@@ -205,15 +205,7 @@ export class TestElement extends TestNode {
   };
   readonly tagName: string;
   private controlValue = "";
-
-  get inputMode(): string {
-    return this.getAttribute("inputMode") ?? "";
-  }
-
-  set inputMode(value: string) {
-    if (value) this.setAttribute("inputMode", value);
-    else this.removeAttribute("inputMode");
-  }
+  inputMode = "";
 
   get value(): string {
     return this.controlValue;
@@ -240,7 +232,11 @@ export class TestElement extends TestNode {
         const match = /^<([\w:-]+)([^>]*)>$/.exec(token);
         if (!match) continue;
         const [, tagName, rawAttributes] = match;
-        const element = this.ownerDocument.createElement(tagName);
+        const parent = stack.at(-1);
+        const inSvg = tagName.toLowerCase() === "svg" || parent?.namespaceURI === SVG_NAMESPACE;
+        const element = inSvg
+          ? this.ownerDocument.createElementNS(SVG_NAMESPACE, tagName)
+          : this.ownerDocument.createElement(tagName);
         for (const attribute of rawAttributes.matchAll(/([^\s=/>]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g)) {
           const [, name, doubleQuoted, singleQuoted, bare] = attribute;
           if (name) element.setAttribute(name, decodeHtml(doubleQuoted ?? singleQuoted ?? bare ?? ""));
@@ -263,9 +259,14 @@ export class TestElement extends TestNode {
     );
   }
 
-  constructor(ownerDocument: TestDocument, tagName: string) {
+  constructor(
+    ownerDocument: TestDocument,
+    tagName: string,
+    namespaceURI = HTML_NAMESPACE,
+  ) {
     super(ownerDocument, 1, tagName.toUpperCase());
     this.tagName = tagName.toUpperCase();
+    this.namespaceURI = namespaceURI;
     const style = Object.create(null) as TestElement["style"];
     style.removeProperty = (name: string) => {
       Reflect.deleteProperty(style, name);
@@ -299,7 +300,7 @@ export class TestElement extends TestNode {
   }
 
   getAttribute(name: string): string | null {
-    return this.attributes.get(normalizeAttributeName(name)) ?? null;
+    return this.attributes.get(this.normalizeAttributeName(name)) ?? null;
   }
 
   getAttributeNames(): string[] {
@@ -321,7 +322,7 @@ export class TestElement extends TestNode {
   }
 
   hasAttribute(name: string): boolean {
-    return this.attributes.has(normalizeAttributeName(name));
+    return this.attributes.has(this.normalizeAttributeName(name));
   }
 
   matches(selector: string): boolean {
@@ -342,17 +343,25 @@ export class TestElement extends TestNode {
   }
 
   removeAttribute(name: string): void {
-    this.attributes.delete(normalizeAttributeName(name));
+    const normalizedName = this.normalizeAttributeName(name);
+    this.attributes.delete(normalizedName);
+    if (normalizedName === "inputmode") this.inputMode = "";
   }
 
   setAttribute(name: string, value: string): void {
-    this.attributes.set(normalizeAttributeName(name), String(value));
+    const normalizedName = this.normalizeAttributeName(name);
+    const normalizedValue = String(value);
+    this.attributes.set(normalizedName, normalizedValue);
+    if (normalizedName === "inputmode") this.inputMode = normalizedValue;
+  }
+
+  private normalizeAttributeName(name: string): string {
+    return this.namespaceURI === SVG_NAMESPACE ? name : name.toLowerCase();
   }
 }
 
-function normalizeAttributeName(name: string): string {
-  return name.toLowerCase() === "inputmode" ? "inputmode" : name;
-}
+const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 const VOID_HTML_ELEMENTS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
 
@@ -406,8 +415,8 @@ export class TestDocument extends TestNode {
     return new TestElement(this, tagName);
   }
 
-  createElementNS(_namespace: string, tagName: string): TestElement {
-    return this.createElement(tagName);
+  createElementNS(namespace: string, tagName: string): TestElement {
+    return new TestElement(this, tagName, namespace);
   }
 
   createTextNode(value: string): TestNode {

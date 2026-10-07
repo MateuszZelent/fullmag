@@ -32,6 +32,7 @@ export interface ChartSeries {
   dataRevision?: string | number | null;
   dimension?: string;
   id: string;
+  kind?: "line" | "scatter";
   label: string;
   points: readonly ChartPoint[];
   quantity: string;

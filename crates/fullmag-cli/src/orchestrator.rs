@@ -1523,6 +1523,7 @@ impl LiveProgressCadence {
         if update.stats.step <= 1
             || update.finished
             || has_heavy_live_payload(update)
+            || step_update_has_parallel_execution_progress(update)
             || step_update_has_frequency_response_progress(update)
         {
             self.last_publish_at = Some(Instant::now());
@@ -1577,6 +1578,14 @@ fn step_update_has_frequency_response_progress(update: &fullmag_runner::StepUpda
                 .get("total_frequency_count")
                 .is_some_and(|value| value.is_finite() && *value > 0.0)
         })
+}
+
+fn step_update_has_parallel_execution_progress(update: &fullmag_runner::StepUpdate) -> bool {
+    update
+        .stats
+        .per_object_scalars
+        .get("fem_eigen_progress")
+        .is_some_and(|progress| progress.get("parallel_telemetry_available") == Some(&1.0))
 }
 
 fn publish_live_step_update(
@@ -2057,14 +2066,7 @@ fn apply_fem_eigen_progress_to_stage_execution(
     };
 
     let phase = fem_eigen_progress_phase(progress);
-    let solver = if progress
-        .get("solver_cpu_sparse_lobpcg")
-        .is_some_and(|value| *value > 0.0)
-    {
-        "cpu_sparse_lobpcg"
-    } else {
-        "cpu_dense_symmetric_eigen"
-    };
+    let solver = fem_eigen_progress_solver(progress);
     let percent = progress
         .get("percent")
         .copied()
@@ -2075,10 +2077,147 @@ fn apply_fem_eigen_progress_to_stage_execution(
     }
     stage.progress_label = Some(phase.to_string());
     stage.progress_detail = Some(fem_eigen_progress_detail(progress, phase, solver));
+    if progress.get("parallel_telemetry_available") == Some(&1.0) {
+        stage.parallel_execution = parallel_execution_telemetry_from_progress(progress);
+    }
     stage.last_progress_unix_ms = Some(current_unix_millis_u64());
 }
 
+fn parallel_execution_telemetry_from_progress(
+    progress: &std::collections::HashMap<String, f64>,
+) -> Option<fullmag_runner::LiveParallelExecutionTelemetry> {
+    if progress.get("parallel_telemetry_available") != Some(&1.0) {
+        return None;
+    }
+
+    fn scalar_u32(value: Option<&f64>) -> Option<u32> {
+        let value = value.copied()?;
+        (value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= u32::MAX as f64)
+            .then_some(value as u32)
+    }
+
+    fn scalar_u64_pair(
+        progress: &std::collections::HashMap<String, f64>,
+        key: &str,
+    ) -> Option<u64> {
+        let low = scalar_u32(progress.get(&format!("{key}_lo")))?;
+        let high = scalar_u32(progress.get(&format!("{key}_hi")))?;
+        Some((u64::from(high) << 32) | u64::from(low))
+    }
+
+    fn optional_u32(
+        progress: &std::collections::HashMap<String, f64>,
+        key: &str,
+    ) -> Option<Option<u32>> {
+        match progress.get(key) {
+            None => Some(None),
+            Some(value) => scalar_u32(Some(value)).map(Some),
+        }
+    }
+
+    fn optional_f64(
+        progress: &std::collections::HashMap<String, f64>,
+        key: &str,
+    ) -> Option<Option<f64>> {
+        match progress.get(key) {
+            None => Some(None),
+            Some(value) if value.is_finite() => Some(Some(*value)),
+            Some(_) => None,
+        }
+    }
+
+    fn optional_u64_pair(
+        progress: &std::collections::HashMap<String, f64>,
+        key: &str,
+    ) -> Option<Option<u64>> {
+        let has_low = progress.contains_key(&format!("{key}_lo"));
+        let has_high = progress.contains_key(&format!("{key}_hi"));
+        match (has_low, has_high) {
+            (false, false) => Some(None),
+            (true, true) => scalar_u64_pair(progress, key).map(Some),
+            _ => None,
+        }
+    }
+
+    fn tagged(progress: &std::collections::HashMap<String, f64>, prefix: &str) -> Option<String> {
+        let mut values = progress.iter().filter_map(|(key, value)| {
+            (key.starts_with(prefix) && *value == 1.0).then(|| key[prefix.len()..].to_string())
+        });
+        let value = values.next().filter(|value| !value.is_empty())?;
+        values.next().is_none().then_some(value)
+    }
+
+    let sampled_at_unix_ms = scalar_u64_pair(progress, "parallel_sampled_at_unix_ms")?;
+    let active_workers = scalar_u32(progress.get("parallel_active_workers"))?;
+    let admission_desired_workers = scalar_u32(progress.get("parallel_admission_desired_workers"))?;
+    let admission_pending_samples = scalar_u32(progress.get("parallel_admission_pending_samples"))?;
+    let cpu_target_percent = progress.get("parallel_cpu_target_percent").copied()?;
+    let memory_target_percent = progress.get("parallel_memory_target_percent").copied()?;
+    if !cpu_target_percent.is_finite()
+        || !memory_target_percent.is_finite()
+        || cpu_target_percent <= 0.0
+        || memory_target_percent <= 0.0
+    {
+        return None;
+    }
+    let memory_reserve_bytes = scalar_u64_pair(progress, "parallel_memory_reserve_bytes")?;
+    Some(fullmag_runner::LiveParallelExecutionTelemetry {
+        sampled_at_unix_ms,
+        active_workers,
+        admission_desired_workers,
+        admission_worker_limit: optional_u32(progress, "parallel_admission_worker_limit")?,
+        admission_pending_samples,
+        resolved_workers: optional_u32(progress, "parallel_resolved_workers")?,
+        cpu_target_percent,
+        memory_target_percent,
+        memory_reserve_bytes,
+        cpu_target_kind: tagged(progress, "parallel_cpu_target_kind:")?,
+        cpu_busy_percent: optional_f64(progress, "parallel_cpu_busy_percent")?,
+        allocated_cpu_cores: optional_f64(progress, "parallel_allocated_cpu_cores")?,
+        cpu_available_cores: optional_f64(progress, "parallel_cpu_available_cores")?,
+        memory_limit_bytes: optional_u64_pair(progress, "parallel_memory_limit_bytes")?,
+        memory_available_bytes: optional_u64_pair(progress, "parallel_memory_available_bytes")?,
+        worker_peak_cpu_cores: optional_f64(progress, "parallel_worker_peak_cpu_cores")?,
+        worker_peak_rss_bytes: optional_u64_pair(progress, "parallel_worker_peak_rss_bytes")?,
+        admission_reason: tagged(progress, "parallel_admission_reason:")?,
+        terminal: progress.get("parallel_telemetry_terminal") == Some(&1.0),
+    })
+}
+
+fn fem_eigen_progress_solver(progress: &std::collections::HashMap<String, f64>) -> &str {
+    let mut kinds = progress.iter().filter_map(|(key, value)| {
+        key.strip_prefix("solver_kind:")
+            .filter(|kind| !kind.is_empty() && *value == 1.0)
+    });
+    if let Some(kind) = kinds.next() {
+        return if kinds.next().is_none() {
+            kind
+        } else {
+            "unknown"
+        };
+    }
+    // Older producers explicitly exposed only LOBPCG. Absence of that flag
+    // cannot prove a dense solver, a device lane, or an execution algorithm.
+    if progress.get("solver_cpu_sparse_lobpcg") == Some(&1.0) {
+        "cpu_sparse_lobpcg"
+    } else {
+        "unknown"
+    }
+}
+
 fn fem_eigen_progress_phase(progress: &std::collections::HashMap<String, f64>) -> &'static str {
+    if progress.get("window_phase_base") == Some(&1.0) {
+        return "solving native frequency window base";
+    }
+    if progress.get("window_phase_refinement") == Some(&1.0) {
+        return "solving native frequency window refinement";
+    }
+    if progress.get("phase_kind:solving_native_shift_invert") == Some(&1.0) {
+        return "solving native shift-invert";
+    }
+    if progress.get("phase_kind:solving_native_contour_interval") == Some(&1.0) {
+        return "solving native contour interval";
+    }
     if progress
         .get("phase_materializing_equilibrium")
         .is_some_and(|value| *value > 0.0)
@@ -2114,6 +2253,73 @@ fn fem_eigen_progress_phase(progress: &std::collections::HashMap<String, f64>) -
     }
 }
 
+fn fem_eigen_progress_is_ksp_norm(
+    progress: &std::collections::HashMap<String, f64>,
+) -> bool {
+    progress.get("residual_source:ksp_norm") == Some(&1.0)
+}
+
+fn fem_eigen_progress_counter(
+    progress: &std::collections::HashMap<String, f64>,
+    key: &str,
+) -> Option<u64> {
+    let value = progress.get(key).copied()?;
+    (value.is_finite()
+        && value >= 0.0
+        && value.fract() == 0.0
+        && value < u64::MAX as f64)
+        .then_some(value as u64)
+}
+
+fn fem_eigen_progress_tagged_value<'a>(
+    progress: &std::collections::HashMap<String, f64>,
+    prefix: &str,
+    allowed: &'a [&'a str],
+) -> Option<&'a str> {
+    let mut matches = allowed.iter().copied().filter(|value| {
+        let key = format!("{prefix}{value}");
+        progress
+            .get(&key)
+            .is_some_and(|flag| flag.is_finite() && *flag == 1.0)
+    });
+    let value = matches.next()?;
+    matches.next().is_none().then_some(value)
+}
+
+fn fem_eigen_linear_progress_detail(
+    progress: &std::collections::HashMap<String, f64>,
+) -> Option<String> {
+    if !fem_eigen_progress_is_ksp_norm(progress) {
+        return None;
+    }
+
+    let mut fields = Vec::with_capacity(4);
+    if let Some(iteration) = fem_eigen_progress_counter(progress, "linear_iteration") {
+        fields.push(format!("linear_iteration={iteration}"));
+    }
+    if let Some(norm) = progress
+        .get("linear_residual_norm")
+        .copied()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+    {
+        fields.push(format!("ksp_norm={norm:.3e}"));
+    }
+    if let Some(role) =
+        fem_eigen_progress_tagged_value(progress, "linear_solver_role:", &["poisson", "shift_invert"])
+    {
+        fields.push(format!("linear_solver_role={role}"));
+    }
+    if let Some(ksp_type) = fem_eigen_progress_tagged_value(
+        progress,
+        "linear_ksp_type:",
+        &["gmres", "fgmres", "preonly"],
+    ) {
+        fields.push(format!("linear_ksp_type={ksp_type}"));
+    }
+
+    (!fields.is_empty()).then(|| fields.join("; "))
+}
+
 fn fem_eigen_progress_detail(
     progress: &std::collections::HashMap<String, f64>,
     phase: &str,
@@ -2126,18 +2332,20 @@ fn fem_eigen_progress_detail(
     let mut detail = format!(
         "{phase}; solver={solver}; active_nodes={active_nodes}; effective_dof={effective_dof}; requested_modes={requested_modes}; computed_modes={computed_modes}"
     );
-    if let Some(iteration) = progress.get("iteration").copied() {
-        if let Some(max_iterations) = progress.get("max_iterations").copied() {
-            detail.push_str(&format!(
-                "; iteration={}/{}",
-                iteration as u64, max_iterations as u64
-            ));
+    if let Some(iteration) = fem_eigen_progress_counter(progress, "iteration") {
+        if let Some(max_iterations) = fem_eigen_progress_counter(progress, "max_iterations") {
+            detail.push_str(&format!("; iteration={iteration}/{max_iterations}"));
         } else {
-            detail.push_str(&format!("; iteration={}", iteration as u64));
+            detail.push_str(&format!("; iteration={iteration}"));
         }
     }
-    if let Some(residual) = progress.get("residual").copied() {
-        detail.push_str(&format!("; residual={residual:.3e}"));
+    if !fem_eigen_progress_is_ksp_norm(progress) {
+        if let Some(residual) = progress.get("residual").copied() {
+            detail.push_str(&format!("; residual={residual:.3e}"));
+        }
+    }
+    if let Some(linear_progress) = fem_eigen_linear_progress_detail(progress) {
+        detail.push_str(&format!("; {linear_progress}"));
     }
     let window_phase = if progress
         .get("window_phase_base")
@@ -2156,10 +2364,10 @@ fn fem_eigen_progress_detail(
         detail.push_str(&format!("; window_phase={window_phase}"));
     }
     if let (Some(current), Some(total)) = (
-        progress.get("current_subwindow").copied(),
-        progress.get("total_subwindows").copied(),
+        fem_eigen_progress_counter(progress, "current_subwindow"),
+        fem_eigen_progress_counter(progress, "total_subwindows"),
     ) {
-        detail.push_str(&format!("; subwindow={}/{}", current as u64, total as u64));
+        detail.push_str(&format!("; subwindow={current}/{total}"));
     }
     if let Some(seconds) = progress.get("subwindow_elapsed_seconds").copied() {
         if seconds.is_finite() {
@@ -2301,26 +2509,29 @@ fn append_fem_eigen_step_progress(line: &mut String, stats: &fullmag_runner::Ste
     };
     let window_phase = if progress
         .get("window_phase_base")
-        .is_some_and(|value| *value > 0.0)
+        .is_some_and(|value| *value == 1.0)
     {
         Some("base")
     } else if progress
         .get("window_phase_refinement")
-        .is_some_and(|value| *value > 0.0)
+        .is_some_and(|value| *value == 1.0)
     {
         Some("refinement")
     } else {
         None
     };
-    let Some(window_phase) = window_phase else {
+    let linear_progress = fem_eigen_linear_progress_detail(progress);
+    if window_phase.is_none() && linear_progress.is_none() {
         return;
-    };
-    let mut segment = format!("  modal window phase={window_phase}");
+    }
+    let mut segment = window_phase
+        .map(|phase| format!("  modal window phase={phase}"))
+        .unwrap_or_else(|| "  modal linear solve".to_string());
     if let (Some(current), Some(total)) = (
-        progress.get("current_subwindow").copied(),
-        progress.get("total_subwindows").copied(),
+        fem_eigen_progress_counter(progress, "current_subwindow"),
+        fem_eigen_progress_counter(progress, "total_subwindows"),
     ) {
-        segment.push_str(&format!(" subwindow={}/{}", current as u64, total as u64));
+        segment.push_str(&format!(" subwindow={current}/{total}"));
     }
     if let Some(seconds) = progress.get("subwindow_elapsed_seconds").copied() {
         if seconds.is_finite() {
@@ -2332,8 +2543,17 @@ fn append_fem_eigen_step_progress(line: &mut String, stats: &fullmag_runner::Ste
             segment.push_str(&format!(" window_s={seconds:.1}"));
         }
     }
-    if let Some(residual) = progress.get("residual").copied() {
-        if residual.is_finite() {
+    if let Some(linear_progress) = linear_progress {
+        if !line.contains(linear_progress.as_str()) {
+            segment.push_str(&format!(" {linear_progress}"));
+        }
+    }
+    if !fem_eigen_progress_is_ksp_norm(progress) {
+        if let Some(residual) = progress
+            .get("residual")
+            .copied()
+            .filter(|value| value.is_finite())
+        {
             segment.push_str(&format!(" relres={residual:.3e}"));
         }
     }
@@ -2449,6 +2669,19 @@ fn format_stage_progress_line(
             .unwrap_or_default();
         return format!("{prefix}  frequency sweep  {progress}{heartbeat}  [{wall_ms:.0}ms]");
     }
+    if let Some(progress) = stats.per_object_scalars.get("fem_eigen_progress") {
+        let detail = fem_eigen_progress_detail(
+            progress,
+            fem_eigen_progress_phase(progress),
+            fem_eigen_progress_solver(progress),
+        );
+        let heartbeat = heartbeat_age
+            .map(|age| format!("  heartbeat idle={:.1}s", age.as_secs_f64()))
+            .unwrap_or_default();
+        let mut line = format!("{prefix}  modal eigen  {detail}{heartbeat}  [{wall_ms:.0}ms]");
+        append_fem_eigen_step_progress(&mut line, stats);
+        return line;
+    }
     let torque_t = if stats.max_torque_T > 0.0 {
         stats.max_torque_T
     } else {
@@ -2471,7 +2704,6 @@ fn format_stage_progress_line(
             wall_ms,
         );
         append_frequency_response_step_progress(&mut line, stats);
-        append_fem_eigen_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
         line
     } else {
@@ -2486,7 +2718,6 @@ fn format_stage_progress_line(
             wall_ms,
         );
         append_frequency_response_step_progress(&mut line, stats);
-        append_fem_eigen_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
         line
     }
@@ -2625,6 +2856,7 @@ fn accepted_relax_handoff_from_completed_stage(
     source_mesh: &fullmag_runner::FemMeshPayload,
     completion: &fullmag_ir::StageCompletionIR,
     equilibrium_magnetization: &[[f64; 3]],
+    accepted_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
     certified_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
     recomputed_certificate: &fullmag_runner::RecomputedFemLinearizationCertificateV1,
 ) -> Result<Option<fullmag_runner::AcceptedFemRelaxStageHandoff>> {
@@ -2634,15 +2866,7 @@ fn accepted_relax_handoff_from_completed_stage(
     if !source_stage.is_relaxation {
         return Ok(None);
     }
-    fullmag_runner::validate_recomputed_fem_linearization_certificate(
-        source_plan,
-        source_mesh,
-        equilibrium_magnetization,
-        certified_fields,
-        recomputed_certificate,
-    )
-    .map_err(|error| anyhow!(error.to_string()))?;
-    fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax(
+    fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax_verified(
         &source_stage.run_id,
         &source_stage.stage_id,
         &source_stage.stage_kind,
@@ -2651,7 +2875,81 @@ fn accepted_relax_handoff_from_completed_stage(
         source_mesh,
         completion,
         equilibrium_magnetization.to_vec(),
+        accepted_fields.clone(),
         certified_fields.clone(),
+        recomputed_certificate.clone(),
+    )
+    .map(Some)
+    .map_err(|error| anyhow!(error.to_string()))
+}
+
+fn accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
+    backend_plan: &BackendPlanIR,
+    source_stage: &ContinuationStageSource,
+    source_mesh: &fullmag_runner::FemMeshPayload,
+    completion: &fullmag_ir::StageCompletionIR,
+    equilibrium_magnetization: &[[f64; 3]],
+    artifact_dir: &Path,
+    accepted_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
+    certified_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
+    recomputed_certificate: &fullmag_runner::RecomputedFemLinearizationCertificateV1,
+) -> Result<Option<fullmag_runner::AcceptedFemRelaxStageHandoff>> {
+    let BackendPlanIR::Fem(source_plan) = backend_plan else {
+        return Ok(None);
+    };
+    if !source_stage.is_relaxation {
+        return Ok(None);
+    }
+    let accepted_path = artifact_dir.join(
+        fullmag_runner::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+            &source_plan.material,
+        ),
+    );
+    let (certified_relative_path, recomputed_relative_path) =
+        fullmag_runner::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+            &source_plan.material,
+        );
+    let certified_path = artifact_dir.join(certified_relative_path);
+    let recomputed_path = artifact_dir.join(recomputed_relative_path);
+    let producer_provenance_path = artifact_dir.join(
+        fullmag_runner::FEM_RELAXATION_PRODUCER_PROVENANCE_RELATIVE_PATH,
+    );
+    let read_exact = |path: &Path, label: &str| -> Result<Vec<u8>> {
+        fs::read(path).with_context(|| {
+            format!(
+                "verified FEM relaxation handoff did not publish exact {label} bytes {}",
+                path.display()
+            )
+        })
+    };
+    let producer_provenance_json = read_exact(&producer_provenance_path, "producer provenance")?;
+    let producer_provenance: fullmag_runner::FemRelaxationProducerProvenance =
+        serde_json::from_slice(&producer_provenance_json)
+        .with_context(|| {
+            format!(
+                "failed to decode producer provenance sidecar {}",
+                producer_provenance_path.display()
+            )
+        })?;
+    fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax_verified_with_exact_artifacts_and_provenance(
+        &source_stage.run_id,
+        &source_stage.stage_id,
+        &source_stage.stage_kind,
+        true,
+        source_plan,
+        source_mesh,
+        completion,
+        equilibrium_magnetization.to_vec(),
+        accepted_fields.clone(),
+        certified_fields.clone(),
+        recomputed_certificate.clone(),
+        fullmag_runner::AcceptedFemRelaxExactArtifacts {
+            accepted_fields_json: read_exact(&accepted_path, "accepted fields")?,
+            certified_fields_json: read_exact(&certified_path, "certified fields")?,
+            recomputed_certificate_json: read_exact(&recomputed_path, "recomputed certificate")?,
+        },
+        producer_provenance,
+        producer_provenance_json,
     )
     .map(Some)
     .map_err(|error| anyhow!(error.to_string()))
@@ -2663,6 +2961,7 @@ fn replace_continuation_after_synthetic_stage(
     continuation_fem_mesh_payload: &mut Option<fullmag_runner::FemMeshPayload>,
     continuation_completion: &mut Option<fullmag_ir::StageCompletionIR>,
     continuation_stage_source: &mut Option<ContinuationStageSource>,
+    continuation_accepted_fields: &mut Option<fullmag_runner::CertifiedFemEquilibriumFields>,
     continuation_certified_fields: &mut Option<fullmag_runner::CertifiedFemEquilibriumFields>,
     continuation_relax_handoff: &mut Option<fullmag_runner::AcceptedFemRelaxStageHandoff>,
     magnetization: Vec<[f64; 3]>,
@@ -2676,6 +2975,7 @@ fn replace_continuation_after_synthetic_stage(
     *continuation_fem_mesh_payload = None;
     *continuation_completion = None;
     *continuation_stage_source = None;
+    *continuation_accepted_fields = None;
     *continuation_certified_fields = None;
     *continuation_relax_handoff = None;
 }
@@ -4350,6 +4650,50 @@ fn stage_execution_from_records(
     }
 }
 
+fn mark_live_stage_execution_failed(
+    stage_execution: &mut Option<CurrentLiveStageExecutionState>,
+    completed_at_unix_ms: u128,
+) {
+    let Some(previous) = stage_execution.take() else {
+        return;
+    };
+    let mut stages = previous.stages;
+    let active_index = previous
+        .active_stage_index
+        .or_else(|| stages.iter().position(|stage| stage.status == "running"));
+    if let Some(active_index) = active_index.and_then(|index| stages.get_mut(index)) {
+        active_index.status = "failed".to_string();
+        active_index.completed_at_unix_ms = Some(millis_to_u64(completed_at_unix_ms));
+        active_index.progress_label = Some("failed".to_string());
+        active_index.last_progress_unix_ms = Some(millis_to_u64(completed_at_unix_ms));
+        active_index.parallel_execution = None;
+    }
+    *stage_execution = Some(stage_execution_from_records(&stages, None, None, "failed"));
+}
+
+fn preserve_completed_parallel_execution(
+    next: &mut CurrentLiveStageExecutionState,
+    previous: Option<&CurrentLiveStageExecutionState>,
+    stage_index: usize,
+) {
+    if next
+        .stages
+        .get(stage_index)
+        .is_none_or(|stage| stage.status != "completed")
+    {
+        return;
+    }
+    let Some(telemetry) = previous
+        .and_then(|state| state.stages.get(stage_index))
+        .and_then(|stage| stage.parallel_execution.clone())
+    else {
+        return;
+    };
+    if let Some(stage) = next.stages.get_mut(stage_index) {
+        stage.parallel_execution = Some(telemetry);
+    }
+}
+
 fn scripted_stage_execution_state(
     total_stages: usize,
     active_index: usize,
@@ -4400,6 +4744,7 @@ fn scripted_stage_execution_state(
             current_settle_step_index: None,
             current_settle_step_kind: None,
             current_settle_step_method: None,
+            parallel_execution: None,
         };
         total_stages
     ];
@@ -4595,6 +4940,7 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         current_settle_step_index: None,
         current_settle_step_kind: None,
         current_settle_step_method: None,
+        parallel_execution: None,
     }
 }
 
@@ -4815,6 +5161,9 @@ impl ActiveSequenceState {
                 current_settle_step_index: previous.current_settle_step_index,
                 current_settle_step_kind: previous.current_settle_step_kind,
                 current_settle_step_method: previous.current_settle_step_method,
+                parallel_execution: (status == "completed")
+                    .then_some(previous.parallel_execution)
+                    .flatten(),
             };
         }
     }
@@ -7702,6 +8051,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut continuation_fem_mesh_payload: Option<fullmag_runner::FemMeshPayload> = None;
     let mut continuation_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut continuation_stage_source: Option<ContinuationStageSource> = None;
+    let mut continuation_accepted_fields: Option<fullmag_runner::CertifiedFemEquilibriumFields> =
+        None;
     let mut continuation_certified_fields: Option<fullmag_runner::CertifiedFemEquilibriumFields> =
         None;
     let mut continuation_relax_handoff: Option<fullmag_runner::AcceptedFemRelaxStageHandoff> = None;
@@ -8467,10 +8818,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         cmd.state_sample_index,
                     ) {
                         Ok(loaded_state) => {
-                            continuation_magnetization = Some(loaded_state.values.clone());
-                            continuation_source = None; // loaded from file — unknown source backend
-                            continuation_completion = None;
-                            continuation_relax_handoff = None;
+                            replace_continuation_after_synthetic_stage(
+                                &mut continuation_magnetization,
+                                &mut continuation_source,
+                                &mut continuation_fem_mesh_payload,
+                                &mut continuation_completion,
+                                &mut continuation_stage_source,
+                                &mut continuation_accepted_fields,
+                                &mut continuation_certified_fields,
+                                &mut continuation_relax_handoff,
+                                loaded_state.values.clone(),
+                                false,
+                            );
                             live_workspace.update(|state| {
                                 state.live_state.updated_at_unix_ms =
                                     unix_time_millis().unwrap_or(0);
@@ -8746,6 +9105,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     ) {
                         current_plan_summary = summary;
                         continuation_relax_handoff = None;
+                        // The remesh invalidates all cached equilibrium field evidence.
+                        continuation_fem_mesh_payload = None;
+                        continuation_completion = None;
+                        continuation_stage_source = None;
+                        continuation_accepted_fields = None;
+                        continuation_certified_fields = None;
                     }
                 }
                 WaitForSolveCommandAction::Stop => {
@@ -8897,6 +9262,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let is_final_stage = stage_index + 1 == stage_count;
         let is_session_final_stage = is_final_stage && !interactive_requested;
         let current_stage_id = format!("stage-{stage_index:03}");
+        // The native runner receives the stage ProblemIR, while the session
+        // run identity lives in orchestration.  Carry both identities through
+        // runtime metadata so the artifact writer can publish producer
+        // provenance from the actual run instead of reconstructing it later.
+        stage.ir.problem_meta.runtime_metadata.insert(
+            "producer_run_id".to_string(),
+            serde_json::Value::String(run_id.clone()),
+        );
+        stage.ir.problem_meta.runtime_metadata.insert(
+            "producer_stage_id".to_string(),
+            serde_json::Value::String(current_stage_id.clone()),
+        );
+        stage.ir.problem_meta.runtime_metadata.insert(
+            "producer_stage_kind".to_string(),
+            serde_json::Value::String(stage.entrypoint_kind.clone()),
+        );
         let current_stage_artifact_dir = stage_artifact_dir(
             &workspace_dir,
             &artifact_dir,
@@ -9071,6 +9452,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &artifact_dir,
                         &aggregated_steps,
                     );
+                    mark_live_stage_execution_failed(
+                        &mut snapshot.stage_execution,
+                        failed_at_unix_ms,
+                    );
                     set_live_state_status(&mut snapshot.live_state, "failed", Some(true));
                     live_workspace.replace(snapshot);
                     live_workspace.push_log(
@@ -9172,6 +9557,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &mut continuation_fem_mesh_payload,
                 &mut continuation_completion,
                 &mut continuation_stage_source,
+                &mut continuation_accepted_fields,
                 &mut continuation_certified_fields,
                 &mut continuation_relax_handoff,
                 synthetic_outcome.magnetization,
@@ -9438,6 +9824,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &artifact_dir,
                     &aggregated_steps,
                 );
+                mark_live_stage_execution_failed(&mut snapshot.stage_execution, failed_at_unix_ms);
                 set_live_state_status(&mut snapshot.live_state, "failed", Some(true));
                 live_workspace.replace(snapshot);
                 live_workspace.push_log("error", format!("Stage execution failed: {}", error));
@@ -9592,6 +9979,46 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         aggregated_steps.extend(offset_steps);
         let next_continuation_magnetization = stage_result.final_magnetization.clone();
         let next_continuation_completion = stage_result.completion.clone();
+        let native_equilibrium_artifact_paths = match &execution_plan.backend_plan {
+            BackendPlanIR::Fem(plan) => Some(
+                fullmag_runner::CertifiedFemEquilibriumFields::artifact_paths_for_material(
+                    &plan.material,
+                ),
+            ),
+            _ => None,
+        };
+        let native_accepted_equilibrium_artifact_path = match &execution_plan.backend_plan {
+            BackendPlanIR::Fem(plan) => Some(
+                fullmag_runner::CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(
+                    &plan.material,
+                ),
+            ),
+            _ => None,
+        };
+        let next_continuation_accepted_fields =
+            if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
+                && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
+                && stage_result.completion.as_ref().is_some_and(|completion| {
+                    completion.status == "completed" && completion.converged
+                })
+            {
+                let path = current_stage_artifact_dir.join(
+                    native_accepted_equilibrium_artifact_path
+                        .expect("FEM relaxation plan was checked"),
+                );
+                let bytes = fs::read(&path).with_context(|| {
+                    format!(
+                        "accepted native FEM relaxation did not publish accepted fields {}",
+                        path.display()
+                    )
+                })?;
+                Some(
+                    serde_json::from_slice(&bytes)
+                        .with_context(|| format!("failed to decode {}", path.display()))?,
+                )
+            } else {
+                None
+            };
         let next_continuation_certified_fields =
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
                 && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
@@ -9599,11 +10026,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     completion.status == "completed" && completion.converged
                 })
             {
-                let path = current_stage_artifact_dir
-                    .join("equilibrium/certified_fem_equilibrium_fields.v1.json");
+                let path = current_stage_artifact_dir.join(
+                    native_equilibrium_artifact_paths.expect("FEM relaxation plan was checked").0,
+                );
                 let bytes = fs::read(&path).with_context(|| {
                     format!(
-                        "accepted native FEM relaxation did not publish {}",
+                        "certified native FEM relaxation did not publish {}",
                         path.display()
                     )
                 })?;
@@ -9621,11 +10049,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     completion.status == "completed" && completion.converged
                 })
             {
-                let path = current_stage_artifact_dir
-                    .join("equilibrium/recomputed_fem_linearization_certificate.v1.json");
+                let path = current_stage_artifact_dir.join(
+                    native_equilibrium_artifact_paths.expect("FEM relaxation plan was checked").1,
+                );
                 let bytes = fs::read(&path).with_context(|| {
                     format!(
-                        "accepted native FEM relaxation did not publish {}",
+                        "recomputed native FEM relaxation did not publish {}",
                         path.display()
                     )
                 })?;
@@ -9647,20 +10076,24 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let next_relax_handoff = match (
             next_continuation_completion.as_ref(),
             next_continuation_fem_mesh_payload.as_ref(),
+            next_continuation_accepted_fields.as_ref(),
             next_continuation_certified_fields.as_ref(),
             next_continuation_recomputed_certificate.as_ref(),
         ) {
             (
                 Some(completion),
                 Some(source_mesh),
+                Some(accepted_fields),
                 Some(certified_fields),
                 Some(recomputed_certificate),
-            ) => accepted_relax_handoff_from_completed_stage(
+            ) => accepted_relax_handoff_from_completed_stage_with_exact_artifacts(
                 &execution_plan.backend_plan,
                 &next_continuation_stage_source,
                 source_mesh,
                 completion,
                 &next_continuation_magnetization,
+                &current_stage_artifact_dir,
+                accepted_fields,
                 certified_fields,
                 recomputed_certificate,
             )?,
@@ -9668,6 +10101,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         };
         continuation_magnetization = Some(next_continuation_magnetization);
         continuation_completion = next_continuation_completion;
+        continuation_accepted_fields = next_continuation_accepted_fields;
         continuation_certified_fields = next_continuation_certified_fields;
         continuation_stage_source = Some(next_continuation_stage_source);
         continuation_fem_mesh_payload = next_continuation_fem_mesh_payload;
@@ -9839,6 +10273,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             preserve_terminal_stage_history(
                 &mut next_stage_execution,
                 previous_stage_execution.as_ref(),
+            );
+            preserve_completed_parallel_execution(
+                &mut next_stage_execution,
+                previous_stage_execution.as_ref(),
+                stage_index,
             );
             attach_stage_fem_mesh_identity(
                 &mut next_stage_execution,
@@ -10280,10 +10719,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             );
                             continue;
                         }
-                        continuation_magnetization = Some(loaded_state.values);
-                        continuation_source = None; // loaded from file — unknown source
-                        continuation_completion = None;
-                        drop(continuation_relax_handoff.take());
+                        replace_continuation_after_synthetic_stage(
+                            &mut continuation_magnetization,
+                            &mut continuation_source,
+                            &mut continuation_fem_mesh_payload,
+                            &mut continuation_completion,
+                            &mut continuation_stage_source,
+                            &mut continuation_accepted_fields,
+                            &mut continuation_certified_fields,
+                            &mut continuation_relax_handoff,
+                            loaded_state.values,
+                            false,
+                        );
                         live_workspace.push_log(
                             "success",
                             format!(
@@ -10356,6 +10803,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     interactive_template_ir = remesh_stages.remove(0).ir;
                     current_plan_summary = summary;
                     drop(continuation_relax_handoff.take());
+                    // The remesh invalidates all cached equilibrium field evidence.
+                    continuation_fem_mesh_payload = None;
+                    continuation_completion = None;
+                    continuation_stage_source = None;
+                    continuation_accepted_fields = None;
+                    continuation_certified_fields = None;
                     interactive_runtime_host.enter_awaiting_command(None, &live_workspace);
                 }
                 continue;
@@ -10603,6 +11056,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &stage.entrypoint_kind,
             );
             let current_stage_id = format!("stage-{interactive_stage_index:03}");
+            // Preserve the actual orchestration identity at the producer
+            // boundary.  Interactive FEM eigen sweeps use the same exact
+            // relaxation sidecar contract as scripted stages; never let the
+            // runner infer these values from the consuming modal stage.
+            stage.ir.problem_meta.runtime_metadata.insert(
+                "producer_run_id".to_string(),
+                serde_json::Value::String(run_id.clone()),
+            );
+            stage.ir.problem_meta.runtime_metadata.insert(
+                "producer_stage_id".to_string(),
+                serde_json::Value::String(current_stage_id.clone()),
+            );
+            stage.ir.problem_meta.runtime_metadata.insert(
+                "producer_stage_kind".to_string(),
+                serde_json::Value::String(stage.entrypoint_kind.clone()),
+            );
             fs::create_dir_all(&current_stage_artifact_dir).with_context(|| {
                 format!(
                     "failed to create interactive stage artifact dir {}",
@@ -11867,7 +12336,8 @@ mod tests {
         format_stage_progress_line, has_heavy_live_payload,
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
-        mark_ui_shell_preparation_ready, mesh_build_pipeline_status_json,
+        mark_live_stage_execution_failed, mark_ui_shell_preparation_ready,
+        mesh_build_pipeline_status_json,
         mesh_source_scene_revision, offset_step_update, own_preparation_boundary_failure,
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
         preserve_terminal_stage_history, project_script_export_failure,
@@ -11879,7 +12349,8 @@ mod tests {
         run_solver_initialization_safety_check, scripted_stage_execution_state,
         scripted_stage_execution_state_with_completion, set_latest_scalar_row_if_due,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
-        step_update_has_frequency_response_progress, user_cancelled_stage_completion,
+        step_update_has_frequency_response_progress, step_update_has_parallel_execution_progress,
+        parallel_execution_telemetry_from_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         write_sampling_resolution_stage_record, ActiveSequenceState, CommandApplicationBoundary,
@@ -12482,6 +12953,90 @@ mod tests {
             terminal_field_snapshot: false,
             finished: false,
         }
+    }
+
+    #[test]
+    fn adaptive_parallel_progress_decodes_typed_admission_telemetry() {
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("parallel_telemetry_available".into(), 1.0);
+        progress.insert("parallel_active_workers".into(), 2.0);
+        progress.insert("parallel_admission_desired_workers".into(), 3.0);
+        progress.insert("parallel_admission_pending_samples".into(), 5.0);
+        progress.insert("parallel_admission_worker_limit".into(), 4.0);
+        progress.insert("parallel_cpu_target_percent".into(), 90.0);
+        progress.insert("parallel_memory_target_percent".into(), 80.0);
+        progress.insert("parallel_cpu_busy_percent".into(), 62.5);
+        progress.insert("parallel_cpu_available_cores".into(), 4.0);
+        progress.insert("parallel_memory_reserve_bytes_lo".into(), 1_073_741_824.0);
+        progress.insert("parallel_memory_reserve_bytes_hi".into(), 0.0);
+        progress.insert("parallel_sampled_at_unix_ms_lo".into(), 3_350_608_227.0);
+        progress.insert("parallel_sampled_at_unix_ms_hi".into(), 414.0);
+        progress.insert("parallel_cpu_target_kind:soft_admission_target".into(), 1.0);
+        progress.insert("parallel_admission_reason:waiting_cpu_headroom_for_probe".into(), 1.0);
+        progress.insert("parallel_admission_reason:waiting_memory_headroom_for_probe".into(), 1.0);
+        assert!(parallel_execution_telemetry_from_progress(&progress).is_none());
+        progress.remove("parallel_admission_reason:waiting_memory_headroom_for_probe");
+
+        let decoded = parallel_execution_telemetry_from_progress(&progress)
+            .expect("complete adaptive telemetry should decode");
+        assert_eq!(decoded.active_workers, 2);
+        assert_eq!(decoded.admission_desired_workers, 3);
+        assert_eq!(decoded.admission_worker_limit, Some(4));
+        assert_eq!(decoded.memory_reserve_bytes, 1_073_741_824);
+        assert_eq!(decoded.cpu_target_kind, "soft_admission_target");
+        assert_eq!(decoded.admission_reason, "waiting_cpu_headroom_for_probe");
+        assert_eq!(decoded.cpu_busy_percent, Some(62.5));
+        assert_eq!(decoded.cpu_available_cores, Some(4.0));
+
+        progress.remove("parallel_cpu_available_cores");
+        let historical = parallel_execution_telemetry_from_progress(&progress)
+            .expect("telemetry without legacy CPU capacity remains decodable");
+        assert_eq!(historical.cpu_available_cores, None);
+    }
+
+    #[test]
+    fn failed_stage_clears_previous_parallel_admission_sample() {
+        let mut stage_execution = Some(CurrentLiveStageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![CurrentLiveStageExecutionRecord {
+                status: "running".to_string(),
+                parallel_execution: Some(fullmag_runner::LiveParallelExecutionTelemetry {
+                    sampled_at_unix_ms: 10,
+                    active_workers: 2,
+                    admission_desired_workers: 2,
+                    admission_worker_limit: Some(4),
+                    admission_pending_samples: 1,
+                    resolved_workers: None,
+                    cpu_target_percent: 90.0,
+                    memory_target_percent: 80.0,
+                    memory_reserve_bytes: 1_073_741_824,
+                    cpu_target_kind: "soft_admission_target".to_string(),
+                    cpu_busy_percent: Some(50.0),
+                    allocated_cpu_cores: Some(2.0),
+                    cpu_available_cores: Some(4.0),
+                    memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
+                    memory_available_bytes: Some(4 * 1024 * 1024 * 1024),
+                    worker_peak_cpu_cores: Some(1.0),
+                    worker_peak_rss_bytes: Some(512 * 1024 * 1024),
+                    admission_reason: "calibrating_first_sample".to_string(),
+                    terminal: false,
+                }),
+                ..CurrentLiveStageExecutionRecord::default()
+            }],
+            stage_statuses: vec!["running".to_string()],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("eigenmodes".to_string()),
+            runtime_state: "running".to_string(),
+        });
+
+        mark_live_stage_execution_failed(&mut stage_execution, 20);
+        let failed = stage_execution.expect("failed stage state should remain published");
+        assert_eq!(failed.runtime_state, "failed");
+        assert_eq!(failed.active_stage_index, None);
+        assert_eq!(failed.stages[0].status, "failed");
+        assert_eq!(failed.stages[0].completed_at_unix_ms, Some(20));
+        assert_eq!(failed.stages[0].parallel_execution, None);
     }
 
     fn test_preview_field(quantity: &str, revision: u64, z: f64) -> LivePreviewField {
@@ -13492,8 +14047,14 @@ mod tests {
         });
         let mut progress = std::collections::HashMap::new();
         progress.insert("percent".to_string(), 48.0);
-        progress.insert("phase_solving_sparse_lobpcg".to_string(), 1.0);
-        progress.insert("solver_cpu_sparse_lobpcg".to_string(), 1.0);
+        progress.insert(
+            "phase_kind:solving_native_frequency_window_base".to_string(),
+            1.0,
+        );
+        progress.insert(
+            "solver_kind:slepc_multi_shift_invert_production_cpu_dense".to_string(),
+            1.0,
+        );
         progress.insert("active_nodes".to_string(), 1931.0);
         progress.insert("effective_dof".to_string(), 3862.0);
         progress.insert("requested_modes".to_string(), 20.0);
@@ -13525,10 +14086,10 @@ mod tests {
         assert_eq!(stage.progress_percent, Some(48.0));
         assert_eq!(
             stage.progress_label.as_deref(),
-            Some("solving sparse LOBPCG")
+            Some("solving native frequency window base")
         );
         let detail = stage.progress_detail.as_deref().unwrap_or_default();
-        assert!(detail.contains("solver=cpu_sparse_lobpcg"));
+        assert!(detail.contains("solver=slepc_multi_shift_invert_production_cpu_dense"));
         assert!(detail.contains("effective_dof=3862"));
         assert!(detail.contains("iteration=37/5000"));
         assert!(detail.contains("residual=1.200e-5"));
@@ -13540,8 +14101,64 @@ mod tests {
     }
 
     #[test]
+    fn modal_progress_does_not_replace_physical_scalar_history_or_run_energy() {
+        let mut state = test_workspace_state();
+        let mut measured = test_step_update(3);
+        measured.stats.e_total = -1.25e-18;
+        state.latest_scalar_row = Some(crate::live_workspace::scalar_row_from_stats(
+            &measured.stats,
+        ));
+        let mut modal = test_step_update(4);
+        modal.stats.per_object_scalars.insert(
+            "fem_eigen_progress".into(),
+            std::collections::HashMap::new(),
+        );
+        modal.finished = true;
+        crate::live_workspace::set_latest_scalar_row_for_terminal_update(&mut state, &modal);
+        assert_eq!(state.latest_scalar_row.as_ref().unwrap().e_total, -1.25e-18);
+        assert_eq!(state.latest_scalar_row.as_ref().unwrap().step, 3);
+        let run = crate::step_utils::running_run_manifest_from_update(
+            "run",
+            "session",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &modal,
+        );
+        assert_eq!(run.final_e_total, None);
+        assert_eq!(run.final_time, None);
+        assert_eq!(run.total_steps, 0);
+        let physical = crate::step_utils::running_run_manifest_from_update(
+            "run",
+            "session",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &measured,
+        );
+        assert_eq!(physical.final_e_total, Some(-1.25e-18));
+    }
+
+    #[test]
+    fn modal_solver_identity_never_infers_dense_from_missing_or_ambiguous_flags() {
+        let mut progress = std::collections::HashMap::new();
+        assert_eq!(super::fem_eigen_progress_solver(&progress), "unknown");
+        for kind in [
+            "slepc_multi_shift_invert_production_cpu_dense",
+            "gpu_modal_device_krylov",
+            "cpu_full_2x2_symmetric",
+        ] {
+            progress.clear();
+            progress.insert(format!("solver_kind:{kind}"), 1.0);
+            assert_eq!(super::fem_eigen_progress_solver(&progress), kind);
+        }
+        progress.insert("solver_kind:other".into(), 1.0);
+        assert_eq!(super::fem_eigen_progress_solver(&progress), "unknown");
+    }
+
+    #[test]
     fn terminal_stage_line_includes_fem_eigen_window_progress() {
         let mut progress = std::collections::HashMap::new();
+        progress.insert(
+            "solver_kind:slepc_multi_shift_invert_production_cpu_dense".to_string(),
+            1.0,
+        );
         progress.insert("window_phase_refinement".to_string(), 1.0);
         progress.insert("current_subwindow".to_string(), 17.0);
         progress.insert("total_subwindows".to_string(), 34.0);
@@ -13564,11 +14181,91 @@ mod tests {
             None,
         );
 
+        for forbidden in ["|H_eff|", "max_torque", "E_total", "m_avg", " t=", " dt="] {
+            assert!(!line.contains(forbidden), "{line}");
+        }
+        assert!(line.contains("solver=slepc_multi_shift_invert_production_cpu_dense"));
         assert!(line.contains("modal window phase=refinement"), "{line}");
         assert!(line.contains("subwindow=17/34"), "{line}");
         assert!(line.contains("subwindow_s=4.2"), "{line}");
         assert!(line.contains("window_s=71.5"), "{line}");
         assert!(line.contains("relres=2.000e-9"), "{line}");
+    }
+
+    fn tagged_ksp_progress_for_cli() -> std::collections::HashMap<String, f64> {
+        let mut progress = std::collections::HashMap::new();
+        for (key, value) in [
+            ("window_phase_refinement", 1.0),
+            ("iteration", 17.0),
+            ("max_iterations", 300.0),
+            ("current_subwindow", 23.0),
+            ("total_subwindows", 50.0),
+            ("linear_iteration", 12.0),
+            ("linear_residual_norm", 4.5e-8),
+            ("linear_solver_role:poisson", 1.0),
+            ("linear_ksp_type:gmres", 1.0),
+            ("residual_source:ksp_norm", 1.0),
+            ("residual", 5.0e-2),
+        ] {
+            progress.insert(key.to_string(), value);
+        }
+        progress
+    }
+
+    #[test]
+    fn terminal_stage_line_formats_tagged_ksp_without_relative_residual() {
+        let mut per_object_scalars = std::collections::HashMap::new();
+        per_object_scalars.insert(
+            "fem_eigen_progress".to_string(),
+            tagged_ksp_progress_for_cli(),
+        );
+        let stats = fullmag_runner::StepStats {
+            step: 17,
+            per_object_scalars,
+            ..fullmag_runner::StepStats::default()
+        };
+
+        let line = format_stage_progress_line(
+            "stage 2/2 (flat_eigenmodes)",
+            &stats,
+            None,
+            Some(Duration::from_secs(5)),
+            None,
+        );
+
+        assert!(line.contains("iteration=17/300"), "{line}");
+        assert!(line.contains("subwindow=23/50"), "{line}");
+        assert!(line.contains("linear_iteration=12"), "{line}");
+        assert!(line.contains("ksp_norm=4.500e-8"), "{line}");
+        assert!(line.contains("linear_solver_role=poisson"), "{line}");
+        assert!(line.contains("linear_ksp_type=gmres"), "{line}");
+        assert_eq!(line.matches("ksp_norm=").count(), 1, "{line}");
+        assert!(!line.contains("relres="), "{line}");
+        assert!(!line.contains("residual=5.000e-2"), "{line}");
+    }
+
+    #[test]
+    fn appended_fem_eigen_progress_formats_tagged_ksp_diagnostics() {
+        let mut per_object_scalars = std::collections::HashMap::new();
+        per_object_scalars.insert(
+            "fem_eigen_progress".to_string(),
+            tagged_ksp_progress_for_cli(),
+        );
+        let stats = fullmag_runner::StepStats {
+            per_object_scalars,
+            ..fullmag_runner::StepStats::default()
+        };
+        let mut line = "stage".to_string();
+
+        super::append_fem_eigen_step_progress(&mut line, &stats);
+
+        assert!(line.contains("subwindow=23/50"), "{line}");
+        assert!(line.contains("linear_iteration=12"), "{line}");
+        assert!(line.contains("ksp_norm=4.500e-8"), "{line}");
+        assert!(line.contains("linear_solver_role=poisson"), "{line}");
+        assert!(line.contains("linear_ksp_type=gmres"), "{line}");
+        assert!(!line.contains("relres="), "{line}");
+        assert!(!line.contains("residual=5.000e-2"), "{line}");
     }
 
     #[test]
@@ -14109,6 +14806,7 @@ mod tests {
     #[test]
     fn fem_gpu_preflight_reports_available_vram() {
         let status = fullmag_runner::NativeFemGpuStatus {
+            cpu_available: true,
             available: true,
             visible_cuda_device_count: 1,
             requested_gpu_index: -1,
@@ -14130,6 +14828,7 @@ mod tests {
     #[test]
     fn fem_gpu_preflight_reports_native_availability_reason() {
         let status = fullmag_runner::NativeFemGpuStatus {
+            cpu_available: false,
             available: false,
             visible_cuda_device_count: 0,
             requested_gpu_index: -1,
@@ -14439,6 +15138,23 @@ mod tests {
         assert!(step_update_has_frequency_response_progress(&update));
         assert!(cadence.should_publish(&update));
         assert!(cadence.should_log(&update));
+    }
+
+    #[test]
+    fn parallel_admission_progress_forces_publish_without_waiting_for_heartbeat() {
+        let mut cadence = LiveProgressCadence::default();
+        cadence.last_publish_at = Some(Instant::now());
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("parallel_telemetry_available".to_string(), 1.0);
+        let mut update = test_step_update(257);
+        update
+            .stats
+            .per_object_scalars
+            .insert("fem_eigen_progress".to_string(), progress);
+
+        assert!(!has_heavy_live_payload(&update));
+        assert!(step_update_has_parallel_execution_progress(&update));
+        assert!(cadence.should_publish(&update));
     }
 
     #[test]
@@ -15554,6 +16270,7 @@ mod tests {
             max_h_ex_difference_a_per_m: 0.0,
             max_h_demag_difference_a_per_m: 0.0,
             max_h_ext_difference_a_per_m: 0.0,
+            max_h_anisotropy_difference_a_per_m: None,
             max_h_eff_difference_a_per_m: 0.0,
             max_phi_difference_a: 0.0,
             field_absolute_tolerance_a_per_m: 1.0e-6,
@@ -16147,6 +16864,7 @@ mod tests {
             mode_tracking: None,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
         };
         let backend = BackendPlanIR::FemEigen(target);
         let completion = stage_completion(fullmag_ir::StageStopReason::Torque);
@@ -16163,6 +16881,7 @@ mod tests {
             &completion,
             &m0,
             &fields,
+            &fields,
             &recomputed,
         )
         .expect("accepted relax output should create a typed handoff");
@@ -16174,6 +16893,23 @@ mod tests {
                 .is_some()
         );
 
+        let mut tampered_accepted_fields = fields.clone();
+        tampered_accepted_fields.h_eff_a_per_m[0][0] += 1.0;
+        let error = accepted_relax_handoff_from_completed_stage(
+            &source_backend,
+            &source_stage,
+            &source_mesh,
+            &completion,
+            &m0,
+            &tampered_accepted_fields,
+            &fields,
+            &recomputed,
+        )
+        .expect_err("a digest-stale accepted endpoint must fail closed");
+        assert!(error
+            .to_string()
+            .contains("certified_fields_invalid"));
+
         let mut tampered_recompute = recomputed.clone();
         tampered_recompute.max_h_demag_difference_a_per_m = 1.0;
         let error = accepted_relax_handoff_from_completed_stage(
@@ -16182,6 +16918,7 @@ mod tests {
             &source_mesh,
             &completion,
             &m0,
+            &fields,
             &fields,
             &tampered_recompute,
         )
@@ -16202,6 +16939,7 @@ mod tests {
             &completion,
             &m0,
             &fields,
+            &fields,
             &mismatched_equilibrium,
         )
         .expect_err("a certificate for a different equilibrium must fail closed");
@@ -16219,6 +16957,7 @@ mod tests {
             &completion,
             &m0,
             &fields,
+            &fields,
             &mismatched_mesh,
         )
         .expect_err("a certificate for a different mesh must fail closed");
@@ -16235,6 +16974,7 @@ mod tests {
             &source_mesh,
             &completion,
             &m0,
+            &fields,
             &fields,
             &mismatched_fields,
         )
@@ -16262,6 +17002,7 @@ mod tests {
         let mut continuation_fem_mesh_payload = Some(source_mesh.clone());
         let mut continuation_completion = Some(completion.clone());
         let mut continuation_stage_source = Some(source_stage.clone());
+        let mut continuation_accepted_fields = Some(fields.clone());
         let mut continuation_certified_fields = Some(fields.clone());
         let mut continuation_relax_handoff = Some(handoff.clone());
 
@@ -16271,6 +17012,7 @@ mod tests {
             &mut continuation_fem_mesh_payload,
             &mut continuation_completion,
             &mut continuation_stage_source,
+            &mut continuation_accepted_fields,
             &mut continuation_certified_fields,
             &mut continuation_relax_handoff,
             save_outcome.magnetization,
@@ -16282,6 +17024,7 @@ mod tests {
         assert!(continuation_fem_mesh_payload.is_none());
         assert!(continuation_completion.is_none());
         assert!(continuation_stage_source.is_none());
+        assert!(continuation_accepted_fields.is_none());
         assert!(continuation_certified_fields.is_none());
         assert!(continuation_relax_handoff.is_none());
         let error = accepted_relax_handoff_for_eigen_stage(
@@ -16299,6 +17042,7 @@ mod tests {
         let mut continuation_fem_mesh_payload = Some(source_mesh.clone());
         let mut continuation_completion = Some(completion.clone());
         let mut continuation_stage_source = Some(source_stage.clone());
+        let mut continuation_accepted_fields = Some(fields.clone());
         let mut continuation_certified_fields = Some(fields.clone());
         let mut continuation_relax_handoff = Some(handoff.clone());
         replace_continuation_after_synthetic_stage(
@@ -16307,6 +17051,7 @@ mod tests {
             &mut continuation_fem_mesh_payload,
             &mut continuation_completion,
             &mut continuation_stage_source,
+            &mut continuation_accepted_fields,
             &mut continuation_certified_fields,
             &mut continuation_relax_handoff,
             m0.clone(),
@@ -16316,6 +17061,7 @@ mod tests {
             continuation_source.is_some(),
             "change_device must preserve the typed continuation source"
         );
+        assert!(continuation_accepted_fields.is_some());
         assert!(accepted_relax_handoff_for_eigen_stage(
             &backend,
             continuation_magnetization.as_deref(),
@@ -16334,6 +17080,7 @@ mod tests {
             &rejected,
             &m0,
             &fields,
+            &fields,
             &recomputed,
         )
         .expect_err("unaccepted relax output must fail closed before the runner");
@@ -16350,6 +17097,7 @@ mod tests {
             &source_mesh,
             &stage_completion(fullmag_ir::StageStopReason::Torque),
             &m0,
+            &fields,
             &fields,
             &recomputed,
         )

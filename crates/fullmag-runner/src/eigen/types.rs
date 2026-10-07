@@ -1,3 +1,4 @@
+pub use super::tracking_mass::ConsistentP1TrackingMetric;
 use fullmag_ir::{FemEigenDispersionValidationIR, FemEigenK0KittelValidationIR};
 use num_complex::Complex64;
 use std::collections::{BTreeMap, BTreeSet};
@@ -359,7 +360,6 @@ fn tet4_volume(nodes: [[f64; 3]; 4]) -> f64 {
 pub enum EigenSolverModel {
     ReferenceScalarTangent,
     ReferenceFull2x2Tangent,
-    ReferenceThinFilmDeBvKalinikosN0,
     ReferenceK0KittelSyntheticDemagFactor,
     LinearizedLlgTangentPlane,
     ProductionCpuShiftInvert,
@@ -372,7 +372,6 @@ impl EigenSolverModel {
         match self {
             Self::ReferenceScalarTangent => "reference_scalar_tangent",
             Self::ReferenceFull2x2Tangent => "reference_full_2x2_tangent",
-            Self::ReferenceThinFilmDeBvKalinikosN0 => "reference_thin_film_de_bv_kalinikos_n0",
             Self::ReferenceK0KittelSyntheticDemagFactor => {
                 "reference_k0_kittel_synthetic_demag_factor"
             }
@@ -406,6 +405,10 @@ pub struct SingleKModeResult {
     pub norm: f64,
     pub mass_norm: Option<f64>,
     pub max_amplitude: f64,
+    /// Solver-reported relative L2 residual. This is separate from
+    /// `residual_norm`, which is the absolute L2 norm, and remains `None`
+    /// when the backend did not provide a relative residual.
+    pub residual_relative_l2: Option<f64>,
     pub residual_norm: Option<f64>,
     pub residual_linf: Option<f64>,
     pub tangent_leakage_mean_abs: Option<f64>,
@@ -418,6 +421,9 @@ pub struct SingleKModeResult {
     pub amplitude: Option<Vec<f64>>,
     pub phase: Option<Vec<f64>>,
     pub node_mass_weights: Option<Vec<f64>>,
+    /// Exact consistent P1 Cartesian metric, bound to physical magnetic nodes.
+    /// Never combine it with the legacy diagonal node_mass_weights field.
+    pub consistent_p1_metric: Option<std::sync::Arc<ConsistentP1TrackingMetric>>,
     pub component_participation: ModalParticipationObservable,
 }
 
@@ -437,6 +443,75 @@ pub struct SingleKSolveResult {
     pub solver_diagnostics: Option<serde_json::Value>,
 }
 
+/// Evidence recorded at assignment time, rather than inferred by artifact writers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrackingEdgeProvenance {
+    pub policy: fullmag_ir::ModeTrackingIR,
+    pub score_source: TrackingScoreSource,
+    pub metric: TrackingMetricDefinition,
+    pub transition: TrackingTransition,
+    pub previous_sample_index: Option<usize>,
+    pub previous_raw_mode_index: Option<usize>,
+    pub skipped_sample_count: usize,
+    pub subspace: Option<TrackingSubspaceEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackingScoreSource {
+    Seed,
+    ModalOverlapWeightedScore,
+    ModalOverlapUnweightedScore,
+    ModalSubspaceTransportScore,
+    FrequencyScoreFallback,
+    ModalOverlapUnavailable,
+}
+
+impl TrackingScoreSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Seed => "seed",
+            Self::ModalOverlapWeightedScore => "modal_overlap_weighted_score",
+            Self::ModalOverlapUnweightedScore => "modal_overlap_unweighted_score",
+            Self::ModalSubspaceTransportScore => "modal_subspace_transport_score",
+            Self::FrequencyScoreFallback => "frequency_score_fallback",
+            Self::ModalOverlapUnavailable => "modal_overlap_unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackingMetricDefinition {
+    ConsistentP1Tet4CartesianNodalEnvelope,
+    DiagonalNodalMass,
+    Euclidean,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackingTransition {
+    Seed,
+    NewBranch,
+    Pair,
+    DegenerateToDegenerate,
+    SplitToDegenerate,
+    DegenerateToSplit,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrackingSubspaceEvidence {
+    pub rank: usize,
+    pub previous_cluster: usize,
+    pub current_cluster: usize,
+    pub branch_ids: Vec<usize>,
+    pub previous_raw_mode_indices: Vec<usize>,
+    pub current_raw_mode_indices: Vec<usize>,
+    pub principal_cosines: Vec<f64>,
+    pub principal_minimum: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct TrackedBranchPoint {
     pub sample_index: usize,
@@ -445,6 +520,7 @@ pub struct TrackedBranchPoint {
     pub frequency_imag_hz: f64,
     pub tracking_confidence: f64,
     pub overlap_prev: Option<f64>,
+    pub tracking_edge: Option<TrackingEdgeProvenance>,
 }
 
 #[derive(Debug, Clone)]
@@ -477,6 +553,8 @@ pub struct K0KittelPeriodicAirboxDemagMetrics {
 
 #[derive(Debug, Clone)]
 pub struct PathSolveResult {
+    /// Actual plan gamma0 in rad/(s A/m); never a publication-time material default.
+    pub gamma0_rad_s_per_a_m: f64,
     pub samples: Vec<SingleKSolveResult>,
     pub branches: Vec<TrackedBranch>,
     pub solver_model: EigenSolverModel,
@@ -484,6 +562,7 @@ pub struct PathSolveResult {
     pub include_demag: bool,
     pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
     pub k0_kittel_validation: Option<FemEigenK0KittelValidationIR>,
+    pub solver_policy: Option<fullmag_ir::FemEigenSolverPolicyIR>,
     pub dispersion_analytic_reference: Option<DispersionAnalyticReferenceContext>,
     pub k0_kittel_periodic_airbox_demag: Option<K0KittelPeriodicAirboxDemagMetrics>,
 }

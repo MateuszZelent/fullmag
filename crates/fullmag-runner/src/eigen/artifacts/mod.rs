@@ -6,6 +6,8 @@ mod legacy_manifest;
 mod modal_manifest;
 mod mode_bundle;
 
+pub(crate) use common::validated_modal_gamma0;
+
 pub use super::response_block_real::{
     solve_and_write_field_driven_response_sweep_bundle,
     solve_and_write_field_driven_response_sweep_bundle_with_identity,
@@ -44,7 +46,9 @@ pub(crate) use kittel::{
     k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep,
 };
 pub use modal_manifest::{
-    write_branch_bundle, write_frequency_domain_eigen_manifest, write_path_bundle,
+    write_branch_bundle, write_branch_bundle_with_sample_namespace,
+    write_frequency_domain_eigen_manifest, write_path_bundle,
+    write_path_bundle_with_sample_namespace,
 };
 pub use mode_bundle::write_mode_bundle;
 

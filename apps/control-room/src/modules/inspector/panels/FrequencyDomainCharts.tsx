@@ -15,6 +15,7 @@ import type {
   FrequencyDomainChartSeries,
   FrequencyResponsePoint,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { eigenModeFieldAvailable } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
 
@@ -53,7 +54,7 @@ export function FrequencyDomainSpectrumChart({
     return {
       dampingRateHz: point.dampingRateHz,
       frequencyLabel: formatFrequencyHz(point.frequencyHz),
-      hasField: Boolean(point.modeFieldId),
+      hasField: eigenModeFieldAvailable(point),
       leakage: point.tangentLeakageMax,
       mode: point.displayModeIndex,
       name: `mode ${point.displayModeIndex}`,

@@ -8,6 +8,9 @@ export function renderStorageView(container) {
   let activePlan = null;
   let volumesError = null;
   let resourcesError = null;
+  let storageLoadGeneration = 0;
+  let storageLoadPromise = null;
+  let destroyed = false;
 
   container.innerHTML = `
     <div class="view-container storage-view">
@@ -103,39 +106,56 @@ export function renderStorageView(container) {
     }
   });
 
-  async function loadStorageData() {
+  function loadStorageData() {
+    if (destroyed) return Promise.resolve();
+    if (storageLoadPromise) return storageLoadPromise;
+    const generation = ++storageLoadGeneration;
     volumesError = null;
     resourcesError = null;
-    try {
-      const [volsRes, resDataRes] = await Promise.allSettled([
-        api.getStorageVolumes(),
-        api.getStorageResources(),
-      ]);
 
-      if (volsRes.status === 'fulfilled') {
-        volumes = volsRes.value;
-      } else {
-        volumesError = volsRes.reason;
+    // Keep the last good response visible during a refresh. On the initial
+    // load the null values leave the individual sections on their own spinner.
+    renderVolumes(volumes, volumesError);
+    renderCategories(resourcesData, resourcesError);
+    renderResourcesTable(resourcesData, resourcesError);
+
+    // The volume endpoint is cheap and must render even when the recursive
+    // resource scan is slow or unavailable. Do not await either request here:
+    // each section owns its response, error state, and timeout.
+    const volumesRequest = Promise.resolve()
+      .then(() => api.getStorageVolumes({ timeoutMs: 5000, retries: 1 }))
+      .then((value) => {
+        if (generation !== storageLoadGeneration) return;
+        volumes = value;
+        volumesError = null;
+        renderVolumes(volumes, volumesError);
+      })
+      .catch((err) => {
+        if (generation !== storageLoadGeneration) return;
         volumes = null;
-      }
+        volumesError = err;
+        renderVolumes(null, volumesError);
+      });
 
-      if (resDataRes.status === 'fulfilled') {
-        resourcesData = resDataRes.value;
-      } else {
-        resourcesError = resDataRes.reason;
+    const resourcesRequest = Promise.resolve()
+      .then(() => api.getStorageResources({ timeoutMs: 7000, retries: 1 }))
+      .then((value) => {
+        if (generation !== storageLoadGeneration) return;
+        resourcesData = value;
+        resourcesError = null;
+        renderCategories(resourcesData, resourcesError);
+        renderResourcesTable(resourcesData, resourcesError);
+      })
+      .catch((err) => {
+        if (generation !== storageLoadGeneration) return;
         resourcesData = null;
-      }
-
-      renderVolumes(volumes, volumesError);
-      renderCategories(resourcesData, resourcesError);
-      renderResourcesTable(resourcesData, resourcesError);
-    } catch (err) {
-      volumesError = err;
-      resourcesError = err;
-      renderVolumes(null, volumesError);
-      renderCategories(null, resourcesError);
-      renderResourcesTable(null, resourcesError);
-    }
+        resourcesError = err;
+        renderCategories(null, resourcesError);
+        renderResourcesTable(null, resourcesError);
+      });
+    storageLoadPromise = Promise.allSettled([volumesRequest, resourcesRequest])
+      .finally(() => { storageLoadPromise = null; });
+    return storageLoadPromise;
   }
 
   function renderVolumes(vols, err = null) {
@@ -439,6 +459,9 @@ export function renderStorageView(container) {
     update: () => {
       loadStorageData();
     },
-    destroy: () => {},
+    destroy: () => {
+      destroyed = true;
+      storageLoadGeneration += 1;
+    },
   };
 }

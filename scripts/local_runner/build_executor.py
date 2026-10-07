@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import shutil
 import time
@@ -16,7 +17,11 @@ from local_runner.coordinator import CoordinatorError, docker, inspect_owned
 from local_runner.queue import JobQueue
 from local_runner.worker import _resolve_storage_dir, _format_cpus, _format_memory
 from local_runner.worker_entrypoint import verify_source
-from local_runner.build_entrypoint import required_outputs_for_profile
+from local_runner.build_entrypoint import (
+    BuildEntryPointError,
+    required_outputs_for_profile,
+    validate_native_source_snapshot,
+)
 
 
 PROFILES = {
@@ -26,11 +31,298 @@ PROFILES = {
     'fem-cpu-current-contracts-v1': ('fem', 'cpu'),
     'fem-gpu-current-contracts-v1': ('fem', 'gpu'),
     'fem-cpu-slepc-modal-v1': ('fem', 'cpu'),
+    'fem-cpu-slepc-runtime-v1': ('fem', 'cpu'),
+    'fem-cpu-slepc-runtime-v2': ('fem', 'cpu'),
 }
+PROFILE_CONTRACTS = {
+    'fem-cpu-current-contracts-v1': {
+        'schema': 'fullmag.fem.cpu_only_contract_result.v1',
+        'scenarios': ('steady-transport', 'steady-transport-rt0', 'oersted-oet0'),
+    },
+    'fem-gpu-current-contracts-v1': {
+        'schema': 'fullmag.current.gpu_contract_result.v1',
+        'scenarios': ('gpu-current',),
+    },
+    'fem-cpu-slepc-modal-v1': {
+        'schema': 'fullmag.fem.cpu.slepc_modal_contract_result.v1',
+        'scenarios': ('slepc-modal',),
+        'modal_target': 'fem_poisson_airbox_modal_eigen_slepc_contract',
+        'floquet_targets': (
+            'fem_floquet_magnetic_operator_contract',
+            'fem_floquet_bloch_scalar_contract',
+            'fem_floquet_airbox_operator_contract',
+            'fem_floquet_dynamic_demag_k_contract',
+            'fem_floquet_waveguide_demag_k_contract',
+            'fem_floquet_waveguide_cross_section_contract',
+            'fem_floquet_modal_solver_contract',
+        ),
+        'shared_domain_target': 'fem_poisson_airbox_shared_domain_contract',
+    },
+}
+RUNTIME_PROFILE_CONTRACTS = {
+    'fem-cpu-slepc-runtime-v1': {
+        'schema': 'fullmag.fem.cpu.slepc_runtime_contract.v1',
+        'native_target': 'fullmag_fem',
+        'backend': 'fem',
+        'device': 'cpu',
+        'precision': 'double',
+        'slepc': True,
+        'cmake_options': {
+            'FULLMAG_ENABLE_CUDA': 'ON',
+            'FULLMAG_ENABLE_FEM_GPU': 'ON',
+            'FULLMAG_USE_MFEM_STACK': 'ON',
+            'FULLMAG_FEM_WITH_SLEPC': 'ON',
+        },
+        'unit_test_targets': [],
+        'frontend_stages': [],
+    },
+}
+RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v2'] = {
+    **RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v1'],
+    'schema': 'fullmag.fem.cpu.slepc_runtime_contract.v2',
+    'cmake_options': {
+        **RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v1']['cmake_options'],
+        'FULLMAG_ENABLE_CUDA': 'OFF',
+        'FULLMAG_ENABLE_FEM_GPU': 'OFF',
+    },
+}
+
+
+def valid_cpu_mfem_abi_attestation(cmake_attestation):
+    if not isinstance(cmake_attestation, dict):
+        return False
+    mfem_abi = cmake_attestation.get('mfem_abi')
+    mfem_cmake_dir = cmake_attestation.get('mfem_cmake_dir')
+    if not isinstance(mfem_abi, dict):
+        return False
+    paths = (
+        (mfem_abi.get('path'), '/opt/fullmag-mfem-cpu/lib/'),
+        (mfem_cmake_dir, '/opt/fullmag-mfem-cpu/'),
+    )
+    if any(
+        not isinstance(path, str)
+        or not path.startswith(prefix)
+        or '..' in Path(path).parts
+        for path, prefix in paths
+    ):
+        return False
+    return re.fullmatch(r'[a-f0-9]{64}', str(mfem_abi.get('sha256', ''))) is not None
+def valid_cpu_modal_driver_attestation(runtime):
+    return isinstance(runtime, dict) and all(
+        runtime.get(name) == [] for name in (
+            'cuda_driver_compatibility_paths',
+            'cuda_driver_compatibility_libraries_preloaded',
+        )
+    )
+
+
+def valid_cpu_modal_dependency_attestation(cmake, dependency):
+    if not isinstance(cmake, dict) or not isinstance(dependency, dict):
+        return False
+    libraries = cmake.get('cpu_dependency_abi')
+    expected = {'mfem', 'hypre', 'ceed', 'petsc', 'slepc'}
+    if not isinstance(libraries, dict) or set(libraries) != expected:
+        return False
+    for family, record in libraries.items():
+        if not isinstance(record, dict):
+            return False
+        path = record.get('path')
+        if (not isinstance(path, str) or not path.startswith('/opt/fullmag-mfem-cpu/lib/')
+                or '..' in path.split('/') or '\\' in path
+                or not re.fullmatch(r'[a-f0-9]{64}', str(record.get('sha256', '')))):
+            return False
+    mfem_abi = cmake.get('mfem_abi')
+    if not isinstance(mfem_abi, dict) or any(mfem_abi.get(key) != libraries['mfem'].get(key)
+                                           for key in ('path', 'sha256')):
+        return False
+    for family in ('petsc', 'slepc'):
+        if dependency.get(family + '_library_realpath') != libraries[family]['path']:
+            return False
+        path = dependency.get(family + '_library_path')
+        directory = dependency.get(family + '_pkgconfig_dir')
+        if (not isinstance(path, str) or not path.startswith('/opt/fullmag-mfem-cpu/lib/')
+                or '..' in path.split('/') or '\\' in path
+                or directory != '/opt/fullmag-mfem-cpu/lib/pkgconfig'):
+            return False
+        module_name = 'FindPETSc.cmake' if family == 'petsc' else 'FindSLEPc.cmake'
+        if dependency.get(family + '_find_module_file') != '/workspace/backends/fem/cmake/' + module_name:
+            return False
+    return True
+
+
 TARGETS = {'source': '/source', 'workspace': '/workspace',
            'build': '/workspace/.fullmag-build', 'artifacts': '/artifacts',
            'trusted': '/runner', 'cargo': '/workspace/.fullmag-cargo',
            'rustup': '/workspace/.fullmag-rustup', 'pnpm': '/pnpm/store'}
+
+
+# A managed browser is a retained Compose service that may outlive a build
+# observation.  Its namespace is generated by run_managed_browser.py and is
+# deliberately narrower than the generic ``fullmag`` name used by the old
+# heavy-job guard.  The Compose labels and container name must agree; a name
+# alone is never enough to exempt a running container from serialization.
+_MANAGED_BROWSER_CONTAINER_RE = re.compile(
+    r'^/fullmag-browser-([0-9a-f]{32})-browser-1$'
+)
+_IMMUTABLE_IMAGE_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
+_MANAGED_BROWSER_MAX_NANO_CPUS = 4 * 10**9
+_MANAGED_BROWSER_MAX_MEMORY = 2 * 1024**3
+_MANAGED_BROWSER_MAX_PIDS = 128
+
+
+def _compose_labels(container):
+    if not isinstance(container, dict):
+        return None
+    config = container.get('Config')
+    if not isinstance(config, dict):
+        return None
+    labels = config.get('Labels')
+    return labels if isinstance(labels, dict) else None
+
+
+def _nonempty_text(value):
+    return isinstance(value, str) and bool(value)
+
+
+def _has_forbidden_mount(container):
+    mounts = container.get('Mounts')
+    if not isinstance(mounts, list):
+        return True
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            return True
+        source = mount.get('Source')
+        destination = mount.get('Destination')
+        if not isinstance(source, str) or not isinstance(destination, str):
+            return True
+        source_key = source.replace('\\', '/').lower()
+        destination_key = destination.replace('\\', '/').lower()
+        if (mount.get('Type') == 'device' or source_key == '/dev'
+                or source_key.startswith('/dev/') or destination_key == '/dev'
+                or destination_key.startswith('/dev/')
+                or 'docker.sock' in source_key or 'docker.sock' in destination_key):
+            return True
+    return False
+
+
+_MANAGED_BROWSER_STATE_PREFIXES = (
+    'set -eu; mkdir /state/workspace;',
+    'set -eu; mkdir -p /state/workspace;',
+    # The current launcher also checks that the state mount is not a symlink
+    # before creating the private workspace.
+    'set -eu; [ ! -L /state/workspace ] || exit 2; '
+    'mkdir -p /state/workspace;',
+)
+_MANAGED_BROWSER_VOLATILE_COMMAND = (
+    'set -eu; mkdir -p /tmp/fullmag-state; exec /package/bin/fullmag-api'
+)
+
+def _has_api_only_command(config):
+    if config.get('WorkingDir') != '/source':
+        return False
+    if config.get('Entrypoint') not in (None, []):
+        return False
+    command = config.get('Cmd')
+    if not isinstance(command, list) or len(command) != 3:
+        return False
+    if command[:2] != ['bash', '-c'] or not isinstance(command[2], str):
+        return False
+    script = command[2]
+    if script == _MANAGED_BROWSER_VOLATILE_COMMAND:
+        return True
+    if not any(script.startswith(prefix) for prefix in _MANAGED_BROWSER_STATE_PREFIXES):
+        return False
+    if not script.endswith('exec /package/bin/fullmag-api'):
+        return False
+    return not any(token in script.lower() for token in (
+        'cargo', 'build_entrypoint', 'worker_entrypoint', '/dev/', 'docker.sock'))
+
+
+
+def is_attested_managed_browser_container(container):
+    """Return true only for the bounded retained managed-browser service.
+
+    Compose's project label is the browser namespace.  Cross-checking it with
+    the generated container name, the service label, and the ordinary Compose
+    identity labels prevents a generic or partially labelled ``fullmag``
+    container from bypassing the heavy-build serialization guard.  Runtime
+    limits and the API-only command are checked too: this is a bounded managed
+    UI-service exemption, not proof that the API can never schedule CPU work.
+    """
+    if not isinstance(container, dict):
+        return False
+    name = container.get('Name')
+    if not isinstance(name, str):
+        return False
+    match = _MANAGED_BROWSER_CONTAINER_RE.fullmatch(name)
+    if match is None:
+        return False
+    labels = _compose_labels(container)
+    if labels is None:
+        return False
+    config = container.get('Config')
+    host = container.get('HostConfig')
+    if not isinstance(config, dict) or not isinstance(host, dict):
+        return False
+    project = 'fullmag-browser-' + match.group(1)
+    image = container.get('Image')
+    security_opt = host.get('SecurityOpt')
+    if (not isinstance(image, str) or not _IMMUTABLE_IMAGE_RE.fullmatch(image)
+            or config.get('Image') != image
+            or config.get('User') != '65532:65532'):
+        return False
+    if (host.get('ReadonlyRootfs') is not True
+            or host.get('Privileged') is not False
+            or host.get('NetworkMode') != 'bridge'
+            or host.get('CapDrop') != ['ALL']
+            or not isinstance(security_opt, list)
+            or any(not isinstance(value, str) for value in security_opt)
+            or 'no-new-privileges:true' not in security_opt):
+        return False
+    nano_cpus = host.get('NanoCpus')
+    memory = host.get('Memory')
+    pids_limit = host.get('PidsLimit')
+    if (isinstance(nano_cpus, bool) or not isinstance(nano_cpus, int)
+            or not 0 < nano_cpus <= _MANAGED_BROWSER_MAX_NANO_CPUS
+            or isinstance(memory, bool) or not isinstance(memory, int)
+            or not 0 < memory <= _MANAGED_BROWSER_MAX_MEMORY
+            or isinstance(pids_limit, bool) or not isinstance(pids_limit, int)
+            or not 0 < pids_limit <= _MANAGED_BROWSER_MAX_PIDS):
+        return False
+    if (host.get('DeviceRequests') not in (None, [])
+            or host.get('Devices') not in (None, [])
+            or host.get('DeviceCgroupRules') not in (None, [])):
+        return False
+    if _has_forbidden_mount(container) or not _has_api_only_command(config):
+        return False
+    return (
+        labels.get('com.docker.compose.project') == project
+        and labels.get('com.docker.compose.service') == 'browser'
+        and labels.get('com.docker.compose.container-number') == '1'
+        and labels.get('com.docker.compose.oneoff') == 'False'
+        and _nonempty_text(labels.get('com.docker.compose.config-hash'))
+        and _nonempty_text(labels.get('com.docker.compose.project.config_files'))
+        and _nonempty_text(labels.get('com.docker.compose.project.working_dir'))
+    )
+
+
+def is_blocking_fullmag_container(container):
+    """Return true for an unknown/compute Fullmag container.
+
+    The runner and BuildKit retain their existing exemptions.  Every other
+    container carrying the Fullmag namespace remains blocking unless it has
+    passed the managed-browser attestation above.
+    """
+    if not isinstance(container, dict):
+        return True
+    name = container.get('Name')
+    if not isinstance(name, str):
+        return True
+    if 'fullmag' not in name.lower():
+        return False
+    if 'buildx_buildkit' in name or name == '/Fullmag_build_runner':
+        return False
+    return not is_attested_managed_browser_container(container)
 
 
 def profile_lane(profile):
@@ -71,8 +363,13 @@ def configured_build(layout, owner, profile):
 
 
 def mount_identity(mounts):
-    return sorted((m.get('Type'), os.path.normcase(os.path.abspath(m.get('Source', ''))),
-                   m.get('Destination'), m.get('RW')) for m in mounts)
+    # Docker reports daemon paths. Do not resolve POSIX daemon paths against a
+    # Windows client cwd; persist JSON arrays so reload preserves equality.
+    return sorted([m.get('Type'),
+                   posixpath.normpath(m.get('Source', ''))
+                   if str(m.get('Source', '')).startswith('/')
+                   else os.path.normcase(os.path.abspath(m.get('Source', ''))),
+                   m.get('Destination'), m.get('RW')] for m in mounts)
 
 
 def capsule_path(storage, job):
@@ -200,18 +497,402 @@ def validate_build_receipt(artifacts, job, journal):
     entries = receipt.get('artifacts')
     if not isinstance(entries, list) or not entries:
         raise ValueError('Build receipt has no artifacts')
-    outputs = required_outputs_for_profile(job['profile'])
-    required = {'outputs/.fullmag/local/' + name for name in outputs}
-    if not required.issubset({entry.get('path') for entry in entries}):
-        raise ValueError('Required build outputs missing')
-    stages = receipt.get('stages', [])
-    if any(not any(stage.get('name') == name and stage.get('exit_code') == 0 for stage in stages)
-           for name in ('native-build', 'frontend-dependencies', 'frontend-build')):
-        raise ValueError('Required build stages did not pass')
+
+    runtime = RUNTIME_PROFILE_CONTRACTS.get(job['profile'])
+    contract = PROFILE_CONTRACTS.get(job['profile'])
+    if runtime is not None:
+        if receipt.get('runtime_only') is not True:
+            raise ValueError('SLEPc runtime receipt is not marked runtime-only')
+        if receipt.get('runtime_contract') != runtime:
+            raise ValueError('SLEPc runtime contract mismatch')
+        if receipt.get('contract_scenarios') != [] or receipt.get('contract_schema') is not None:
+            raise ValueError('SLEPc runtime receipt contains contract stages')
+        entry_paths = {
+            entry.get('path') for entry in entries if isinstance(entry, dict)
+        }
+        required = {
+            'outputs/.fullmag/local/bin/fullmag-bin',
+            'outputs/.fullmag/local/bin/fullmag-api',
+            'outputs/.fullmag/local/_fullmag_core.so',
+            'outputs/.fullmag/local/launcher-build-mode',
+            'source-identity.json',
+            'cmake-attestation.json',
+            'runtime-attestation.json',
+            'dependency-attestation.json',
+        }
+        if not required.issubset(entry_paths):
+            raise ValueError('Required SLEPc runtime outputs missing')
+        if not any(
+            isinstance(path, str)
+            and path.startswith('outputs/.fullmag/local/lib/libfullmag_fem.so')
+            for path in entry_paths
+        ):
+            raise ValueError('SLEPc runtime receipt is missing the native FEM library artifact')
+        identity_path = validate_path(
+            artifacts / 'source-identity.json',
+            artifacts,
+            'source identity artifact',
+        )
+        try:
+            identity_artifact = json.loads(identity_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, ValueError) as error:
+            raise ValueError('Invalid source identity artifact') from error
+        if identity_artifact != native:
+            raise ValueError('SLEPc runtime source identity artifact mismatch')
+        expected_source = {
+            'commit': native.get('head_commit_full') if isinstance(native, dict) else None,
+            'snapshot_sha256': native.get('source_snapshot_sha256') if isinstance(native, dict) else None,
+        }
+        cmake_path = validate_path(
+            artifacts / 'cmake-attestation.json',
+            artifacts,
+            'CMake attestation',
+        )
+        runtime_path = validate_path(
+            artifacts / 'runtime-attestation.json',
+            artifacts,
+            'runtime attestation',
+        )
+        dependency_path = validate_path(
+            artifacts / 'dependency-attestation.json',
+            artifacts,
+            'dependency attestation',
+        )
+        try:
+            cmake_attestation = json.loads(cmake_path.read_text(encoding='utf-8'))
+            runtime_attestation = json.loads(runtime_path.read_text(encoding='utf-8'))
+            dependency_attestation = json.loads(dependency_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, ValueError) as error:
+            raise ValueError('Invalid SLEPc runtime attestation') from error
+        cmake_options = (
+            cmake_attestation.get('options')
+            if isinstance(cmake_attestation, dict)
+            else None
+        )
+        expected_cmake_options = runtime['cmake_options']
+        artifact_hashes = {
+            entry.get('path'): entry.get('sha256')
+            for entry in entries
+            if isinstance(entry, dict)
+        }
+        runtime_library_sha256 = (
+            cmake_attestation.get('runtime_library_sha256')
+            if isinstance(cmake_attestation, dict)
+            else None
+        )
+        native_library_sha256 = (
+            cmake_attestation.get('native_library_sha256')
+            if isinstance(cmake_attestation, dict)
+            else None
+        )
+        dependency_library_path = (
+            dependency_attestation.get('library')
+            if isinstance(dependency_attestation, dict)
+            else None
+        )
+        runtime_library_bound = (
+            isinstance(dependency_library_path, str)
+            and dependency_library_path in artifact_hashes
+            and artifact_hashes[dependency_library_path] == runtime_library_sha256
+        )
+        if (
+            not isinstance(cmake_attestation, dict)
+            or cmake_attestation.get('schema')
+            != 'fullmag.fem.slepc_runtime.cmake_attestation.v1'
+            or cmake_attestation.get('status') != 'pass'
+            or cmake_attestation.get('source') != expected_source
+            or not isinstance(cmake_options, dict)
+            or set(cmake_options) != set(expected_cmake_options)
+            or any(
+                not isinstance(cmake_options.get(name), dict)
+                or str(cmake_options[name].get('value', '')).upper() != str(value).upper()
+                for name, value in expected_cmake_options.items()
+            )
+            or not re.fullmatch(r'[a-f0-9]{64}', str(runtime_library_sha256 or ''))
+            or runtime_library_sha256 != native_library_sha256
+            or not runtime_library_bound
+        ):
+            raise ValueError('SLEPc runtime CMake attestation does not match the profile')
+        if job['profile'] == 'fem-cpu-slepc-runtime-v2':
+            if not valid_cpu_mfem_abi_attestation(cmake_attestation):
+                raise ValueError('SLEPc runtime v2 lacks CPU MFEM ABI attestation')
+        startup_stamp = (
+            runtime_attestation.get('startup_stamp')
+            if isinstance(runtime_attestation, dict)
+            else ''
+        )
+        stamped_snapshot = ''
+        if isinstance(startup_stamp, str) and 'source snapshot:' in startup_stamp:
+            snapshot_suffix = startup_stamp.split('source snapshot:', 1)[1].strip()
+            stamped_snapshot = snapshot_suffix.split(maxsplit=1)[0] if snapshot_suffix else ''
+        if (
+            not isinstance(runtime_attestation, dict)
+            or runtime_attestation.get('schema') != 'fullmag.fem.slepc_runtime.attestation.v1'
+            or runtime_attestation.get('status') != 'pass'
+            or runtime_attestation.get('source') != expected_source
+            or not isinstance(runtime_attestation.get('availability'), dict)
+            or runtime_attestation['availability'].get('native_fem_cpu_available') is not True
+            or stamped_snapshot != expected_source['snapshot_sha256']
+            or not re.fullmatch(r'[a-f0-9]{64}', stamped_snapshot)
+        ):
+            raise ValueError('SLEPc runtime attestation does not prove native CPU availability')
+        if job['profile'] == 'fem-cpu-slepc-runtime-v2' and not valid_cpu_modal_driver_attestation(runtime_attestation):
+            raise ValueError('SLEPc runtime v2 must not preload CUDA compatibility libraries')
+        dependency = (
+            dependency_attestation.get('dependency')
+            if isinstance(dependency_attestation, dict)
+            else None
+        )
+        if (
+            not isinstance(dependency_attestation, dict)
+            or dependency_attestation.get('schema')
+            != 'fullmag.fem.slepc_runtime.dependency_attestation.v1'
+            or dependency_attestation.get('status') != 'pass'
+            or dependency_attestation.get('source') != expected_source
+            or not isinstance(dependency, dict)
+            or dependency.get('petsc_available') is not True
+            or dependency.get('slepc_available') is not True
+            or dependency.get('modal_eigen_native_cpu_slepc_available') is not True
+            or not dependency.get('petsc_version')
+            or not dependency.get('slepc_version')
+        ):
+            raise ValueError('SLEPc runtime dependency attestation is incomplete')
+        if job['profile'] == 'fem-cpu-slepc-runtime-v2' and not valid_cpu_modal_dependency_attestation(cmake_attestation, dependency):
+            raise ValueError('SLEPc runtime v2 lacks complete CPU dependency binding')
+        try:
+            validate_native_source_snapshot(
+                dependency.get('diagnostics_json'), expected_source['snapshot_sha256']
+            )
+        except BuildEntryPointError as error:
+            raise ValueError(f'SLEPc runtime native source binding failed: {error}') from error
+        stages = receipt.get('stages')
+        if not isinstance(stages, list) or len(stages) != 1:
+            raise ValueError('SLEPc runtime receipt must contain only native-build')
+        stage = stages[0]
+        command = stage.get('command') if isinstance(stage, dict) else None
+        make_name = (
+            str(command[0]).replace('\\', '/').rsplit('/', 1)[-1]
+            if isinstance(command, list) and command
+            else ''
+        )
+        if (
+            not isinstance(stage, dict)
+            or stage.get('name') != 'native-build'
+            or stage.get('exit_code') != 0
+            or not isinstance(command, list)
+            or len(command) != 2
+            or make_name != 'make'
+            or command[1] != 'install-cli-dev'
+        ):
+            raise ValueError('SLEPc runtime receipt does not prove native-only build')
+    elif contract is None:
+        outputs = required_outputs_for_profile(job['profile'])
+        required = {'outputs/.fullmag/local/' + name for name in outputs}
+        if not required.issubset({entry.get('path') for entry in entries}):
+            raise ValueError('Required build outputs missing')
+        stages = receipt.get('stages', [])
+        if any(
+            not any(stage.get('name') == name and stage.get('exit_code') == 0 for stage in stages)
+            for name in ('native-build', 'frontend-dependencies', 'frontend-build')
+        ):
+            raise ValueError('Required build stages did not pass')
+    else:
+        scenarios = tuple(contract['scenarios'])
+        if receipt.get('contract_scenarios') != list(scenarios):
+            raise ValueError('Build receipt contract scenario list mismatch')
+        entry_paths = {
+            entry.get('path') for entry in entries if isinstance(entry, dict)
+        }
+        required = {f'contracts/{scenario}/result.json' for scenario in scenarios}
+        if not required.issubset(entry_paths):
+            raise ValueError('Required contract receipts missing')
+        if job['profile'] == 'fem-cpu-slepc-modal-v1':
+            if not any(
+                isinstance(path, str)
+                and path.startswith('outputs/.fullmag/local/lib/libfullmag_fem.so')
+                for path in entry_paths
+            ):
+                raise ValueError('SLEPc modal receipt is missing the native FEM library artifact')
+            if 'source-identity.json' not in entry_paths:
+                raise ValueError('SLEPc modal receipt is missing the source identity artifact')
+            identity_path = validate_path(
+                artifacts / 'source-identity.json',
+                artifacts,
+                'source identity artifact',
+            )
+            try:
+                identity_artifact = json.loads(identity_path.read_text(encoding='utf-8'))
+            except (OSError, UnicodeError, ValueError) as error:
+                raise ValueError('Invalid source identity artifact') from error
+            if identity_artifact != native:
+                raise ValueError('SLEPc modal source identity artifact mismatch')
+        stages = receipt.get('stages')
+        if not isinstance(stages, list):
+            raise ValueError('Build receipt contract stages are missing')
+        for scenario in scenarios:
+            stage_name = f'contract-{scenario}'
+            if not any(
+                isinstance(stage, dict)
+                and stage.get('name') == stage_name
+                and stage.get('exit_code') == 0
+                for stage in stages
+            ):
+                raise ValueError('Required contract stages did not pass: ' + scenario)
+            result_path = validate_path(
+                artifacts / 'contracts' / scenario / 'result.json',
+                artifacts,
+                'contract result',
+            )
+            if result_path.is_symlink() or not result_path.is_file():
+                raise ValueError('Contract result is not a regular file: ' + scenario)
+            try:
+                result = json.loads(result_path.read_text(encoding='utf-8'))
+            except (OSError, UnicodeError, ValueError) as error:
+                raise ValueError('Invalid contract result JSON: ' + scenario) from error
+            if (
+                not isinstance(result, dict)
+                or result.get('schema') != contract['schema']
+                or result.get('scenario') != scenario
+                or result.get('status') != 'pass'
+            ):
+                raise ValueError('Invalid or failing contract result: ' + scenario)
+            if job['profile'] == 'fem-cpu-slepc-modal-v1':
+                source = result.get('source')
+                expected_source = {
+                    'commit': native.get('head_commit_full') if isinstance(native, dict) else None,
+                    'snapshot_sha256': native.get('source_snapshot_sha256') if isinstance(native, dict) else None,
+                }
+                if (
+                    not isinstance(source, dict)
+                    or source.get('commit') != expected_source['commit']
+                    or source.get('snapshot_sha256') != expected_source['snapshot_sha256']
+                ):
+                    raise ValueError('SLEPc modal contract source identity mismatch')
+                requested = result.get('requested')
+                resolved = result.get('resolved')
+                if not isinstance(requested, dict) or not isinstance(resolved, dict):
+                    raise ValueError('SLEPc modal result lacks requested/resolved execution')
+                expected_execution = {
+                    'backend': 'fem',
+                    'device': 'cpu',
+                    'precision': 'double',
+                    'slepc': True,
+                }
+                if any(requested.get(key) != value for key, value in expected_execution.items()):
+                    raise ValueError('SLEPc modal requested execution mismatch')
+                if any(resolved.get(key) != value for key, value in expected_execution.items()):
+                    raise ValueError('SLEPc modal resolved execution mismatch')
+                if resolved.get('fallback_used') is not False:
+                    raise ValueError('SLEPc modal result permits an implicit fallback')
+                build = result.get('build')
+                if not isinstance(build, dict):
+                    raise ValueError('SLEPc modal result lacks build contract')
+                if build.get('modal_target') != contract['modal_target']:
+                    raise ValueError('SLEPc modal target mismatch')
+                if tuple(build.get('floquet_targets', ())) != tuple(contract['floquet_targets']):
+                    raise ValueError('SLEPc Floquet target set mismatch')
+                if build.get('shared_domain_target') != contract['shared_domain_target']:
+                    raise ValueError('SLEPc shared-domain target mismatch')
+                options = build.get('options')
+                required_options = {
+                    '-DFULLMAG_ENABLE_CUDA=ON',
+                    '-DFULLMAG_ENABLE_FEM_GPU=OFF',
+                    '-DFULLMAG_USE_MFEM_STACK=ON',
+                    '-DFULLMAG_FEM_WITH_SLEPC=ON',
+                }
+                if not isinstance(options, list) or not required_options.issubset(options):
+                    raise ValueError('SLEPc modal CMake options do not prove CPU/SLEPc mode')
+                expected_targets = [
+                    contract['modal_target'],
+                    *contract['floquet_targets'],
+                    contract['shared_domain_target'],
+                ]
+                if build.get('ctest_completed') is not True or build.get('executed_targets') != expected_targets:
+                    raise ValueError('SLEPc modal receipt does not prove all required CTest targets ran')
+                attestation = result.get('attestation')
+                if not isinstance(attestation, dict):
+                    raise ValueError('SLEPc modal result lacks execution attestation')
+                junit = attestation.get('ctest_junit')
+                if (
+                    not isinstance(junit, dict)
+                    or junit.get('status') != 'pass'
+                    or junit.get('testcase_count') != len(expected_targets)
+                    or junit.get('skipped_count') != 0
+                    or junit.get('failure_count') != 0
+                    or junit.get('testcases') != expected_targets
+                ):
+                    raise ValueError('SLEPc modal result does not prove all CTest targets passed without skips')
+                cmake = attestation.get('cmake')
+                if not isinstance(cmake, dict) or cmake.get('status') != 'pass':
+                    raise ValueError('SLEPc modal result lacks a passing CMake attestation')
+                cache_options = cmake.get('options')
+                if not isinstance(cache_options, dict) or any(
+                    not isinstance(cache_options.get(name), dict)
+                    or str(cache_options[name].get('value', '')).upper() != value
+                    for name, value in {
+                        'FULLMAG_ENABLE_CUDA': 'ON',
+                        'FULLMAG_ENABLE_FEM_GPU': 'OFF',
+                        'FULLMAG_USE_MFEM_STACK': 'ON',
+                        'FULLMAG_FEM_WITH_SLEPC': 'ON',
+                    }.items()
+                ):
+                    raise ValueError('SLEPc modal CMake attestation options mismatch')
+                runtime = attestation.get('runtime')
+                availability = runtime.get('availability') if isinstance(runtime, dict) else None
+                if (
+                    not isinstance(runtime, dict)
+                    or runtime.get('status') != 'pass'
+                    or not isinstance(availability, dict)
+                    or availability.get('native_fem_cpu_available') is not True
+                    or 'source snapshot:' not in str(runtime.get('startup_stamp', ''))
+                ):
+                    raise ValueError('SLEPc modal result lacks native CPU runtime attestation')
+                dependency = attestation.get('dependency')
+                dependency_values = dependency.get('dependency') if isinstance(dependency, dict) else None
+                if (
+                    not isinstance(dependency, dict)
+                    or dependency.get('status') != 'pass'
+                    or not isinstance(dependency_values, dict)
+                    or dependency_values.get('petsc_available') is not True
+                    or dependency_values.get('slepc_available') is not True
+                    or dependency_values.get('modal_eigen_native_cpu_slepc_available') is not True
+                    or not dependency_values.get('petsc_version')
+                    or not dependency_values.get('slepc_version')
+                ):
+                    raise ValueError('SLEPc modal result lacks PETSc/SLEPc dependency attestation')
+                try:
+                    validate_native_source_snapshot(
+                        dependency_values.get('diagnostics'), expected_source['snapshot_sha256']
+                    )
+                except BuildEntryPointError as error:
+                    raise ValueError(f'SLEPc modal native source binding failed: {error}') from error
+                resolution = attestation.get('resolution')
+                if (
+                    not isinstance(resolution, dict)
+                    or resolution.get('status') != 'pass'
+                    or resolution.get('resolved') != resolved
+                ):
+                    raise ValueError('SLEPc modal result lacks consistent resolution attestation')
+                precision = resolution.get('precision')
+                if (
+                    not isinstance(precision, dict)
+                    or precision.get('value') != 'double'
+                    or 'PETSC_USE_REAL_DOUBLE' not in str(precision.get('basis', ''))
+                    or 'sizeof(PetscReal)' not in str(precision.get('basis', ''))
+                ):
+                    raise ValueError('SLEPc modal result lacks a PETSc double precision attestation')
+
     seen = set()
     for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError('Invalid artifact member')
         relative = entry['path']
-        if relative in seen or Path(relative).is_absolute() or '..' in Path(relative).parts:
+        if (
+            not isinstance(relative, str)
+            or relative in seen
+            or Path(relative).is_absolute()
+            or '..' in Path(relative).parts
+        ):
             raise ValueError('Invalid artifact member')
         seen.add(relative)
         artifact = validate_path(artifacts / relative, artifacts, 'build artifact')
@@ -267,7 +948,7 @@ def finish_build(layout, queue, job, journal, run_root, inspected, call):
     return queue.get(job['job_id'])
 
 
-def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_seconds=8 * 3600, expected_job_id=None):
+def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_seconds=8 * 3600, expected_job_id=None, on_claim=None):
     if not layout.get('container_coordinator'):
         initialize(layout)
     storage = Path(layout['storage_root'])
@@ -282,14 +963,14 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
             return {'state': 'waiting_for_disk'}
         identifiers = call(['ps', '-q', '--no-trunc']).split()
         running = json.loads(call(['inspect', *identifiers])) if identifiers else []
-        if any('fullmag' in item.get('Name', '').lower()
-               and 'buildx_buildkit' not in item.get('Name', '')
-               and item.get('Name') != '/Fullmag_build_runner' for item in running):
+        if any(is_blocking_fullmag_container(item) for item in running):
             return {'state': 'waiting_for_existing_fullmag_container'}
         job = queue.claim('local-host', owner=owner, expected_job_id=expected_job_id)
         if job is None:
             return None
         try:
+            if on_claim is not None:
+                on_claim({'job_id': job['job_id'], 'profile': job['profile']})
             if job['operation'] != 'build':
                 raise ValueError('Expected a build job')
             config = configured_build(layout, owner, job['profile'])
@@ -321,7 +1002,7 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
             identifiers = call(['ps', '-q', '--no-trunc']).split()
             running = json.loads(call(['inspect', *identifiers])) if identifiers else []
             for container in running:
-                if 'fullmag' in container.get('Name', '').lower() and 'buildx_buildkit' not in container.get('Name', '') and container.get('Name') != '/Fullmag_build_runner':
+                if is_blocking_fullmag_container(container):
                     raise ValueError('Existing Fullmag container must finish before queued build')
             run_root = validate_path(storage / 'runs' / job['worktree_id'] / job['job_id'], storage)
             run_root.mkdir(exist_ok=False)

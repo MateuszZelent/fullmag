@@ -1,0 +1,91 @@
+{
+  "document": {
+    "path": "docs/physics/0600-fem-eigenmodes-linearized-llg.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-visible / unvalidated"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-visible / unvalidated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This page specifies the FEM eigenmode realization; FDM time-domain eigenproducts have a separate owner."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This page specifies the FEM eigenmode realization; FDM time-domain eigenproducts have a separate owner."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-0600-modal-pencil",
+      "symbols": ["q", "lambda", "B_alpha", "omega", "f"],
+      "sources": ["source-runner-path", "source-plan-eigen"]
+    },
+    {
+      "id": "eq-0600-p00-reference",
+      "symbols": ["P00", "k", "t"],
+      "sources": ["source-p00"]
+    }
+  ],
+  "symbols": [
+    {"id": "q", "latex": "$q$", "meaning": "tangent-plane modal coefficients", "si_unit": "$1$"},
+    {"id": "lambda", "latex": "$\\lambda$", "meaning": "generalized eigenvalue", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "B_alpha", "latex": "$B_\\alpha$", "meaning": "gyrotropic/mass operator", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "f", "latex": "$f$", "meaning": "cyclic frequency", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "P00", "latex": "$P_{00}$", "meaning": "thin-film demagnetizing factor", "si_unit": "$1$"},
+    {"id": "k", "latex": "$k$", "meaning": "in-plane wave vector magnitude", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "t", "latex": "$t$", "meaning": "film thickness", "si_unit": "$\\mathrm{m}$"}
+  ],
+  "sources": [
+    {
+      "id": "source-python-eigenmodes",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class Eigenmodes",
+      "responsibility": "Validate public modal parameters."
+    },
+    {
+      "id": "source-plan-eigen",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem_eigen",
+      "responsibility": "Lower the FEM eigen study and enforce capability policy."
+    },
+    {
+      "id": "source-runner-path",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "execute_fem_eigen_path",
+      "responsibility": "Execute k samples and publish postsolve comparisons."
+    },
+    {
+      "id": "source-p00",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "p00_demag_factor",
+      "responsibility": "Provide the stable analytic P00 reference."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.stages.add_eigenmodes.count",
+        "type": "int",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "positive integer",
+        "meaning": "maximum accepted modal count",
+        "backend_support": "FEM CPU/GPU authoring; runtime-qualified per lane",
+        "problem_ir": "studies[].eigenmodes.count"
+      }
+    ]
+  }
+}

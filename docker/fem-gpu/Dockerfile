@@ -35,7 +35,8 @@ ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
 ARG FULLMAG_HYPRE_GPU_ARCHITECTURES="60 70 80 89 90"
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_VERSION=3.30.5
-ENV MFEM_REF=v4.9
+ENV MFEM_REF=v4.10
+ENV MFEM_SOURCE_COMMIT=d964264cdb9a13e94a201b6c236c7721e0c8765f
 ENV LIBCEED_REF=v0.12.0
 ENV HYPRE_REF=v3.1.0
 ENV PETSC_REF=v3.24.6
@@ -81,13 +82,14 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 
 WORKDIR /tmp/build
 
-RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git
+RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git && \
+    test "$(git -C mfem rev-parse HEAD)" = "${MFEM_SOURCE_COMMIT}"
 RUN git clone --depth 1 --branch ${LIBCEED_REF} https://github.com/CEED/libCEED.git /tmp/build/libCEED
 
 RUN make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} -j"$(nproc)" && \
     make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} install prefix=${INSTALL_PREFIX}
 
-# S10: Build hypre (serial + CUDA) — required for CG+AMG Poisson solver
+# S10: Build hypre (serial + CUDA) â€” required for CG+AMG Poisson solver
 ENV UMPIRE_REF=v2024.07.0
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}
@@ -193,6 +195,7 @@ RUN git clone --depth 1 --branch ${SLEPC_REF} https://gitlab.com/slepc/slepc.git
 RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_STANDARD=17 \
       -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
       -DBUILD_SHARED_LIBS=ON \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -204,9 +207,72 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -DMFEM_USE_CEED=YES \
       -DCEED_DIR=${INSTALL_PREFIX} \
       -DMFEM_USE_HYPRE=YES \
-      -DHYPRE_DIR=${INSTALL_PREFIX} && \
-    cmake --build /tmp/build/mfem/build -j"$(nproc)" && \
+      -DHYPRE_DIR=${INSTALL_PREFIX} \
+      -DMFEM_ENABLE_TESTING=OFF && \
+    cmake --build /tmp/build/mfem/build --target mfem -j"$(nproc)" && \
     cmake --install /tmp/build/mfem/build
+
+# CUDA-free MFEM requires a matching CUDA-free HYPRE; retain the GPU prefix.
+RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
+      -DBUILD_SHARED_LIBS=ON -DHYPRE_ENABLE_MPI=ON -DHYPRE_ENABLE_OPENMP=ON \
+      -DHYPRE_ENABLE_CUDA=OFF -DHYPRE_BUILD_TESTS=OFF -DHYPRE_BUILD_EXAMPLES=OFF && \
+    cmake --build /tmp/build/hypre/build-cpu -j2 && \
+    cmake --install /tmp/build/hypre/build-cpu
+
+# Keep the complete CPU dependency closure separate, including PETSc/SLEPc.
+# A CUDA-free MFEM alone is insufficient when PETSc still links CUDA HYPRE.
+# Separate source trees avoid reusing GPU objects or generated configuration.
+RUN git clone --no-hardlinks /tmp/build/libCEED /tmp/build/libCEED-cpu && \
+    test "$(git -C /tmp/build/libCEED-cpu rev-parse HEAD)" = "4018a20a98d451fac24765d3ddb936861647ce8d" && \
+    make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= -j2 && \
+    make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= \
+      install prefix=/opt/fullmag-mfem-cpu
+
+RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
+    test "$(git -C /tmp/build/petsc-cpu rev-parse HEAD)" = "1467453aedb62826efc970ceafc4bd6dab8229ab" && \
+    cd /tmp/build/petsc-cpu && \
+    PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu \
+    python3 ./configure \
+      PETSC_ARCH=arch-linux-cpu \
+      --prefix=/opt/fullmag-mfem-cpu \
+      --with-cc=mpicc --with-cxx=mpicxx --with-fc=mpifort \
+      COPTFLAGS=-O3 CXXOPTFLAGS=-O3 FOPTFLAGS=-O3 \
+      --with-debugging=0 --with-shared-libraries=1 \
+      --with-scalar-type=real --with-precision=double \
+      --with-cuda=0 --with-hip=0 --with-sycl=0 --with-opencl=0 \
+      --with-hypre=1 --with-hypre-dir=/opt/fullmag-mfem-cpu && \
+    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu -j2 all && \
+    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install
+
+RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
+    test "$(git -C /tmp/build/slepc-cpu rev-parse HEAD)" = "4c754d7d3ae067837670828a304512798334fb3a" && \
+    cd /tmp/build/slepc-cpu && \
+    SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= \
+      python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
+    make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= -j2 all && \
+    make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= install
+
+# The CPU FEM client is compiled with the host C++ compiler. Keep its MFEM
+# headers and library in a separate, CUDA-free prefix so SparseMatrix has the
+# same layout on both sides of the ABI. The GPU installation above is intact.
+RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_STANDARD=17 \
+      -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
+      -DCMAKE_PREFIX_PATH=/opt/fullmag-mfem-cpu \
+      -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -DMFEM_USE_MPI=YES \
+      -DMFEM_USE_OPENMP=YES \
+      -DMFEM_USE_METIS=NO \
+      -DMFEM_USE_CUDA=NO \
+      -DMFEM_USE_CEED=YES \
+      -DCEED_DIR=/opt/fullmag-mfem-cpu \
+      -DHYPRE_DIR=/opt/fullmag-mfem-cpu \
+      -DMFEM_ENABLE_TESTING=OFF && \
+    cmake --build /tmp/build/mfem/build-cpu --target mfem -j2 && \
+    cmake --install /tmp/build/mfem/build-cpu
 
 FROM cuda-base-normalized AS fem-gpu-dev
 
@@ -315,6 +381,7 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
+COPY --from=deps /opt/fullmag-mfem-cpu /opt/fullmag-mfem-cpu
 
 # Nsight Systems/Compute are capture-time capabilities, not build prerequisites.
 # The managed runtime must remain buildable when the optional profiler packages

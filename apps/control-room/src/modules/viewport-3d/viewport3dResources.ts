@@ -644,6 +644,27 @@ const FULL_FIELD_VECTOR_QUERY: FieldVectorQuery = {
   component: "full",
   scope_kind: "full",
 };
+/**
+ * FEM topology is a sequential header/full/decode load. The live 1.4 MiB
+ * topology measured a 3.3 s header response before the full payload could
+ * start, so the generic 5 s hook deadline expired before adoption. Keep the
+ * larger budget local to topology; field resources retain their own policy.
+ */
+export const VIEWPORT_3D_TOPOLOGY_RETRY_POLICY: ResourceRetryPolicy = {
+  deadlineMs: 15_000,
+  maxAttempts: 3,
+  retryAfterMs: 250,
+  retryableReasonCodes: [
+    "field_materialization_pending",
+    "field_pending",
+    "field_unmaterialized",
+    "materialization_pending",
+    "not_ready",
+    "pending",
+    "temporary_not_found",
+    "transient_not_found",
+  ],
+};
 const FIELD_VECTOR_RETRY_POLICY: ResourceRetryPolicy = {
   deadlineMs: 5_000,
   maxAttempts: 5,
@@ -1453,6 +1474,7 @@ export function useViewport3DDomainTopology(enabled = true) {
   return useResource({
     enabled: enabled && sessionIdentity !== null,
     load,
+    retryPolicy: VIEWPORT_3D_TOPOLOGY_RETRY_POLICY,
     resolveRevision: () => topologyCache.peek(resourceKey)?.etag ?? null,
     resourceKey,
   });

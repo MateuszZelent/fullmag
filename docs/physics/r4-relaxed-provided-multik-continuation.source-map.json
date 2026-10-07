@@ -1,0 +1,70 @@
+{
+  "document": {
+    "path": "docs/physics/r4-relaxed-provided-multik-continuation.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-visible / runtime-unverified"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-visible / runtime-unverified",
+      "reason": "The shared handoff contract is present, but device and runtime evidence is pending."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The contract is owned by the FEM relaxation handoff."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The contract is owned by the FEM relaxation handoff."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-r4-static-equilibrium",
+      "symbols": ["m_0", "H_eff"],
+      "sources": ["source-handoff-m0", "source-handoff-certificate"]
+    },
+    {
+      "id": "eq-r4-static-field-binding",
+      "symbols": ["H_eff", "H_ex", "H_demag", "H_ani", "H_ext"],
+      "sources": ["source-static-identity"]
+    },
+    {
+      "id": "eq-r4-floquet-continuation",
+      "symbols": ["delta_m_k", "k", "R", "i"],
+      "sources": ["source-modal-k-binding"]
+    }
+  ],
+  "symbols": [
+    {"id": "m_0", "latex": "\\mathbf m_0", "meaning": "zaakceptowana magnetyzacja równowagi", "si_unit": "1"},
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff}}", "meaning": "statyczne pole efektywne", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ex", "latex": "\\mathbf H_{\\mathrm{ex}}", "meaning": "pole wymiany", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_demag", "latex": "\\mathbf H_{\\mathrm{demag}}", "meaning": "statyczne pole demagnetyzacji", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ani", "latex": "\\mathbf H_{\\mathrm{ani}}", "meaning": "pole anizotropii jednoosiowej", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ext", "latex": "\\mathbf H_{\\mathrm{ext}}", "meaning": "przyłożone pole zewnętrzne", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "delta_m_k", "latex": "\\delta\\mathbf m_{\\mathbf k}", "meaning": "dynamiczne zaburzenie modalne", "si_unit": "1"},
+    {"id": "k", "latex": "\\mathbf k", "meaning": "wektor falowy punktu ścieżki", "si_unit": "\\mathrm{rad\\,m^{-1}}"},
+    {"id": "R", "latex": "\\mathbf R", "meaning": "wektor okresu siatki", "si_unit": "\\mathrm{m}"},
+    {"id": "i", "latex": "\\mathrm i", "meaning": "jednostka urojona", "si_unit": "1"}
+  ],
+  "sources": [
+    {"id": "source-handoff-m0", "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs", "symbol": "validate_plan_binding", "responsibility": "Checks exact equilibrium vector, norms, and source digests."},
+    {"id": "source-handoff-certificate", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs", "symbol": "validate_eigen_equilibrium_certificate", "responsibility": "Dispatches pre- and post-conversion source handoff validation."},
+    {"id": "source-static-identity", "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs", "symbol": "EquilibriumIdentitySignaturesV1", "responsibility": "Builds canonical material, static-physics, and boundary signatures."},
+    {"id": "source-modal-k-binding", "path": "crates/fullmag-runner/src/fem/eigen_path.rs", "symbol": "execute_fem_eigen_path", "responsibility": "Creates per-sample single-k modal plans and preserves source handoff."},
+    {"id": "source-conversion", "path": "crates/fullmag-runner/src/fem/eigen_equilibrium.rs", "symbol": "prepare_single_k_stage_continuation", "responsibility": "Changes the source marker and immediately revalidates the Provided plan."},
+    {"id": "source-regression", "path": "scripts/test_fem_relaxed_provided_continuation_contract.py", "symbol": "class RelaxedProvidedContinuationContractTests", "responsibility": "Checks the cross-layer source contract without native compilation."}
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

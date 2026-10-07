@@ -837,6 +837,45 @@ atomic cutover razem z ADR 0024 i ADR 0027. Requested intent pozostaje w
 `ObjectRegionIR.mesh_policy`; resolved execution, markery i realne pola należą
 do artifacts/provenance. Dual-write V03/V04 i heurystyczne odczyty są zabronione.
 
+
+(material-regions-v04-registry-identities)=
+### 4.2.1 Tożsamości rejestrów przed przypisaniem fizyki V04
+
+Stan: poniższe guardy są **zaimplementowane w źródłach walidatora V04**.
+Regresje Rust są przygotowane, lecz nie skompilowane ani wykonane zgodnie
+z obowiązującym zakazem kompilowania testów. Parser i przegląd źródeł
+nie zastępują typechecku ani wykonania `ProblemIRV04::validate`.
+Managed build #229 przypięto przed tym przyrostem i nie kwalifikuje tych guardów.
+
+Przed zbudowaniem lookupów materiałów i par owner/region walidator V04
+musi odrzucić puste lub whitespace-only `materials[].name` oraz
+powtórzone dokładne nazwy materiałów. W obecnym stagingu
+`ObjectMaterialAssignmentIR.material_id` i `MagnetizationModuleIR.material_id`
+odwołują się dokładnie do `MaterialIR.name`; osobny niezmienny identyfikator
+materiału nie istnieje w tym typie. Nie wolno zastąpić tego faktu fikcyjnym
+rejestrem ID ani normalizować nazw przez trim przy rozwiązywaniu referencji.
+Trim służy wyłącznie odrzuceniu pustego identyfikatora.
+
+`ObjectRegionIR.region_id` pozostaje niepuste i globalnie unikalne, zgodnie
+z kontraktem powyżej i istniejącą walidacją V03. Dotyczy to także regionów
+disabled oraz regionów różnych właścicieli. Każdy `owner_object` musi być
+niepustym dokładnym `PhysicsObjectIR.object_id` obecnym w `objects[]`;
+nazwa obiektu ani prezentacyjny `type` nie zastępują referencji i nie
+aktywują magnetyzmu. Walidacja nie zmienia danych użytkownika i zbiera
+indeksowane błędy przed dalszą kontrolą assignments/modules.
+
+To poprawka brakującej kontroli istniejącego kontraktu w
+`ProblemIRV04::validate`, bez nowego pola wire, migracji, zmiany publicznego
+writera V03, planner capabilities lub API/UI. Jest wymagana także przed
+przyszłym powiązaniem regionów przekroju falowodu S09 z modelem. Sam
+poprawny rejestr nie dowodzi geometrycznej zgodności, wyboru aktywnego
+modułu, zrealizowanych współczynników ani działania providera 2.5D.
+
+FDM CPU/GPU i FEM CPU/GPU współdzielą tę semantykę rejestrów; nie jest to
+kwalifikacja wykonania żadnej realizacji. Regresje Rust wymagają osobnego
+wykonania po odwołaniu zakazu kompilowania testów. Kontrola interpretowana
+może sprawdzić golden wejścia i obecność guardów, lecz nie wykonuje Rust.
+
 ### 4.3 Planner and capability-matrix impact
 
 The planner must resolve:
@@ -1020,3 +1059,5 @@ must include:
 | ProblemIR vocabulary | `crates/fullmag-ir/src/model.rs` | `MaterialParameterNameIR` | typed parameter names |
 | ProblemIR couplings | `crates/fullmag-ir/src/model.rs` | `CouplingIR` | typed explicit couplings |
 | FEM material core | `backends/fem/core/fem_element_quadrature_material.hpp` | `class ElementQuadratureMaterial` | element/quadrature material access |
+| Rejestry V04 | `crates/fullmag-ir/src/validation.rs` | `validate_physics_object_problem` | indeksowane błędy pustych/duplikowanych materiałów i regionów oraz właścicieli; źródła, bez kwalifikacji runtime |
+| Publiczna walidacja V04 | `crates/fullmag-ir/src/physics_object.rs` | `validate` | `validate()` egzekwuje istniejący kontrakt rejestrów, bez zmiany wire V03/V04 |

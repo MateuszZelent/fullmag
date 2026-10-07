@@ -40,6 +40,32 @@ Obraz workera powstaje z istniejącego, świadomie wybranego obrazu toolchaina:
 `just runner-build-image <lokalny-tag-toolchaina>`; sprawdź jego immutable ID,
 a następnie `just runner-configure-build fem-cpu-release sha256:<image-id-workera>`.
 Sama obecność profilu w katalogu nie oznacza konfiguracji obrazu ani walidacji.
+
+Dla pełnego stosu modalnego CPU z `CPU_MFEM_ONLY=1` recepta musi mieć sieć
+na pobranie przypiętych źródeł i pakietów, np.
+`just runner-build-image <zweryfikowany-lokalny-tag> <nowy-tag-workera> 1 default`.
+W Docker BuildKit wartość `bridge` nie jest poprawną opcją build network.
+Sprawdź immutable ID tagu bazowego przed wywołaniem; surowy image ID
+`sha256:...` w `FROM` może zostać zinterpretowany jako nazwa repozytorium,
+więc użyj osobnego lokalnego aliasu przypiętego do tego sprawdzonego obrazu.
+Nie zastępuje to kontroli końcowego immutable ID workera.
+
+Przy prefix-based PETSc/SLEPc usuń odziedziczone `PETSC_ARCH` przed
+konfiguracją SLEPc i nie przekazuj `PETSC_ARCH=` jako argumentu poleceń
+`make` SLEPc. Własny build PETSc nadal jawnie używa `PETSC_ARCH=arch-linux-cpu`.
+Configure wybiera tymczasowy katalog `installed-arch-...`; command-line
+pusta wartość nadpisuje ten wybór i powoduje brak `slepcrules`/`slepcconf.h`.
+Procedura wynika z [instrukcji SLEPc](https://slepc.upv.es/release/documentation/manual/intro.html#prefix-based-installation).
+Nie zmienia to kontraktu uruchomieniowego: po instalacji API używa jawnego
+prefixu CPU, a attestacja weryfikuje rzeczywiste pliki i konfigurację bibliotek.
+
+Zaufany executor pochodzi z obrazu koordynatora, nie z kapsuły workera.
+Po zmianie środowiska runtime-v2 lub walidacji receiptów aktualizuj oba obrazy
+w pustym, zapauzowanym slocie. Przed wymianą porównaj źródła wdrożonego
+executora; zachowaj działającą obsługę pozostałych profili i atestowanych
+ograniczonych instancji managed browser. Nie przenoś kodu nieznanego
+pochodzenia ani lokalnych sekretów. Po wdrożeniu sprawdź health, profile,
+źródła executora i stan kolejki, a następnie jawnie wznów FIFO.
 Aktualnie konfigurowana trasa to FEM CPU; FEM GPU/FDM CPU wymagają osobnych dowodów.
 
 Z wybranego, zarejestrowanego worktree:
@@ -83,6 +109,56 @@ Zdrowie API i stan wykonawcy są oddzielne: sprawdzaj `accepting_jobs`,
 
 ## Dane, zakończenie i retencja
 
+### Sprzątanie prywatnych kopii wykonania
+
+Koordynator udostępnia nieblokujące operacje: `POST /api/v1/retention/plans`
+zwraca `plan_id` i `planning`; `GET /api/v1/retention/plans/<plan_id>` odczytuje
+ten sam plan; `POST /api/v1/retention/plans/<plan_id>/apply` zwraca ACK
+`accepted`. Po timeoutcie klient odczytuje istniejący identyfikator zamiast
+ponawiać mutację. Raporty pozostają w `index/retention-plans` i
+`index/retention-operations`. Restart z nieznanym wynikiem daje
+`interrupted_unknown`, a błąd częściowy `partial`, bez deklaracji pełnego sukcesu.
+
+Wykonawca obejmuje wyłącznie dokładne `runs/<worktree>/<job>/execution`.
+Sprawdza ponownie queue/journal/receipt, digest źródeł, zachowane artefakty,
+piny, blokady, znaczniki właścicieli, tożsamość drzewa i wszystkie bind mounty.
+Wiążące blokady chronią zarządzanych użytkowników; procesy uruchamiane poza
+zarządzanymi launcherami wymagają osobnej kontroli operatora przed cleanupem.
+Link wewnątrz drzewa jest usuwany jako link, bez przechodzenia do celu.
+Zakończony kontener własnego joba może zostać usunięty bez `force` i bez wolumenów
+dopiero po zapisaniu wszystkich dostępnych logów w `worker-full.log` z hashem.
+Niepoprawne UTF-8 lub przekroczenie limitu odpowiedzi Docker zatrzymuje ten krok.
+
+Polityka `mode=automatic` włącza ten sam wykonawca pomiędzy buildami; domyślnie
+pozostaje `preview`. Drain zatrzymuje przyjmowanie nowych operacji, a wymiana
+koordynatora wymaga także zakończenia już przyjętej retencji. TTL źródeł,
+logów i niezweryfikowanych stagingów nie jest wykonywany i jest nieaktywny w UI.
+Rozmiar logiczny usuniętych drzew oraz zmiana wolnego miejsca są osobnymi polami;
+zmiana miejsca może obejmować pracę innych programów i nie jest przypisywana
+w całości retencji.
+
+Stan wdrożenia i dowody:
+[plan retencji](../superpowers/plans/2026-10-05-runner-storage-retention.md),
+[ADR 0052](../adr/0052-runner-storage-retention.md). Obecność kodu nie dowodzi
+aktualizacji uruchomionego koordynatora.
+
+### Współdzielenie zawartości źródeł
+
+Klient capture korzysta z `storage/cache/source-content-v1`. Klucz obiektu
+obejmuje SHA-256 treści i tryb wykonywalny Git. Każda kapsuła nadal ma własny
+manifest v1 i drzewo `source/tree`, lecz identyczne regularne pliki wskazują
+na niezmienną zawartość przez hardlinki. Obiekt powstaje z prywatnego stagingu;
+repozytorium i zapisywalne execution nigdy nie są hardlinkowane do magazynu.
+Worker materializuje prywatne kopie i przywraca prawa do zapisu zgodnie z manifestem.
+
+Publikacja i cleanup własnego stagingu używają blokady obiektu. Na Windows
+atrybut readonly jest wspólny dla hardlinków; helper usuwający link stagingu
+ponownie pieczętuje obiekt w `finally`. Korupcja, nieznana blokada, inny wolumen
+lub niebezpieczna ścieżka kończą capture błędem. Zachowujemy dotychczasowe
+manifesty i digesty; CAS nie jest objęty automatycznym prune cache. Migracja
+historycznych kapsuł ma osobne zabezpieczenia i nie wynika z samego włączenia
+współdzielenia nowych capture.
+
 - `storage/runs/<worktree-id>/<capture-id>/source`: kapsuła readonly.
 - `storage/runs/<worktree-id>/<job-id>/execution`: prywatna kopia robocza.
 - `storage/runs/<worktree-id>/<job-id>/artifacts`: logi, receipt i wybrane wyniki.
@@ -99,6 +175,44 @@ Build wykonuje natywny `make install-cli-dev`, instalację zależności frontend
 z lockfile i `make web-build-static`. Success wymaga exit 0, etapów zakończonych
 poprawnie i hashy wymaganych binariów/core/web/markera. Nie publikuje automatycznie
 nowego `current` ani nie zalicza testów fizyki.
+
+Profil `fem-cpu-slepc-runtime-v1` jest osobną trasą dla produkcyjnej biblioteki
+FEM CPU z PETSc/SLEPc. Trusted entrypoint uruchamia w nim wyłącznie etap
+`make install-cli-dev`; nie dodaje instalacji frontendu, `CTest` ani celów
+jednostkowych/kontraktowych. Receipt musi zawierać `libfullmag_fem.so`,
+`source-identity.json`, marker `fem-cpu` oraz kontrakt
+`fullmag.fem.cpu.slepc_runtime_contract.v1` z `FULLMAG_FEM_WITH_SLEPC=ON`,
+urządzeniem CPU i precyzją double. Ten profil dostarcza artefakt runtime do
+diagnostyki lub dalszego uruchomienia; `run_comsol_dispersion_benchmark.py`
+akceptuje oba profile SLEPc, a źródło `fullmag-bin` i `libfullmag_fem` w trasie
+runtime-only jest powiązane hashami. Sam receipt pozostaje `NOT VERIFIED` i nie
+jest dowodem CTest ani kwalifikacji fizycznej.
+
+Profil `fem-cpu-slepc-runtime-v2` oddziela ABI trasy CPU: obraz zawiera drugi
+MFEM v4.10 zbudowany bez CUDA pod `/opt/fullmag-mfem-cpu`, a natywny klient FEM
+jest kompilowany z `FULLMAG_ENABLE_CUDA=OFF`. Trusted receipt wymaga zarówno
+`MFEM_DIR` z tego prefiksu w cache CMake, jak i rzeczywistego `libmfem.so`
+rozwiązanego przez loader z tego samego prefiksu; zapisuje ścieżkę i hash
+biblioteki w `cmake-attestation.json`. Profil v1 pozostaje dostępny dla
+historycznych wyników. v2 nie stanowi dowodu naprawy ABI, dopóki nowy obraz,
+managed build, pomiar pamięci i pilot nie przejdą weryfikacji.
+
+
+Aktywacja wyłącznie profilu runtime-v2 odbywa się przez
+`container-configure --image-id <immutable-coordinator-id> --enable-slepc-runtime-v2`.
+Zachowuje istniejące profile, token oraz ustawienia operatora; ponowienie nie
+powiela wpisu. Późniejsza aktywacja current-contracts również zachowuje profile
+wcześniej dodane przez operatora. Wymiana koordynatora wymaga pustej kolejki
+aktywnego wykonania i zatrzymanego workera po graceful pause; nie anuluje się
+w tym celu cudzych jobów.
+
+Ponieważ CUDA-enabled `libfullmag_fem` może zachować transitive
+`libcuda.so.1` także w CPU lane, trusted post-build probe dodaje wyłącznie
+image-owned `/usr/local/cuda/compat` do `LD_LIBRARY_PATH`, gdy zawiera
+loadable SONAME. Nie włącza to GPU ani nie zmienia resolved device; zapis
+`cuda_driver_compatibility_paths` w `runtime-attestation.json` dokumentuje
+ścieżkę loadera używaną tylko do tej attestacji. Usługa `fem-modal-cpu` ma
+ten sam jawny compatibility path, lecz nie żąda urządzenia Docker GPU.
 
 Przy mniej niż 8 GiB wolnego miejsca job pozostaje w kolejce. Nie jest to twarda
 kwota dyskowa: pojedynczy etap może zużyć więcej miejsca. `runner-retention-plan`
@@ -233,3 +347,121 @@ fizyki ani wydania.
 
 Nie nadawaj temu wykonawcy etykiety `fem-managed` ani nie używaj diagnostycznego
 receipt do zaliczenia CI/kwalifikacji solvera.
+
+
+### Toolchain CPU dla runtime-v2
+
+Dla kompletnego runtime-v2 recepta
+`just runner-build-image <verified-local-toolchain-tag> <new-tag> 1 default`
+dodaje osobny CPU stos: MFEM v4.10 z commita
+`d964264cdb9a13e94a201b6c236c7721e0c8765f` i HYPRE v3.1.0
+z commita 9dc9e18aed6a945a95f966e57daacfb1c269f6ec,
+bez CUDA i bez testów, przykładów oraz miniapps. Zachowuje stary prefix.
+Dodaje też CPU libCEED v0.12.0 (`4018a20a98d451fac24765d3ddb936861647ce8d`),
+PETSc v3.24.6 (`1467453aedb62826efc970ceafc4bd6dab8229ab`) i SLEPc v3.24.3
+(`4c754d7d3ae067837670828a304512798334fb3a`). Dokładne commity sprawdzane są
+po shallow fetch; źródła CPU i ich wygenerowane konfiguracje są osobne.
+PETSc jest real/double z MPI, bez CUDA/HIP/SYCL/OpenCL, powiązany z tym samym
+CPU HYPRE co MFEM. CPU MFEM korzysta z CPU libCEED. Inherited GPU PETSC_DIR /
+SLEPC_DIR są zastąpione podczas configure. Przy CPU_MFEM_ONLY=0 bootstrap
+CPU jest pomijany; historyczny/GPU prefix pozostaje zachowany.
+Wariant CPU potrzebuje sieci dla jawnego pobrania źródeł i pakietów
+rozwojowych BLAS/LAPACK/Fortran. Domyślne network=none pozostaje bez zmiany;
+nie ma automatycznego przełączenia na online ani fallbacku GPU.
+To jawna budowa obrazu operatorowego, nie build ani kwalifikacja Fullmaga.
+Domyślne argumenty recepty pozostają bez dostępu sieci i bez tego kroku.
+Obraz wymaga kontroli CPU prefix, a następnie konfiguracji immutable ID
+profilu runtime-v2 i osobnego builda Fullmaga przez kolejkę.
+
+Historyczny bootstrap MFEM 4.9 zweryfikowano: obraz f12e618dce9e212fc7f1be5947fa1e92acbb9736d4820eca892b5b7dbc2eebcc; MFEM/HYPRE bez CUDA, loader HYPRE z CPU prefixu. To obraz zależności; build Fullmaga i fizyka NOT VERIFIED.
+
+Aktualizacja do MFEM 4.10 wymaga nowego tagu, immutable ID i kontroli wersji
+nagłówków oraz załadowanej biblioteki; historyczny obraz nie stanowi jej dowodu.
+Przed operatorską budową obrazu należy zakończyć aktywne wykonania i potwierdzić
+zwolnienie lease oraz zdrowie koordynatora. Kolejka obsługuje build źródeł,
+nie budowę obrazu. Zachowaj istniejące profile i obrazy wykorzystywane przez
+wcześniejsze kapsuły. Oba prefixy CPU/GPU kwalifikuj oddzielnie.
+
+
+### Obsługa źródeł i paczek runtime
+
+Plan retencji jest związany z zakresem (`execution`, `sources`, `runtime`) oraz
+opcjonalnym wyborem pełnych ID jobów. Klient CLI udostępnia
+`retention-preview --scope sources`, `retention-get <plan-id>` i
+`retention-apply <plan-id>`; recepty `just runner-retention-preview sources`,
+`runner-retention-get` i `runner-retention-apply` korzystają z tego samego API.
+Nie ponawiaj POST po timeout: odczytaj trwały wynik tego samego ID.
+
+Kompakcja historycznych źródeł zachowuje manifest, digest i ścieżkę kapsuły.
+Identyczna treść jest współdzielona w CAS; execution nadal otrzymuje prywatną
+zapisywalną kopię. Operacja chroni aktywne zadania, piny, obce hardlinki,
+reparse points i mounty. Liczniki logicznych bajtów nie są pomiarem odzysku
+fizycznego miejsca.
+
+Retencja runtime obejmuje wyłącznie dokładny lokalny katalog paczki terminalnego
+udanego buildu. Zachowuje źródła, wyniki naukowe, logi, receipty i historię
+kolejki. Zostawia co najmniej `min_artifacts_to_keep` najnowszych dostępnych
+pakietów dla każdej pary worktree/profil (liczba całkowita 1–20) oraz wszystkie
+paczki używane przez wyniki, UI, eksporty, piny i kontenery. Brak pełnego
+inwentarza lub uszkodzone metadane chronią potencjalnie używane zasoby.
+Automatyczne usuwanie paczek wymaga oddzielnego `runtime_retention_enabled=true`
+oraz trybu `automatic`; domyślnie jest wyłączone.
+
+Autorytatywny rejestr metadanych w `index/runtime-reference-roots.json` ma
+schema `fullmag.runtime-reference-roots.v1`, tablicę `relative_roots` i jawne
+`legacy_inventory_complete`. Nie ustawiaj kompletności na true bez sprawdzenia
+historycznych lokalizacji wyników i zapisania dowodów audytu. Brak pliku albo
+wartości true blokuje usuwanie wszystkich paczek runtime. COMSOL/DE rejestruje
+nowy output pod bramką admission przed zwolnieniem ticketu; utworzenie rejestru
+nie poświadcza historii. Nieobsługiwany output w namespace kontrolnym/payload
+unieważnia kompletność. Katalogi rejestru są względem kanonicznego storage,
+bez ścieżek absolutnych i przejść `..`.
+
+Przed usuwaniem paczki powstaje `artifacts/runtime-package-retention.json`.
+Pełne usunięcie pozostawia tombstone `removed` związany z SHA-256 oryginalnego
+build receipt. Stan `partial_error`, `deleting` albo niezgodna tożsamość blokuje
+ponowną próbę i wymaga ręcznego sprawdzenia danych. Nie deklaruj udanego
+sprzątania na podstawie braku katalogu bez takiego dowodu.
+
+
+Przy maintenance można jawnie użyć
+`just runner-container-replace <verified-image-sha256> <readonly-preview-plan-id>`.
+To wyłącznie porzucenie wskazanego execution preview w statusie planning,
+przy policy preview i potwierdzonym Drain bez aktywnych jobów/workerów/błędów.
+Klient sprawdza uwierzytelnione API, kanoniczny rekord i brak operation/admission,
+a po stop ponownie atestuje kontener i metadane. Przerwany preview otrzymuje
+blocked/applied=false; trzeba wygenerować świeży plan. Nie używaj tego wariantu
+do apply, automatycznej retencji lub odzyskania nieznanego wyniku mutacji.
+Domyślny wariant recepty zachowuje odmowę podczas retention_busy.
+
+
+## Cooperative cancel tylko dla read-only execution preview
+
+Przygotowywany przyrost rozszerza istniejącą usługę retention o
+`POST /api/v1/retention/plans/<plan_id>/cancel` z pustym body i komendę
+`retention-cancel <plan_id>` zatwierdzonego klienta. Obejmuje wyłącznie aktywny
+read-only preview scope execution. Cancel apply oraz preview sources/runtime
+pozostaje niedostępny; nie przerywa się usuwania danych w połowie operacji.
+
+Klient CLI zwraca kod `124` dla ACK `cancel_requested`, `0` dla terminalnego
+`cancelled`, a `1` dla pozostałych odpowiedzi (np. odmowy anulowania).
+Kod `124` wymaga odczytu tego samego planu, a nie ponowienia preview.
+
+ACK `cancel_requested` nie jest wynikiem terminalnym. Thread sprawdza event
+między odczytami metadanych i etapami drzewa, po czym utrwala `cancelled` z
+`applied=false`. Slot builda pozostaje zajęty do faktycznego zakończenia threadu.
+Nie wolno wyczyścić lease, zrestartować procesu ani ponowić skanu na podstawie
+samego ACK lub wieku operacji. Przy utracie handle wynik pozostaje
+`interrupted_unknown`, nie success. Canceled preview nie może być użyty do apply.
+
+Progress przedstawia rzeczywiście zbadane entries/files/logical bytes oraz
+fazę enumeracji/inspekcji. Nie ma zgadywanego procentu, całkowitej liczby entries
+ani ETA; kandydat i fingerprint są dostępne dopiero po pełnej inspekcji.
+Finalne publish i przejście automatic-preview→apply są chronione tą samą blokadą
+co cancel, aby zaakceptowany cancel nie został nadpisany gotowym planem.
+
+Przygotowanie źródeł i regresji CI nie włącza tej trasy we wdrożonym koordynatorze.
+Przed użyciem potrzebne są sprawdzone CI, zgodna aktualizacja jednego runnera,
+attestacja obrazu, pusta aktywna ścieżka builda i preserved queue/profiles/data.
+Dla starego koordynatora brak obsługi oznacza unavailable; nie udajemy anulowania.
+Reguły autoryzacji i ochrony kandydatów przy rzeczywistym cleanup pozostają bez zmian.
