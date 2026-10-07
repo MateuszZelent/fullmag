@@ -8,7 +8,6 @@ import { initialMeshBuildDialogState, meshBuildDialogReducer } from "./mesh-buil
 import {
   FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
   UNKNOWN_MESH_COMMAND_LANE_REASON,
-  resolveMeshCommandLane,
   type MeshCommandLane,
 } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import {
@@ -24,6 +23,11 @@ import {
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  resolveActiveLaneDiscretization,
+  resolveActiveLaneOperation,
+  type ActiveLaneCapabilitySnapshot,
+} from "@/kernel/resources/useActiveLaneCapabilities";
 import type { JsonObject, LiveStatusResource } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
 import { diffMeshPolicies } from "@/shared/domain/mesh/meshPolicyDiff";
@@ -107,10 +111,14 @@ function meshBuildDialogRuntimeStatusEquals(
   return (
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
-    previous.capabilities.active_lane.operations.grid_build.reason ===
-      next.capabilities.active_lane.operations.grid_build.reason &&
-    previous.capabilities.active_lane.operations.grid_build.state ===
-      next.capabilities.active_lane.operations.grid_build.state &&
+    resolveActiveLaneDiscretization(previous.capabilities.active_lane) ===
+      resolveActiveLaneDiscretization(next.capabilities.active_lane) &&
+    previous.capabilities.active_lane.operations.grid_build?.reason ===
+      next.capabilities.active_lane.operations.grid_build?.reason &&
+    previous.capabilities.active_lane.operations.grid_build?.state ===
+      next.capabilities.active_lane.operations.grid_build?.state &&
+    previous.capabilities.active_lane.operations.shared_mesh_build?.state ===
+      next.capabilities.active_lane.operations.shared_mesh_build?.state &&
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
@@ -119,9 +127,9 @@ function meshBuildDialogRuntimeStatusEquals(
 }
 
 export function resolveMeshBuildDialogLane(
-  discretization: unknown,
+  snapshot: ActiveLaneCapabilitySnapshot | null,
 ): MeshCommandLane {
-  return resolveMeshCommandLane(discretization);
+  return resolveActiveLaneDiscretization(snapshot);
 }
 
 export function shouldLoadMeshBuildDialogFemResources(
@@ -158,7 +166,11 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     selectMeshBuildDialogRuntimeStatus,
     { enabled: state.open, isEqual: meshBuildDialogRuntimeStatusEquals },
   );
-  const lane = resolveMeshBuildDialogLane(runtimeStatus?.domain.discretization);
+  const lane = resolveMeshBuildDialogLane(runtimeStatus?.capabilities.active_lane ?? null);
+  const buildOperation = resolveActiveLaneOperation(
+    runtimeStatus?.capabilities.active_lane ?? null,
+    "shared_mesh_build",
+  );
   const explicitFemLane = shouldLoadMeshBuildDialogFemResources(
     state.open,
     lane,
@@ -333,7 +345,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   }
 
   function confirmBuild(): void {
-    if (!state.request?.requestId || !stableSnapshotBefore || !snapshotCurrent || state.phase !== "pre-build") return;
+    if (!state.request?.requestId || !stableSnapshotBefore || !snapshotCurrent || !buildOperation.enabled || state.phase !== "pre-build") return;
     dispatch({ type: "submitting" });
     kernel.bus.emit("mesh:build-confirm-resolved", { requestId: state.request.requestId, confirmed: true, precondition: { scene_revision: stableSnapshotBefore.sceneRevision, mesh_revision: stableSnapshotBefore.meshRevision } });
   }
@@ -374,7 +386,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
               diffRows={diffRows}
               errorMessage={state.errorMessage}
               mode={state.phase}
-              ready={snapshotCurrent}
+              ready={snapshotCurrent && buildOperation.enabled}
               stale={stableSnapshotBefore !== null && !snapshotCurrent}
               onRefresh={() => {
                 captureSnapshot(null);
@@ -428,7 +440,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
                   size="sm"
                   type="button"
                   variant="ghost"
-                  onClick={() => dispatch({ open: false, type: "open" })}
+                  onClick={closeDialog}
                 >
                   Close
                 </Button>

@@ -106,12 +106,14 @@ describe("antennaFieldSolutionIdentityStatus", () => {
     status: "ready",
     session_id: "session-1",
     session_epoch: "epoch-1",
+    request_scope_epoch: "instance-1:7",
   } as AntennaFieldSolutionResource;
   const catalog = {
     stage_id: "solve-1",
     status: "ready",
     session_id: "session-1",
     session_epoch: "epoch-1",
+    request_scope_epoch: "instance-1:7",
     outputs: [{
       output_id: "h-ant-output",
       solution_ref: {
@@ -127,6 +129,9 @@ describe("antennaFieldSolutionIdentityStatus", () => {
     expect(antennaFieldSolutionIdentityStatus(ids, { status: "ready", data: field }, { status: "loading", data: null })).toBe("awaiting stage catalog");
     expect(antennaFieldSolutionIdentityStatus(ids, { status: "ready", data: field }, {
       status: "ready", data: { ...catalog, session_epoch: "other-epoch" },
+    })).toBe("identity mismatch");
+    expect(antennaFieldSolutionIdentityStatus(ids, { status: "ready", data: field }, {
+      status: "ready", data: { ...catalog, request_scope_epoch: "instance-1:8" },
     })).toBe("identity mismatch");
     expect(antennaFieldSolutionIdentityStatus(ids, { status: "ready", data: field }, {
       status: "ready", data: { ...catalog, outputs: [{ ...catalog.outputs[0], solution_ref: { ...catalog.outputs[0].solution_ref, asset_id: "other-asset" } }] },
@@ -153,10 +158,12 @@ describe("antennaSpectrumIdentityStatus", () => {
     solution_content_digest: "sha256:valid",
     session_id: "session-1",
     session_epoch: "epoch-1",
+    request_scope_epoch: "instance-1:7",
     sampling: { solution_id: "h-ant-output" },
   } as AntennaSourceSpectrumResource;
   const catalog = {
     stage_id: "solve-1", status: "ready", session_id: "session-1", session_epoch: "epoch-1",
+    request_scope_epoch: "instance-1:7",
     outputs: [{
       output_id: "h-ant-output",
       solution_ref: { stage_id: "solve-1", content_digest: "sha256:valid" },
@@ -169,6 +176,7 @@ describe("antennaSpectrumIdentityStatus", () => {
     expect(antennaSpectrumIdentityStatus(ids, { status: "ready", data: spectrum }, { status: "loading", data: null })).toBe("awaiting stage catalog");
     expect(antennaSpectrumIdentityStatus(ids, { status: "ready", data: { ...spectrum, solution_content_digest: "sha256:other" } }, { status: "ready", data: catalog })).toBe("identity mismatch");
     expect(antennaSpectrumIdentityStatus(ids, { status: "ready", data: spectrum }, { status: "ready", data: { ...catalog, session_epoch: "other" } })).toBe("identity mismatch");
+    expect(antennaSpectrumIdentityStatus(ids, { status: "ready", data: spectrum }, { status: "ready", data: { ...catalog, request_scope_epoch: "instance-1:8" } })).toBe("identity mismatch");
   });
 
   it("checks the imported field digest without requesting a stage catalog", () => {

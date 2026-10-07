@@ -305,6 +305,16 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 GeometrySupportStatus::Production,
             ),
             primitive(
+                "microstrip_antenna_layout",
+                "Microstrip Antenna Layout",
+                "antenna",
+                true,
+                false,
+                true,
+                false,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
                 "triangular_prism",
                 "Triangular Prism",
                 "core",
@@ -595,11 +605,13 @@ fn validate_object_geometry(
             &["realize_geometry", "build_mesh", "run_solver"],
         ));
     }
-    if object.material_ref.trim().is_empty()
-        || !scene
-            .materials
-            .iter()
-            .any(|material| material.id == object.material_ref)
+    let requires_magnetic_refs = object.role == "magnet";
+    if (requires_magnetic_refs || !object.material_ref.trim().is_empty())
+        && (object.material_ref.trim().is_empty()
+            || !scene
+                .materials
+                .iter()
+                .any(|material| material.id == object.material_ref))
     {
         diagnostics.push(error(
             "GEOMETRY_OBJECT_MATERIAL_MISSING",
@@ -609,26 +621,28 @@ fn validate_object_geometry(
             &["realize_geometry", "build_mesh", "run_solver"],
         ));
     }
-    match object
-        .magnetization_ref
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        Some(reference)
-            if scene
-                .magnetization_assets
-                .iter()
-                .any(|asset| asset.id == *reference) => {}
-        _ => diagnostics.push(error(
-            "GEOMETRY_OBJECT_MAGNETIZATION_MISSING",
-            format!(
-                "Object '{}' must reference a magnetization asset before mesh/compute.",
-                object.id
-            ),
-            Some(object.id.clone()),
-            Some(object_path.clone()),
-            &["build_mesh", "run_solver"],
-        )),
+    if requires_magnetic_refs || object.magnetization_ref.is_some() {
+        match object
+            .magnetization_ref
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(reference)
+                if scene
+                    .magnetization_assets
+                    .iter()
+                    .any(|asset| asset.id == *reference) => {}
+            _ => diagnostics.push(error(
+                "GEOMETRY_OBJECT_MAGNETIZATION_MISSING",
+                format!(
+                    "Object '{}' must reference a magnetization asset before mesh/compute.",
+                    object.id
+                ),
+                Some(object.id.clone()),
+                Some(object_path.clone()),
+                &["build_mesh", "run_solver"],
+            )),
+        }
     }
     if !transform_is_valid(&object.transform) {
         diagnostics.push(error(
@@ -834,6 +848,26 @@ fn validate_geometry_node(
                 diagnostics,
             );
         }
+        "MicrostripAntennaLayout" => {
+            if *backend_target != GeometryBackendTarget::Fem {
+                diagnostics.push(error(
+                    "GEOMETRY_KIND_UNSUPPORTED",
+                    "MicrostripAntennaLayout requires the FEM geometry pipeline.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+            if let Err(reason) = parse_microstrip_layout(&geometry.geometry_params) {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    format!("Invalid MicrostripAntennaLayout: {reason}"),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        }
         "Difference" => validate_difference_node(
             &geometry.geometry_params,
             backend_target,
@@ -985,8 +1019,163 @@ fn derive_object_bounds(object: &SceneObject) -> Option<([f64; 3], [f64; 3])> {
     Some((world_min, world_max))
 }
 
+struct MicrostripLayout {
+    length_m: f64,
+    thickness_m: f64,
+    return_width_m: f64,
+    return_offset_m: f64,
+    stations: Vec<(f64, f64)>,
+    rotation: [[f64; 3]; 3],
+    translation: [f64; 3],
+}
+
+fn parse_microstrip_layout(params: &Value) -> Result<MicrostripLayout, &'static str> {
+    let positive = |key| match number_param(params, key) {
+        Some(value) if value.is_finite() && value > 0.0 => Ok(value),
+        _ => Err("length, thickness, conductivity and return width must be positive SI values"),
+    };
+    let length_m = positive("length_m")?;
+    let thickness_m = positive("thickness_m")?;
+    positive("conductivity_s_per_m")?;
+    let return_width_m = positive("return_width_m")?;
+    let return_offset_m = number_param(params, "return_offset_m")
+        .ok_or("return_offset_m must be a non-negative SI value")?;
+    if !return_offset_m.is_finite() || return_offset_m < 0.0 {
+        return Err("return_offset_m must be a non-negative SI value");
+    }
+
+    let raw_stations = params
+        .get("stations")
+        .and_then(Value::as_array)
+        .ok_or("stations must contain at least two ordered width stations")?;
+    if raw_stations.len() < 2 {
+        return Err("stations must contain at least two ordered width stations");
+    }
+    let mut stations = Vec::with_capacity(raw_stations.len());
+    for station in raw_stations {
+        let s = number_param(station, "s").ok_or("station s must be finite")?;
+        let width = number_param(station, "signal_width_m")
+            .ok_or("station signal_width_m must be positive")?;
+        if !s.is_finite() || !(0.0..=1.0).contains(&s) {
+            return Err("station s must lie in [0, 1]");
+        }
+        if !width.is_finite() || width <= 0.0 {
+            return Err("station signal_width_m must be positive");
+        }
+        if stations.last().is_some_and(|(previous, _)| s <= *previous) {
+            return Err("station positions must be strictly increasing");
+        }
+        stations.push((s, width));
+    }
+    if stations.first().map(|station| station.0) != Some(0.0)
+        || stations.last().map(|station| station.0) != Some(1.0)
+    {
+        return Err("stations must start at s=0 and end at s=1");
+    }
+
+    let transform = params.get("transform");
+    if transform.is_some_and(|value| !value.is_object()) {
+        return Err("transform must be a rigid transform object");
+    }
+    let rotation = if let Some(raw) = transform.and_then(|value| value.get("rotation_matrix")) {
+        let rows = raw
+            .as_array()
+            .filter(|rows| rows.len() == 3)
+            .ok_or("rotation_matrix must be a right-handed 3x3 rotation")?;
+        let mut matrix = [[0.0; 3]; 3];
+        for (row_index, row) in rows.iter().enumerate() {
+            matrix[row_index] = vec3_from_value(row)
+                .ok_or("rotation_matrix must be a right-handed 3x3 rotation")?;
+        }
+        if !valid_rotation_matrix(matrix) {
+            return Err("rotation_matrix must be a right-handed 3x3 rotation");
+        }
+        matrix
+    } else {
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    };
+    let translation = if let Some(raw) = transform.and_then(|value| value.get("translation_m")) {
+        vec3_from_value(raw).ok_or("translation_m must be a finite 3-vector")?
+    } else {
+        [0.0; 3]
+    };
+    Ok(MicrostripLayout {
+        length_m,
+        thickness_m,
+        return_width_m,
+        return_offset_m,
+        stations,
+        rotation,
+        translation,
+    })
+}
+
+fn vec3_from_value(value: &Value) -> Option<[f64; 3]> {
+    let values = value.as_array()?;
+    if values.len() != 3 {
+        return None;
+    }
+    let vector = [
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        values[2].as_f64()?,
+    ];
+    finite_vec3(vector).then_some(vector)
+}
+
+fn valid_rotation_matrix(matrix: [[f64; 3]; 3]) -> bool {
+    for left in 0..3 {
+        for right in 0..3 {
+            let dot = (0..3)
+                .map(|row| matrix[row][left] * matrix[row][right])
+                .sum::<f64>();
+            if !dot.is_finite() || (dot - if left == right { 1.0 } else { 0.0 }).abs() > 1e-9 {
+                return false;
+            }
+        }
+    }
+    let determinant = matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]);
+    (determinant - 1.0).abs() <= 1e-9
+}
+
+fn microstrip_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
+    let layout = parse_microstrip_layout(params).ok()?;
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for (s, signal_width) in layout.stations {
+        for (width, center_z) in [
+            (signal_width, 0.0),
+            (
+                layout.return_width_m,
+                -(layout.thickness_m + layout.return_offset_m),
+            ),
+        ] {
+            for y in [-width / 2.0, width / 2.0] {
+                for z in [
+                    center_z - layout.thickness_m / 2.0,
+                    center_z + layout.thickness_m / 2.0,
+                ] {
+                    let local = [s * layout.length_m, y, z];
+                    for axis in 0..3 {
+                        let world = (0..3)
+                            .map(|component| layout.rotation[axis][component] * local[component])
+                            .sum::<f64>()
+                            + layout.translation[axis];
+                        min[axis] = min[axis].min(world);
+                        max[axis] = max[axis].max(world);
+                    }
+                }
+            }
+        }
+    }
+    Some((min, max))
+}
+
 fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3])> {
     match geometry.geometry_kind.as_str() {
+        "MicrostripAntennaLayout" => microstrip_layout_bounds(&geometry.geometry_params),
         "Box" => {
             let size = vec3_param(&geometry.geometry_params, "size")
                 .or_else(|| vec3_param(&geometry.geometry_params, "dimensions"))?;
@@ -1463,6 +1652,51 @@ mod tests {
     }
 
     #[test]
+    fn auxiliary_geometry_preserves_mesh_body_without_magnetic_references() {
+        for role in ["antenna", "conductor", "geometry"] {
+            let mut scene = scene_with_object(SceneGeometry {
+                geometry_kind: "Box".to_string(),
+                geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
+                bounds_min: None,
+                bounds_max: None,
+            });
+            scene.objects[0].role = role.to_string();
+            scene.objects[0].material_ref.clear();
+            scene.objects[0].magnetization_ref = None;
+            scene.materials.clear();
+            scene.magnetization_assets.clear();
+            assert_eq!(validate_geometry_scene(&scene, GeometryBackendTarget::Fem).status, "ready");
+            assert!(geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem).is_none());
+            let realized = realize_geometry_scene(&scene, GeometryBackendTarget::Fem);
+            assert_eq!(realized.bodies.len(), 1);
+            assert_eq!(realized.bodies[0].object_id, "free");
+            assert_eq!(realized.bodies[0].bounds_max, [0.5, 1.0, 1.5]);
+
+            scene.objects[0].role = "magnet".to_string();
+            assert!(geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem).is_some());
+            let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+            assert!(validation.diagnostics.iter().any(|entry| entry.code == "GEOMETRY_OBJECT_MATERIAL_MISSING"));
+            assert!(validation.diagnostics.iter().any(|entry| entry.code == "GEOMETRY_OBJECT_MAGNETIZATION_MISSING"));
+        }
+    }
+
+    #[test]
+    fn auxiliary_geometry_rejects_explicit_dangling_magnetic_references() {
+        let mut scene = scene_with_object(SceneGeometry {
+            geometry_kind: "Box".to_string(),
+            geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        scene.objects[0].role = "antenna".to_string();
+        scene.materials.clear();
+        scene.magnetization_assets.clear();
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert!(validation.diagnostics.iter().any(|entry| entry.code == "GEOMETRY_OBJECT_MATERIAL_MISSING"));
+        assert!(validation.diagnostics.iter().any(|entry| entry.code == "GEOMETRY_OBJECT_MAGNETIZATION_MISSING"));
+    }
+
+    #[test]
     fn box_scene_realizes_with_bounds_and_dirty_state() {
         let scene = scene_with_object(SceneGeometry {
             geometry_kind: "Box".to_string(),
@@ -1511,6 +1745,84 @@ mod tests {
         assert!((snapshot.bodies[0].bounds_max[0] - 200e-9).abs() < 1e-18);
         assert!((snapshot.bodies[0].bounds_max[1] - 20e-9).abs() < 1e-18);
         assert!((snapshot.bodies[0].bounds_max[2] - 15e-9).abs() < 1e-18);
+    }
+
+    #[test]
+    fn microstrip_scene_derives_bounds_from_stations_not_stale_stored_bounds() {
+        let scene = scene_with_object(SceneGeometry {
+            geometry_kind: "MicrostripAntennaLayout".to_string(),
+            geometry_params: json!({
+                "length_m": 1e-6,
+                "thickness_m": 10e-9,
+                "conductivity_s_per_m": 5.8e7,
+                "return_width_m": 500e-9,
+                "return_offset_m": 30e-9,
+                "stations": [
+                    {"s": 0.0, "signal_width_m": 50e-9},
+                    {"s": 0.5, "signal_width_m": 600e-9},
+                    {"s": 1.0, "signal_width_m": 50e-9}
+                ],
+                "transform": {
+                    "rotation_matrix": [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+                    "translation_m": [0, -0.5e-6, 0]
+                }
+            }),
+            bounds_min: Some([-1.0, -1.0, -1.0]),
+            bounds_max: Some([1.0, 1.0, 1.0]),
+        });
+        assert_eq!(
+            validate_geometry_scene(&scene, GeometryBackendTarget::Fem).status,
+            "ready"
+        );
+        let snapshot = realize_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        let body = &snapshot.bodies[0];
+        assert!((body.bounds_min[0] + 300e-9).abs() < 1e-18);
+        assert!((body.bounds_max[0] - 300e-9).abs() < 1e-18);
+        assert!((body.bounds_min[1] + 0.5e-6).abs() < 1e-18);
+        assert!((body.bounds_max[1] - 0.5e-6).abs() < 1e-18);
+        assert!((body.bounds_min[2] + 45e-9).abs() < 1e-18);
+        assert!((body.bounds_max[2] - 5e-9).abs() < 1e-18);
+        assert!(validate_geometry_scene(&scene, GeometryBackendTarget::Fdm)
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "GEOMETRY_KIND_UNSUPPORTED"));
+    }
+
+    #[test]
+    fn microstrip_scene_rejects_unordered_stations_and_nonrigid_transform() {
+        let mut scene = scene_with_object(SceneGeometry {
+            geometry_kind: "MicrostripAntennaLayout".to_string(),
+            geometry_params: json!({
+                "length_m": 1e-6,
+                "thickness_m": 10e-9,
+                "conductivity_s_per_m": 5.8e7,
+                "return_width_m": 500e-9,
+                "return_offset_m": 30e-9,
+                "stations": [
+                    {"s": 0.0, "signal_width_m": 50e-9},
+                    {"s": 0.0, "signal_width_m": 20e-9},
+                    {"s": 1.0, "signal_width_m": 50e-9}
+                ]
+            }),
+            bounds_min: None,
+            bounds_max: None,
+        });
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert!(validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "GEOMETRY_PARAM_INVALID"
+                && diagnostic.message.contains("strictly increasing")));
+        scene.objects[0].geometry.geometry_params["stations"][1]["s"] = json!(0.5);
+        scene.objects[0].geometry.geometry_params["transform"] = json!({
+            "rotation_matrix": [[-1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        });
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert!(validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "GEOMETRY_PARAM_INVALID"
+                && diagnostic.message.contains("right-handed")));
     }
 
     #[test]

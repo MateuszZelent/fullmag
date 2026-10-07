@@ -2380,6 +2380,7 @@ class Problem:
     runtime_metadata: dict[str, object] = field(default_factory=dict)
     auxiliary_geometries: Sequence[object] = ()
     auxiliary_geometry_roles: Mapping[str, str] = field(default_factory=dict)
+    auxiliary_geometry_object_ids: Mapping[str, str] = field(default_factory=dict)
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
     # Composition-first microwave antenna resources.  These are immutable
@@ -2458,6 +2459,18 @@ class Problem:
                 + ", ".join(unknown_roles)
             )
         object.__setattr__(self, "auxiliary_geometry_roles", roles)
+        auxiliary_object_ids = {
+            require_non_empty(name, "auxiliary_geometry_object_ids.name"):
+            require_non_empty(object_id, "auxiliary_geometry_object_ids.object_id")
+            for name, object_id in self.auxiliary_geometry_object_ids.items()
+        }
+        unknown_ids = sorted(set(auxiliary_object_ids) - set(roles))
+        if unknown_ids:
+            raise ValueError(
+                "auxiliary_geometry_object_ids references unknown geometry object(s): "
+                + ", ".join(unknown_ids)
+            )
+        object.__setattr__(self, "auxiliary_geometry_object_ids", auxiliary_object_ids)
         if not self.magnets:
             raise ValueError("Problem requires at least one magnet")
         if not self.energy and not any(
@@ -2540,6 +2553,15 @@ class Problem:
             magnet.object_id for magnet in self.magnets if magnet.object_id is not None
         ]
         ensure_unique_names(explicit_object_ids, "magnet object_ids")
+        ensure_unique_names(
+            [
+                *(magnet.object_id if magnet.object_id is not None else magnet.name
+                  for magnet in self.magnets),
+                *(self.auxiliary_geometry_object_ids.get(name, name)
+                  for name in self.auxiliary_geometry_roles),
+            ],
+            "object_ids",
+        )
         self._validate_magnetization_constraints()
         ensure_unique_names(
             (module.name for module in self.current_modules), "current module names"
@@ -2837,7 +2859,7 @@ class Problem:
         physics_objects = [
             {
                 "schema_version": "physics_object.v1",
-                "object_id": name,
+                "object_id": self.auxiliary_geometry_object_ids.get(name, name),
                 "name": name,
                 "type": role,
                 "geometry_id": name,

@@ -34,6 +34,13 @@ run-managed-browser job_id commit port="3104":
 run-managed-browser-snapshot job_id commit source_digest native_snapshot_sha256 port="3104":
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_browser.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --port {{quote(port)}}
 
+# Approved scientific fixture only: RAM session, retained export, no build.
+run-managed-antenna-ram job_id commit source_digest native_snapshot_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_ram.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}}
+
+observe-managed-antenna-ram run_root:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_ram.py" --repo-root "{{repo_root}}" observe --run-root {{quote(run_root)}}
+
 storage-prepare:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" prepare-links --repo-root "{{repo_root}}" --compat --frontend
 
@@ -497,6 +504,22 @@ verify-development-restart-action-browser:
 # Real Study profile component/facade against controlled HTTP; no solver gate.
 verify-study-execution-profile-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3256 --scenario study-execution-profile
+
+# Production antenna Inspector and resource hooks in an isolated browser fixture.
+verify-antenna-external-lead-inspection-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3252 --scenario antenna-external-lead-inspection
+
+# Production microstrip draft/transaction lifecycle in an isolated browser fixture.
+verify-antenna-microstrip-stations-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3253 --scenario antenna-microstrip-stations
+
+# Production transport draft/conflict lifecycle; controlled HTTP, no native solve.
+verify-antenna-transport-drafts-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3254 --scenario antenna-transport-drafts
+
+# Production primitive color preferences and Object/Airbox Inspector stability.
+verify-primitive-color-inspector-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3257 --scenario primitive-color-inspector
 
 lint-control-room-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"
@@ -1896,6 +1919,9 @@ verify-fem-time-domain-cpu-only-contract:
 verify-fem-oersted-oet0-cpu-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oet0
+
+verify-antenna-contracts group="all":
+    {{storage_python}} scripts/verify_antenna_contracts.py {{quote(group)}}
 
 # Interpreted cold-reader checks only; never compiles native tests or solves fields.
 verify-antenna-field-reader:
@@ -7280,4 +7306,3 @@ verify-fdm-gpu-solved-current-racetrack-production:
         --execution-audit "$evidence_root/execution-audit.v1.json" || true; \
       python3 scripts/verify_fdm_gpu_racetrack_qualification.py --evidence-root "$evidence_root" --source-snapshot "$source_snapshot"; \
       echo "production-qualified racetrack manifest: $evidence_root/fdm_gpu_solved_current_racetrack_qualification_v1.json"'
-                                                                                                                                                                                                                                                  

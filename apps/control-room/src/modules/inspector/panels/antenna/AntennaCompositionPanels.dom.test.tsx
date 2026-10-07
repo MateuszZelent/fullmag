@@ -57,13 +57,35 @@ vi.mock("@/kernel/KernelContext", () => ({
 }));
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+  publishCommittedSceneResource: vi.fn(),
   useSceneResource: () => mocks.scene,
 }));
 
 vi.mock("@/kernel/resources/antennaResources", () => ({
+  antennaFieldPayloadEtag: () => '"field-payload"',
   useAntennaFieldSolutionResource: () => mocks.fieldSolution,
+  useAntennaFieldSolutionPayloadResource: (
+    _solutionId: string,
+    kind: string | null,
+  ) => ({
+    data: kind ? {
+      status: "ready",
+      data: new Float64Array(kind === "sample_positions"
+        ? [1e-9, 2e-9, 3e-9, 4e-9, 5e-9, 6e-9]
+        : [1, -2, 3, 4, -5, 6]).buffer,
+    } : null,
+    error: null,
+    status: kind ? "ready" : "idle",
+  }),
   useAntennaStageOutputCatalogResource: () => mocks.stageOutputCatalog,
   useAntennaSourceSpectrumResource: () => mocks.sourceSpectrum,
+}));
+
+// The inspection panel has its own real-browser resource/identity proof.
+vi.mock("./AntennaExternalLeadInspectionPanel", () => ({
+  AntennaExternalLeadInspectionPanel: ({ authoredStageId }: { authoredStageId: string }) => (
+    <div data-testid="antenna-inspection-composition-binding">{authoredStageId}</div>
+  ),
 }));
 
 import { AntennaCompositionPanel } from "./AntennaCompositionPanels";
@@ -541,6 +563,39 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
+  it("does not present a published field as current after the current view is removed", async () => {
+    mocks.scene.data = {
+      ...sceneFixture(),
+      antenna_field_solve_stages: [{
+        id: "solve-1", source_object_id: "antenna-1", current_transport_id: "current-1",
+        conservative_current_view_ref: "current-1:rt0", port_mode_ids: [],
+        field_sampling_domain: { kind: "global" }, target_refs: [],
+        outputs: [{ id: "solution-1", quantity: "H_ant_basis" }],
+      }],
+      current_transports: [{ name: "current-1", kind: "current_transport", model: "ohmic_poisson" }],
+    } as unknown as SceneResource;
+    mocks.fieldSolution.status = "ready";
+    mocks.fieldSolution.data = fieldSolutionFixture();
+    mocks.stageOutputCatalog.status = "ready";
+    mocks.stageOutputCatalog.data = stageOutputCatalogFixture();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <AntennaCompositionPanel kind="solution" selection={solutionSelection()} />,
+      ));
+      expect(container.textContent).toContain("requires a mesh-exact ConservativeCurrentView");
+      expect(container.textContent).toContain("Runtime resultauthoring invalid");
+      expect(container.textContent).not.toContain("Published solutionsolution-1");
+      expect(container.textContent).not.toContain("Direct antenna field");
+      expect(findGroupBadge(container, "invalid · result pending")).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("shows missing solve and target references for an incomplete projection", async () => {
     mocks.scene.data = {
       antenna_target_projections: [{
@@ -883,6 +938,143 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
+  it("shows the authored microstrip dimensions and width stations", async () => {
+    mocks.scene.data = {
+      objects: [{
+        id: "antenna-1",
+        name: "Microstrip antenna",
+        role: "antenna",
+        geometry: {
+          geometry_kind: "MicrostripAntennaLayout",
+          geometry_params: {
+            length_m: 1e-6,
+            thickness_m: 10e-9,
+            conductivity_s_per_m: 5.8e7,
+            return_width_m: 500e-9,
+            return_offset_m: 30e-9,
+            stations: [
+              { s: 0, signal_width_m: 50e-9 },
+              { s: 1, signal_width_m: 25e-9 },
+            ],
+          },
+        },
+      }],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />,
+        ),
+      );
+      expect(container.textContent).toContain("GeometryMicrostripAntennaLayout");
+      expect(container.textContent).toContain("Length1.0000e-6 m");
+      expect(container.textContent).toContain("Station 1s=0.0000e+0, signal width=5.0000e-8 m");
+      expect(container.textContent).toContain("Station 2s=1.0000e+0, signal width=2.5000e-8 m");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps the conductor Inspector stable while saving a width station", async () => {
+    const geometry = {
+      geometry_kind: "MicrostripAntennaLayout",
+      geometry_params: {
+        length_m: 1e-6, thickness_m: 10e-9, conductivity_s_per_m: 5.8e7,
+        return_width_m: 500e-9, return_offset_m: 30e-9,
+        stations: [{ s: 0, signal_width_m: 50e-9 }, { s: 1, signal_width_m: 25e-9 }],
+        transform: { rotation_matrix: [[0, -1, 0], [1, 0, 0], [0, 0, 1]] },
+      },
+    };
+    mocks.scene.data = { revision: 4, objects: [{ id: "antenna-1", geometry }] } as unknown as SceneResource;
+    let acknowledge: ((value: unknown) => void) | undefined;
+    mocks.commitTransaction.mockImplementation(() => new Promise((resolve) => { acknowledge = resolve; }));
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const find = (tag: string, label: string): TestElement => {
+      const found: TestElement[] = [];
+      const visit = (node: TestNode) => {
+        if (node instanceof TestElement && node.tagName === tag &&
+          (node.getAttribute("aria-label") === label || node.textContent.includes(label))) found.push(node);
+        node.childNodes.forEach(visit);
+      };
+      visit(container);
+      if (!found[0]) throw new Error(`Missing ${label}`);
+      return found[0];
+    };
+    try {
+      await act(async () => root.render(<AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />));
+      const panel = find("DIV", "Antenna conductor");
+      const input = find("INPUT", "Station 1 signal width");
+      const unrelatedInput = find("INPUT", "Station 2 signal width");
+      Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "60e-9");
+      await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      await act(async () => find("BUTTON", "Save width stations").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.commitTransaction).toHaveBeenCalledWith(expect.objectContaining({
+        kind: "patch_object_geometry", object_id: "antenna-1", base_revision: 4,
+        geometry: expect.objectContaining({ geometry_params: expect.objectContaining({
+          stations: [{ s: 0, signal_width_m: 60e-9 }, { s: 1, signal_width_m: 25e-9 }],
+        }) }),
+      }));
+      expect(find("DIV", "Antenna conductor")).toBe(panel);
+      expect(find("INPUT", "Station 1 signal width")).toBe(input);
+      expect(unrelatedInput.disabled).toBe(false);
+      await act(async () => acknowledge?.({ scene_revision: 5, committed_scene: { ...mocks.scene.data, revision: 5 } }));
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("requires explicit rebase if server geometry changes during a local station edit", async () => {
+    const geometry = {
+      geometry_kind: "MicrostripAntennaLayout",
+      geometry_params: {
+        length_m: 1e-6, thickness_m: 10e-9, conductivity_s_per_m: 5.8e7,
+        return_width_m: 500e-9, return_offset_m: 30e-9,
+        stations: [{ s: 0, signal_width_m: 50e-9 }, { s: 1, signal_width_m: 25e-9 }],
+      },
+    };
+    mocks.scene.data = { revision: 4, objects: [{ id: "antenna-1", geometry }] } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const find = (tag: string, label: string): TestElement => {
+      const found: TestElement[] = [];
+      const visit = (node: TestNode) => {
+        if (node instanceof TestElement && node.tagName === tag &&
+          (node.getAttribute("aria-label") === label || node.textContent.includes(label))) found.push(node);
+        node.childNodes.forEach(visit);
+      };
+      visit(container);
+      if (!found[0]) throw new Error(`Missing ${label}`);
+      return found[0];
+    };
+    try {
+      await act(async () => root.render(<AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />));
+      const input = find("INPUT", "Station 1 signal width");
+      Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "60e-9");
+      await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      mocks.scene.data = { revision: 5, objects: [{ id: "antenna-1", geometry: {
+        ...geometry, geometry_params: { ...geometry.geometry_params, return_width_m: 400e-9 },
+      } }] } as unknown as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />));
+      expect(container.textContent).toContain("Conductor geometry changed on the server");
+      expect(find("BUTTON", "Save width stations").disabled).toBe(true);
+      expect(mocks.commitTransaction).not.toHaveBeenCalled();
+      expect(input.value).toBe("60e-9");
+      await act(async () => find("BUTTON", "Rebase draft").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(find("BUTTON", "Save width stations").disabled).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("uses a ready field-solution resource for the solution Inspector", async () => {
     mocks.scene.data = sceneFixture();
     mocks.fieldSolution.status = "ready";
@@ -913,6 +1105,9 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).toContain("Port port-1 normalization1.0000e+0 A");
       expect(container.textContent).toContain("Port port-1 current certificatesha256:certificate");
       expect(container.textContent).toContain("Port port-1 magnetic basisA/m/A · 6 values");
+      expect(container.textContent).toContain("Direct antenna field");
+      expect(container.textContent).toContain("Sample 1 H/I");
+      expect(container.textContent).toContain("1.000e+0");
       expect(findGroupBadge(container, "ready")).toBeDefined();
       mocks.fieldSolution.data = { ...fieldSolutionFixture(), content_digest: "sha256:other" };
       await act(async () => root.render(
@@ -920,6 +1115,7 @@ describe("AntennaCompositionPanel runtime results", () => {
       ));
       expect(container.textContent).toContain("Runtime resultidentity mismatch");
       expect(container.textContent).not.toContain("Published solutionsolution-1");
+      expect(container.textContent).not.toContain("Direct antenna field");
       expect(container.textContent).not.toContain("Port port-1 measured current");
       expect(findGroupBadge(container, "stale result")).toBeDefined();
       mocks.fieldSolution.data = fieldSolutionFixture();
@@ -960,7 +1156,7 @@ function fieldSolutionFixture(): AntennaFieldSolutionResource {
       current_balance_certificate_digest: "sha256:certificate",
       electric_potential_per_ampere: { layout: "scalar", path: "potential.f64le", scalar_type: "f64", sha256: "sha256:potential", unit: "V/A", value_count: 2 },
       current_density_per_ampere: { layout: "xyz", path: "current.f64le", scalar_type: "f64", sha256: "sha256:current-density", unit: "A/m^2/A", value_count: 6 },
-      magnetic_field_per_ampere: { layout: "xyz", path: "field.f64le", scalar_type: "f64", sha256: "sha256:field-basis", unit: "A/m/A", value_count: 6 },
+      magnetic_field_per_ampere: { layout: "sample_xyz_interleaved", path: "field.f64le", scalar_type: "float64_le", sha256: "sha256:field-basis", unit: "A/m/A", value_count: 6 },
       quadrature_diagnostics: {},
     }],
     component: "vector_basis",
@@ -983,9 +1179,9 @@ function fieldSolutionFixture(): AntennaFieldSolutionResource {
     resolved_execution: { discretization: "fem", device: "cpu", precision: "double", execution_mode: "strict" },
     resource_id: "antenna/field-solution/solution-1",
     sample_positions: {
-      layout: "xyz",
+      layout: "sample_xyz_interleaved",
       path: "samples.f64le",
-      scalar_type: "f64",
+      scalar_type: "float64_le",
       sha256: "sha256:samples",
       unit: "m",
       value_count: 6,
@@ -993,6 +1189,7 @@ function fieldSolutionFixture(): AntennaFieldSolutionResource {
     sample_topology: null,
     schema_version: "antenna_field_solution.v1",
     session_epoch: "epoch-1",
+    request_scope_epoch: "instance-1:7",
     session_id: "session-1",
     signatures: {
       current_solution_signature: "sha256:current",
@@ -1031,6 +1228,7 @@ function stageOutputCatalogFixture(): AntennaStageOutputCatalogResource {
     resource_id: "antenna/stage-output-catalog/solve-1",
     schema_version: "antenna_stage_output_catalog.v1",
     session_epoch: "epoch-1",
+    request_scope_epoch: "instance-1:7",
     session_id: "session-1",
     solution_id: "solution-1",
     stage_id: "solve-1",

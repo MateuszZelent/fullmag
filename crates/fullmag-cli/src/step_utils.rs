@@ -1850,15 +1850,11 @@ pub(crate) fn bind_frozen_spins_replan_to_paused_command(
 pub(crate) fn build_resumable_interactive_command(
     command: &crate::types::SessionCommand,
     stage_result: &fullmag_runner::RunResult,
+    elapsed_seconds: f64,
 ) -> Option<crate::types::SessionCommand> {
     match command.kind.as_str() {
         "run" => {
             let requested_until_seconds = command.until_seconds?;
-            let elapsed_seconds = stage_result
-                .steps
-                .last()
-                .map(|step| step.time)
-                .unwrap_or(0.0);
             let remaining_until_seconds = (requested_until_seconds - elapsed_seconds).max(0.0);
             if remaining_until_seconds <= 0.0 {
                 return None;

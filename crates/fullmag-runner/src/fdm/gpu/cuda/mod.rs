@@ -35,7 +35,10 @@ pub(crate) fn canonical_fdm_waveform_time(
     solver_time_s: f64,
 ) -> f64 {
     match origin {
-        fullmag_ir::FieldTimeOriginIR::StageLocal => solver_time_s,
+        fullmag_ir::FieldTimeOriginIR::StageLocal => {
+            solver_time_s
+                + (plan.time_stage.start_time_s - plan.time_stage.waveform_origin_time_s())
+        }
         fullmag_ir::FieldTimeOriginIR::Absolute => canonical_fdm_time(plan, solver_time_s),
     }
 }

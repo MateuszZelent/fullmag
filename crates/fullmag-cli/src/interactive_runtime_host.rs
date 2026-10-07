@@ -6,6 +6,7 @@ use std::time::Duration;
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, FemDomainMeshModeIR};
 use serde_json::{json, Value};
 
+use crate::antenna_workflow::{materialize_antenna_consumer_plan, plan_antenna_observation};
 use crate::control_room::*;
 use crate::live_workspace::*;
 
@@ -15,6 +16,12 @@ use super::*;
 struct CurrentLiveControlState {
     display_selection: CurrentDisplaySelection,
     queue: VecDeque<SessionCommand>,
+}
+
+fn latch_running_interrupt_request(signal: &AtomicBool, requests_interrupt: bool) {
+    if requests_interrupt {
+        signal.store(true, Ordering::Release);
+    }
 }
 
 pub(super) struct CurrentLiveDisplaySelectionHandle {
@@ -109,9 +116,10 @@ impl CurrentLiveDisplaySelectionHandle {
                         if let Some(ref typed_cmd) = typed {
                             let requests_interrupt =
                                 crate::command_bridge::is_interrupt_command(typed_cmd);
-                            worker
-                                .running_interrupt_requested
-                                .store(requests_interrupt, Ordering::Relaxed);
+                            latch_running_interrupt_request(
+                                &worker.running_interrupt_requested,
+                                requests_interrupt,
+                            );
                         }
                         let (lock, cvar) = &*worker.shared;
                         let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -629,14 +637,17 @@ impl InteractiveRuntimeHost {
     pub(super) fn prepare_base_problem(
         base_problem: ProblemIR,
         plan: &ExecutionPlanIR,
+        live_workspace: &LocalLiveWorkspace,
     ) -> Result<PreparedInteractiveBase> {
+        let mut plan = plan.clone();
+        materialize_antenna_consumer_plan(&base_problem, &mut plan, live_workspace)?;
         let backend_plan = &plan.backend_plan;
         let resolver = fullmag_runner::ObservationProviderResolver::from_backend_plan(backend_plan);
         let runtime_capable = resolver.retains_idle_runtime();
         let runtime = if runtime_capable {
             Some(fullmag_runner::create_planned_interactive_runtime(
                 &base_problem,
-                plan,
+                &plan,
                 None,
             )?)
         } else {
@@ -734,6 +745,7 @@ impl InteractiveRuntimeHost {
                 &self.base_problem,
                 continuation_magnetization,
                 &preview_request,
+                live_workspace,
             )?;
         live_workspace.replace_auxiliary_artifacts(&auxiliary_artifacts)?;
         live_workspace.update(|state| {
@@ -884,6 +896,7 @@ impl InteractiveRuntimeHost {
             let runtime = create_interactive_preview_runtime_from_problem(
                 &self.base_problem,
                 continuation_magnetization,
+                live_workspace,
             )
             .context("Idle live preview runtime unavailable")?;
             self.runtime = Some(runtime);
@@ -976,8 +989,10 @@ impl InteractiveRuntimeHost {
         }
         let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
         let materialization_request = full_field_materialization_request(request.clone());
-        let batch = fullmag_runner::snapshot_problem_vector_field_batch(
+        let plan = plan_antenna_observation(&problem, live_workspace)?;
+        let batch = fullmag_runner::snapshot_planned_problem_vector_field_batch(
             &problem,
+            &plan,
             &quantities,
             &materialization_request,
         )?;
@@ -1036,7 +1051,8 @@ fn refresh_interactive_preview_snapshot(
     if let Some(previous_final_magnetization) = continuation_magnetization {
         apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
     }
-    let preview_field = fullmag_runner::snapshot_problem_preview(&problem, request)?;
+    let plan = plan_antenna_observation(&problem, live_workspace)?;
+    let preview_field = fullmag_runner::snapshot_planned_problem_preview(&problem, &plan, request)?;
     live_workspace.update(|state| {
         state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
         state.live_state.latest_step.preview_field = Some(preview_field.clone());
@@ -1071,8 +1087,10 @@ fn create_interactive_preview_runtime(
 fn create_interactive_preview_runtime_from_problem(
     base_problem: &ProblemIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
+    live_workspace: &LocalLiveWorkspace,
 ) -> Result<fullmag_runner::InteractiveRuntime> {
-    fullmag_runner::create_interactive_runtime(base_problem, continuation_magnetization)
+    let plan = plan_antenna_observation(base_problem, live_workspace)?;
+    fullmag_runner::create_planned_interactive_runtime(base_problem, &plan, continuation_magnetization)
         .map_err(|error| anyhow!(error.to_string()))
 }
 
@@ -1368,6 +1386,14 @@ mod tests {
             owner_session_id: None,
             worker_owner: true,
         }
+    }
+
+    #[test]
+    fn unrelated_command_cannot_clear_pending_stage_interrupt() {
+        let signal = AtomicBool::new(false);
+        latch_running_interrupt_request(&signal, true);
+        latch_running_interrupt_request(&signal, false);
+        assert!(signal.load(Ordering::Acquire));
     }
 
     fn retained_preview_field(quantity: &str) -> fullmag_runner::LivePreviewField {
@@ -1667,7 +1693,7 @@ mod tests {
         assert!(function_body.contains("snapshot_interactive_preview_payload"));
         assert!(function_body.contains("replace_auxiliary_artifacts"));
         assert!(function_body.contains("full_field_materialization_request"));
-        assert!(source.contains("snapshot_problem_vector_field_batch"));
+        assert!(source.contains("snapshot_planned_problem_vector_field_batch"));
     }
 
     #[test]
@@ -1690,6 +1716,7 @@ fn refresh_interactive_preview_fields(
     base_problem: &ProblemIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
     request: &fullmag_runner::LivePreviewRequest,
+    live_workspace: &LocalLiveWorkspace,
 ) -> Result<Vec<fullmag_runner::LivePreviewField>> {
     let mut problem = base_problem.clone();
     if let Some(previous_final_magnetization) = continuation_magnetization {
@@ -1697,8 +1724,10 @@ fn refresh_interactive_preview_fields(
     }
     let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
 
-    Ok(fullmag_runner::snapshot_problem_vector_fields(
+    let plan = plan_antenna_observation(&problem, live_workspace)?;
+    Ok(fullmag_runner::snapshot_planned_problem_vector_fields(
         &problem,
+        &plan,
         &quantities,
         request,
     )?)
@@ -1708,6 +1737,7 @@ fn snapshot_interactive_preview_payload(
     base_problem: &ProblemIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
     request: &fullmag_runner::LivePreviewRequest,
+    live_workspace: &LocalLiveWorkspace,
 ) -> Result<(
     fullmag_runner::LivePreviewField,
     Vec<fullmag_runner::LivePreviewField>,
@@ -1718,10 +1748,12 @@ fn snapshot_interactive_preview_payload(
         apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
     }
     let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
-    let preview_field = fullmag_runner::snapshot_problem_preview(&problem, request)?;
+    let plan = plan_antenna_observation(&problem, live_workspace)?;
+    let preview_field = fullmag_runner::snapshot_planned_problem_preview(&problem, &plan, request)?;
     let materialization_request = full_field_materialization_request(request.clone());
-    let batch = fullmag_runner::snapshot_problem_vector_field_batch(
+    let batch = fullmag_runner::snapshot_planned_problem_vector_field_batch(
         &problem,
+        &plan,
         &quantities,
         &materialization_request,
     )?;
@@ -1753,6 +1785,7 @@ fn spawn_interactive_preview_cache_refresh(
             &base_problem,
             continuation_magnetization.as_deref(),
             &request,
+            &live_workspace,
         ) else {
             return;
         };

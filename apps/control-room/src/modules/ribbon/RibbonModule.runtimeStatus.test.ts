@@ -90,6 +90,13 @@ function select(status: LiveStatusResource) {
 }
 
 describe("RibbonModule runtime status selection", () => {
+  it("loads the canonical scene on Physics before validating selected-object Exchange", () => {
+    const source = readFileSync(new URL("./RibbonModule.tsx", import.meta.url), "utf8");
+    const sceneHook = source.match(/const scene = useSceneResource\(\{[\s\S]*?\}\);/)?.[0];
+    expect(sceneHook).toContain('activeTab === "physics"');
+    expect(source).toContain('[MODEL_SCENE_PATH]: scene.status === "ready" ? scene.data : null');
+  });
+
   it("wires the runtime field catalog into ribbon tab construction", () => {
     const source = readFileSync(new URL("./RibbonModule.tsx", import.meta.url), "utf8");
 

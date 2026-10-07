@@ -78,6 +78,7 @@ import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import {
+  resolveActiveLaneDiscretization,
   resolveActiveLaneOperation,
   type ActiveLaneCapabilitySnapshot,
 } from "@/kernel/resources/useActiveLaneCapabilities";
@@ -282,7 +283,7 @@ function physicsInteractionMenu(
         tooltip: operation.enabled ? undefined : operation.reason,
         disabled: !operation.enabled,
         commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
-        commandInput: { interactionId: spec.id },
+        commandInput: { interactionId: spec.id, ...(scope === "global" ? { scope: "global" } : {}) },
       };
     }),
     ...(scope === "global" ? [createFieldDriveItem] : []),
@@ -788,12 +789,9 @@ function ribbonDiscretization(context: RibbonBuildContext): RibbonDiscretization
   // null while unresolved), which then fails closed below.
   if (context.sessionStatus === undefined) return "fem";
   if (context.sessionStatus === null) return "unknown";
-  const value = context.sessionStatus.domain?.discretization
-    ?.trim()
-    .toLowerCase();
-  if (value === "fdm") return "fdm";
-  if (value === "fem") return "fem";
-  return "unknown";
+  return resolveActiveLaneDiscretization(
+    context.sessionStatus.capabilities?.active_lane ?? null,
+  );
 }
 
 function buildGeometryTabContent(

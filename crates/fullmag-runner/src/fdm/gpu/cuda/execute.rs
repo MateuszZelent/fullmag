@@ -183,6 +183,7 @@ fn append_solved_antenna_drive_events(
     events: &mut Vec<f64>,
     drive: &fullmag_ir::SolvedAntennaDriveIR,
     stage_start_s: f64,
+    waveform_origin_s: f64,
     stage_end_s: f64,
     tolerance_s: f64,
 ) {
@@ -197,7 +198,7 @@ fn append_solved_antenna_drive_events(
     };
     for offset_s in offsets {
         let time_s = match drive.time_origin {
-            fullmag_ir::FieldTimeOriginIR::StageLocal => stage_start_s + offset_s,
+            fullmag_ir::FieldTimeOriginIR::StageLocal => waveform_origin_s + offset_s,
             fullmag_ir::FieldTimeOriginIR::Absolute => offset_s,
         };
         if time_s > stage_start_s + tolerance_s && time_s < stage_end_s - tolerance_s {
@@ -212,9 +213,11 @@ fn cuda_drive_event_schedule(plan: &FdmPlanIR, until_seconds: f64) -> Vec<f64> {
     let stage_end_s = stage_start_s + until_seconds;
     let tolerance_s = crate::schedules::OUTPUT_TIME_TOLERANCE;
     let mut events = vec![stage_start_s, stage_end_s];
-    events.extend(crate::time_events::resolved_stage_drive_discontinuities(
+    events.extend(crate::time_events::resolved_stage_drive_discontinuities_with_origin(
         &plan.field_drives,
+        &plan.solved_antenna_drive_bases,
         stage_start_s,
+        plan.time_stage.waveform_origin_time_s(),
         stage_end_s,
         tolerance_s,
     ));
@@ -227,6 +230,7 @@ fn cuda_drive_event_schedule(plan: &FdmPlanIR, until_seconds: f64) -> Vec<f64> {
                 &mut events,
                 &resolved.drive,
                 stage_start_s,
+                plan.time_stage.waveform_origin_time_s(),
                 stage_end_s,
                 tolerance_s,
             );
@@ -399,6 +403,24 @@ pub(crate) fn execute_cuda_fdm(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let has_dynamic_drive = plan
+        .regional_field_drive_bases
+        .iter()
+        .any(|basis| {
+            basis.drive.enabled
+                && !matches!(basis.drive.waveform, fullmag_ir::TimeDependenceIR::Constant)
+        })
+        || plan.solved_antenna_drive_bases.iter().any(|basis| {
+            !matches!(basis.drive.waveform, fullmag_ir::TimeDependenceIR::Constant)
+        });
+    if has_dynamic_drive
+        && plan.time_stage.waveform_origin_time_s() != plan.time_stage.start_time_s
+    {
+        return Err(RunError {
+            message: "exact stage-local waveform resume is not qualified for FDM CUDA execution"
+                .to_string(),
+        });
+    }
     crate::solver_runtime::selection::reject_frozen_spins_cuda_plan_execution(plan)?;
     if plan.frozen_spins.is_some() && direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
         return Err(RunError {
@@ -1270,6 +1292,16 @@ mod adaptive_batch_tests {
         assert_eq!(
             cap_cuda_target_to_drive_event(&plan, 0.0, 5.0, &cuda_drive_event_schedule(&plan, 5.0)),
             1.0
+        );
+        plan.time_stage.start_time_s = 10.5;
+        plan.time_stage.waveform_origin_time_s = Some(10.0);
+        assert_eq!(
+            cuda_drive_event_schedule(&plan, 4.5),
+            vec![10.5, 11.0, 12.0, 13.0, 15.0]
+        );
+        assert_eq!(
+            canonical_fdm_waveform_time(&plan, FieldTimeOriginIR::StageLocal, 0.25),
+            0.75
         );
     }
 

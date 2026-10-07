@@ -2852,6 +2852,10 @@ bool context_upload_regional_field_drives(
     Context &ctx,
     const fullmag_fdm_regional_field_drive_desc_v1 *drives,
     uint32_t drive_count);
+bool context_upload_regional_field_drives(
+    Context &ctx,
+    const fullmag_fdm_regional_field_drive_desc_v2 *drives,
+    uint32_t drive_count);
 
 /// Upload sparse demag boundary correction tensors.
 bool context_upload_demag_boundary_corr(

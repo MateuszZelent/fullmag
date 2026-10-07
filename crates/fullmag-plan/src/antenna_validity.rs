@@ -31,15 +31,15 @@ pub fn antenna_waveform_bandwidth_notes(problem: &ProblemIR) -> Vec<String> {
 }
 
 /// Publish one conservative band for the shared antenna-field source used by
-/// all potentially active solved drives. A stage-specific activation cannot
-/// be resolved from a singular `ProblemIR`, so explicit `StageIds` are treated
-/// as potentially active; `AllTimeEvolution` follows the study kind.
+/// all potentially active solved drives. When the active stage is known, use
+/// the same activation rule as materialization; otherwise explicit `StageIds`
+/// remain potentially active in an authored, unresolved `ProblemIR`.
 pub fn antenna_waveform_bandwidth_aggregate_note(problem: &ProblemIR) -> String {
     let study_kind = problem.study.kind();
     let candidates = problem
         .solved_antenna_drives
         .iter()
-        .filter(|drive| drive_may_be_active(drive, study_kind))
+        .filter(|drive| drive_may_be_active(drive, problem))
         .collect::<Vec<_>>();
     if candidates.is_empty() {
         return format!(
@@ -91,10 +91,13 @@ pub fn antenna_waveform_bandwidth_aggregate_note(problem: &ProblemIR) -> String 
     )
 }
 
-fn drive_may_be_active(drive: &SolvedAntennaDriveIR, study_kind: StudyKindIR) -> bool {
+fn drive_may_be_active(drive: &SolvedAntennaDriveIR, problem: &ProblemIR) -> bool {
+    if crate::util::active_stage_id(problem).is_some() {
+        return crate::util::drive_activation_is_active(&drive.activation, problem);
+    }
     match &drive.activation {
         fullmag_ir::DriveActivationIR::AllTimeEvolution {} => {
-            matches!(study_kind, StudyKindIR::TimeEvolution)
+            matches!(problem.study.kind(), StudyKindIR::TimeEvolution)
         }
         fullmag_ir::DriveActivationIR::StageIds { stage_ids } => !stage_ids.is_empty(),
     }
@@ -139,12 +142,16 @@ fn conductor_metrics_for_drive(
     let stage = problem
         .antenna_field_solve_stages
         .iter()
-        .find(|stage| stage.id == projection.solution.stage_id)?;
+        .find(|stage| stage.id == projection.solution.stage_id())?;
+    let geometry_name = crate::antenna_field_solve::geometry_name_for_object(
+        problem,
+        &stage.source_object_id,
+    ).ok()?;
     let geometry = problem
         .geometry
         .entries
         .iter()
-        .find(|entry| entry.name() == stage.source_object_id.as_str())?;
+        .find(|entry| entry.name() == geometry_name)?;
     match geometry {
         GeometryEntryIR::MicrostripAntenna {
             length_m,
@@ -217,6 +224,16 @@ fn antenna_validity_note(
                 .sqrt();
         metrics.thickness_m / skin_depth_m
     };
+    if !eta_wave.is_finite() || !eta_skin.is_finite() {
+        return format!(
+            "{ANTENNA_VALIDITY_SCHEMA_VERSION} drive_id={} status=unknown reason=validity_numeric_overflow f_max_hz={f_max_hz:.17e} source={} length_m={:.17e} thickness_m={:.17e} conductivity_s_per_m={:.17e}",
+            drive.id,
+            source.as_str(),
+            metrics.length_m,
+            metrics.thickness_m,
+            metrics.conductivity_s_per_m,
+        );
+    }
     let status = if eta_wave >= VALIDITY_WARNING_THRESHOLD || eta_skin >= VALIDITY_WARNING_THRESHOLD
     {
         "warning"
@@ -277,7 +294,10 @@ fn antenna_waveform_bandwidth_note(drive: &SolvedAntennaDriveIR) -> String {
 mod tests {
     use super::*;
     use fullmag_ir::{
-        AntennaWaveformBandwidthSourceIR, DriveActivationIR, FieldTimeOriginIR, TimeDependenceIR,
+        AntennaFieldModelIR, AntennaFieldSolveStageIR, AntennaOerstedRealizationIR,
+        AntennaSolutionRefIR, AntennaStageOutputRefIR, AntennaTargetProjectionRefIR,
+        AntennaWaveformBandwidthSourceIR, DriveActivationIR, FieldTargetIR, FieldTimeOriginIR,
+        TimeDependenceIR,
     };
 
     fn drive(id: &str, waveform: TimeDependenceIR) -> SolvedAntennaDriveIR {
@@ -364,6 +384,41 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_uses_resolved_stage_activation_when_stage_is_known() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let mut run_drive = drive("run_rf", TimeDependenceIR::Constant);
+        run_drive.activation = DriveActivationIR::StageIds {
+            stage_ids: vec!["run".to_string()],
+        };
+        let mut later_drive = drive(
+            "later_rf",
+            TimeDependenceIR::PiecewiseLinear {
+                points: vec![[0.0, 0.0], [1.0e-9, 1.0]],
+            },
+        );
+        later_drive.activation = DriveActivationIR::StageIds {
+            stage_ids: vec!["later".to_string()],
+        };
+        problem.solved_antenna_drives = vec![run_drive, later_drive];
+
+        assert!(antenna_waveform_bandwidth_aggregate_note(&problem).contains("status=unknown"));
+        problem.problem_meta.runtime_metadata.insert(
+            "active_stage_id".to_string(),
+            serde_json::json!("run"),
+        );
+        let note = antenna_waveform_bandwidth_aggregate_note(&problem);
+        assert!(note.contains("status=known active_drive_ids=run_rf"));
+        assert!(!note.contains("later_rf"));
+        assert!(note.contains("f_max_hz=0.00000000000000000e0"));
+
+        problem.problem_meta.runtime_metadata.insert(
+            "active_stage_id".to_string(),
+            serde_json::json!("relax"),
+        );
+        assert!(antenna_waveform_bandwidth_aggregate_note(&problem).contains("status=none"));
+    }
+
+    #[test]
     fn classifier_reexport_preserves_source_contract() {
         let result = classify_antenna_waveform_bandwidth(&TimeDependenceIR::SincPulse {
             cutoff_hz: 8.0e9,
@@ -401,6 +456,92 @@ mod tests {
         assert!(note.contains("eta_wave="));
         assert!(note.contains("eta_skin="));
         assert!(note.contains("separable_field_basis_validity_warning"));
+    }
+
+    #[test]
+    fn validity_resolves_stable_object_id_through_its_geometry_binding() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.geometry.entries[0] = GeometryEntryIR::MicrostripAntenna {
+            name: "layout_geometry".into(),
+            length_m: 1.0e-5,
+            thickness_m: 1.0e-7,
+            conductivity_s_per_m: 5.8e7,
+            transform: fullmag_ir::AntennaRigidTransformIR {
+                rotation_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                translation_m: [0.0; 3],
+            },
+            stations: Vec::new(),
+            return_width_m: 1.0e-6,
+            return_offset_m: 2.0e-6,
+            conductors: Vec::new(),
+            terminal_faces: std::collections::BTreeMap::new(),
+        };
+        problem.regions[0].geometry = "layout_geometry".into();
+        problem.magnets[0].name = "display_name".into();
+        problem.magnets[0].object_id = Some("stable_object_id".into());
+        problem.geometry.entries.push(GeometryEntryIR::Box {
+            name: "stable_object_id".into(),
+            size: [1.0, 1.0, 1.0],
+        });
+        assert_eq!(
+            crate::antenna_field_solve::geometry_name_for_object(
+                &problem,
+                "stable_object_id",
+            ).unwrap(),
+            "layout_geometry",
+        );
+        problem.antenna_field_solve_stages.push(AntennaFieldSolveStageIR {
+            id: "solve".into(),
+            source_object_id: "stable_object_id".into(),
+            current_transport_id: "current".into(),
+            port_mode_ids: vec!["port".into()],
+            conservative_current_view_ref: Some("view".into()),
+            model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
+            oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
+            conductor_mesh_policy: "default".into(),
+            field_sampling_domain: FieldTargetIR::Global {},
+            target_refs: Vec::new(),
+            solver_policy: "default".into(),
+            outputs: Vec::new(),
+        });
+        problem.antenna_target_projections.push(AntennaTargetProjectionRefIR {
+            id: "projection".into(),
+            solution: AntennaSolutionRefIR::StageOutput(AntennaStageOutputRefIR::StageOutput {
+                stage_id: "solve".into(),
+                output_id: "basis".into(),
+            }),
+            target: FieldTargetIR::Global {},
+            output_id: "projected".into(),
+        });
+        let drive = drive("rf", TimeDependenceIR::Constant);
+        let metrics = conductor_metrics_for_drive(&problem, &drive)
+            .expect("validity must resolve object id to authored geometry");
+        assert_eq!(metrics.length_m, 1.0e-5);
+        assert_eq!(metrics.thickness_m, 1.0e-7);
+        assert_eq!(metrics.conductivity_s_per_m, 5.8e7);
+    }
+
+    #[test]
+    fn validity_note_does_not_publish_infinite_ratios() {
+        let drive = drive(
+            "rf",
+            TimeDependenceIR::Sinusoidal {
+                frequency_hz: 1.0e300,
+                phase_rad: 0.0,
+                offset: 0.0,
+            },
+        );
+        let note = antenna_validity_note(
+            &drive,
+            Some(ConductorMetrics {
+                length_m: 1.0e100,
+                thickness_m: 1.0e100,
+                conductivity_s_per_m: 1.0e100,
+            }),
+        );
+        assert!(note.contains("status=unknown reason=validity_numeric_overflow"));
+        assert!(!note.contains("eta_wave="));
+        assert!(!note.contains("eta_skin="));
     }
 
     #[test]

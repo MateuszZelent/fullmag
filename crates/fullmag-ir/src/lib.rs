@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod antenna;
+pub mod antenna_current_source;
 pub mod constraint;
 pub mod compute_resources;
 pub mod eigen_contract;
@@ -29,6 +30,7 @@ pub mod spin_transport;
 pub mod study;
 mod validation;
 pub use antenna::*;
+pub use antenna_current_source::*;
 pub use constraint::*;
 pub use compute_resources::*;
 pub use eigen_contract::*;

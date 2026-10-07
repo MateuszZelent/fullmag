@@ -520,6 +520,14 @@ pub(super) fn materialize_native_fem_steady_transport_request(
             resolved.module_id
         ),
     })?;
+    if descriptor.charge_definition.conservative_current_source.is_some() {
+        return Err(RunError {
+            message: format!(
+                "FEM spin transport '{}' cannot execute conservative_current_source through the legacy steady-transport request",
+                resolved.module_id
+            ),
+        });
+    }
     if resolved_fem_descriptor_contradiction(mesh, resolved, descriptor) {
         return Err(RunError {
             message: format!(
@@ -553,6 +561,11 @@ pub(super) fn materialize_native_fem_steady_transport_request(
             }
             fullmag_ir::ChargePotentialGaugeIR::ZeroMean => {
                 NativeFemSteadyTransportGauge::ZeroMeanPotential
+            }
+            fullmag_ir::ChargePotentialGaugeIR::TerminalReference => {
+                return Err(RunError {
+                    message: "terminal-reference gauge requires dedicated antenna charge solve".into(),
+                });
             }
         },
         constitutive_model,

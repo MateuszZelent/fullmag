@@ -544,6 +544,11 @@ pub async fn get_stage_execution(
     };
 
     Ok(Json(StageExecutionResource {
+        session_id: request_context.session_id.clone(),
+        session_epoch: crate::router_v2::handlers::sessions::current_live_session_epoch(snapshot),
+        request_scope_epoch: request_context.request_scope_epoch.clone(),
+        run_id: snapshot.run.as_ref().map(|run| run.run_id.clone())
+            .unwrap_or_else(|| snapshot.session.run_id.clone()),
         revision: snapshot.state_version,
         runtime_state: stage.runtime_state.as_str().to_string(),
         total_stages: stage.total_stages as u32,
@@ -575,6 +580,7 @@ pub async fn get_stage_execution(
                         .stage_id
                         .clone()
                         .unwrap_or_else(|| stage_id_for_index(index)),
+                    antenna_solve_stage_id: record.antenna_solve_stage_id.clone(),
                     index: index as u32,
                     label: Some(format!("Stage {}", index + 1)),
                     kind,

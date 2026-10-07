@@ -1,4 +1,7 @@
 use crate::antenna_spectrum::FieldTetraBvh;
+pub(crate) mod direct_quadrature;
+pub use direct_quadrature::AntennaQuadratureEvidenceRef;
+use direct_quadrature::{DirectOerstedSnapshot, DirectQuadratureEvidence, EVIDENCE_SCHEMA};
 use crate::types::{AuxiliaryArtifact, RunError};
 use fullmag_ir::{
     AntennaFieldSolveStageIR, AntennaSpectrumRequestIR, AntennaTargetProjectionRefIR, FdmPlanIR,
@@ -17,6 +20,16 @@ pub struct AntennaFieldSolutionSignatures {
     pub current_solution_signature: String,
     pub field_solution_signature: String,
     pub target_projection_signatures: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency_signatures: Option<AntennaDependencySignatures>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaDependencySignatures {
+    pub terminal: String,
+    pub solver: String,
+    pub sampling: String,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +41,8 @@ pub(crate) struct AntennaFieldBasisInput {
     pub magnetic_field_xyz_apm: Vec<[f64; 3]>,
     pub current_balance_certificate_digest: String,
     pub quadrature_diagnostics: serde_json::Value,
+    pub oersted_operator_version: String,
+    pub direct_quadrature_snapshot: Option<DirectOerstedSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,11 +62,47 @@ pub(crate) struct AntennaFieldSolutionInput {
     pub signatures: AntennaFieldSolutionSignatures,
     pub conductor_positions_xyz_m: Vec<[f64; 3]>,
     pub sample_positions_xyz_m: Vec<[f64; 3]>,
+    pub sample_carrier: AntennaSampleCarrier,
     /// Optional P1 tetrahedral topology for the field-sampling carrier.
     /// Without it, spectrum sampling remains limited to exact immutable
     /// sample-coordinate lookup for backwards-compatible assets.
     pub sample_tet4_cells: Option<Vec<[u32; 4]>>,
     pub bases: Vec<AntennaFieldBasisInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AntennaSampleCarrier {
+    pub domain: FieldTargetIR,
+    pub carrier_kind: String,
+    pub location: String,
+    pub topology_digest: String,
+}
+
+fn validate_sample_carrier(carrier: Option<&AntennaSampleCarrier>) -> Result<(), RunError> {
+    let Some(carrier) = carrier else {
+        // Legacy point carriers remain readable without mesh-adoption metadata.
+        return Ok(());
+    };
+    validate_nonempty("sample carrier kind", &carrier.carrier_kind)?;
+    let digest_is_valid = carrier.topology_digest.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    });
+    if carrier.location != "node" || !digest_is_valid {
+        return Err(RunError {
+            message: "antenna sample carrier requires node location and a canonical SHA-256 topology digest".into(),
+        });
+    }
+    match &carrier.domain {
+        FieldTargetIR::Global {} => {}
+        FieldTargetIR::Object { object_id } => validate_nonempty("sample carrier object_id", object_id)?,
+        FieldTargetIR::Region { object_id, region_id } => {
+            validate_nonempty("sample carrier object_id", object_id)?;
+            validate_nonempty("sample carrier region_id", region_id)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +126,9 @@ struct BasisManifest<'a> {
     current_density_per_ampere: BinaryFieldRef<'a>,
     magnetic_field_per_ampere: BinaryFieldRef<'a>,
     quadrature_diagnostics: &'a serde_json::Value,
+    oersted_operator_version: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quadrature_evidence: Option<&'a AntennaQuadratureEvidenceRef>,
 }
 
 #[derive(Debug, Serialize)]
@@ -96,6 +150,7 @@ struct SolutionManifest<'a> {
     signatures: &'a AntennaFieldSolutionSignatures,
     conductor_positions: BinaryFieldRef<'a>,
     sample_positions: BinaryFieldRef<'a>,
+    sample_carrier: &'a AntennaSampleCarrier,
     #[serde(skip_serializing_if = "Option::is_none")]
     sample_topology: Option<BinaryFieldRef<'a>>,
     assumptions: [&'static str; 4],
@@ -116,10 +171,38 @@ struct StoredBinaryFieldRef {
 #[derive(Debug, Deserialize)]
 struct StoredBasisManifest {
     port_mode_id: String,
+    measured_positive_terminal_current_a: f64,
     normalization_current_a: f64,
+    normalization_scale: f64,
     electric_potential_per_ampere: StoredBinaryFieldRef,
     current_density_per_ampere: StoredBinaryFieldRef,
     magnetic_field_per_ampere: StoredBinaryFieldRef,
+    #[serde(default)]
+    current_balance_certificate_digest: String,
+    #[serde(default)]
+    quadrature_diagnostics: serde_json::Value,
+    #[serde(default)]
+    oersted_operator_version: Option<String>,
+    #[serde(default)]
+    quadrature_evidence: Option<AntennaQuadratureEvidenceRef>,
+}
+
+fn validate_basis_normalization(bases: &[StoredBasisManifest]) -> Result<(), RunError> {
+    for basis in bases {
+        let current = basis.measured_positive_terminal_current_a;
+        if !current.is_finite()
+            || current <= 0.0
+            || basis.normalization_current_a != 1.0
+            || !basis.normalization_scale.is_finite()
+            || basis.normalization_scale <= 0.0
+            || basis.normalization_scale != 1.0 / current
+        {
+            return Err(RunError {
+                message: format!("antenna port '{}' has invalid per-ampere normalization", basis.port_mode_id),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,9 +212,17 @@ struct StoredSolutionManifest {
     status: String,
     solution_id: String,
     source_object_id: String,
+    #[serde(default)]
+    geometry_revision: String,
+    #[serde(default)]
+    material_revision: String,
+    #[serde(default)]
+    mesh_digest: String,
     signatures: AntennaFieldSolutionSignatures,
     conductor_positions: StoredBinaryFieldRef,
     sample_positions: StoredBinaryFieldRef,
+    #[serde(default)]
+    sample_carrier: Option<AntennaSampleCarrier>,
     #[serde(default)]
     sample_topology: Option<StoredBinaryFieldRef>,
     bases: Vec<StoredBasisManifest>,
@@ -148,17 +239,32 @@ fn validate_nonempty(label: &str, value: &str) -> Result<(), RunError> {
 }
 
 fn signatures_are_valid(signatures: &AntennaFieldSolutionSignatures) -> bool {
-    signatures.current_solution_signature.starts_with("sha256:")
-        && signatures.field_solution_signature.starts_with("sha256:")
+    fn valid_sha256(signature: &str) -> bool {
+        signature.strip_prefix("sha256:").is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    }
+
+    valid_sha256(&signatures.current_solution_signature)
+        && valid_sha256(&signatures.field_solution_signature)
         && signatures
             .target_projection_signatures
             .values()
-            .all(|signature| signature.starts_with("sha256:"))
+            .all(|signature| valid_sha256(signature))
+        && signatures.dependency_signatures.as_ref().is_none_or(|dependencies| {
+            [&dependencies.terminal, &dependencies.solver, &dependencies.sampling]
+                .into_iter()
+                .all(|signature| valid_sha256(signature))
+        })
 }
 
 fn parse_verified_manifest(
     manifest_bytes: &[u8],
 ) -> Result<(String, StoredSolutionManifest), RunError> {
+    crate::antenna_external_lead_solution::reject_unqualified_external_lead_source(manifest_bytes)?;
     let mut canonical_value: serde_json::Value =
         serde_json::from_slice(manifest_bytes).map_err(|error| RunError {
             message: format!("parse antenna field solution manifest: {error}"),
@@ -183,6 +289,8 @@ fn parse_verified_manifest(
         serde_json::from_value(canonical_value).map_err(|error| RunError {
             message: format!("validate antenna field solution manifest: {error}"),
         })?;
+    validate_sample_carrier(manifest.sample_carrier.as_ref())?;
+    validate_basis_normalization(&manifest.bases)?;
     if manifest.schema_version != ANTENNA_FIELD_SOLUTION_SCHEMA
         || manifest.status != "ready"
         || manifest.asset_id.trim().is_empty()
@@ -194,6 +302,12 @@ fn parse_verified_manifest(
         });
     }
     Ok((published_digest, manifest))
+}
+
+pub(crate) fn verify_antenna_field_solution_manifest(
+    manifest_bytes: &[u8],
+) -> Result<(), RunError> {
+    parse_verified_manifest(manifest_bytes).map(|_| ())
 }
 
 fn verify_binary_ref(
@@ -303,6 +417,23 @@ pub fn verify_antenna_field_solution_asset(
     manifest_bytes: &[u8],
     payloads: &[AuxiliaryArtifact],
 ) -> Result<(), RunError> {
+    verify_field_solution_payloads(manifest_bytes, payloads, true)
+}
+
+/// Validate all referenced data, allowing enclosing bundle diagnostics/manifest.
+/// This is the same scientific gate as full-asset verification, not a weaker load path.
+pub fn verify_antenna_field_solution_referenced_data(
+    manifest_bytes: &[u8],
+    payloads: &[AuxiliaryArtifact],
+) -> Result<(), RunError> {
+    verify_field_solution_payloads(manifest_bytes, payloads, false)
+}
+
+fn verify_field_solution_payloads(
+    manifest_bytes: &[u8],
+    payloads: &[AuxiliaryArtifact],
+    require_exact_payload_set: bool,
+) -> Result<(), RunError> {
     let (_, manifest) = parse_verified_manifest(manifest_bytes)?;
     let mut expected_paths = BTreeSet::from([
         manifest.conductor_positions.path.as_str(),
@@ -391,12 +522,20 @@ pub fn verify_antenna_field_solution_asset(
             "sample_xyz_interleaved",
             "A/m/A",
         )?;
+        if let Some(reference) = &basis.quadrature_evidence {
+            if !expected_paths.insert(reference.path.as_str()) {
+                return Err(RunError { message: "duplicate antenna evidence reference".into() });
+            }
+        }
+        verify_basis_quadrature(&manifest, basis, payloads)?;
     }
     let actual_paths = payloads
         .iter()
         .map(|artifact| artifact.relative_path.as_str())
         .collect::<BTreeSet<_>>();
-    if actual_paths.len() != payloads.len() || actual_paths != expected_paths {
+    if actual_paths.len() != payloads.len()
+        || (require_exact_payload_set && actual_paths != expected_paths)
+    {
         return Err(RunError {
             message: "antenna field solution contains duplicate, missing, or unreferenced payloads"
                 .into(),
@@ -405,16 +544,111 @@ pub fn verify_antenna_field_solution_asset(
     Ok(())
 }
 
+fn verify_basis_quadrature(
+    manifest: &StoredSolutionManifest,
+    basis: &StoredBasisManifest,
+    payloads: &[AuxiliaryArtifact],
+) -> Result<(), RunError> {
+    let direct = fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION;
+    match basis.oersted_operator_version.as_deref() {
+        Some(version) if version == direct => {
+            let reference = basis.quadrature_evidence.as_ref().ok_or_else(|| RunError {
+                message: "direct v3 antenna basis is missing retained quadrature evidence".into(),
+            })?;
+            let payload = payloads.iter().find(|artifact| artifact.relative_path == reference.path)
+                .ok_or_else(|| RunError { message: "missing antenna quadrature evidence payload".into() })?;
+            if reference.schema_version != EVIDENCE_SCHEMA || reference.byte_length != payload.bytes.len()
+                || sha256(&payload.bytes) != reference.sha256
+            {
+                return Err(RunError { message: "antenna quadrature evidence schema/hash/length mismatch".into() });
+            }
+            let evidence = DirectQuadratureEvidence::decode(&payload.bytes)?;
+            if reference.target_count != evidence.snapshot.targets.len() {
+                return Err(RunError { message: "antenna quadrature evidence target count mismatch".into() });
+            }
+            let positions = payloads.iter().find(|a| a.relative_path == manifest.sample_positions.path)
+                .ok_or_else(|| RunError { message: "missing antenna positions".into() })?;
+            let field = payloads.iter().find(|a| a.relative_path == basis.magnetic_field_per_ampere.path)
+                .ok_or_else(|| RunError { message: "missing antenna normalized field".into() })?;
+            evidence.verify_binding(
+                &decode_xyz_f64_le(&positions.bytes, manifest.sample_positions.value_count)?,
+                &decode_xyz_f64_le(&field.bytes, basis.magnetic_field_per_ampere.value_count)?,
+                basis.measured_positive_terminal_current_a, basis.normalization_scale,
+                &basis.current_balance_certificate_digest, &basis.quadrature_diagnostics,
+            )
+        }
+        Some(version) if version == fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION => {
+            if basis.quadrature_evidence.is_some()
+                || basis.quadrature_diagnostics.get("operator_version").and_then(|v| v.as_str()) != Some(version)
+            {
+                return Err(RunError { message: "mixed direct/vector-potential antenna evidence".into() });
+            }
+            // OE-F2 retains its own native residual/gauge checks; not a direct-v3 certificate.
+            Ok(())
+        }
+        _ => Err(RunError {
+            message: "antenna basis has absent/unsupported operator evidence; archival readability does not certify reuse".into(),
+        }),
+    }
+}
+
 /// Verify that a published asset was produced from the same resolved
 /// conductor, port, material and field-solution dependencies as the current
-/// authoring model.  A valid content digest alone proves only that the old
-/// immutable file was not tampered with; it does not prove that it is current.
+/// authoring model. Target projections are recomputed against the resolved
+/// LLG topology and do not invalidate an otherwise current source field.
+/// A valid content digest alone proves only that the immutable file was not
+/// tampered with; it does not prove that its source field is current.
 pub fn verify_antenna_field_solution_signatures(
     manifest_bytes: &[u8],
     expected: &AntennaFieldSolutionSignatures,
 ) -> Result<(), RunError> {
+    verify_antenna_field_solution_signatures_with_revisions(manifest_bytes, expected, None)
+}
+
+pub(crate) fn verify_antenna_field_solution_signatures_with_revisions(
+    manifest_bytes: &[u8],
+    expected: &AntennaFieldSolutionSignatures,
+    expected_revisions: Option<(&str, &str, &str)>,
+) -> Result<(), RunError> {
     let (_, manifest) = parse_verified_manifest(manifest_bytes)?;
-    if manifest.signatures != *expected {
+    let mut changed = Vec::new();
+    if let Some((geometry_revision, material_revision, mesh_digest)) = expected_revisions {
+        if manifest.geometry_revision != geometry_revision || manifest.mesh_digest != mesh_digest {
+            changed.push("geometry");
+        }
+        if manifest.material_revision != material_revision {
+            changed.push("material");
+        }
+    }
+    match (
+        manifest.signatures.dependency_signatures.as_ref(),
+        expected.dependency_signatures.as_ref(),
+    ) {
+        (Some(stored), Some(current)) => {
+            if stored.terminal != current.terminal {
+                changed.push("terminal");
+            }
+            if stored.solver != current.solver {
+                changed.push("solver");
+            }
+            if stored.sampling != current.sampling {
+                changed.push("sampling");
+            }
+        }
+        (None, Some(_)) | (Some(_), None) => changed.extend(["terminal", "solver", "sampling"]),
+        (None, None) => {}
+    }
+    if !changed.is_empty() {
+        return Err(RunError {
+            message: format!(
+                "antenna field solution is stale for the current model; changed dependencies: {}",
+                changed.join(", ")
+            ),
+        });
+    }
+    if manifest.signatures.current_solution_signature != expected.current_solution_signature
+        || manifest.signatures.field_solution_signature != expected.field_solution_signature
+    {
         let changed = [
             (
                 "current_solution_signature",
@@ -424,11 +658,6 @@ pub fn verify_antenna_field_solution_signatures(
             (
                 "field_solution_signature",
                 manifest.signatures.field_solution_signature != expected.field_solution_signature,
-            ),
-            (
-                "target_projection_signatures",
-                manifest.signatures.target_projection_signatures
-                    != expected.target_projection_signatures,
             ),
         ]
         .into_iter()
@@ -452,6 +681,29 @@ fn encode_f64(values: impl IntoIterator<Item = f64>) -> Vec<u8> {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     bytes
+}
+
+fn encode_scaled_basis_f64(
+    values: impl IntoIterator<Item = f64>,
+    scale: f64,
+    port_mode_id: &str,
+    quantity: &str,
+) -> Result<Vec<u8>, RunError> {
+    let iterator = values.into_iter();
+    let (lower, _) = iterator.size_hint();
+    let mut bytes = Vec::with_capacity(lower * std::mem::size_of::<f64>());
+    for value in iterator {
+        let scaled = value * scale;
+        if !value.is_finite() || !scaled.is_finite() {
+            return Err(RunError {
+                message: format!(
+                    "port mode '{port_mode_id}' {quantity} contains a non-finite input or overflows during per-ampere normalization"
+                ),
+            });
+        }
+        bytes.extend_from_slice(&scaled.to_le_bytes());
+    }
+    Ok(bytes)
 }
 
 fn encode_u32(values: impl IntoIterator<Item = u32>) -> Vec<u8> {
@@ -529,31 +781,7 @@ fn decode_tet4_u32_le(
     Ok(cells)
 }
 
-pub fn load_solved_antenna_drive_basis(
-    manifest_bytes: &[u8],
-    payloads: &[AuxiliaryArtifact],
-    drive: SolvedAntennaDriveIR,
-    expected_solution_id: &str,
-    expected_source_object_id: &str,
-    expected_content_digest: &str,
-    expected_sample_count: usize,
-    target_mask: Option<&[bool]>,
-) -> Result<ResolvedSolvedAntennaDriveBasisIR, RunError> {
-    load_solved_antenna_drive_basis_projected(
-        manifest_bytes,
-        payloads,
-        drive,
-        expected_solution_id,
-        expected_source_object_id,
-        expected_content_digest,
-        expected_sample_count,
-        None,
-        target_mask,
-    )
-}
-
-/// Load a solved basis and apply the qualified identity nodal projection from
-/// the immutable field-sampling carrier to a target FEM nodal carrier.
+/// Load a solved basis onto explicit FEM nodes or FDM cell centres.
 ///
 /// This production projection first reuses exact source coordinates and then
 /// uses the immutable tet4 carrier for deterministic P1 interpolation.  A
@@ -569,9 +797,11 @@ pub fn load_solved_antenna_drive_basis_projected(
     expected_source_object_id: &str,
     expected_content_digest: &str,
     expected_sample_count: usize,
-    target_positions_xyz_m: Option<&[[f64; 3]]>,
+    target_positions_xyz_m: &[[f64; 3]],
     target_mask: Option<&[bool]>,
 ) -> Result<ResolvedSolvedAntennaDriveBasisIR, RunError> {
+    verify_antenna_field_solution_referenced_data(manifest_bytes, payloads)?;
+    crate::antenna_external_lead_solution::reject_unqualified_external_lead_source(manifest_bytes)?;
     let mut canonical_value: serde_json::Value =
         serde_json::from_slice(manifest_bytes).map_err(|error| RunError {
             message: format!("parse antenna field solution manifest: {error}"),
@@ -600,6 +830,8 @@ pub fn load_solved_antenna_drive_basis_projected(
         serde_json::from_value(canonical_value).map_err(|error| RunError {
             message: format!("validate antenna field solution manifest: {error}"),
         })?;
+    validate_sample_carrier(manifest.sample_carrier.as_ref())?;
+    validate_basis_normalization(&manifest.bases)?;
     if manifest.schema_version != ANTENNA_FIELD_SOLUTION_SCHEMA
         || manifest.status != "ready"
         || manifest.asset_id.trim().is_empty()
@@ -634,7 +866,7 @@ pub fn load_solved_antenna_drive_basis_projected(
     let expected_field_values = field_ref.value_count;
     if expected_sample_count == 0 {
         return Err(RunError {
-            message: "antenna target projection requires a non-empty target FEM mesh".into(),
+            message: "antenna target projection requires a non-empty target sample set".into(),
         });
     }
     let field_payload = payloads
@@ -660,9 +892,8 @@ pub fn load_solved_antenna_drive_basis_projected(
             });
         }
     }
-    let (mut field_xyz_apm_per_a, mapping_digest) = if let Some(target_positions) =
-        target_positions_xyz_m
-    {
+    let target_positions = target_positions_xyz_m;
+    let (mut field_xyz_apm_per_a, mapping_digest) = {
         if target_positions.len() != expected_sample_count {
             return Err(RunError {
                 message: format!(
@@ -677,7 +908,7 @@ pub fn load_solved_antenna_drive_basis_projected(
             .any(|value| !value.is_finite())
         {
             return Err(RunError {
-                message: "antenna target projection requires finite target FEM coordinates".into(),
+                message: "antenna target projection requires finite target coordinates".into(),
             });
         }
         if manifest.sample_positions.value_count % 3 != 0
@@ -780,7 +1011,7 @@ pub fn load_solved_antenna_drive_basis_projected(
                 })
                 .ok_or_else(|| RunError {
                     message: format!(
-                        "antenna target projection requires an explicit interpolation for target FEM node {target_index}; no source node or containing tet4 element was found"
+                        "antenna target projection requires an explicit interpolation for target sample {target_index}; no source node or containing tet4 element was found"
                     ),
                 })?;
             let cell = sample_tet4_cells
@@ -804,7 +1035,7 @@ pub fn load_solved_antenna_drive_basis_projected(
             if value.iter().any(|component| !component.is_finite()) {
                 return Err(RunError {
                     message: format!(
-                        "antenna target projection produced a non-finite P1 value at target FEM node {target_index}"
+                        "antenna target projection produced a non-finite P1 value at target sample {target_index}"
                     ),
                 });
             }
@@ -815,22 +1046,11 @@ pub fn load_solved_antenna_drive_basis_projected(
         }
         let mapping_digest = sha256_u64(&mapping);
         let mapping_digest = if used_interpolation {
-            format!("p1:{mapping_digest}")
+            format!("fem_p1_interpolation_v1:{mapping_digest}")
         } else {
-            mapping_digest
+            format!("identity_coordinates_v1:{mapping_digest}")
         };
         (projected, mapping_digest)
-    } else {
-        if field_ref.value_count != expected_sample_count.saturating_mul(3) {
-            return Err(RunError {
-                message: format!(
-                    "antenna target projection requires an explicit point-to-mesh projection; immutable field basis has {} sample vectors but the downstream FEM mesh has {} nodes",
-                    field_ref.value_count / 3,
-                    expected_sample_count
-                ),
-            });
-        }
-        (source_field_xyz_apm_per_a, "identity".into())
     };
     let mask_digest = if let Some(mask) = target_mask {
         for (value, selected) in field_xyz_apm_per_a.iter_mut().zip(mask) {
@@ -860,11 +1080,7 @@ pub fn load_solved_antenna_drive_basis_projected(
 }
 
 fn coordinate_key(position: [f64; 3]) -> [u64; 3] {
-    [
-        position[0].to_bits(),
-        position[1].to_bits(),
-        position[2].to_bits(),
-    ]
+    position.map(|value| if value == 0.0 { 0.0_f64.to_bits() } else { value.to_bits() })
 }
 
 fn sha256_u64(values: &[u64]) -> String {
@@ -904,6 +1120,8 @@ pub fn load_antenna_field_solution_samples(
     expected_source_object_id: &str,
     expected_content_digest: &str,
 ) -> Result<AntennaFieldSolutionSamples, RunError> {
+    verify_antenna_field_solution_referenced_data(manifest_bytes, payloads)?;
+    crate::antenna_external_lead_solution::reject_unqualified_external_lead_source(manifest_bytes)?;
     let mut canonical_value: serde_json::Value =
         serde_json::from_slice(manifest_bytes).map_err(|error| RunError {
             message: format!("parse antenna field solution manifest: {error}"),
@@ -931,6 +1149,8 @@ pub fn load_antenna_field_solution_samples(
         serde_json::from_value(canonical_value).map_err(|error| RunError {
             message: format!("validate antenna field solution manifest: {error}"),
         })?;
+    validate_sample_carrier(manifest.sample_carrier.as_ref())?;
+    validate_basis_normalization(&manifest.bases)?;
     if manifest.schema_version != ANTENNA_FIELD_SOLUTION_SCHEMA
         || manifest.status != "ready"
         || manifest.asset_id.trim().is_empty()
@@ -1020,6 +1240,9 @@ pub fn load_antenna_field_solution_samples_for_spectrum(
     payloads: &[AuxiliaryArtifact],
     request: &AntennaSpectrumRequestIR,
 ) -> Result<AntennaFieldSolutionSamples, RunError> {
+    let reference = request.solution_ref.published().ok_or_else(|| RunError {
+        message: format!("antenna source-spectrum request '{}' has an unresolved stage output", request.id),
+    })?;
     let (_, manifest) = parse_verified_manifest(manifest_bytes)?;
     let port_mode_id = match request.port_mode_id.as_deref() {
         Some(port_mode_id) if !port_mode_id.trim().is_empty() => port_mode_id,
@@ -1037,7 +1260,7 @@ pub fn load_antenna_field_solution_samples_for_spectrum(
                 return Err(RunError {
                     message: format!(
                         "antenna source-spectrum solution '{}' contains no port basis",
-                        request.solution_ref.output_id
+                        reference.output_id
                     ),
                 })
             }
@@ -1056,9 +1279,9 @@ pub fn load_antenna_field_solution_samples_for_spectrum(
         manifest_bytes,
         payloads,
         port_mode_id,
-        &request.solution_ref.output_id,
+        &reference.output_id,
         &manifest.source_object_id,
-        &request.solution_ref.content_digest,
+        &reference.content_digest,
     )
 }
 
@@ -1074,13 +1297,16 @@ pub fn materialize_fem_solved_antenna_drives(
         message: format!("invalid antenna composition: {}", reasons.join("; ")),
     })?;
 
+    let target_topology_digest = resolved_target_topology_digest(&plan.mesh)?;
+
     let materialized = materialize_solved_antenna_drive_parts(
         &problem.solved_antenna_drives,
         &plan.time_stage,
         &problem.antenna_target_projections,
         &problem.antenna_field_solve_stages,
         plan.mesh.nodes.len(),
-        Some(&plan.mesh.nodes),
+        &plan.mesh.nodes,
+        &target_topology_digest,
         assets,
         |target| {
             fullmag_plan::resolve_fem_antenna_projection_mask(plan, target).map_err(|error| {
@@ -1107,13 +1333,16 @@ pub fn materialize_fem_solved_antenna_drives_v03(
         message: format!("invalid antenna composition: {}", reasons.join("; ")),
     })?;
 
+    let target_topology_digest = resolved_target_topology_digest(&plan.mesh)?;
+
     let materialized = materialize_solved_antenna_drive_parts(
         &problem.solved_antenna_drives,
         &plan.time_stage,
         &problem.antenna_target_projections,
         &problem.antenna_field_solve_stages,
         plan.mesh.nodes.len(),
-        Some(&plan.mesh.nodes),
+        &plan.mesh.nodes,
+        &target_topology_digest,
         assets,
         |target| {
             fullmag_plan::resolve_fem_antenna_projection_mask(plan, target).map_err(|error| {
@@ -1129,11 +1358,10 @@ pub fn materialize_fem_solved_antenna_drives_v03(
 
 /// Resolve an immutable field-solution asset onto the cell-centred FDM grid.
 ///
-/// The target projection is deliberately identity-coordinate only.  The
-/// source field-solve sampling carrier must therefore contain exactly the FDM
-/// cell centres; otherwise the caller receives an explicit interpolation error
-/// instead of a point-count-based broadcast.  The active-cell mask is always
-/// applied because inactive FDM cells are not LLG degrees of freedom.
+/// Source samples at cell centres are reused directly; otherwise a supported
+/// source mesh is interpolated at the cell centres. The active-cell mask is
+/// applied before sampling because inactive FDM cells are not LLG degrees of
+/// freedom. Unsupported or incomplete source sampling fails explicitly.
 pub fn materialize_fdm_solved_antenna_drives(
     problem: &ProblemIRV04,
     plan: &mut FdmPlanIR,
@@ -1187,13 +1415,15 @@ fn materialize_fdm_solved_antenna_drive_parts(
     }
     let target_positions = fdm_cell_center_positions(plan)?;
     let active_mask = fdm_active_mask(plan, target_positions.len())?;
+    let target_topology_digest = fdm_target_topology_digest(plan)?;
     let materialized = materialize_solved_antenna_drive_parts(
         drives,
         &plan.time_stage,
         projections,
         stages,
         target_positions.len(),
-        Some(&target_positions),
+        &target_positions,
+        &target_topology_digest,
         assets,
         |target| fdm_antenna_projection_mask(plan, target, &active_mask),
     )?;
@@ -1207,7 +1437,8 @@ fn materialize_solved_antenna_drive_parts<F>(
     projections: &[AntennaTargetProjectionRefIR],
     stages: &[AntennaFieldSolveStageIR],
     expected_sample_count: usize,
-    target_positions: Option<&[[f64; 3]]>,
+    target_positions: &[[f64; 3]],
+    target_topology_digest: &str,
     assets: &BTreeMap<String, AntennaFieldSolutionAsset>,
     resolve_target_mask: F,
 ) -> Result<Vec<ResolvedSolvedAntennaDriveBasisIR>, RunError>
@@ -1239,11 +1470,12 @@ where
             })?;
         let stage = stages
             .iter()
-            .find(|stage| stage.id == projection.solution.stage_id)
+            .find(|stage| stage.id == projection.solution.stage_id())
             .ok_or_else(|| RunError {
                 message: format!(
                     "antenna projection '{}' references missing solve stage '{}'",
-                    projection.id, projection.solution.stage_id
+                    projection.id,
+                    projection.solution.stage_id()
                 ),
             })?;
         if !stage
@@ -1258,36 +1490,91 @@ where
                 ),
             });
         }
-        let asset = assets
-            .get(&projection.solution.asset_id)
-            .ok_or_else(|| RunError {
-                message: format!(
-                    "antenna solution asset '{}' is not resolved in the session artifact store",
-                    projection.solution.asset_id
-                ),
-            })?;
+        let reference = projection.solution.published().ok_or_else(|| RunError {
+            message: format!(
+                "antenna projection '{}' has unresolved stage output '{}/{}'",
+                projection.id,
+                projection.solution.stage_id(),
+                projection.solution.output_id()
+            ),
+        })?;
+        let asset = assets.get(&reference.asset_id).ok_or_else(|| RunError {
+            message: format!(
+                "antenna solution asset '{}' is not resolved in the session artifact store",
+                reference.asset_id
+            ),
+        })?;
         let target_mask = resolve_target_mask(&projection.target).map_err(|error| RunError {
             message: format!(
                 "resolve antenna projection '{}': {}",
                 projection.id, error.message
             ),
         })?;
-        materialized.push(load_solved_antenna_drive_basis_projected(
+        let mut resolved = load_solved_antenna_drive_basis_projected(
             &asset.manifest_bytes,
             &asset.payloads,
             drive.clone(),
-            &projection.solution.output_id,
+            &reference.output_id,
             &stage.source_object_id,
-            &projection.solution.content_digest,
+            &reference.content_digest,
             expected_sample_count,
             target_positions,
             target_mask.as_deref(),
-        )?);
+        )?;
+        if resolved
+            .field_xyz_apm_per_a
+            .iter()
+            .flatten()
+            .any(|value| !(*value * drive.peak_current_a).is_finite())
+        {
+            return Err(RunError {
+                message: format!(
+                    "solved antenna drive '{}' peak current produces a non-finite projected H field",
+                    drive.id
+                ),
+            });
+        }
+        resolved.projection_signature.push_str(":target_topology:");
+        resolved.projection_signature.push_str(target_topology_digest);
+        materialized.push(resolved);
     }
     Ok(materialized)
 }
 
+fn resolved_target_topology_digest(value: &impl Serialize) -> Result<String, RunError> {
+    let bytes = serde_json::to_vec(value).map_err(|error| RunError {
+        message: format!("serialize resolved antenna target topology: {error}"),
+    })?;
+    Ok(format!("sha256:{}", sha256(&bytes)))
+}
+
+pub(crate) fn fdm_target_topology_digest(plan: &FdmPlanIR) -> Result<String, RunError> {
+    resolved_target_topology_digest(&(
+        plan.origin_m,
+        &plan.grid,
+        plan.cell_size,
+        &plan.region_mask,
+        &plan.active_mask,
+    ))
+}
+
 fn fdm_cell_center_positions(plan: &FdmPlanIR) -> Result<Vec<[f64; 3]>, RunError> {
+    let certificate = plan.grid_certificate.as_ref().ok_or_else(|| RunError {
+        message: "FDM antenna target projection requires a grid certificate".into(),
+    })?;
+    certificate
+        .validate_against_masks(plan.active_mask.as_deref(), &plan.region_mask)
+        .map_err(|message| RunError {
+            message: format!("FDM antenna target grid certificate is invalid: {message}"),
+        })?;
+    if certificate.origin_m != plan.origin_m
+        || certificate.counts != plan.grid.cells
+        || certificate.cell_m != plan.cell_size
+    {
+        return Err(RunError {
+            message: "FDM antenna target grid certificate does not match resolved plan".into(),
+        });
+    }
     let [nx, ny, nz] = plan.grid.cells;
     let expected = usize::try_from(
         u64::from(nx)
@@ -1435,7 +1722,7 @@ pub(crate) fn build_antenna_field_solution_artifacts(
     }
     if !signatures_are_valid(&input.signatures) {
         return Err(RunError {
-            message: "antenna field solution signatures must use sha256: identifiers".into(),
+            message: "antenna field solution signatures must be sha256: followed by 64 lowercase hex digits".into(),
         });
     }
     if input.bases.is_empty() {
@@ -1454,6 +1741,7 @@ pub(crate) fn build_antenna_field_solution_artifacts(
             message: "antenna field solution requires finite sample positions".into(),
         });
     }
+    validate_sample_carrier(Some(&input.sample_carrier))?;
     if input.conductor_positions_xyz_m.is_empty()
         || input
             .conductor_positions_xyz_m
@@ -1540,6 +1828,7 @@ pub(crate) fn build_antenna_field_solution_artifacts(
         current_count: usize,
         field_count: usize,
         scale: f64,
+        evidence: Option<(AntennaQuadratureEvidenceRef, Vec<u8>)>,
     }
 
     let mut encoded = Vec::with_capacity(input.bases.len());
@@ -1570,24 +1859,81 @@ pub(crate) fn build_antenna_field_solution_artifacts(
             });
         }
         let scale = 1.0 / current;
-        let potential_bytes =
-            encode_f64(basis.electric_potential_v.iter().map(|value| value * scale));
-        let current_bytes = encode_f64(
+        if !scale.is_finite() {
+            return Err(RunError {
+                message: format!(
+                    "port mode '{}' per-ampere normalization scale is non-finite",
+                    basis.port_mode_id
+                ),
+            });
+        }
+        let potential_bytes = encode_scaled_basis_f64(
+            basis.electric_potential_v.iter().copied(),
+            scale,
+            &basis.port_mode_id,
+            "electric potential",
+        )?;
+        let current_bytes = encode_scaled_basis_f64(
             basis
                 .current_density_xyz_apm2
                 .iter()
-                .flat_map(|value| value.iter().map(|component| component * scale)),
-        );
-        let field_bytes = encode_f64(
+                .flat_map(|value| value.iter().copied()),
+            scale,
+            &basis.port_mode_id,
+            "current density",
+        )?;
+        let field_bytes = encode_scaled_basis_f64(
             basis
                 .magnetic_field_xyz_apm
                 .iter()
-                .flat_map(|value| value.iter().map(|component| component * scale)),
-        );
+                .flat_map(|value| value.iter().copied()),
+            scale,
+            &basis.port_mode_id,
+            "magnetic field",
+        )?;
         let base = format!(
             "antenna/field_solutions/{}/{}",
             input.solution_id, basis.port_mode_id
         );
+        let evidence = match basis.oersted_operator_version.as_str() {
+            fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION => {
+                let snapshot = basis.direct_quadrature_snapshot.clone().ok_or_else(|| RunError {
+                    message: "cannot publish direct v3 antenna basis without full native snapshot".into(),
+                })?;
+                if snapshot.targets.len() != input.sample_positions_xyz_m.len()
+                    || snapshot.targets.iter().zip(&basis.magnetic_field_xyz_apm)
+                        .any(|(row, field)| row.h_xyz_apm.iter().zip(field)
+                            .any(|(a, b)| a.to_bits() != b.to_bits()))
+                {
+                    return Err(RunError { message: "native raw H snapshot differs from publication input".into() });
+                }
+                let evidence = DirectQuadratureEvidence {
+                    snapshot, measured_positive_terminal_current_a: current,
+                    normalization_scale: scale,
+                    current_balance_certificate_digest: basis.current_balance_certificate_digest.clone(),
+                };
+                evidence.verify_binding(
+                    &input.sample_positions_xyz_m,
+                    &decode_xyz_f64_le(&field_bytes, basis.magnetic_field_xyz_apm.len() * 3)?,
+                    current, scale, &basis.current_balance_certificate_digest, &basis.quadrature_diagnostics,
+                )?;
+                let bytes = evidence.encode()?;
+                Some((AntennaQuadratureEvidenceRef {
+                    schema_version: EVIDENCE_SCHEMA.into(), path: format!("{base}/direct_quadrature.v1.bin"),
+                    sha256: sha256(&bytes), byte_length: bytes.len(), target_count: evidence.snapshot.targets.len(),
+                }, bytes))
+            }
+            fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION => {
+                if basis.direct_quadrature_snapshot.is_some()
+                    || basis.quadrature_diagnostics.get("operator_version").and_then(|v| v.as_str())
+                        != Some(fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION)
+                {
+                    return Err(RunError { message: "mixed direct/vector-potential publication input".into() });
+                }
+                None
+            }
+            _ => return Err(RunError { message: "unsupported antenna Oersted publication operator".into() }),
+        };
         encoded.push(EncodedBasis {
             potential_path: format!("{base}/V_per_A.f64le"),
             current_path: format!("{base}/J_per_A.f64le"),
@@ -1602,6 +1948,7 @@ pub(crate) fn build_antenna_field_solution_artifacts(
             current_bytes,
             field_bytes,
             scale,
+            evidence,
         });
     }
 
@@ -1640,6 +1987,8 @@ pub(crate) fn build_antenna_field_solution_artifacts(
                 value_count: data.field_count,
             },
             quadrature_diagnostics: &basis.quadrature_diagnostics,
+            oersted_operator_version: &basis.oersted_operator_version,
+            quadrature_evidence: data.evidence.as_ref().map(|(reference, _)| reference),
         })
         .collect();
     let manifest = SolutionManifest {
@@ -1674,6 +2023,7 @@ pub(crate) fn build_antenna_field_solution_artifacts(
             unit: "m",
             value_count: input.sample_positions_xyz_m.len() * 3,
         },
+        sample_carrier: &input.sample_carrier,
         sample_topology: sample_topology.as_ref().map(|(path, _, sha, value_count)| {
             BinaryFieldRef {
                 path,
@@ -1733,7 +2083,11 @@ pub(crate) fn build_antenna_field_solution_artifacts(
             relative_path: data.field_path,
             bytes: data.field_bytes,
         });
+        if let Some((reference, bytes)) = data.evidence {
+            artifacts.push(AuxiliaryArtifact { relative_path: reference.path, bytes });
+        }
     }
+    verify_antenna_field_solution_asset(&manifest_bytes, &artifacts)?;
     artifacts.push(AuxiliaryArtifact {
         relative_path: format!(
             "antenna/field_solutions/{}/manifest.v1.json",
@@ -1769,9 +2123,16 @@ mod tests {
                     "object:magnet".into(),
                     format!("sha256:{}", "3".repeat(64)),
                 )]),
+                dependency_signatures: None,
             },
             conductor_positions_xyz_m: vec![[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
             sample_positions_xyz_m: vec![[0.1, 0.2, 0.3]],
+            sample_carrier: AntennaSampleCarrier {
+                domain: FieldTargetIR::Object { object_id: "magnet".into() },
+                carrier_kind: "fem_mesh_asset:magnet".into(),
+                location: "node".into(),
+                topology_digest: format!("sha256:{}", "4".repeat(64)),
+            },
             sample_tet4_cells: None,
             bases: vec![AntennaFieldBasisInput {
                 port_mode_id: "common".into(),
@@ -1780,7 +2141,10 @@ mod tests {
                 current_density_xyz_apm2: vec![[2.0, 4.0, 6.0], [8.0, 10.0, 12.0]],
                 magnetic_field_xyz_apm: vec![[8.0, 10.0, 12.0]],
                 current_balance_certificate_digest: "balance-digest".into(),
-                quadrature_diagnostics: serde_json::json!({"unconverged_pair_count": 0}),
+                // Synthetic non-direct plumbing fixture; not an OE-F2 science certificate.
+                quadrature_diagnostics: serde_json::json!({"operator_version": fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION}),
+                oersted_operator_version: fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION.into(),
+                direct_quadrature_snapshot: None,
             }],
         }
     }
@@ -1871,12 +2235,14 @@ mod tests {
         );
         let projection = AntennaTargetProjectionRefIR {
             id: "projection_1".into(),
-            solution: fullmag_ir::AntennaFieldSolutionRefIR {
-                stage_id: "solve_antenna_1".into(),
-                output_id: "solution_1".into(),
-                asset_id: "afs-fixture".into(),
-                content_digest: "sha256:placeholder".into(),
-            },
+            solution: fullmag_ir::AntennaSolutionRefIR::Published(
+                fullmag_ir::AntennaFieldSolutionRefIR {
+                    stage_id: "solve_antenna_1".into(),
+                    output_id: "solution_1".into(),
+                    asset_id: "afs-fixture".into(),
+                    content_digest: "sha256:placeholder".into(),
+                },
+            ),
             target: FieldTargetIR::Global {},
             output_id: "solution_1".into(),
         };
@@ -1885,7 +2251,7 @@ mod tests {
             source_object_id: "antenna_1".into(),
             current_transport_id: "current_1".into(),
             port_mode_ids: vec!["common".into()],
-            conservative_current_view_ref: "current_1:rt0".into(),
+            conservative_current_view_ref: Some("current_1:rt0".into()),
             model: fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature,
             conductor_mesh_policy: "authored_shared_domain".into(),
@@ -1920,6 +2286,10 @@ mod tests {
         assert_eq!(manifest["status"], "ready");
         assert_eq!(manifest["conductor_positions"]["unit"], "m");
         assert_eq!(manifest["sample_positions"]["unit"], "m");
+        assert_eq!(manifest["sample_carrier"]["domain"]["object_id"], "magnet");
+        assert_eq!(manifest["sample_carrier"]["carrier_kind"], "fem_mesh_asset:magnet");
+        assert_eq!(manifest["sample_carrier"]["location"], "node");
+        assert_eq!(manifest["sample_carrier"]["topology_digest"], format!("sha256:{}", "4".repeat(64)));
         assert_eq!(
             manifest["sample_positions"]["layout"],
             "sample_xyz_interleaved"
@@ -1929,6 +2299,162 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("sha256:"));
+    }
+
+    #[test]
+    fn readers_reject_rehashed_invalid_normalization_in_an_unselected_port() {
+        let mut fixture = input(2.0);
+        let mut other = fixture.bases[0].clone();
+        other.port_mode_id = "other".into();
+        fixture.bases.push(other);
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let payloads = &artifacts[..artifacts.len() - 1];
+        let published = &artifacts.last().unwrap().bytes;
+        verify_antenna_field_solution_asset(published, payloads).unwrap();
+        for (field, value) in [
+            ("normalization_scale", Some(serde_json::json!(2.0))),
+            ("measured_positive_terminal_current_a", Some(serde_json::json!(0.0))),
+            ("measured_positive_terminal_current_a", Some(serde_json::json!(-2.0))),
+            ("normalization_current_a", Some(serde_json::json!(2.0))),
+            ("normalization_scale", None),
+            ("measured_positive_terminal_current_a", None),
+        ] {
+            let mut manifest: serde_json::Value = serde_json::from_slice(published).unwrap();
+            let basis = manifest["bases"][1].as_object_mut().unwrap();
+            if let Some(value) = value {
+                basis.insert(field.into(), value);
+            } else {
+                basis.remove(field);
+            }
+            manifest.as_object_mut().unwrap().remove("content_digest");
+            let digest = format!("sha256:{}", sha256(&serde_json::to_vec(&manifest).unwrap()));
+            manifest["content_digest"] = serde_json::json!(digest);
+            let bytes = serde_json::to_vec(&manifest).unwrap();
+            assert!(verify_antenna_field_solution_manifest(&bytes).is_err(), "{field}");
+            assert!(verify_antenna_field_solution_asset(&bytes, payloads).is_err(), "{field}");
+            assert!(load_antenna_field_solution_samples(
+                &bytes, payloads, "common", "solution_1", "antenna_1", &digest,
+            ).is_err(), "{field}");
+            assert!(load_solved_antenna_drive_basis_projected(
+                &bytes, payloads, drive(), "solution_1", "antenna_1", &digest,
+                1, &fixture.sample_positions_xyz_m, None,
+            ).is_err(), "{field}");
+        }
+    }
+
+    fn direct_evidence_fixture() -> AntennaFieldSolutionInput {
+        // Synthetic binary-ledger fixture, not a solved physical conductor.
+        let evidence = direct_quadrature::tests::example();
+        let mut fixture = input(evidence.measured_positive_terminal_current_a);
+        fixture.sample_positions_xyz_m = evidence.snapshot.targets.iter().map(|r| r.target_xyz_m).collect();
+        let basis = &mut fixture.bases[0];
+        basis.magnetic_field_xyz_apm = evidence.snapshot.targets.iter().map(|r| r.h_xyz_apm).collect();
+        basis.current_balance_certificate_digest = evidence.current_balance_certificate_digest;
+        basis.oersted_operator_version = fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION.into();
+        basis.quadrature_diagnostics = evidence.snapshot.diagnostics();
+        basis.direct_quadrature_snapshot = Some(evidence.snapshot);
+        fixture
+    }
+
+    #[test]
+    fn direct_evidence_publication_and_both_loaders_bind_nonunit_current() {
+        let fixture = direct_evidence_fixture();
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let manifest = artifacts.last().unwrap();
+        let digest = manifest_digest(&manifest.bytes);
+        verify_antenna_field_solution_asset(&manifest.bytes, &artifacts[..artifacts.len() - 1]).unwrap();
+        // Enclosing runtime bundles may include the manifest and other artifacts.
+        let samples = load_antenna_field_solution_samples(
+            &manifest.bytes, &artifacts, "common", "solution_1", "antenna_1", &digest,
+        ).unwrap();
+        assert_eq!(samples.magnetic_field_xyz_apm_per_a[0][0].to_bits(), (0.5_f64 / 3.0).to_bits());
+        assert_eq!(samples.magnetic_field_xyz_apm_per_a[0][1].to_bits(), (-0.0_f64).to_bits());
+        load_solved_antenna_drive_basis_projected(
+            &manifest.bytes, &artifacts, drive(), "solution_1", "antenna_1", &digest,
+            12, &fixture.sample_positions_xyz_m, None,
+        ).unwrap();
+    }
+
+    #[test]
+    fn both_loaders_refuse_bad_direct_evidence_after_complete_rehash() {
+        let fixture = direct_evidence_fixture();
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let mut payloads = artifacts[..artifacts.len() - 1].to_vec();
+        let evidence = payloads.iter_mut().find(|a| a.relative_path.ends_with("direct_quadrature.v1.bin")).unwrap();
+        evidence.bytes[336..344].copy_from_slice(&1.0_f64.to_le_bytes()); // raw E exceeds tau
+        let evidence_sha = sha256(&evidence.bytes);
+        let mut value: serde_json::Value = serde_json::from_slice(&artifacts.last().unwrap().bytes).unwrap();
+        value["bases"][0]["quadrature_evidence"]["sha256"] = serde_json::json!(evidence_sha);
+        value.as_object_mut().unwrap().remove("content_digest");
+        let digest = format!("sha256:{}", sha256(&serde_json::to_vec(&value).unwrap()));
+        value["content_digest"] = serde_json::json!(digest);
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(verify_antenna_field_solution_asset(&bytes, &payloads).is_err());
+        assert!(load_antenna_field_solution_samples(
+            &bytes, &payloads, "common", "solution_1", "antenna_1", &digest,
+        ).is_err());
+        assert!(load_solved_antenna_drive_basis_projected(
+            &bytes, &payloads, drive(), "solution_1", "antenna_1", &digest,
+            12, &fixture.sample_positions_xyz_m, None,
+        ).is_err());
+    }
+
+    #[test]
+    fn direct_publication_refuses_missing_or_misbound_native_snapshot() {
+        let mut fixture = direct_evidence_fixture();
+        fixture.bases[0].direct_quadrature_snapshot = None;
+        assert!(build_antenna_field_solution_artifacts(&fixture).is_err());
+        let mut fixture = direct_evidence_fixture();
+        fixture.bases[0].magnetic_field_xyz_apm[0][0] = 0.6;
+        assert!(build_antenna_field_solution_artifacts(&fixture).is_err());
+    }
+
+    #[test]
+    fn readers_refuse_missing_mixed_future_and_duplicate_direct_evidence() {
+        let fixture = direct_evidence_fixture();
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        for mutation in 0..7 {
+            let mut payloads = artifacts[..artifacts.len() - 1].to_vec();
+            let mut value: serde_json::Value = serde_json::from_slice(&artifacts.last().unwrap().bytes).unwrap();
+            match mutation {
+                0 => { value["bases"][0].as_object_mut().unwrap().remove("quadrature_evidence"); }
+                1 => { value["bases"][0].as_object_mut().unwrap().remove("oersted_operator_version"); }
+                2 => { value["bases"][0]["oersted_operator_version"] = serde_json::json!(fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION); }
+                3 => { value["bases"][0]["quadrature_evidence"]["schema_version"] = serde_json::json!("fem_direct_oersted_evidence.v2"); }
+                4 => { value["bases"][0]["quadrature_evidence"]["path"] = value["bases"][0]["magnetic_field_per_ampere"]["path"].clone(); }
+                5 => {
+                    let duplicate = payloads.iter().find(|a| a.relative_path.ends_with("direct_quadrature.v1.bin")).unwrap().clone();
+                    payloads.push(duplicate);
+                }
+                _ => { value["bases"][0]["quadrature_diagnostics"]["relative_scale_floor_apm"] = serde_json::json!(-0.0); }
+            }
+            value.as_object_mut().unwrap().remove("content_digest");
+            let digest = format!("sha256:{}", sha256(&serde_json::to_vec(&value).unwrap()));
+            value["content_digest"] = serde_json::json!(digest);
+            let bytes = serde_json::to_vec(&value).unwrap();
+            assert!(verify_antenna_field_solution_asset(&bytes, &payloads).is_err(), "mutation {mutation}");
+            assert!(load_antenna_field_solution_samples(
+                &bytes, &payloads, "common", "solution_1", "antenna_1", &digest,
+            ).is_err(), "mutation {mutation}");
+            assert!(load_solved_antenna_drive_basis_projected(
+                &bytes, &payloads, drive(), "solution_1", "antenna_1", &digest,
+                12, &fixture.sample_positions_xyz_m, None,
+            ).is_err(), "mutation {mutation}");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_sample_carrier_before_publication() {
+        for invalid in [
+            AntennaSampleCarrier { carrier_kind: " ".into(), ..input(1.0).sample_carrier },
+            AntennaSampleCarrier { location: "cell".into(), ..input(1.0).sample_carrier },
+            AntennaSampleCarrier { topology_digest: "sha256:invalid".into(), ..input(1.0).sample_carrier },
+            AntennaSampleCarrier { domain: FieldTargetIR::Object { object_id: "".into() }, ..input(1.0).sample_carrier },
+        ] {
+            let mut fixture = input(1.0);
+            fixture.sample_carrier = invalid;
+            assert!(build_antenna_field_solution_artifacts(&fixture).is_err());
+        }
     }
 
     #[test]
@@ -1978,7 +2504,9 @@ mod tests {
         let manifest = artifacts.last().unwrap();
         let digest = manifest_digest(&manifest.bytes);
         let (mut plan, mut projection, stage) = fdm_projection_fixture();
-        projection.solution.content_digest = digest;
+        if let fullmag_ir::AntennaSolutionRefIR::Published(reference) = &mut projection.solution {
+            reference.content_digest = digest;
+        }
         let assets = BTreeMap::from([(
             "afs-fixture".into(),
             AntennaFieldSolutionAsset {
@@ -1999,6 +2527,124 @@ mod tests {
             plan.solved_antenna_drive_bases[0].field_xyz_apm_per_a,
             vec![[4.0, 5.0, 6.0], [0.0, 0.0, 0.0]]
         );
+        let expected_topology = resolved_target_topology_digest(&(
+            plan.origin_m,
+            &plan.grid,
+            plan.cell_size,
+            &plan.region_mask,
+            &plan.active_mask,
+        ))
+        .unwrap();
+        assert!(plan.solved_antenna_drive_bases[0]
+            .projection_signature
+            .ends_with(&format!(":target_topology:{expected_topology}")));
+        crate::antenna_fields::validate_fdm_antenna_sample_counts(&plan, 2).unwrap();
+        plan.origin_m[0] += plan.cell_size[0];
+        let error =
+            crate::antenna_fields::validate_fdm_antenna_sample_counts(&plan, 2).unwrap_err();
+        assert!(error.message.contains("target topology differs"));
+        plan.origin_m[0] -= plan.cell_size[0];
+        plan.solved_antenna_drive_bases[0].projection_signature = "legacy".into();
+        let error =
+            crate::antenna_fields::validate_fdm_antenna_sample_counts(&plan, 2).unwrap_err();
+        assert!(error.message.contains("target topology differs"));
+        assert_ne!(
+            expected_topology,
+            resolved_target_topology_digest(&(
+                plan.origin_m,
+                &plan.grid,
+                plan.cell_size,
+                &[0_u32, 1_u32],
+                &plan.active_mask,
+            ))
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn solved_antenna_materialization_rejects_peak_current_field_overflow() {
+        let mut fixture = input(2.0);
+        fixture.sample_positions_xyz_m = vec![[1.0, 1.0, 1.0], [3.0, 1.0, 1.0]];
+        fixture.bases[0].magnetic_field_xyz_apm = vec![[8.0, 10.0, 12.0], [16.0, 18.0, 20.0]];
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let manifest = artifacts.last().unwrap();
+        let digest = manifest_digest(&manifest.bytes);
+        let (mut plan, mut projection, stage) = fdm_projection_fixture();
+        if let fullmag_ir::AntennaSolutionRefIR::Published(reference) = &mut projection.solution {
+            reference.content_digest = digest;
+        }
+        let assets = BTreeMap::from([(
+            "afs-fixture".into(),
+            AntennaFieldSolutionAsset {
+                manifest_bytes: manifest.bytes.clone(),
+                payloads: artifacts[..artifacts.len() - 1].to_vec(),
+            },
+        )]);
+        let mut excessive = drive();
+        excessive.peak_current_a = f64::MAX;
+        let error = materialize_fdm_solved_antenna_drive_parts(
+            &[excessive],
+            &[projection],
+            &[stage],
+            &mut plan,
+            &assets,
+        )
+        .expect_err("finite H/A and peak current must not overflow the LLG field");
+        assert!(error.message.contains("non-finite projected H field"));
+        assert!(plan.solved_antenna_drive_bases.is_empty());
+    }
+
+    #[test]
+    fn fdm_materialization_interpolates_active_cell_and_skips_outside_inactive_cell() {
+        let mut fixture = input(2.0);
+        fixture.sample_positions_xyz_m = vec![
+            [0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [0.0, 4.0, 0.0],
+            [0.0, 0.0, 4.0],
+        ];
+        fixture.bases[0].magnetic_field_xyz_apm = fixture.sample_positions_xyz_m.clone();
+        fixture.sample_tet4_cells = Some(vec![[0, 1, 2, 3]]);
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let manifest = artifacts.last().unwrap();
+        let digest = manifest_digest(&manifest.bytes);
+        let (mut plan, mut projection, stage) = fdm_projection_fixture();
+        if let fullmag_ir::AntennaSolutionRefIR::Published(reference) = &mut projection.solution {
+            reference.content_digest = digest;
+        }
+        let assets = BTreeMap::from([(
+            "afs-fixture".into(),
+            AntennaFieldSolutionAsset {
+                manifest_bytes: manifest.bytes.clone(),
+                payloads: artifacts[..artifacts.len() - 1].to_vec(),
+            },
+        )]);
+
+        materialize_fdm_solved_antenna_drive_parts(
+            &[drive()],
+            &[projection],
+            &[stage],
+            &mut plan,
+            &assets,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.solved_antenna_drive_bases[0].field_xyz_apm_per_a,
+            vec![[0.5, 0.5, 0.5], [0.0, 0.0, 0.0]]
+        );
+    }
+
+    #[test]
+    fn fdm_antenna_projection_rejects_stale_grid_certificate() {
+        let (mut plan, _, _) = fdm_projection_fixture();
+        plan.origin_m[0] = 1.0;
+        let error = fdm_cell_center_positions(&plan).unwrap_err();
+        assert!(error.message.contains("does not match resolved plan"));
+
+        let (mut plan, _, _) = fdm_projection_fixture();
+        plan.region_mask[0] = 1;
+        let error = fdm_cell_center_positions(&plan).unwrap_err();
+        assert!(error.message.contains("grid certificate is invalid"));
     }
 
     #[test]
@@ -2032,7 +2678,7 @@ mod tests {
             "antenna_1",
             &digest,
             2,
-            Some(&[[1.0, 1.0, 1.0], [3.0, 1.0, 1.0]]),
+            &[[1.0, 1.0, 1.0], [3.0, 1.0, 1.0]],
             Some(&[true, false]),
         )
         .unwrap();
@@ -2040,6 +2686,28 @@ mod tests {
             resolved.field_xyz_apm_per_a,
             vec![[4.0, 5.0, 6.0], [0.0, 0.0, 0.0]]
         );
+    }
+
+    #[test]
+    fn identity_projection_treats_signed_zero_as_the_same_coordinate() {
+        let mut fixture = input(2.0);
+        fixture.sample_positions_xyz_m = vec![[-0.0, 0.0, -0.0]];
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let manifest = artifacts.last().unwrap();
+        let digest = manifest_digest(&manifest.bytes);
+        let resolved = load_solved_antenna_drive_basis_projected(
+            &manifest.bytes,
+            &artifacts[..artifacts.len() - 1],
+            drive(),
+            "solution_1",
+            "antenna_1",
+            &digest,
+            1,
+            &[[0.0, -0.0, 0.0]],
+            None,
+        )
+        .unwrap();
+        assert_eq!(resolved.field_xyz_apm_per_a, vec![[4.0, 5.0, 6.0]]);
     }
 
     #[test]
@@ -2065,11 +2733,35 @@ mod tests {
     }
 
     #[test]
+    fn rejects_nonfinite_or_overflowed_per_ampere_basis_before_publication() {
+        let mut potential = input(1.0e-29);
+        potential.bases[0].electric_potential_v[0] = f64::MAX;
+        let error = build_antenna_field_solution_artifacts(&potential).unwrap_err();
+        assert!(error.message.contains("electric potential"));
+        assert!(error.message.contains("per-ampere normalization"));
+
+        let mut current = input(1.0e-29);
+        current.bases[0].current_density_xyz_apm2[0][0] = f64::MAX;
+        let error = build_antenna_field_solution_artifacts(&current).unwrap_err();
+        assert!(error.message.contains("current density"));
+
+        let mut field = input(1.0e-29);
+        field.bases[0].magnetic_field_xyz_apm[0][0] = f64::MAX;
+        let error = build_antenna_field_solution_artifacts(&field).unwrap_err();
+        assert!(error.message.contains("magnetic field"));
+
+        let mut nonfinite = input(2.0);
+        nonfinite.bases[0].electric_potential_v[0] = f64::NAN;
+        let error = build_antenna_field_solution_artifacts(&nonfinite).unwrap_err();
+        assert!(error.message.contains("non-finite input"));
+    }
+
+    #[test]
     fn loads_verified_field_basis_for_the_requested_port() {
         let artifacts = build_antenna_field_solution_artifacts(&input(2.0)).unwrap();
         let manifest = artifacts.last().unwrap();
         let digest = manifest_digest(&manifest.bytes);
-        let resolved = load_solved_antenna_drive_basis(
+        let resolved = load_solved_antenna_drive_basis_projected(
             &manifest.bytes,
             &artifacts[..artifacts.len() - 1],
             drive(),
@@ -2077,6 +2769,7 @@ mod tests {
             "antenna_1",
             &digest,
             1,
+            &[[0.1, 0.2, 0.3]],
             None,
         )
         .unwrap();
@@ -2084,7 +2777,7 @@ mod tests {
         assert_eq!(resolved.drive.peak_current_a, 0.25);
         assert!(!resolved.projection_signature.is_empty());
 
-        let masked = load_solved_antenna_drive_basis(
+        let masked = load_solved_antenna_drive_basis_projected(
             &manifest.bytes,
             &artifacts[..artifacts.len() - 1],
             drive(),
@@ -2092,6 +2785,7 @@ mod tests {
             "antenna_1",
             &digest,
             1,
+            &[[0.1, 0.2, 0.3]],
             Some(&[false]),
         )
         .unwrap();
@@ -2121,13 +2815,18 @@ mod tests {
             current_density_xyz_apm2: vec![[4.0, 8.0, 12.0], [16.0, 20.0, 24.0]],
             magnetic_field_xyz_apm: vec![[14.0, 16.0, 18.0]],
             current_balance_certificate_digest: "balance-b".into(),
-            quadrature_diagnostics: serde_json::json!({"unconverged_pair_count": 0}),
+            // Synthetic non-direct multi-port plumbing fixture.
+            quadrature_diagnostics: serde_json::json!({"operator_version": fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION}),
+            oersted_operator_version: fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION.into(),
+            direct_quadrature_snapshot: None,
         });
         let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
         let manifest = artifacts.last().unwrap();
         let digest = manifest_digest(&manifest.bytes);
         let mut explicit_request = spectrum_request(Some("port_b"));
-        explicit_request.solution_ref.content_digest = digest.clone();
+        if let fullmag_ir::AntennaSolutionRefIR::Published(reference) = &mut explicit_request.solution_ref {
+            reference.content_digest = digest.clone();
+        }
         let samples = load_antenna_field_solution_samples_for_spectrum(
             &manifest.bytes,
             &artifacts[..artifacts.len() - 1],
@@ -2138,7 +2837,9 @@ mod tests {
         assert_eq!(samples.magnetic_field_xyz_apm_per_a, vec![[7.0, 8.0, 9.0]]);
 
         let mut legacy_request = spectrum_request(None);
-        legacy_request.solution_ref.content_digest = digest.clone();
+        if let fullmag_ir::AntennaSolutionRefIR::Published(reference) = &mut legacy_request.solution_ref {
+            reference.content_digest = digest.clone();
+        }
         let error = load_antenna_field_solution_samples_for_spectrum(
             &manifest.bytes,
             &artifacts[..artifacts.len() - 1],
@@ -2166,7 +2867,7 @@ mod tests {
             "antenna_1",
             &digest,
             target_positions.len(),
-            Some(&target_positions),
+            &target_positions,
             None,
         )
         .unwrap();
@@ -2175,6 +2876,9 @@ mod tests {
             vec![[8.0, 9.0, 10.0], [4.0, 5.0, 6.0]]
         );
         assert!(resolved.projection_signature.contains("sha256:"));
+        assert!(resolved
+            .projection_signature
+            .contains(":identity_coordinates_v1:"));
 
         let missing_position = vec![[9.0, 9.0, 9.0]];
         let error = load_solved_antenna_drive_basis_projected(
@@ -2185,7 +2889,7 @@ mod tests {
             "antenna_1",
             &digest,
             missing_position.len(),
-            Some(&missing_position),
+            &missing_position,
             None,
         )
         .expect_err("unmatched target nodes must not be broadcast or extrapolated");
@@ -2220,7 +2924,7 @@ mod tests {
             "antenna_1",
             &digest,
             target_positions.len(),
-            Some(&target_positions),
+            &target_positions,
             None,
         )
         .unwrap();
@@ -2229,14 +2933,16 @@ mod tests {
         assert!((value[0] - 1.0).abs() < 1.0e-12);
         assert!((value[1] - 2.0).abs() < 1.0e-12);
         assert!((value[2] - 3.0).abs() < 1.0e-12);
-        assert!(resolved.projection_signature.contains(":p1:"));
+        assert!(resolved
+            .projection_signature
+            .contains(":fem_p1_interpolation_v1:"));
     }
 
     #[test]
     fn rejects_unimplemented_sample_to_mesh_projection_instead_of_broadcasting() {
         let artifacts = build_antenna_field_solution_artifacts(&input(2.0)).unwrap();
         let digest = manifest_digest(&artifacts.last().unwrap().bytes);
-        let error = load_solved_antenna_drive_basis(
+        let error = load_solved_antenna_drive_basis_projected(
             &artifacts.last().unwrap().bytes,
             &artifacts[..artifacts.len() - 1],
             drive(),
@@ -2244,11 +2950,11 @@ mod tests {
             "antenna_1",
             &digest,
             2,
+            &[[0.1, 0.2, 0.3], [9.0, 9.0, 9.0]],
             None,
         )
         .expect_err("different carrier topology must fail closed");
-        assert!(error.message.contains("explicit point-to-mesh projection"));
-        assert!(error.message.contains("1 sample vectors"));
+        assert!(error.message.contains("explicit interpolation"));
     }
 
     #[test]
@@ -2258,7 +2964,7 @@ mod tests {
         let mut manifest = artifacts.last().unwrap().bytes.clone();
         let index = manifest.iter().position(|byte| *byte == b's').unwrap();
         manifest[index] = b'x';
-        assert!(load_solved_antenna_drive_basis(
+        assert!(load_solved_antenna_drive_basis_projected(
             &manifest,
             &artifacts[..artifacts.len() - 1],
             drive(),
@@ -2266,6 +2972,7 @@ mod tests {
             "antenna_1",
             &digest,
             1,
+            &[[0.1, 0.2, 0.3]],
             None,
         )
         .is_err());
@@ -2276,7 +2983,7 @@ mod tests {
             .find(|artifact| artifact.relative_path.ends_with("H_per_A.f64le"))
             .expect("magnetic field payload")
             .bytes[0] ^= 1;
-        assert!(load_solved_antenna_drive_basis(
+        assert!(load_solved_antenna_drive_basis_projected(
             &artifacts.last().unwrap().bytes,
             &payloads,
             drive(),
@@ -2284,13 +2991,14 @@ mod tests {
             "antenna_1",
             &digest,
             1,
+            &[[0.1, 0.2, 0.3]],
             None,
         )
         .unwrap_err()
         .message
         .contains("sha256 mismatch"));
 
-        assert!(load_solved_antenna_drive_basis(
+        assert!(load_solved_antenna_drive_basis_projected(
             &artifacts.last().unwrap().bytes,
             &artifacts[..artifacts.len() - 1],
             drive(),
@@ -2298,6 +3006,7 @@ mod tests {
             "antenna_1",
             "obsolete-digest",
             1,
+            &[[0.1, 0.2, 0.3]],
             None,
         )
         .unwrap_err()
@@ -2320,5 +3029,81 @@ mod tests {
         let error = verify_antenna_field_solution_signatures(manifest, &expected)
             .expect_err("an old but untampered asset must not pass current-model validation");
         assert!(error.message.contains("current_solution_signature"));
+    }
+
+    #[test]
+    fn dependency_signatures_identify_terminal_solver_and_sampling_changes() {
+        let mut fixture = input(2.0);
+        fixture.signatures.dependency_signatures = Some(AntennaDependencySignatures {
+            terminal: format!("sha256:{}", "4".repeat(64)),
+            solver: format!("sha256:{}", "5".repeat(64)),
+            sampling: format!("sha256:{}", "6".repeat(64)),
+        });
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let manifest = &artifacts.last().unwrap().bytes;
+        for category in ["terminal", "solver", "sampling"] {
+            let mut expected = fixture.signatures.clone();
+            let dependencies = expected.dependency_signatures.as_mut().unwrap();
+            match category {
+                "terminal" => dependencies.terminal = format!("sha256:{}", "7".repeat(64)),
+                "solver" => dependencies.solver = format!("sha256:{}", "8".repeat(64)),
+                "sampling" => dependencies.sampling = format!("sha256:{}", "9".repeat(64)),
+                _ => unreachable!(),
+            }
+            let error = verify_antenna_field_solution_signatures(manifest, &expected)
+                .expect_err("a changed dependency must invalidate the immutable field solution");
+            assert!(error.message.contains(&format!("changed dependencies: {category}")));
+        }
+    }
+
+    #[test]
+    fn missing_detailed_dependency_signatures_are_stale_even_with_matching_aggregate_hashes() {
+        let mut fixture = input(2.0);
+        let old_manifest = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let old_manifest = &old_manifest.last().unwrap().bytes;
+        let detailed = AntennaDependencySignatures {
+            terminal: format!("sha256:{}", "4".repeat(64)),
+            solver: format!("sha256:{}", "5".repeat(64)),
+            sampling: format!("sha256:{}", "6".repeat(64)),
+        };
+        fixture.signatures.dependency_signatures = Some(detailed);
+        let error = verify_antenna_field_solution_signatures(old_manifest, &fixture.signatures)
+            .expect_err("an intact legacy manifest lacks the required dependency certificate");
+        assert!(error
+            .message
+            .contains("changed dependencies: terminal, solver, sampling"));
+
+        let new_manifest = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let new_manifest = &new_manifest.last().unwrap().bytes;
+        fixture.signatures.dependency_signatures = None;
+        let error = verify_antenna_field_solution_signatures(new_manifest, &fixture.signatures)
+            .expect_err("an expectation without detailed dependencies must not accept them");
+        assert!(error
+            .message
+            .contains("changed dependencies: terminal, solver, sampling"));
+    }
+
+    #[test]
+    fn rejects_malformed_dependency_digest_before_publication() {
+        let mut fixture = input(2.0);
+        fixture.signatures.dependency_signatures = Some(AntennaDependencySignatures {
+            terminal: "sha256:short".into(),
+            solver: format!("sha256:{}", "5".repeat(64)),
+            sampling: format!("sha256:{}", "6".repeat(64)),
+        });
+        let error = build_antenna_field_solution_artifacts(&fixture).unwrap_err();
+        assert!(error.message.contains("64 lowercase hex digits"));
+    }
+
+    #[test]
+    fn manifest_integrity_is_checked_without_loading_field_payloads() {
+        let artifacts = build_antenna_field_solution_artifacts(&input(2.0)).unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&artifacts.last().unwrap().bytes).unwrap();
+        manifest["signatures"]["current_solution_signature"] =
+            serde_json::Value::String(format!("sha256:{}", "f".repeat(64)));
+        let tampered = serde_json::to_vec(&manifest).unwrap();
+        let error = verify_antenna_field_solution_manifest(&tampered).unwrap_err();
+        assert!(error.message.contains("content_digest mismatch"));
     }
 }

@@ -4045,7 +4045,7 @@ pub(crate) fn plan_fem(
         });
     }
     let charge_transport_plans =
-        resolve_fem_charge_only_transport(problem, &mesh, &object_segments, &resolved_mesh_parts)?;
+        resolve_fem_charge_only_transport(problem, &mesh, &object_segments, &resolved_mesh_parts, false)?;
     let spin_transport_plans = crate::spin_transport::resolve_m1_fem_spin_transport(
         problem,
         &mesh,

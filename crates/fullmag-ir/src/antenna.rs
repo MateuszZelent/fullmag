@@ -20,6 +20,17 @@ pub const ANTENNA_PORT_MIGRATION_REQUIRES_TERMINAL_PAIRS: &str =
 /// changing meaning when the default pair budget is revised.
 pub const ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1: &str = "antenna_direct_oersted_budget.v1";
 pub const ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS: u64 = 1_000_000;
+pub const ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION: &str = "fem_oersted_direct_tetra_quadrature.v3";
+pub const ANTENNA_DIRECT_OERSTED_BASE_QUADRATURE_ORDER: i32 = 4;
+pub const ANTENNA_DIRECT_OERSTED_MAX_SUBDIVISION_DEPTH: i32 = 6;
+pub const ANTENNA_DIRECT_OERSTED_ABSOLUTE_TOLERANCE_APM: f64 = 1.0e-9;
+pub const ANTENNA_DIRECT_OERSTED_RELATIVE_TOLERANCE: f64 = 1.0e-5;
+pub const ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION: &str = "fem_oersted_hcurl_h1_gauge.v1";
+pub const ANTENNA_VECTOR_POTENTIAL_BOUNDARY_GAUGE: &str = "tangential_A_h1_0.v1";
+pub const ANTENNA_VECTOR_POTENTIAL_MU0_SI: f64 = 1.25663706212e-6;
+pub const ANTENNA_VECTOR_POTENTIAL_RELATIVE_TOLERANCE: f64 = 1.0e-10;
+pub const ANTENNA_VECTOR_POTENTIAL_MAX_ND_DOFS: i32 = 4096;
+pub const ANTENNA_VECTOR_POTENTIAL_MAX_H1_DOFS: i32 = 2048;
 
 /// Rigid transform shared by all conductor bodies and terminal selectors of
 /// an authored microwave antenna layout.
@@ -402,7 +413,8 @@ pub struct AntennaFieldSolveStageIR {
     pub source_object_id: String,
     pub current_transport_id: String,
     pub port_mode_ids: Vec<String>,
-    pub conservative_current_view_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_view_ref: Option<String>,
     pub model: AntennaFieldModelIR,
     pub oersted_realization: AntennaOerstedRealizationIR,
     pub conductor_mesh_policy: String,
@@ -422,10 +434,63 @@ pub struct AntennaFieldSolutionRefIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub enum AntennaStageOutputRefIR {
+    StageOutput { stage_id: String, output_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaResolvedAssetKindIR {
+    ResolvedAsset,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AntennaResolvedAssetRefIR {
+    pub kind: AntennaResolvedAssetKindIR,
+    #[serde(flatten)]
+    pub reference: AntennaFieldSolutionRefIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AntennaSolutionRefIR {
+    StageOutput(AntennaStageOutputRefIR),
+    ResolvedAsset(AntennaResolvedAssetRefIR),
+    Published(AntennaFieldSolutionRefIR),
+}
+
+impl AntennaSolutionRefIR {
+    pub fn stage_id(&self) -> &str {
+        match self {
+            Self::StageOutput(AntennaStageOutputRefIR::StageOutput { stage_id, .. }) => stage_id,
+            Self::ResolvedAsset(reference) => &reference.reference.stage_id,
+            Self::Published(reference) => &reference.stage_id,
+        }
+    }
+
+    pub fn output_id(&self) -> &str {
+        match self {
+            Self::StageOutput(AntennaStageOutputRefIR::StageOutput { output_id, .. }) => output_id,
+            Self::ResolvedAsset(reference) => &reference.reference.output_id,
+            Self::Published(reference) => &reference.output_id,
+        }
+    }
+
+    pub fn published(&self) -> Option<&AntennaFieldSolutionRefIR> {
+        match self {
+            Self::StageOutput(_) => None,
+            Self::ResolvedAsset(reference) => Some(&reference.reference),
+            Self::Published(reference) => Some(reference),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AntennaTargetProjectionRefIR {
     pub id: String,
-    pub solution: AntennaFieldSolutionRefIR,
+    pub solution: AntennaSolutionRefIR,
     pub target: FieldTargetIR,
     pub output_id: String,
 }
@@ -502,7 +567,7 @@ pub struct AntennaSpectrumKGridIR {
 #[serde(deny_unknown_fields)]
 pub struct AntennaSpectrumRequestIR {
     pub id: String,
-    pub solution_ref: AntennaFieldSolutionRefIR,
+    pub solution_ref: AntennaSolutionRefIR,
     /// Optional only for backward-compatible single-port assets.  A request
     /// against a multi-port solution must select exactly one solved basis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -550,6 +615,18 @@ fn nonempty(value: &str) -> bool {
     !value.trim().is_empty()
 }
 
+fn antenna_solution_source_is_basis(
+    stage: Option<&AntennaFieldSolveStageIR>,
+    output_id: &str,
+) -> bool {
+    stage.is_some_and(|stage| {
+        stage
+            .outputs
+            .iter()
+            .any(|output| output.id == output_id && output.quantity == "H_ant_basis")
+    })
+}
+
 /// `mode_basis_ref` is reserved for a future, independently verified modal
 /// analysis.  The source-spectrum path must not accept the field and then
 /// silently ignore it, because that would make a request appear modal while
@@ -588,6 +665,12 @@ fn validate_transverse_equilibrium_ref(
     errors: &mut Vec<String>,
 ) -> bool {
     if component != "transverse" {
+        if equilibrium_ref.is_some() {
+            errors.push(format!(
+                "{prefix}.equilibrium_ref is only valid for component='transverse'"
+            ));
+            return false;
+        }
         return true;
     }
     match equilibrium_ref {
@@ -653,9 +736,7 @@ fn validate_v2_port_structure(
     for (branch_index, branch) in port.branches.iter().enumerate() {
         let branch_prefix = format!("{prefix}.branches[{branch_index}]");
         if !nonempty(&branch.id) || !branch_ids.insert(branch.id.as_str()) {
-            errors.push(format!(
-                "{branch_prefix}.id must be non-empty and unique"
-            ));
+            errors.push(format!("{branch_prefix}.id must be non-empty and unique"));
         }
         if !nonempty(&branch.inlet_terminal_ref)
             || !terminal_refs.insert(branch.inlet_terminal_ref.as_str())
@@ -689,12 +770,59 @@ fn validate_v2_port_structure(
     let Some(definition) = definition else {
         return;
     };
+    if let Some(source) = &definition.conservative_current_source {
+        let crate::ConservativeCurrentSourceIR::ExternalLeadCurrent { drives, .. } = source;
+        if drives
+            .iter()
+            .filter(|drive| drive.port_mode_ref == port.id)
+            .count()
+            != 1
+        {
+            errors.push(format!("{prefix} requires exactly one explicitly authored current-source drive for this port mode"));
+        }
+        let observations = source
+            .terminal_observations()
+            .iter()
+            .map(|observation| (observation.id.as_str(), observation))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for branch in &port.branches {
+            let mut objects = Vec::new();
+            for (role, id) in [
+                ("inlet_terminal_ref", branch.inlet_terminal_ref.as_str()),
+                ("outlet_terminal_ref", branch.outlet_terminal_ref.as_str()),
+            ] {
+                if let Some(observation) = observations.get(id) {
+                    if !definition
+                        .domain
+                        .iter()
+                        .any(|region| region.object_id == observation.object_id)
+                    {
+                        errors.push(format!("{prefix}.branches branch '{}' {role} must observe an object in the CurrentTransport domain", branch.id));
+                    }
+                    objects.push(observation.object_id.as_str());
+                } else {
+                    errors.push(format!("{prefix}.branches branch '{}' {role} '{}' does not exist in current-source terminal_observations", branch.id, id));
+                }
+            }
+            if objects.len() == 2 && objects[0] != objects[1] {
+                errors.push(format!("{prefix}.branches branch '{}' inlet and outlet observations must belong to the same conductor object", branch.id));
+            }
+            if branch.signed_weight > 0.0
+                && objects.len() == 2
+                && objects[0] != port.source_object_id
+            {
+                errors.push(format!("{prefix}.branches branch '{}' positive signal observations must belong to source object '{}'", branch.id, port.source_object_id));
+            }
+        }
+        return;
+    }
     let boundaries = definition
         .boundaries
         .iter()
         .map(|boundary| (boundary.id(), boundary))
         .collect::<std::collections::BTreeMap<_, _>>();
     for branch in &port.branches {
+        let mut branch_objects = Vec::with_capacity(2);
         for (role, terminal_ref) in [
             ("inlet_terminal_ref", branch.inlet_terminal_ref.as_str()),
             ("outlet_terminal_ref", branch.outlet_terminal_ref.as_str()),
@@ -706,22 +834,45 @@ fn validate_v2_port_structure(
                 ));
                 continue;
             };
-            if boundary.surfaces().is_empty()
-                || boundary
-                    .surfaces()
+            let terminal_objects = boundary
+                .surfaces()
+                .iter()
+                .map(|surface| surface.object_id.as_str())
+                .collect::<BTreeSet<_>>();
+            if terminal_objects.len() != 1
+                || !definition
+                    .domain
                     .iter()
-                    .any(|surface| surface.object_id != port.source_object_id)
+                    .any(|region| terminal_objects.contains(region.object_id.as_str()))
                 || !matches!(
                     boundary,
-                    crate::ChargeBoundaryIR::VoltageElectrode { .. }
+                    crate::ChargeBoundaryIR::EquipotentialCurrentTerminal { .. }
+                        | crate::ChargeBoundaryIR::VoltageElectrode { .. }
                         | crate::ChargeBoundaryIR::NormalCurrentElectrode { .. }
                 )
             {
                 errors.push(format!(
-                    "{prefix}.branches branch '{}' {role} '{}' must be an electrical terminal on source object '{}'",
-                    branch.id, terminal_ref, port.source_object_id
+                    "{prefix}.branches branch '{}' {role} '{}' must be an electrical terminal on one object in the CurrentTransport domain",
+                    branch.id, terminal_ref
                 ));
+            } else if let Some(object_id) = terminal_objects.iter().next() {
+                branch_objects.push(*object_id);
             }
+        }
+        if branch_objects.len() == 2 && branch_objects[0] != branch_objects[1] {
+            errors.push(format!(
+                "{prefix}.branches branch '{}' inlet and outlet must lie on the same conductor object",
+                branch.id
+            ));
+        }
+        if branch.signed_weight > 0.0
+            && branch_objects.len() == 2
+            && branch_objects[0] != port.source_object_id
+        {
+            errors.push(format!(
+                "{prefix}.branches branch '{}' positive signal path must lie on source object '{}'",
+                branch.id, port.source_object_id
+            ));
         }
     }
 }
@@ -732,7 +883,7 @@ fn validate_solved_antenna_drive(
     projection_ids: &BTreeSet<&str>,
     port_ids: &BTreeSet<&str>,
     solved_stage: Option<&AntennaFieldSolveStageIR>,
-    pipeline_stage_ids: &BTreeSet<String>,
+    pipeline_stage_ids: Option<&BTreeSet<String>>,
     study_kind: StudyKindIR,
     active_stage_id: Option<&str>,
     errors: &mut Vec<String>,
@@ -751,7 +902,7 @@ fn validate_solved_antenna_drive(
         ));
     }
 
-    crate::validation::validate_time_dependence(
+    crate::field_drive_validation::validate_time_dependence(
         &format!("{prefix}.waveform"),
         &drive.waveform,
         errors,
@@ -773,24 +924,12 @@ fn validate_solved_antenna_drive(
         }
     }
 
-    if let DriveActivationIR::StageIds { stage_ids } = &drive.activation {
-        if stage_ids.is_empty() {
-            errors.push(format!("{prefix}.activation.stage_ids must not be empty"));
-        }
-        let mut local_ids = BTreeSet::new();
-        for stage_id in stage_ids {
-            if stage_id.trim().is_empty() || !local_ids.insert(stage_id.as_str()) {
-                errors.push(format!(
-                    "{prefix}.activation stage ids must be non-empty and unique"
-                ));
-            }
-            if !pipeline_stage_ids.contains(stage_id) {
-                errors.push(format!(
-                    "{prefix}.activation stage id '{stage_id}' does not exist"
-                ));
-            }
-        }
-    }
+    crate::field_drive_validation::validate_drive_activation(
+        prefix,
+        &drive.activation,
+        pipeline_stage_ids,
+        errors,
+    );
 
     if matches!(study_kind, StudyKindIR::Relaxation)
         && drive.activation.is_active_for(study_kind, active_stage_id)
@@ -802,7 +941,88 @@ fn validate_solved_antenna_drive(
     }
 }
 
+fn validate_current_source_references(
+    modules: &[CurrentModuleIR],
+    ports: &[AntennaPortModeIR],
+    objects: &BTreeSet<&str>,
+    errors: &mut Vec<String>,
+) {
+    for module in modules {
+        if let CurrentModuleIR::CurrentTransport {
+            name,
+            definition: Some(definition),
+            ..
+        } = module
+        {
+            if let Some(crate::ConservativeCurrentSourceIR::ExternalLeadCurrent {
+                drives,
+                terminal_observations,
+                ..
+            }) = &definition.conservative_current_source
+            {
+                for drive in drives {
+                    if !ports.iter().any(|port| {
+                        port.id == drive.port_mode_ref && port.current_transport_id == *name
+                    }) {
+                        errors.push(format!("CurrentTransport '{name}' current-source drive '{}' must reference a port mode bound to this transport", drive.id));
+                    }
+                }
+                for observation in terminal_observations {
+                    if !objects.contains(observation.object_id.as_str()) {
+                        errors.push(format!("CurrentTransport '{name}' current-source observation '{}' references an unknown object", observation.id));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn validate_stage_current_view_ref(
+    stage: &AntennaFieldSolveStageIR,
+    modules: &[CurrentModuleIR],
+    prefix: &str,
+    errors: &mut Vec<String>,
+) {
+    if let Some(reference) = stage.conservative_current_view_ref.as_deref() {
+        if !nonempty(reference) {
+            errors.push(format!(
+                "{prefix}.conservative_current_view_ref must be non-empty when present"
+            ));
+        }
+        return;
+    }
+
+    let has_typed_source = modules.iter().any(|module| {
+        matches!(
+            module,
+            CurrentModuleIR::CurrentTransport {
+                name,
+                definition: Some(definition),
+                ..
+            } if name == &stage.current_transport_id
+                && definition.conservative_current_source.is_some()
+        )
+    });
+    if !has_typed_source {
+        errors.push(format!(
+            "{prefix}.conservative_current_view_ref may be omitted only when CurrentTransport '{}' defines conservative_current_source",
+            stage.current_transport_id
+        ));
+    }
+}
+
 pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut Vec<String>) {
+    let objects = problem
+        .objects
+        .iter()
+        .map(|object| object.object_id.as_str())
+        .collect();
+    validate_current_source_references(
+        &problem.current_modules,
+        &problem.antenna_port_modes,
+        &objects,
+        errors,
+    );
     let mut port_ids = BTreeSet::new();
     for (index, port) in problem.antenna_port_modes.iter().enumerate() {
         let prefix = format!("antenna_port_modes[{index}]");
@@ -867,6 +1087,7 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
         if !nonempty(&stage.id) || !stage_ids.insert(stage.id.as_str()) {
             errors.push(format!("{prefix}.id must be non-empty and unique"));
         }
+        validate_stage_current_view_ref(stage, &problem.current_modules, &prefix, errors);
         let referenced_ports = stage
             .port_mode_ids
             .iter()
@@ -877,7 +1098,7 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
                     .find(|port| &port.id == id)
             })
             .collect::<Vec<_>>();
-        if stage.port_mode_ids.is_empty()
+        if stage.port_mode_ids.len() != 1
             || referenced_ports.len() != stage.port_mode_ids.len()
             || referenced_ports.iter().any(|port| {
                 port.source_object_id != stage.source_object_id
@@ -885,7 +1106,12 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
             })
         {
             errors.push(format!(
-                "{prefix}.port_mode_ids must all reference port modes bound to the stage source object and CurrentTransport"
+                "{prefix}.port_mode_ids must contain exactly one port bound to the stage source object and CurrentTransport"
+            ));
+        }
+        if stage.target_refs.is_empty() {
+            errors.push(format!(
+                "{prefix}.target_refs must contain at least one explicitly authored target"
             ));
         }
         if !target_exists(&stage.field_sampling_domain, problem)
@@ -928,21 +1154,33 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
                 "antenna_target_projections[{index}].id must be non-empty and unique"
             ));
         }
+        if !antenna_solution_source_is_basis(
+            problem
+                .antenna_field_solve_stages
+                .iter()
+                .find(|stage| stage.id == projection.solution.stage_id()),
+            projection.solution.output_id(),
+        ) {
+            errors.push(format!(
+                "antenna_target_projections[{index}].solution must reference an H_ant_basis output"
+            ));
+        }
         if !stage_outputs.contains(&(
-            projection.solution.stage_id.as_str(),
-            projection.solution.output_id.as_str(),
+            projection.solution.stage_id(),
+            projection.solution.output_id(),
         )) || !target_exists(&projection.target, problem)
-            || !nonempty(&projection.solution.asset_id)
-            || !nonempty(&projection.solution.content_digest)
+            || projection.solution.published().is_some_and(|reference| {
+                !nonempty(&reference.asset_id) || !nonempty(&reference.content_digest)
+            })
         {
             errors.push(format!(
-                "antenna_target_projections[{index}] must reference a published compatible field solution and target"
+                "antenna_target_projections[{index}] must reference a declared stage output or complete published solution and valid target"
             ));
         }
     }
 
     let pipeline_stage_ids =
-        crate::validation::pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
+        crate::validation::declared_pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
     let study_kind = problem.study.kind();
     let active_stage_id = problem
         .problem_meta
@@ -965,7 +1203,7 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
                 problem
                     .antenna_field_solve_stages
                     .iter()
-                    .find(|stage| stage.id == projection.solution.stage_id)
+                    .find(|stage| stage.id == projection.solution.stage_id())
             });
         validate_solved_antenna_drive(
             &prefix,
@@ -973,7 +1211,7 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
             &projection_ids,
             &port_ids,
             solved_stage,
-            &pipeline_stage_ids,
+            pipeline_stage_ids.as_ref(),
             study_kind,
             active_stage_id,
             errors,
@@ -1033,7 +1271,12 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
         let solved_stage = problem
             .antenna_field_solve_stages
             .iter()
-            .find(|stage| stage.id == request.solution_ref.stage_id);
+            .find(|stage| stage.id == request.solution_ref.stage_id());
+        if !antenna_solution_source_is_basis(solved_stage, request.solution_ref.output_id()) {
+            errors.push(format!(
+                "{prefix}.solution_ref must reference an H_ant_basis output"
+            ));
+        }
         let valid_port_mode = match request.port_mode_id.as_deref() {
             Some(port_mode_id) => {
                 nonempty(port_mode_id)
@@ -1056,11 +1299,11 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
         let valid_mode_basis =
             validate_mode_basis_ref(&prefix, request.mode_basis_ref.as_deref(), errors);
         if !stage_outputs.contains(&(
-            request.solution_ref.stage_id.as_str(),
-            request.solution_ref.output_id.as_str(),
-        )) || !nonempty(&request.solution_ref.asset_id)
-            || !nonempty(&request.solution_ref.content_digest)
-            || !target_exists(&request.target, problem)
+            request.solution_ref.stage_id(),
+            request.solution_ref.output_id(),
+        )) || request.solution_ref.published().is_some_and(|reference| {
+            !nonempty(&reference.asset_id) || !nonempty(&reference.content_digest)
+        }) || !target_exists(&request.target, problem)
             || !matches!(
                 request.component.as_str(),
                 "x" | "y" | "z" | "u" | "v" | "normal" | "vector_power" | "transverse"
@@ -1073,7 +1316,7 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
             || !nonempty(&request.output_id)
         {
             errors.push(format!(
-                "{prefix} must reference a published solution and valid target, sampling frame, transform grid, component/equilibrium, optional mode basis, and output"
+                "{prefix} must reference a declared stage output or published solution and valid target, sampling frame, transform grid, component/equilibrium, optional mode basis, and output"
             ));
         }
     }
@@ -1091,6 +1334,8 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
         && problem.antenna_target_projections.is_empty()
         && problem.solved_antenna_drives.is_empty()
         && problem.antenna_spectrum_requests.is_empty()
+        && !problem.current_modules.iter().any(|module| matches!(module,
+            CurrentModuleIR::CurrentTransport { definition: Some(definition), .. } if definition.conservative_current_source.is_some()))
     {
         return;
     }
@@ -1107,6 +1352,12 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
         })
         .chain(problem.geometry.entries.iter().map(|entry| entry.name()))
         .collect::<BTreeSet<_>>();
+    validate_current_source_references(
+        &problem.current_modules,
+        &problem.antenna_port_modes,
+        &object_ids,
+        errors,
+    );
     let region_ids = problem
         .object_regions
         .iter()
@@ -1178,7 +1429,8 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
         if !nonempty(&stage.id) || !stage_ids.insert(stage.id.as_str()) {
             errors.push(format!("{prefix}.id must be non-empty and unique"));
         }
-        let valid_ports = !stage.port_mode_ids.is_empty()
+        validate_stage_current_view_ref(stage, &problem.current_modules, &prefix, errors);
+        let valid_ports = stage.port_mode_ids.len() == 1
             && stage.port_mode_ids.iter().all(|id| {
                 problem
                     .antenna_port_modes
@@ -1191,7 +1443,12 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
             });
         if !valid_ports {
             errors.push(format!(
-                "{prefix}.port_mode_ids must reference ports bound to the stage source and CurrentTransport"
+                "{prefix}.port_mode_ids must contain exactly one port bound to the stage source and CurrentTransport"
+            ));
+        }
+        if stage.target_refs.is_empty() {
+            errors.push(format!(
+                "{prefix}.target_refs must contain at least one explicitly authored target"
             ));
         }
         if !object_ids.contains(stage.source_object_id.as_str())
@@ -1234,21 +1491,33 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
         if !nonempty(&projection.id) || !projection_ids.insert(projection.id.as_str()) {
             errors.push(format!("{prefix}.id must be non-empty and unique"));
         }
+        if !antenna_solution_source_is_basis(
+            problem
+                .antenna_field_solve_stages
+                .iter()
+                .find(|stage| stage.id == projection.solution.stage_id()),
+            projection.solution.output_id(),
+        ) {
+            errors.push(format!(
+                "{prefix}.solution must reference an H_ant_basis output"
+            ));
+        }
         if !stage_outputs.contains(&(
-            projection.solution.stage_id.as_str(),
-            projection.solution.output_id.as_str(),
+            projection.solution.stage_id(),
+            projection.solution.output_id(),
         )) || !target_exists(&projection.target)
-            || !nonempty(&projection.solution.asset_id)
-            || !nonempty(&projection.solution.content_digest)
+            || projection.solution.published().is_some_and(|reference| {
+                !nonempty(&reference.asset_id) || !nonempty(&reference.content_digest)
+            })
         {
             errors.push(format!(
-                "{prefix} must reference a published compatible solution and target"
+                "{prefix} must reference a declared stage output or complete published solution and valid target"
             ));
         }
     }
 
     let pipeline_stage_ids =
-        crate::validation::pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
+        crate::validation::declared_pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
     let study_kind = problem.study.kind();
     let active_stage_id = problem
         .problem_meta
@@ -1269,7 +1538,7 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
             problem
                 .antenna_field_solve_stages
                 .iter()
-                .find(|stage| stage.id == projection.solution.stage_id)
+                .find(|stage| stage.id == projection.solution.stage_id())
         });
         validate_solved_antenna_drive(
             &prefix,
@@ -1277,7 +1546,7 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
             &projection_ids,
             &port_ids,
             stage,
-            &pipeline_stage_ids,
+            pipeline_stage_ids.as_ref(),
             study_kind,
             active_stage_id,
             errors,
@@ -1337,7 +1606,12 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
         let solved_stage = problem
             .antenna_field_solve_stages
             .iter()
-            .find(|stage| stage.id == request.solution_ref.stage_id);
+            .find(|stage| stage.id == request.solution_ref.stage_id());
+        if !antenna_solution_source_is_basis(solved_stage, request.solution_ref.output_id()) {
+            errors.push(format!(
+                "{prefix}.solution_ref must reference an H_ant_basis output"
+            ));
+        }
         let valid_port_mode = match request.port_mode_id.as_deref() {
             Some(port_mode_id) => {
                 nonempty(port_mode_id)
@@ -1360,11 +1634,11 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
         let valid_mode_basis =
             validate_mode_basis_ref(&prefix, request.mode_basis_ref.as_deref(), errors);
         if !stage_outputs.contains(&(
-            request.solution_ref.stage_id.as_str(),
-            request.solution_ref.output_id.as_str(),
-        )) || !nonempty(&request.solution_ref.asset_id)
-            || !nonempty(&request.solution_ref.content_digest)
-            || !target_exists(&request.target)
+            request.solution_ref.stage_id(),
+            request.solution_ref.output_id(),
+        )) || request.solution_ref.published().is_some_and(|reference| {
+            !nonempty(&reference.asset_id) || !nonempty(&reference.content_digest)
+        }) || !target_exists(&request.target)
             || !matches!(
                 request.component.as_str(),
                 "x" | "y" | "z" | "u" | "v" | "normal" | "vector_power" | "transverse"
@@ -1377,7 +1651,7 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
             || !nonempty(&request.output_id)
         {
             errors.push(format!(
-                "{prefix} must reference a published solution and valid target, sampling frame, transform grid, component/equilibrium, optional mode basis, and output"
+                "{prefix} must reference a declared stage output or published solution and valid target, sampling frame, transform grid, component/equilibrium, optional mode basis, and output"
             ));
         }
     }
@@ -1387,13 +1661,71 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
 mod tests {
     use super::*;
 
+    #[test]
+    fn antenna_solution_reference_preserves_symbolic_and_published_wire_shapes() {
+        let symbolic = serde_json::json!({
+            "kind": "stage_output",
+            "stage_id": "solve_1",
+            "output_id": "basis"
+        });
+        let parsed: AntennaSolutionRefIR = serde_json::from_value(symbolic.clone()).unwrap();
+        assert!(parsed.published().is_none());
+        assert_eq!(parsed.stage_id(), "solve_1");
+        assert_eq!(serde_json::to_value(parsed).unwrap(), symbolic);
+
+        let published = serde_json::json!({
+            "stage_id": "solve_1",
+            "output_id": "basis",
+            "asset_id": "asset-1",
+            "content_digest": "sha256:valid"
+        });
+        let parsed: AntennaSolutionRefIR = serde_json::from_value(published.clone()).unwrap();
+        assert_eq!(parsed.published().unwrap().asset_id, "asset-1");
+        assert_eq!(serde_json::to_value(parsed).unwrap(), published);
+
+        let resolved_asset = serde_json::json!({
+            "kind": "resolved_asset",
+            "stage_id": "solve_1",
+            "output_id": "basis",
+            "asset_id": "asset-1",
+            "content_digest": "sha256:valid"
+        });
+        let parsed: AntennaSolutionRefIR = serde_json::from_value(resolved_asset.clone()).unwrap();
+        assert_eq!(parsed.published().unwrap().asset_id, "asset-1");
+        assert_eq!(serde_json::to_value(parsed).unwrap(), resolved_asset);
+
+        for malformed in [
+            serde_json::json!({
+                "kind": "stage_output",
+                "stage_id": "solve_1",
+                "output_id": "basis",
+                "asset_id": "asset-1"
+            }),
+            serde_json::json!({
+                "kind": "resolved_asset",
+                "stage_id": "solve_1",
+                "output_id": "basis",
+                "asset_id": "asset-1"
+            }),
+            serde_json::json!({
+                "kind": "unknown",
+                "stage_id": "solve_1",
+                "output_id": "basis",
+                "asset_id": "asset-1",
+                "content_digest": "sha256:valid"
+            }),
+        ] {
+            assert!(serde_json::from_value::<AntennaSolutionRefIR>(malformed).is_err());
+        }
+    }
+
     fn solved_stage() -> AntennaFieldSolveStageIR {
         AntennaFieldSolveStageIR {
             id: "antenna_solve".to_string(),
             source_object_id: "antenna_1".to_string(),
             current_transport_id: "antenna_current".to_string(),
             port_mode_ids: vec!["port_1".to_string()],
-            conservative_current_view_ref: "current_view".to_string(),
+            conservative_current_view_ref: Some("current_view".to_string()),
             model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
             conductor_mesh_policy: "full_3d".to_string(),
@@ -1405,6 +1737,342 @@ mod tests {
                 quantity: "H_ant_basis".to_string(),
             }],
         }
+    }
+
+    fn stage_transport(
+        name: &str,
+        source: Option<crate::ConservativeCurrentSourceIR>,
+    ) -> CurrentModuleIR {
+        let mut definition: ChargeTransportDefinitionIR =
+            serde_json::from_value(serde_json::json!({
+                "domain": [{"object_id": "antenna_1"}],
+                "materials": [],
+                "boundaries": [],
+                "gauge": "zero_mean",
+                "solver": {
+                    "engine": "cg",
+                    "linear": {
+                        "relative_tolerance": 1e-10,
+                        "absolute_tolerance": 0.0,
+                        "max_iterations": 100
+                    },
+                    "operator_version": "fem_charge_conforming_h1_p1.transparent.v1",
+                    "physical_residual_version": "charge_balance_integrated_l2.v1"
+                }
+            }))
+            .unwrap();
+        definition.conservative_current_source = source;
+        CurrentModuleIR::CurrentTransport {
+            name: name.to_string(),
+            model: CurrentTransportModelIR::OhmicPoisson,
+            current_density: None,
+            solve_region: None,
+            conductivity_s_per_m: None,
+            coupling: TransportCouplingIR::OneWay,
+            time_envelope: None,
+            definition: Some(definition),
+        }
+    }
+
+    #[test]
+    fn stage_current_view_ref_wire_shape_preserves_legacy_and_omits_none() {
+        let legacy = serde_json::to_value(solved_stage()).unwrap();
+        assert_eq!(legacy["conservative_current_view_ref"], "current_view");
+        let decoded: AntennaFieldSolveStageIR = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(
+            decoded.conservative_current_view_ref.as_deref(),
+            Some("current_view")
+        );
+        assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
+
+        let mut omitted = legacy;
+        omitted
+            .as_object_mut()
+            .unwrap()
+            .remove("conservative_current_view_ref");
+        let decoded: AntennaFieldSolveStageIR = serde_json::from_value(omitted.clone()).unwrap();
+        assert_eq!(decoded.conservative_current_view_ref, None);
+        assert_eq!(serde_json::to_value(decoded).unwrap(), omitted);
+
+        let mut explicit_null = omitted.clone();
+        explicit_null["conservative_current_view_ref"] = serde_json::Value::Null;
+        let decoded: AntennaFieldSolveStageIR = serde_json::from_value(explicit_null).unwrap();
+        assert_eq!(decoded.conservative_current_view_ref, None);
+        assert_eq!(serde_json::to_value(decoded).unwrap(), omitted);
+    }
+
+    #[test]
+    fn stage_current_view_ref_is_optional_only_for_the_exact_typed_source_transport() {
+        let mut stage = solved_stage();
+        stage.conservative_current_view_ref = None;
+        let source = crate::spin_transport::current_source_tests::fixture();
+        let modules = vec![stage_transport("antenna_current", Some(source.clone()))];
+        let mut errors = Vec::new();
+        validate_stage_current_view_ref(&stage, &modules, "stage", &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let modules = vec![
+            stage_transport("antenna_current", None),
+            stage_transport("another_transport", Some(source)),
+        ];
+        validate_stage_current_view_ref(&stage, &modules, "stage", &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("may be omitted only when CurrentTransport")));
+
+        errors.clear();
+        stage.conservative_current_view_ref = Some("  ".into());
+        validate_stage_current_view_ref(&stage, &modules, "stage", &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("must be non-empty when present")));
+
+        errors.clear();
+        stage.conservative_current_view_ref = Some("historical:view".into());
+        validate_stage_current_view_ref(&stage, &modules, "stage", &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn both_problem_versions_apply_the_stage_current_view_selector_rule() {
+        let mut stage = solved_stage();
+        stage.conservative_current_view_ref = None;
+        let source = crate::spin_transport::current_source_tests::fixture();
+
+        let mut v03 = ProblemIR::bootstrap_example();
+        v03.current_modules = vec![stage_transport("antenna_current", Some(source.clone()))];
+        v03.antenna_field_solve_stages = vec![stage.clone()];
+        let mut errors = Vec::new();
+        validate_antenna_composition_v03(&v03, &mut errors);
+        assert!(!errors
+            .iter()
+            .any(|error| error.contains("conservative_current_view_ref")));
+
+        let mut v04 = ProblemIRV04::bootstrap_example();
+        v04.current_modules = vec![stage_transport("antenna_current", Some(source))];
+        v04.antenna_field_solve_stages = vec![stage.clone()];
+        errors.clear();
+        validate_antenna_composition(&v04, &mut errors);
+        assert!(!errors
+            .iter()
+            .any(|error| error.contains("conservative_current_view_ref")));
+
+        v03.current_modules = vec![
+            stage_transport("antenna_current", None),
+            stage_transport(
+                "another_transport",
+                Some(crate::spin_transport::current_source_tests::fixture()),
+            ),
+        ];
+        errors.clear();
+        validate_antenna_composition_v03(&v03, &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("conservative_current_view_ref may be omitted")));
+
+        v04.current_modules = v03.current_modules.clone();
+        errors.clear();
+        validate_antenna_composition(&v04, &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("conservative_current_view_ref may be omitted")));
+
+        stage.conservative_current_view_ref = Some("  ".into());
+        v03.antenna_field_solve_stages = vec![stage.clone()];
+        v04.antenna_field_solve_stages = vec![stage.clone()];
+        errors.clear();
+        validate_antenna_composition_v03(&v03, &mut errors);
+        assert!(errors.iter().any(|error| {
+            error.contains("conservative_current_view_ref must be non-empty when present")
+        }));
+        errors.clear();
+        validate_antenna_composition(&v04, &mut errors);
+        assert!(errors.iter().any(|error| {
+            error.contains("conservative_current_view_ref must be non-empty when present")
+        }));
+
+        stage.conservative_current_view_ref = Some("legacy:view".into());
+        v03.antenna_field_solve_stages = vec![stage.clone()];
+        v04.antenna_field_solve_stages = vec![stage];
+        errors.clear();
+        validate_antenna_composition_v03(&v03, &mut errors);
+        assert!(!errors
+            .iter()
+            .any(|error| error.contains("conservative_current_view_ref")));
+        errors.clear();
+        validate_antenna_composition(&v04, &mut errors);
+        assert!(!errors
+            .iter()
+            .any(|error| error.contains("conservative_current_view_ref")));
+    }
+
+    #[test]
+    fn both_problem_versions_require_explicit_solve_targets() {
+        for targets in [vec![], vec![FieldTargetIR::Global {}]] {
+            let empty = targets.is_empty();
+            let mut stage = solved_stage();
+            stage.target_refs = targets;
+            let mut v03 = ProblemIR::bootstrap_example();
+            v03.antenna_field_solve_stages = vec![stage.clone()];
+            let mut v04 = ProblemIRV04::bootstrap_example();
+            v04.antenna_field_solve_stages = vec![stage];
+            let mut errors = Vec::new();
+            validate_antenna_composition_v03(&v03, &mut errors);
+            assert_eq!(
+                errors.iter().any(|error| error
+                    .contains("target_refs must contain at least one explicitly authored target")),
+                empty
+            );
+            errors.clear();
+            validate_antenna_composition(&v04, &mut errors);
+            assert_eq!(
+                errors.iter().any(|error| error
+                    .contains("target_refs must contain at least one explicitly authored target")),
+                empty
+            );
+        }
+    }
+
+    #[test]
+    fn spectrum_source_requires_the_field_basis_output() {
+        let mut stage = solved_stage();
+        stage.outputs.push(AntennaNamedOutputIR {
+            id: "diagnostic".to_string(),
+            quantity: "H_ant".to_string(),
+        });
+        assert!(antenna_solution_source_is_basis(Some(&stage), "basis"));
+        assert!(!antenna_solution_source_is_basis(
+            Some(&stage),
+            "diagnostic"
+        ));
+        assert!(!antenna_solution_source_is_basis(None, "basis"));
+    }
+
+    #[test]
+    fn antenna_stage_validation_rejects_multiple_ports_before_execution() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let mut stage = solved_stage();
+        stage.port_mode_ids.push("port_2".into());
+        problem.antenna_field_solve_stages.push(stage);
+        let mut errors = Vec::new();
+        validate_antenna_composition_v03(&problem, &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("port_mode_ids must contain exactly one port")));
+    }
+
+    #[test]
+    fn port_return_terminals_may_use_a_separate_transport_domain_conductor() {
+        let port: AntennaPortModeIR = serde_json::from_value(serde_json::json!({
+            "schema_version": "antenna_port_mode.v2",
+            "id": "port",
+            "source_object_id": "signal",
+            "current_transport_id": "current",
+            "branches": [
+                {"id": "signal", "inlet_terminal_ref": "signal_in", "outlet_terminal_ref": "signal_out", "signed_weight": 1.0},
+                {"id": "return", "inlet_terminal_ref": "return_in", "outlet_terminal_ref": "return_out", "signed_weight": -1.0}
+            ]
+        })).unwrap();
+        let definition: ChargeTransportDefinitionIR = serde_json::from_value(serde_json::json!({
+            "domain": [{"object_id": "signal"}, {"object_id": "return"}],
+            "materials": [],
+            "boundaries": [
+                {"id": "signal_in", "kind": "voltage_electrode", "potential_V": 1.0, "surfaces": [{"object_id": "signal", "surface_id": "y_min", "orientation": [0.0, -1.0, 0.0]}]},
+                {"id": "signal_out", "kind": "voltage_electrode", "potential_V": 0.0, "surfaces": [{"object_id": "signal", "surface_id": "y_max", "orientation": [0.0, 1.0, 0.0]}]},
+                {"id": "return_in", "kind": "voltage_electrode", "potential_V": 0.0, "surfaces": [{"object_id": "return", "surface_id": "y_min", "orientation": [0.0, -1.0, 0.0]}]},
+                {"id": "return_out", "kind": "voltage_electrode", "potential_V": 1.0, "surfaces": [{"object_id": "return", "surface_id": "y_max", "orientation": [0.0, 1.0, 0.0]}]}
+            ],
+            "gauge": "dirichlet_reference",
+            "solver": {"engine": "cg", "linear": {"absolute_tolerance": 1e-12, "max_iterations": 500, "relative_tolerance": 1e-10}, "operator_version": "fv_charge_harmonic_v1", "physical_residual_version": "charge_balance_integrated_l2.v1"}
+        })).unwrap();
+        let mut errors = Vec::new();
+        validate_v2_port_structure(&port, Some(&definition), "port", &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let mut invalid = definition.clone();
+        if let crate::ChargeBoundaryIR::VoltageElectrode { surfaces, .. } =
+            &mut invalid.boundaries[3]
+        {
+            surfaces[0].object_id = "outside_domain".into();
+        }
+        validate_v2_port_structure(&port, Some(&invalid), "port", &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("CurrentTransport domain")));
+
+        let mut split_branch = definition.clone();
+        if let crate::ChargeBoundaryIR::VoltageElectrode { surfaces, .. } =
+            &mut split_branch.boundaries[3]
+        {
+            surfaces[0].object_id = "signal".into();
+        }
+        errors.clear();
+        validate_v2_port_structure(&port, Some(&split_branch), "port", &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("same conductor object")));
+
+        let mut wrong_signal = port.clone();
+        wrong_signal.source_object_id = "return".into();
+        errors.clear();
+        validate_v2_port_structure(&wrong_signal, Some(&definition), "port", &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("positive signal path")));
+    }
+
+    #[test]
+    fn current_source_port_endpoints_resolve_observations_not_boundary_conditions() {
+        let mut source = crate::spin_transport::current_source_tests::fixture();
+        let crate::ConservativeCurrentSourceIR::ExternalLeadCurrent {
+            terminal_observations,
+            ..
+        } = &mut source;
+        terminal_observations[0].id = "signal-in".into();
+        terminal_observations[1].id = "signal-out".into();
+        terminal_observations.extend([
+            crate::CurrentSourceTerminalObservationIR {
+                id: "return-in".into(),
+                object_id: "return".into(),
+                interface_pair_ids: vec!["return-pair-in".into()],
+            },
+            crate::CurrentSourceTerminalObservationIR {
+                id: "return-out".into(),
+                object_id: "return".into(),
+                interface_pair_ids: vec!["return-pair-out".into()],
+            },
+        ]);
+        let definition:ChargeTransportDefinitionIR=serde_json::from_value(serde_json::json!({
+            "domain":[{"object_id":"body"},{"object_id":"return"}],"materials":[],"boundaries":[],"gauge":"terminal_reference",
+            "solver":{"engine":"cg","linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},"operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
+            "conservative_current_source":source
+        })).unwrap();
+        let mut port:AntennaPortModeIR=serde_json::from_value(serde_json::json!({"schema_version":ANTENNA_PORT_MODE_SCHEMA_VERSION_V2,"id":"port","source_object_id":"body","current_transport_id":"transport","branches":[
+            {"id":"signal","inlet_terminal_ref":"signal-in","outlet_terminal_ref":"signal-out","signed_weight":1.},
+            {"id":"return","inlet_terminal_ref":"return-in","outlet_terminal_ref":"return-out","signed_weight":-1.}
+        ]})).unwrap();
+        let mut errors = Vec::new();
+        validate_v2_port_structure(&port, Some(&definition), "port", &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        port.branches[0].inlet_terminal_ref = "legacy-voltage".into();
+        validate_v2_port_structure(&port, Some(&definition), "port", &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("terminal_observations")));
+        port.branches[0].inlet_terminal_ref = "signal-in".into();
+        port.id = "missing-drive".into();
+        errors.clear();
+        validate_v2_port_structure(&port, Some(&definition), "port", &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("exactly one explicitly authored")));
+        port.id = "port".into();
+        port.source_object_id = "return".into();
+        errors.clear();
+        validate_v2_port_structure(&port, Some(&definition), "port", &mut errors);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("positive signal observations")));
     }
 
     fn solved_drive(
@@ -1444,7 +2112,7 @@ mod tests {
             &BTreeSet::from(["projection_1"]),
             &BTreeSet::from(["port_1"]),
             Some(&stage),
-            &BTreeSet::from(["run".to_string()]),
+            Some(&BTreeSet::from(["run".to_string()])),
             StudyKindIR::TimeEvolution,
             Some("run"),
             &mut errors,
@@ -1480,7 +2148,7 @@ mod tests {
             &BTreeSet::from(["projection_1"]),
             &BTreeSet::from(["port_1"]),
             Some(&stage),
-            &BTreeSet::from(["relax".to_string()]),
+            Some(&BTreeSet::from(["relax".to_string()])),
             StudyKindIR::Relaxation,
             Some("relax"),
             &mut errors,
@@ -1490,6 +2158,39 @@ mod tests {
             .iter()
             .any(|error| error
                 .contains("dynamic waveform is invalid in a minimizer/relaxation study")));
+    }
+
+    #[test]
+    fn solved_drive_without_pipeline_defers_stage_existence_check() {
+        assert!(crate::validation::declared_pipeline_stage_ids(&Default::default()).is_none());
+        let declared_empty = std::collections::BTreeMap::from([(
+            "study_pipeline".to_string(),
+            serde_json::json!({ "nodes": [] }),
+        )]);
+        assert_eq!(
+            crate::validation::declared_pipeline_stage_ids(&declared_empty),
+            Some(BTreeSet::new())
+        );
+        let stage = solved_stage();
+        let drive = solved_drive(
+            TimeDependenceIR::Constant,
+            DriveActivationIR::StageIds {
+                stage_ids: vec!["later_run".to_string()],
+            },
+        );
+        let mut errors = Vec::new();
+        validate_solved_antenna_drive(
+            "solved_antenna_drives[0]",
+            &drive,
+            &BTreeSet::from(["projection_1"]),
+            &BTreeSet::from(["port_1"]),
+            Some(&stage),
+            None,
+            StudyKindIR::Relaxation,
+            Some("relax"),
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
@@ -1516,7 +2217,7 @@ mod tests {
                 &BTreeSet::from(["projection_1"]),
                 &BTreeSet::from(["port_1"]),
                 Some(&stage),
-                &BTreeSet::from(["relax".to_string(), "run".to_string()]),
+                Some(&BTreeSet::from(["relax".to_string(), "run".to_string()])),
                 StudyKindIR::Relaxation,
                 Some("relax"),
                 &mut errors,
@@ -1534,9 +2235,8 @@ mod tests {
             },
             DriveActivationIR::AllTimeEvolution {},
         );
-        drive.bandwidth_declaration = Some(AntennaWaveformBandwidthDeclarationIR {
-            f_max_hz: f64::NAN,
-        });
+        drive.bandwidth_declaration =
+            Some(AntennaWaveformBandwidthDeclarationIR { f_max_hz: f64::NAN });
         let mut errors = Vec::new();
         validate_solved_antenna_drive(
             "solved_antenna_drives[0]",
@@ -1544,7 +2244,7 @@ mod tests {
             &BTreeSet::from(["projection_1"]),
             &BTreeSet::from(["port_1"]),
             Some(&stage),
-            &BTreeSet::from(["run".to_string()]),
+            Some(&BTreeSet::from(["run".to_string()])),
             StudyKindIR::TimeEvolution,
             Some("run"),
             &mut errors,
@@ -1558,9 +2258,8 @@ mod tests {
             phase_rad: 0.0,
             offset: 0.0,
         };
-        drive.bandwidth_declaration = Some(AntennaWaveformBandwidthDeclarationIR {
-            f_max_hz: 2.0e9,
-        });
+        drive.bandwidth_declaration =
+            Some(AntennaWaveformBandwidthDeclarationIR { f_max_hz: 2.0e9 });
         errors.clear();
         validate_solved_antenna_drive(
             "solved_antenna_drives[0]",
@@ -1568,7 +2267,7 @@ mod tests {
             &BTreeSet::from(["projection_1"]),
             &BTreeSet::from(["port_1"]),
             Some(&stage),
-            &BTreeSet::from(["run".to_string()]),
+            Some(&BTreeSet::from(["run".to_string()])),
             StudyKindIR::TimeEvolution,
             Some("run"),
             &mut errors,
@@ -1626,5 +2325,16 @@ mod tests {
         assert!(errors
             .iter()
             .any(|error| error.contains("equilibrium_ref is required")));
+
+        let mut errors = Vec::new();
+        assert!(!validate_transverse_equilibrium_ref(
+            "antenna_spectrum_requests[0]",
+            "x",
+            Some("equilibrium_1"),
+            &mut errors,
+        ));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("only valid for component='transverse'")));
     }
 }

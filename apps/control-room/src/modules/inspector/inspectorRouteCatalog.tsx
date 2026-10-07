@@ -577,7 +577,7 @@ const OBJECT_VISUALIZATION_DEBUG_OWNER: VisualizationDebugInspectorOwner = {
   capabilityDescription:
     "Object-scoped FEM viewport snapshots, field carriers, and exact transport metadata",
   id: "object.visualization.debug",
-  targetLabel: "Magnetic object target",
+  targetLabel: "Object target",
   title: "Object Visualization Debug",
 };
 

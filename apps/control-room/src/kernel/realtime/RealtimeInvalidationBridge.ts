@@ -1043,6 +1043,8 @@ export class RealtimeInvalidationBridge {
     if (recommendedFetch === SIMULATION_STAGES_EXECUTION_PATH) {
       this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, dependentRevision);
       this.resources.invalidate(SIMULATION_COMMANDS_PATH, dependentRevision);
+      // Catalog, inspection metadata and payloads share the canonical stage prefix.
+      this.resources.invalidatePrefix(ANTENNA_STAGE_OUTPUT_CATALOG_PREFIX, dependentRevision);
       this.resources.invalidateMatching(
         (resourceKey) =>
           matchesStageScopedResource(
@@ -1104,10 +1106,6 @@ export class RealtimeInvalidationBridge {
           matchesStageScopedResource(
             resourceKey,
             ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
-          ) ||
-          matchesStageScopedResource(
-            resourceKey,
-            DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
           ),
         dependentRevision,
       );

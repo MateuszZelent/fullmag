@@ -794,8 +794,20 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_antenna_field_solution),
         )
         .route(
+            "/v2/sessions/current/data/antenna/field-solutions/:solution_id/payloads/:payload_kind",
+            get(handlers::data::get_antenna_field_solution_payload),
+        )
+        .route(
             "/v2/sessions/current/data/antenna/stages/:stage_id/output-catalog",
             get(handlers::data::get_antenna_stage_output_catalog),
+        )
+        .route(
+            "/v2/sessions/current/data/antenna/stages/:stage_id/external-lead-inspection",
+            get(handlers::data::get_antenna_external_lead_inspection),
+        )
+        .route(
+            "/v2/sessions/current/data/antenna/stages/:stage_id/external-lead-inspection/payloads/:payload_kind",
+            get(handlers::data::get_antenna_external_lead_inspection_payload),
         )
         .route(
             "/v2/sessions/current/data/antenna/source-spectra/:output_id",

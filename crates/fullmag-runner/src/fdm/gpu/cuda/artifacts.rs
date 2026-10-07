@@ -21,6 +21,7 @@ pub(super) fn copy_resolved_antenna_field(
     solver_time_seconds: f64,
 ) -> Result<Vec<[f64; 3]>, RunError> {
     let physical_time_seconds = super::canonical_fdm_time(plan, solver_time_seconds);
+    crate::antenna_fields::validate_fdm_antenna_sample_counts(plan, cell_count)?;
     let mut values =
         resolved_antenna_zeeman_field_for_count(plan, cell_count, physical_time_seconds);
     if values.len() != cell_count {
@@ -342,6 +343,22 @@ pub(crate) fn copy_cuda_field_snapshot_with_plan(
 mod tests {
     use super::*;
     use fullmag_ir::{ResolvedAntennaZeemanMaskIR, TimeDependenceIR};
+
+    #[test]
+    fn cuda_antenna_snapshot_rejects_short_mask() {
+        let mut plan = FdmPlanIR::default();
+        plan.antenna_zeeman_masks = vec![ResolvedAntennaZeemanMaskIR {
+            source: "antenna_1".into(),
+            object: "magnet".into(),
+            amplitude_b_t: 0.0,
+            direction: [1.0, 0.0, 0.0],
+            spatial_profile: None,
+            waveform: None,
+            field_xyz: vec![[0.0; 3]],
+        }];
+        let error = copy_resolved_antenna_field(&plan, "H_ant", 2, 0.0).unwrap_err();
+        assert!(error.message.contains("expected 2"));
+    }
 
     #[test]
     fn resolved_cuda_antenna_snapshot_scales_the_retained_basis_in_time() {

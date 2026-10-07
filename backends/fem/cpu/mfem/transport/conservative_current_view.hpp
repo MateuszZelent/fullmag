@@ -159,6 +159,10 @@ public:
     static Ptr Import(const ConservativeCurrentImportRequest &request);
     const mfem::FiniteElementSpace &space() const;
     const mfem::GridFunction &field() const;
+    const StableMeshVertexIdentities &stable_vertex_identities() const;
+    // Owned vertex-order values from the charge solve used to build this RT0.
+    // Imported RT0 alone has no charge-potential provenance and returns nullptr.
+    const std::vector<double> *charge_potential_vertex_values_v() const;
     const ConservativeCurrentIdentity &identity() const;
     const ConservativeCurrentBalanceCertificate &balance() const;
     const ConstraintRankCertificate &constraint_rank_certificate() const;

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 import fullmag
@@ -161,15 +163,18 @@ def test_field_solve_projection_and_spectrum_are_typed_thin_references() -> None
             k_u_rad_per_m=(-1.0e7, 0.0, 1.0e7),
             k_v_rad_per_m=(-2.0e7, 0.0, 2.0e7),
         ),
-        component="transverse",
-        equilibrium_ref="equilibrium_1",
-        mode_basis_ref="modes_1",
+        component="x",
         output_id="k_spectrum_1",
     )
 
     assert stage.to_ir()["outputs"] == [
         {"id": "solution_1", "quantity": "H_ant_basis"}
     ]
+    assert stage.to_ir()["conservative_current_view_ref"] == "antenna_current:rt0"
+    source_stage = replace(stage, conservative_current_view_ref=None)
+    assert "conservative_current_view_ref" not in source_stage.to_ir()
+    with pytest.raises(ValueError, match="conservative_current_view_ref must not be empty"):
+        replace(stage, conservative_current_view_ref="  ")
     assert projection.to_ir()["solution"]["asset_id"] == "afs_01"
     assert projection.to_ir()["solution"]["kind"] == "resolved_asset"
     assert spectrum.to_ir()["solution_ref"]["kind"] == "resolved_asset"
@@ -177,6 +182,12 @@ def test_field_solve_projection_and_spectrum_are_typed_thin_references() -> None
     assert spectrum.to_ir()["port_mode_id"] == "cpw_common"
     assert spectrum.to_ir()["sampling_plane"]["sample_count_u"] == 65
     assert spectrum.to_ir()["normalization"] == "integral_si"
+    with pytest.raises(ValueError, match="equilibrium_ref is only valid"):
+        replace(spectrum, equilibrium_ref="equilibrium_1")
+    with pytest.raises(ValueError, match="transverse spectrum is unsupported"):
+        replace(spectrum, component="transverse", equilibrium_ref="equilibrium_1")
+    with pytest.raises(ValueError, match="mode_basis_ref is unsupported"):
+        replace(spectrum, mode_basis_ref="modes_1")
     for payload in (stage.to_ir(), projection.to_ir(), spectrum.to_ir()):
         assert "geometry" not in payload
         assert "conductivity" not in payload

@@ -87,6 +87,10 @@ pub struct CurrentRunResource {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StageExecutionResource {
+    pub session_id: String,
+    pub session_epoch: String,
+    pub request_scope_epoch: String,
+    pub run_id: String,
     pub revision: u64,
     pub runtime_state: String,
     pub total_stages: u32,
@@ -102,6 +106,9 @@ pub struct StageExecutionResource {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StageExecutionRecordResource {
     pub stage_id: String,
+    /// Exact authored antenna definition ID, not the study node or runtime ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub antenna_solve_stage_id: Option<String>,
     pub index: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,

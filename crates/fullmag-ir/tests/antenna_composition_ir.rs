@@ -66,6 +66,7 @@ fn problem_with_charge_transport() -> ProblemIRV04 {
                     operator_version: "fem_charge_conforming_h1_p1.transparent.v1".to_string(),
                 },
                 conservative_current_view: None,
+                conservative_current_source: None,
                 structured_current_closure: None,
             }),
         });

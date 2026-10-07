@@ -10,6 +10,12 @@
 use fullmag_fem_sys as ffi;
 
 mod availability;
+// A modeled-domain contribution, not a complete closed-circuit field.
+#[allow(dead_code)]
+pub(crate) mod accepted_external_lead;
+// The owned charge ABI is a prerequisite, not yet a closed Oersted producer.
+#[allow(dead_code)]
+pub(crate) mod accepted_terminal_charge;
 #[cfg(feature = "fem-gpu")]
 mod charge_transport;
 mod eigen;
@@ -1383,17 +1389,21 @@ fn pack_native_regional_field_drives(
     let mut marker_storage = Vec::with_capacity(plan.field_drives.len());
     let mut point_storage = Vec::with_capacity(plan.field_drives.len());
     let mut geometry_node_storage = Vec::with_capacity(plan.field_drives.len());
-    let active_solved_bases = plan
-        .solved_antenna_drive_bases
-        .iter()
-        .filter(|basis| {
-            basis.drive.activation.is_active_for(
-                plan.time_stage.study_kind,
-                plan.time_stage.active_stage_id.as_deref(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let mut basis_storage = active_solved_bases
+    if let Some(inactive) = plan.solved_antenna_drive_bases.iter().find(|basis| {
+        !basis.drive.activation.is_active_for(
+            plan.time_stage.study_kind,
+            plan.time_stage.active_stage_id.as_deref(),
+        )
+    }) {
+        return Err(RunError {
+            message: format!(
+                "resolved FEM antenna basis '{}' is inactive in the current stage",
+                inactive.drive.id
+            ),
+        });
+    }
+    let resolved_solved_bases = &plan.solved_antenna_drive_bases;
+    let mut basis_storage = resolved_solved_bases
         .iter()
         .map(|basis| {
             basis
@@ -1431,7 +1441,7 @@ fn pack_native_regional_field_drives(
         geometry_node_storage.push(nodes);
     }
     let procedural_point_count = point_storage.len();
-    point_storage.extend(active_solved_bases.iter().map(|basis| {
+    point_storage.extend(resolved_solved_bases.iter().map(|basis| {
         match &basis.drive.waveform {
             TimeDependenceIR::PiecewiseLinear { points } => points
                 .iter()
@@ -1658,7 +1668,7 @@ fn pack_native_regional_field_drives(
             },
         });
     }
-    for (index, (basis, values)) in active_solved_bases.iter().zip(&basis_storage).enumerate() {
+    for (index, (basis, values)) in resolved_solved_bases.iter().zip(&basis_storage).enumerate() {
         if basis.field_xyz_apm_per_a.len() != plan.mesh.nodes.len() {
             return Err(RunError {
                 message: format!(
@@ -2701,12 +2711,31 @@ impl NativeFemBackend {
     }
 
     pub(crate) fn begin_stage(&mut self, stage_start_time_s: f64) -> Result<(), RunError> {
-        if !stage_start_time_s.is_finite() || stage_start_time_s < 0.0 {
+        self.begin_stage_with_waveform_origin(stage_start_time_s, stage_start_time_s)
+    }
+
+    pub(crate) fn begin_stage_with_waveform_origin(
+        &mut self,
+        segment_start_time_s: f64,
+        waveform_origin_time_s: f64,
+    ) -> Result<(), RunError> {
+        if !segment_start_time_s.is_finite()
+            || segment_start_time_s < 0.0
+            || !waveform_origin_time_s.is_finite()
+            || waveform_origin_time_s < 0.0
+            || waveform_origin_time_s > segment_start_time_s
+        {
             return Err(RunError {
-                message: "native FEM stage start time must be finite and non-negative".to_string(),
+                message: "native FEM waveform origin must be finite, non-negative, and no later than the segment start".to_string(),
             });
         }
-        let rc = unsafe { ffi::fullmag_fem_backend_begin_stage(self.handle, stage_start_time_s) };
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_begin_stage_v2(
+                self.handle,
+                segment_start_time_s,
+                waveform_origin_time_s,
+            )
+        };
         if rc != ffi::FULLMAG_FEM_OK {
             return Err(self.last_error_or("beginning native FEM stage failed"));
         }
@@ -6595,6 +6624,11 @@ mod tests {
             .unwrap(),
             Some(vec![false, true, true, false])
         );
+        plan.time_stage.active_stage_id = Some("other".into());
+        let error = pack_native_regional_field_drives(&plan)
+            .err()
+            .expect("inactive resolved basis must be rejected");
+        assert!(error.message.contains("inactive in the current stage"));
     }
 
     #[test]

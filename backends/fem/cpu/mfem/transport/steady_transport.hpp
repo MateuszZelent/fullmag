@@ -5,6 +5,7 @@
 #include <array>
 #include <limits>
 #include <memory>
+#include <vector>
 
 namespace fullmag::fem::transport {
 
@@ -50,6 +51,13 @@ struct ChargeSolveDiagnostics {
     std::array<double, 3> current_density_volume_average_apm2{};
 };
 
+struct ChargeTerminalCurrentSolution {
+    ChargeSolveDiagnostics diagnostics;
+    std::vector<double> terminal_voltage_v;
+    std::vector<double> measured_outward_current_a;
+    std::vector<int> gauge_terminal_indices;
+};
+
 struct SpinSolveDiagnostics {
     bool converged = false;
     int iterations = 0;
@@ -93,6 +101,10 @@ public:
         mfem::Coefficient &boundary_potential,
         ChargeGauge gauge);
 
+    ChargeTerminalCurrentSolution solve_charge_terminal_currents(
+        const std::vector<std::vector<int>> &terminal_boundary_attributes,
+        const std::vector<double> &requested_outward_current_a);
+
     SpinSolveDiagnostics solve_spin(
         const mfem::Array<int> &dirichlet_boundary_marker,
         mfem::VectorCoefficient *boundary_spin_potential);
@@ -107,6 +119,7 @@ public:
     const mfem::GridFunction &electric_potential() const;
     const mfem::GridFunction &charge_current_density() const;
     double boundary_current_a(int boundary_attribute);
+    double boundary_weak_current_a(int boundary_attribute) const;
     const mfem::GridFunction &spin_potential() const;
     const mfem::GridFunction &spin_current_tensor() const;
     const mfem::GridFunction &transport_torque() const;

@@ -25,6 +25,7 @@
 @import "../src/design/styles/ribbon.css" layer(fm-components);
 @import "../src/design/styles/explorer.css" layer(fm-components);
 @import "../src/design/styles/inspector.css" layer(fm-modules);
+@import "../src/design/styles/inspector-antenna.css" layer(fm-modules);
 @import "../src/design/styles/inspector-sinc.css" layer(fm-modules);
 @import "../src/design/styles/inspector-topological-charge.css" layer(fm-modules);
 @import "../src/design/styles/inspector-hysteresis.css" layer(fm-modules);

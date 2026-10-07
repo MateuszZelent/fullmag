@@ -10,8 +10,8 @@ import type { RecentIndexState } from "./types";
 /**
  * Bridge to the desktop host's recent-project index. The index is derived
  * state, so every failure here resolves to a state the screen can render; none
- * of these functions may reject into the UI. A browser build or a host without
- * the commands reports "unavailable", which is not an error.
+ * of these functions may reject into the UI. Only a browser without the host
+ * bridge reports "unavailable"; a present host's failures remain visible.
  */
 
 interface HostOpenArchive {
@@ -24,18 +24,12 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** A host that predates the command rejects with "command ... not found". */
-function isMissingCommand(error: unknown): boolean {
-  return /not found|unknown command|not allowed/i.test(describe(error));
-}
-
 async function call(command: string, args?: Record<string, unknown>): Promise<RecentIndexState> {
   const invoke = tauriInvoke();
   if (!invoke) return { kind: "unavailable" };
   try {
     return parseRecentIndex(await invoke<unknown>(command, args));
   } catch (error) {
-    if (isMissingCommand(error)) return { kind: "unavailable" };
     return { kind: "error", message: describe(error) };
   }
 }

@@ -602,6 +602,138 @@ backends/fem/cpu/mfem/workflows/antenna_field_solve
 
 Reguły własności:
 
+Stan źródłowy 2026-10-03: powyższy właściciel ma teraz
+`charge_trace_workspace.cpp::solve_charge_trace_workspace`, napięciowy
+etap H1/P1 na straight tet4 z affine trace, gauge i niezależnym residualem
+każdego komponentu oraz owned V i reakcjami oryginalnego K.
+`PeriodicChargePotentialSolver::Solve` deleguje do tego etapu.
+Nie oznacza to ukończenia workflow: odpowiedź na zadane podpisane prądy
+portowe, ograniczenia sum terminalnych w RT0 i wspólny zaakceptowany
+snapshot V/J/H nadal wymagają wdrożenia i kwalifikacji runtime.
+Stan źródeł i builda nie jest dowodem walidacji fizycznej.
+Późniejszy etap źródłowy `charge_current_response.cpp::solve_charge_current_response`
+korzysta z owned `ChargeTraceWorkspace`: K powstaje raz dla jednostkowych
+i końcowego solve, a odpowiedź dotyczy prądów sprzężonych z voltage controls.
+To nie jest jeszcze publiczny adapter physical terminal/closure ani
+terminal-current certificate. Źródłowy gate odrzuca authored common-mode
+przed solve; numeryczny rząd, signed currents i RT0 wymagają dowodów.
+Kolejny źródłowy `charge_control_nullspace_rank.cpp::validate_charge_control_rank`
+dodaje dokładną wykonalność i niezależność wszystkich controls modulo stałe
+pierwotnych objętości K, przed identyfikacją trace i przed unit CG.
+Odmowy bounded arytmetyki są odrębne od zależności; numerical response
+conditioning i runtime nadal nie są kwalifikowane.
+Następny source-only `charge_terminal_current_constraints.cpp::solve_charge_terminal_current_constraints`
+wiąże terminale z rzeczywistymi stable-ID boundary faces i P1 DOF,
+sprawdza face closure, referencje i bilans per electrical component oraz
+podpisane prądy wszystkich terminali, także reference/requested-zero.
+`solve_charge_current_response_prepared` korzysta z tego samego frozen K;
+ordered topology i solver policy nie mogą się zmienić. Zero-jump
+interfaces są jawne; nonzero cut actuators i trace-aliased electrodes
+wymagają oddzielnej realizacji. Ten adapter nie jest jeszcze publiczną
+ścieżką closure/RT0, nowym ABI ani kompletnym accepted-source V/J/H.
+Kwalifikacja numeryczna i runtime pozostają otwarte.
+Kolejny source-only operator transportu `project_terminal_constrained_rt0`
+przyjmuje zmierzone H1 outward currents jako aggregate terminal rows;
+rozszerza istniejący exact rank i weighted RT0 KKT. Wszystkie elementy,
+ściany oraz terminale są mierzone po solve, także omitted rows.
+Legacy `Build` nadal używa pustej listy tych rows. Owned numeric
+projection nie jest `ConservativeCurrentView` ani accepted V/J/H:
+sam operator nie ma typed wspólnego mesh/material/V provenance,
+publicznego ABI i kwalifikacji. Nie używać go do promowania capability.
+Kolejny numeric source step dodaje optional explicit metal-metal pair
+rows do tego samego rank/KKT. Face/vertex maps są authored stable IDs,
+geometry exact-coincident z przeciwnymi outward normals, a terminal
+overlap i reused faces są odrzucane. Każdy interface flux jest mierzony
+po solve. To nie jest source cut ani accepted external-lead closure;
+same numeric pairs nie potwierdzają pochodzenia H1/raw J.
+Następny source-only workflow
+`accepted_terminal_charge_source.cpp::solve_accepted_terminal_charge_source`
+łączy terminal H1 z RT0 na jednej owned mesh i frozen elementwise scalar
+conductivity. Odtwarza rzeczywiste P1 i mierzy requested→RT0 każdego
+terminala. Typed interfaces mają wspólny geometric/topological preflight
+przed H1: owner wyprowadza wyłącznie actual P1 zero-jumps z zamrożonych
+stable vertex maps i przekazuje te same face pairs do RT0. Nie ma
+caller DOF trace passthrough, inferred contacts ani dopisywania leadów
+po solve. Shared mesh preflight sprawdza
+bezwymiarowy shape przed clone/H1, bez metr-scale minimum ani zmiany
+legacy `Build`. Otwarte terminal V/σ/J nie jest domkniętym źródłem
+Oersteda; typed closure finalization, source cuts, digest/ABI, publiczny producent i native
+numerical/runtime qualification pozostają wymaganiami T05/T06.
+
+Kolejny prywatny source-only przyrost wiąże ten owned payload przez
+`accepted_terminal_charge_source.ordered.v1` SHA-256. Rzeczywisty
+ordered mesh/stable IDs/σ/V/reakcje/RT0 face-DOF-sign map, terminale,
+interfaces, rank i scalar solver policy trafiają do finite typed
+stream po acceptance gates. Preimage ma limit 128 MiB, nie gwarancję
+peak RAM. Digest nie jest permutation-invariant geometry identity,
+caller field digest ani closure certificate; sam nie promuje ABI,
+publicznego producenta lub kwalifikacji.
+
+Append-only ABI `fullmag_fem_solve_accepted_terminal_charge_v1` i prywatny
+Rust adapter są kolejnym source-only prerequisite. Publikują/odbierają
+wyłącznie dokładny canonical owned record objęty SHA; consumer dekoduje
+ten sam stream i porównuje maps/material/controls/policy z request.
+Bounded typed CSR/exterior preflight poprzedza import MFEM; skrócony
+result prefix nie otrzymuje pełnych zapisów, odmowy nie publikują
+acceptance metadata. C/Rust layout jest zamrożony niezależnie od testów.
+Nie ma połączenia z publicznym producerem ani nowego domknięcia/H.
+Retained caller buffer może kosztować 128 MiB per record, nie jest to
+peak-RAM qualification. Source regressions pozostają niekompilowane;
+build, numerical/runtime i public artifact evidence są osobne.
+
+Kolejny source-only owner `accepted_external_lead_source.cpp` finalizuje
+ten sam immutable charge/RT0 payload dla jawnie partycjonowanej domeny
+device+lead z outer current electrodes. Transport zatrzymuje rzeczywiste
+terminal face groups i explicit pairs oraz udostępnia niezależny fizyczny
+pomiar niezmienionego RT0. Workflow sprawdza exhaustive exterior roles,
+actual komponenty, signed H1/RT0 device-port observations i wszystkie
+outer terminal currents; nie wykonuje drugiego H1 ani projekcji RT0.
+Całkowanie `EvaluateField` jest wyłącznie wkładem skończonej domeny:
+fixed scope `external_electrode_truncation`, własne source/field digests,
+pusta legacy view identity. Nie ma zależności transport→workflow ani
+promocji do pełnego zamkniętego obwodu, public producer lub bazy LLG.
+Private bounds order/depth/pair count i field-record preflight ograniczają
+wejścia; obecny kernel floor 1 A/m jest jawny w polityce, nie deklaracją
+standardowej tolerancji względnej małego pola. Source cuts, sterowanie
+device branch currents, dowód braku nakładania objętości, truncation/error
+qualification, ABI/public integration i runtime pozostają otwarte.
+
+Source-only ABI `fullmag_fem_solve_accepted_external_lead_field_v1` dodaje
+jeden native workflow charge→finalizer→field i canonical bounded bundle
+trzech exact retained records. J jest jawnie reprezentowane przez momenty
+RT0, nie przez nodalny raw J z niezależnego solve. Workflow sam ustala
+accepted charge owner i SHA pin; wspólny importer C nie definiuje nowej
+numeryki. Nowy request/result/fingerprint nie zmienia starszych layoutów.
+Hash całego pakietu i cross-digests wiążą V/material/RT0, finalizację
+i ordered H/targets/options. Łączny preimage ma limit 128 MiB, a failed
+ABI nie publikuje acceptance metadata. To granica wewnętrzna; publiczny
+producer nadal musi otrzymać jawne actuator→observation maps i usunąć
+dwa legacy charge workflow. Build, runtime i physics qualification
+pozostają osobnymi wymaganiami, bez promocji truncated scope do pełnej
+closure lub bazy LLG.
+
+Finalizer source record v2 dodaje rzeczywisty signed Piola RT0
+DOF→canonical-flux weight. Właściwy numeric owner liczy go z owned
+`CalcVShape`/orientation, także przy zero current; Rust nie zgaduje
+normalizacji bazy i nie zastępuje signed binding porównaniem modułów.
+Face ledger musi wiązać element/terminal/interface/insulation aggregates,
+a sumowanie uwzględniać silne cancellation bez osłabiania SI gates.
+To korekta jawnego private record contract, nie nowy charge solve ani
+zmiana starego charge ABI.
+
+Source-only inspection boundary `antenna_external_lead_solution.v1` ma osobnego
+właściciela w `crates/fullmag-runner/src/antenna_external_lead_solution.rs`.
+Nie zastępuje `antenna_field_solution.v1`: przechowuje jeden exact raw
+V/RT0/H bundle oraz zgodne binary pochodne, bez per-ampere rescale. Pure owned
+codecs pozostają w istniejących plikach `native_fem/accepted_*`, ale nie zależą
+od flag uruchamiających build natywnego solvera. Request binding i packed ABI
+pozostają FEM-gated. Adapter zachowuje actual input i jawne native-v1 jump
+defaults, natomiast builder wymaga odrębnej requested execution i odrzuca
+wymuszone GPU. Bezsolverowy inspection load nie jest realizacją solve w FDM
+lub FEM GPU. Atomic publisher/cache mają oddzielny namespace; legacy LLG i
+spectrum boundaries zwracają `source_not_qualified` przed projekcją. Public
+stage/API, managed runtime i kwalifikacja naukowa nie wynikają z tej granicy.
+
 1. Numeryka przewodnictwa, normalizacji prądu, kwadratury Biota-Savarta i
    projekcji targetu żyje w `backends/fem`, nie w Rust runnerze.
 2. `crates/fullmag-runner` orkiestruje ABI, cache, artefakty, progress i

@@ -85,6 +85,13 @@ pub enum ScriptExecutionStageAction {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         port_mode_ids: Vec<String>,
     },
+    AntennaSourceSpectrum {
+        request: fullmag_ir::AntennaSpectrumRequestIR,
+    },
+    AddSolvedAntennaDrive {
+        projection: fullmag_ir::AntennaTargetProjectionRefIR,
+        drive: fullmag_ir::SolvedAntennaDriveIR,
+    },
     SaveState {
         #[serde(default = "default_stage_action_artifact_name")]
         artifact_name: String,
@@ -172,10 +179,22 @@ pub struct ScriptExecutionStage {
 
 #[derive(Debug, Clone)]
 pub enum ResolvedScriptStageAction {
+    AntennaExternalLeadInspection {
+        input: fullmag_ir::ResolvedAntennaExternalLeadCurrentInputIR,
+        requested_execution: fullmag_ir::RequestedTransportExecutionIR,
+        output_id: String,
+    },
     AntennaFieldSolve {
         stage_id: String,
         port_mode_id: String,
         plan: fullmag_ir::AntennaFieldSolvePlanIR,
+    },
+    AntennaSourceSpectrum {
+        request_id: String,
+    },
+    AddSolvedAntennaDrive {
+        projection_id: String,
+        drive_id: String,
     },
     SaveState {
         artifact_name: String,
@@ -231,7 +250,9 @@ pub enum ResolvedScriptStageAction {
 #[serde(rename_all = "snake_case")]
 pub enum StageTransitionKind {
     ContinueInPlace,
+    AntennaExternalLeadInspection,
     AntennaFieldSolve,
+    AntennaSourceSpectrum,
     TransferState,
     RemeshTransfer,
     BackendTransfer,
@@ -245,7 +266,9 @@ pub enum StageTransitionKind {
 #[serde(rename_all = "snake_case")]
 pub enum StageTransitionReason {
     SameRuntimeContext,
+    AntennaExternalLeadInspection,
     AntennaFieldSolve,
+    AntennaSourceSpectrum,
     ExplicitRemesh,
     BackendChange,
     MeshGenerationChanged,
@@ -323,7 +346,9 @@ impl StageTransitionMetadata {
         }
         match self.kind {
             StageTransitionKind::ContinueInPlace => "continues",
+            StageTransitionKind::AntennaExternalLeadInspection => "antenna inspection computed",
             StageTransitionKind::AntennaFieldSolve => "field basis solved",
+            StageTransitionKind::AntennaSourceSpectrum => "source spectrum computed",
             StageTransitionKind::SaveCheckpoint => "preserved",
             StageTransitionKind::LoadState => "restored",
             StageTransitionKind::ExportOnly => "exported",

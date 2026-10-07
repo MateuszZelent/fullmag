@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::ffi::OsString;
 
 mod accepted_run_transport;
+mod antenna_workflow;
 mod args;
 mod command_bridge;
 mod communication_policy;

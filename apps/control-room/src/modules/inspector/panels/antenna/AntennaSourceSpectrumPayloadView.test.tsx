@@ -365,6 +365,7 @@ function spectrumFixture(): AntennaSourceSpectrumResource {
     sampling: {} as AntennaSourceSpectrumResource["sampling"],
     schema_version: "antenna_source_spectrum.v2",
     session_epoch: "epoch-1",
+    request_scope_epoch: "instance-1:7",
     session_id: "session-1",
     solution_content_digest: "sha256:solution",
     solution_id: "solution-1",

@@ -59,13 +59,7 @@ pub fn bind_antenna_field_solve(
             )],
         });
     }
-    let geometry_revision = sha256_json(&problem.geometry)?;
-    let material_revision = sha256_json(&(
-        &problem.materials,
-        &problem.material_parameter_fields,
-        &problem.material_assignments,
-    ))?;
-    bind_resolved_antenna_field_solve(stage, port, geometry_revision, material_revision, plan)
+    bind_resolved_antenna_field_solve(stage, port, plan)
 }
 
 /// Bind one explicitly selected public 0.3 antenna field-solve stage.
@@ -123,25 +117,12 @@ pub fn bind_antenna_field_solve_v03(
             )],
         });
     }
-    bind_resolved_antenna_field_solve(
-        stage,
-        port,
-        sha256_json(&problem.geometry)?,
-        sha256_json(&(
-            &problem.materials,
-            &problem.material_parameter_fields,
-            &problem.magnets,
-            &problem.object_regions,
-        ))?,
-        plan,
-    )
+    bind_resolved_antenna_field_solve(stage, port, plan)
 }
 
 fn bind_resolved_antenna_field_solve(
     stage: &AntennaFieldSolveStageIR,
     port: &AntennaPortModeIR,
-    geometry_revision: String,
-    material_revision: String,
     plan: &mut AntennaConductorFemPlanIR,
 ) -> Result<(), PlanError> {
     let stage_id = stage.id.as_str();
@@ -173,6 +154,12 @@ fn bind_resolved_antenna_field_solve(
         });
     }
     let mesh_digest = sha256_json(&plan.mesh)?;
+    let geometry_revision = sha256_json(&serde_json::json!({
+        "schema": "antenna_conductor_geometry_revision.v1",
+        "mesh": plan.mesh,
+        "object_segments": plan.object_segments,
+        "mesh_parts": plan.mesh_parts,
+    }))?;
     let charge = plan
         .charge_transport_plans
         .iter_mut()
@@ -196,6 +183,13 @@ fn bind_resolved_antenna_field_solve(
             "antenna field-solve stage '{stage_id}' requires a FEM CPU/double charge descriptor"
         )],
     })?;
+    if descriptor.charge_definition.conservative_current_source.is_some() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "antenna field-solve stage '{stage_id}' conservative_current_source requires the current-driven owned-bundle producer; legacy terminal-boundary binding is forbidden"
+            )],
+        });
+    }
     if descriptor.conservative_current_view.is_none() {
         return Err(PlanError {
             reasons: vec![format!(
@@ -203,11 +197,10 @@ fn bind_resolved_antenna_field_solve(
             )],
         });
     }
-    let material_revision = sha256_json(&(
-        material_revision,
-        &descriptor.charge_definition,
-        &descriptor.charge_conductivity_spm_per_element,
-    ))?;
+    let material_revision = sha256_json(&serde_json::json!({
+        "schema": "antenna_charge_material_revision.v1",
+        "conductivity_spm_per_element": descriptor.charge_conductivity_spm_per_element,
+    }))?;
     descriptor.oersted_source_bound = true;
     descriptor.stage_coupling = "fem_charge_then_oersted_once.v1".into();
     if !charge

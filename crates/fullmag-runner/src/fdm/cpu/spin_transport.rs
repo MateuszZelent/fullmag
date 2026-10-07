@@ -2913,6 +2913,11 @@ fn materialize_one_way_problem(
             gauge: match descriptor.charge_gauge {
                 ChargePotentialGaugeIR::DirichletReference => None,
                 ChargePotentialGaugeIR::ZeroMean => Some(PotentialGauge::ZeroMean),
+                ChargePotentialGaugeIR::TerminalReference => {
+                    return Err(RunError {
+                        message: "terminal-reference gauge requires dedicated FEM antenna solve".into(),
+                    });
+                }
             },
         })
         .map_err(engine_error("charge solve"))?;

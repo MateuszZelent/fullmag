@@ -1,6 +1,6 @@
 use crate::{ExecutionDevice, ExecutionMode, ExecutionPrecision, MeshIR, RegionRefIR};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn is_zero_f64(value: &f64) -> bool {
     *value == 0.0
@@ -42,7 +42,712 @@ pub struct ChargeTransportDefinitionIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conservative_current_view: Option<ResolvedFemConservativeCurrentViewIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_source: Option<ConservativeCurrentSourceIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_current_closure: Option<StructuredCurrentClosureIR>,
+}
+
+pub const CONSERVATIVE_CURRENT_SOURCE_SCHEMA_VERSION: &str = "conservative_current_source.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentSourceInterfacePairIR {
+    pub id: String,
+    pub device_face_vertex_ids: [u64; 3],
+    pub lead_face_vertex_ids: [u64; 3],
+    pub vertex_pairs: [[u64; 2]; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentSourceOuterTerminalIR {
+    pub id: String,
+    pub boundary_face_vertex_ids: Vec<[u64; 3]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentSourceTerminalObservationIR {
+    pub id: String,
+    pub object_id: String,
+    pub interface_pair_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentSourceDriveIR {
+    pub id: String,
+    pub port_mode_ref: String,
+    pub outer_terminal_currents_a: BTreeMap<String, f64>,
+}
+
+/// Authored current-driven input, not an accepted field or closed-loop certificate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConservativeCurrentSourceIR {
+    ExternalLeadCurrent {
+        schema_version: String,
+        revision: String,
+        device_stable_vertex_ids: Vec<u64>,
+        #[serde(deserialize_with = "deserialize_current_source_lead_mesh")]
+        lead_mesh: MeshIR,
+        lead_stable_vertex_ids: Vec<u64>,
+        lead_conductivity_spm_per_element: Vec<f64>,
+        interface_pairs: Vec<CurrentSourceInterfacePairIR>,
+        outer_terminals: Vec<CurrentSourceOuterTerminalIR>,
+        terminal_observations: Vec<CurrentSourceTerminalObservationIR>,
+        drives: Vec<CurrentSourceDriveIR>,
+    },
+}
+
+fn deserialize_current_source_lead_mesh<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<MeshIR, D::Error> {
+    use serde::de::Error;
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let check = |value: &serde_json::Value, allowed: &[&str]| -> Result<(), D::Error> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| D::Error::custom("source lead mesh metadata must be an object"))?;
+        if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+            return Err(D::Error::custom(format!(
+                "unknown current-source lead mesh field '{key}'"
+            )));
+        }
+        Ok(())
+    };
+    check(
+        &value,
+        &[
+            "mesh_name",
+            "nodes",
+            "cells",
+            "facets",
+            "element_markers",
+            "boundary_markers",
+            "periodic_boundary_pairs",
+            "periodic_node_pairs",
+            "per_domain_quality",
+        ],
+    )?;
+    if let Some(cells) = value.get("cells") {
+        check(
+            cells,
+            &["types", "offsets", "nodes", "global_ordinals", "mesh_parts"],
+        )?;
+    }
+    if let Some(facets) = value.get("facets") {
+        check(
+            facets,
+            &["types", "roles", "offsets", "nodes", "global_ordinals"],
+        )?;
+    }
+    if let Some(quality) = value.get("per_domain_quality") {
+        for metrics in quality
+            .as_object()
+            .ok_or_else(|| D::Error::custom("source lead mesh quality must be an object"))?
+            .values()
+        {
+            check(
+                metrics,
+                &[
+                    "n_elements",
+                    "sicn_min",
+                    "sicn_max",
+                    "sicn_mean",
+                    "sicn_p5",
+                    "sicn_histogram",
+                    "gamma_min",
+                    "gamma_mean",
+                    "gamma_histogram",
+                    "volume_min",
+                    "volume_max",
+                    "volume_mean",
+                    "volume_std",
+                    "avg_quality",
+                ],
+            )?;
+        }
+    }
+    serde_json::from_value(value).map_err(D::Error::custom)
+}
+
+impl ConservativeCurrentSourceIR {
+    pub fn terminal_observations(&self) -> &[CurrentSourceTerminalObservationIR] {
+        match self {
+            Self::ExternalLeadCurrent {
+                terminal_observations,
+                ..
+            } => terminal_observations,
+        }
+    }
+
+    pub fn validation_errors(&self, path: &str) -> Vec<String> {
+        let Self::ExternalLeadCurrent {
+            schema_version,
+            revision,
+            device_stable_vertex_ids,
+            lead_mesh,
+            lead_stable_vertex_ids,
+            lead_conductivity_spm_per_element,
+            interface_pairs,
+            outer_terminals,
+            terminal_observations,
+            drives,
+        } = self;
+        let mut errors = Vec::new();
+        let text =
+            |value: &str| !value.trim().is_empty() && value.len() <= 4096 && !value.contains('\0');
+        let canonical = |face: &[u64; 3]| face[0] > 0 && face[0] < face[1] && face[1] < face[2];
+        const ELEMENT_LIMIT: usize = 1 << 20;
+        const LIMIT: usize = 4 * ELEMENT_LIMIT;
+        if [
+            device_stable_vertex_ids.len(),
+            lead_stable_vertex_ids.len(),
+            lead_mesh.nodes.len(),
+            lead_mesh.cell_count(),
+            lead_mesh.facet_count(),
+            lead_conductivity_spm_per_element.len(),
+            interface_pairs.len(),
+            outer_terminals.len(),
+            terminal_observations.len(),
+            drives.len(),
+        ]
+        .iter()
+        .any(|count| *count > LIMIT)
+            || outer_terminals
+                .iter()
+                .try_fold(0usize, |n, t| {
+                    n.checked_add(t.boundary_face_vertex_ids.len())
+                })
+                .is_none_or(|n| n > LIMIT)
+            || terminal_observations
+                .iter()
+                .try_fold(0usize, |n, t| n.checked_add(t.interface_pair_ids.len()))
+                .is_none_or(|n| n > LIMIT)
+            || drives
+                .iter()
+                .try_fold(0usize, |n, d| {
+                    n.checked_add(d.outer_terminal_currents_a.len())
+                })
+                .is_none_or(|n| n > LIMIT)
+        {
+            return vec![format!("{path} exceeds bounded source input support")];
+        }
+        if schema_version != CONSERVATIVE_CURRENT_SOURCE_SCHEMA_VERSION || !text(revision) {
+            errors.push(format!(
+                "{path} requires the supported schema_version and bounded nonempty revision"
+            ));
+        }
+        let device: BTreeSet<_> = device_stable_vertex_ids.iter().copied().collect();
+        let lead: BTreeSet<_> = lead_stable_vertex_ids.iter().copied().collect();
+        if device.is_empty()
+            || lead.is_empty()
+            || device.contains(&0)
+            || lead.contains(&0)
+            || device.len() != device_stable_vertex_ids.len()
+            || lead.len() != lead_stable_vertex_ids.len()
+            || !device.is_disjoint(&lead)
+            || lead.len() != lead_mesh.nodes.len()
+        {
+            errors.push(format!("{path} requires unique positive disjoint device/lead stable IDs with complete lead node coverage"));
+        }
+        if let Err(mesh_errors) = lead_mesh.validate() {
+            errors.extend(
+                mesh_errors
+                    .into_iter()
+                    .map(|error| format!("{path}.lead_mesh: {error}")),
+            );
+        }
+        if lead_mesh
+            .element_markers
+            .iter()
+            .chain(&lead_mesh.boundary_markers)
+            .any(|marker| *marker == 0 || *marker > i32::MAX as u32)
+        {
+            errors.push(format!(
+                "{path}.lead_mesh markers must be positive signed-32-bit values"
+            ));
+        }
+        let elements = lead_mesh.require_tet4_elements();
+        let facets = lead_mesh.require_tri3_boundary_faces();
+        if elements.is_err()
+            || facets.is_err()
+            || lead_mesh.cell_count() == 0
+            || lead_mesh.cell_count() > ELEMENT_LIMIT
+            || lead_mesh.nodes.len() > 4 * lead_mesh.cell_count()
+            || lead_mesh.facet_count() > 4 * lead_mesh.cell_count()
+            || lead_mesh
+                .facets
+                .roles
+                .iter()
+                .any(|role| *role != crate::FemFacetRoleIR::Exterior)
+            || !lead_mesh.periodic_boundary_pairs.is_empty()
+            || !lead_mesh.periodic_node_pairs.is_empty()
+        {
+            errors.push(format!("{path}.lead_mesh requires nonempty tet4 cells, tri3 exterior facets and no periodic relations"));
+        }
+        if lead_conductivity_spm_per_element.len() != lead_mesh.cell_count()
+            || lead_conductivity_spm_per_element
+                .iter()
+                .any(|sigma| !sigma.is_finite() || *sigma <= 0.0)
+        {
+            errors.push(format!("{path}.lead_conductivity_spm_per_element must cover every lead cell with finite sigma>0"));
+        }
+        let mut incidence = BTreeMap::<[u64; 3], usize>::new();
+        if lead_mesh
+            .nodes
+            .iter()
+            .flatten()
+            .any(|coordinate| !coordinate.is_finite())
+        {
+            errors.push(format!("{path}.lead_mesh nodes must be finite"));
+        }
+        if let Ok(elements) = elements {
+            for tet in elements {
+                if let Some(points) = tet
+                    .iter()
+                    .map(|local| lead_mesh.nodes.get(*local as usize))
+                    .collect::<Option<Vec<_>>>()
+                {
+                    let mut edges = [[0.0; 3]; 3];
+                    for i in 0..3 {
+                        for j in 0..3 {
+                            edges[i][j] = points[i + 1][j] - points[0][j];
+                        }
+                    }
+                    let scale = edges
+                        .iter()
+                        .flatten()
+                        .fold(0.0_f64, |maximum, value| maximum.max(value.abs()));
+                    if scale.is_finite() && scale > 0.0 {
+                        for edge in &mut edges {
+                            for value in edge {
+                                *value /= scale;
+                            }
+                        }
+                    }
+                    let [a, b, c] = edges;
+                    let det = a[0] * (b[1] * c[2] - b[2] * c[1])
+                        - a[1] * (b[0] * c[2] - b[2] * c[0])
+                        + a[2] * (b[0] * c[1] - b[1] * c[0]);
+                    if !scale.is_finite() || scale == 0.0 || !det.is_finite() || det <= 0.0 {
+                        errors.push(format!("{path}.lead_mesh requires finite nondegenerate positively oriented tet4 cells"));
+                    }
+                }
+                let ids = tet.map(|local| lead_stable_vertex_ids.get(local as usize).copied());
+                if let [Some(a), Some(b), Some(c), Some(d)] = ids {
+                    for mut face in [[a, b, c], [a, b, d], [a, c, d], [b, c, d]] {
+                        face.sort_unstable();
+                        *incidence.entry(face).or_default() += 1;
+                    }
+                }
+            }
+        }
+        let exterior: BTreeSet<_> = incidence
+            .iter()
+            .filter(|(_, count)| **count == 1)
+            .map(|(face, _)| *face)
+            .collect();
+        let mut declared = BTreeSet::new();
+        if let Ok(facets) = facets {
+            for face in facets {
+                let ids = face.map(|local| lead_stable_vertex_ids.get(local as usize).copied());
+                if let [Some(a), Some(b), Some(c)] = ids {
+                    let mut key = [a, b, c];
+                    key.sort_unstable();
+                    if !declared.insert(key) {
+                        errors.push(format!("{path}.lead_mesh has duplicate boundary faces"));
+                    }
+                }
+            }
+        }
+        if declared != exterior || incidence.values().any(|count| *count > 2) {
+            errors.push(format!(
+                "{path}.lead_mesh facets must exactly cover its manifold exterior"
+            ));
+        }
+        let mut pairs = BTreeMap::new();
+        let mut used_device_faces = BTreeSet::new();
+        let mut used_lead_faces = BTreeSet::new();
+        let mut trace_vertices = BTreeSet::new();
+        for pair in interface_pairs {
+            let left: BTreeSet<_> = pair.vertex_pairs.iter().map(|pair| pair[0]).collect();
+            let right: BTreeSet<_> = pair.vertex_pairs.iter().map(|pair| pair[1]).collect();
+            if !text(&pair.id)
+                || pairs.insert(pair.id.as_str(), pair).is_some()
+                || !canonical(&pair.device_face_vertex_ids)
+                || !canonical(&pair.lead_face_vertex_ids)
+                || !pair
+                    .device_face_vertex_ids
+                    .iter()
+                    .all(|id| device.contains(id))
+                || !pair.lead_face_vertex_ids.iter().all(|id| lead.contains(id))
+                || !exterior.contains(&pair.lead_face_vertex_ids)
+                || !used_device_faces.insert(pair.device_face_vertex_ids)
+                || !used_lead_faces.insert(pair.lead_face_vertex_ids)
+                || left != pair.device_face_vertex_ids.into_iter().collect()
+                || right != pair.lead_face_vertex_ids.into_iter().collect()
+            {
+                errors.push(format!("{path}.interface_pairs requires unique IDs/exterior faces and an exact device-to-lead vertex bijection"));
+            }
+            trace_vertices.extend(pair.lead_face_vertex_ids);
+        }
+        if pairs.is_empty() {
+            errors.push(format!("{path}.interface_pairs must not be empty"));
+        }
+        let mut terminal_ids = BTreeSet::new();
+        let mut terminal_vertex_owner = BTreeMap::new();
+        for terminal in outer_terminals {
+            if !text(&terminal.id)
+                || !terminal_ids.insert(terminal.id.as_str())
+                || terminal.boundary_face_vertex_ids.is_empty()
+            {
+                errors.push(format!(
+                    "{path}.outer_terminals requires unique bounded IDs and nonempty face groups"
+                ));
+            }
+            for face in &terminal.boundary_face_vertex_ids {
+                if !canonical(face) || !exterior.contains(face) || !used_lead_faces.insert(*face) {
+                    errors.push(format!("{path}.outer_terminals has unknown, duplicate or interface-overlapping exterior face"));
+                }
+                for vertex in face {
+                    let previous = terminal_vertex_owner.insert(*vertex, terminal.id.as_str());
+                    if trace_vertices.contains(vertex)
+                        || previous.is_some_and(|owner| owner != terminal.id)
+                    {
+                        errors.push(format!(
+                            "{path}.outer_terminals has shared electrode/trace essential vertices"
+                        ));
+                    }
+                }
+            }
+        }
+        if outer_terminals.len() < 2 {
+            errors.push(format!(
+                "{path}.outer_terminals requires at least two terminals"
+            ));
+        }
+        for face in &exterior {
+            if face
+                .iter()
+                .all(|vertex| terminal_vertex_owner.contains_key(vertex))
+            {
+                let owners: BTreeSet<_> = face
+                    .iter()
+                    .map(|vertex| terminal_vertex_owner[vertex])
+                    .collect();
+                if owners.len() != 1 || !used_lead_faces.contains(face) {
+                    errors.push(format!("{path}.outer_terminals must be closed under essential face ownership; separator faces require a free P1 vertex"));
+                }
+            }
+        }
+        let mut observations = BTreeSet::new();
+        let mut observed_pairs = BTreeSet::new();
+        let mut observation_vertex_owner = BTreeMap::new();
+        for observation in terminal_observations {
+            if !text(&observation.id)
+                || !text(&observation.object_id)
+                || !observations.insert(observation.id.as_str())
+                || observation.interface_pair_ids.is_empty()
+            {
+                errors.push(format!("{path}.terminal_observations requires unique bounded IDs, object_id and nonempty pair groups"));
+            }
+            for id in &observation.interface_pair_ids {
+                if !observed_pairs.insert(id.as_str()) || !pairs.contains_key(id.as_str()) {
+                    errors.push(format!(
+                        "{path}.terminal_observations has unknown or repeated interface pair"
+                    ));
+                }
+                if let Some(pair) = pairs.get(id.as_str()) {
+                    for vertex in pair.device_face_vertex_ids {
+                        let previous =
+                            observation_vertex_owner.insert(vertex, observation.id.as_str());
+                        if previous.is_some_and(|owner| owner != observation.id) {
+                            errors.push(format!(
+                                "{path}.terminal_observations shares device reaction vertices"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        if observed_pairs != pairs.keys().copied().collect() {
+            errors.push(format!(
+                "{path}.terminal_observations must partition every interface pair"
+            ));
+        }
+        let mut drive_ids = BTreeSet::new();
+        let mut port_ids = BTreeSet::new();
+        for drive in drives {
+            if !text(&drive.id)
+                || !text(&drive.port_mode_ref)
+                || !drive_ids.insert(drive.id.as_str())
+                || !port_ids.insert(drive.port_mode_ref.as_str())
+                || drive
+                    .outer_terminal_currents_a
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>()
+                    != terminal_ids
+                || drive
+                    .outer_terminal_currents_a
+                    .values()
+                    .any(|current| !current.is_finite())
+            {
+                errors.push(format!("{path}.drives requires unique IDs/port refs and finite signed currents for exactly every outer terminal"));
+            }
+        }
+        if drives.is_empty() {
+            errors.push(format!("{path}.drives must not be empty"));
+        }
+        errors
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod current_source_tests {
+    use super::*;
+
+    pub(crate) fn fixture() -> ConservativeCurrentSourceIR {
+        let corners = [
+            [0., 0., 0.],
+            [1., 0., 0.],
+            [1., 1., 0.],
+            [0., 1., 0.],
+            [0., 0., 1.],
+            [1., 0., 1.],
+            [1., 1., 1.],
+            [0., 1., 1.],
+        ];
+        let cells = [
+            [0, 1, 2, 6],
+            [0, 2, 3, 6],
+            [0, 3, 7, 6],
+            [0, 7, 4, 6],
+            [0, 4, 5, 6],
+            [0, 5, 1, 6],
+        ];
+        let nodes = [-1., 1.]
+            .into_iter()
+            .flat_map(|x| corners.map(|[a, b, c]| [a + x, b, c]))
+            .collect();
+        let elements: Vec<_> = [0, 8]
+            .into_iter()
+            .flat_map(|offset| cells.map(|tet| tet.map(|vertex| vertex + offset)))
+            .collect();
+        let mut counts = BTreeMap::new();
+        for [a, b, c, d] in &elements {
+            for mut face in [[*a, *b, *c], [*a, *b, *d], [*a, *c, *d], [*b, *c, *d]] {
+                face.sort_unstable();
+                *counts.entry(face).or_insert(0) += 1;
+            }
+        }
+        let faces: Vec<_> = counts
+            .into_iter()
+            .filter(|(_, count)| *count == 1)
+            .map(|(face, _)| face)
+            .collect();
+        let lead_mesh = MeshIR::from_legacy_tet4(
+            "explicit-leads".into(),
+            nodes,
+            elements,
+            vec![1; 12],
+            faces.clone(),
+            vec![1; faces.len()],
+            vec![],
+            vec![],
+            Default::default(),
+        );
+        let interface_pairs = [
+            ([1, 2, 3], [102, 103, 107]),
+            ([1, 3, 4], [102, 106, 107]),
+            ([5, 6, 7], [109, 112, 116]),
+            ([5, 7, 8], [109, 113, 116]),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (device, lead))| CurrentSourceInterfacePairIR {
+            id: format!("pair-{index}"),
+            device_face_vertex_ids: device,
+            lead_face_vertex_ids: lead,
+            vertex_pairs: std::array::from_fn(|i| [device[i], lead[i]]),
+        })
+        .collect();
+        ConservativeCurrentSourceIR::ExternalLeadCurrent {
+            schema_version: CONSERVATIVE_CURRENT_SOURCE_SCHEMA_VERSION.into(),
+            revision: "authored-v1".into(),
+            device_stable_vertex_ids: (1..=8).collect(),
+            lead_mesh,
+            lead_stable_vertex_ids: (101..=116).collect(),
+            lead_conductivity_spm_per_element: vec![4.; 12],
+            interface_pairs,
+            outer_terminals: vec![
+                CurrentSourceOuterTerminalIR {
+                    id: "left".into(),
+                    boundary_face_vertex_ids: vec![[101, 104, 108], [101, 105, 108]],
+                },
+                CurrentSourceOuterTerminalIR {
+                    id: "right".into(),
+                    boundary_face_vertex_ids: vec![[110, 111, 115], [110, 114, 115]],
+                },
+            ],
+            terminal_observations: vec![
+                CurrentSourceTerminalObservationIR {
+                    id: "in".into(),
+                    object_id: "body".into(),
+                    interface_pair_ids: vec!["pair-0".into(), "pair-1".into()],
+                },
+                CurrentSourceTerminalObservationIR {
+                    id: "out".into(),
+                    object_id: "body".into(),
+                    interface_pair_ids: vec!["pair-2".into(), "pair-3".into()],
+                },
+            ],
+            drives: vec![CurrentSourceDriveIR {
+                id: "drive".into(),
+                port_mode_ref: "port".into(),
+                outer_terminal_currents_a: BTreeMap::from([
+                    ("left".into(), -1.),
+                    ("right".into(), 1.),
+                ]),
+            }],
+        }
+    }
+
+    #[test]
+    fn current_source_roundtrip_preserves_explicit_maps_and_signed_zero_drives() {
+        let mut source = fixture();
+        assert!(source.validation_errors("source").is_empty());
+        let ConservativeCurrentSourceIR::ExternalLeadCurrent { drives, .. } = &mut source;
+        drives.push(CurrentSourceDriveIR {
+            id: "zero".into(),
+            port_mode_ref: "zero-port".into(),
+            outer_terminal_currents_a: BTreeMap::from([("left".into(), 0.), ("right".into(), 0.)]),
+        });
+        let bytes = serde_json::to_vec(&source).unwrap();
+        let decoded: ConservativeCurrentSourceIR = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(source, decoded);
+        assert!(decoded.validation_errors("source").is_empty());
+    }
+
+    #[test]
+    fn flat_current_module_retains_source_and_rejects_malformed_source_payloads() {
+        let flat = serde_json::json!({
+            "kind":"current_transport","name":"transport","model":"ohmic_poisson","coupling":"one_way",
+            "domain":[{"object_id":"body"}],"materials":[{"region":{"object_id":"body"},"material":{"sigma_Spm":4.}}],
+            "boundaries":[],"gauge":"terminal_reference","solver":{"engine":"cg","linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},"operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
+            "conservative_current_source":fixture()
+        });
+        let module: crate::CurrentModuleIR = serde_json::from_value(flat.clone()).unwrap();
+        let crate::CurrentModuleIR::CurrentTransport {
+            definition: Some(definition),
+            ..
+        } = &module
+        else {
+            panic!("flattened source definition disappeared")
+        };
+        assert_eq!(definition.conservative_current_source, Some(fixture()));
+        let encoded = serde_json::to_value(&module).unwrap();
+        assert_eq!(
+            encoded["conservative_current_source"],
+            flat["conservative_current_source"]
+        );
+        assert!(encoded.get("definition").is_none());
+        let mut unknown = flat.clone();
+        unknown["conservative_current_source"]["invented_pin"] = serde_json::json!("fake-sha");
+        assert!(serde_json::from_value::<crate::CurrentModuleIR>(unknown).is_err());
+        for malformed in [serde_json::json!(1), serde_json::json!([])] {
+            let mut value = flat.clone();
+            value["conservative_current_source"] = malformed;
+            assert!(serde_json::from_value::<crate::CurrentModuleIR>(value).is_err());
+        }
+        let mut missing = flat;
+        missing.as_object_mut().unwrap().remove("domain");
+        assert!(serde_json::from_value::<crate::CurrentModuleIR>(missing).is_err());
+        for model in ["prescribed_density", "ohmic_poisson"] {
+            let legacy = serde_json::json!({
+                "kind":"current_transport", "name":"legacy", "model":model
+            });
+            for explicit_null in [false, true] {
+                let mut value = legacy.clone();
+                if explicit_null {
+                    value["conservative_current_source"] = serde_json::Value::Null;
+                }
+                let module: crate::CurrentModuleIR = serde_json::from_value(value).unwrap();
+                assert!(matches!(
+                    module,
+                    crate::CurrentModuleIR::CurrentTransport {
+                        definition: None,
+                        ..
+                    }
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn current_source_rejects_unknown_fields_maps_and_essential_aliases() {
+        for path in [
+            vec!["unexpected"],
+            vec!["lead_mesh", "unexpected"],
+            vec!["lead_mesh", "cells", "unexpected"],
+            vec!["interface_pairs", "0", "unexpected"],
+        ] {
+            let mut value = serde_json::to_value(fixture()).unwrap();
+            let mut cursor = &mut value;
+            for key in &path[..path.len() - 1] {
+                cursor = if *key == "0" {
+                    &mut cursor[0]
+                } else {
+                    &mut cursor[*key]
+                };
+            }
+            cursor[path[path.len() - 1]] = serde_json::json!(true);
+            assert!(serde_json::from_value::<ConservativeCurrentSourceIR>(value).is_err());
+        }
+        for mutation in 0..11 {
+            let mut source = fixture();
+            let ConservativeCurrentSourceIR::ExternalLeadCurrent {
+                schema_version,
+                interface_pairs,
+                outer_terminals,
+                terminal_observations,
+                drives,
+                lead_conductivity_spm_per_element,
+                lead_mesh,
+                ..
+            } = &mut source;
+            match mutation {
+                0 => *schema_version = "foreign".into(),
+                1 => interface_pairs[0].vertex_pairs[1] = interface_pairs[0].vertex_pairs[0],
+                2 => {
+                    outer_terminals[0].boundary_face_vertex_ids[0] =
+                        interface_pairs[0].lead_face_vertex_ids
+                }
+                3 => terminal_observations[1]
+                    .interface_pair_ids
+                    .push("pair-0".into()),
+                4 => {
+                    drives[0].outer_terminal_currents_a.remove("left");
+                }
+                5 => lead_conductivity_spm_per_element[0] = f64::INFINITY,
+                6 => drives[0]
+                    .outer_terminal_currents_a
+                    .insert("foreign".into(), 0.)
+                    .map(|_| ())
+                    .unwrap_or(()),
+                7 => lead_mesh.facets.roles[0] = crate::FemFacetRoleIR::MaterialInterface,
+                8 => lead_mesh.nodes[0] = lead_mesh.nodes[1],
+                9 => lead_mesh.element_markers[0] = 0,
+                _ => lead_mesh.boundary_markers[0] = u32::MAX,
+            }
+            assert!(
+                !source.validation_errors("source").is_empty(),
+                "mutation {mutation}"
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -222,6 +927,10 @@ pub struct ChargeTransportMaterialIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChargeBoundaryIR {
+    EquipotentialCurrentTerminal {
+        id: String,
+        surfaces: Vec<SurfaceRefIR>,
+    },
     VoltageElectrode {
         id: String,
         surfaces: Vec<SurfaceRefIR>,
@@ -243,7 +952,8 @@ pub enum ChargeBoundaryIR {
 impl ChargeBoundaryIR {
     pub fn id(&self) -> &str {
         match self {
-            Self::VoltageElectrode { id, .. }
+            Self::EquipotentialCurrentTerminal { id, .. }
+            | Self::VoltageElectrode { id, .. }
             | Self::NormalCurrentElectrode { id, .. }
             | Self::Insulating { id, .. } => id,
         }
@@ -251,7 +961,8 @@ impl ChargeBoundaryIR {
 
     pub fn surfaces(&self) -> &[SurfaceRefIR] {
         match self {
-            Self::VoltageElectrode { surfaces, .. }
+            Self::EquipotentialCurrentTerminal { surfaces, .. }
+            | Self::VoltageElectrode { surfaces, .. }
             | Self::NormalCurrentElectrode { surfaces, .. }
             | Self::Insulating { surfaces, .. } => surfaces,
         }
@@ -263,6 +974,7 @@ impl ChargeBoundaryIR {
 pub enum ChargePotentialGaugeIR {
     DirichletReference,
     ZeroMean,
+    TerminalReference,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

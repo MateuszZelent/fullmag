@@ -58,7 +58,7 @@ class AntennaContractWrapperTests(unittest.TestCase):
         self.assertTrue(result["source_unchanged"])
 
     def test_browser_summaries_count_real_tests_and_skips(self) -> None:
-        self.assertEqual(len(BROWSER_VITEST_TESTS), 15)
+        self.assertEqual(len(BROWSER_VITEST_TESTS), 16)
         self.assertIn(
             "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.test.ts",
             BROWSER_VITEST_TESTS,
@@ -69,6 +69,10 @@ class AntennaContractWrapperTests(unittest.TestCase):
         )
         self.assertIn(
             "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.test.ts",
+            BROWSER_VITEST_TESTS,
+        )
+        self.assertIn(
+            "apps/control-room/src/modules/inspector/panels/antenna/AntennaFieldBasisPreview.dom.test.tsx",
             BROWSER_VITEST_TESTS,
         )
         self.assertEqual(

@@ -2,6 +2,7 @@ import type { ColorRepresentation } from "three";
 
 export interface Viewport3DColors {
   accent: ColorRepresentation;
+  antenna?: ColorRepresentation;
   accentStrong?: ColorRepresentation;
   background: ColorRepresentation;
   danger?: ColorRepresentation;

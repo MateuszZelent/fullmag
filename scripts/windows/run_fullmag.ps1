@@ -571,6 +571,24 @@ function Install-FullmagPython {
   Invoke-Uv @("pip", "install", "--python", $PythonExe, "$package[meshing]")
 }
 
+function Resolve-NativePublicationPython {
+  # Windows venv python.exe is a redirector with its own child process. The
+  # publisher must be a direct child of this launcher for the PID/nonce guard.
+  $baseOutput = (& $PythonExe -B -c "import json, sys; print(json.dumps(sys._base_executable))" 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw "Native publication Python probe failed: $baseOutput" }
+  $basePython = $baseOutput | ConvertFrom-Json
+  if ($basePython -isnot [string] -or [string]::IsNullOrWhiteSpace($basePython)) {
+    throw "Native publication Python probe returned no base executable"
+  }
+  $basePython = Assert-FullmagStoragePath -Layout $StorageLayout -Path $basePython -Label "native publication Python" -Parent $PythonRoot
+  if (-not (Test-Path -LiteralPath $basePython -PathType Leaf) -or
+      [System.IO.Path]::GetExtension($basePython) -ne ".exe" -or
+      (Get-Item -LiteralPath $basePython -Force).Length -eq 0) {
+    throw "Native publication Python must be an existing nonempty managed executable"
+  }
+  return $basePython
+}
+
 function Publish-NativeWorkspaceRuntime {
   if (-not $env:FULLMAG_NATIVE_RUNTIME_READY_FILE -or
       $env:FULLMAG_NATIVE_RUNTIME_NONCE -notmatch '^[0-9a-f]{32}$') {
@@ -598,7 +616,8 @@ function Publish-NativeWorkspaceRuntime {
       [string]$sealedBundle.source.build_version.product_version -ne [string]$manifest.build_version.product_version) {
     throw "Sealed native runtime identity does not match the validated build manifest"
   }
-  $launchOutput = (& python (Join-Path $PSScriptRoot "stable_launch.py") --repo-root $RepoRoot --bundle-root ([string]$bundle.bundle_root) --profile $SelectedBackendProfile 2>&1 | Out-String)
+  $publicationPython = Resolve-NativePublicationPython
+  $launchOutput = (& $publicationPython -B (Join-Path $PSScriptRoot "stable_launch.py") --repo-root $RepoRoot --bundle-root ([string]$bundle.bundle_root) --profile $SelectedBackendProfile 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0) { throw "Stable native runtime publication failed: $launchOutput" }
   $launch = $launchOutput | ConvertFrom-Json
   if ($SelectedBackendProfile -eq "dev" -and $Frontend -eq "dev") {

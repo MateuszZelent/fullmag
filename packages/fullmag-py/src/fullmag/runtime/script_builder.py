@@ -21,6 +21,7 @@ from fullmag.init.magnetization import (
 from fullmag.init.textures import PresetTexture
 from fullmag.init.state_io import infer_magnetization_state_format
 from fullmag.model.antenna import (
+    ANTENNA_PORT_MODE_SCHEMA_VERSION,
     AntennaFieldSource,
     CPWAntenna,
     DriveActivation,
@@ -353,7 +354,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
             mode.to_ir() for mode in base_problem.antenna_port_modes
         ],
         "antenna_field_solve_stages": [
-            stage.to_ir() for stage in base_problem.antenna_field_solve_stages
+            stage.to_ir() for stage in authored_problem.antenna_field_solve_stages
         ],
         "antenna_target_projections": [
             projection.to_ir() for projection in authored_problem.antenna_target_projections
@@ -463,6 +464,8 @@ def render_loaded_problem_as_script(
 
     base_problem = _builder_base_problem(loaded)
     surface = _script_api_surface(base_problem, overrides=overrides)
+    if any(getattr(loaded.antenna_inventory, name) for name in _ANTENNA_SCENE_COLLECTIONS[1:]):
+        surface = "study"
     magnet_vars = _magnet_variable_names(base_problem, overrides=overrides)
     lines: list[str] = []
     source_root = loaded.source_path.parent
@@ -645,6 +648,22 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(stage_lines)
 
+    authored_problem = loaded.workspace_problem or loaded.problem
+    declaration_lines = _render_antenna_inventory_declarations(
+        {
+            collection: [item.to_ir() for item in getattr(authored_problem, collection)]
+            for collection in _ANTENNA_SCENE_COLLECTIONS[1:]
+        },
+        [stage.action for stage in stages if isinstance(stage.action, dict)],
+    )
+    if declaration_lines:
+        lines.append("")
+        lines.extend(declaration_lines)
+
+    authored_pipeline = overrides.get("study_pipeline", base_problem.runtime_metadata.get("study_pipeline"))
+    if authored_pipeline is not None:
+        lines.append(f"fm.runtime_metadata('study_pipeline', {_py_literal(authored_pipeline)})")
+
     normalized = "\n".join(lines).rstrip() + "\n"
     return normalized
 
@@ -704,6 +723,13 @@ def render_scene_document_as_script(
         script_path = Path(temporary) / "scene_document.py"
         script_path.write_text(bootstrap, encoding="utf-8")
         loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        for collection in _ANTENNA_SCENE_COLLECTIONS:
+            if collection in builder:
+                actual = [item.to_ir() for item in getattr(
+                    loaded.workspace_problem or loaded.problem, collection
+                )]
+                if actual != builder[collection]:
+                    raise ValueError(f"{collection} did not round-trip through the public antenna DSL")
         overrides = builder_overrides_from_scene_document(scene_for_render)
         _omit_scene_mesh_editor_defaults(overrides)
         return render_loaded_problem_as_script(
@@ -1053,17 +1079,19 @@ def _render_scene_document_bootstrap(
         role = str(raw_object.get("role") or "magnet").lower()
         if role != "magnet":
             name = str(raw_object.get("name") or raw_object.get("id") or f"object_{index}")
+            object_id = str(raw_object.get("object_id") or raw_object.get("id") or name)
             auxiliary = f"auxiliary_{index}"
             shape = _render_shape_expression(raw_object)
             if role == "antenna":
                 lines.append(
                     f"{auxiliary} = study.antenna_object({shape}, "
-                    f"name={_python_literal(name)})"
+                    f"name={_python_literal(name)}, object_id={_python_literal(object_id)})"
                 )
             else:
                 lines.append(
                     f"{auxiliary} = study.geometry_object({shape}, "
-                    f"name={_python_literal(name)}, type={_python_literal(role)})"
+                    f"name={_python_literal(name)}, type={_python_literal(role)}, "
+                    f"object_id={_python_literal(object_id)})"
                 )
             continue
         name = str(raw_object.get("name") or raw_object.get("id") or f"object_{index}")
@@ -1170,11 +1198,28 @@ def _render_scene_document_bootstrap(
         if universe_mesh_kwargs:
             lines.append(f"study.universe.mesh({_python_keyword_args(universe_mesh_kwargs)})")
 
+    for module in builder.get("current_modules") or []:
+        lines.append(_render_current_module_override(module, surface="study"))
+    for mode in builder.get("antenna_port_modes") or []:
+        if not isinstance(mode, Mapping):
+            raise ValueError("antenna_port_modes must contain objects")
+        kwargs = dict(mode)
+        schema = kwargs.pop("schema_version", None)
+        if schema != ANTENNA_PORT_MODE_SCHEMA_VERSION:
+            raise ValueError("unsupported antenna port mode schema_version")
+        branches = kwargs.pop("branches", None)
+        if not isinstance(branches, list):
+            raise ValueError("antenna port mode branches must be a list")
+        expression = "[" + ", ".join(f"fm.AntennaPortBranch(**{_py_literal(branch)})" for branch in branches) + "]"
+        lines.append(f"study.add_antenna_port_mode(port_mode=fm.AntennaPortMode(**{_py_literal(kwargs)}, branches={expression}))")
+
+    authored_stages = []
     raw_stages = builder.get("stages") or []
     if include_authored_stages:
         if not isinstance(raw_stages, list):
             raise ValueError("SceneDocument stages must be a list")
-        for index, stage in enumerate(_enabled_scene_stages(raw_stages)):
+        authored_stages = _scene_antenna_stage_sequence(builder)
+        for index, stage in enumerate(_enabled_scene_stages(authored_stages)):
             if not isinstance(stage, Mapping):
                 raise ValueError(f"SceneDocument stages[{index}] must be an object")
             lines.extend(_render_scene_stage_bootstrap(stage, index=index, solver=solver))
@@ -1185,8 +1230,136 @@ def _render_scene_document_bootstrap(
             kwargs = _scene_relax_stage_kwargs(stage, solver=solver)
             lines.append(f"study.stages.add_relax({_python_keyword_args(kwargs)})")
 
+    lines.extend(_render_antenna_inventory_declarations(builder, authored_stages))
     lines.append("")
     return "\n".join(lines) + "\n"
+
+
+_ANTENNA_SCENE_COLLECTIONS = (
+    "antenna_port_modes", "antenna_field_solve_stages", "antenna_target_projections",
+    "solved_antenna_drives", "antenna_spectrum_requests",
+)
+
+
+def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[str, object]]:
+    """Bind ordered authored actions to their canonical collection inventory."""
+    inventory: dict[str, dict[str, dict[str, object]]] = {}
+    for collection in _ANTENNA_SCENE_COLLECTIONS:
+        entries = builder.get(collection, [])
+        if not isinstance(entries, list):
+            raise ValueError(f"{collection} must be a list")
+        indexed: dict[str, dict[str, object]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"].strip():
+                raise ValueError(f"{collection} requires objects with nonempty ids")
+            if entry["id"] in indexed:
+                raise ValueError(f"duplicate {collection} id {entry['id']!r}")
+            indexed[entry["id"]] = entry
+        inventory[collection] = indexed
+    stages = builder.get("stages") or []
+    pipeline = builder.get("study_pipeline")
+    if isinstance(pipeline, Mapping):
+        stages = []
+        def visit(nodes: object) -> None:
+            if not isinstance(nodes, list):
+                raise ValueError("study_pipeline.nodes/children must be a list")
+            for node in nodes:
+                if not isinstance(node, Mapping):
+                    raise ValueError("study_pipeline nodes must be objects")
+                enabled = node.get("enabled", True)
+                if not isinstance(enabled, bool):
+                    raise ValueError("study_pipeline node enabled must be a boolean")
+                if not enabled:
+                    continue
+                if node.get("node_kind") == "group":
+                    visit(node.get("children", []))
+                elif node.get("node_kind") == "primitive":
+                    payload = node.get("payload")
+                    if not isinstance(payload, Mapping):
+                        raise ValueError("primitive pipeline node requires payload")
+                    stage = dict(payload)
+                    stage["kind"] = node["stage_kind"]
+                    stage.setdefault("stage_id", node["id"])
+                    stages.append(stage)
+                else:
+                    raise ValueError("scene pipeline requires the shared study pipeline materializer")
+        visit(pipeline.get("nodes"))
+    consumed = {collection: set() for collection in _ANTENNA_SCENE_COLLECTIONS}
+    def bind(stage: dict[str, object], field: str, collection: str, identifier: object) -> dict[str, object]:
+        embedded = stage.get(field)
+        if isinstance(embedded, Mapping):
+            identifier = embedded.get("id")
+        item = inventory[collection].get(identifier) if isinstance(identifier, str) else None
+        if item is None:
+            raise ValueError(f"dangling {collection} reference {identifier!r}")
+        if embedded is not None and embedded != item:
+            raise ValueError(f"conflicting {collection} payload {identifier!r}")
+        if identifier in consumed[collection] and collection != "antenna_target_projections":
+            raise ValueError(f"duplicate {collection} action {identifier!r}")
+        consumed[collection].add(identifier)
+        stage[field] = item
+        return item
+    result = []
+    for raw_stage in stages:
+        if not isinstance(raw_stage, Mapping):
+            raise ValueError("scene stages must be objects")
+        stage = dict(raw_stage)
+        kind = stage.get("kind")
+        if kind == "antenna_field_solve":
+            definition = bind(stage, "definition", "antenna_field_solve_stages", stage.get("stage_id"))
+            if "port_mode_ids" in stage and stage["port_mode_ids"] != definition["port_mode_ids"]:
+                raise ValueError("conflicting antenna solve port_mode_ids")
+        elif kind == "antenna_source_spectrum":
+            bind(stage, "request", "antenna_spectrum_requests", stage.get("stage_id"))
+        elif kind == "add_solved_antenna_drive":
+            drive = bind(stage, "drive", "solved_antenna_drives", stage.get("stage_id"))
+            bind(stage, "projection", "antenna_target_projections", drive["projection_ref"])
+        result.append(stage)
+    return result
+
+
+def _render_antenna_inventory_declarations(
+    inventory: Mapping[str, object], actions: Sequence[object]
+) -> list[str]:
+    used = {collection: set() for collection in _ANTENNA_SCENE_COLLECTIONS[1:]}
+    for action in actions:
+        if not isinstance(action, Mapping):
+            continue
+        kind = action.get("kind")
+        bindings = {
+            "antenna_field_solve": (("antenna_field_solve_stages", "definition"),),
+            "antenna_source_spectrum": (("antenna_spectrum_requests", "request"),),
+            "add_solved_antenna_drive": (
+                ("solved_antenna_drives", "drive"),
+                ("antenna_target_projections", "projection"),
+            ),
+        }.get(kind, ())
+        for collection, field in bindings:
+            payload = action.get(field)
+            if isinstance(payload, Mapping):
+                used[collection].add(payload.get("id"))
+    renderers = {
+        "antenna_field_solve_stages": (
+            "declare_antenna_field_solve", "definition", _render_antenna_field_solve_definition_expr
+        ),
+        "antenna_target_projections": (
+            "declare_antenna_target_projection", "projection", _render_antenna_projection_expr
+        ),
+        "solved_antenna_drives": (
+            "declare_solved_antenna_drive", "drive", _render_solved_antenna_drive_expr
+        ),
+        "antenna_spectrum_requests": (
+            "declare_antenna_spectrum_request", "request", _render_antenna_spectrum_request_expr
+        ),
+    }
+    lines = []
+    for collection, (method, parameter, render) in renderers.items():
+        for entry in inventory.get(collection, []) or []:
+            if not isinstance(entry, dict):
+                raise ValueError(f"{collection} declarations must be objects")
+            if entry.get("id") not in used[collection]:
+                lines.append(f"study.{method}({parameter}={render(entry)})")
+    return lines
 
 
 def _relax_stage_timestep_kwargs(
@@ -1283,6 +1456,17 @@ def _render_scene_stage_bootstrap(
         else None
     )
     stage_id_arg = {"stage_id": stage_id} if stage_id is not None else {}
+
+    if kind == "antenna_field_solve":
+        _reject_unrendered_scene_stage_fields(stage, kind=kind, rendered_fields={"definition", "port_mode_ids"})
+        definition = stage["definition"]
+        return [f"study.stages.add_antenna_field_solve(id={_py_literal(definition['id'])}, definition={_render_antenna_field_solve_definition_expr(definition)})"]
+    if kind == "antenna_source_spectrum":
+        _reject_unrendered_scene_stage_fields(stage, kind=kind, rendered_fields={"request"})
+        return [f"study.add_antenna_spectrum_request(request={_render_antenna_spectrum_request_expr(stage['request'])})"]
+    if kind == "add_solved_antenna_drive":
+        _reject_unrendered_scene_stage_fields(stage, kind=kind, rendered_fields={"drive", "projection"})
+        return [f"study.add_solved_antenna_drive(drive={_render_solved_antenna_drive_expr(stage['drive'])}, projection={_render_antenna_projection_expr(stage['projection'])})"]
 
     if kind == "relax":
         _reject_unrendered_scene_stage_fields(
@@ -2293,6 +2477,9 @@ def _builder_stage_sequence(loaded: LoadedProblem) -> tuple[LoadedStage, ...]:
 
 
 def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] | None:
+    authored = loaded.problem.runtime_metadata.get("study_pipeline")
+    if isinstance(authored, dict):
+        return copy.deepcopy(authored)
     stages = _builder_stage_sequence(loaded)
     if not stages:
         return None
@@ -3322,6 +3509,9 @@ def _render_geometry_and_materials(
         lines.append("")
     for geometry in problem.auxiliary_geometries:
         role = problem.auxiliary_geometry_roles.get(geometry.geometry_name, "antenna")
+        object_id = problem.auxiliary_geometry_object_ids.get(
+            geometry.geometry_name, geometry.geometry_name
+        )
         if role == "antenna":
             constructor = "antenna_object"
             type_suffix = ""
@@ -3329,7 +3519,7 @@ def _render_geometry_and_materials(
             constructor = "geometry_object"
             type_suffix = f", type={_py_repr(role)}"
         lines.append(
-            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, constructor)}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(geometry.geometry_name)}{type_suffix})"
+            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, constructor)}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(geometry.geometry_name)}{type_suffix}, object_id={_py_repr(object_id)})"
         )
         lines.append("")
     if lines[-1] == "":
@@ -3842,25 +4032,25 @@ def _render_geometries_from_override(
             source_root=source_root,
         )
 
-        if role != "magnet":
-            if role == "antenna":
-                lines.append(
-                    f"{var_name} = {_surface_call(surface, 'antenna_object')}({expr}, name={_py_repr(name)})"
-                )
-            else:
-                lines.append(
-                    f"{var_name} = {_surface_call(surface, 'geometry_object')}({expr}, "
-                    f"name={_py_repr(name)}, type={_py_repr(role)})"
-                )
-            lines.append("")
-            continue
-
         object_id = g.get("object_id")
         object_id_arg = (
             f", object_id={_py_repr(object_id)}"
             if isinstance(object_id, str) and object_id
             else ""
         )
+        if role != "magnet":
+            if role == "antenna":
+                lines.append(
+                    f"{var_name} = {_surface_call(surface, 'antenna_object')}({expr}, name={_py_repr(name)}{object_id_arg})"
+                )
+            else:
+                lines.append(
+                    f"{var_name} = {_surface_call(surface, 'geometry_object')}({expr}, "
+                    f"name={_py_repr(name)}, type={_py_repr(role)}{object_id_arg})"
+                )
+            lines.append("")
+            continue
+
         lines.append(
             f"{var_name} = {_surface_call(surface, 'geometry')}({expr}, name={_py_repr(name)}{object_id_arg})"
         )
@@ -4174,6 +4364,8 @@ def _render_charge_boundary_payload(payload: object) -> str:
     if not boundary_id or not isinstance(surfaces, list) or not surfaces:
         raise ValueError("current transport boundary is incomplete")
     surfaces_expr = "[" + ", ".join(_render_surface_ref_payload(item) for item in surfaces) + "]"
+    if kind == "equipotential_current_terminal":
+        return f"fm.EquipotentialCurrentTerminal({_py_repr(boundary_id)}, {surfaces_expr})"
     if kind == "voltage_electrode":
         potential = _number_or_none(entry.get("potential_V"))
         if potential is None:
@@ -4648,6 +4840,28 @@ def _render_conservative_current_view_payload(payload: object) -> str:
     return f"fm.ConservativeCurrentView({', '.join(view_kwargs)})"
 
 
+def _render_conservative_current_source_payload(payload: object) -> str:
+    from fullmag.runtime.scene_document import _decode_conservative_current_source
+
+    source = _decode_conservative_current_source(payload).to_ir()
+    groups = {
+        "interface_pairs": "CurrentSourceInterfacePair",
+        "outer_terminals": "CurrentSourceOuterTerminal",
+        "terminal_observations": "CurrentSourceTerminalObservation",
+        "drives": "CurrentSourceDrive",
+    }
+    kwargs = []
+    for key, value in source.items():
+        if key == "kind":
+            continue
+        if key in groups:
+            items = [f"fm.{groups[key]}(" + ", ".join(f"{k}={v!r}" for k, v in item.items()) + ")" for item in value]
+            kwargs.append(f"{key}=[" + ", ".join(items) + "]")
+        else:
+            kwargs.append(f"{key}={value!r}")
+    return "fm.ExternalLeadCurrentSource(" + ", ".join(kwargs) + ")"
+
+
 def _render_current_transport_payload(payload: object, *, surface: str) -> str:
     entry = _normalize_mapping(payload)
     kwargs = [f"name={_py_repr(str(entry.get('name') or 'transport'))}"]
@@ -4699,6 +4913,8 @@ def _render_current_transport_payload(payload: object, *, surface: str) -> str:
     if isinstance(time_envelope, Mapping):
         kwargs.append("time_envelope=" + _render_sot_envelope(time_envelope))
     conservative_view = entry.get("conservative_current_view")
+    if entry.get("conservative_current_source") is not None:
+        kwargs.append("conservative_current_source=" + _render_conservative_current_source_payload(entry["conservative_current_source"]))
     if isinstance(conservative_view, Mapping):
         kwargs.append(
             "conservative_current_view="
@@ -4844,10 +5060,14 @@ def _render_field_target_payload_expr(value: object) -> str:
 def _render_antenna_field_solve_definition_expr(definition: dict[str, object]) -> str:
     scalar_fields = (
         "id", "source_object_id", "current_transport_id", "port_mode_ids",
-        "conservative_current_view_ref", "model", "oersted_realization",
-        "conductor_mesh_policy", "solver_policy",
+        "model", "oersted_realization", "conductor_mesh_policy", "solver_policy",
     )
     args = [f"{field}={_py_literal(definition[field])}" for field in scalar_fields]
+    if definition.get("conservative_current_view_ref") is not None:
+        args.append(
+            "conservative_current_view_ref="
+            + _py_literal(definition["conservative_current_view_ref"])
+        )
     args.append(
         "field_sampling_domain="
         + _render_field_target_payload_expr(definition["field_sampling_domain"])
@@ -9294,6 +9514,7 @@ def _export_auxiliary_geometry_entry(
     hint = _normalize_mapping(geometry_hints.get(name))
     return {
         "name": name,
+        "object_id": problem.auxiliary_geometry_object_ids.get(name, name),
         "role": str(
             problem.auxiliary_geometry_roles.get(name)
             or hint.get("role")
@@ -9999,7 +10220,10 @@ def _export_domain_frame(
         return domain_frame
     universe = _normalize_mapping(runtime_metadata.get("study_universe"))
     return build_domain_frame(
-        geometries=[magnet.geometry for magnet in problem.magnets],
+        geometries=[
+            *(magnet.geometry for magnet in problem.magnets),
+            *problem.auxiliary_geometries,
+        ],
         source_root=source_root,
         study_universe=universe or None,
     )
@@ -10643,6 +10867,10 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
             *[_geometry_signature(geometry) for geometry in problem.auxiliary_geometries],
         ],
         "auxiliary_geometry_roles": dict(problem.auxiliary_geometry_roles),
+        "auxiliary_geometry_object_ids": {
+            name: problem.auxiliary_geometry_object_ids.get(name, name)
+            for name in problem.auxiliary_geometry_roles
+        },
         "materials": [_material_signature(magnet) for magnet in problem.magnets],
         "magnets": [
             {

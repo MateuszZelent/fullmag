@@ -4,6 +4,7 @@ import {
   collectFieldVectorIdentityIssues,
   ControlRoomApi,
   ControlRoomApiError,
+  MAX_ANTENNA_INSPECTION_BYTES,
   MAX_TOPOLOGY_BYTES,
   parseFieldVectorResponseMetadata,
   transformFieldMetaForDisplay,
@@ -28,6 +29,9 @@ import type {
 import {
   ANALYSIS_RESULT_BRANCH_POINTS_PATH,
   ANALYSIS_RESULT_ITEMS_PATH,
+  DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH,
+  DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH,
+  DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
   DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
   SESSIONS_PATH,
@@ -95,6 +99,38 @@ describe("derived B_drive display quantity", () => {
 });
 
 describe("antenna source-spectrum binary payloads", () => {
+  it("loads a port-scoped field basis through the typed binary facade", async () => {
+    let observedUrl = "";
+    let observedHeaders = new Headers();
+    const payload = new Float64Array([1, 2, 3]);
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedHeaders = new Headers(init?.headers);
+        return binaryResponse(payload.buffer, { headers: { etag: '"field-basis"' } });
+      },
+    });
+
+    const result = await api.data.antenna.fieldSolutionPayload(
+      "solution-1",
+      "magnetic_field_per_ampere",
+      "port-1",
+      { etag: '"previous"', range: "bytes=0-23" },
+    );
+
+    expect(result.status).toBe("ready");
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/antenna/field-solutions/solution-1/payloads/magnetic_field_per_ampere?port_mode_id=port-1",
+    );
+    expect(observedHeaders.get("if-none-match")).toBe('"previous"');
+    expect(observedHeaders.get("range")).toBe("bytes=0-23");
+    expect(DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH).toContain("/payloads/{payload_kind}");
+    if (result.status === "ready") {
+      expect(Array.from(new Float64Array(result.data))).toEqual([1, 2, 3]);
+    }
+  });
+
   it("loads a stage output catalog through the typed JSON facade", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
@@ -108,6 +144,7 @@ describe("antenna source-spectrum binary payloads", () => {
           resource_id: "antenna/stage-output-catalog/solve-1",
           schema_version: "stage_output_catalog.v1",
           session_epoch: "epoch-1",
+          request_scope_epoch: "instance-1:7",
           session_id: "session-1",
           stage_id: "solve-1",
           stage_kind: "antenna_field_solve",
@@ -162,6 +199,66 @@ describe("antenna source-spectrum binary payloads", () => {
     expect(DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH).toContain(
       "/payloads/{payload_kind}",
     );
+  });
+});
+
+describe("antenna external-lead inspection facade", () => {
+  const sessionScopeKey = "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7";
+
+  it("reads a cancelled inspection without inventing a field solution", async () => {
+    let observedUrl = "";
+    let observedHeaders = new Headers();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedHeaders = new Headers(init?.headers);
+        return jsonResponse({ status: "cancelled", qualification: "NOT VERIFIED", outputs: [], manifest: null });
+      },
+    });
+    const result = await api.data.antenna.externalLeadInspection("stage/1", { sessionScopeKey });
+    expect(observedUrl).toBe("http://127.0.0.1:8765/v2/sessions/current/data/antenna/stages/stage%2F1/external-lead-inspection");
+    expect(observedHeaders.get("x-fullmag-session-scope")).toBe(sessionScopeKey);
+    expect(result).toMatchObject({ status: "cancelled", outputs: [], manifest: null });
+    expect(DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH).toContain("{stage_id}");
+  });
+
+  it("pins raw SI bytes to the selected inspection digest and request scope", async () => {
+    let observedUrl = "";
+    let observedHeaders = new Headers();
+    const payload = new Float64Array([1, -2, 3]);
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedHeaders = new Headers(init?.headers);
+        return binaryResponse(payload.buffer, { status: 206, headers: { etag: '"inspection"' } });
+      },
+    });
+    const result = await api.data.antenna.externalLeadInspectionPayload(
+      "stage-1", "magnetic_field", "sha256:selected",
+      { sessionScopeKey, etag: '"old"', range: "bytes=0-23" },
+    );
+    expect(observedUrl).toBe("http://127.0.0.1:8765/v2/sessions/current/data/antenna/stages/stage-1/external-lead-inspection/payloads/magnetic_field?content_digest=sha256%3Aselected");
+    expect(observedHeaders.get("x-fullmag-session-scope")).toBe(sessionScopeKey);
+    expect(observedHeaders.get("if-none-match")).toBe('"old"');
+    expect(observedHeaders.get("range")).toBe("bytes=0-23");
+    expect(DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH).toContain("{payload_kind}");
+    expect(result.status).toBe("ready");
+    if (result.status === "ready") expect(Array.from(new Float64Array(result.data))).toEqual([1, -2, 3]);
+  });
+
+  it("rejects an oversized inspection before reading the body even with a larger caller budget", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => binaryResponse(new ArrayBuffer(8), {
+        headers: { "content-length": String(MAX_ANTENNA_INSPECTION_BYTES + 1) },
+      }),
+    });
+    await expect(api.data.antenna.externalLeadInspectionPayload(
+      "stage-1", "bundle", "sha256:selected",
+      { sessionScopeKey, maxResponseBytes: 2 * MAX_ANTENNA_INSPECTION_BYTES },
+    )).rejects.toThrow(/byte budget/);
   });
 });
 

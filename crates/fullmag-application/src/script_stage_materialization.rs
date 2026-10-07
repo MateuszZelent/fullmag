@@ -190,6 +190,79 @@ mod canonical_relaxation_time_tests {
     }
 }
 
+#[cfg(test)]
+mod antenna_stage_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn antenna_source_spectrum_pipeline_materializes_as_synthetic_stage() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let payload = BTreeMap::from([("request".to_string(), json!({
+            "id": "source_k",
+            "solution_ref": {"kind": "stage_output", "stage_id": "solve_1", "output_id": "basis"},
+            "target": {"kind": "global"},
+            "transform": "spatial_fft",
+            "sampling_plane": {
+                "origin_m": [0.0, 0.0, 0.0],
+                "axis_u": [1.0, 0.0, 0.0],
+                "axis_v": [0.0, 1.0, 0.0],
+                "extent_u_m": 1.0,
+                "extent_v_m": 1.0,
+                "sample_count_u": 4,
+                "sample_count_v": 4,
+                "interpolation": "fem_element",
+                "outside_policy": "zero"
+            },
+            "window": "rectangular",
+            "normalization": "unitary_discrete",
+            "component": "x",
+            "output_id": "spectrum"
+        }))]);
+        let stage = materialize_pipeline_antenna_source_spectrum(&mut problem, &payload).unwrap();
+        assert!(matches!(stage.action, Some(ResolvedScriptStageAction::AntennaSourceSpectrum { ref request_id }) if request_id == "source_k"));
+        assert_eq!(stage.ir.antenna_spectrum_requests.len(), 1);
+        assert_eq!(problem.antenna_spectrum_requests.len(), 1);
+        materialize_pipeline_antenna_source_spectrum(&mut problem, &payload).unwrap();
+        assert_eq!(problem.antenna_spectrum_requests.len(), 1);
+        let mut conflict = payload.clone();
+        conflict.get_mut("request").unwrap()["output_id"] = json!("other");
+        assert!(materialize_pipeline_antenna_source_spectrum(&mut problem, &conflict)
+            .unwrap_err()
+            .to_string()
+            .contains("conflicting antenna source-spectrum request id"));
+    }
+
+    #[test]
+    fn solved_antenna_drive_action_preserves_matching_base_model_without_duplicates() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let projection: fullmag_ir::AntennaTargetProjectionRefIR = serde_json::from_value(json!({
+            "id": "projection_1",
+            "solution": {"kind": "stage_output", "stage_id": "solve_1", "output_id": "basis"},
+            "target": {"kind": "global"},
+            "output_id": "projected"
+        })).unwrap();
+        let drive: fullmag_ir::SolvedAntennaDriveIR = serde_json::from_value(json!({
+            "id": "drive_1",
+            "name": "Drive 1",
+            "projection_ref": "projection_1",
+            "port_mode_id": "port_1",
+            "peak_current_a": 1.0,
+            "waveform": {"kind": "constant"},
+            "time_origin": "absolute",
+            "activation": {"kind": "all_time_evolution"}
+        })).unwrap();
+        register_solved_antenna_drive(&mut problem, &projection, &drive).unwrap();
+        register_solved_antenna_drive(&mut problem, &projection, &drive).unwrap();
+        assert_eq!(problem.antenna_target_projections.len(), 1);
+        assert_eq!(problem.solved_antenna_drives.len(), 1);
+        let mut conflicting = drive.clone();
+        conflicting.peak_current_a = 2.0;
+        assert!(register_solved_antenna_drive(&mut problem, &projection, &conflicting)
+            .unwrap_err().to_string().contains("conflicting solved antenna drive id"));
+    }
+}
+
 pub type StageOutputPolicy =
     fn(&mut ProblemIR, OutputDataFormatIR, f64) -> std::result::Result<(), String>;
 
@@ -455,9 +528,19 @@ fn classify_stage_transition(
 
 fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> StageTransitionMetadata {
     match action {
+        ResolvedScriptStageAction::AntennaExternalLeadInspection { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::AntennaExternalLeadInspection,
+            StageTransitionReason::AntennaExternalLeadInspection,
+            None,
+        ),
         ResolvedScriptStageAction::AntennaFieldSolve { .. } => StageTransitionMetadata::boundary(
             StageTransitionKind::AntennaFieldSolve,
             StageTransitionReason::AntennaFieldSolve,
+            None,
+        ),
+        ResolvedScriptStageAction::AntennaSourceSpectrum { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::AntennaSourceSpectrum,
+            StageTransitionReason::AntennaSourceSpectrum,
             None,
         ),
         ResolvedScriptStageAction::SaveState { .. } => StageTransitionMetadata::boundary(
@@ -485,6 +568,7 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
         | ResolvedScriptStageAction::TableAutosave { .. }
         | ResolvedScriptStageAction::Autosave { .. }
         | ResolvedScriptStageAction::FftResponse { .. }
+        | ResolvedScriptStageAction::AddSolvedAntennaDrive { .. }
         | ResolvedScriptStageAction::SetTransportCurrent { .. }
         | ResolvedScriptStageAction::SetSpinTorqueEnabled { .. } => {
             StageTransitionMetadata::continue_in_place()
@@ -552,6 +636,33 @@ fn same_magnet_topology(
             })
 }
 
+fn resolve_antenna_field_solve_action(
+    ir: &ProblemIR,
+    stage_id: &str,
+    port_mode_id: &str,
+) -> Result<ResolvedScriptStageAction> {
+    let plan = fullmag_plan::plan_antenna_field_solve_execution(ir, stage_id, port_mode_id)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(match plan {
+        fullmag_plan::AntennaFieldSolveExecutionPlan::FieldBasis(plan) => {
+            ResolvedScriptStageAction::AntennaFieldSolve {
+                stage_id: stage_id.into(),
+                port_mode_id: port_mode_id.into(),
+                plan,
+            }
+        }
+        fullmag_plan::AntennaFieldSolveExecutionPlan::ExternalLeadInspection {
+            input,
+            requested_execution,
+            output_id,
+        } => ResolvedScriptStageAction::AntennaExternalLeadInspection {
+            input,
+            requested_execution,
+            output_id,
+        },
+    })
+}
+
 fn resolve_explicit_stage_action(
     mut ir: ProblemIR,
     entrypoint_kind: String,
@@ -581,15 +692,35 @@ fn resolve_explicit_stage_action(
                     )
                 }
             };
-            let plan =
-                fullmag_plan::plan_antenna_field_solve(&ir, &stage_id, &selected_port_mode_id)
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let resolved_action = resolve_antenna_field_solve_action(
+                &ir, &stage_id, &selected_port_mode_id,
+            )?;
             (
                 "study_pipeline_antenna_field_solve",
-                ResolvedScriptStageAction::AntennaFieldSolve {
-                    stage_id,
-                    port_mode_id: selected_port_mode_id,
-                    plan,
+                resolved_action,
+            )
+        }
+        ScriptExecutionStageAction::AntennaSourceSpectrum { request } => {
+            if let Some(existing) = ir.antenna_spectrum_requests.iter().find(|item| item.id == request.id) {
+                if existing != &request {
+                    bail!("conflicting antenna source-spectrum request id '{}'", request.id);
+                }
+            } else {
+                ir.antenna_spectrum_requests.push(request.clone());
+            }
+            let request_id = request.id.clone();
+            (
+                "study_pipeline_antenna_source_spectrum",
+                ResolvedScriptStageAction::AntennaSourceSpectrum { request_id },
+            )
+        }
+        ScriptExecutionStageAction::AddSolvedAntennaDrive { projection, drive } => {
+            register_solved_antenna_drive(&mut ir, &projection, &drive)?;
+            (
+                "study_pipeline_add_solved_antenna_drive",
+                ResolvedScriptStageAction::AddSolvedAntennaDrive {
+                    projection_id: projection.id,
+                    drive_id: drive.id,
                 },
             )
         }
@@ -896,6 +1027,12 @@ fn materialize_pipeline_primitive(
         "antenna_field_solve" => {
             materialize_pipeline_antenna_field_solve(current_ir, payload).map(Some)
         }
+        "antenna_source_spectrum" => {
+            materialize_pipeline_antenna_source_spectrum(current_ir, payload).map(Some)
+        }
+        "add_solved_antenna_drive" => {
+            materialize_pipeline_add_solved_antenna_drive(current_ir, payload).map(Some)
+        }
         "run" => {
             validate_pipeline_run_primitive_payload(payload)?;
             materialize_pipeline_run(current_ir, payload, default_until_seconds).map(Some)
@@ -990,18 +1127,90 @@ fn materialize_pipeline_antenna_field_solve(
             .filter(|value| !value.trim().is_empty())
             .context("antenna_field_solve payload.port_mode_ids[0] must be a non-empty string")?
     };
-    let plan = fullmag_plan::plan_antenna_field_solve(current_ir, &stage_id, &port_mode_id)
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let action = resolve_antenna_field_solve_action(current_ir, &stage_id, &port_mode_id)?;
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_antenna_field_solve".to_string());
     current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
     Ok(ResolvedScriptStage::synthetic(
         current_ir.clone(),
         entrypoint_kind,
-        ResolvedScriptStageAction::AntennaFieldSolve {
-            stage_id,
-            port_mode_id,
-            plan,
+        action,
+    ))
+}
+
+fn materialize_pipeline_antenna_source_spectrum(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let request: fullmag_ir::AntennaSpectrumRequestIR = serde_json::from_value(
+        payload.get("request").cloned().context("antenna_source_spectrum requires payload.request")?,
+    )
+    .context("antenna_source_spectrum payload.request is invalid")?;
+    if let Some(existing) = current_ir.antenna_spectrum_requests.iter().find(|item| item.id == request.id) {
+        if existing != &request {
+            bail!("conflicting antenna source-spectrum request id '{}'", request.id);
+        }
+    } else {
+        current_ir.antenna_spectrum_requests.push(request.clone());
+    }
+    let request_id = request.id.clone();
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_antenna_source_spectrum".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::AntennaSourceSpectrum { request_id },
+    ))
+}
+
+fn register_solved_antenna_drive(
+    problem: &mut ProblemIR,
+    projection: &fullmag_ir::AntennaTargetProjectionRefIR,
+    drive: &fullmag_ir::SolvedAntennaDriveIR,
+) -> Result<()> {
+    if drive.projection_ref != projection.id {
+        bail!("solved antenna drive '{}' must reference projection '{}'", drive.id, projection.id);
+    }
+    let existing_projection = problem.antenna_target_projections.iter().find(|item| item.id == projection.id);
+    if existing_projection.is_some_and(|item| item != projection) {
+        bail!("conflicting antenna projection id '{}'", projection.id);
+    }
+    let existing_drive = problem.solved_antenna_drives.iter().find(|item| item.id == drive.id);
+    if existing_drive.is_some_and(|item| item != drive) {
+        bail!("conflicting solved antenna drive id '{}'", drive.id);
+    }
+    if existing_projection.is_none() {
+        problem.antenna_target_projections.push(projection.clone());
+    }
+    if existing_drive.is_none() {
+        problem.solved_antenna_drives.push(drive.clone());
+    }
+    Ok(())
+}
+
+fn materialize_pipeline_add_solved_antenna_drive(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let projection: fullmag_ir::AntennaTargetProjectionRefIR = serde_json::from_value(
+        payload.get("projection").cloned().context("add_solved_antenna_drive requires payload.projection")?,
+    )
+    .context("add_solved_antenna_drive payload.projection is invalid")?;
+    let drive: fullmag_ir::SolvedAntennaDriveIR = serde_json::from_value(
+        payload.get("drive").cloned().context("add_solved_antenna_drive requires payload.drive")?,
+    )
+    .context("add_solved_antenna_drive payload.drive is invalid")?;
+    register_solved_antenna_drive(current_ir, &projection, &drive)?;
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_add_solved_antenna_drive".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::AddSolvedAntennaDrive {
+            projection_id: projection.id,
+            drive_id: drive.id,
         },
     ))
 }

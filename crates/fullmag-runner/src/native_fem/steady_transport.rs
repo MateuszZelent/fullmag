@@ -22,6 +22,13 @@ fn preflight_direct_oersted_pair_budget(
     source_cell_count: usize,
     target_count: usize,
 ) -> Result<u64, RunError> {
+    if source_cell_count == 0 || target_count == 0 {
+        return Err(RunError {
+            message: format!(
+                "antenna Oersted preflight requires nonempty source tetrahedra and target points ({source_cell_count} source tetrahedra x {target_count} target points)"
+            ),
+        });
+    }
     let source_count = u64::try_from(source_cell_count).map_err(|_| RunError {
         message: "antenna Oersted preflight source cell count is not representable".into(),
     })?;
@@ -76,11 +83,14 @@ pub(crate) fn preflight_direct_oersted_pair_budget_for_evaluations(
 }
 
 mod descriptor;
+mod direct_oersted_snapshot;
 mod provenance;
 mod publication;
 mod stage_cache;
 
 pub(crate) use descriptor::preflight_transport_plans;
+pub(crate) use direct_oersted_snapshot::DirectOerstedSnapshot;
+use direct_oersted_snapshot::SnapshotBuffer;
 use publication::transport_field_snapshots;
 use stage_cache::{
     validate_plan as validate_stage_cache_plan, SteadySourceStageCoordinator,
@@ -178,7 +188,46 @@ pub(crate) struct NativeFemSteadyTransportResult {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct NativeFemChargePotentialSnapshot {
+    pub electric_potential_v: Vec<f64>,
+    pub stable_vertex_ids: Vec<u64>,
+    pub vertex_positions_xyz_m: Vec<[f64; 3]>,
+    pub stable_vertex_id_version: String,
+    pub source_view_identity_digest: String,
+}
+
+fn validate_charge_potential_snapshot(
+    snapshot: &NativeFemChargePotentialSnapshot,
+    expected_ids: &[u64],
+    expected_positions: &[[f64; 3]],
+    expected_source_digest: &str,
+) -> Result<(), RunError> {
+    if expected_ids.is_empty()
+        || snapshot.electric_potential_v.len() != expected_ids.len()
+        || snapshot.stable_vertex_ids.as_slice() != expected_ids
+        || snapshot.vertex_positions_xyz_m.as_slice() != expected_positions
+        || expected_positions.len() != expected_ids.len()
+        || snapshot.stable_vertex_id_version != "stable_mesh_vertex_u64.v1"
+        || snapshot.source_view_identity_digest != expected_source_digest
+        || expected_source_digest.len() != 64
+        || !expected_source_digest
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        || snapshot.electric_potential_v.iter().any(|value| !value.is_finite())
+        || snapshot.vertex_positions_xyz_m.iter().flatten().any(|value| !value.is_finite())
+        || snapshot.stable_vertex_ids.iter().copied().collect::<std::collections::HashSet<_>>().len()
+            != expected_ids.len()
+    {
+        return Err(RunError {
+            message: "native FEM charge snapshot has invalid values, vertex ordering or RT0 source identity".into(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct NativeFemSteadyTransportRt0Result {
+    pub charge_potential_snapshot: NativeFemChargePotentialSnapshot,
     pub rt0_dof_values: Vec<f64>,
     pub canonical_face_records: Vec<([u64; 3], f64)>,
     pub max_element_divergence_a: f64,
@@ -203,6 +252,7 @@ pub(crate) struct NativeFemSteadyTransportRt0Result {
     pub oersted_unconverged_pair_count: Option<u64>,
     pub oersted_maximum_pair_error_apm: Option<f64>,
     pub oersted_diagnostics: Option<Value>,
+    pub oersted_quadrature_snapshot: Option<DirectOerstedSnapshot>,
 }
 
 pub(crate) struct NativeFemSteadyTransportBundle {
@@ -224,6 +274,7 @@ struct NativeFemOerstedField {
     unconverged_pair_count: Option<u64>,
     maximum_pair_error_apm: Option<f64>,
     diagnostics: Value,
+    quadrature_snapshot: Option<DirectOerstedSnapshot>,
 }
 
 pub(crate) fn execute_native_fem_steady_transport_plans(
@@ -427,9 +478,9 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
                 let operator = rt0_view
                     .as_ref()
                     .and_then(|view| view.oersted_operator_version.as_deref());
-                let direct_rt0 = operator == Some("fem_oersted_direct_tetra_quadrature.v1");
+                let direct_rt0 = operator == Some(fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION);
                 let vector_potential =
-                    operator == Some("fem_oersted_hcurl_h1_gauge.v1");
+                    operator == Some(fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION);
                 serde_json::json!({
                     "source_kind": if vector_potential {
                         "fem_conservative_current_rt0_vector_potential.v1"
@@ -1101,12 +1152,20 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
     oersted_method: NativeFemSteadyTransportOerstedMethod,
     target_points: Option<&[[f64; 3]]>,
 ) -> Result<NativeFemSteadyTransportRt0Result, RunError> {
+    let (lead_cell_count, lead_nodes, lead_ids) = match &view.closure {
+        ConservativeCurrentClosureIR::ExternalLead {
+            lead_mesh, lead_stable_vertex_ids, ..
+        } => (lead_mesh.cell_count(), lead_mesh.nodes.as_slice(), lead_stable_vertex_ids.as_slice()),
+        ConservativeCurrentClosureIR::ClosedGeometry { .. } => (0, &[][..], &[][..]),
+    };
+    let rt0_cell_count = request.mesh.cell_count().checked_add(lead_cell_count)
+        .ok_or_else(|| RunError { message: "combined RT0 cell count overflows".into() })?;
     if matches!(
         oersted_method,
         NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature
     ) {
         if let Some(target_points) = target_points {
-            preflight_direct_oersted_pair_budget(request.mesh.cell_count(), target_points.len())?;
+            preflight_direct_oersted_pair_budget(rt0_cell_count, target_points.len())?;
         }
     }
     // The legacy H1 preflight rejects periodic topology because its old ABI
@@ -1442,14 +1501,36 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
     // DOF vector and canonical face records before the native adapter can
     // publish a valid result.  Four faces per tet is a conservative upper
     // bound; shared faces only reduce the actual RT0 dimension.
-    let rt0_cell_count = request
-        .mesh
-        .cell_count()
-        .saturating_add(match &view.closure {
-            ConservativeCurrentClosureIR::ExternalLead { lead_mesh, .. } => lead_mesh.cell_count(),
-            ConservativeCurrentClosureIR::ClosedGeometry { .. } => 0,
-        });
-    let capacity = rt0_cell_count.saturating_mul(4).max(1);
+    let capacity = rt0_cell_count.checked_mul(4).ok_or_else(|| RunError {
+        message: "combined RT0 face capacity overflows".into(),
+    })?.max(1);
+    let charge_node_count = request.mesh.nodes.len().checked_add(lead_nodes.len())
+        .ok_or_else(|| RunError { message: "combined charge node count overflows".into() })?;
+    let charge_xyz_count = charge_node_count.checked_mul(3).ok_or_else(|| RunError {
+        message: "combined charge coordinate capacity overflows".into(),
+    })?;
+    let expected_charge_ids = view.stable_vertex_ids.iter().chain(lead_ids).copied().collect::<Vec<_>>();
+    let expected_charge_positions = request.mesh.nodes.iter().chain(lead_nodes).copied().collect::<Vec<_>>();
+    let mut charge_potential_v = vec![f64::NAN; charge_node_count];
+    let mut charge_stable_ids = vec![0; charge_node_count];
+    let mut charge_vertex_xyz = vec![f64::NAN; charge_xyz_count];
+    let mut charge_snapshot_ffi = ffi::fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 {
+        abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_CHARGE_SNAPSHOT_ABI_VERSION,
+        reserved_flags: 0,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1>() as u64,
+        electric_potential_v: charge_potential_v.as_mut_ptr(),
+        electric_potential_v_capacity: charge_node_count as u64,
+        electric_potential_v_len: 0,
+        stable_vertex_ids: charge_stable_ids.as_mut_ptr(),
+        stable_vertex_ids_capacity: charge_node_count as u64,
+        stable_vertex_ids_len: 0,
+        vertex_xyz_m: charge_vertex_xyz.as_mut_ptr(),
+        vertex_xyz_m_capacity: charge_xyz_count as u64,
+        vertex_xyz_m_len: 0,
+        stable_vertex_id_version: [0; 96],
+        source_view_identity_digest: [0; 65],
+        error_message: [0; 256],
+    };
     let mut rt0_dof_values = vec![0.0; capacity];
     let mut canonical_face_records = vec![
             ffi::fullmag_fem_steady_transport_rt0_face_flux_record_v1 {
@@ -1496,7 +1577,8 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
                         message: "FEM OE-F1 target points contain a non-finite value".into(),
                     });
                 }
-                let mut h_xyz_apm = vec![0.0; target_points_xyz.len()];
+                let mut h_xyz_apm = vec![f64::NAN; target_points_xyz.len()];
+                let mut snapshot_buffer = SnapshotBuffer::new(target_points.len())?;
                 let oersted_request = ffi::fullmag_fem_steady_transport_rt0_oersted_request_v1 {
                     abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION,
                     reserved_flags: 0,
@@ -1506,10 +1588,10 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
                     rt0: request_ffi,
                     target_points_xyz: const_ptr(&target_points_xyz),
                     target_points_xyz_len: target_points_xyz.len() as u64,
-                    base_quadrature_order: 4,
-                    maximum_subdivision_depth: 6,
-                    absolute_tolerance_apm: 1.0e-9,
-                    relative_tolerance: 1.0e-5,
+                    base_quadrature_order: fullmag_ir::ANTENNA_DIRECT_OERSTED_BASE_QUADRATURE_ORDER,
+                    maximum_subdivision_depth: fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SUBDIVISION_DEPTH,
+                    absolute_tolerance_apm: fullmag_ir::ANTENNA_DIRECT_OERSTED_ABSOLUTE_TOLERANCE_APM,
+                    relative_tolerance: fullmag_ir::ANTENNA_DIRECT_OERSTED_RELATIVE_TOLERANCE,
                     maximum_source_target_pairs: DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
                 };
                 let mut outer_result = ffi::fullmag_fem_steady_transport_rt0_oersted_result_v1 {
@@ -1532,32 +1614,38 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
                     diagnostics_json: [0; 1024],
                 };
                 let status = unsafe {
-                    ffi::fullmag_fem_solve_steady_transport_rt0_oersted_v1(
+                    ffi::fullmag_fem_solve_steady_transport_rt0_oersted_with_snapshots_v1(
                         &oersted_request,
                         &mut outer_result,
+                        &mut charge_snapshot_ffi,
+                        &mut snapshot_buffer.header,
                     )
                 };
                 result_ffi = outer_result.rt0;
-                direct_oersted_result_ffi = Some((outer_result, h_xyz_apm));
+                direct_oersted_result_ffi = Some((outer_result, h_xyz_apm, snapshot_buffer));
                 status
             } else {
                 unsafe {
-                    ffi::fullmag_fem_solve_steady_transport_rt0_v1(&request_ffi, &mut result_ffi)
+                    ffi::fullmag_fem_solve_steady_transport_rt0_with_charge_snapshot_v1(
+                        &request_ffi, &mut result_ffi, &mut charge_snapshot_ffi,
+                    )
                 }
             }
         }
         NativeFemSteadyTransportOerstedMethod::FemVectorPotential => {
             if target_points.is_some() {
-                let nd_capacity = request.mesh.cell_count().saturating_mul(6).max(1);
-                let h1_capacity = request.mesh.nodes.len().max(1);
-                let rt_capacity = request.mesh.cell_count().saturating_mul(4).max(1);
+                let nd_capacity = rt0_cell_count.checked_mul(6).ok_or_else(|| RunError {
+                    message: "combined OE-F2 edge capacity overflows".into(),
+                })?.max(1);
+                let h1_capacity = charge_node_count.max(1);
+                let rt_capacity = capacity;
                 let mut a_dofs_t_m = vec![0.0; nd_capacity];
                 let mut gauge_dofs_apm = vec![0.0; h1_capacity];
                 let mut compatible_b_dofs_t = vec![0.0; rt_capacity];
                 let mut compatible_h_dofs_apm = vec![0.0; rt_capacity];
-                let mut nodal_h_xyz_apm = vec![0.0; request.mesh.nodes.len() * 3];
+                let mut nodal_h_xyz_apm = vec![f64::NAN; charge_xyz_count];
                 let boundary_gauge_variant =
-                    c_string("tangential_A_h1_0.v1", "boundary_gauge_variant")?;
+                    c_string(fullmag_ir::ANTENNA_VECTOR_POTENTIAL_BOUNDARY_GAUGE, "boundary_gauge_variant")?;
                 let vector_potential_request =
                     ffi::fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 {
                         abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION,
@@ -1566,10 +1654,10 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
                             ffi::fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1,
                         >() as u64,
                         rt0: request_ffi,
-                        mu0_si: 1.25663706212e-6,
-                        relative_tolerance: 1.0e-10,
-                        maximum_nd_dofs: 4096,
-                        maximum_h1_dofs: 2048,
+                        mu0_si: fullmag_ir::ANTENNA_VECTOR_POTENTIAL_MU0_SI,
+                        relative_tolerance: fullmag_ir::ANTENNA_VECTOR_POTENTIAL_RELATIVE_TOLERANCE,
+                        maximum_nd_dofs: fullmag_ir::ANTENNA_VECTOR_POTENTIAL_MAX_ND_DOFS,
+                        maximum_h1_dofs: fullmag_ir::ANTENNA_VECTOR_POTENTIAL_MAX_H1_DOFS,
                         boundary_gauge_variant: boundary_gauge_variant.as_ptr(),
                     };
                 let mut vector_potential_result =
@@ -1611,9 +1699,10 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
                         nodal_h_xyz_apm_len: 0,
                     };
                 let status = unsafe {
-                    ffi::fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+                    ffi::fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_with_charge_snapshot_v1(
                         &vector_potential_request,
                         &mut vector_potential_result,
+                        &mut charge_snapshot_ffi,
                     )
                 };
                 result_ffi = vector_potential_result.rt0;
@@ -1621,7 +1710,9 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
                 status
             } else {
                 unsafe {
-                    ffi::fullmag_fem_solve_steady_transport_rt0_v1(&request_ffi, &mut result_ffi)
+                    ffi::fullmag_fem_solve_steady_transport_rt0_with_charge_snapshot_v1(
+                        &request_ffi, &mut result_ffi, &mut charge_snapshot_ffi,
+                    )
                 }
             }
         }
@@ -1634,7 +1725,7 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
             .or_else(|| {
                 direct_oersted_result_ffi
                     .as_ref()
-                    .map(|(result, _)| chars(&result.error_message))
+                    .map(|(result, _, _)| chars(&result.error_message))
                     .filter(|message| !message.is_empty())
             })
             .unwrap_or_else(|| chars(&result_ffi.error_message));
@@ -1650,6 +1741,26 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
             message: "native FEM RT0 returned a non-converged or out-of-range result".into(),
         });
     }
+    if charge_snapshot_ffi.electric_potential_v_len != charge_node_count as u64
+        || charge_snapshot_ffi.stable_vertex_ids_len != charge_node_count as u64
+        || charge_snapshot_ffi.vertex_xyz_m_len != charge_xyz_count as u64
+    {
+        return Err(RunError {
+            message: "native FEM charge snapshot returned incomplete V/IDs/xyz lengths".into(),
+        });
+    }
+    let charge_potential_snapshot = NativeFemChargePotentialSnapshot {
+        electric_potential_v: charge_potential_v,
+        stable_vertex_ids: charge_stable_ids,
+        vertex_positions_xyz_m: charge_vertex_xyz.chunks_exact(3)
+            .map(|point| [point[0], point[1], point[2]]).collect(),
+        stable_vertex_id_version: chars(&charge_snapshot_ffi.stable_vertex_id_version),
+        source_view_identity_digest: chars(&charge_snapshot_ffi.source_view_identity_digest),
+    };
+    validate_charge_potential_snapshot(
+        &charge_potential_snapshot, &expected_charge_ids, &expected_charge_positions,
+        &chars(&result_ffi.view_identity_digest),
+    )?;
     let diagnostics_text = chars(&result_ffi.diagnostics_json);
     let diagnostics = serde_json::from_str(&diagnostics_text).map_err(|error| RunError {
         message: format!("invalid native FEM RT0 diagnostics JSON: {error}"),
@@ -1668,9 +1779,13 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
         .take(result_ffi.canonical_face_records_len as usize)
         .map(|record| (record.face_vertex_ids, record.flux_a))
         .collect();
-    let oersted = if let Some((oersted_result, h_xyz_apm)) = direct_oersted_result_ffi {
+    let oersted = if let Some((oersted_result, mut h_xyz_apm, snapshot_buffer)) = direct_oersted_result_ffi {
         if oersted_result.h_xyz_apm_len != h_xyz_apm.len() as u64
-            || oersted_result.h_xyz_apm_len > oersted_result.h_xyz_apm_capacity
+            || oersted_result.h_xyz_apm_capacity != h_xyz_apm.len() as u64
+            || oersted_result.h_xyz_apm != h_xyz_apm.as_mut_ptr()
+            || oersted_result.abi_version != ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION
+            || oersted_result.reserved_flags != 0
+            || oersted_result.struct_size != std::mem::size_of::<ffi::fullmag_fem_steady_transport_rt0_oersted_result_v1>() as u64
             || h_xyz_apm.iter().any(|value| !value.is_finite())
         {
             return Err(RunError {
@@ -1684,21 +1799,27 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
             });
         }
         let operator_version = chars(&oersted_result.operator_version);
-        if operator_version != "fem_oersted_direct_tetra_quadrature.v1" {
+        if operator_version != fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION {
             return Err(RunError {
                 message: format!(
                     "native FEM OE-F1 returned unexpected operator version '{operator_version}'"
                 ),
             });
         }
-        let diagnostics_text = chars(&oersted_result.diagnostics_json);
-        let diagnostics = serde_json::from_str(&diagnostics_text).map_err(|error| RunError {
-            message: format!("invalid native FEM OE-F1 diagnostics JSON: {error}"),
-        })?;
         validate_direct_oersted_convergence(
             oersted_result.unconverged_pair_count,
             oersted_result.maximum_pair_error_apm,
         )?;
+        let quadrature_snapshot = snapshot_buffer.finish(
+            &oersted_result,
+            target_points.ok_or_else(|| RunError {
+                message: "native FEM OE-F1 snapshot has no authored target points".into(),
+            })?,
+            &h_xyz_apm,
+            rt0_cell_count,
+            &source_view_identity_digest,
+        )?;
+        let diagnostics = quadrature_snapshot.diagnostics();
         Some(NativeFemOerstedField {
             field: h_xyz_apm,
             operator_version,
@@ -1708,6 +1829,7 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
             unconverged_pair_count: Some(oersted_result.unconverged_pair_count),
             maximum_pair_error_apm: Some(oersted_result.maximum_pair_error_apm),
             diagnostics,
+            quadrature_snapshot: Some(quadrature_snapshot),
         })
     } else if let Some((oersted_result, nodal_h_xyz_apm)) = vector_potential_result_ffi {
         if oersted_result.nodal_h_xyz_apm_len != nodal_h_xyz_apm.len() as u64
@@ -1725,7 +1847,7 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
             });
         }
         let operator_version = chars(&oersted_result.operator_version);
-        if operator_version != "fem_oersted_hcurl_h1_gauge.v1" {
+        if operator_version != fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION {
             return Err(RunError {
                 message: format!(
                     "native FEM OE-F2 returned unexpected operator version '{operator_version}'"
@@ -1745,11 +1867,13 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
             unconverged_pair_count: None,
             maximum_pair_error_apm: None,
             diagnostics,
+            quadrature_snapshot: None,
         })
     } else {
         None
     };
     Ok(NativeFemSteadyTransportRt0Result {
+        charge_potential_snapshot,
         rt0_dof_values: rt0_dof_values
             .into_iter()
             .take(result_ffi.rt0_dof_values_len as usize)
@@ -1795,7 +1919,8 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
         oersted_maximum_pair_error_apm: oersted
             .as_ref()
             .and_then(|value| value.maximum_pair_error_apm),
-        oersted_diagnostics: oersted.map(|value| value.diagnostics),
+        oersted_diagnostics: oersted.as_ref().map(|value| value.diagnostics.clone()),
+        oersted_quadrature_snapshot: oersted.and_then(|value| value.quadrature_snapshot),
     })
 }
 
@@ -1932,6 +2057,7 @@ mod tests {
             gauge: ChargePotentialGaugeIR::DirichletReference,
             solver: charge_solver.clone(),
             conservative_current_view: None,
+            conservative_current_source: None,
             structured_current_closure: None,
         };
         ResolvedSpinTransportPlanIR {
@@ -3796,6 +3922,51 @@ mod tests {
     }
 
     #[test]
+    fn charge_snapshot_consumer_rejects_inconsistent_combined_payload() {
+        let (transport, view) = external_lead_request_and_view();
+        let ConservativeCurrentClosureIR::ExternalLead {
+            lead_mesh, lead_stable_vertex_ids, ..
+        } = &view.closure else { panic!("external lead fixture required") };
+        let ids = view.stable_vertex_ids.iter().chain(lead_stable_vertex_ids)
+            .copied().collect::<Vec<_>>();
+        let positions = transport.mesh.nodes.iter().chain(&lead_mesh.nodes)
+            .copied().collect::<Vec<_>>();
+        let digest = "ab".repeat(32);
+        let accepted = NativeFemChargePotentialSnapshot {
+            electric_potential_v: positions.iter().map(|point| -(point[0] + 1.0) / 3.0).collect(),
+            stable_vertex_ids: ids.clone(),
+            vertex_positions_xyz_m: positions.clone(),
+            stable_vertex_id_version: "stable_mesh_vertex_u64.v1".into(),
+            source_view_identity_digest: digest.clone(),
+        };
+        assert_eq!(accepted.electric_potential_v.len(), 24);
+        validate_charge_potential_snapshot(&accepted, &ids, &positions, &digest).unwrap();
+        for mutation in 0..10 {
+            let mut invalid = accepted.clone();
+            match mutation {
+                0 => { invalid.electric_potential_v.pop(); }
+                1 => invalid.stable_vertex_ids.swap(0, 1),
+                2 => invalid.stable_vertex_ids[1] = invalid.stable_vertex_ids[0],
+                3 => invalid.vertex_positions_xyz_m[0][0] += 1.0,
+                4 => invalid.stable_vertex_id_version = "foreign.v1".into(),
+                5 => invalid.source_view_identity_digest = "cd".repeat(32),
+                6 => invalid.electric_potential_v[23] = f64::NAN,
+                7 => invalid.vertex_positions_xyz_m[23][2] = f64::INFINITY,
+                8 => { invalid.vertex_positions_xyz_m.pop(); }
+                9 => { invalid.electric_potential_v.push(0.0); }
+                _ => unreachable!(),
+            }
+            assert!(validate_charge_potential_snapshot(&invalid, &ids, &positions, &digest).is_err(),
+                "mutation {mutation} accepted an inconsistent combined snapshot");
+        }
+        for invalid_digest in ["AB".repeat(32), format!("sha256:{digest}"), "".into()] {
+            let mut invalid = accepted.clone();
+            invalid.source_view_identity_digest = invalid_digest.clone();
+            assert!(validate_charge_potential_snapshot(&invalid, &ids, &positions, &invalid_digest).is_err());
+        }
+    }
+
+    #[test]
     fn external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit() {
         let (transport, view) = external_lead_request_and_view();
 
@@ -3820,6 +3991,15 @@ mod tests {
             "fem_conservative_current_rt0_view.v1"
         );
         assert_eq!(result.flux_unit, "A");
+        let snapshot = &result.charge_potential_snapshot;
+        assert_eq!(snapshot.electric_potential_v.len(), 24);
+        assert_eq!(snapshot.source_view_identity_digest, result.view_identity_digest);
+        assert_eq!(snapshot.stable_vertex_ids,
+            (1_u64..=8).chain(101_u64..=108).chain(201_u64..=208).collect::<Vec<_>>());
+        for (potential, position) in snapshot.electric_potential_v.iter()
+            .zip(&snapshot.vertex_positions_xyz_m) {
+            assert!((potential + (position[0] + 1.0) / 3.0).abs() <= 1.0e-11);
+        }
     }
 
     #[test]
@@ -3845,6 +4025,18 @@ mod tests {
         assert!(error.message.contains("global budget"));
         assert!(error.message.contains("1500000 source-target pairs"));
         assert!(error.message.contains("3 evaluations"));
+    }
+
+    #[test]
+    fn direct_oersted_pair_budget_rejects_empty_source_or_target() {
+        for (sources, targets) in [(0, usize::MAX), (1, 0)] {
+            let error = preflight_direct_oersted_pair_budget(sources, targets).unwrap_err();
+            assert!(error.message.contains("nonempty source tetrahedra and target points"));
+        }
+        assert_eq!(
+            preflight_direct_oersted_pair_budget_for_evaluations(0, 0, 0).unwrap(),
+            0
+        );
     }
 
     #[test]

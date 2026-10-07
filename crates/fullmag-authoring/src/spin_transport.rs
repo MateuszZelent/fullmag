@@ -70,6 +70,10 @@ pub struct KnownSceneCurrentTransport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub conservative_current_view: Option<BTreeMap<String, serde_json::Value>>,
+    /// Authored current-driven request; no accepted field SHA exists yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub conservative_current_source: Option<BTreeMap<String, serde_json::Value>>,
     /// Authored FDM closed-current intent. Grid face indices and runtime
     /// certificate state are resolved later and never enter the scene model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -177,6 +181,10 @@ pub struct SceneChargeTransportMaterialAssignment {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SceneChargeBoundary {
+    EquipotentialCurrentTerminal {
+        id: String,
+        surfaces: Vec<SceneSurfaceRef>,
+    },
     VoltageElectrode {
         id: String,
         surfaces: Vec<SceneSurfaceRef>,
@@ -200,6 +208,7 @@ pub enum SceneChargeBoundary {
 pub enum SceneChargePotentialGauge {
     DirichletReference,
     ZeroMean,
+    TerminalReference,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]

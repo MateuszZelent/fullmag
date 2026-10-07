@@ -33,6 +33,7 @@ type Feedback = {
 interface DraftState {
   draft: AntennaObjectDraft;
   dirtyKeys: Array<keyof AntennaObjectDraft>;
+  editedAgainst: Partial<AntennaObjectDraft>;
   key: string;
 }
 
@@ -47,6 +48,18 @@ type RevisionConflictPhase =
   | "refreshing"
   | "rebased"
   | "refetched";
+
+const draftFieldLabels: Record<keyof AntennaObjectDraft, string> = {
+  amplitudeB: "Amplitude",
+  direction: "Direction",
+  waveformKind: "Waveform",
+  sincAmplitude: "Waveform amplitude",
+  sincCutoffHz: "Cutoff",
+  sincT0: "t0",
+  sinusoidalFrequencyHz: "Frequency",
+  sinusoidalOffset: "Offset",
+  sinusoidalPhaseRad: "Phase",
+};
 
 interface RevisionConflictState {
   baseRevision: number;
@@ -85,6 +98,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   const [draftState, setDraftState] = useState<DraftState>({
     draft: baseDraft,
     dirtyKeys: [],
+    editedAgainst: {},
     key: draftKey,
   });
   const [feedbackState, setFeedbackState] = useState<FeedbackState>({
@@ -97,7 +111,23 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   const baseRevision = sceneRevision(scene.data?.revision);
   const canCommit =
     scene.status === "ready" && baseRevision !== null && model.mode !== "missing";
-  const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+  const draft: AntennaObjectDraft =
+    draftState.key === draftKey
+      ? {
+          ...baseDraft,
+          ...Object.fromEntries(
+            draftState.dirtyKeys.map((key) => [key, draftState.draft[key]]),
+          ),
+        }
+      : baseDraft;
+  const locallyConflictingKeys =
+    draftState.key === draftKey
+      ? draftState.dirtyKeys.filter(
+          (key) =>
+            draftState.editedAgainst[key] !== baseDraft[key] &&
+            draftState.draft[key] !== baseDraft[key],
+        )
+      : [];
   const feedback =
     feedbackState.key === draftKey ? feedbackState.feedback : null;
   const revisionConflict =
@@ -119,9 +149,17 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   function updateDraft(patch: Partial<AntennaObjectDraft>): void {
     setDraftState((current) => {
       const dirtyKeys = current.key === draftKey ? current.dirtyKeys : [];
+      const patchKeys = Object.keys(patch) as Array<keyof AntennaObjectDraft>;
+      const editedAgainst = current.key === draftKey ? { ...current.editedAgainst } : {};
+      for (const key of patchKeys) {
+        if (!dirtyKeys.includes(key) || current.draft[key] === baseDraft[key]) {
+          Object.assign(editedAgainst, { [key]: baseDraft[key] });
+        }
+      }
       return {
         draft: { ...(current.key === draftKey ? current.draft : baseDraft), ...patch },
-        dirtyKeys: [...new Set([...dirtyKeys, ...(Object.keys(patch) as Array<keyof AntennaObjectDraft>)])],
+        dirtyKeys: [...new Set([...dirtyKeys, ...patchKeys])],
+        editedAgainst,
         key: draftKey,
       };
     });
@@ -136,6 +174,13 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
       setFeedback({
         kind: "error",
         message: "Scene revision is unavailable; refresh before saving.",
+      });
+      return;
+    }
+    if (locallyConflictingKeys.length > 0) {
+      setFeedback({
+        kind: "error",
+        message: "The server changed an edited field. Compare and rebase before saving.",
       });
       return;
     }
@@ -193,13 +238,16 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   function rebaseAfterRevisionConflict(): void {
     if (!revisionConflict || conflictViewPhase !== "refetched") return;
     setDraftState((current) => {
-      if (current.key !== draftKey) return { draft: baseDraft, dirtyKeys: [], key: draftKey };
+      if (current.key !== draftKey) return { draft: baseDraft, dirtyKeys: [], editedAgainst: {}, key: draftKey };
       const edited = Object.fromEntries(
         current.dirtyKeys.map((key) => [key, current.draft[key]]),
       ) as Partial<AntennaObjectDraft>;
       return {
         draft: { ...baseDraft, ...edited },
         dirtyKeys: current.dirtyKeys,
+        editedAgainst: Object.fromEntries(
+          current.dirtyKeys.map((key) => [key, baseDraft[key]]),
+        ),
         key: draftKey,
       };
     });
@@ -210,6 +258,19 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     setFeedback({
       kind: "error",
       message: "Draft rebased onto the latest server revision. Review and retry Save.",
+    });
+  }
+
+  function rebaseLocalDraft(): void {
+    setDraftState((current) => ({
+      ...current,
+      editedAgainst: Object.fromEntries(
+        current.dirtyKeys.map((key) => [key, baseDraft[key]]),
+      ),
+    }));
+    setFeedback({
+      kind: "success",
+      message: "Draft rebased onto the current scene. Review before saving.",
     });
   }
 
@@ -337,6 +398,19 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         {feedback ? (
           <FeedbackBanner kind={feedback.kind} message={feedback.message} />
         ) : null}
+        {locallyConflictingKeys.length > 0 && !revisionConflict ? (
+          <InspectorGroup title="Concurrent field edit" badge="review required">
+            {locallyConflictingKeys.map((key) => (
+              <div key={key}>
+                <FieldRow label={`Server ${draftFieldLabels[key]}`} value={baseDraft[key]} />
+                <FieldRow label={`Draft ${draftFieldLabels[key]}`} value={draft[key]} />
+              </div>
+            ))}
+            <Button size="sm" type="button" variant="ghost" onClick={rebaseLocalDraft}>
+              Rebase Draft
+            </Button>
+          </InspectorGroup>
+        ) : null}
         {revisionConflict ? (
           <InspectorGroup
             title="Revision conflict"
@@ -417,7 +491,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         ) : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={!canCommit || pending || revisionConflict !== null}
+            disabled={!canCommit || pending || revisionConflict !== null || locallyConflictingKeys.length > 0}
             size="sm"
             type="button"
             variant="primary"

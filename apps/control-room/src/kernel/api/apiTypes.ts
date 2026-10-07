@@ -271,8 +271,23 @@ export type FrequencyDomainTextArtifactResource =
 export type ArtifactResource = components["schemas"]["ArtifactResource"];
 export type AntennaFieldSolutionResource =
   components["schemas"]["AntennaFieldSolutionResource"];
+export type AntennaFieldPayloadKind =
+  | "conductor_positions"
+  | "sample_positions"
+  | "sample_topology"
+  | "electric_potential_per_ampere"
+  | "current_density_per_ampere"
+  | "magnetic_field_per_ampere";
 export type AntennaStageOutputCatalogResource =
   components["schemas"]["AntennaStageOutputCatalogResource"];
+export type AntennaExternalLeadInspectionResource =
+  components["schemas"]["AntennaExternalLeadInspectionResource"];
+export type AntennaInspectionPayloadKind =
+  | "bundle"
+  | "sample_positions"
+  | "magnetic_field"
+  | "device_vertex_ids"
+  | "device_potential";
 export type AntennaSourceSpectrumResource =
   components["schemas"]["AntennaSourceSpectrumResource"];
 export type AntennaSpectrumPayloadKind =
@@ -1042,7 +1057,7 @@ export type BinaryResourceResult<TData, TMetadata = unknown> =
 
 export interface RequestOptions {
   /**
-   * Canonical session=<encoded-id>&epoch=<encoded-epoch> identity used for
+   * Canonical session, scientific epoch and request_scope_epoch identity used for
    * coalescing and the x-fullmag-session-scope HTTP precondition header.
    * It is never serialized into URLs.
    */

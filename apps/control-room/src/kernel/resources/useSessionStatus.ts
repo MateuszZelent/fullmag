@@ -91,6 +91,33 @@ export function useSessionResourceIdentity(): SessionResourceIdentity | null {
   return confirmedSessionResourceIdentity(identity, sessions.resource.data);
 }
 
+/** Identity and preparation publication share one status subscription. */
+export function useSimulationPreparationSessionScope() {
+  const sessions = useSessionCollection();
+  const scope = useSessionStatusSelector(
+    (status) => ({
+      sessionIdentity: sessionResourceIdentityFromStatus(status.data),
+      preparationRevision: status.status === "ready"
+        ? status.data?.resources.simulation_preparation_revision
+        : undefined,
+    }),
+    {
+      enabled: sessions.state === "ready",
+      isEqual: (previous, next) =>
+        sessionResourceIdentitiesEqual(previous.sessionIdentity, next.sessionIdentity) &&
+        previous.preparationRevision === next.preparationRevision,
+    },
+  );
+  const sessionIdentity = confirmedSessionResourceIdentity(
+    scope.sessionIdentity,
+    sessions.resource.data,
+  );
+  return {
+    sessionIdentity,
+    preparationRevision: sessionIdentity ? scope.preparationRevision : undefined,
+  };
+}
+
 export function useSessionLifecycle(): SelectedSessionLifecycle | null {
   return useSessionStatusSelector((status) =>
     status.data?.lifecycle ? selectSessionLifecycle(status.data.lifecycle) : null,

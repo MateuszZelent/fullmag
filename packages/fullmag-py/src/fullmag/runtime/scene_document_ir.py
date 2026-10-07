@@ -398,8 +398,6 @@ def _reject_unlowered_scene_fields(scene: Mapping[str, object]) -> None:
         values = scene.get(collection, [])
         if not isinstance(values, list):
             raise ValueError(f"SceneDocument.{collection} must be a list")
-        if values:
-            raise ValueError(f"scene_document_antenna_collection_not_lowered: {collection}")
 
     outputs = scene.get("outputs")
     if outputs is not None and not isinstance(outputs, Mapping):

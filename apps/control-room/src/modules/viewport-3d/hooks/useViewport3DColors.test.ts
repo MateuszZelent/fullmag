@@ -37,6 +37,7 @@ describe("readViewport3DColorsFromStyles", () => {
           "--fm-bg-panel-raised": "#313244",
           "--fm-bg-viewport": "#11111b",
           "--fm-danger": "#f38ba8",
+          "--fm-surface-antenna": "#f9e2af",
           "--fm-success": "#a6e3a1",
           "--fm-text-primary": "#cdd6f4",
           "--fm-text-secondary": "#bac2de",
@@ -44,6 +45,7 @@ describe("readViewport3DColorsFromStyles", () => {
       ),
     ).toEqual({
       accent: "#89b4fa",
+      antenna: "#f9e2af",
       accentStrong: "#b4befe",
       background: "#11111b",
       danger: "#f38ba8",

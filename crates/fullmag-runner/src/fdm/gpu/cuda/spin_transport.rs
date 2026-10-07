@@ -692,6 +692,9 @@ impl PreparedGpuM1Descriptor {
                 fullmag_ir::ChargePotentialGaugeIR::ZeroMean => {
                     ffi::FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT
                 }
+                fullmag_ir::ChargePotentialGaugeIR::TerminalReference => {
+                    return Err(invalid("terminal-reference gauge requires dedicated FEM antenna solve"));
+                }
             },
             charge_relative_tolerance: descriptor.charge_solver.linear.relative_tolerance,
             charge_max_iterations: u64::from(descriptor.charge_solver.linear.max_iterations),

@@ -10,6 +10,7 @@ import type {
   FrozenSpinsSelectionExpression,
 } from "@/kernel/api/apiTypes";
 import { antennaPortStatus } from "@/shared/domain/physics/antennaPortValidation";
+import { antennaStageValidationMessages } from "@/shared/domain/physics/antennaStageValidation";
 
 import { buildPhysicsGraphObjectNode } from "./physicsGraphTree";
 import {
@@ -295,20 +296,23 @@ function antennaCompositionNodes(
         contextCommands: ["workspace.focus-selection"],
       };
     }),
-    ...solveStages.map((stage) => ({
-      id: `${antennaParentId}:solution:${encodeURIComponent(stage.id)}`,
-      kind: "object.antenna.solution" as const,
-      label: `Field solve ${stage.id}`,
-      parentId: antennaParentId,
-      badge: `${stage.outputs.length} outputs · configured`,
-      icon: "mesh" as const,
-      objectId,
-      objectRole: "antenna" as const,
-      antennaResourceId: stage.id,
-      antennaResourceKind: "solution" as const,
-      status: "warning" as const,
-      contextCommands: ["workspace.focus-selection"],
-    })),
+    ...solveStages.map((stage) => {
+      const invalid = antennaStageValidationMessages(stage, scene ?? null).length > 0;
+      return {
+        id: `${antennaParentId}:solution:${encodeURIComponent(stage.id)}`,
+        kind: "object.antenna.solution" as const,
+        label: `Field solve ${stage.id}`,
+        parentId: antennaParentId,
+        badge: `${stage.outputs.length} outputs · ${invalid ? "invalid" : "configured"}`,
+        icon: "mesh" as const,
+        objectId,
+        objectRole: "antenna" as const,
+        antennaResourceId: stage.id,
+        antennaResourceKind: "solution" as const,
+        status: "warning" as const,
+        contextCommands: ["workspace.focus-selection"],
+      };
+    }),
     ...projections.map((projection) => ({
       id: `${antennaParentId}:projection:${encodeURIComponent(projection.id)}`,
       kind: "object.antenna.projection" as const,

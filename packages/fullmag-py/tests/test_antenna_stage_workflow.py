@@ -325,6 +325,42 @@ def test_study_registers_port_mode_in_canonical_problem() -> None:
         raise AssertionError("duplicate port mode must be rejected")
 
 
+def test_solved_drives_share_matching_projection_and_reject_conflicting_projection() -> None:
+    fm.reset()
+    study = _configure_study()
+    basis = study.stages.add_antenna_field_solve(
+        id="solve_antenna_1", definition=_field_solve_definition()
+    )
+    projection = fm.AntennaTargetProjection(
+        id="projection_1", solution=basis,
+        target=fm.FieldTarget.object("magnet_1"), output_id="projected",
+    )
+    drive = fm.SolvedAntennaDrive(
+        id="drive_1", name="First antenna drive", projection_ref=projection.id,
+        port_mode_id="port_1", peak_current_a=0.01,
+        waveform=fm.Sinusoidal(frequency_hz=1e9),
+    )
+    study.add_solved_antenna_drive(drive=drive, projection=projection)
+    second = replace(drive, id="drive_2", name="Second antenna drive")
+    study.add_solved_antenna_drive(drive=second, projection=projection)
+    problem = flat_world._build_problem()
+    assert problem.antenna_target_projections == (projection,)
+    assert problem.solved_antenna_drives == (drive, second)
+    actions_before_conflict = len(flat_world._state._declared_stages)
+    try:
+        study.add_solved_antenna_drive(
+            drive=replace(drive, id="drive_3"),
+            projection=replace(projection, output_id="conflicting_output"),
+        )
+    except ValueError as exc:
+        assert "conflicting antenna projection id" in str(exc)
+    else:
+        raise AssertionError("conflicting projection must be rejected")
+    assert flat_world._build_problem().antenna_target_projections == (projection,)
+    assert flat_world._build_problem().solved_antenna_drives == (drive, second)
+    assert len(flat_world._state._declared_stages) == actions_before_conflict
+
+
 def test_antenna_solve_returns_symbolic_output_and_preserves_authoring_intent() -> None:
     fm.reset()
     study = _configure_study()
@@ -898,6 +934,47 @@ def test_antenna_solve_is_exported_as_one_pipeline_node() -> None:
     ][0]["id"] == "solve_antenna_1"
 
 
+def test_current_source_stage_omits_legacy_selector_from_script_export() -> None:
+    fm.reset()
+    study = _configure_study()
+    study.stages.add_antenna_field_solve(
+        id="solve_antenna_1",
+        definition=replace(
+            _field_solve_definition(), conservative_current_view_ref=None
+        ),
+    )
+    captured = tuple(
+        LoadedStage(
+            problem=stage.problem,
+            entrypoint_kind=stage.entrypoint_kind,
+            action=stage.action,
+            stage_id=stage.stage_id,
+        )
+        for stage in flat_world._state._declared_stages
+    )
+    loaded = LoadedProblem(
+        problem=flat_world._build_problem(),
+        source_path=Path("antenna_current_source_stage.py"),
+        script_source="",
+        entrypoint_kind="flat_sequence",
+        stages=captured,
+    )
+
+    draft = export_builder_draft(loaded)
+    assert "conservative_current_view_ref" not in draft[
+        "antenna_field_solve_stages"
+    ][0]
+    rendered = render_loaded_problem_as_script(loaded)
+    assert "conservative_current_view_ref=" not in rendered
+    compile(rendered, "antenna_current_source_stage_export.py", "exec")
+    fm.reset()
+    exec(rendered, {})
+    replayed = flat_world._build_problem().to_ir(include_geometry_assets=False)
+    assert "conservative_current_view_ref" not in replayed[
+        "antenna_field_solve_stages"
+    ][0]
+
+
 def test_antenna_stage_ids_share_the_flat_pipeline_namespace() -> None:
     fm.reset()
     study = _configure_study()
@@ -1008,7 +1085,13 @@ def test_imported_antenna_drive_rejects_port_not_in_declared_solve() -> None:
 def test_scene_document_adapters_preserve_all_antenna_collections() -> None:
     builder = {
         "antenna_port_modes": [{"id": "port_1"}],
-        "antenna_field_solve_stages": [{"id": "solve_1"}],
+        "antenna_field_solve_stages": [
+            {
+                "id": "solve_1",
+                "conservative_current_view_ref": "transport_1:rt0",
+            },
+            {"id": "solve_source"},
+        ],
         "antenna_target_projections": [{"id": "projection_1"}],
         "solved_antenna_drives": [{"id": "drive_1"}],
         "antenna_spectrum_requests": [{"id": "spectrum_1"}],
@@ -1027,6 +1110,11 @@ def test_scene_document_adapters_preserve_all_antenna_collections() -> None:
         assert scene[collection][0]["id"] == item_id
         assert rebuilt[collection][0]["id"] == item_id
         assert overrides[collection][0]["id"] == item_id
+
+    for projection in (scene, rebuilt, overrides):
+        stages = projection["antenna_field_solve_stages"]
+        assert stages[0]["conservative_current_view_ref"] == "transport_1:rt0"
+        assert "conservative_current_view_ref" not in stages[1]
 
 
 def test_scene_document_round_trip_without_antenna_collections() -> None:

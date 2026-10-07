@@ -290,7 +290,8 @@ pub struct AntennaFieldSolveStageResource {
     pub source_object_id: String,
     pub current_transport_id: String,
     pub port_mode_ids: Vec<String>,
-    pub conservative_current_view_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_view_ref: Option<String>,
     pub model: AntennaFieldModelResource,
     pub oersted_realization: AntennaOerstedRealizationResource,
     pub conductor_mesh_policy: String,
@@ -310,10 +311,40 @@ pub struct AntennaFieldSolutionRefResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub enum AntennaStageOutputRefResource {
+    StageOutput { stage_id: String, output_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaResolvedAssetKindResource {
+    ResolvedAsset,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaResolvedAssetRefResource {
+    pub kind: AntennaResolvedAssetKindResource,
+    pub stage_id: String,
+    pub output_id: String,
+    pub asset_id: String,
+    pub content_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum AntennaSolutionRefResource {
+    StageOutput(AntennaStageOutputRefResource),
+    ResolvedAsset(AntennaResolvedAssetRefResource),
+    Published(AntennaFieldSolutionRefResource),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AntennaTargetProjectionResource {
     pub id: String,
-    pub solution: AntennaFieldSolutionRefResource,
+    pub solution: AntennaSolutionRefResource,
     pub target: FieldTargetResource,
     pub output_id: String,
 }
@@ -396,7 +427,7 @@ pub struct AntennaSpectrumKGridResource {
 #[serde(deny_unknown_fields)]
 pub struct AntennaSpectrumRequestResource {
     pub id: String,
-    pub solution_ref: AntennaFieldSolutionRefResource,
+    pub solution_ref: AntennaSolutionRefResource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port_mode_id: Option<String>,
     pub target: FieldTargetResource,
@@ -1966,6 +1997,18 @@ mod stage_autosave_tests {
         assert_eq!(value["antenna_target_projections"][0]["id"], "projection_1");
         assert_eq!(value["solved_antenna_drives"][0]["id"], "drive_1");
         assert_eq!(value["antenna_spectrum_requests"][0]["id"], "spectrum_1");
+        let mut symbolic = value.clone();
+        let stage_output = serde_json::json!({
+            "kind": "stage_output",
+            "stage_id": "solve_1",
+            "output_id": "basis"
+        });
+        symbolic["antenna_target_projections"][0]["solution"] = stage_output.clone();
+        symbolic["antenna_spectrum_requests"][0]["solution_ref"] = stage_output.clone();
+        let scene: SceneResource = serde_json::from_value(symbolic).unwrap();
+        let round_trip = serde_json::to_value(scene).unwrap();
+        assert_eq!(round_trip["antenna_target_projections"][0]["solution"], stage_output);
+        assert_eq!(round_trip["antenna_spectrum_requests"][0]["solution_ref"], stage_output);
         assert!(value["field_drives"].get("drives").is_none_or(|drives| {
             drives.as_array().is_some_and(Vec::is_empty)
         }));

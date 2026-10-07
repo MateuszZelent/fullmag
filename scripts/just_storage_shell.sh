@@ -304,6 +304,18 @@ esac
 # paths/lock inside the dedicated helper. Do not run the generic compatibility-
 # link or heavy-build wrapper for them.
 case "${recipe}" in
+  *"scripts/run_managed_antenna_ram.py"*)
+    antenna_ram_start_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_antenna_ram.py\" --repo-root \"[^\"]+\" start --job-id '([0-9a-f]{32})' --commit '([0-9a-f]{40})' --source-digest '([0-9a-f]{64})' --native-snapshot-sha256 '([0-9a-f]{64})'$"
+    if [[ "${recipe}" =~ ${antenna_ram_start_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_antenna_ram.py" --repo-root "${repo_root}" start --job-id "${BASH_REMATCH[1]}" --commit "${BASH_REMATCH[2]}" --source-digest "${BASH_REMATCH[3]}" --native-snapshot-sha256 "${BASH_REMATCH[4]}"
+    fi
+    antenna_ram_observe_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_antenna_ram.py\" --repo-root \"[^\"]+\" observe --run-root '([^']+)'$"
+    if [[ "${recipe}" =~ ${antenna_ram_observe_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_antenna_ram.py" --repo-root "${repo_root}" observe --run-root "${BASH_REMATCH[1]}"
+    fi
+    echo "[fullmag just] invalid managed antenna RAM recipe" >&2
+    exit 2
+    ;;
   *"scripts/run_managed_browser.py"*)
     managed_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/run_managed_browser.py" --repo-root "[^"]+" --job-id ([0-9a-f]{32}) --commit ([0-9a-f]{40}) --port ([0-9]{4,5})$'
     if [[ ! "${recipe}" =~ ${managed_browser_pattern} ]]; then
@@ -332,6 +344,22 @@ case "${recipe}" in
     kernel_host_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3252 --scenario development-kernel-host$'
     if [[ "${recipe}" =~ ${kernel_host_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3252 --scenario development-kernel-host
+    fi
+    transport_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3254 --scenario antenna-transport-drafts$'
+    if [[ "${recipe}" =~ ${transport_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3254 --scenario antenna-transport-drafts
+    fi
+    primitive_color_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3257 --scenario primitive-color-inspector$'
+    if [[ "${recipe}" =~ ${primitive_color_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3257 --scenario primitive-color-inspector
+    fi
+    stations_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3253 --scenario antenna-microstrip-stations$'
+    if [[ "${recipe}" =~ ${stations_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3253 --scenario antenna-microstrip-stations
+    fi
+    antenna_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3252 --scenario antenna-external-lead-inspection$'
+    if [[ "${recipe}" =~ ${antenna_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3252 --scenario antenna-external-lead-inspection
     fi
     project_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3251 --scenario project-document-handoff$'
     if [[ "${recipe}" =~ ${project_browser_pattern} ]]; then

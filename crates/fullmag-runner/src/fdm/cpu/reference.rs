@@ -533,7 +533,10 @@ pub(crate) fn resolved_regional_field_drives(
             basis_field: resolved.field_xyz.clone(),
             waveform: resolved.drive.waveform.clone(),
             time_offset_s: match resolved.drive.time_origin {
-                fullmag_ir::FieldTimeOriginIR::StageLocal => stage_start_time_s,
+                fullmag_ir::FieldTimeOriginIR::StageLocal => plan
+                    .time_stage
+                    .waveform_origin_time_s
+                    .unwrap_or(stage_start_time_s),
                 fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
             },
             enabled: resolved.drive.enabled,
@@ -571,7 +574,10 @@ fn resolved_solved_antenna_drives(
                 .collect(),
             waveform: basis.drive.waveform.clone(),
             time_offset_s: match basis.drive.time_origin {
-                FieldTimeOriginIR::StageLocal => stage_start_time_s,
+                FieldTimeOriginIR::StageLocal => plan
+                    .time_stage
+                    .waveform_origin_time_s
+                    .unwrap_or(stage_start_time_s),
                 FieldTimeOriginIR::Absolute => 0.0,
             },
             enabled: true,
@@ -834,6 +840,10 @@ fn engine_projection_policy(policy: FdmProjectionPolicyIR) -> ProjectionPolicy {
 
 fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunError> {
     validate_single_grid_budget(plan)?;
+    crate::antenna_fields::validate_fdm_antenna_sample_counts(
+        plan,
+        plan.initial_magnetization.len(),
+    )?;
     let grid = GridShape::new(
         plan.grid.cells[0] as usize,
         plan.grid.cells[1] as usize,
@@ -1514,9 +1524,11 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
 
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
-    let time_events = crate::time_events::build_resolved_stage_event_schedule(
+    let time_events = crate::time_events::build_resolved_stage_event_schedule_with_origin(
         &plan.field_drives,
+        &plan.solved_antenna_drive_bases,
         plan.time_stage.start_time_s,
+        plan.time_stage.waveform_origin_time_s(),
         stage_end_time_s,
         outputs,
         crate::schedules::OUTPUT_TIME_TOLERANCE,
@@ -4047,6 +4059,24 @@ mod tests {
     }
 
     #[test]
+    fn reference_problem_rejects_short_antenna_mask_before_execution() {
+        let mut plan = make_test_plan();
+        plan.antenna_zeeman_masks = vec![fullmag_ir::ResolvedAntennaZeemanMaskIR {
+            source: "antenna_1".into(),
+            object: "magnet".into(),
+            amplitude_b_t: 0.0,
+            direction: [1.0, 0.0, 0.0],
+            spatial_profile: None,
+            waveform: None,
+            field_xyz: vec![[0.0; 3]],
+        }];
+        let error = build_reference_problem(&plan)
+            .err()
+            .expect("short antenna mask must be rejected");
+        assert!(error.message.contains("antenna Zeeman mask 'antenna_1'"));
+    }
+
+    #[test]
     fn reference_problem_materializes_rotated_interfacial_dmi_from_plan() {
         let mut plan = make_test_plan();
         plan.enable_exchange = false;
@@ -4738,6 +4768,10 @@ mod tests {
         let mut plan = make_test_plan();
         plan.time_stage.active_stage_id = Some("ringdown".into());
         plan.time_stage.start_time_s = 10.0;
+        let projection_signature = format!(
+            "verified:target_topology:{}",
+            crate::antenna_field_solution::fdm_target_topology_digest(&plan).unwrap()
+        );
         plan.solved_antenna_drive_bases = vec![ResolvedSolvedAntennaDriveBasisIR {
             drive: SolvedAntennaDriveIR {
                 id: "antenna-drive".into(),
@@ -4759,7 +4793,7 @@ mod tests {
             solution_id: "solution".into(),
             source_object_id: "antenna".into(),
             field_xyz_apm_per_a: vec![[4.0, 8.0, 12.0]; 16],
-            projection_signature: "verified".into(),
+            projection_signature,
         }];
 
         let terms = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
@@ -4772,6 +4806,11 @@ mod tests {
                 && (value[1] - 2.0).abs() < 1.0e-12
                 && (value[2] - 3.0).abs() < 1.0e-12
         }));
+        plan.solved_antenna_drive_bases[0].field_xyz_apm_per_a.pop();
+        let error = build_reference_problem(&plan)
+            .err()
+            .expect("short solved antenna basis must be rejected before FDM execution");
+        assert!(error.message.contains("expected 16 FDM cells"));
     }
 
     #[test]
@@ -4835,6 +4874,12 @@ mod tests {
         let local = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
         assert_eq!(local[0].multiplier_at(11.5), 1.0);
         assert_eq!(local[0].multiplier_at(10.5), 0.0);
+
+        plan.time_stage.start_time_s = 10.5;
+        plan.time_stage.waveform_origin_time_s = Some(10.0);
+        let resumed = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
+        assert_eq!(resumed[0].multiplier_at(11.25), 1.0);
+        assert_eq!(resumed[0].multiplier_at(12.25), 0.0);
 
         plan.regional_field_drive_bases = vec![make_basis(
             FieldTimeOriginIR::Absolute,

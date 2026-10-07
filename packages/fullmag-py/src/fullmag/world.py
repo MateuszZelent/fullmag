@@ -64,6 +64,7 @@ from fullmag.model.antenna import (
     SpinWaveExcitationAnalysis,
 )
 from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
+from fullmag.model.antenna_inventory import AntennaAuthoringInventory
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.constraints import FrozenSpins, merge_constraint_stage_ids
 from fullmag.model.current_transport import (
@@ -72,6 +73,7 @@ from fullmag.model.current_transport import (
     ChargeSolverPolicy,
     ChargeTransportMaterialAssignment,
     ConservativeCurrentView,
+    ExternalLeadCurrentSource,
     NormalCurrentElectrode,
     StructuredCurrentClosure,
     CurrentTransport,
@@ -2512,6 +2514,7 @@ class _WorldState:
     _magnets: list[MagnetHandle] = field(default_factory=list)
     _auxiliary_geometries: list[object] = field(default_factory=list)
     _auxiliary_geometry_roles: dict[str, str] = field(default_factory=dict)
+    _auxiliary_geometry_object_ids: dict[str, str] = field(default_factory=dict)
     _couplings: CouplingRegistry = field(default_factory=CouplingRegistry)
     _loaded_field_states: dict[tuple[str, str, str], object] = field(default_factory=dict)
 
@@ -2543,6 +2546,9 @@ class _WorldState:
     _antenna_target_projections: list[AntennaTargetProjection] = field(default_factory=list)
     _solved_antenna_drives: list[SolvedAntennaDrive] = field(default_factory=list)
     _antenna_spectrum_requests: list[AntennaSpectrumRequest] = field(default_factory=list)
+    _antenna_authoring_inventory: AntennaAuthoringInventory = field(
+        default_factory=AntennaAuthoringInventory
+    )
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
     _planar_monitors: list[PlanarMonitor] = field(default_factory=list)
     _spin_torques: list[SpinTorqueModule] = field(default_factory=list)
@@ -3881,6 +3887,11 @@ def capture_declared_stages() -> list[CapturedStage]:
     return list(_state._declared_stages)
 
 
+def capture_antenna_authoring_inventory() -> AntennaAuthoringInventory:
+    """Capture immutable declarations without adding them to solver snapshots."""
+    return _state._antenna_authoring_inventory
+
+
 class RelaxStageBuilder:
     """Configuration handle for one declared relaxation stage."""
 
@@ -4300,6 +4311,12 @@ class StudyStagesBuilder:
         if any(stage.id == stage_id for stage in _state._antenna_field_solve_stages):
             raise ValueError(f"duplicate antenna field solve id {stage_id!r}")
         normalized_definition = replace(definition, id=stage_id)
+        declared_definition = next((
+            item for item in _state._antenna_authoring_inventory.antenna_field_solve_stages
+            if item.id == stage_id
+        ), None)
+        if declared_definition is not None and declared_definition != normalized_definition:
+            raise ValueError(f"conflicting antenna field solve declaration {stage_id!r}")
         basis_outputs = [
             output
             for output in normalized_definition.outputs
@@ -5735,6 +5752,43 @@ class StudyBuilder:
         _state._antenna_port_modes.append(port_mode)
         return port_mode
 
+    def _declare_antenna(self, collection: str, value: object) -> None:
+        candidate = _state._antenna_authoring_inventory.declare(collection, value)
+        active = AntennaAuthoringInventory(**{
+            name: tuple(getattr(_state, f"_{name}"))
+            for name in candidate.__dataclass_fields__
+        })
+        candidate.merge_with(active)
+        _state._antenna_authoring_inventory = candidate
+
+    def declare_antenna_field_solve(
+        self, *, definition: AntennaFieldSolveStage
+    ) -> AntennaFieldSolveStage:
+        """Keep a static solve definition without scheduling its execution."""
+        self._declare_antenna("antenna_field_solve_stages", definition)
+        return definition
+
+    def declare_antenna_target_projection(
+        self, *, projection: AntennaTargetProjection
+    ) -> AntennaTargetProjection:
+        """Keep a target projection independently of a field drive."""
+        self._declare_antenna("antenna_target_projections", projection)
+        return projection
+
+    def declare_solved_antenna_drive(
+        self, *, drive: SolvedAntennaDrive
+    ) -> SolvedAntennaDrive:
+        """Keep a drive declaration without activating its field."""
+        self._declare_antenna("solved_antenna_drives", drive)
+        return drive
+
+    def declare_antenna_spectrum_request(
+        self, *, request: AntennaSpectrumRequest
+    ) -> AntennaSpectrumRequest:
+        """Keep a source-spectrum request without scheduling analysis."""
+        self._declare_antenna("antenna_spectrum_requests", request)
+        return request
+
     def add_solved_antenna_drive(
         self,
         *,
@@ -5750,6 +5804,13 @@ class StudyBuilder:
             raise ValueError(
                 "drive.projection_ref must match the supplied projection.id"
             )
+        for collection, value in (
+            ("solved_antenna_drives", drive), ("antenna_target_projections", projection)
+        ):
+            declared = next((item for item in getattr(_state._antenna_authoring_inventory, collection)
+                             if item.id == value.id), None)
+            if declared is not None and declared != value:
+                raise ValueError(f"conflicting {collection} declaration {value.id!r}")
         if isinstance(projection.solution, (AntennaStageOutputRef, AntennaFieldSolutionRef)):
             solve = next(
                 (
@@ -5824,6 +5885,10 @@ class StudyBuilder:
         """Register a source-field spectrum for a declared antenna solve output."""
         if not isinstance(request, AntennaSpectrumRequest):
             raise TypeError("request must be an AntennaSpectrumRequest")
+        declared = next((item for item in _state._antenna_authoring_inventory.antenna_spectrum_requests
+                         if item.id == request.id), None)
+        if declared is not None and declared != request:
+            raise ValueError(f"conflicting antenna spectrum declaration {request.id!r}")
         if any(item.id == request.id for item in _state._antenna_spectrum_requests):
             raise ValueError(f"duplicate antenna spectrum request id {request.id!r}")
         if any(item.output_id == request.output_id for item in _state._antenna_spectrum_requests):
@@ -6271,14 +6336,19 @@ class StudyBuilder:
         name: str = "object",
         *,
         type: str = "geometry",
+        object_id: str | None = None,
     ) -> object:
-        return geometry_object(shape, name=name, type=type)
+        return geometry_object(shape, name=name, type=type, object_id=object_id)
 
-    def conductor(self, shape: object, name: str = "conductor") -> object:
-        return geometry_object(shape, name=name, type="conductor")
+    def conductor(
+        self, shape: object, name: str = "conductor", *, object_id: str | None = None
+    ) -> object:
+        return geometry_object(shape, name=name, type="conductor", object_id=object_id)
 
-    def antenna_object(self, shape: object, name: str = "antenna") -> object:
-        return antenna_object(shape, name=name)
+    def antenna_object(
+        self, shape: object, name: str = "antenna", *, object_id: str | None = None
+    ) -> object:
+        return antenna_object(shape, name=name, object_id=object_id)
 
     def solver(
         self,
@@ -6420,6 +6490,7 @@ class StudyBuilder:
         time_envelope: TimeEnvelope | None = None,
         conservative_current_view: ConservativeCurrentView | None = None,
         structured_current_closure: StructuredCurrentClosure | None = None,
+        conservative_current_source: ExternalLeadCurrentSource | None = None,
     ) -> CurrentTransport:
         return current_transport(
             name=name,
@@ -6436,6 +6507,7 @@ class StudyBuilder:
             time_envelope=time_envelope,
             conservative_current_view=conservative_current_view,
             structured_current_closure=structured_current_closure,
+            conservative_current_source=conservative_current_source,
         )
 
     def spin_torque(self, module: SpinTorqueModule) -> SpinTorqueModule:
@@ -8413,6 +8485,12 @@ def geometry(
     Multiple calls register multiple magnets.
     """
     handle = MagnetHandle(shape, name, object_id=object_id)
+    resolved_id = handle.object_id if handle.object_id is not None else handle._name
+    if resolved_id in _state._auxiliary_geometry_object_ids.values() or any(
+        resolved_id == (magnet.object_id if magnet.object_id is not None else magnet._name)
+        for magnet in _state._magnets
+    ):
+        raise ValueError(f"duplicate object_id {resolved_id!r}")
     _state._magnets.append(handle)
     return handle
 
@@ -8422,6 +8500,7 @@ def geometry_object(
     name: str = "object",
     *,
     type: str = "geometry",
+    object_id: str | None = None,
 ) -> object:
     """Register a non-magnetic geometry with an explicit physical object type.
 
@@ -8445,8 +8524,17 @@ def geometry_object(
         raise TypeError("geometry_object() requires a geometry with a geometry_name")
     if geometry_name in _state._auxiliary_geometry_roles:
         raise ValueError(f"duplicate geometry object name {geometry_name!r}")
+    resolved_id = (
+        require_non_empty(object_id, "object_id") if object_id is not None else geometry_name
+    )
+    if resolved_id in _state._auxiliary_geometry_object_ids.values() or any(
+        resolved_id == (magnet.object_id if magnet.object_id is not None else magnet._name)
+        for magnet in _state._magnets
+    ):
+        raise ValueError(f"duplicate object_id {resolved_id!r}")
     _state._auxiliary_geometries.append(resolved)
     _state._auxiliary_geometry_roles[geometry_name] = normalized_type
+    _state._auxiliary_geometry_object_ids[geometry_name] = resolved_id
     if normalized_type == "antenna":
         _state._register_geometry_visualization_hint(
             geometry_name,
@@ -8460,9 +8548,11 @@ def geometry_object(
     return resolved
 
 
-def antenna_object(shape: object, name: str = "antenna") -> object:
+def antenna_object(
+    shape: object, name: str = "antenna", *, object_id: str | None = None
+) -> object:
     """Register a non-magnetic geometry object for prescribed antenna masks."""
-    return geometry_object(shape, name=name, type="antenna")
+    return geometry_object(shape, name=name, type="antenna", object_id=object_id)
 
 
 # ---------------------------------------------------------------------------
@@ -8761,6 +8851,7 @@ def current_transport(
     time_envelope: TimeEnvelope | None = None,
     conservative_current_view: ConservativeCurrentView | None = None,
     structured_current_closure: StructuredCurrentClosure | None = None,
+    conservative_current_source: ExternalLeadCurrentSource | None = None,
 ) -> CurrentTransport:
     module = CurrentTransport(
         name=name,
@@ -8777,6 +8868,7 @@ def current_transport(
         time_envelope=time_envelope,
         conservative_current_view=conservative_current_view,
         structured_current_closure=structured_current_closure,
+        conservative_current_source=conservative_current_source,
     )
     _state._current_modules.append(module)
     return module
@@ -9476,6 +9568,7 @@ def _build_problem(
         runtime_metadata=runtime_metadata,
         auxiliary_geometries=tuple(s._auxiliary_geometries),
         auxiliary_geometry_roles=dict(s._auxiliary_geometry_roles),
+        auxiliary_geometry_object_ids=dict(s._auxiliary_geometry_object_ids),
         current_modules=tuple(s._current_modules),
         antenna_port_modes=tuple(s._antenna_port_modes),
         antenna_field_solve_stages=tuple(s._antenna_field_solve_stages),

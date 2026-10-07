@@ -56,6 +56,7 @@ BROWSER_VITEST_TESTS = (
     "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.test.ts",
     "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.dom.test.tsx",
     "apps/control-room/src/modules/inspector/panels/antenna/AntennaFieldBasisPreviewModel.test.ts",
+    "apps/control-room/src/modules/inspector/panels/antenna/AntennaFieldBasisPreview.dom.test.tsx",
     "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.test.ts",
     "apps/control-room/src/shared/domain/physics/antennaStageValidation.test.ts",
     "apps/control-room/src/modules/inspector/panels/antenna/SolvedAntennaDriveEditorModel.test.ts",

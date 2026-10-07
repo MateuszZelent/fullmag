@@ -5,7 +5,98 @@
 //! inventing a bandwidth for discontinuous or sampled waveforms.
 
 use crate::model::TimeDependenceIR;
+use crate::DriveActivationIR;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+
+pub(crate) fn validate_drive_activation(
+    label: &str,
+    activation: &DriveActivationIR,
+    declared_stage_ids: Option<&BTreeSet<String>>,
+    errors: &mut Vec<String>,
+) {
+    let DriveActivationIR::StageIds { stage_ids } = activation else {
+        return;
+    };
+    if stage_ids.is_empty() {
+        errors.push(format!("{label}.activation.stage_ids must not be empty"));
+    }
+    let mut local_ids = BTreeSet::new();
+    for stage_id in stage_ids {
+        if stage_id.trim().is_empty() || !local_ids.insert(stage_id.as_str()) {
+            errors.push(format!(
+                "{label}.activation stage ids must be non-empty and unique"
+            ));
+        }
+        if declared_stage_ids.is_some_and(|ids| !ids.contains(stage_id)) {
+            errors.push(format!(
+                "{label}.activation stage id '{stage_id}' does not exist"
+            ));
+        }
+    }
+}
+
+pub(crate) fn validate_time_dependence(
+    label: &str,
+    value: &TimeDependenceIR,
+    errors: &mut Vec<String>,
+) {
+    match value {
+        TimeDependenceIR::Constant => {}
+        TimeDependenceIR::Sinusoidal {
+            frequency_hz,
+            phase_rad,
+            offset,
+        } => {
+            if !frequency_hz.is_finite() || *frequency_hz <= 0.0 {
+                errors.push(format!("{label} frequency_hz must be finite and > 0"));
+            }
+            if !phase_rad.is_finite() || !offset.is_finite() {
+                errors.push(format!("{label} phase_rad and offset must be finite"));
+            }
+        }
+        TimeDependenceIR::Pulse { t_on, t_off } => {
+            if !t_on.is_finite() || !t_off.is_finite() || t_off <= t_on {
+                errors.push(format!("{label} pulse requires finite t_off > t_on"));
+            }
+        }
+        TimeDependenceIR::PiecewiseLinear { points } => {
+            if points.len() < 2 {
+                errors.push(format!(
+                    "{label} piecewise_linear requires at least 2 points"
+                ));
+            }
+            for point in points {
+                if !point[0].is_finite() || !point[1].is_finite() {
+                    errors.push(format!("{label} piecewise_linear points must be finite"));
+                }
+            }
+            for window in points.windows(2) {
+                if window[1][0] <= window[0][0] {
+                    errors.push(format!(
+                        "{label} piecewise_linear times must be strictly increasing"
+                    ));
+                }
+            }
+        }
+        TimeDependenceIR::SincPulse {
+            cutoff_hz,
+            t0,
+            amplitude,
+        } => {
+            if !cutoff_hz.is_finite() || *cutoff_hz <= 0.0 {
+                errors.push(format!(
+                    "{label} sinc_pulse cutoff_hz must be finite and > 0"
+                ));
+            }
+            if !t0.is_finite() || *t0 < 0.0 || !amplitude.is_finite() {
+                errors.push(format!(
+                    "{label} sinc_pulse t0 must be finite and >= 0; amplitude must be finite"
+                ));
+            }
+        }
+    }
+}
 
 /// Schema for the bandwidth classification carried in plan provenance.
 pub const ANTENNA_WAVEFORM_BANDWIDTH_SCHEMA_VERSION: &str = "antenna_waveform_bandwidth.v1";
@@ -162,6 +253,26 @@ pub fn classify_antenna_waveform_bandwidth_with_declaration(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_checks_structure_without_claiming_unknown_pipeline_is_empty() {
+        let activation = DriveActivationIR::StageIds {
+            stage_ids: vec!["run".to_string(), "run".to_string(), "missing".to_string()],
+        };
+        let mut errors = Vec::new();
+        validate_drive_activation("drive", &activation, None, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("non-empty and unique"));
+
+        errors.clear();
+        validate_drive_activation(
+            "drive",
+            &activation,
+            Some(&BTreeSet::from(["run".to_string()])),
+            &mut errors,
+        );
+        assert!(errors.iter().any(|error| error.contains("'missing' does not exist")));
+    }
 
     fn assert_known(
         waveform: TimeDependenceIR,

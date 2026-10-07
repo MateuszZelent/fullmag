@@ -835,6 +835,7 @@ pub(crate) fn resolve_fem_charge_only_transport(
     mesh: &MeshIR,
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[FemMeshPartIR],
+    allow_antenna_current_terminals: bool,
 ) -> Result<Vec<ResolvedChargeTransportPlanIR>, PlanError> {
     let mut plans = Vec::new();
     let mut errors = Vec::new();
@@ -890,6 +891,14 @@ pub(crate) fn resolve_fem_charge_only_transport(
             ));
             continue;
         };
+        if charge.gauge == fullmag_ir::ChargePotentialGaugeIR::TerminalReference
+            && !allow_antenna_current_terminals
+        {
+            errors.push(format!(
+                "{prefix} terminal-reference current electrodes require a dedicated antenna field-solve stage"
+            ));
+            continue;
+        }
         if time_envelope.is_some() {
             errors.push(format!(
                 "{prefix} charge-only FEM CPU/double does not yet support a time_envelope; dynamic charge/Oersted stage coupling fails closed"
@@ -1106,6 +1115,12 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             ));
             continue;
         };
+        if charge.gauge == fullmag_ir::ChargePotentialGaugeIR::TerminalReference {
+            errors.push(format!(
+                "{prefix} terminal-reference current electrodes require a dedicated antenna field-solve stage"
+            ));
+            continue;
+        }
         let reciprocal = coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
         let expected_model = if reciprocal {
             fullmag_ir::CurrentTransportModelIR::MagnetoresistivePoisson
@@ -1541,6 +1556,11 @@ fn materialize_fem_charge_components(
     current_source_id: &str,
     reciprocal: bool,
 ) -> Result<FemChargeComponents, Vec<String>> {
+    if charge.conservative_current_source.is_some() {
+        return Err(vec![format!(
+            "{owner_kind} '{owner_id}' conservative_current_source execution is unavailable: the current-driven owned-bundle producer is not connected; legacy boundary materialization and solve are forbidden"
+        )]);
+    }
     let charge_domain_mask = fem_domain_mask(
         &charge.domain,
         mesh.cell_count(),
@@ -1590,12 +1610,28 @@ fn materialize_fem_charge_components(
     let charge_driven_boundaries = resolve_charge_driven_boundaries(charge, mesh, mesh_parts)?;
     let charge_insulating_boundaries =
         resolve_charge_insulating_boundaries(charge, mesh, mesh_parts)?;
+    let current_terminal_markers = if charge.gauge
+        == fullmag_ir::ChargePotentialGaugeIR::TerminalReference
+    {
+        charge_driven_boundaries
+            .iter()
+            .flat_map(|boundary| {
+                boundary
+                    .boundary_attributes
+                    .iter()
+                    .map(move |marker| (boundary.id.as_str(), *marker))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     validate_fem_boundary_partition(
         "charge",
         mesh,
         charge_dirichlet
             .iter()
             .map(|(marker, _)| ("dirichlet", *marker))
+            .chain(current_terminal_markers)
             .chain(charge_insulating_boundaries.iter().flat_map(|boundary| {
                 boundary
                     .boundary_attributes
@@ -1604,6 +1640,16 @@ fn materialize_fem_charge_components(
             })),
     )?;
     match charge.gauge {
+        fullmag_ir::ChargePotentialGaugeIR::TerminalReference if reciprocal => {
+            return Err(vec![
+                "terminal-reference gauge is supported only by dedicated one-way antenna current solve".into(),
+            ]);
+        }
+        fullmag_ir::ChargePotentialGaugeIR::TerminalReference if !charge_dirichlet.is_empty() => {
+            return Err(vec![
+                "terminal-reference gauge conflicts with voltage electrodes".into(),
+            ]);
+        }
         fullmag_ir::ChargePotentialGaugeIR::DirichletReference if charge_dirichlet.is_empty() => {
             return Err(vec![
                 "boundary-reference gauge requires at least one voltage electrode".into(),
@@ -2097,6 +2143,7 @@ fn validate_charge_face_exact_boundary_ownership(
         .iter()
         .map(|boundary| {
             let kind = match boundary {
+                ChargeBoundaryIR::EquipotentialCurrentTerminal { .. } => "current_terminal",
                 ChargeBoundaryIR::VoltageElectrode { .. } => "voltage",
                 ChargeBoundaryIR::NormalCurrentElectrode { .. } => "normal_current",
                 ChargeBoundaryIR::Insulating { .. } => "insulating",
@@ -2251,6 +2298,11 @@ fn resolve_charge_dirichlet(
     let mut values = BTreeMap::new();
     for boundary in &charge.boundaries {
         match boundary {
+            ChargeBoundaryIR::EquipotentialCurrentTerminal { surfaces, .. } => {
+                for surface in surfaces {
+                    let _ = surface_markers(surface, mesh, mesh_parts)?;
+                }
+            }
             ChargeBoundaryIR::VoltageElectrode {
                 surfaces,
                 potential_v,
@@ -2288,7 +2340,8 @@ fn resolve_charge_driven_boundaries(
         .boundaries
         .iter()
         .filter_map(|boundary| match boundary {
-            ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } => Some((id, surfaces)),
+            ChargeBoundaryIR::EquipotentialCurrentTerminal { id, surfaces }
+            | ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } => Some((id, surfaces)),
             _ => None,
         })
         .map(|(id, surfaces)| {
@@ -2488,6 +2541,12 @@ fn materialize_fdm_descriptor(
     time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
     active_graph: &ActiveFdmTransportGraph,
 ) -> Result<ResolvedFdmSpinTransportIR, Vec<String>> {
+    if charge.conservative_current_source.is_some() {
+        return Err(vec![format!(
+            "spin transport '{}' conservative_current_source has no FDM source-solve realization; legacy FDM charge fallback is forbidden",
+            module.id
+        )]);
+    }
     let count = context.region_mask.len();
     if count == 0
         || context.initial_magnetization.len() != count
@@ -2736,6 +2795,11 @@ pub(crate) fn materialize_fdm_gpu_charge_descriptor(
     charge: &fullmag_ir::ChargeTransportDefinitionIR,
     context: &FdmSpinTransportResolutionContext<'_>,
 ) -> Result<ResolvedFdmGpuChargeTransportIR, Vec<String>> {
+    if charge.conservative_current_source.is_some() {
+        return Err(vec![format!(
+            "FDM GPU charge transport '{module_id}' conservative_current_source has no FDM source-solve realization; legacy FDM charge fallback is forbidden"
+        )]);
+    }
     let count = context.region_mask.len();
     if count == 0
         || context
@@ -3424,6 +3488,11 @@ fn resolve_charge_boundaries(
     let mut exact_surfaces = BTreeMap::<(String, StructuredBoundaryFaceIR), String>::new();
     for boundary in boundaries {
         let condition = match boundary {
+            ChargeBoundaryIR::EquipotentialCurrentTerminal { .. } => {
+                return Err(vec![
+                    "equipotential current terminals require a dedicated FEM antenna solve".into(),
+                ]);
+            }
             ChargeBoundaryIR::VoltageElectrode { potential_v, .. } => {
                 ResolvedChargeBoundaryConditionIR::Voltage {
                     potential_v: *potential_v,
@@ -4103,6 +4172,7 @@ mod tests {
                     operator_version: "fv_charge_harmonic_v1".into(),
                 },
                 conservative_current_view: None,
+                conservative_current_source: None,
                 structured_current_closure: None,
             }),
         }];
@@ -5136,7 +5206,7 @@ mod tests {
         };
         charge.conservative_current_view = Some(cube_closed_current_view(&mesh));
 
-        let plans = resolve_fem_charge_only_transport(&problem, &mesh, &segments, &parts)
+        let plans = resolve_fem_charge_only_transport(&problem, &mesh, &segments, &parts, false)
             .expect("complete one-way Ohmic charge solve should materialize without spin");
         assert!(problem.spin_transport_modules.is_empty());
         assert_eq!(plans.len(), 1);
@@ -5253,7 +5323,7 @@ mod tests {
             source_object_id: "strip".into(),
             current_transport_id: "charge".into(),
             port_mode_ids: vec!["strip_port".into()],
-            conservative_current_view_ref: "charge:rt0".into(),
+            conservative_current_view_ref: Some("charge:rt0".into()),
             model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
             conductor_mesh_policy: "authored_shared_domain".into(),
@@ -5317,6 +5387,134 @@ mod tests {
         let descriptor = charge.fem_cpu_double.as_ref().expect("charge descriptor");
         assert!(descriptor.oersted_source_bound);
         assert_eq!(descriptor.stage_coupling, "fem_charge_then_oersted_once.v1");
+
+        let mut current_authored = problem.clone();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(current_definition),
+            ..
+        } = &mut current_authored.current_modules[0]
+        else {
+            unreachable!()
+        };
+        current_definition.gauge = ChargePotentialGaugeIR::TerminalReference;
+        current_definition.boundaries = current_definition
+            .boundaries
+            .iter()
+            .map(|boundary| match boundary {
+                ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } => {
+                    ChargeBoundaryIR::EquipotentialCurrentTerminal {
+                        id: id.clone(),
+                        surfaces: surfaces.clone(),
+                    }
+                }
+                other => other.clone(),
+            })
+            .collect();
+        let current_plan = crate::plan_antenna_field_solve(
+            &current_authored,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("current-authored antenna must not require dummy voltage electrodes");
+        let current_descriptor = current_plan.conductor.charge_transport_plans[0]
+            .fem_cpu_double
+            .as_ref()
+            .expect("current-authored charge descriptor");
+        assert!(current_descriptor.charge_dirichlet.is_empty());
+        assert_eq!(current_descriptor.charge_driven_boundaries.len(), 4);
+        assert!(crate::plan(&current_authored).is_err());
+
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge_definition),
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!()
+        };
+        charge_definition
+            .conservative_current_view
+            .as_mut()
+            .expect("RT0 view")
+            .algebraic_relative_tolerance = 1e-11;
+        let revised = crate::plan_antenna_field_solve(
+            &problem,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("changed RT0 tolerance must still resolve");
+        let revised_charge = &revised.conductor.charge_transport_plans[0];
+        let revised_request = revised_charge
+            .antenna_field_solution_request
+            .as_ref()
+            .expect("revised artifact request");
+        assert_eq!(request.material_revision, revised_request.material_revision);
+        assert_ne!(
+            descriptor
+                .conservative_current_view
+                .as_ref()
+                .expect("original RT0 view")
+                .algebraic_relative_tolerance,
+            revised_charge
+                .fem_cpu_double
+                .as_ref()
+                .expect("revised charge descriptor")
+                .conservative_current_view
+                .as_ref()
+                .expect("revised RT0 view")
+                .algebraic_relative_tolerance
+        );
+
+        problem.magnets[0].initial_magnetization =
+            Some(fullmag_ir::InitialMagnetizationIR::Uniform {
+                value: [0.0, 1.0, 0.0],
+            });
+        let changed_m0 = crate::plan_antenna_field_solve(
+            &problem,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("changing m0 must not invalidate the static antenna solve");
+        let changed_m0_request = changed_m0.conductor.charge_transport_plans[0]
+            .antenna_field_solution_request
+            .as_ref()
+            .expect("m0 variant request");
+        assert_eq!(request.material_revision, changed_m0_request.material_revision);
+
+        problem.geometry.entries.push(fullmag_ir::GeometryEntryIR::Box {
+            name: "unrelated_target".into(),
+            size: [10.0e-9, 10.0e-9, 2.0e-9],
+        });
+        let changed_scene = crate::plan_antenna_field_solve(
+            &problem,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("unrelated target geometry must not invalidate the conductor");
+        let changed_scene_request = changed_scene.conductor.charge_transport_plans[0]
+            .antenna_field_solution_request
+            .as_ref()
+            .expect("unrelated geometry variant request");
+        assert_eq!(request.geometry_revision, changed_scene_request.geometry_revision);
+
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge_definition),
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!()
+        };
+        charge_definition.materials[0].material.sigma_spm *= 2.0;
+        let changed_sigma = crate::plan_antenna_field_solve(
+            &problem,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("changed conductivity must resolve a new static antenna solve");
+        let changed_sigma_request = changed_sigma.conductor.charge_transport_plans[0]
+            .antenna_field_solution_request
+            .as_ref()
+            .expect("conductivity variant request");
+        assert_ne!(request.material_revision, changed_sigma_request.material_revision);
     }
 
     #[test]
@@ -5331,7 +5529,7 @@ mod tests {
             unreachable!()
         };
         *definition = None;
-        let error = resolve_fem_charge_only_transport(&incomplete, &mesh, &segments, &parts)
+        let error = resolve_fem_charge_only_transport(&incomplete, &mesh, &segments, &parts, false)
             .expect_err("missing charge definition must fail closed");
         assert!(error
             .reasons
@@ -5347,7 +5545,7 @@ mod tests {
             unreachable!()
         };
         *time_envelope = Some(TimeEnvelopeIR::Constant { value: 1.0 });
-        let error = resolve_fem_charge_only_transport(&dynamic, &mesh, &segments, &parts)
+        let error = resolve_fem_charge_only_transport(&dynamic, &mesh, &segments, &parts, false)
             .expect_err("dynamic charge-only stage coupling must fail closed");
         assert!(error
             .reasons
@@ -5360,7 +5558,7 @@ mod tests {
         let mut problem = fem_problem();
         problem.backend_policy.requested_backend = BackendTarget::Fem;
         let (mesh, segments, parts) = fem_mesh_fixture();
-        let charge_plans = resolve_fem_charge_only_transport(&problem, &mesh, &segments, &parts)
+        let charge_plans = resolve_fem_charge_only_transport(&problem, &mesh, &segments, &parts, false)
             .expect("spin-owned charge source remains valid");
         assert!(charge_plans.is_empty());
         let spin_plans = resolve_m1_fem_spin_transport(

@@ -252,6 +252,13 @@ if(FULLMAG_USE_MFEM_STACK)
     list(APPEND FEM_SOURCES
         src/mfem_bridge.cpp
         cpu/mfem/transport/steady_transport.cpp
+        cpu/mfem/transport/affine_rt0_element.cpp
+        cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp
+        cpu/mfem/workflows/antenna_field_solve/charge_current_response.cpp
+        cpu/mfem/workflows/antenna_field_solve/charge_control_nullspace_rank.cpp
+        cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.cpp
+        cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
+          cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
         cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
         cpu/mfem/interactions/oersted/vector_potential.cpp
     )
@@ -550,7 +557,16 @@ if(FULLMAG_USE_MFEM_STACK)
         target_sources(fullmag_fem PRIVATE
             ${FULLMAG_OET0_PRODUCTION_SOURCES})
         target_sources(fem_conservative_current_view_contract PRIVATE
-            ${FULLMAG_OET0_PRODUCTION_SOURCES})
+            ${FULLMAG_OET0_PRODUCTION_SOURCES}
+            cpu/mfem/transport/affine_rt0_element.cpp
+            cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp
+            cpu/mfem/workflows/antenna_field_solve/charge_current_response.cpp
+            cpu/mfem/workflows/antenna_field_solve/charge_control_nullspace_rank.cpp
+            cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.cpp
+            cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
+            cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
+            cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
+            src/frequency_domain/canonical_digest.cpp)
     endif()
     find_package(Threads REQUIRED)
     if(TARGET MFEM::mfem)

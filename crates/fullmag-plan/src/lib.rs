@@ -14,6 +14,7 @@ use fullmag_ir::{
 use fullmag_ir::*;
 
 mod antenna_composition;
+mod antenna_current_source;
 mod antenna_field_solve;
 mod antenna_projection;
 mod antenna_validity;
@@ -50,6 +51,8 @@ mod validate;
 pub mod boundary_geometry;
 
 pub use antenna_composition::{bind_antenna_field_solve, bind_antenna_field_solve_v03};
+pub use antenna_current_source::materialize_antenna_external_lead_current_input;
+pub use antenna_field_solve::{plan_antenna_field_solve_execution, AntennaFieldSolveExecutionPlan};
 pub use antenna_projection::resolve_fem_antenna_projection_mask;
 pub use antenna_validity::{
     antenna_validity_notes, antenna_waveform_bandwidth_aggregate_note,

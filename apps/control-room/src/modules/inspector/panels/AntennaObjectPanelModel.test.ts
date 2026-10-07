@@ -191,4 +191,45 @@ describe("AntennaObjectPanelModel", () => {
       amplitude: 0.35,
     });
   });
+
+  it("rejects blank sinusoidal parameters instead of saving them as zero", () => {
+    const selection = { ...EMPTY_SELECTION, objectId: "antenna" };
+    const scene = {
+      field_drives: { drives: [{
+        id: "drive",
+        kind: "regional",
+        amplitude_B_T: 0.001,
+        direction: [0, 1, 0],
+        spatial_profile: { kind: "geometry_mask", object_id: "antenna" },
+        waveform: { kind: "sinusoidal", frequency_hz: 1e9, phase_rad: 0.4, offset: 0.2 },
+      }] },
+    } as never;
+    const draft = resolveAntennaObjectDraft(selection, scene);
+
+    expect(buildAntennaCanonicalFieldDrive(selection, scene, {
+      ...draft, sinusoidalPhaseRad: "  ",
+    }).error).toBe("Sinusoidal phase is required.");
+    expect(buildAntennaCanonicalFieldDrive(selection, scene, {
+      ...draft, sinusoidalOffset: "",
+    }).error).toBe("Sinusoidal offset is required.");
+  });
+
+  it("rejects a blank sinc amplitude instead of silently disabling excitation", () => {
+    const selection = { ...EMPTY_SELECTION, objectId: "antenna" };
+    const scene = {
+      field_drives: { drives: [{
+        id: "drive",
+        kind: "regional",
+        amplitude_B_T: 0.001,
+        direction: [0, 1, 0],
+        spatial_profile: { kind: "geometry_mask", object_id: "antenna" },
+        waveform: { kind: "sinc_pulse", cutoff_hz: 2e10, t0: 5e-11, amplitude: 0.35 },
+      }] },
+    } as never;
+    const draft = resolveAntennaObjectDraft(selection, scene);
+
+    expect(buildAntennaCanonicalFieldDrive(selection, scene, {
+      ...draft, sincAmplitude: "",
+    }).error).toBe("Sinc amplitude is required.");
+  });
 });

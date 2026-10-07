@@ -282,9 +282,37 @@ pub enum CurrentModuleIR {
         time_envelope: Option<crate::TimeEnvelopeIR>,
         /// Complete executable charge solve. Legacy records without this
         /// payload remain readable but fail closed for `ohmic_poisson`.
-        #[serde(default, flatten, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            flatten,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_current_transport_definition"
+        )]
         definition: Option<crate::ChargeTransportDefinitionIR>,
     },
+}
+
+fn deserialize_current_transport_definition<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ChargeTransportDefinitionIR>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let remaining = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+    let has_current_source = remaining
+        .get("conservative_current_source")
+        .is_some_and(|source| !source.is_null());
+    let parsed = serde_json::from_value::<crate::ChargeTransportDefinitionIR>(
+        serde_json::Value::Object(remaining),
+    );
+    if has_current_source {
+        // A malformed authored source must not disappear through flatten's
+        // optional legacy-definition behavior.
+        parsed.map(Some).map_err(D::Error::custom)
+    } else {
+        // Preserve readable legacy records without a complete charge payload.
+        Ok(parsed.ok())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1228,6 +1256,20 @@ fn default_stage_autosave_kind() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_activation_scopes_default_rf_and_explicit_relax_stage() {
+        let default_rf = DriveActivationIR::AllTimeEvolution {};
+        assert!(default_rf.is_active_for(StudyKindIR::TimeEvolution, Some("run")));
+        assert!(!default_rf.is_active_for(StudyKindIR::Relaxation, Some("relax")));
+
+        let explicit_relax = DriveActivationIR::StageIds {
+            stage_ids: vec!["relax".into()],
+        };
+        assert!(explicit_relax.is_active_for(StudyKindIR::Relaxation, Some("relax")));
+        assert!(!explicit_relax.is_active_for(StudyKindIR::Relaxation, Some("other")));
+        assert!(!explicit_relax.is_active_for(StudyKindIR::Relaxation, None));
+    }
 
     #[test]
     fn sampling_ir_deserializes_table_autosave_contract() {

@@ -344,7 +344,7 @@ class AntennaFieldSolveStage:
     source_object_id: str
     current_transport_id: str
     port_mode_ids: tuple[str, ...]
-    conservative_current_view_ref: str
+    conservative_current_view_ref: str | None
     field_sampling_domain: FieldTarget
     target_refs: tuple[FieldTarget, ...]
     outputs: tuple[AntennaNamedOutput, ...]
@@ -360,7 +360,7 @@ class AntennaFieldSolveStage:
         source_object_id: str,
         current_transport_id: str,
         port_mode_ids: Sequence[str],
-        conservative_current_view_ref: str,
+        conservative_current_view_ref: str | None = None,
         field_sampling_domain: FieldTarget,
         target_refs: Sequence[FieldTarget],
         outputs: Sequence[AntennaNamedOutput],
@@ -373,11 +373,20 @@ class AntennaFieldSolveStage:
             ("id", id),
             ("source_object_id", source_object_id),
             ("current_transport_id", current_transport_id),
-            ("conservative_current_view_ref", conservative_current_view_ref),
             ("conductor_mesh_policy", conductor_mesh_policy),
             ("solver_policy", solver_policy),
         ):
             object.__setattr__(self, name, require_non_empty(value, f"antenna_field_solve.{name}"))
+        object.__setattr__(
+            self,
+            "conservative_current_view_ref",
+            None
+            if conservative_current_view_ref is None
+            else require_non_empty(
+                conservative_current_view_ref,
+                "antenna_field_solve.conservative_current_view_ref",
+            ),
+        )
         ports = tuple(require_non_empty(value, "antenna_field_solve.port_mode_id") for value in port_mode_ids)
         if len(ports) != 1:
             raise ValueError("antenna field solve requires exactly one port_mode_id per executable stage")
@@ -406,12 +415,11 @@ class AntennaFieldSolveStage:
         object.__setattr__(self, "model", model)
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "id": self.id,
             "source_object_id": self.source_object_id,
             "current_transport_id": self.current_transport_id,
             "port_mode_ids": list(self.port_mode_ids),
-            "conservative_current_view_ref": self.conservative_current_view_ref,
             "model": self.model,
             "oersted_realization": self.oersted_realization,
             "conductor_mesh_policy": self.conductor_mesh_policy,
@@ -420,6 +428,9 @@ class AntennaFieldSolveStage:
             "solver_policy": self.solver_policy,
             "outputs": [output.to_ir() for output in self.outputs],
         }
+        if self.conservative_current_view_ref is not None:
+            payload["conservative_current_view_ref"] = self.conservative_current_view_ref
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -597,10 +608,16 @@ class AntennaSpectrumRequest:
             raise ValueError("nonuniform_spatial_fft requires nonuniform_k_grid")
         if self.component == "transverse" and not self.equilibrium_ref:
             raise ValueError("transverse spectrum requires equilibrium_ref")
+        if self.component != "transverse" and self.equilibrium_ref is not None:
+            raise ValueError("equilibrium_ref is only valid for component='transverse'")
         for name in ("equilibrium_ref", "mode_basis_ref"):
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, require_non_empty(value, f"antenna_spectrum.{name}"))
+        if self.component == "transverse":
+            raise ValueError("transverse spectrum is unsupported until certified equilibrium loading and projection exist")
+        if self.mode_basis_ref is not None:
+            raise ValueError("mode_basis_ref is unsupported until modal analysis is implemented")
         object.__setattr__(self, "window", window)
         object.__setattr__(self, "normalization", normalization)
 

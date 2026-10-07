@@ -1729,6 +1729,40 @@ fn validate_current_transport(
             validate_scene_charge_contract(index, transport, object_ids)?;
         }
     }
+    if let Some(value) = transport.conservative_current_source.as_ref() {
+        if transport.model != CurrentTransportModel::OhmicPoisson
+            || transport.coupling != SceneTransportCoupling::OneWay
+            || transport.conservative_current_view.is_some()
+            || transport.structured_current_closure.is_some()
+            || transport.time_envelope.is_some()
+        {
+            return Err(SceneDocumentValidationError::new(format!("current_transports[{index}].conservative_current_source requires one-way ohmic_poisson and no other source/view")));
+        }
+        let source: fullmag_ir::ConservativeCurrentSourceIR = serde_json::from_value(
+            serde_json::to_value(value).expect("JSON object is serializable"),
+        )
+        .map_err(|error| {
+            SceneDocumentValidationError::new(format!(
+                "current_transports[{index}].conservative_current_source: {error}"
+            ))
+        })?;
+        let errors = source.validation_errors(&format!(
+            "current_transports[{index}].conservative_current_source"
+        ));
+        if !errors.is_empty() {
+            return Err(SceneDocumentValidationError::new(errors.join("; ")));
+        }
+        for observation in source.terminal_observations() {
+            if !object_ids.contains(&observation.object_id)
+                || !transport
+                    .domain
+                    .iter()
+                    .any(|region| region.object_id == observation.object_id)
+            {
+                return Err(SceneDocumentValidationError::new(format!("current_transports[{index}].conservative_current_source observation '{}' must belong to an existing charge-domain object", observation.id)));
+            }
+        }
+    }
     if let Some(view) = transport.conservative_current_view.as_ref() {
         if transport.model != CurrentTransportModel::OhmicPoisson
             || transport.coupling != SceneTransportCoupling::OneWay
@@ -2375,13 +2409,19 @@ fn validate_scene_charge_contract(
     let prefix = format!("current_transports[{index}]");
     if transport.domain.is_empty()
         || transport.materials.is_empty()
-        || transport.boundaries.is_empty()
+        || (transport.boundaries.is_empty() && transport.conservative_current_source.is_none())
         || transport.gauge.is_none()
         || transport.solver.is_none()
     {
         return Err(SceneDocumentValidationError::new(format!(
             "{prefix} ohmic_poisson requires non-empty domain, materials, boundaries, gauge, and solver"
         )));
+    }
+    if transport.conservative_current_source.is_some()
+        && (!transport.boundaries.is_empty()
+            || transport.gauge != Some(SceneChargePotentialGauge::TerminalReference))
+    {
+        return Err(SceneDocumentValidationError::new(format!("{prefix}.conservative_current_source requires empty boundaries and gauge=terminal_reference")));
     }
     let mut domain = BTreeSet::new();
     for (region_index, region) in transport.domain.iter().enumerate() {
@@ -2464,8 +2504,14 @@ fn validate_scene_charge_contract(
     let mut boundary_ids = BTreeSet::new();
     let mut surfaces = BTreeSet::new();
     let mut voltage_count = 0usize;
+    let mut terminal_count = 0usize;
+    let mut current_density_count = 0usize;
     for (boundary_index, boundary) in transport.boundaries.iter().enumerate() {
         let (id, selected_surfaces) = match boundary {
+            SceneChargeBoundary::EquipotentialCurrentTerminal { id, surfaces } => {
+                terminal_count += 1;
+                (id, surfaces)
+            }
             SceneChargeBoundary::VoltageElectrode {
                 id,
                 surfaces,
@@ -2483,6 +2529,7 @@ fn validate_scene_charge_contract(
                 surfaces,
                 outward_current_density_apm2,
             } => {
+                current_density_count += 1;
                 finite(
                     *outward_current_density_apm2,
                     &format!("{prefix}.boundaries[{boundary_index}].outward_current_density_Apm2"),
@@ -2522,14 +2569,36 @@ fn validate_scene_charge_contract(
                 "{prefix}.gauge=zero_mean conflicts with voltage electrodes"
             )));
         }
+        Some(SceneChargePotentialGauge::TerminalReference)
+            if transport.conservative_current_source.is_none()
+                && (terminal_count == 0 || voltage_count != 0 || current_density_count != 0) =>
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.gauge=terminal_reference requires current terminals and no voltage or current-density electrodes"
+            )));
+        }
+        _ if terminal_count != 0
+            && transport.gauge != Some(SceneChargePotentialGauge::TerminalReference) =>
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix} equipotential current terminals require gauge=terminal_reference"
+            )));
+        }
         _ => {}
     }
     let solver = transport.solver.as_ref().expect("checked above");
     let reciprocal = transport.coupling == SceneTransportCoupling::Bidirectional
         || transport.model == CurrentTransportModel::MagnetoresistivePoisson;
+    if terminal_count != 0 && reciprocal {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix} equipotential current terminals require one-way Ohmic transport"
+        )));
+    }
     let expected_engine = if reciprocal { "block_gmres" } else { "cg" };
     let expected_operator = if reciprocal {
         "fdm_coupled_charge_spin_fv_block_gmres.v1"
+    } else if terminal_count != 0 || transport.conservative_current_source.is_some() {
+        "fem_charge_conforming_h1_p1.transparent.v1"
     } else if transport.structured_current_closure.is_some() {
         "fv_charge_harmonic_source_cut_v1"
     } else {
@@ -4057,6 +4126,43 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn scene_current_source_policy_rejects_legacy_bcs_and_untyped_payloads() {
+        // Empty payload isolates charge policy; full transport validation must reject it.
+        let mut transport:KnownSceneCurrentTransport=serde_json::from_value(serde_json::json!({
+            "kind":"current_transport","name":"source","model":"ohmic_poisson","coupling":"one_way",
+            "domain":[{"object_id":"body"}],"materials":[{"region":{"object_id":"body"},"material":{"sigma_Spm":4.}}],
+            "boundaries":[],"gauge":"terminal_reference","solver":{"engine":"cg","linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},"operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
+            "conservative_current_source":{}
+        })).unwrap();
+        let objects = BTreeSet::from(["body".to_string()]);
+        validate_scene_charge_contract(0, &transport, &objects).unwrap();
+        assert!(validate_current_transport(0, &transport, &objects)
+            .unwrap_err()
+            .message
+            .contains("conservative_current_source"));
+        transport.gauge = Some(SceneChargePotentialGauge::ZeroMean);
+        assert!(validate_scene_charge_contract(0, &transport, &objects)
+            .unwrap_err()
+            .message
+            .contains("terminal_reference"));
+        transport.gauge = Some(SceneChargePotentialGauge::TerminalReference);
+        transport.boundaries.push(SceneChargeBoundary::Insulating {
+            id: "legacy".into(),
+            surfaces: vec![],
+        });
+        assert!(validate_scene_charge_contract(0, &transport, &objects)
+            .unwrap_err()
+            .message
+            .contains("empty boundaries"));
+        transport.boundaries.clear();
+        transport.conservative_current_source = None;
+        assert!(validate_scene_charge_contract(0, &transport, &objects)
+            .unwrap_err()
+            .message
+            .contains("non-empty"));
     }
 
     #[test]

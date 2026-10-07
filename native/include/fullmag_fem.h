@@ -1002,6 +1002,30 @@ typedef struct {
     char diagnostics_json[1024];
 } fullmag_fem_steady_transport_rt0_result_v1;
 
+/* Optional charge payload from the SAME solve as the RT0 result. New entry
+ * points below preserve every existing request/result layout. Vertex order
+ * belongs to the RT0 mesh, including volumetric leads; V is in volts, xyz in
+ * metres. On any error all published lengths and the source digest are reset.
+ * This payload does not certify prescribed integral port currents. */
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_CHARGE_SNAPSHOT_ABI_VERSION 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    double *electric_potential_v;
+    uint64_t electric_potential_v_capacity;
+    uint64_t electric_potential_v_len;
+    uint64_t *stable_vertex_ids;
+    uint64_t stable_vertex_ids_capacity;
+    uint64_t stable_vertex_ids_len;
+    double *vertex_xyz_m;
+    uint64_t vertex_xyz_m_capacity;
+    uint64_t vertex_xyz_m_len;
+    char stable_vertex_id_version[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char source_view_identity_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char error_message[256];
+} fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1;
+
 /* Direct OE-F1 evaluation on the exact immutable RT0 view produced by the
  * closure-aware transport extension.  This is a new symbol; the RT0 result
  * above remains byte-for-byte stable. */
@@ -1037,6 +1061,57 @@ typedef struct {
     char error_message[256];
     char diagnostics_json[1024];
 } fullmag_fem_steady_transport_rt0_oersted_result_v1;
+
+/* Append-only companion to OE-F1. Caller-owned, disjoint writable records
+ * retain the exact input xyz, raw H and final target ledger from the SAME
+ * solve. Existing OE-F1 layouts and their 1024-byte summary are unchanged.
+ * On failure sufficiently sized non-null outputs have zero published lengths;
+ * undersized headers are not written and no output may be consumed on error.
+ * Record bytes beyond a zero published length are not results.
+ * This evidence is not a rigorous error bound or a per-ampere certificate. */
+#define FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_ABI_VERSION 1u
+#define FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_MAX_TARGETS 1000000u
+typedef struct {
+    double target_xyz_m[3];
+    double h_xyz_apm[3];
+    double estimated_error_apm;
+    double tolerance_apm;
+    double roundoff_indicator_apm;
+    uint64_t final_leaf_count;
+    uint64_t kernel_evaluations;
+    uint64_t ledger_leaf_visits;
+} fullmag_fem_direct_oersted_target_record_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_direct_oersted_target_record_v1 *target_records;
+    uint64_t target_records_capacity;
+    uint64_t target_records_len;
+    uint64_t source_target_pairs;
+    uint64_t refined_pairs;
+    uint64_t unconverged_pair_count;
+    double maximum_pair_error_apm;
+    uint64_t kernel_evaluations;
+    uint64_t ledger_leaf_visits;
+    int32_t base_quadrature_order;
+    int32_t maximum_subdivision_depth;
+    double absolute_tolerance_apm;
+    double relative_tolerance;
+    double relative_scale_floor_apm;
+    uint64_t maximum_source_target_pairs;
+    uint64_t maximum_final_leaves_per_target;
+    uint64_t maximum_kernel_evaluations;
+    uint64_t maximum_ledger_leaf_visits;
+    char schema_version[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char operator_version[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char quadrature_scope[32];
+    char estimated_error_policy[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char roundoff_indicator_policy[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char source_view_identity_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char error_message[256];
+} fullmag_fem_direct_oersted_snapshot_result_v1;
 
 /* Mixed H(curl) x H1 OE-F2 evaluation on the exact immutable RT0 view.  This
  * is an append-only wrapper: the nested RT0 request/result and all legacy
@@ -1189,6 +1264,161 @@ typedef struct {
     uint64_t dirichlet_boundary_currents_a_capacity;
     uint64_t dirichlet_boundary_currents_a_len;
 } fullmag_fem_charge_transport_result_v2;
+
+/* Prescribed signed outward terminal currents. V1/V2 fixed-potential calls
+ * retain their original layouts and semantics. The embedded V1 request has
+ * no Dirichlet attributes; terminal faces and currents are specified here.
+ * Offsets delimit nonempty per-terminal groups in boundary_attributes.
+ * One gauge terminal index is returned per connected conductor component. */
+#define FULLMAG_FEM_CHARGE_TERMINAL_CURRENT_ABI_VERSION 3u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_charge_transport_request_v1 base;
+    const uint64_t *terminal_attribute_offsets;
+    uint64_t terminal_attribute_offsets_len;
+    const uint32_t *terminal_boundary_attributes;
+    uint64_t terminal_boundary_attributes_len;
+    const double *requested_outward_currents_a;
+    uint64_t terminal_count;
+} fullmag_fem_charge_transport_request_v3;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_charge_transport_result_v1 base;
+    double *terminal_voltages_v;
+    uint64_t terminal_voltages_v_capacity;
+    uint64_t terminal_voltages_v_len;
+    double *measured_outward_currents_a;
+    uint64_t measured_outward_currents_a_capacity;
+    uint64_t measured_outward_currents_a_len;
+    uint32_t *gauge_terminal_indices;
+    uint64_t gauge_terminal_indices_capacity;
+    uint64_t gauge_terminal_indices_len;
+} fullmag_fem_charge_transport_result_v3;
+
+/* One current-driven owned H1/material/RT0 record. This does not certify
+ * closure or publish H; all previous charge/RT0 layouts remain unchanged. */
+#define FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_ABI_VERSION 1u
+#define FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_TEXT_CAPACITY 96u
+#define FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_MAX_PAYLOAD_BYTES (UINT64_C(128) << 20)
+#define FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_LAYOUT_FINGERPRINT \
+    "fullmag:fem-accepted-terminal-charge:abi:v1:canonical-owned-record"
+
+typedef struct {
+    const char *id;
+    const uint64_t *boundary_face_vertex_ids;
+    uint64_t face_count;
+    double requested_outward_current_a;
+} fullmag_fem_accepted_terminal_charge_terminal_v1;
+
+typedef struct {
+    const char *id;
+    uint64_t first_face_vertex_ids[3];
+    uint64_t second_face_vertex_ids[3];
+    uint64_t vertex_pairs[3][2];
+} fullmag_fem_accepted_terminal_charge_interface_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_execution_lane execution_lane;
+    uint32_t reserved_execution;
+    fullmag_fem_mesh_desc mesh;
+    fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1 stable_vertex_identities;
+    const double *conductivity_spm_per_element;
+    uint64_t conductivity_spm_per_element_len;
+    const fullmag_fem_accepted_terminal_charge_terminal_v1 *terminals;
+    uint64_t terminal_count;
+    const fullmag_fem_accepted_terminal_charge_interface_v1 *interfaces;
+    uint64_t interface_count;
+    double absolute_jump_tolerance_v;
+    double relative_jump_tolerance;
+    double algebraic_relative_tolerance;
+    uint32_t maximum_iterations;
+    uint32_t reserved_solver;
+} fullmag_fem_accepted_terminal_charge_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    uint8_t *canonical_payload;
+    uint64_t canonical_payload_capacity;
+    uint64_t canonical_payload_len;
+    char digest_schema[FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_TEXT_CAPACITY];
+    char operator_version[FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_TEXT_CAPACITY];
+    char layout_fingerprint[FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_TEXT_CAPACITY];
+    char content_sha256[65];
+    char error_message[256];
+} fullmag_fem_accepted_terminal_charge_result_v1;
+
+/* One current-driven charge -> finite device+lead source -> H bundle.
+ * Scope is external_electrode_truncation, never a full closed circuit.
+ * J is represented by owned RT0 face-flux moments, not legacy nodal raw J. */
+#define FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_ABI_VERSION 1u
+#define FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_TEXT_CAPACITY 96u
+#define FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_MAX_PAYLOAD_BYTES (UINT64_C(128) << 20)
+#define FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_LAYOUT_FINGERPRINT \
+    "fullmag:fem-accepted-external-lead:abi:v1:canonical-owned-bundle"
+#define FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_BOUNDARY_INSULATING 1u
+#define FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_BOUNDARY_OUTER_ELECTRODE 2u
+#define FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_BOUNDARY_DEVICE_INTERFACE 3u
+
+typedef struct {
+    uint64_t vertex_ids[3];
+    uint32_t role;
+    uint32_t reserved;
+    const char *circuit_id;
+} fullmag_fem_accepted_external_lead_boundary_v1;
+
+typedef struct {
+    const char *id;
+    const char *const *interface_pair_ids;
+    uint64_t interface_pair_count;
+    double requested_device_outward_current_a;
+} fullmag_fem_accepted_external_lead_branch_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_accepted_terminal_charge_request_v1 charge;
+    const char *closure_revision;
+    const uint64_t *device_vertex_ids;
+    uint64_t device_vertex_count;
+    const uint64_t *lead_vertex_ids;
+    uint64_t lead_vertex_count;
+    const fullmag_fem_accepted_external_lead_boundary_v1 *boundary_faces;
+    uint64_t boundary_face_count;
+    const fullmag_fem_accepted_external_lead_branch_v1 *branches;
+    uint64_t branch_count;
+    const double *target_xyz_m;
+    uint64_t target_count;
+    int32_t base_quadrature_order;
+    int32_t maximum_subdivision_depth;
+    double absolute_tolerance_apm;
+    double relative_tolerance;
+    uint64_t maximum_source_target_pairs;
+} fullmag_fem_accepted_external_lead_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    uint8_t *canonical_payload;
+    uint64_t canonical_payload_capacity;
+    uint64_t canonical_payload_len;
+    char digest_schema[FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_TEXT_CAPACITY];
+    char operator_version[FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_TEXT_CAPACITY];
+    char layout_fingerprint[FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_TEXT_CAPACITY];
+    char content_sha256[65];
+    char error_message[256];
+} fullmag_fem_accepted_external_lead_result_v1;
 
 typedef struct {
     uint64_t step;
@@ -3157,6 +3387,18 @@ FULLMAG_FEM_API int fullmag_fem_solve_charge_transport_v2(
     const fullmag_fem_charge_transport_request_v1 *request,
     fullmag_fem_charge_transport_result_v2 *result
 );
+FULLMAG_FEM_API int fullmag_fem_solve_charge_transport_v3(
+    const fullmag_fem_charge_transport_request_v3 *request,
+    fullmag_fem_charge_transport_result_v3 *result
+);
+FULLMAG_FEM_API int fullmag_fem_solve_accepted_terminal_charge_v1(
+    const fullmag_fem_accepted_terminal_charge_request_v1 *request,
+    fullmag_fem_accepted_terminal_charge_result_v1 *result
+);
+FULLMAG_FEM_API int fullmag_fem_solve_accepted_external_lead_field_v1(
+    const fullmag_fem_accepted_external_lead_request_v1 *request,
+    fullmag_fem_accepted_external_lead_result_v1 *result
+);
 FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_m2_v1(
     const fullmag_fem_steady_transport_m2_request_v1 *request,
     fullmag_fem_steady_transport_result_v1 *result
@@ -3172,6 +3414,27 @@ FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
 FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
     const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,
     fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result
+);
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_with_charge_snapshot_v1(
+    const fullmag_fem_steady_transport_rt0_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot
+);
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_with_charge_snapshot_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot
+);
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_with_snapshots_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot,
+    fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature_snapshot
+);
+FULLMAG_FEM_API int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_with_charge_snapshot_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot
 );
 FULLMAG_FEM_API int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
 FULLMAG_FEM_API int fullmag_fem_get_frequency_domain_availability_info(
@@ -3311,6 +3574,11 @@ FULLMAG_FEM_API int fullmag_fem_get_regional_field_drive_abi_layout(
 FULLMAG_FEM_API int fullmag_fem_backend_begin_stage(
     fullmag_fem_backend *handle,
     double stage_start_time_s
+);
+FULLMAG_FEM_API int fullmag_fem_backend_begin_stage_v2(
+    fullmag_fem_backend *handle,
+    double segment_start_time_s,
+    double waveform_origin_time_s
 );
 
 FULLMAG_FEM_API int fullmag_fem_backend_set_gpu_execution_request_v1(

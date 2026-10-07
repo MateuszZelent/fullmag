@@ -138,6 +138,8 @@ describe("scratch material Inspector stability", () => {
       expect(panelRoot.scrollTop).toBe(73);
       expect(input(mounted.container, "New anisotropy axis X").value).toBe("1");
       expect(mounted.container.textContent).toContain("Ku1 draft is ready");
+      expect(input(mounted.container, "Ms").value).toBe("1100000");
+      expect(input(mounted.container, "Aex").value).toBe("1.3e-11");
 
       const invalidationCounts = new Map<string, number>();
       for (const [resourceKey] of fixture.invalidate.mock.calls as [string, unknown][]) {
@@ -378,7 +380,9 @@ function createdMaterialAck(materialId = "mat:cofeb"): AuthoringTransactionRespo
   return {
     committed_scene: {
       ...scene(22),
-      materials: [{ id: materialId, name: "CoFeB" }],
+      materials: [{ id: materialId, name: "CoFeB", properties: {
+        Aex: 1.3e-11, Ms: 1.1e6, alpha: 0.01, Dind: null, Dbulk: null,
+      } }],
       revision: 22,
     },
     scene_revision: 22,
@@ -389,6 +393,7 @@ function createdMaterialAck(materialId = "mat:cofeb"): AuthoringTransactionRespo
 function assignedScene(revision: number, materialRef: string): SceneResource {
   return {
     ...scene(revision),
+    materials: createdMaterialAck(materialRef).committed_scene.materials,
     objects: [
       sceneObject("object-a", "Object A", materialRef),
       sceneObject("object-b", "Object B"),

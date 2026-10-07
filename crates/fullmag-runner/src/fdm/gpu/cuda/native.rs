@@ -638,7 +638,7 @@ fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunEr
 struct NativeRegionalFieldDrivePayload {
     _fields: Vec<Vec<f64>>,
     _piecewise_points: Vec<Vec<f64>>,
-    descriptors: Vec<ffi::fullmag_fdm_regional_field_drive_desc_v1>,
+    descriptors: Vec<ffi::fullmag_fdm_regional_field_drive_desc_v2>,
 }
 
 #[cfg(feature = "cuda")]
@@ -651,6 +651,19 @@ enum NativeDriveSpec<'a> {
 fn native_regional_field_drive_payload(
     plan: &fullmag_ir::FdmPlanIR,
 ) -> Result<Option<NativeRegionalFieldDrivePayload>, RunError> {
+    if let Some(inactive) = plan.solved_antenna_drive_bases.iter().find(|basis| {
+        !basis.drive.activation.is_active_for(
+            plan.time_stage.study_kind,
+            plan.time_stage.active_stage_id.as_deref(),
+        )
+    }) {
+        return Err(RunError {
+            message: format!(
+                "resolved CUDA antenna basis '{}' is inactive in the current stage",
+                inactive.drive.id
+            ),
+        });
+    }
     let mut specs = Vec::with_capacity(
         plan.regional_field_drive_bases.len() + plan.solved_antenna_drive_bases.len(),
     );
@@ -662,12 +675,6 @@ fn native_regional_field_drive_payload(
     specs.extend(
         plan.solved_antenna_drive_bases
             .iter()
-            .filter(|resolved| {
-                resolved.drive.activation.is_active_for(
-                    plan.time_stage.study_kind,
-                    plan.time_stage.active_stage_id.as_deref(),
-                )
-            })
             .map(NativeDriveSpec::Solved),
     );
     if specs.is_empty() {
@@ -785,36 +792,39 @@ fn native_regional_field_drive_payload(
         let points_storage = piecewise_points
             .last()
             .expect("piecewise storage was just appended");
-        descriptors.push(ffi::fullmag_fdm_regional_field_drive_desc_v1 {
-            abi_version: ffi::FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1,
-            struct_size: std::mem::size_of::<ffi::fullmag_fdm_regional_field_drive_desc_v1>()
-                as u32,
-            field_xyz: field_storage.as_ptr(),
-            field_len: field_storage.len() as u64,
-            waveform,
-            time_origin: match time_origin {
-                fullmag_ir::FieldTimeOriginIR::StageLocal => {
-                    ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
-                }
-                fullmag_ir::FieldTimeOriginIR::Absolute => {
-                    ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_ABSOLUTE
-                }
+        descriptors.push(ffi::fullmag_fdm_regional_field_drive_desc_v2 {
+            drive: ffi::fullmag_fdm_regional_field_drive_desc_v1 {
+                abi_version: ffi::FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2,
+                struct_size: std::mem::size_of::<ffi::fullmag_fdm_regional_field_drive_desc_v2>()
+                    as u32,
+                field_xyz: field_storage.as_ptr(),
+                field_len: field_storage.len() as u64,
+                waveform,
+                time_origin: match time_origin {
+                    fullmag_ir::FieldTimeOriginIR::StageLocal => {
+                        ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
+                    }
+                    fullmag_ir::FieldTimeOriginIR::Absolute => {
+                        ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_ABSOLUTE
+                    }
+                },
+                stage_start_time_s: plan.time_stage.start_time_s,
+                frequency_hz,
+                phase_rad,
+                offset,
+                t_on_s,
+                t_off_s,
+                cutoff_hz,
+                t0_s,
+                amplitude,
+                piecewise_points: if points_storage.is_empty() {
+                    std::ptr::null()
+                } else {
+                    points_storage.as_ptr()
+                },
+                piecewise_point_count: (points_storage.len() / 2) as u64,
             },
-            stage_start_time_s: plan.time_stage.start_time_s,
-            frequency_hz,
-            phase_rad,
-            offset,
-            t_on_s,
-            t_off_s,
-            cutoff_hz,
-            t0_s,
-            amplitude,
-            piecewise_points: if points_storage.is_empty() {
-                std::ptr::null()
-            } else {
-                points_storage.as_ptr()
-            },
-            piecewise_point_count: (points_storage.len() / 2) as u64,
+            waveform_origin_time_s: plan.time_stage.waveform_origin_time_s(),
         });
     }
 
@@ -1395,6 +1405,10 @@ impl NativeFdmBackend {
         // into nullable ABI pointers. Never let malformed or stale selection
         // evidence reach a device probe, allocation, or native repair path.
         validate_native_frozen_spins_plan(plan)?;
+        crate::antenna_fields::validate_fdm_antenna_sample_counts(
+            plan,
+            plan.initial_magnetization.len(),
+        )?;
         let integrator_choice = plan
             .integrator
             .unwrap_or(fullmag_ir::IntegratorChoice::Heun);
@@ -2044,7 +2058,7 @@ impl NativeFdmBackend {
 
         if let Some(regional_drives) = native_regional_field_drive_payload(plan)? {
             let drive_status = unsafe {
-                ffi::fullmag_fdm_backend_set_regional_field_drives_v1(
+                ffi::fullmag_fdm_backend_set_regional_field_drives_v2(
                     handle,
                     regional_drives.descriptors.as_ptr(),
                     regional_drives.descriptors.len() as u32,
@@ -4380,6 +4394,7 @@ mod tests {
         plan.time_stage = fullmag_ir::TimeStageContextIR {
             active_stage_id: None,
             start_time_s: 0.25,
+            waveform_origin_time_s: None,
             study_kind: fullmag_ir::StudyKindIR::TimeEvolution,
         };
         plan.solved_antenna_drive_bases = vec![fullmag_ir::ResolvedSolvedAntennaDriveBasisIR {
@@ -4412,17 +4427,29 @@ mod tests {
         assert_eq!(payload._fields[0], vec![2.5, 5.0, 7.5, 10.0, 12.5, 15.0]);
         let descriptor = &payload.descriptors[0];
         assert_eq!(
-            descriptor.waveform,
+            descriptor.drive.waveform,
             ffi::fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINUSOIDAL
         );
-        assert_eq!(descriptor.stage_start_time_s, 0.25);
-        assert_eq!(descriptor.frequency_hz, 1.0e9);
-        assert_eq!(descriptor.phase_rad, 0.125);
-        assert_eq!(descriptor.offset, 0.25);
+        assert_eq!(descriptor.drive.stage_start_time_s, 0.25);
+        assert_eq!(descriptor.waveform_origin_time_s, 0.25);
+        assert_eq!(descriptor.drive.frequency_hz, 1.0e9);
+        assert_eq!(descriptor.drive.phase_rad, 0.125);
+        assert_eq!(descriptor.drive.offset, 0.25);
         assert_eq!(
-            descriptor.time_origin,
+            descriptor.drive.time_origin,
             ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
         );
+        plan.time_stage.waveform_origin_time_s = Some(0.125);
+        let resumed = native_regional_field_drive_payload(&plan)
+            .unwrap()
+            .expect("resumed segment retains its solved basis");
+        assert_eq!(resumed.descriptors[0].drive.stage_start_time_s, 0.25);
+        assert_eq!(resumed.descriptors[0].waveform_origin_time_s, 0.125);
+        plan.time_stage.study_kind = fullmag_ir::StudyKindIR::Relaxation;
+        let error = native_regional_field_drive_payload(&plan)
+            .err()
+            .expect("inactive resolved basis must be rejected");
+        assert!(error.message.contains("inactive in the current stage"));
     }
 
     #[test]

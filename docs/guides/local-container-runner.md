@@ -321,6 +321,42 @@ równoległą podmianą; wymagany jest przypięty runtime tylko do odczytu.
 Regresja samego fingerprintu jest w
 `scripts/test_verify_antenna_field_reader.py::test_imported_direct_decoder_changes_reader_fingerprint`.
 
+### Mały test naukowy anteny z sesją w RAM
+
+Po jawnej zgodzie użytkownika można użyć
+`just run-managed-antenna-ram <job-id> <commit> <source-digest> <native-snapshot-sha256>`.
+To osobna, ograniczona trasa FEM CPU/double dla przypiętego przykładu
+`examples/fem_antenna_current_source_inspection.py`, nie alternatywny trwały
+SessionStore i nie uruchomienie LLG. Wymaga terminalnego, udanego buildu
+`fem-cpu-release` i pełnego validatora trusted documents, pakietu oraz kapsuły.
+Nowy przykład jest osobnym, dokładnie zahashowanym wejściem naukowym;
+nie wolno przypisywać go wcześniejszej kapsule buildu.
+
+Sesja, cache siatki i oryginalny wynik znajdują się wyłącznie na ograniczonym
+tmpfs `/ram` (768 MiB). Kontener ma 2 CPU, 2 GiB RAM, 128 procesów, UID/GID
+65532, read-only rootfs, brak capabilities, podwyższonych uprawnień, sieci,
+portów i named volumes. Kapsuła, pakiet i trzy pliki wejściowe są read-only;
+jedyny zapis na bind hosta to eksport logu, exit marker i kopia wyniku pod
+nowym katalogiem `storage/builds/<worktree-id>/managed-antenna-ram-cpu/runs/<id>`.
+Nie zmienia to allowlisty filesystemów ani kwalifikacji checkpointów na 9p.
+
+Tryb naukowy ustawia `FULLMAG_API_PORT=0`: headless nie wymaga serwera API,
+a kontener nadal nie publikuje portów. `FULLMAG_STATE_DIR=/ram/user-state`
+kieruje osobną historię workspace do RAM; nie należy utożsamiać tej zmiennej
+z `FULLMAG_STATE_ROOT`, który określa root sesji. Oba zapisy są tymczasowe.
+
+`just observe-managed-antenna-ram <absolutny-run-root>` ponawia kontrolę
+pakietu, kapsuły i wejść oraz sprawdza rzeczywisty image, mounty, limity,
+tmpfs, komendę, środowisko i właściciela Compose. Stan inny niż `exited`
+pozostaje oczekujący. Exit 0, właściwy startup stamp i obecność eksportu
+oznaczają wyłącznie `solver_succeeded_comparison_pending`. Oddzielna bramka
+musi odczytać konkretny inspection stage record, zweryfikować jego canonical
+bundle i porównać V/H z niezależnym wzorcem. Receipt zachowuje
+`physics_qualified=false` i `durable_session_storage_qualified=false`.
+Kontener i eksport są zachowane także po błędzie; observer nie startuje
+nowego solve ani nie usuwa zasobów. Utrata RAM po zakończeniu kontenera jest
+zamierzona; eksport nie dowodzi odporności sesji na utratę zasilania.
+
 ### Pozostałe ograniczenia
 
 - Build/uruchomienie Fullmaga z prywatnej kopii kapsuły i jawnego execution context.

@@ -55,6 +55,9 @@ import {
   DATA_ARTIFACT_PATH,
   DATA_ARTIFACTS_PATH,
   DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH,
+  DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH,
+  DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH,
   DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
@@ -372,6 +375,9 @@ import type {
   FrequencyDomainTextArtifactResource,
   ArtifactResource,
   AntennaFieldSolutionResource,
+  AntennaFieldPayloadKind,
+  AntennaExternalLeadInspectionResource,
+  AntennaInspectionPayloadKind,
   AntennaStageOutputCatalogResource,
   AntennaSpectrumPayloadKind,
   AntennaSourceSpectrumResource,
@@ -837,6 +843,7 @@ function savedGeometryBinaryQuery(geometry: SavedFieldGeometryResource, limit: n
 }
 const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
 export const MAX_TOPOLOGY_BYTES = 512 * 1024 * 1024;
+export const MAX_ANTENNA_INSPECTION_BYTES = 128 * 1024 * 1024;
 const FIELD_MATERIALIZATION_TIMEOUT_MS = 5_000;
 const FIELD_MATERIALIZATION_RETRY_MS = 250;
 const FIELD_MATERIALIZATION_REQUEST_KEY = "current-field-cache";
@@ -1736,11 +1743,47 @@ export class ControlRoomApi {
           options,
           { path: { solution_id: solutionId } },
         ),
+      fieldSolutionPayload: (
+        solutionId: string,
+        payloadKind: AntennaFieldPayloadKind,
+        portModeId?: string,
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestBinaryBytes(
+          DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH,
+          options,
+          { solution_id: solutionId, payload_kind: payloadKind },
+          portModeId ? { port_mode_id: portModeId } : undefined,
+        ),
       stageOutputCatalog: (stageId: string, options?: RequestOptions) =>
         this.requestJson<AntennaStageOutputCatalogResource>(
           DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
           options,
           { path: { stage_id: stageId } },
+        ),
+      externalLeadInspection: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<AntennaExternalLeadInspectionResource>(
+          DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      externalLeadInspectionPayload: (
+        stageId: string,
+        payloadKind: AntennaInspectionPayloadKind,
+        contentDigest: string,
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestBinaryBytes(
+          DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH,
+          {
+            ...options,
+            maxResponseBytes: Math.min(
+              options?.maxResponseBytes ?? MAX_ANTENNA_INSPECTION_BYTES,
+              MAX_ANTENNA_INSPECTION_BYTES,
+            ),
+          },
+          { stage_id: stageId, payload_kind: payloadKind },
+          { content_digest: contentDigest },
         ),
       sourceSpectrum: (outputId: string, options?: RequestOptions) =>
         this.requestJson<AntennaSourceSpectrumResource>(

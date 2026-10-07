@@ -25,7 +25,7 @@ use fullmag_ir::{
 
 use crate::antenna_fields::{
     compute_per_unit_antenna_fields, dynamic_antenna_drive_terms, has_time_varying_antenna,
-    static_antenna_field,
+    static_antenna_field, validate_antenna_zeeman_mask_lengths,
 };
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::compute_torque_field;
@@ -455,6 +455,7 @@ pub(crate) fn build_problem_and_state(
         }
     }
 
+    validate_antenna_zeeman_mask_lengths(&plan.antenna_zeeman_masks, plan.mesh.nodes.len())?;
     let per_unit_fields = compute_per_unit_antenna_fields(plan)?;
     let initial_antenna_field = static_antenna_field(plan, &per_unit_fields);
     let terms = EffectiveFieldTerms {
@@ -1864,14 +1865,92 @@ fn select_base_field(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, AirBoxConfigIR, ExchangeBoundaryCondition,
-        ExecutionPrecision, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
-        FemObjectSegmentIR, FemPlanIR, IntegratorChoice, MaterialIR, MeshIR, RelaxationAlgorithmIR,
-        RelaxationControlIR, ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR,
-        SelectionCertificateIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
-        SELECTION_CERTIFICATE_SCHEMA_VERSION,
+        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, AirBoxConfigIR,
+        AntennaFieldSourceModelIR, CurrentModuleIR, DriveActivationIR,
+        ExchangeBoundaryCondition, ExecutionPrecision, FemMeshPartIR, FemMeshPartRole,
+        FemMeshPartSelector, FemObjectSegmentIR, FemPlanIR, FieldTimeOriginIR, IntegratorChoice,
+        MaterialIR, MeshIR, RelaxationAlgorithmIR, RelaxationControlIR,
+        ResolvedAntennaZeemanMaskIR, ResolvedFrozenSpinsPlanIR,
+        ResolvedSolvedAntennaDriveBasisIR, RfDriveIR, SelectionAuthoredFingerprintIR,
+        SelectionCertificateIR, SolvedAntennaDriveIR, TimeDependenceIR,
+        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn reference_antenna_drive_maps_stage_clock_to_waveform_origin() {
+        let mut plan = make_test_plan(false);
+        plan.time_stage.start_time_s = 10.0;
+        plan.time_stage.active_stage_id = Some("run".into());
+        let make_basis = |id: &str, time_origin| ResolvedSolvedAntennaDriveBasisIR {
+            drive: SolvedAntennaDriveIR {
+                id: id.into(),
+                name: id.into(),
+                projection_ref: "projection".into(),
+                port_mode_id: "common".into(),
+                peak_current_a: 0.25,
+                waveform: TimeDependenceIR::Sinusoidal {
+                    frequency_hz: 0.25,
+                    phase_rad: 0.3,
+                    offset: 0.1,
+                },
+                bandwidth_declaration: None,
+                time_origin,
+                activation: DriveActivationIR::StageIds {
+                    stage_ids: vec!["run".into()],
+                },
+            },
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            field_xyz_apm_per_a: vec![[4.0, 0.0, 0.0]; 4],
+            projection_signature: "verified".into(),
+        };
+        plan.solved_antenna_drive_bases = vec![
+            make_basis("local", FieldTimeOriginIR::StageLocal),
+            make_basis("absolute", FieldTimeOriginIR::Absolute),
+        ];
+
+        let terms = dynamic_antenna_drive_terms(&plan, &[]);
+        let expected_local = 0.3_f64.cos() + 0.1;
+        let expected_absolute = -0.3_f64.cos() + 0.1;
+        assert_eq!(terms.len(), 2);
+        assert_eq!(terms[0].basis_field[0], [1.0, 0.0, 0.0]);
+        assert!((terms[0].multiplier_at(1.0) - expected_local).abs() < 1.0e-12);
+        assert!((terms[1].multiplier_at(1.0) - expected_absolute).abs() < 1.0e-12);
+
+        let absolute_waveform = plan.solved_antenna_drive_bases[1].drive.waveform.clone();
+        plan.antenna_zeeman_masks = vec![ResolvedAntennaZeemanMaskIR {
+            source: "prescribed".into(),
+            object: "magnet".into(),
+            amplitude_b_t: 0.0,
+            direction: [1.0, 0.0, 0.0],
+            spatial_profile: None,
+            waveform: Some(absolute_waveform.clone()),
+            field_xyz: vec![[2.0, 0.0, 0.0]; 4],
+        }];
+        plan.current_modules = vec![CurrentModuleIR::AntennaFieldSource {
+            name: "legacy".into(),
+            model: AntennaFieldSourceModelIR::Mqs2p5dAz,
+            solver: None,
+            antenna: None,
+            drive: Some(RfDriveIR {
+                current_a: 2.0,
+                waveform: Some(absolute_waveform),
+            }),
+            air_box_factor: None,
+            object: None,
+            field: None,
+            spatial_profile: None,
+            waveform: None,
+        }];
+        let per_unit_fields = vec![vec![[3.0, 0.0, 0.0]; 4]];
+        let terms = dynamic_antenna_drive_terms(&plan, &per_unit_fields);
+        assert_eq!(terms.len(), 4);
+        assert_eq!(terms[0].basis_field[0], [2.0, 0.0, 0.0]);
+        assert_eq!(terms[3].basis_field[0], [6.0, 0.0, 0.0]);
+        assert!((terms[0].multiplier_at(1.0) - expected_absolute).abs() < 1.0e-12);
+        assert!((terms[3].multiplier_at(1.0) - expected_absolute).abs() < 1.0e-12);
+    }
 
     fn make_test_plan(enable_demag: bool) -> FemPlanIR {
         FemPlanIR {

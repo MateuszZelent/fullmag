@@ -340,6 +340,12 @@ quantity revision map. It also records exact FSAL invalidation count and
 absolute invalidation times, so pulse/PWL event handling is auditable rather
 than inferred from accepted steps. Heavy fields use the binary data plane.
 
+Przy wznowieniu segmentu artefakt zapisuje osobno absolutny początek segmentu
+`stage_start_time_s` i początek przebiegu `waveform_origin_time_s`; czasy
+zdarzeń i unieważnień FSAL są liczone względem drugiej wartości dla przebiegów
+lokalnych etapu. Stare przebiegi zachowują `waveform_origin_time_s =
+stage_start_time_s`.
+
 ## 10. Gamma response qualification
 
 The Gamma benchmark uses one 200 nm by 200 nm by 10 nm antidot cell with x/y

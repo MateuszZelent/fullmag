@@ -43,6 +43,9 @@ pub fn resolve_fem_surface_selector(
             tolerance,
         );
     }
+    if normalized == "antenna_nonterminal" {
+        return resolve_antenna_nonterminal_selector(mesh, mesh_parts, object_id, tolerance);
+    }
     let face = parse_bbox_face(&normalized)?;
     let part = mesh_parts
         .iter()
@@ -176,6 +179,71 @@ fn antenna_terminal_marker(object_id: &str, conductor_part_id: &str, selector: &
     let bytes = digest.finalize();
     let value = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
     ANTENNA_TERMINAL_MARKER_BASE + value % ANTENNA_TERMINAL_MARKER_SPAN
+}
+
+fn resolve_antenna_nonterminal_selector(
+    mesh: &MeshIR,
+    mesh_parts: &[FemMeshPartIR],
+    object_id: &str,
+    tolerance: Option<f64>,
+) -> Result<ResolvedFemSurfaceSelector, String> {
+    let tolerance = tolerance.unwrap_or(1.0e-12);
+    if !tolerance.is_finite() || tolerance <= 0.0 {
+        return Err("antenna nonterminal selector tolerance must be finite and > 0".to_string());
+    }
+    let owned_faces = mesh_parts
+        .iter()
+        .filter(|part| {
+            part.role == FemMeshPartRole::Conductor
+                && part.object_id.as_deref() == Some(object_id)
+        })
+        .flat_map(|part| candidate_boundary_face_indices(part, mesh.facet_count()))
+        .collect::<BTreeSet<_>>();
+    if owned_faces.is_empty() {
+        return Err(format!(
+            "antenna_nonterminal cannot resolve object '{object_id}': FEM mesh has no owned conductor boundary"
+        ));
+    }
+    let mut boundary_face_indices = Vec::new();
+    let mut facet_global_ordinals = Vec::new();
+    let mut node_indices = BTreeSet::new();
+    let mut area = 0.0;
+    for face_index in owned_faces {
+        let index = face_index as usize;
+        if mesh.boundary_markers.get(index) != Some(&1)
+            || !matches!(mesh.facets.roles.get(index), Some(fullmag_ir::FemFacetRoleIR::Exterior))
+        {
+            continue;
+        }
+        let Some(nodes) = mesh.facets.item_nodes(index) else {
+            return Err(format!(
+                "antenna_nonterminal references malformed FEM boundary face {face_index}"
+            ));
+        };
+        let Some(ordinal) = mesh.facets.global_ordinals.get(index) else {
+            return Err(format!(
+                "antenna_nonterminal has no global ordinal for FEM boundary face {face_index}"
+            ));
+        };
+        boundary_face_indices.push(face_index);
+        facet_global_ordinals.push(*ordinal);
+        node_indices.extend(nodes.iter().copied());
+        area += facet_area(mesh, nodes);
+    }
+    if boundary_face_indices.is_empty() || !area.is_finite() || area <= 0.0 {
+        return Err(format!(
+            "antenna_nonterminal resolved no positive-area nonterminal exterior faces for object '{object_id}'"
+        ));
+    }
+    Ok(ResolvedFemSurfaceSelector {
+        object_id: object_id.to_string(),
+        selector: "antenna_nonterminal".to_string(),
+        tolerance,
+        boundary_face_indices,
+        facet_global_ordinals,
+        node_indices: node_indices.into_iter().collect(),
+        area,
+    })
 }
 
 fn resolve_antenna_terminal_selector(
@@ -437,5 +505,49 @@ mod tests {
         )
         .expect_err("missing terminal marker must not fall back to a bbox face");
         assert!(error.contains("deterministic terminal marker"));
+    }
+
+    #[test]
+    fn antenna_nonterminal_selects_only_owned_marker_one_faces() {
+        let terminal = antenna_terminal_marker("antenna", "signal", "local_u_min");
+        let (mut mesh, mut parts) = terminal_mesh(terminal);
+        mesh.facets.global_ordinals.push(1);
+        mesh.facets.types.push(FemFacetTypeIR::Tri3);
+        mesh.facets.roles.push(FemFacetRoleIR::Exterior);
+        mesh.facets.offsets.push(6);
+        mesh.facets.nodes.extend([0, 1, 3]);
+        mesh.boundary_markers.push(1);
+        parts[0].boundary_face_indices.push(1);
+        parts[0].facet_global_ordinals.push(1);
+
+        let resolved = resolve_fem_surface_selector(
+            &mesh,
+            &parts,
+            "antenna",
+            "antenna_nonterminal",
+            None,
+        )
+        .expect("nonterminal marker is owned by the conductor");
+        assert_eq!(resolved.boundary_face_indices, vec![1]);
+        assert_eq!(resolved.facet_global_ordinals, vec![1]);
+        assert!(resolved.area > 0.0);
+        assert!(resolve_fem_surface_selector(
+            &mesh,
+            &parts,
+            "other-object",
+            "antenna_nonterminal",
+            None,
+        )
+        .is_err());
+
+        mesh.boundary_markers[1] = terminal;
+        assert!(resolve_fem_surface_selector(
+            &mesh,
+            &parts,
+            "antenna",
+            "antenna_nonterminal",
+            None,
+        )
+        .is_err());
     }
 }

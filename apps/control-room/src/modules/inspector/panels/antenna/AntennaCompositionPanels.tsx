@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import { antennaPortValidationMessages } from "@/shared/domain/physics/antennaPortValidation";
+import { antennaStageValidationMessages } from "@/shared/domain/physics/antennaStageValidation";
 import {
   useAntennaFieldSolutionResource,
   useAntennaStageOutputCatalogResource,
@@ -14,9 +15,13 @@ import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { AntennaSourceSpectrumPayloadView } from "./AntennaSourceSpectrumPayloadView";
+import { AntennaFieldBasisPreview } from "./AntennaFieldBasisPreview";
+import { AntennaExternalLeadInspectionPanel } from "./AntennaExternalLeadInspectionPanel";
 import { AntennaProjectionDriveComposer } from "./AntennaProjectionDriveComposer";
 import { AntennaSolveTargetsEditor } from "./AntennaSolveTargetsEditor";
 import { AntennaSpectrumComposer } from "./AntennaSpectrumComposer";
+import { MicrostripGeometryEditor } from "./MicrostripGeometryEditor";
+import { AntennaPlacementEditor } from "./AntennaPlacementEditor";
 import { SolvedAntennaDriveEditor } from "./SolvedAntennaDriveEditor";
 import { antennaWaveformBandwidthValue } from "./AntennaCompositionModel";
 import {
@@ -157,6 +162,10 @@ function conductorDetails(
 ): DetailModel {
   const object = scene?.objects?.find((candidate) => candidate.id === objectId);
   const geometry = recordValue(object?.geometry);
+  const params = geometry?.geometry_kind === "MicrostripAntennaLayout"
+    ? recordValue(geometry.geometry_params)
+    : null;
+  const stations = Array.isArray(params?.stations) ? params.stations : [];
   return {
     title: "Antenna conductor",
     badge: "3D geometry",
@@ -165,6 +174,20 @@ function conductorDetails(
       { label: "Name", value: textValue(object?.name, objectId ?? "unavailable") },
       { label: "Role", value: textValue(object?.role) },
       { label: "Geometry", value: textValue(geometry?.geometry_kind ?? geometry?.kind) },
+      ...(params ? [
+        { label: "Length", value: numberValue(params.length_m, "m") },
+        { label: "Thickness", value: numberValue(params.thickness_m, "m") },
+        { label: "Conductivity", value: numberValue(params.conductivity_s_per_m, "S/m") },
+        { label: "Return width", value: numberValue(params.return_width_m, "m") },
+        { label: "Return offset", value: numberValue(params.return_offset_m, "m") },
+        ...stations.map((entry, index) => {
+          const station = recordValue(entry);
+          return {
+            label: `Station ${index + 1}`,
+            value: `s=${numberValue(station?.s)}, signal width=${numberValue(station?.signal_width_m, "m")}`,
+          };
+        }),
+      ] : []),
       { label: "Material", value: textValue(object?.material_ref, "unassigned") },
       { label: "Mesh policy", value: object?.object_mesh ? "authored" : "default" },
     ],
@@ -200,43 +223,6 @@ function portDetails(
       })),
     ],
   };
-}
-
-function antennaStageValidationMessages(
-  stage: AntennaSolveStage,
-  scene: SceneResource | null,
-): string[] {
-  const messages: string[] = [];
-  if (scene?.current_transports) {
-    const hasTransport = scene.current_transports.some(
-      (candidate) => recordValue(candidate)?.name === stage.current_transport_id,
-    );
-    if (!hasTransport) {
-      messages.push(`missing current transport '${stage.current_transport_id}'`);
-    }
-  }
-  if (scene?.antenna_port_modes) {
-    const portModesById = new Map(
-      scene.antenna_port_modes.map((candidate) => [candidate.id, candidate]),
-    );
-    for (const portId of stage.port_mode_ids) {
-      const port = portModesById.get(portId);
-      if (!port) {
-        messages.push(`missing port mode '${portId}'`);
-        continue;
-      }
-      if (
-        port.source_object_id !== stage.source_object_id ||
-        port.current_transport_id !== stage.current_transport_id
-      ) {
-        messages.push(`port mode '${portId}' is bound to a different source or transport`);
-      }
-    }
-  }
-  if (!stage.outputs.some((output) => output.quantity === "H_ant_basis")) {
-    messages.push("stage must publish one H_ant_basis output");
-  }
-  return messages;
 }
 
 function solutionDetails(
@@ -820,10 +806,11 @@ function enrichRuntimeModel(
   }
 
   if (kind === "solution") {
-    rows.push(...fieldSolutionRuntimeRows(fieldSolution, fieldStatus));
+    const currentStatus = model.badge.startsWith("invalid") ? "authoring invalid" : fieldStatus;
+    rows.push(...fieldSolutionRuntimeRows(fieldSolution, currentStatus));
     return {
       ...model,
-      badge: runtimeBadge(model.badge, fieldStatus),
+      badge: currentStatus === "authoring invalid" ? model.badge : runtimeBadge(model.badge, fieldStatus),
       rows,
     };
   }
@@ -902,11 +889,24 @@ export function AntennaCompositionPanel({
         {model.badge.includes("pending") ? (
           <FeedbackBanner
             kind="warning"
-            message="To publish H_ant or FFT results, run the configured field-solve/projection stage first."
+            message={model.badge.startsWith("invalid")
+              ? "Complete the antenna stage validation requirements before field solve; an older published result is not current."
+              : "To publish H_ant or FFT results, run the configured field-solve/projection stage first."}
           />
         ) : null}
       </InspectorGroup>
+      {kind === "conductor" && objectId ? <MicrostripGeometryEditor objectId={objectId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
+      {kind === "conductor" && objectId ? <AntennaPlacementEditor objectId={objectId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
       {kind === "solution" && objectId && resourceId ? <AntennaSolveTargetsEditor key={`targets:${objectId}:${resourceId}`} objectId={objectId} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
+      {kind === "solution" && ids.stageId ? <AntennaExternalLeadInspectionPanel authoredStageId={ids.stageId} /> : null}
+      {kind === "solution" && fieldSolution.data &&
+      model.badge === "ready" &&
+      antennaFieldSolutionIdentityStatus(ids, fieldSolution, stageOutputCatalog) === "ready" ? (
+        <AntennaFieldBasisPreview
+          key={fieldSolution.data.asset_id}
+          solution={fieldSolution.data}
+        />
+      ) : null}
       {kind === "solution" && resourceId ? <AntennaProjectionDriveComposer key={`projection:${resourceId}`} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
       {kind === "solution" && resourceId ? <AntennaSpectrumComposer key={`spectrum:${resourceId}`} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
       {kind === "drive" && resourceId ? <SolvedAntennaDriveEditor driveId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}

@@ -7,6 +7,9 @@ use rustfft::FftPlanner;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::io::Read;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::antenna_field_solution::AntennaFieldSolutionSamples;
 use crate::types::AuxiliaryArtifact;
@@ -14,6 +17,13 @@ use crate::types::RunError;
 
 const MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT: usize = 10_000_000;
 const MAX_ANTENNA_NONUNIFORM_OPERATION_COUNT: usize = 100_000_000;
+
+fn check_spectrum_interrupt(interrupt_requested: Option<&AtomicBool>) -> Result<(), RunError> {
+    if interrupt_requested.is_some_and(|signal| signal.load(Ordering::Acquire)) {
+        return Err(error("antenna source-spectrum cancelled: interrupt_requested"));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AntennaSourceSpectrum2D {
@@ -219,24 +229,29 @@ fn coordinate_key(position: [f64; 3], tolerance_m: f64) -> Option<[i64; 3]> {
     Some(key)
 }
 
-fn coordinate_scale(
+fn coordinate_tolerance(
     request: &AntennaSpectrumRequestIR,
-    samples: &AntennaFieldSolutionSamples,
-) -> f64 {
-    request
-        .sampling_plane
-        .origin_m
-        .into_iter()
-        .chain(request.sampling_plane.axis_u)
-        .chain(request.sampling_plane.axis_v)
-        .chain([
-            request.sampling_plane.extent_u_m,
-            request.sampling_plane.extent_v_m,
-        ])
-        .chain(samples.sample_positions_xyz_m.iter().flatten().copied())
-        .map(f64::abs)
-        .fold(0.0_f64, f64::max)
-        .max(f64::MIN_POSITIVE)
+    spacing_u: f64,
+    spacing_v: f64,
+) -> Result<f64, RunError> {
+    let plane = &request.sampling_plane;
+    let coordinate_scale = (0..3)
+        .map(|axis| {
+            plane.origin_m[axis].abs()
+                + 0.5
+                    * (plane.extent_u_m * plane.axis_u[axis].abs()
+                        + plane.extent_v_m * plane.axis_v[axis].abs())
+        })
+        .fold(spacing_u.max(spacing_v), f64::max);
+    let minimum_spacing = spacing_u.min(spacing_v);
+    let tolerance_m = (minimum_spacing * 1.0e-9)
+        .max(2.0 * f64::EPSILON * coordinate_scale);
+    if 2.0 * tolerance_m >= minimum_spacing {
+        return Err(error(
+            "antenna source-spectrum plane spacing is not resolvable at its absolute coordinates",
+        ));
+    }
+    Ok(tolerance_m)
 }
 
 fn coordinate_distance_squared(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -366,16 +381,35 @@ impl FieldTetraBvh {
         cells: &[[u32; 4]],
         margin: f64,
     ) -> Result<Self, RunError> {
+        Self::build_interruptible(positions, cells, margin, None)
+    }
+
+    fn build_interruptible(
+        positions: &[[f64; 3]],
+        cells: &[[u32; 4]],
+        margin: f64,
+        interrupt_requested: Option<&AtomicBool>,
+    ) -> Result<Self, RunError> {
+        check_spectrum_interrupt(interrupt_requested)?;
         if cells.is_empty() {
             return Ok(Self { root: None });
         }
         let mut entries = Vec::with_capacity(cells.len());
         for (cell_index, cell) in cells.iter().copied().enumerate() {
+            if cell_index % 4096 == 0 {
+                check_spectrum_interrupt(interrupt_requested)?;
+            }
             let bounds = FieldAabb::from_tetra(positions, cell, margin).ok_or_else(|| {
                 error(format!(
                     "antenna source-spectrum topology cell {cell_index} references a missing sample node"
                 ))
             })?;
+            let vertices = cell.map(|node| positions[node as usize]);
+            if barycentric_tet(vertices[0], vertices).is_none() {
+                return Err(error(format!(
+                    "antenna source-spectrum topology cell {cell_index} is a degenerate tet4 element"
+                )));
+            }
             let center = [
                 0.5 * (bounds.minimum[0] + bounds.maximum[0]),
                 0.5 * (bounds.minimum[1] + bounds.maximum[1]),
@@ -384,16 +418,22 @@ impl FieldTetraBvh {
             entries.push((bounds, center, cell_index));
         }
         Ok(Self {
-            root: Some(Self::build_recursive(&mut entries)),
+            root: Some(Self::build_recursive(&mut entries, interrupt_requested)?),
         })
     }
 
-    fn build_recursive(entries: &mut [(FieldAabb, [f64; 3], usize)]) -> FieldBvhNode {
+    fn build_recursive(
+        entries: &mut [(FieldAabb, [f64; 3], usize)],
+        interrupt_requested: Option<&AtomicBool>,
+    ) -> Result<FieldBvhNode, RunError> {
+        if entries.len() >= 4096 {
+            check_spectrum_interrupt(interrupt_requested)?;
+        }
         if entries.len() == 1 {
-            return FieldBvhNode::Leaf {
+            return Ok(FieldBvhNode::Leaf {
                 bounds: entries[0].0,
                 cell_index: entries[0].2,
-            };
+            });
         }
         let mut bounds = entries[0].0;
         for entry in entries.iter().skip(1) {
@@ -406,13 +446,16 @@ impl FieldTetraBvh {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| left.2.cmp(&right.2))
         });
+        if entries.len() >= 4096 {
+            check_spectrum_interrupt(interrupt_requested)?;
+        }
         let middle = entries.len() / 2;
         let (left, right) = entries.split_at_mut(middle);
-        FieldBvhNode::Internal {
+        Ok(FieldBvhNode::Internal {
             bounds,
-            left: Box::new(Self::build_recursive(left)),
-            right: Box::new(Self::build_recursive(right)),
-        }
+            left: Box::new(Self::build_recursive(left, interrupt_requested)?),
+            right: Box::new(Self::build_recursive(right, interrupt_requested)?),
+        })
     }
 
     pub(crate) fn locate(
@@ -530,10 +573,15 @@ fn sample_antenna_field_with_tetrahedra(
     spacing_u: f64,
     spacing_v: f64,
     tolerance_m: f64,
-    source_minimum: [f64; 3],
-    source_maximum: [f64; 3],
+    interrupt_requested: Option<&AtomicBool>,
 ) -> Result<AntennaSpectrumSampleGrid, RunError> {
-    let bvh = FieldTetraBvh::build(&samples.sample_positions_xyz_m, cells, tolerance_m)?;
+    check_spectrum_interrupt(interrupt_requested)?;
+    let bvh = FieldTetraBvh::build_interruptible(
+        &samples.sample_positions_xyz_m,
+        cells,
+        tolerance_m,
+        interrupt_requested,
+    )?;
     let sample_count = count_u
         .checked_mul(count_v)
         .ok_or_else(|| error("antenna source-spectrum sample count overflows"))?;
@@ -542,6 +590,7 @@ fn sample_antenna_field_with_tetrahedra(
     let mut mapping = Vec::with_capacity(sample_count * 5);
     let mut outside_count = 0;
     for v in 0..count_v {
+        check_spectrum_interrupt(interrupt_requested)?;
         let coordinate_v = -0.5 * request.sampling_plane.extent_v_m + v as f64 * spacing_v;
         for u in 0..count_u {
             let coordinate_u = -0.5 * request.sampling_plane.extent_u_m + u as f64 * spacing_u;
@@ -578,12 +627,6 @@ fn sample_antenna_field_with_tetrahedra(
                     if matches!(
                         request.sampling_plane.outside_policy,
                         fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero
-                    )
-                    && !point_inside_source_bounds(
-                        position,
-                        source_minimum,
-                        source_maximum,
-                        tolerance_m,
                     ) =>
                 {
                     outside_count += 1;
@@ -592,10 +635,15 @@ fn sample_antenna_field_with_tetrahedra(
                 }
                 None => {
                     return Err(error(format!(
-                        "antenna source-spectrum plane point ({u},{v}) lies inside the sampling carrier bounds but in no FEM tetrahedron"
+                        "antenna source-spectrum plane point ({u},{v}) lies outside the FEM tetrahedral carrier"
                     )))
                 }
             };
+            if value.iter().any(|component| !component.is_finite()) {
+                return Err(error(format!(
+                    "antenna source-spectrum P1 interpolation produced a non-finite field at plane point ({u},{v})"
+                )));
+            }
             positions.push(position);
             field.push(value);
         }
@@ -618,6 +666,15 @@ pub fn sample_antenna_field_on_plane(
     request: &AntennaSpectrumRequestIR,
     samples: &AntennaFieldSolutionSamples,
 ) -> Result<AntennaSpectrumSampleGrid, RunError> {
+    sample_antenna_field_on_plane_interruptible(request, samples, None)
+}
+
+fn sample_antenna_field_on_plane_interruptible(
+    request: &AntennaSpectrumRequestIR,
+    samples: &AntennaFieldSolutionSamples,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<AntennaSpectrumSampleGrid, RunError> {
+    check_spectrum_interrupt(interrupt_requested)?;
     if request.sampling_plane.interpolation != "fem_element" {
         return Err(error(format!(
             "antenna source-spectrum interpolation '{}' is not executable for the current immutable carrier; fdm_trilinear requires explicit FDM grid metadata",
@@ -654,7 +711,7 @@ pub fn sample_antenna_field_on_plane(
             "antenna source-spectrum plane spacing must be finite and positive",
         ));
     }
-    let tolerance_m = coordinate_scale(request, samples) * 1.0e-12;
+    let tolerance_m = coordinate_tolerance(request, spacing_u, spacing_v)?;
     let (source_minimum, source_maximum) = source_bounds(&samples.sample_positions_xyz_m);
     if let Some(cells) = samples.sample_tet4_cells.as_deref() {
         if cells.is_empty() {
@@ -671,12 +728,29 @@ pub fn sample_antenna_field_on_plane(
             spacing_u,
             spacing_v,
             tolerance_m,
-            source_minimum,
-            source_maximum,
+            interrupt_requested,
         );
     }
     let mut buckets: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+    let plane_minimum = std::array::from_fn(|axis| {
+        request.sampling_plane.origin_m[axis]
+            - 0.5
+                * (request.sampling_plane.extent_u_m * request.sampling_plane.axis_u[axis].abs()
+                    + request.sampling_plane.extent_v_m * request.sampling_plane.axis_v[axis].abs())
+    });
+    let plane_maximum = std::array::from_fn(|axis| {
+        request.sampling_plane.origin_m[axis]
+            + 0.5
+                * (request.sampling_plane.extent_u_m * request.sampling_plane.axis_u[axis].abs()
+                    + request.sampling_plane.extent_v_m * request.sampling_plane.axis_v[axis].abs())
+    });
     for (index, position) in samples.sample_positions_xyz_m.iter().copied().enumerate() {
+        if index % 4096 == 0 {
+            check_spectrum_interrupt(interrupt_requested)?;
+        }
+        if !point_inside_source_bounds(position, plane_minimum, plane_maximum, tolerance_m) {
+            continue;
+        }
         let key = coordinate_key(position, tolerance_m).ok_or_else(|| {
             error("antenna source-spectrum source coordinates exceed the bounded matching range")
         })?;
@@ -688,6 +762,7 @@ pub fn sample_antenna_field_on_plane(
     let mut mapping = Vec::with_capacity(sample_count);
     let mut outside_count = 0;
     for v in 0..count_v {
+        check_spectrum_interrupt(interrupt_requested)?;
         let coordinate_v = -0.5 * request.sampling_plane.extent_v_m + v as f64 * spacing_v;
         for u in 0..count_u {
             let coordinate_u = -0.5 * request.sampling_plane.extent_u_m + u as f64 * spacing_u;
@@ -787,21 +862,48 @@ pub fn compute_antenna_source_spectrum_artifact(
     samples: &AntennaFieldSolutionSamples,
     equilibrium_samples: Option<&[[f64; 3]]>,
 ) -> Result<AntennaSourceSpectrumArtifact, RunError> {
-    let sampled = sample_antenna_field_on_plane(request, samples)?;
+    compute_antenna_source_spectrum_artifact_interruptible(
+        request,
+        samples,
+        equilibrium_samples,
+        None,
+    )
+}
+
+pub fn compute_antenna_source_spectrum_artifact_interruptible(
+    request: &AntennaSpectrumRequestIR,
+    samples: &AntennaFieldSolutionSamples,
+    equilibrium_samples: Option<&[[f64; 3]]>,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<AntennaSourceSpectrumArtifact, RunError> {
+    if request.component == "transverse" {
+        return Err(error(
+            "transverse antenna spectrum requires a verified equilibrium resource loader and projection",
+        ));
+    }
+    if request.equilibrium_ref.is_some() || request.mode_basis_ref.is_some() {
+        return Err(error(
+            "antenna source-spectrum cannot publish ignored equilibrium or mode-basis references",
+        ));
+    }
+    let sampled = sample_antenna_field_on_plane_interruptible(request, samples, interrupt_requested)?;
     let spectrum = match request.transform {
-        AntennaSpectrumTransformIR::SpatialFft => compute_structured_antenna_source_spectrum(
+        AntennaSpectrumTransformIR::SpatialFft => compute_structured_antenna_source_spectrum_interruptible(
             request,
             &sampled.field_xyz_apm_per_a,
             equilibrium_samples,
+            interrupt_requested,
         )?,
         AntennaSpectrumTransformIR::NonuniformSpatialFft => {
-            compute_nonuniform_k_antenna_source_spectrum(
+            compute_nonuniform_k_antenna_source_spectrum_interruptible(
                 request,
                 &sampled.field_xyz_apm_per_a,
                 equilibrium_samples,
+                interrupt_requested,
             )?
         }
     };
+    check_spectrum_interrupt(interrupt_requested)?;
     let (transform, fourier_realization) = spectrum_transform_metadata(&request.transform);
     let sampling = AntennaSpectrumSamplingMetadata {
         schema_version: "antenna_spectrum_sampling.v1".into(),
@@ -1024,6 +1126,384 @@ pub fn antenna_source_spectrum_auxiliary_artifacts(
     Ok(artifacts)
 }
 
+pub fn verify_antenna_source_spectrum_auxiliary_artifacts(
+    artifacts: &[AuxiliaryArtifact],
+) -> Result<(), RunError> {
+    let manifests = artifacts
+        .iter()
+        .filter(|artifact| artifact.relative_path.ends_with("/spectrum.v2.json"))
+        .collect::<Vec<_>>();
+    if manifests.len() != 1 || artifacts.len() != 5 {
+        return Err(error("antenna source-spectrum requires one manifest and four payloads"));
+    }
+    let mut canonical: serde_json::Value = serde_json::from_slice(&manifests[0].bytes)
+        .map_err(|cause| error(format!("parse antenna source-spectrum manifest: {cause}")))?;
+    let published_digest = canonical
+        .as_object_mut()
+        .and_then(|object| object.remove("content_digest"))
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| error("antenna source-spectrum manifest has no content_digest"))?;
+    let canonical_bytes = serde_json::to_vec(&canonical)
+        .map_err(|cause| error(format!("canonicalize antenna source-spectrum manifest: {cause}")))?;
+    if sha256_bytes(&canonical_bytes) != published_digest {
+        return Err(error("antenna source-spectrum manifest content_digest mismatch"));
+    }
+    canonical["content_digest"] = serde_json::Value::String(published_digest);
+    let manifest: AntennaSourceSpectrumManifest = serde_json::from_value(canonical)
+        .map_err(|cause| error(format!("validate antenna source-spectrum manifest: {cause}")))?;
+    if manifest.schema_version != "antenna_source_spectrum_artifact.v2"
+        || manifests[0].relative_path
+            != format!("antenna/source_spectra/{}/spectrum.v2.json", manifest.output_id)
+    {
+        return Err(error("antenna source-spectrum manifest identity mismatch"));
+    }
+    validate_antenna_source_spectrum_manifest_semantics(&manifest)?;
+    let references = [
+        &manifest.payloads.k_u_rad_per_m,
+        &manifest.payloads.k_v_rad_per_m,
+        &manifest.payloads.amplitudes_re_im,
+        &manifest.payloads.power,
+    ];
+    let mut paths = std::collections::BTreeSet::new();
+    for reference in references {
+        if !paths.insert(reference.path.as_str()) || reference.scalar_type != "float64_le" {
+            return Err(error("antenna source-spectrum payload identity is invalid"));
+        }
+        let payloads = artifacts
+            .iter()
+            .filter(|artifact| artifact.relative_path == reference.path)
+            .collect::<Vec<_>>();
+        let expected_len = reference.value_count.checked_mul(8)
+            .ok_or_else(|| error("antenna source-spectrum payload byte count overflows"))?;
+        if payloads.len() != 1
+            || payloads[0].bytes.len() != expected_len
+            || sha256_bytes(&payloads[0].bytes) != reference.sha256
+        {
+            return Err(error(format!(
+                "antenna source-spectrum payload '{}' length or sha256 mismatch",
+                reference.path
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate the thin v2 manifest independently of its binary payload bytes.
+/// Used at both publication and API read boundaries; payload hashes are
+/// checked separately by those callers.
+pub fn validate_antenna_source_spectrum_manifest_semantics(
+    manifest: &AntennaSourceSpectrumManifest,
+) -> Result<(), RunError> {
+    let spectrum = &manifest.spectrum;
+    let component_labels = match spectrum.component.as_str() {
+        "vector_power" => vec!["x", "y", "z"],
+        "x" | "y" | "z" | "u" | "v" | "normal" => vec![spectrum.component.as_str()],
+        _ => return Err(error("antenna source-spectrum manifest component is unsupported")),
+    };
+    let amplitude_unit = match spectrum.normalization.as_str() {
+        "integral_si" => "A*m/A",
+        "unitary_discrete" => "A/m/A",
+        _ => return Err(error("antenna source-spectrum manifest normalization is unsupported")),
+    };
+    let bin_count = spectrum.k_u_count.checked_mul(spectrum.k_v_count)
+        .ok_or_else(|| error("antenna source-spectrum grid size overflows"))?;
+    let amplitude_count = bin_count.checked_mul(component_labels.len())
+        .ok_or_else(|| error("antenna source-spectrum amplitude count overflows"))?;
+    let complex_scalar_count = amplitude_count.checked_mul(2)
+        .ok_or_else(|| error("antenna source-spectrum complex scalar count overflows"))?;
+    let window = match manifest.sampling.window.as_str() {
+        "rectangular" => AntennaSpectrumWindowIR::Rectangular,
+        "hann" => AntennaSpectrumWindowIR::Hann,
+        "hamming" => AntennaSpectrumWindowIR::Hamming,
+        "blackman" => AntennaSpectrumWindowIR::Blackman,
+        _ => return Err(error("antenna source-spectrum manifest window is unsupported")),
+    };
+    let sampling = &manifest.sampling;
+    let expected_realization = match sampling.transform.as_str() {
+        "spatial_fft" => "structured_fft_rustfft_centered_v1",
+        "nonuniform_spatial_fft" => "direct_nonuniform_dft_centered_v1",
+        _ => return Err(error("antenna source-spectrum manifest transform is unsupported")),
+    };
+    let sampling_count = (sampling.sample_count_u as usize)
+        .checked_mul(sampling.sample_count_v as usize)
+        .ok_or_else(|| error("antenna source-spectrum sampling count overflows"))?;
+    let finite_frame = sampling.origin_m.iter().chain(&sampling.axis_u)
+        .chain(&sampling.axis_v).all(|value| value.is_finite());
+    let norm_u = sampling.axis_u.iter().map(|value| value * value).sum::<f64>();
+    let norm_v = sampling.axis_v.iter().map(|value| value * value).sum::<f64>();
+    let dot_uv = sampling.axis_u.iter().zip(&sampling.axis_v)
+        .map(|(u, v)| u * v).sum::<f64>();
+    if sampling.schema_version != "antenna_spectrum_sampling.v1"
+        || sampling.solution_id != manifest.solution_id
+        || sampling.source_object_id != manifest.source_object_id
+        || sampling.port_mode_id != manifest.port_mode_id
+        || sampling.fourier_realization != expected_realization
+        || sampling.fourier_phase_convention != "centered_plane_origin_phase_corrected.v1"
+        || sampling.interpolation != "fem_element"
+        || !sampling.extent_u_m.is_finite()
+        || !sampling.extent_v_m.is_finite()
+        || sampling.extent_u_m <= 0.0
+        || sampling.extent_v_m <= 0.0
+        || !finite_frame
+        || (norm_u - 1.0).abs() > 1.0e-12
+        || (norm_v - 1.0).abs() > 1.0e-12
+        || dot_uv.abs() > 1.0e-12
+        || sampling.source_sample_count == 0
+        || sampling.mapping_digest.is_empty()
+        || sampling.fourier_origin_uv_m != [-0.5 * sampling.extent_u_m, -0.5 * sampling.extent_v_m]
+        || !matches!(sampling.realization.as_str(), "fem_p1_interpolation_v1" | "identity_coordinates_v1")
+        || !matches!(sampling.outside_policy.as_str(), "error" | "zero")
+        || sampling.outside_count > sampling_count
+    {
+        return Err(error("antenna source-spectrum sampling provenance is incompatible"));
+    }
+    let (coherent_gain, equivalent_noise_bandwidth_bins) = analytic_window_metrics(
+        &window,
+        manifest.sampling.sample_count_u as usize,
+        manifest.sampling.sample_count_v as usize,
+    )?;
+    let base = format!("antenna/source_spectra/{}", manifest.output_id);
+    if manifest.schema_version != "antenna_source_spectrum_artifact.v2"
+        || spectrum.schema_version != "antenna_source_spectrum.v1"
+        || spectrum.k_u_count == 0
+        || spectrum.k_v_count == 0
+        || (sampling.transform == "spatial_fft"
+            && (spectrum.k_u_count != sampling.sample_count_u as usize
+                || spectrum.k_v_count != sampling.sample_count_v as usize))
+        || spectrum.request_id != manifest.request_id
+        || spectrum.output_id != manifest.output_id
+        || spectrum.component_labels != component_labels
+        || spectrum.amplitude_count != amplitude_count
+        || spectrum.power_count != bin_count
+        || spectrum.amplitude_unit != amplitude_unit
+        || spectrum.wave_vector_unit != "rad/m"
+        || !window_metric_matches(spectrum.coherent_gain, coherent_gain)
+        || !window_metric_matches(spectrum.equivalent_noise_bandwidth_bins, equivalent_noise_bandwidth_bins)
+        || manifest.payloads.k_u_rad_per_m.value_count != spectrum.k_u_count
+        || manifest.payloads.k_v_rad_per_m.value_count != spectrum.k_v_count
+        || manifest.payloads.amplitudes_re_im.value_count != complex_scalar_count
+        || manifest.payloads.power.value_count != bin_count
+        || manifest.payloads.k_u_rad_per_m.path != format!("{base}/k_u_rad_per_m.f64le")
+        || manifest.payloads.k_v_rad_per_m.path != format!("{base}/k_v_rad_per_m.f64le")
+        || manifest.payloads.amplitudes_re_im.path != format!("{base}/amplitudes_re_im.f64le")
+        || manifest.payloads.power.path != format!("{base}/power.f64le")
+        || manifest.payloads.k_u_rad_per_m.layout != "axis_u_1d"
+        || manifest.payloads.k_v_rad_per_m.layout != "axis_v_1d"
+        || manifest.payloads.amplitudes_re_im.layout != "component_kv_ku_complex_re_im"
+        || manifest.payloads.power.layout != "kv_ku_power"
+        || manifest.payloads.k_u_rad_per_m.unit != "rad/m"
+        || manifest.payloads.k_v_rad_per_m.unit != "rad/m"
+        || manifest.payloads.amplitudes_re_im.unit != amplitude_unit
+        || manifest.payloads.power.unit != format!("({amplitude_unit})^2")
+    {
+        return Err(error("antenna source-spectrum manifest shape or unit is incompatible"));
+    }
+    Ok(())
+}
+
+pub fn reusable_antenna_source_spectrum_output(
+    output_dir: &Path,
+    request: &AntennaSpectrumRequestIR,
+    solution_id: &str,
+    source_object_id: &str,
+    port_mode_id: &str,
+    solution_content_digest: &str,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<bool, RunError> {
+    check_spectrum_interrupt(interrupt_requested)?;
+    if !output_dir.exists() {
+        return Ok(false);
+    }
+    if !output_dir.is_dir() {
+        return Err(error("antenna source-spectrum output exists as a non-directory"));
+    }
+    let manifest_bytes = std::fs::read(output_dir.join("spectrum.v2.json"))
+        .map_err(|cause| error(format!("read cached antenna spectrum manifest: {cause}")))?;
+    let mut canonical: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+        .map_err(|cause| error(format!("parse cached antenna spectrum manifest: {cause}")))?;
+    let published_digest = canonical
+        .as_object_mut()
+        .and_then(|object| object.remove("content_digest"))
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| error("cached antenna spectrum manifest has no content_digest"))?;
+    let canonical_bytes = serde_json::to_vec(&canonical)
+        .map_err(|cause| error(format!("canonicalize cached antenna spectrum manifest: {cause}")))?;
+    if published_digest != sha256_bytes(&canonical_bytes) {
+        return Err(error("cached antenna spectrum manifest content_digest mismatch"));
+    }
+    canonical["content_digest"] = serde_json::Value::String(published_digest);
+    let manifest: AntennaSourceSpectrumManifest = serde_json::from_value(canonical)
+        .map_err(|cause| error(format!("validate cached antenna spectrum manifest: {cause}")))?;
+    let (transform, realization) = spectrum_transform_metadata(&request.transform);
+    let normalization = match request.normalization {
+        AntennaSpectrumNormalizationIR::IntegralSi => "integral_si",
+        AntennaSpectrumNormalizationIR::UnitaryDiscrete => "unitary_discrete",
+    };
+    let outside_policy = match request.sampling_plane.outside_policy {
+        fullmag_ir::AntennaSpectrumOutsidePolicyIR::Error => "error",
+        fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero => "zero",
+    };
+    let sampling = &manifest.sampling;
+    if request.component == "transverse"
+        || request.equilibrium_ref.is_some()
+        || request.mode_basis_ref.is_some()
+        || manifest.schema_version != "antenna_source_spectrum_artifact.v2"
+        || manifest.request_id != request.id
+        || manifest.output_id != request.output_id
+        || manifest.solution_id != solution_id
+        || manifest.source_object_id != source_object_id
+        || manifest.port_mode_id != port_mode_id
+        || manifest.solution_content_digest != solution_content_digest
+        || sampling.target != request.target
+        || sampling.origin_m != request.sampling_plane.origin_m
+        || sampling.axis_u != request.sampling_plane.axis_u
+        || sampling.axis_v != request.sampling_plane.axis_v
+        || sampling.extent_u_m != request.sampling_plane.extent_u_m
+        || sampling.extent_v_m != request.sampling_plane.extent_v_m
+        || sampling.sample_count_u != request.sampling_plane.sample_count_u
+        || sampling.sample_count_v != request.sampling_plane.sample_count_v
+        || sampling.interpolation != request.sampling_plane.interpolation
+        || sampling.outside_policy != outside_policy
+        || sampling.transform != transform
+        || sampling.window != spectrum_window_name(&request.window)
+        || sampling.fourier_realization != realization
+        || sampling.fourier_phase_convention != "centered_plane_origin_phase_corrected.v1"
+        || sampling.fourier_origin_uv_m != [
+            -0.5 * request.sampling_plane.extent_u_m,
+            -0.5 * request.sampling_plane.extent_v_m,
+        ]
+        || manifest.spectrum.component != request.component
+        || manifest.spectrum.normalization != normalization
+        || manifest.spectrum.schema_version != "antenna_source_spectrum.v1"
+        || sampling.schema_version != "antenna_spectrum_sampling.v1"
+        || !matches!(sampling.realization.as_str(), "fem_p1_interpolation_v1" | "identity_coordinates_v1")
+    {
+        return Err(error("cached antenna spectrum output has different analysis inputs"));
+    }
+    let expected_samples = (request.sampling_plane.sample_count_u as usize)
+        .checked_mul(request.sampling_plane.sample_count_v as usize)
+        .ok_or_else(|| error("cached antenna spectrum sample count overflows"))?;
+    let lattice = validated_uniform_plane_lattice(request, expected_samples)?;
+    let (coherent_gain, equivalent_noise_bandwidth_bins) =
+        analytic_window_metrics(&request.window, lattice.count_u, lattice.count_v)?;
+    if !window_metric_matches(manifest.spectrum.coherent_gain, coherent_gain)
+        || !window_metric_matches(
+            manifest.spectrum.equivalent_noise_bandwidth_bins,
+            equivalent_noise_bandwidth_bins,
+        )
+    {
+        return Err(error("cached antenna spectrum window metrics are incompatible"));
+    }
+    let (k_u, k_v) = match request.transform {
+        AntennaSpectrumTransformIR::SpatialFft => {
+            (
+                fft_frequencies(lattice.count_u, lattice.spacing_u),
+                fft_frequencies(lattice.count_v, lattice.spacing_v),
+            )
+        }
+        AntennaSpectrumTransformIR::NonuniformSpatialFft => {
+            let (grid, _) = validated_nonuniform_k_grid(request)?;
+            (grid.k_u_rad_per_m.clone(), grid.k_v_rad_per_m.clone())
+        }
+    };
+    if manifest.payloads.k_u_rad_per_m.sha256 != sha256_bytes(&encode_f64_le(k_u.iter().copied()))
+        || manifest.payloads.k_v_rad_per_m.sha256 != sha256_bytes(&encode_f64_le(k_v.iter().copied()))
+        || manifest.spectrum.k_u_count != k_u.len()
+        || manifest.spectrum.k_v_count != k_v.len()
+    {
+        return Err(error("cached antenna spectrum output has a different wave-vector grid"));
+    }
+    let sample_count = k_u.len().checked_mul(k_v.len())
+        .ok_or_else(|| error("cached antenna spectrum grid size overflows"))?;
+    let component_labels = match request.component.as_str() {
+        "vector_power" => vec!["x", "y", "z"],
+        "x" | "y" | "z" | "u" | "v" | "normal" => vec![request.component.as_str()],
+        _ => return Err(error("cached antenna spectrum component is unsupported")),
+    };
+    let amplitude_count = sample_count.checked_mul(component_labels.len())
+        .ok_or_else(|| error("cached antenna spectrum amplitude count overflows"))?;
+    let amplitude_scalar_count = amplitude_count.checked_mul(2)
+        .ok_or_else(|| error("cached antenna spectrum complex scalar count overflows"))?;
+    let amplitude_unit = match request.normalization {
+        AntennaSpectrumNormalizationIR::IntegralSi => "A*m/A",
+        AntennaSpectrumNormalizationIR::UnitaryDiscrete => "A/m/A",
+    };
+    if manifest.spectrum.power_count != sample_count
+        || manifest.spectrum.amplitude_count != amplitude_count
+        || manifest.spectrum.component_labels != component_labels
+        || manifest.spectrum.amplitude_unit != amplitude_unit
+        || manifest.spectrum.wave_vector_unit != "rad/m"
+        || manifest.payloads.k_u_rad_per_m.layout != "axis_u_1d"
+        || manifest.payloads.k_v_rad_per_m.layout != "axis_v_1d"
+        || manifest.payloads.amplitudes_re_im.layout != "component_kv_ku_complex_re_im"
+        || manifest.payloads.power.layout != "kv_ku_power"
+        || manifest.payloads.k_u_rad_per_m.unit != "rad/m"
+        || manifest.payloads.k_v_rad_per_m.unit != "rad/m"
+        || manifest.payloads.amplitudes_re_im.unit != amplitude_unit
+        || manifest.payloads.power.unit != format!("({amplitude_unit})^2")
+        || manifest.payloads.k_u_rad_per_m.value_count != k_u.len()
+        || manifest.payloads.k_v_rad_per_m.value_count != k_v.len()
+        || manifest.payloads.amplitudes_re_im.value_count != amplitude_scalar_count
+        || manifest.payloads.power.value_count != sample_count
+    {
+        return Err(error("cached antenna spectrum payload shape or unit is incompatible"));
+    }
+    let base = format!("antenna/source_spectra/{}", request.output_id);
+    let references = [
+        (&manifest.payloads.k_u_rad_per_m, "k_u_rad_per_m.f64le"),
+        (&manifest.payloads.k_v_rad_per_m, "k_v_rad_per_m.f64le"),
+        (&manifest.payloads.amplitudes_re_im, "amplitudes_re_im.f64le"),
+        (&manifest.payloads.power, "power.f64le"),
+    ];
+    let expected_files = [
+        "spectrum.v2.json",
+        "k_u_rad_per_m.f64le",
+        "k_v_rad_per_m.f64le",
+        "amplitudes_re_im.f64le",
+        "power.f64le",
+    ].into_iter().map(str::to_owned).collect::<std::collections::BTreeSet<_>>();
+    let actual_files = std::fs::read_dir(output_dir)
+        .map_err(|cause| error(format!("list cached antenna spectrum output: {cause}")))?
+        .map(|entry| {
+            let entry = entry.map_err(|cause| error(format!("list cached antenna spectrum file: {cause}")))?;
+            if !entry.file_type().map_err(|cause| error(format!("inspect cached antenna spectrum file: {cause}")))?.is_file() {
+                return Err(error("cached antenna spectrum output contains a non-file entry"));
+            }
+            entry.file_name().into_string().map_err(|_| error("cached antenna spectrum file name is not UTF-8"))
+        })
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    if actual_files != expected_files {
+        return Err(error("cached antenna spectrum output has a different file set"));
+    }
+    let mut buffer = [0_u8; 64 * 1024];
+    for (reference, filename) in references {
+        check_spectrum_interrupt(interrupt_requested)?;
+        if reference.path != format!("{base}/{filename}") || reference.scalar_type != "float64_le" {
+            return Err(error("cached antenna spectrum payload identity mismatch"));
+        }
+        let mut file = std::fs::File::open(output_dir.join(filename))
+            .map_err(|cause| error(format!("open cached antenna spectrum payload: {cause}")))?;
+        let mut digest = Sha256::new();
+        let mut byte_count = 0_usize;
+        loop {
+            check_spectrum_interrupt(interrupt_requested)?;
+            let count = file.read(&mut buffer)
+                .map_err(|cause| error(format!("read cached antenna spectrum payload: {cause}")))?;
+            if count == 0 { break; }
+            byte_count = byte_count.checked_add(count)
+                .ok_or_else(|| error("cached antenna spectrum payload byte count overflows"))?;
+            digest.update(&buffer[..count]);
+        }
+        if Some(byte_count) != reference.value_count.checked_mul(8)
+            || format!("sha256:{:x}", digest.finalize()) != reference.sha256
+        {
+            return Err(error(format!("cached antenna spectrum payload '{filename}' length or sha256 mismatch")));
+        }
+    }
+    check_spectrum_interrupt(interrupt_requested)?;
+    Ok(true)
+}
+
 /// Convert a source-spectrum result into its JSON manifest only. Kept as a
 /// compatibility helper for callers that publish auxiliary artifacts one at a
 /// time; new workflows should use [`antenna_source_spectrum_auxiliary_artifacts`].
@@ -1054,6 +1534,80 @@ fn window_values(kind: &AntennaSpectrumWindowIR, count: usize) -> Vec<f64> {
             }
         })
         .collect()
+}
+
+fn analytic_window_metrics(
+    window: &AntennaSpectrumWindowIR,
+    count_u: usize,
+    count_v: usize,
+) -> Result<(f64, f64), RunError> {
+    let sample_count = count_u.checked_mul(count_v)
+        .ok_or_else(|| error("antenna spectrum window sample count overflows"))?;
+    if count_u < 2 || count_v < 2 || sample_count > MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT {
+        return Err(error("antenna spectrum window grid size is unsupported"));
+    }
+    let (a0, a1, a2) = match window {
+        AntennaSpectrumWindowIR::Rectangular => (1.0, 0.0, 0.0),
+        AntennaSpectrumWindowIR::Hann => (0.5, -0.5, 0.0),
+        AntennaSpectrumWindowIR::Hamming => (0.54, -0.46, 0.0),
+        AntennaSpectrumWindowIR::Blackman => (0.42, -0.5, 0.08),
+    };
+    let axis_sums = |count: usize| {
+        let harmonic_sum = |harmonic: usize| {
+            if harmonic % (count - 1) == 0 { count as f64 } else { 1.0 }
+        };
+        let sum = a0 * count as f64 + a1 * harmonic_sum(1) + a2 * harmonic_sum(2);
+        let square = (a0 * a0 + 0.5 * (a1 * a1 + a2 * a2)) * count as f64
+            + (2.0 * a0 * a1 + a1 * a2) * harmonic_sum(1)
+            + (2.0 * a0 * a2 + 0.5 * a1 * a1) * harmonic_sum(2)
+            + a1 * a2 * harmonic_sum(3)
+            + 0.5 * a2 * a2 * harmonic_sum(4);
+        (sum, square)
+    };
+    let (sum_u, square_u) = axis_sums(count_u);
+    let (sum_v, square_v) = axis_sums(count_v);
+    let sum = sum_u * sum_v;
+    if !sum.is_finite() || sum.abs() <= f64::EPSILON {
+        return Err(error("antenna spectrum window has zero coherent gain"));
+    }
+    let coherent_gain = sum / sample_count as f64;
+    let equivalent_noise_bandwidth_bins =
+        sample_count as f64 * square_u * square_v / (sum * sum);
+    if !equivalent_noise_bandwidth_bins.is_finite() {
+        return Err(error("antenna spectrum window has non-finite noise bandwidth"));
+    }
+    Ok((coherent_gain, equivalent_noise_bandwidth_bins))
+}
+
+fn window_metric_matches(actual: f64, expected: f64) -> bool {
+    actual.is_finite() && (actual - expected).abs() <= 1.0e-10 * expected.abs().max(1.0)
+}
+
+fn spectrum_window_metrics(
+    window: &AntennaSpectrumWindowIR,
+    count_u: usize,
+    count_v: usize,
+) -> Result<(Vec<f64>, Vec<f64>, f64, f64), RunError> {
+    let sample_count = count_u.checked_mul(count_v)
+        .ok_or_else(|| error("antenna spectrum window sample count overflows"))?;
+    if count_u < 2 || count_v < 2 || sample_count > MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT {
+        return Err(error("antenna spectrum window grid size is unsupported"));
+    }
+    let window_u = window_values(window, count_u);
+    let window_v = window_values(window, count_v);
+    let window_sum = window_u.iter().sum::<f64>() * window_v.iter().sum::<f64>();
+    let window_square_sum = window_u.iter().map(|value| value * value).sum::<f64>()
+        * window_v.iter().map(|value| value * value).sum::<f64>();
+    if !window_sum.is_finite() || window_sum.abs() <= f64::EPSILON {
+        return Err(error("antenna spectrum window has zero coherent gain"));
+    }
+    let coherent_gain = window_sum / sample_count as f64;
+    let equivalent_noise_bandwidth_bins =
+        sample_count as f64 * window_square_sum / (window_sum * window_sum);
+    if !equivalent_noise_bandwidth_bins.is_finite() {
+        return Err(error("antenna spectrum window has non-finite noise bandwidth"));
+    }
+    Ok((window_u, window_v, coherent_gain, equivalent_noise_bandwidth_bins))
 }
 
 fn fft_frequencies(count: usize, spacing_m: f64) -> Vec<f64> {
@@ -1133,15 +1687,22 @@ fn selected_components(
     }
 }
 
-fn fft2_in_place(values: &mut [Complex64], count_u: usize, count_v: usize) {
+fn fft2_in_place(
+    values: &mut [Complex64],
+    count_u: usize,
+    count_v: usize,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<(), RunError> {
     let mut planner = FftPlanner::<f64>::new();
     let fft_u = planner.plan_fft_forward(count_u);
     for row in values.chunks_exact_mut(count_u) {
+        check_spectrum_interrupt(interrupt_requested)?;
         fft_u.process(row);
     }
     let fft_v = planner.plan_fft_forward(count_v);
     let mut column = vec![Complex64::new(0.0, 0.0); count_v];
     for u in 0..count_u {
+        check_spectrum_interrupt(interrupt_requested)?;
         for v in 0..count_v {
             column[v] = values[v * count_u + u];
         }
@@ -1150,6 +1711,7 @@ fn fft2_in_place(values: &mut [Complex64], count_u: usize, count_v: usize) {
             values[v * count_u + u] = column[v];
         }
     }
+    Ok(())
 }
 
 fn centered_origin_phase(k_u: f64, k_v: f64, extent_u_m: f64, extent_v_m: f64) -> Complex64 {
@@ -1274,6 +1836,21 @@ pub fn compute_structured_antenna_source_spectrum(
     field_samples_apm_per_a: &[[f64; 3]],
     equilibrium_samples: Option<&[[f64; 3]]>,
 ) -> Result<AntennaSourceSpectrum2D, RunError> {
+    compute_structured_antenna_source_spectrum_interruptible(
+        request,
+        field_samples_apm_per_a,
+        equilibrium_samples,
+        None,
+    )
+}
+
+fn compute_structured_antenna_source_spectrum_interruptible(
+    request: &AntennaSpectrumRequestIR,
+    field_samples_apm_per_a: &[[f64; 3]],
+    equilibrium_samples: Option<&[[f64; 3]]>,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<AntennaSourceSpectrum2D, RunError> {
+    check_spectrum_interrupt(interrupt_requested)?;
     if request.transform != AntennaSpectrumTransformIR::SpatialFft {
         return Err(error(
             "structured antenna FFT kernel requires transform='spatial_fft'",
@@ -1294,17 +1871,8 @@ pub fn compute_structured_antenna_source_spectrum(
         spacing_u,
         spacing_v,
     } = lattice;
-    let window_u = window_values(&request.window, count_u);
-    let window_v = window_values(&request.window, count_v);
-    let window_sum = window_u.iter().sum::<f64>() * window_v.iter().sum::<f64>();
-    let window_square_sum = window_u.iter().map(|value| value * value).sum::<f64>()
-        * window_v.iter().map(|value| value * value).sum::<f64>();
-    if !window_sum.is_finite() || window_sum.abs() <= f64::EPSILON {
-        return Err(error("antenna spectrum window has zero coherent gain"));
-    }
-    let coherent_gain = window_sum / sample_count as f64;
-    let equivalent_noise_bandwidth_bins =
-        sample_count as f64 * window_square_sum / (window_sum * window_sum);
+    let (window_u, window_v, coherent_gain, equivalent_noise_bandwidth_bins) =
+        spectrum_window_metrics(&request.window, count_u, count_v)?;
     let scale = match request.normalization {
         AntennaSpectrumNormalizationIR::IntegralSi => spacing_u * spacing_v,
         AntennaSpectrumNormalizationIR::UnitaryDiscrete => 1.0 / (sample_count as f64).sqrt(),
@@ -1316,6 +1884,7 @@ pub fn compute_structured_antenna_source_spectrum(
     let mut amplitudes = Vec::with_capacity(components.len() * sample_count);
     let mut power = vec![0.0; sample_count];
     for component in components {
+        check_spectrum_interrupt(interrupt_requested)?;
         let mut transformed = component
             .into_iter()
             .enumerate()
@@ -1325,7 +1894,8 @@ pub fn compute_structured_antenna_source_spectrum(
                 Complex64::new(value * window_u[u] * window_v[v], 0.0)
             })
             .collect::<Vec<_>>();
-        fft2_in_place(&mut transformed, count_u, count_v);
+        fft2_in_place(&mut transformed, count_u, count_v, interrupt_requested)?;
+        check_spectrum_interrupt(interrupt_requested)?;
         for (index, value) in transformed.into_iter().enumerate() {
             let u = index % count_u;
             let v = index / count_u;
@@ -1337,7 +1907,13 @@ pub fn compute_structured_antenna_source_spectrum(
                     request.sampling_plane.extent_v_m,
                 )
                 * scale;
+            if !value.re.is_finite() || !value.im.is_finite() {
+                return Err(error("antenna structured spectrum produced a non-finite amplitude"));
+            }
             power[index] += value.norm_sqr();
+            if !power[index].is_finite() {
+                return Err(error("antenna structured spectrum produced non-finite power"));
+            }
             amplitudes.push([value.re, value.im]);
         }
     }
@@ -1374,6 +1950,21 @@ pub fn compute_nonuniform_k_antenna_source_spectrum(
     field_samples_apm_per_a: &[[f64; 3]],
     equilibrium_samples: Option<&[[f64; 3]]>,
 ) -> Result<AntennaSourceSpectrum2D, RunError> {
+    compute_nonuniform_k_antenna_source_spectrum_interruptible(
+        request,
+        field_samples_apm_per_a,
+        equilibrium_samples,
+        None,
+    )
+}
+
+fn compute_nonuniform_k_antenna_source_spectrum_interruptible(
+    request: &AntennaSpectrumRequestIR,
+    field_samples_apm_per_a: &[[f64; 3]],
+    equilibrium_samples: Option<&[[f64; 3]]>,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<AntennaSourceSpectrum2D, RunError> {
+    check_spectrum_interrupt(interrupt_requested)?;
     if request.transform != AntennaSpectrumTransformIR::NonuniformSpatialFft {
         return Err(error(
             "nonuniform-k antenna spectrum kernel requires transform='nonuniform_spatial_fft'",
@@ -1403,17 +1994,8 @@ pub fn compute_nonuniform_k_antenna_source_spectrum(
             "antenna direct nonuniform transform requires {operation_count} sample-k pairs; limit is {MAX_ANTENNA_NONUNIFORM_OPERATION_COUNT}"
         )));
     }
-    let window_u = window_values(&request.window, count_u);
-    let window_v = window_values(&request.window, count_v);
-    let window_sum = window_u.iter().sum::<f64>() * window_v.iter().sum::<f64>();
-    let window_square_sum = window_u.iter().map(|value| value * value).sum::<f64>()
-        * window_v.iter().map(|value| value * value).sum::<f64>();
-    if !window_sum.is_finite() || window_sum.abs() <= f64::EPSILON {
-        return Err(error("antenna spectrum window has zero coherent gain"));
-    }
-    let coherent_gain = window_sum / sample_count as f64;
-    let equivalent_noise_bandwidth_bins =
-        sample_count as f64 * window_square_sum / (window_sum * window_sum);
+    let (window_u, window_v, coherent_gain, equivalent_noise_bandwidth_bins) =
+        spectrum_window_metrics(&request.window, count_u, count_v)?;
     let scale = match request.normalization {
         AntennaSpectrumNormalizationIR::IntegralSi => spacing_u * spacing_v,
         AntennaSpectrumNormalizationIR::UnitaryDiscrete => 1.0 / (sample_count as f64).sqrt(),
@@ -1427,12 +2009,16 @@ pub fn compute_nonuniform_k_antenna_source_spectrum(
             for &k_u in &grid.k_u_rad_per_m {
                 let mut amplitude = Complex64::new(0.0, 0.0);
                 for v in 0..count_v {
+                    check_spectrum_interrupt(interrupt_requested)?;
                     let coordinate_v =
                         -0.5 * request.sampling_plane.extent_v_m + v as f64 * spacing_v;
                     for u in 0..count_u {
                         let coordinate_u =
                             -0.5 * request.sampling_plane.extent_u_m + u as f64 * spacing_u;
                         let phase = -(k_u * coordinate_u + k_v * coordinate_v);
+                        if !phase.is_finite() {
+                            return Err(error("antenna nonuniform spectrum phase is non-finite"));
+                        }
                         amplitude += Complex64::from_polar(
                             component[v * count_u + u] * window_u[u] * window_v[v],
                             phase,
@@ -1440,8 +2026,14 @@ pub fn compute_nonuniform_k_antenna_source_spectrum(
                     }
                 }
                 let amplitude = amplitude * scale;
+                if !amplitude.re.is_finite() || !amplitude.im.is_finite() {
+                    return Err(error("antenna nonuniform spectrum produced a non-finite amplitude"));
+                }
                 let output_index = amplitudes.len() % output_count;
                 power[output_index] += amplitude.norm_sqr();
+                if !power[output_index].is_finite() {
+                    return Err(error("antenna nonuniform spectrum produced non-finite power"));
+                }
                 amplitudes.push([amplitude.re, amplitude.im]);
             }
         }
@@ -1502,6 +2094,35 @@ mod tests {
     }
 
     #[test]
+    fn source_spectrum_kernels_stop_on_interrupt() {
+        let interrupted = AtomicBool::new(true);
+        let field = vec![[2.0, 0.0, 0.0]; 16];
+        let error = compute_structured_antenna_source_spectrum_interruptible(
+            &request("x"),
+            &field,
+            None,
+            Some(&interrupted),
+        )
+        .expect_err("structured FFT must honor cancellation");
+        assert!(error.message.contains("cancelled"));
+
+        let mut nonuniform = request("x");
+        nonuniform.transform = AntennaSpectrumTransformIR::NonuniformSpatialFft;
+        nonuniform.nonuniform_k_grid = Some(fullmag_ir::AntennaSpectrumKGridIR {
+            k_u_rad_per_m: vec![0.0],
+            k_v_rad_per_m: vec![0.0],
+        });
+        let error = compute_nonuniform_k_antenna_source_spectrum_interruptible(
+            &nonuniform,
+            &field,
+            None,
+            Some(&interrupted),
+        )
+        .expect_err("direct k transform must honor cancellation");
+        assert!(error.message.contains("cancelled"));
+    }
+
+    #[test]
     fn constant_field_has_only_the_zero_wave_vector_bin() {
         let field = vec![[2.0, 0.0, 0.0]; 16];
         let result =
@@ -1528,6 +2149,32 @@ mod tests {
     }
 
     #[test]
+    fn published_spectrum_rejects_uncertified_or_ignored_analysis_references() {
+        let mut transverse = request("transverse");
+        transverse.equilibrium_ref = Some("equilibrium_1".into());
+        let samples = solution_samples_for(&transverse);
+        let equilibrium = vec![[0.0, 0.0, 1.0]; 16];
+        let error = compute_antenna_source_spectrum_artifact(
+            &transverse, &samples, Some(&equilibrium),
+        ).unwrap_err();
+        assert!(error.message.contains("verified equilibrium resource loader"));
+
+        let mut cartesian = request("x");
+        cartesian.equilibrium_ref = Some("equilibrium_1".into());
+        let error = compute_antenna_source_spectrum_artifact(
+            &cartesian, &samples, None,
+        ).unwrap_err();
+        assert!(error.message.contains("ignored equilibrium"));
+
+        cartesian.equilibrium_ref = None;
+        cartesian.mode_basis_ref = Some("modes_1".into());
+        let error = compute_antenna_source_spectrum_artifact(
+            &cartesian, &samples, None,
+        ).unwrap_err();
+        assert!(error.message.contains("mode-basis references"));
+    }
+
+    #[test]
     fn direct_nonuniform_k_grid_evaluates_authored_zero_bin() {
         let mut request = request("x");
         request.transform = AntennaSpectrumTransformIR::NonuniformSpatialFft;
@@ -1543,7 +2190,6 @@ mod tests {
 
     #[test]
     fn regular_fft_matches_direct_centered_phase_convention() {
-        let mut structured_request = request("x");
         let field = (0..16)
             .map(|index| {
                 if index == 1 {
@@ -1555,27 +2201,51 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let structured =
-            compute_structured_antenna_source_spectrum(&structured_request, &field, None).unwrap();
+        for window in [
+            AntennaSpectrumWindowIR::Rectangular,
+            AntennaSpectrumWindowIR::Hann,
+            AntennaSpectrumWindowIR::Hamming,
+            AntennaSpectrumWindowIR::Blackman,
+        ] {
+            for normalization in [
+                AntennaSpectrumNormalizationIR::UnitaryDiscrete,
+                AntennaSpectrumNormalizationIR::IntegralSi,
+            ] {
+                let mut structured_request = request("x");
+                structured_request.window = window.clone();
+                structured_request.normalization = normalization.clone();
+                let structured = compute_structured_antenna_source_spectrum(
+                    &structured_request,
+                    &field,
+                    None,
+                )
+                .unwrap();
+                assert!(structured.k_u_rad_per_m.iter().any(|value| *value < 0.0));
+                assert!(structured.k_v_rad_per_m.iter().any(|value| *value < 0.0));
 
-        structured_request.transform = AntennaSpectrumTransformIR::NonuniformSpatialFft;
-        structured_request.nonuniform_k_grid = Some(fullmag_ir::AntennaSpectrumKGridIR {
-            k_u_rad_per_m: structured.k_u_rad_per_m.clone(),
-            k_v_rad_per_m: structured.k_v_rad_per_m.clone(),
-        });
-        let direct =
-            compute_nonuniform_k_antenna_source_spectrum(&structured_request, &field, None)
+                structured_request.transform = AntennaSpectrumTransformIR::NonuniformSpatialFft;
+                structured_request.nonuniform_k_grid = Some(fullmag_ir::AntennaSpectrumKGridIR {
+                    k_u_rad_per_m: structured.k_u_rad_per_m.clone(),
+                    k_v_rad_per_m: structured.k_v_rad_per_m.clone(),
+                });
+                let direct = compute_nonuniform_k_antenna_source_spectrum(
+                    &structured_request,
+                    &field,
+                    None,
+                )
                 .unwrap();
 
-        assert_eq!(structured.k_u_rad_per_m, direct.k_u_rad_per_m);
-        assert_eq!(structured.k_v_rad_per_m, direct.k_v_rad_per_m);
-        for (fft, direct) in structured
-            .amplitudes_re_im
-            .iter()
-            .zip(&direct.amplitudes_re_im)
-        {
-            assert!((fft[0] - direct[0]).abs() < 1.0e-12);
-            assert!((fft[1] - direct[1]).abs() < 1.0e-12);
+                assert_eq!(structured.k_u_rad_per_m, direct.k_u_rad_per_m);
+                assert_eq!(structured.k_v_rad_per_m, direct.k_v_rad_per_m);
+                for (fft, direct) in structured
+                    .amplitudes_re_im
+                    .iter()
+                    .zip(&direct.amplitudes_re_im)
+                {
+                    assert!((fft[0] - direct[0]).abs() < 1.0e-12);
+                    assert!((fft[1] - direct[1]).abs() < 1.0e-12);
+                }
+            }
         }
     }
 
@@ -1606,6 +2276,26 @@ mod tests {
         assert!(error
             .message
             .contains("k grid must contain only finite values"));
+    }
+
+    #[test]
+    fn spectrum_rejects_overflow_from_finite_inputs() {
+        let structured = request("x");
+        let huge_field = vec![[1.0e308, 0.0, 0.0]; 16];
+        let error = compute_structured_antenna_source_spectrum(&structured, &huge_field, None)
+            .expect_err("finite samples must not publish overflowing FFT output");
+        assert!(error.message.contains("non-finite"));
+
+        let mut direct = request("x");
+        direct.transform = AntennaSpectrumTransformIR::NonuniformSpatialFft;
+        direct.nonuniform_k_grid = Some(fullmag_ir::AntennaSpectrumKGridIR {
+            k_u_rad_per_m: vec![1.7e308],
+            k_v_rad_per_m: vec![0.0],
+        });
+        let finite_field = vec![[1.0, 0.0, 0.0]; 16];
+        let error = compute_nonuniform_k_antenna_source_spectrum(&direct, &finite_field, None)
+            .expect_err("finite k must not publish an overflowing phase");
+        assert!(error.message.contains("phase is non-finite"));
     }
 
     fn solution_samples_for(request: &AntennaSpectrumRequestIR) -> AntennaFieldSolutionSamples {
@@ -1656,6 +2346,49 @@ mod tests {
         assert_eq!(sampled.field_xyz_apm_per_a[0][0], 0.0);
         assert_eq!(sampled.field_xyz_apm_per_a[15][0], 15.0);
         assert!(sampled.mapping_digest.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn identity_plane_sampling_distinguishes_micrometre_samples_far_from_origin() {
+        let mut request = request("x");
+        request.sampling_plane.origin_m = [1.0e6, 1.0e6, 0.0];
+        request.sampling_plane.extent_u_m = 3.0e-6;
+        request.sampling_plane.extent_v_m = 3.0e-6;
+        let mut samples = solution_samples_for(&request);
+        samples.sample_positions_xyz_m.reverse();
+        samples.magnetic_field_xyz_apm_per_a.reverse();
+
+        let sampled = sample_antenna_field_on_plane(&request, &samples).unwrap();
+        assert_eq!(sampled.outside_count, 0);
+        for (index, field) in sampled.field_xyz_apm_per_a.iter().enumerate() {
+            assert_eq!(field[0], index as f64);
+        }
+    }
+
+    #[test]
+    fn identity_plane_sampling_ignores_remote_source_samples() {
+        let request = request("x");
+        let mut samples = solution_samples_for(&request);
+        samples.sample_positions_xyz_m.push([1.0e100, 0.0, 0.0]);
+        samples.magnetic_field_xyz_apm_per_a.push([999.0, 0.0, 0.0]);
+
+        let sampled = sample_antenna_field_on_plane(&request, &samples).unwrap();
+        assert_eq!(sampled.outside_count, 0);
+        for (index, field) in sampled.field_xyz_apm_per_a.iter().enumerate() {
+            assert_eq!(field[0], index as f64);
+        }
+    }
+
+    #[test]
+    fn identity_plane_sampling_rejects_spacing_below_coordinate_resolution() {
+        let mut request = request("x");
+        request.sampling_plane.origin_m = [1.0e6, 1.0e6, 0.0];
+        request.sampling_plane.extent_u_m = 3.0e-10;
+        request.sampling_plane.extent_v_m = 3.0e-10;
+        let samples = solution_samples_for(&request);
+
+        let error = sample_antenna_field_on_plane(&request, &samples).unwrap_err();
+        assert!(error.message.contains("spacing is not resolvable"));
     }
 
     #[test]
@@ -1827,6 +2560,96 @@ mod tests {
     }
 
     #[test]
+    fn tetrahedral_index_build_rejects_pending_interrupt() {
+        let positions = [[0.0, 0.0, 0.0]; 4];
+        let cells = [[0, 1, 2, 3]];
+        let interrupted = AtomicBool::new(true);
+        let error = FieldTetraBvh::build_interruptible(
+            &positions,
+            &cells,
+            1.0e-12,
+            Some(&interrupted),
+        )
+        .err()
+        .expect("cancelled index construction must stop before building a tree");
+        assert!(error.message.contains("cancelled"));
+    }
+
+    #[test]
+    fn tetrahedral_carrier_zeroes_only_points_outside_its_cells_not_its_bounds() {
+        let mut request = request("x");
+        request.sampling_plane.origin_m = [0.5, 0.5, 0.1];
+        request.sampling_plane.extent_u_m = 1.0;
+        request.sampling_plane.extent_v_m = 1.0;
+        request.sampling_plane.outside_policy = fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero;
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let samples = AntennaFieldSolutionSamples {
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            port_mode_id: "port".into(),
+            sample_positions_xyz_m: positions,
+            magnetic_field_xyz_apm_per_a: vec![[2.0, 0.0, 0.0]; 4],
+            sample_tet4_cells: Some(vec![[0, 1, 2, 3]]),
+            content_digest: "sha256:solution".into(),
+        };
+
+        let sampled = sample_antenna_field_on_plane(&request, &samples).unwrap();
+        assert_eq!(sampled.field_xyz_apm_per_a[0], [2.0, 0.0, 0.0]);
+        assert_eq!(sampled.field_xyz_apm_per_a[3], [0.0; 3]);
+        assert!(sampled.outside_count > 0);
+
+        request.sampling_plane.outside_policy = fullmag_ir::AntennaSpectrumOutsidePolicyIR::Error;
+        let error = sample_antenna_field_on_plane(&request, &samples).unwrap_err();
+        assert!(error.message.contains("outside the FEM tetrahedral carrier"));
+    }
+
+    #[test]
+    fn degenerate_tetrahedral_carrier_is_not_classified_as_outside() {
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]];
+        let error = FieldTetraBvh::build(&positions, &[[0, 1, 2, 3]], 1.0e-12)
+            .err()
+            .expect("coplanar tet4 must fail before outside-zero classification");
+        assert!(error.message.contains("degenerate tet4"));
+    }
+
+    #[test]
+    fn tetrahedral_sampler_rejects_nonfinite_interpolation_from_finite_values() {
+        let mut request = request("x");
+        request.sampling_plane.origin_m = [-1.0e-11, 0.05 - 1.0e-11, 0.05 - 1.0e-11];
+        request.sampling_plane.axis_u = [0.0, 1.0, 0.0];
+        request.sampling_plane.axis_v = [0.0, 0.0, 1.0];
+        request.sampling_plane.extent_u_m = 0.1;
+        request.sampling_plane.extent_v_m = 0.1;
+        let samples = AntennaFieldSolutionSamples {
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            port_mode_id: "port".into(),
+            sample_positions_xyz_m: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            magnetic_field_xyz_apm_per_a: vec![
+                [f64::MAX, 0.0, 0.0],
+                [0.0; 3],
+                [0.0; 3],
+                [0.0; 3],
+            ],
+            sample_tet4_cells: Some(vec![[0, 1, 2, 3]]),
+            content_digest: "sha256:solution".into(),
+        };
+        let error = sample_antenna_field_on_plane(&request, &samples)
+            .expect_err("finite source values must not yield a non-finite P1 sample");
+        assert!(error.message.contains("P1 interpolation produced a non-finite field"));
+    }
+
+    #[test]
     fn missing_internal_lattice_points_fail_closed_instead_of_becoming_zero() {
         let mut request = request("x");
         request.sampling_plane.outside_policy = fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero;
@@ -1875,6 +2698,7 @@ mod tests {
         let artifact = compute_antenna_source_spectrum_artifact(&request, &samples, None).unwrap();
         assert!(artifact.content_digest.starts_with("sha256:"));
         let artifacts = antenna_source_spectrum_auxiliary_artifacts(&artifact).unwrap();
+        verify_antenna_source_spectrum_auxiliary_artifacts(&artifacts).unwrap();
         assert_eq!(artifacts.len(), 5);
         assert!(artifacts
             .iter()
@@ -1910,6 +2734,134 @@ mod tests {
     }
 
     #[test]
+    fn source_spectrum_verifier_rejects_tampered_manifest_and_payload() {
+        let request = request("x");
+        let samples = solution_samples_for(&request);
+        let artifact = compute_antenna_source_spectrum_artifact(&request, &samples, None).unwrap();
+        let artifacts = antenna_source_spectrum_auxiliary_artifacts(&artifact).unwrap();
+
+        let mut tampered_payload = artifacts.clone();
+        tampered_payload[0].bytes[0] ^= 1;
+        let error = verify_antenna_source_spectrum_auxiliary_artifacts(&tampered_payload)
+            .unwrap_err();
+        assert!(error.message.contains("sha256 mismatch"));
+
+        let mut tampered_manifest = artifacts;
+        let manifest = tampered_manifest.last_mut().unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&manifest.bytes).unwrap();
+        value["sampling"]["window"] = serde_json::json!("hann");
+        manifest.bytes = serde_json::to_vec(&value).unwrap();
+        let error = verify_antenna_source_spectrum_auxiliary_artifacts(&tampered_manifest)
+            .unwrap_err();
+        assert!(error.message.contains("content_digest mismatch"));
+    }
+
+    #[test]
+    fn source_spectrum_verifier_rejects_rehashed_invalid_units_and_shape() {
+        let request = request("x");
+        let samples = solution_samples_for(&request);
+        let artifact = compute_antenna_source_spectrum_artifact(&request, &samples, None).unwrap();
+        let artifacts = antenna_source_spectrum_auxiliary_artifacts(&artifact).unwrap();
+        for (path, replacement, expected_error) in [
+            ("/payloads/power/unit", serde_json::json!("wrong"), "shape or unit"),
+            ("/spectrum/amplitude_count", serde_json::json!(999), "shape or unit"),
+            ("/spectrum/coherent_gain", serde_json::json!(0.123), "shape or unit"),
+            ("/sampling/fourier_phase_convention", serde_json::json!("wrong"), "sampling provenance"),
+            ("/sampling/axis_u", serde_json::json!([2.0, 0.0, 0.0]), "sampling provenance"),
+            ("/sampling/source_sample_count", serde_json::json!(0), "sampling provenance"),
+            ("/sampling/mapping_digest", serde_json::json!(""), "sampling provenance"),
+            ("/sampling/interpolation", serde_json::json!("fdm_trilinear"), "sampling provenance"),
+            ("/spectrum/k_u_count", serde_json::json!(0), "shape or unit"),
+        ] {
+            let mut tampered = artifacts.clone();
+            let manifest = tampered.last_mut().unwrap();
+            let mut value: serde_json::Value = serde_json::from_slice(&manifest.bytes).unwrap();
+            *value.pointer_mut(path).unwrap() = replacement;
+            let mut canonical = value.clone();
+            canonical.as_object_mut().unwrap().remove("content_digest");
+            value["content_digest"] =
+                serde_json::json!(sha256_bytes(&serde_json::to_vec(&canonical).unwrap()));
+            manifest.bytes = serde_json::to_vec(&value).unwrap();
+            let error = verify_antenna_source_spectrum_auxiliary_artifacts(&tampered)
+                .unwrap_err();
+            assert!(error.message.contains(expected_error), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn cached_spectrum_reuses_only_matching_verified_analysis() {
+        let request = request("x");
+        let samples = solution_samples_for(&request);
+        let artifact = compute_antenna_source_spectrum_artifact(&request, &samples, None).unwrap();
+        let artifacts = antenna_source_spectrum_auxiliary_artifacts(&artifact).unwrap();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-antenna-spectrum-cache-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&output_dir).unwrap();
+        for artifact in &artifacts {
+            let filename = Path::new(&artifact.relative_path).file_name().unwrap();
+            std::fs::write(output_dir.join(filename), &artifact.bytes).unwrap();
+        }
+        let reuse = |request: &AntennaSpectrumRequestIR| {
+            reusable_antenna_source_spectrum_output(
+                &output_dir,
+                request,
+                &samples.solution_id,
+                &samples.source_object_id,
+                &samples.port_mode_id,
+                &samples.content_digest,
+                None,
+            )
+        };
+        assert!(reuse(&request).unwrap());
+
+        let mut changed_window = request.clone();
+        changed_window.window = AntennaSpectrumWindowIR::Hann;
+        assert!(reuse(&changed_window).unwrap_err().message.contains("different analysis inputs"));
+
+        let mut changed_source = samples.content_digest.clone();
+        changed_source.push('x');
+        let error = reusable_antenna_source_spectrum_output(
+            &output_dir,
+            &request,
+            &samples.solution_id,
+            &samples.source_object_id,
+            &samples.port_mode_id,
+            &changed_source,
+            None,
+        ).unwrap_err();
+        assert!(error.message.contains("different analysis inputs"));
+
+        let manifest_path = output_dir.join("spectrum.v2.json");
+        let mut invalid_gain: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        invalid_gain["spectrum"]["coherent_gain"] = serde_json::json!(0.123);
+        let mut canonical = invalid_gain.clone();
+        canonical.as_object_mut().unwrap().remove("content_digest");
+        invalid_gain["content_digest"] =
+            serde_json::json!(sha256_bytes(&serde_json::to_vec(&canonical).unwrap()));
+        std::fs::write(&manifest_path, serde_json::to_vec(&invalid_gain).unwrap()).unwrap();
+        assert!(reuse(&request).unwrap_err().message.contains("window metrics"));
+        std::fs::write(&manifest_path, &artifacts.last().unwrap().bytes).unwrap();
+
+        let mut invalid_unit: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        invalid_unit["payloads"]["power"]["unit"] = serde_json::json!("wrong");
+        let mut canonical = invalid_unit.clone();
+        canonical.as_object_mut().unwrap().remove("content_digest");
+        invalid_unit["content_digest"] =
+            serde_json::json!(sha256_bytes(&serde_json::to_vec(&canonical).unwrap()));
+        std::fs::write(&manifest_path, serde_json::to_vec(&invalid_unit).unwrap()).unwrap();
+        assert!(reuse(&request).unwrap_err().message.contains("shape or unit"));
+        std::fs::write(&manifest_path, &artifacts.last().unwrap().bytes).unwrap();
+
+        std::fs::write(output_dir.join("power.f64le"), [0_u8; 8]).unwrap();
+        assert!(reuse(&request).unwrap_err().message.contains("sha256 mismatch"));
+        std::fs::remove_dir_all(output_dir).unwrap();
+    }
+
+    #[test]
     fn hann_window_reports_two_dimensional_coherent_gain_and_enbw() {
         let mut request = request("x");
         request.window = AntennaSpectrumWindowIR::Hann;
@@ -1918,6 +2870,30 @@ mod tests {
 
         assert!((result.coherent_gain - 9.0 / 64.0).abs() < 1.0e-14);
         assert!((result.equivalent_noise_bandwidth_bins - 4.0).abs() < 1.0e-14);
+    }
+
+    #[test]
+    fn analytic_window_metrics_match_executed_windows_without_sample_arrays() {
+        for window in [
+            AntennaSpectrumWindowIR::Rectangular,
+            AntennaSpectrumWindowIR::Hann,
+            AntennaSpectrumWindowIR::Hamming,
+            AntennaSpectrumWindowIR::Blackman,
+        ] {
+            for (count_u, count_v) in [(3, 3), (4, 5), (5, 4), (33, 65), (65, 33)] {
+                let (_, _, executed_gain, executed_enbw) =
+                    spectrum_window_metrics(&window, count_u, count_v).unwrap();
+                let (analytic_gain, analytic_enbw) =
+                    analytic_window_metrics(&window, count_u, count_v).unwrap();
+                assert!(window_metric_matches(executed_gain, analytic_gain));
+                assert!(window_metric_matches(executed_enbw, analytic_enbw));
+            }
+        }
+        assert_eq!(
+            analytic_window_metrics(&AntennaSpectrumWindowIR::Rectangular, 5_000_000, 2)
+                .unwrap(),
+            (1.0, 1.0),
+        );
     }
 
     #[test]

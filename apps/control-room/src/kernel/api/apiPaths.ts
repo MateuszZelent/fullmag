@@ -405,8 +405,20 @@ export const DATA_ANTENNA_FIELD_SOLUTION_PATH = openApiV2Path(
   "/v2/sessions/current/data/antenna/field-solutions/{solution_id}",
 );
 
+export const DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/field-solutions/{solution_id}/payloads/{payload_kind}",
+);
+
 export const DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH = openApiV2Path(
   "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog",
+);
+
+export const DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection",
+);
+
+export const DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/payloads/{payload_kind}",
 );
 
 export const DATA_ANTENNA_SOURCE_SPECTRUM_PATH = openApiV2Path(

@@ -305,6 +305,9 @@ function draftWaveform(draft: AntennaObjectDraft): { error: string | null; value
 }
 
 function parseFinite(value: string, label: string): { error: string | null; value: number } {
+  if (value.trim().length === 0) {
+    return { error: `${label} is required.`, value: 0 };
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return { error: `${label} must be finite.`, value: 0 };

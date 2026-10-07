@@ -80,14 +80,18 @@ pub(crate) fn cached_preview_quantities_for(
 
 fn interactive_time_event_schedule(
     drives: &[fullmag_ir::RegionalFieldDriveIR],
+    solved_bases: &[fullmag_ir::ResolvedSolvedAntennaDriveBasisIR],
     stage_start_s: f64,
+    waveform_origin_time_s: f64,
     duration_s: f64,
     output_periods_s: impl IntoIterator<Item = f64>,
 ) -> Vec<f64> {
     let stage_end_s = stage_start_s + duration_s;
-    let mut times = crate::time_events::build_resolved_stage_event_schedule(
+    let mut times = crate::time_events::build_resolved_stage_event_schedule_with_origin(
         drives,
+        solved_bases,
         stage_start_s,
+        waveform_origin_time_s,
         stage_end_s,
         &[],
         crate::schedules::OUTPUT_TIME_TOLERANCE,
@@ -2658,6 +2662,10 @@ impl CpuInteractiveFdmPreviewRuntime {
             quantities,
         );
         let sample_count = self.state.magnetization().len();
+        crate::antenna_fields::validate_fdm_antenna_sample_counts(
+            &self.plan_signature,
+            sample_count,
+        )?;
         self.problem.terms.per_node_field =
             cpu_reference::resolved_per_node_external_field_for_count(
                 &self.plan_signature,
@@ -2795,7 +2803,9 @@ impl CpuInteractiveFdmPreviewRuntime {
             cpu_reference::resolved_regional_field_drives(plan, base_time);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             std::iter::empty(),
         );
@@ -3146,7 +3156,9 @@ impl CpuInteractiveFdmPreviewRuntime {
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             output_periods,
         );
@@ -3556,7 +3568,9 @@ impl CudaInteractiveFdmPreviewRuntime {
         let base_time = self.total_time;
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             std::iter::empty(),
         );
@@ -3925,7 +3939,9 @@ impl CudaInteractiveFdmPreviewRuntime {
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             output_periods,
         );
@@ -4339,7 +4355,9 @@ impl CpuInteractiveFemPreviewRuntime {
         let base_time = self.state.time_seconds;
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             std::iter::empty(),
         );
@@ -4684,7 +4702,9 @@ impl CpuInteractiveFemPreviewRuntime {
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             output_periods,
         );
@@ -5101,10 +5121,15 @@ impl GpuInteractiveFemPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        self.backend.begin_stage(base_time)?;
+        self.backend.begin_stage_with_waveform_origin(
+            base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
+        )?;
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             std::iter::empty(),
         );
@@ -5371,6 +5396,15 @@ impl GpuInteractiveFemPreviewRuntime {
         let mut scalar_schedules = collect_scalar_schedules(outputs)?;
         let mut field_schedules = collect_field_schedules(outputs)?;
         let default_scalar_trace = scalar_schedules.is_empty();
+        let base_step = self.total_steps;
+        let base_time = self.total_time;
+        let waveform_origin_time_s = plan.time_stage.waveform_origin_time_s.unwrap_or(base_time);
+        let split_waveform_clock = waveform_origin_time_s != base_time;
+        if split_waveform_clock {
+            self.backend
+                .begin_stage_with_waveform_origin(base_time, waveform_origin_time_s)?;
+            self.backend.snapshot_step_stats(self.node_count)?;
+        }
         capture_initial_native_fem_runtime_fields(
             &self.backend,
             self.node_count,
@@ -5378,16 +5412,18 @@ impl GpuInteractiveFemPreviewRuntime {
             &mut artifacts,
         )?;
 
-        let base_step = self.total_steps;
-        let base_time = self.total_time;
-        self.backend.begin_stage(base_time)?;
+        if !split_waveform_clock {
+            self.backend.begin_stage(base_time)?;
+        }
         let output_periods = scalar_schedules
             .iter()
             .chain(field_schedules.iter())
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             output_periods,
         );

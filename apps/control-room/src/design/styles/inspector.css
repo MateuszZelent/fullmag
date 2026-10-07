@@ -1016,3 +1016,17 @@
 .fm-antenna-spectrum__status--error {
   color: var(--fm-danger);
 }
+
+.fm-microstrip-station {
+  display: grid;
+  gap: var(--fm-inspector-control-gap);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+}
+
+.fm-microstrip-station-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+}

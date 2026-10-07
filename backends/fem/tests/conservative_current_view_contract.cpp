@@ -1,6 +1,14 @@
 #include "cpu/mfem/transport/conservative_constraint_rank.hpp"
+#include "cpu/mfem/transport/affine_trace_relations.hpp"
 #include "cpu/mfem/transport/conservative_current_view.hpp"
 #include "cpu/mfem/transport/periodic_charge_potential.hpp"
+#include "cpu/mfem/transport/terminal_constrained_rt0_projection.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/charge_current_response.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/charge_control_nullspace_rank.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.hpp"
 
 #include <mfem.hpp>
 
@@ -109,6 +117,57 @@ void require_rejected(Callable &&callable, const std::string &message)
         rejected = true;
     }
     require(rejected, message);
+}
+
+void affine_trace_relations_preserve_independent_jumps_and_reject_cycles()
+{
+    using fullmag::fem::transport::AffineTraceRelation;
+    using fullmag::fem::transport::reduce_affine_trace_relations;
+    const std::vector<AffineTraceRelation> relations{
+        {0, 1, 2.0, "cut-a"}, {1, 2, -0.5, "cut-b"},
+        {0, 2, 1.5, "consistent-cycle"}, {3, 4, -1.0e-4, "small-return"},
+        {2, 2, 0.0, "identity"}};
+    const auto reduction = reduce_affine_trace_relations(6, relations, 1.0e-18, 1.0e-12);
+    require(reduction.reduced_size == 3 &&
+            reduction.full_to_reduced == std::vector<int>({0, 0, 0, 1, 1, 2}),
+        "affine trace quotient merged disconnected or unconstrained dofs");
+    require(reduction.lift_v == std::vector<double>({0.0, 2.0, 1.5, 0.0, -1.0e-4, 0.0}),
+        "affine trace lift lost signed independent jumps");
+    auto permuted = relations;
+    std::reverse(permuted.begin(), permuted.end());
+    const auto reordered = reduce_affine_trace_relations(6, permuted, 1.0e-18, 1.0e-12);
+    require(reordered.full_to_reduced == reduction.full_to_reduced &&
+            reordered.lift_v == reduction.lift_v,
+        "exact affine relations changed under relation permutation");
+    auto inconsistent = relations;
+    inconsistent[2].potential_jump_v = 1.6;
+    require_rejected([&] {
+        reduce_affine_trace_relations(6, inconsistent, 1.0e-18, 1.0e-12);
+    }, "inconsistent affine cycle was accepted");
+    inconsistent = relations;
+    inconsistent.push_back({3, 4, 1.0e-4, "reversed-small-return"});
+    require_rejected([&] {
+        reduce_affine_trace_relations(6, inconsistent, 1.0e-18, 1.0e-12);
+    }, "large component masked an inconsistent small jump");
+    require_rejected([&] {
+        reduce_affine_trace_relations(2, {{1, 1, 1.0, "self-jump"}}, 0.0, 0.0);
+    }, "nonzero self jump was accepted");
+    require_rejected([&] {
+        reduce_affine_trace_relations(3,
+            {{0, 1, 1.0e20, "large"}, {1, 2, 1.0e-4, "unrepresentable-small"}},
+            1.0e-18, 1.0e-12);
+    }, "unrepresentable canonical double lift silently lost a small jump");
+    for (const auto &bad : std::vector<AffineTraceRelation>{
+             {-1, 1, 1.0, "negative"}, {0, 6, 1.0, "out-of-range"},
+             {0, 1, std::numeric_limits<double>::infinity(), "infinite"},
+             {0, 1, 1.0, ""}}) {
+        require_rejected([&] {
+            reduce_affine_trace_relations(6, {bad}, 1.0e-18, 1.0e-12);
+        }, "malformed affine trace relation was accepted");
+    }
+    const auto isolated = reduce_affine_trace_relations(3, {}, 0.0, 0.0);
+    require(isolated.reduced_size == 3 && isolated.lift_v == std::vector<double>(3, 0.0),
+        "empty trace relations fabricated connectivity or voltage");
 }
 
 ConservativeConstraintRankRow rank_row(
@@ -1869,6 +1928,8 @@ void identity_and_source_snapshot_are_immutable()
     ConservativeCurrentView::Ptr view;
     std::vector<CanonicalFaceFluxRecord> before;
     std::string accepted_source_revision;
+    StableMeshVertexIdentities accepted_ids;
+    std::vector<double> accepted_potential;
     {
         auto fixture = periodic_cube_fixture();
         auto ids = stable_vertex_ids(fixture.mesh);
@@ -1878,6 +1939,10 @@ void identity_and_source_snapshot_are_immutable()
             std::shared_ptr<const PeriodicChargePotentialSnapshot>>,
             "periodic potential prerequisite must be immutable by construction");
         view = ConservativeCurrentView::Build(request);
+        accepted_ids = ids;
+        require(view->charge_potential_vertex_values_v() != nullptr,
+            "periodic Build discarded its source charge potential");
+        accepted_potential = *view->charge_potential_vertex_values_v();
         before = records(view);
         accepted_source_revision = view->identity().source_state_revision;
     }
@@ -1888,6 +1953,20 @@ void identity_and_source_snapshot_are_immutable()
     require(view->space().GetMesh() != nullptr &&
             view->space().GetNE() > 0 && view->field().Size() > 0,
         "accepted view did not retain a usable mesh/space/field snapshot");
+    require(view->stable_vertex_identities().version == accepted_ids.version &&
+            view->stable_vertex_identities().local_to_stable ==
+                accepted_ids.local_to_stable,
+        "owned charge potential lost its stable vertex identities");
+    const auto *potential = view->charge_potential_vertex_values_v();
+    require(potential != nullptr && *potential == accepted_potential &&
+            potential->size() == static_cast<std::size_t>(
+                view->space().GetMesh()->GetNV()),
+        "owned charge potential did not survive source destruction");
+    for (int vertex = 0; vertex < view->space().GetMesh()->GetNV(); ++vertex) {
+        const double x = view->space().GetMesh()->GetVertex(vertex)[0];
+        require(std::abs(potential->at(vertex) - (0.5 - x)) <= 1.0e-12,
+            "periodic charge potential differs from its analytic gauge");
+    }
     const auto average = volume_average(view->field());
     require(std::abs(average[0] - 4.0) <= 1.0e-11,
         "owned field became invalid after source fixture destruction");
@@ -2135,6 +2214,15 @@ void validation_fails_closed()
     auto fixture = periodic_cube_fixture();
     const auto ids = stable_vertex_ids(fixture.mesh);
     const auto identity = identity_input();
+
+    auto foreign_vertex_snapshot = periodic_request(fixture, ids, identity);
+    auto foreign_ids = ids;
+    for (auto &id : foreign_ids.local_to_stable) id += 100000;
+    foreign_vertex_snapshot.periodic_charge_potential =
+        periodic_request(fixture, foreign_ids, identity).periodic_charge_potential;
+    require_rejected([&] {
+        (void)ConservativeCurrentView::Build(foreign_vertex_snapshot);
+    }, "OE-T0 accepted charge values with foreign stable vertex identities");
 
     auto stale = periodic_request(fixture, ids, identity);
     stale.pins.required_source_state_revision = "source-r0";
@@ -2427,9 +2515,16 @@ void certified_imported_rt0_is_accepted_and_deep_owned()
         request.pins = pins_for(request.identity);
         request.require_independent_physical_certificate = true;
         imported_view = ConservativeCurrentView::Import(request);
+        require(imported_view->charge_potential_vertex_values_v() == nullptr,
+            "RT0-only import fabricated charge-potential provenance");
     }
     require(imported_view != nullptr && imported_view->balance().closure_complete,
         "finite closed imported RT0 field was not independently certified");
+    require(imported_view->charge_potential_vertex_values_v() == nullptr &&
+            imported_view->stable_vertex_identities().version == ids.version &&
+            imported_view->stable_vertex_identities().local_to_stable ==
+                ids.local_to_stable,
+        "RT0-only import lost stable IDs or fabricated a charge potential");
     require(imported_view->balance().max_element_divergence_a <= 1.0e-12 &&
             imported_view->balance().max_internal_face_jump_a <= 1.0e-12,
         "certified imported RT0 field failed conservation");
@@ -2777,6 +2872,553 @@ ExactPhysicalConstraintOracle assemble_exact_physical_constraint_oracle(
     return oracle;
 }
 
+void charge_trace_workspace_preserves_component_gauges_and_weak_reactions()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTraceSolveRequest;
+    using fullmag::fem::antenna_field_solve::ChargeTraceSolution;
+    using fullmag::fem::antenna_field_solve::solve_charge_trace_workspace;
+    std::shared_ptr<const ChargeTraceSolution> accepted;
+    {
+        auto lower = shifted_unit_cube(0.0, 1);
+        auto upper = shifted_unit_cube(0.0, 1);
+        auto isolated = shifted_unit_cube(0.0, 1);
+        for (int vertex = 0; vertex < upper.GetNV(); ++vertex) upper.GetVertex(vertex)[1] += 2.0;
+        for (int vertex = 0; vertex < isolated.GetNV(); ++vertex) isolated.GetVertex(vertex)[1] += 4.0;
+        const auto pair = combine_disjoint_tetrahedral_meshes(lower, upper);
+        ChargeFixture fixture(combine_disjoint_tetrahedral_meshes(pair, isolated));
+        mfem::H1_FECollection collection(1, 3);
+        mfem::FiniteElementSpace space(&fixture.mesh, &collection);
+        ChargeTraceSolveRequest request;
+        request.mesh = &fixture.mesh;
+        request.conductivity = &fixture.conductivity;
+        request.stable_vertex_identities = coordinate_stable_vertex_ids(fixture.mesh);
+        for (int minus = 0; minus < fixture.mesh.GetNV(); ++minus) {
+            const auto *position = fixture.mesh.GetVertex(minus);
+            if (position[0] != 0.0 || position[1] >= 3.5) continue;
+            for (int plus = 0; plus < fixture.mesh.GetNV(); ++plus) {
+                const auto *peer = fixture.mesh.GetVertex(plus);
+                if (peer[0] != 1.0 || peer[1] != position[1] || peer[2] != position[2]) continue;
+                mfem::Array<int> minus_dofs, plus_dofs;
+                space.GetVertexDofs(minus, minus_dofs);
+                space.GetVertexDofs(plus, plus_dofs);
+                request.trace_relations.push_back({minus_dofs[0], plus_dofs[0],
+                    position[1] < 1.5 ? 2.0 : -1.0e-4,
+                    "component-cut:" + std::to_string(minus)});
+            }
+        }
+        accepted = solve_charge_trace_workspace(request);
+        require(accepted->gauge_vertex_ids.size() == 3 && accepted->component_ids.size() == 3,
+            "charge trace solve did not gauge both driven and isolated components");
+        for (int component = 0; component < 3; ++component) {
+            require(accepted->component_relative_residuals[static_cast<std::size_t>(component)] <= 1.0e-12,
+                "charge trace per-component independent residual failed");
+        }
+        mfem::Array<int> anchor_dofs;
+        // Use the H1 map, not the mesh vertex number, for an explicit voltage anchor.
+        space.GetVertexDofs(0, anchor_dofs);
+        request.potential_anchors.push_back({anchor_dofs[0], 5.0});
+        const auto anchored = solve_charge_trace_workspace(request);
+        require(anchored->gauge_vertex_ids.size() == 2 &&
+                std::abs(anchored->potential_vertex_values_v[0] - 5.0) <= 1.0e-12,
+            "charge trace solve added a gauge to an already anchored component");
+    }
+    std::map<std::uint64_t, std::array<double, 3>> gauge_positions;
+    for (std::size_t vertex = 0; vertex < accepted->vertex_positions_m.size(); ++vertex) {
+        const auto id = accepted->stable_vertex_identities.local_to_stable[vertex];
+        if (std::find(accepted->gauge_vertex_ids.begin(), accepted->gauge_vertex_ids.end(), id) !=
+            accepted->gauge_vertex_ids.end()) gauge_positions[id] = accepted->vertex_positions_m[vertex];
+    }
+    std::array<std::array<double, 2>, 3> outward_currents{};
+    for (std::size_t vertex = 0; vertex < accepted->vertex_positions_m.size(); ++vertex) {
+        const auto position = accepted->vertex_positions_m[vertex];
+        const int component = position[1] < 1.5 ? 0 : position[1] < 3.5 ? 1 : 2;
+        const double jump = component == 0 ? 2.0 : component == 1 ? -1.0e-4 : 0.0;
+        const auto gauge = gauge_positions.at(accepted->vertex_component_ids[vertex]);
+        require(std::abs(accepted->potential_vertex_values_v[vertex] -
+                    jump * (position[0] - gauge[0])) <= 1.0e-10 * std::max(std::abs(jump), 1.0e-12),
+            "owned charge trace potential is not the affine component solution");
+        if (position[0] == 0.0 || position[0] == 1.0) {
+            outward_currents[static_cast<std::size_t>(component)][position[0] == 0.0 ? 0 : 1] -=
+                accepted->reaction_vertex_values_a[vertex];
+        }
+    }
+    for (int component = 0; component < 3; ++component) {
+        const double current = component == 0 ? 8.0 : component == 1 ? -4.0e-4 : 0.0;
+        const double tolerance = std::abs(current) * 1.0e-8 + 1.0e-18;
+        require(std::abs(outward_currents[static_cast<std::size_t>(component)][0] - current) <= tolerance &&
+                std::abs(outward_currents[static_cast<std::size_t>(component)][1] + current) <= tolerance,
+            "charge trace weak reactions lost sign or hid a small component current");
+    }
+}
+
+void charge_trace_workspace_rejects_jumps_lost_after_anchoring()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTraceSolveRequest;
+    using fullmag::fem::antenna_field_solve::solve_charge_trace_workspace;
+    mfem::Mesh mesh(3, 4, 1, 4, 3);
+    const double coordinates[4][3] = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}};
+    for (const auto &position : coordinates) mesh.AddVertex(position);
+    int vertices[4] = {0, 1, 2, 3};
+    mesh.AddTet(vertices, 1);
+    int faces[4][3] = {{0, 2, 1}, {0, 1, 3}, {0, 3, 2}, {1, 2, 3}};
+    for (auto &face : faces) mesh.AddBdrTriangle(face, 1);
+    mesh.FinalizeTetMesh(1, 1, true);
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::ConstantCoefficient conductivity(4.0);
+    ChargeTraceSolveRequest request;
+    request.mesh = &mesh;
+    request.conductivity = &conductivity;
+    request.stable_vertex_identities = coordinate_stable_vertex_ids(mesh);
+    mfem::Array<int> root_dofs;
+    space.GetVertexDofs(0, root_dofs);
+    for (int vertex = 1; vertex < mesh.GetNV(); ++vertex) {
+        mfem::Array<int> dofs;
+        space.GetVertexDofs(vertex, dofs);
+        request.trace_relations.push_back({root_dofs[0], dofs[0],
+            vertex == 1 ? 1.0 : 0.0, "anchored-tet:" + std::to_string(vertex)});
+    }
+    // Every quotient DOF is fixed: there are no free residual rows to catch
+    // loss of the 1 V jump when a large common double offset is added.
+    request.potential_anchors.push_back({root_dofs[0], 0.0});
+    const auto baseline = solve_charge_trace_workspace(request);
+    require(baseline->gauge_vertex_ids.empty() &&
+            baseline->potential_vertex_values_v[0] == 0.0 &&
+            baseline->potential_vertex_values_v[1] == 1.0,
+        "fully anchored trace fixture did not preserve its baseline jump");
+    request.potential_anchors[0].potential_v = 1.0e20;
+    bool rejected = false;
+    try {
+        (void)solve_charge_trace_workspace(request);
+    } catch (const std::runtime_error &error) {
+        rejected = std::string(error.what()).find("lost an authored jump") != std::string::npos;
+    }
+    require(rejected, "charge trace solve accepted an authored jump erased by a large anchor");
+}
+
+void charge_trace_workspace_reuses_owned_operator_after_sources_are_destroyed()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTraceSolveRequest;
+    using fullmag::fem::antenna_field_solve::ChargeTraceWorkspace;
+    using fullmag::fem::antenna_field_solve::ChargeTraceSolution;
+    class CountingConductivity final : public mfem::Coefficient {
+    public:
+        double value = 4.0;
+        int evaluations = 0;
+        double Eval(mfem::ElementTransformation &, const mfem::IntegrationPoint &) override
+        {
+            ++evaluations;
+            return value;
+        }
+    };
+    std::unique_ptr<ChargeTraceWorkspace> workspace;
+    std::shared_ptr<const ChargeTraceSolution> unit_solution;
+    std::vector<double> jumps;
+    {
+        auto mesh = shifted_unit_cube(0.0, 1);
+        CountingConductivity conductivity;
+        mfem::H1_FECollection collection(1, 3);
+        mfem::FiniteElementSpace space(&mesh, &collection);
+        ChargeTraceSolveRequest request;
+        request.mesh = &mesh;
+        request.conductivity = &conductivity;
+        request.stable_vertex_identities = coordinate_stable_vertex_ids(mesh);
+        for (int minus = 0; minus < mesh.GetNV(); ++minus) {
+            const auto *position = mesh.GetVertex(minus);
+            if (position[0] != 0.0) continue;
+            for (int plus = 0; plus < mesh.GetNV(); ++plus) {
+                const auto *peer = mesh.GetVertex(plus);
+                if (peer[0] != 1.0 || peer[1] != position[1] || peer[2] != position[2]) continue;
+                mfem::Array<int> minus_dofs, plus_dofs;
+                space.GetVertexDofs(minus, minus_dofs);
+                space.GetVertexDofs(plus, plus_dofs);
+                request.trace_relations.push_back({minus_dofs[0], plus_dofs[0], 0.0,
+                    "frozen-cut:" + std::to_string(minus)});
+            }
+        }
+        workspace = std::make_unique<ChargeTraceWorkspace>(request);
+        jumps.assign(request.trace_relations.size(), 1.0);
+        const int assembled_evaluations = conductivity.evaluations;
+        require(assembled_evaluations > 0, "charge workspace did not assemble conductivity");
+        conductivity.value = 1000.0;
+        unit_solution = workspace->solve(jumps, {});
+        require(conductivity.evaluations == assembled_evaluations,
+            "charge workspace reread mutated conductivity during a subsequent solve");
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) mesh.GetVertex(vertex)[0] *= 2.0;
+        request.trace_relations.clear();
+        request.stable_vertex_identities.local_to_stable.clear();
+    }
+    std::fill(jumps.begin(), jumps.end(), 2.0);
+    const auto accepted = workspace->solve(jumps, {});
+    require(accepted->vertex_positions_m == unit_solution->vertex_positions_m,
+        "owned charge carrier changed after mutation of the source mesh");
+    double left_outward_current_a = 0.0;
+    double unit_left_outward_current_a = 0.0;
+    for (std::size_t vertex = 0; vertex < accepted->vertex_positions_m.size(); ++vertex) {
+        const double x = accepted->vertex_positions_m[vertex][0];
+        if (x == 0.0) {
+            left_outward_current_a -= accepted->reaction_vertex_values_a[vertex];
+            unit_left_outward_current_a -= unit_solution->reaction_vertex_values_a[vertex];
+        }
+        require(std::abs(accepted->potential_vertex_values_v[vertex] -
+                    2.0 * unit_solution->potential_vertex_values_v[vertex]) <= 1.0e-12,
+            "charge workspace mutated an earlier owned voltage snapshot");
+    }
+    require(std::abs(left_outward_current_a - 8.0) <= 8.0e-8,
+        "reused charge operator lost the original conductivity or its signed reaction");
+    require(std::abs(unit_left_outward_current_a - 4.0) <= 4.0e-8,
+        "charge workspace mutated an earlier owned reaction snapshot");
+}
+
+void charge_current_response_preserves_sign_and_independent_component_scales()
+{
+    using fullmag::fem::antenna_field_solve::ChargeCurrentResponseRequest;
+    using fullmag::fem::antenna_field_solve::solve_charge_current_response;
+    auto lower = shifted_unit_cube(0.0, 1);
+    auto upper = shifted_unit_cube(0.0, 2);
+    for (int vertex = 0; vertex < upper.GetNV(); ++vertex) upper.GetVertex(vertex)[1] += 2.0;
+    auto mesh = combine_disjoint_tetrahedral_meshes(lower, upper);
+    mfem::Vector conductivity_values(2);
+    conductivity_values[0] = 4.0;
+    conductivity_values[1] = 4.0e-4;
+    mfem::PWConstCoefficient conductivity(conductivity_values);
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    ChargeCurrentResponseRequest request;
+    auto &base = request.zero_baseline;
+    base.mesh = &mesh;
+    base.conductivity = &conductivity;
+    base.stable_vertex_identities = coordinate_stable_vertex_ids(mesh);
+    std::vector<int> relation_components;
+    for (int minus = 0; minus < mesh.GetNV(); ++minus) {
+        const auto *position = mesh.GetVertex(minus);
+        if (position[0] != 0.0) continue;
+        for (int plus = 0; plus < mesh.GetNV(); ++plus) {
+            const auto *peer = mesh.GetVertex(plus);
+            if (peer[0] != 1.0 || peer[1] != position[1] || peer[2] != position[2]) continue;
+            mfem::Array<int> minus_dofs, plus_dofs;
+            space.GetVertexDofs(minus, minus_dofs);
+            space.GetVertexDofs(plus, plus_dofs);
+            base.trace_relations.push_back({minus_dofs[0], plus_dofs[0], 0.0,
+                "response-cut:" + std::to_string(minus)});
+            relation_components.push_back(position[1] < 1.5 ? 0 : 1);
+        }
+    }
+    for (int component = 0; component < 2; ++component) {
+        fullmag::fem::antenna_field_solve::ChargeVoltageControlColumn column;
+        column.id = "component-control:" + std::to_string(component);
+        column.requested_conjugate_current_a = component == 0 ? -1.0 : -1.0e-4;
+        for (int relation_component : relation_components) {
+            column.trace_jump_coefficients.push_back(relation_component == component ? 1.0 : 0.0);
+        }
+        request.columns.push_back(std::move(column));
+    }
+    const auto result = solve_charge_current_response(request);
+    require(result->accepted_solution->component_ids.size() == 2 &&
+            result->accepted_solution->gauge_vertex_ids.size() == 2,
+        "current response lost independent component gauges");
+    for (int component = 0; component < 2; ++component) {
+        const std::size_t index = static_cast<std::size_t>(component);
+        const double conductance = component == 0 ? 4.0 : 4.0e-4;
+        const double current = component == 0 ? -1.0 : -1.0e-4;
+        require(std::abs(result->control_voltages_v[index] - 0.25) <= 1.0e-10 &&
+                std::abs(result->response_matrix_s[index * 2 + index] - conductance) <=
+                    1.0e-10 * conductance &&
+                std::abs(result->measured_conjugate_currents_a[index] - current) <=
+                    1.0e-8 * std::abs(current) + 1.0e-18,
+            "current response hid a small component or lost its signed conductance");
+    }
+    require(std::abs(result->response_matrix_s[1]) <= 1.0e-18 &&
+            std::abs(result->response_matrix_s[2]) <= 1.0e-18,
+        "disconnected charge controls acquired spurious coupling");
+    auto reversed = request;
+    for (auto &column : reversed.columns) {
+        column.requested_conjugate_current_a *= -1.0;
+        for (double &coefficient : column.trace_jump_coefficients) coefficient *= -1.0;
+    }
+    const auto reversed_result = solve_charge_current_response(reversed);
+    for (std::size_t vertex = 0; vertex < result->accepted_solution->potential_vertex_values_v.size(); ++vertex) {
+        require(std::abs(result->accepted_solution->potential_vertex_values_v[vertex] -
+                    reversed_result->accepted_solution->potential_vertex_values_v[vertex]) <= 1.0e-10,
+            "reversing current-control orientation changed the physical potential");
+    }
+    auto zero = request;
+    for (auto &column : zero.columns) column.requested_conjugate_current_a = 0.0;
+    const auto zero_result = solve_charge_current_response(zero);
+    for (double value : zero_result->accepted_solution->potential_vertex_values_v) {
+        require(value == 0.0, "zero current response retained hidden baseline excitation");
+    }
+    auto dependent = request;
+    auto duplicate = dependent.columns.front();
+    duplicate.id = "dependent-control";
+    duplicate.requested_conjugate_current_a *= 2.0;
+    for (double &coefficient : duplicate.trace_jump_coefficients) coefficient *= 2.0;
+    dependent.columns.push_back(duplicate);
+    require_rejected([&] { (void)solve_charge_current_response(dependent); },
+        "current response accepted energetically dependent controls with compatible RHS");
+    for (auto &column : dependent.columns) column.requested_conjugate_current_a = 0.0;
+    require_rejected([&] { (void)solve_charge_current_response(dependent); },
+        "zero requested currents bypassed the response rank gate");
+    auto hidden_baseline = request;
+    hidden_baseline.zero_baseline.trace_relations.front().potential_jump_v = 1.0;
+    require_rejected([&] { (void)solve_charge_current_response(hidden_baseline); },
+        "current response accepted a hidden legacy voltage drop");
+}
+
+void charge_current_response_uses_terminal_anchors_and_rejects_common_mode()
+{
+    using fullmag::fem::antenna_field_solve::ChargeCurrentResponseRequest;
+    using fullmag::fem::antenna_field_solve::ChargeVoltageControlColumn;
+    using fullmag::fem::antenna_field_solve::solve_charge_current_response;
+    auto mesh = shifted_unit_cube(0.0, 1);
+    mfem::ConstantCoefficient conductivity(4.0);
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    ChargeCurrentResponseRequest request;
+    request.zero_baseline.mesh = &mesh;
+    request.zero_baseline.conductivity = &conductivity;
+    request.zero_baseline.stable_vertex_identities = coordinate_stable_vertex_ids(mesh);
+    ChargeVoltageControlColumn control;
+    control.id = "terminal-voltage-control";
+    control.requested_conjugate_current_a = -1.0;
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        const double x = mesh.GetVertex(vertex)[0];
+        if (x != 0.0 && x != 1.0) continue;
+        mfem::Array<int> dofs;
+        space.GetVertexDofs(vertex, dofs);
+        request.zero_baseline.potential_anchors.push_back({dofs[0], 0.0});
+        control.anchor_potential_coefficients.push_back(x);
+    }
+    request.columns.push_back(control);
+    const auto result = solve_charge_current_response(request);
+    require(result->accepted_solution->gauge_vertex_ids.empty() &&
+            std::abs(result->control_voltages_v[0] - 0.25) <= 1.0e-10,
+        "anchored terminal response added an extra gauge or lost current sign");
+    double left = 0.0, right = 0.0;
+    for (std::size_t vertex = 0; vertex < result->accepted_solution->vertex_positions_m.size(); ++vertex) {
+        const double x = result->accepted_solution->vertex_positions_m[vertex][0];
+        require(std::abs(result->accepted_solution->potential_vertex_values_v[vertex] - 0.25 * x) <= 1.0e-10,
+            "terminal-anchor response is not the analytical affine potential");
+        if (x == 0.0) left -= result->accepted_solution->reaction_vertex_values_a[vertex];
+        if (x == 1.0) right -= result->accepted_solution->reaction_vertex_values_a[vertex];
+    }
+    require(std::abs(left - 1.0) <= 1.0e-8 && std::abs(right + 1.0) <= 1.0e-8,
+        "terminal-anchor response did not preserve signed uneliminated weak reactions");
+    request.columns.front().requested_conjugate_current_a = 0.0;
+    std::fill(request.columns.front().anchor_potential_coefficients.begin(),
+        request.columns.front().anchor_potential_coefficients.end(), 1.0);
+    for (double algebraic_tolerance : {1.0e-12, 1.0e-3}) {
+        request.zero_baseline.algebraic_relative_tolerance = algebraic_tolerance;
+        bool authored_common_mode_rejected = false;
+        try {
+            (void)solve_charge_current_response(request);
+        } catch (const std::invalid_argument &error) {
+            authored_common_mode_rejected = std::string(error.what()).find(
+                "authored charge current control is constant") != std::string::npos;
+        }
+        require(authored_common_mode_rejected,
+            "common-mode terminal control was not rejected before the approximate H1 solve");
+    }
+}
+
+void prepared_charge_current_response_reuses_owned_operator_and_checks_topology()
+{
+    using fullmag::fem::antenna_field_solve::ChargeCurrentResponseRequest;
+    using fullmag::fem::antenna_field_solve::ChargeTraceWorkspace;
+    using fullmag::fem::antenna_field_solve::solve_charge_current_response_prepared;
+    class CountingConductivity final : public mfem::Coefficient {
+    public:
+        int evaluations = 0;
+        double value = 4.0;
+        double Eval(mfem::ElementTransformation &, const mfem::IntegrationPoint &) override
+        {
+            ++evaluations;
+            return value;
+        }
+    };
+    ChargeCurrentResponseRequest request;
+    std::unique_ptr<ChargeTraceWorkspace> workspace;
+    {
+        auto mesh = shifted_unit_cube(0.0, 1);
+        CountingConductivity conductivity;
+        mfem::H1_FECollection collection(1, 3);
+        mfem::FiniteElementSpace space(&mesh, &collection);
+        request.zero_baseline.mesh = &mesh;
+        request.zero_baseline.conductivity = &conductivity;
+        request.zero_baseline.stable_vertex_identities = coordinate_stable_vertex_ids(mesh);
+        request.columns = {{"frozen-terminal", {}, {}, -1.0}};
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            const double x = mesh.GetVertex(vertex)[0];
+            if (x != 0.0 && x != 1.0) continue;
+            mfem::Array<int> dofs;
+            space.GetVertexDofs(vertex, dofs);
+            request.zero_baseline.potential_anchors.push_back({dofs[0], 0.0});
+            request.columns.front().anchor_potential_coefficients.push_back(x);
+        }
+        workspace = std::make_unique<ChargeTraceWorkspace>(request.zero_baseline);
+        const int assembled_count = conductivity.evaluations;
+        require(assembled_count > 0, "prepared response did not assemble its conductivity");
+        conductivity.value = 1000.0;
+        const auto result = solve_charge_current_response_prepared(request, *workspace);
+        require(conductivity.evaluations == assembled_count &&
+                std::abs(result->control_voltages_v.front() - 0.25) <= 1.0e-10,
+            "prepared current response reassembled or reread conductivity");
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            mfem::Array<int> dofs;
+            space.GetVertexDofs(vertex, dofs);
+            require(workspace->vertex_index_for_full_dof(dofs[0]) == vertex,
+                "prepared workspace lost its actual P1 DOF-to-vertex map");
+        }
+        request.zero_baseline.mesh = nullptr;
+        request.zero_baseline.conductivity = nullptr;
+    }
+    const auto result = solve_charge_current_response_prepared(request, *workspace);
+    require(std::abs(result->control_voltages_v.front() - 0.25) <= 1.0e-10,
+        "prepared response required destroyed borrowed sources");
+    const auto rejects_owned_mismatch = [&](const ChargeCurrentResponseRequest &candidate) {
+        bool rejected = false;
+        try {
+            (void)solve_charge_current_response_prepared(candidate, *workspace);
+        } catch (const std::invalid_argument &error) {
+            rejected = std::string(error.what()).find("owned workspace") != std::string::npos;
+        }
+        require(rejected, "prepared response ignored a changed owned topology or solver policy");
+    };
+    auto changed = request;
+    changed.zero_baseline.stable_vertex_identities.local_to_stable.front() += 1;
+    rejects_owned_mismatch(changed);
+    changed = request;
+    std::swap(changed.zero_baseline.potential_anchors[0], changed.zero_baseline.potential_anchors[1]);
+    rejects_owned_mismatch(changed);
+    changed = request;
+    changed.zero_baseline.maximum_iterations += 1;
+    rejects_owned_mismatch(changed);
+    require_rejected([&] { (void)workspace->vertex_index_for_full_dof(-1); },
+        "owned DOF-to-vertex map accepted an invalid negative DOF");
+}
+
+void charge_current_controls_require_exact_rank_modulo_original_volumes()
+{
+    using fullmag::fem::antenna_field_solve::ChargeCurrentResponseRequest;
+    using fullmag::fem::antenna_field_solve::ChargeTraceWorkspace;
+    using fullmag::fem::antenna_field_solve::solve_charge_current_response;
+    using fullmag::fem::antenna_field_solve::validate_charge_control_rank;
+    auto lower = shifted_unit_cube(0.0, 1);
+    auto upper = shifted_unit_cube(0.0, 2);
+    for (int vertex = 0; vertex < upper.GetNV(); ++vertex) upper.GetVertex(vertex)[1] += 2.0;
+    auto mesh = combine_disjoint_tetrahedral_meshes(lower, upper);
+    mfem::ConstantCoefficient conductivity(4.0);
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    const auto dof = [&](int vertex) {
+        mfem::Array<int> values;
+        space.GetVertexDofs(vertex, values);
+        return values[0];
+    };
+    ChargeCurrentResponseRequest request;
+    auto &base = request.zero_baseline;
+    base.mesh = &mesh;
+    base.conductivity = &conductivity;
+    base.stable_vertex_identities = coordinate_stable_vertex_ids(mesh);
+    const int lower_a = dof(0), lower_b = dof(1);
+    const int upper_a = dof(lower.GetNV()), upper_b = dof(lower.GetNV() + 1);
+    base.trace_relations = {{lower_a, upper_a, 0.0, "constant-volume-offset"}};
+    request.columns = {{"bridge-offset", {1.0}, {}, 0.0}};
+    const auto reject_with_message = [&](const ChargeCurrentResponseRequest &candidate,
+                                        const char *message, bool use_response) {
+        bool rejected = false;
+        try {
+            if (use_response) {
+                (void)solve_charge_current_response(candidate);
+            } else {
+                ChargeTraceWorkspace owner(candidate.zero_baseline);
+                validate_charge_control_rank(candidate, owner);
+            }
+        } catch (const std::invalid_argument &error) {
+            rejected = std::string(error.what()).find(message) != std::string::npos;
+        }
+        require(rejected, "authored control did not fail its specific exact source gate");
+    };
+    reject_with_message(request, "dependent modulo original charge nullspace", true);
+    base.potential_anchors = {{lower_a, 0.0}, {upper_a, 0.0}};
+    request.columns.front().anchor_potential_coefficients = {0.0, 1.0};
+    reject_with_message(request, "dependent modulo original charge nullspace", true);
+
+    base.potential_anchors.clear();
+    base.trace_relations = {{lower_a, lower_b, 0.0, "within-lower"},
+                           {upper_a, upper_b, 0.0, "within-upper"}};
+    request.columns = {{"lower", {1.0, 0.0}, {}, 0.0},
+                       {"upper", {0.0, 1.0}, {}, 0.0}};
+    {
+        ChargeTraceWorkspace owner(base);
+        require(owner.original_volume_component_for_full_dof(lower_a) ==
+                    owner.original_volume_component_for_full_dof(lower_b) &&
+                owner.original_volume_component_for_full_dof(lower_a) !=
+                    owner.original_volume_component_for_full_dof(upper_a),
+            "owned original-volume map was replaced by the trace quotient partition");
+        validate_charge_control_rank(request, owner);
+        request.columns[0].trace_jump_coefficients = {1.0, 1.0};
+        request.columns[1].trace_jump_coefficients = {1.0, std::nextafter(1.0, 2.0)};
+        validate_charge_control_rank(request, owner);
+        std::reverse(request.columns.begin(), request.columns.end());
+        validate_charge_control_rank(request, owner);
+        request.columns.resize(1);
+        request.columns[0].trace_jump_coefficients = {std::numeric_limits<double>::denorm_min(), 0.0};
+        validate_charge_control_rank(request, owner);
+        auto oversized = request;
+        oversized.zero_baseline.trace_relations.resize(65537, base.trace_relations.front());
+        oversized.columns.front().trace_jump_coefficients.resize(65537, 1.0);
+        bool resource_rejected = false;
+        try {
+            validate_charge_control_rank(oversized, owner);
+        } catch (const std::runtime_error &error) {
+            resource_rejected = std::string(error.what()).find("exact rank resource exceeded") != std::string::npos;
+        }
+        require(resource_rejected, "exact rank resource refusal was mistaken for dependent controls");
+    }
+
+    // Different authored arrays may differ only by a large common-mode.
+    base.trace_relations.clear();
+    base.potential_anchors = {{lower_a, 0.0}, {lower_b, 0.0}};
+    request.columns = {{"gradient", {}, {0.0, 1.0}, 0.0},
+                       {"gradient-plus-constant", {}, {std::ldexp(1.0, 40),
+                           std::ldexp(1.0, 40) + 1.0}, 0.0}};
+    reject_with_message(request, "dependent modulo original charge nullspace", true);
+    std::reverse(base.potential_anchors.begin(), base.potential_anchors.end());
+    for (auto &column : request.columns) {
+        std::reverse(column.anchor_potential_coefficients.begin(),
+            column.anchor_potential_coefficients.end());
+    }
+    reject_with_message(request, "dependent modulo original charge nullspace", true);
+
+    // Infeasible nodal cycles must not be counted as energetic controls.
+    base.potential_anchors.clear();
+    base.trace_relations = {{lower_a, lower_b, 0.0, "cycle-ab"},
+                           {lower_b, dof(2), 0.0, "cycle-bc"},
+                           {lower_a, dof(2), 0.0, "cycle-ac"}};
+    request.columns = {{"infeasible-cycle", {1.0, 0.0, 0.0}, {}, 0.0}};
+    reject_with_message(request, "infeasible in full DOF space", true);
+
+    // An exact full-rank matrix may exceed the arithmetic budget; that
+    // refusal must not be mislabeled as a dependent or infeasible control.
+    base.trace_relations.clear();
+    base.potential_anchors = {{lower_a, 0.0}, {lower_b, 0.0}, {dof(2), 0.0}, {dof(3), 0.0}};
+    const double tiny = std::numeric_limits<double>::denorm_min();
+    const double huge = std::numeric_limits<double>::max();
+    request.columns = {{"budget-a", {}, {0.0, huge, tiny, 0.0}, 0.0},
+                       {"budget-b", {}, {0.0, tiny, huge, tiny}, 0.0},
+                       {"budget-c", {}, {0.0, 0.0, tiny, huge}, 0.0}};
+    ChargeTraceWorkspace owner(base);
+    bool bit_budget_rejected = false;
+    try {
+        validate_charge_control_rank(request, owner);
+    } catch (const std::runtime_error &error) {
+        bit_budget_rejected = std::string(error.what()).find("exact rank resource exceeded") != std::string::npos;
+    }
+    require(bit_budget_rejected, "exact rank intermediate-bit budget did not fail closed");
+}
+
 void two_disconnected_closed_components_have_two_certified_dependencies()
 {
     auto first = mfem::Mesh::MakeCartesian3D(
@@ -2904,6 +3546,1551 @@ void two_disconnected_closed_components_have_two_certified_dependencies()
     }
     independently_decode_and_match_balance_artifact(
         view, ids, boundary_map, expected_pairs);
+}
+
+fullmag::fem::antenna_field_solve::ResolvedChargeTerminal fixture_terminal_on_x(
+    const mfem::Mesh &mesh, const StableMeshVertexIdentities &ids,
+    const std::string &id, double x, double current,
+    double minimum_y = -std::numeric_limits<double>::infinity(),
+    double maximum_y = std::numeric_limits<double>::infinity())
+{
+    fullmag::fem::antenna_field_solve::ResolvedChargeTerminal terminal;
+    terminal.id = id;
+    terminal.requested_outward_current_a = current;
+    for (int boundary : boundary_elements_on_x(mesh, x)) {
+        mfem::Array<int> vertices;
+        mesh.GetBdrElementVertices(boundary, vertices);
+        double y = 0.0;
+        for (int vertex : vertices) y += mesh.GetVertex(vertex)[1] / vertices.Size();
+        if (y >= minimum_y && y <= maximum_y) {
+            terminal.boundary_face_vertex_ids.push_back(sorted_face_key(mesh, ids, boundary));
+        }
+    }
+    require(!terminal.boundary_face_vertex_ids.empty(), "physical terminal fixture has no boundary faces");
+    return terminal;
+}
+
+void require_terminal_adapter_rejected(
+    const fullmag::fem::antenna_field_solve::ChargeTerminalCurrentRequest &request,
+    const std::string &fragment)
+{
+    bool rejected = false;
+    try {
+        (void)fullmag::fem::antenna_field_solve::solve_charge_terminal_current_constraints(request);
+    } catch (const std::invalid_argument &error) {
+        rejected = std::string(error.what()).find(fragment) != std::string::npos;
+    }
+    require(rejected, "physical terminal fixture missed its specific rejection: " + fragment);
+}
+
+void physical_charge_terminal_currents_preserve_signed_references_and_scale()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTerminalCurrentRequest;
+    using fullmag::fem::antenna_field_solve::solve_charge_terminal_current_constraints;
+    auto mesh = shifted_unit_cube(0.0, 1);
+    mfem::ConstantCoefficient conductivity(4.0);
+    auto ids = stable_vertex_ids(mesh);
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        if (std::abs(mesh.GetVertex(vertex)[0] - 1.0) < 1.0e-13) ids.local_to_stable[vertex] = 100u + vertex;
+    }
+    ChargeTerminalCurrentRequest request;
+    request.conductor.mesh = &mesh;
+    request.conductor.conductivity = &conductivity;
+    request.conductor.stable_vertex_identities = ids;
+    request.terminals = {fixture_terminal_on_x(mesh, ids, "left", 0.0, -1.0),
+        fixture_terminal_on_x(mesh, ids, "right", 1.0, 1.0)};
+    const auto check = [&](const ChargeTerminalCurrentRequest &candidate, double scale) {
+        const auto result = solve_charge_terminal_current_constraints(candidate);
+        require(result->reference_terminal_ids == std::vector<std::string>{"right"} &&
+                result->accepted_solution->gauge_vertex_ids.empty() && result->response != nullptr,
+            "physical terminal reference followed authored order instead of stable vertex identity");
+        for (std::size_t terminal = 0; terminal < result->terminal_ids.size(); ++terminal) {
+            const double expected = result->terminal_ids[terminal] == "left" ? -scale : scale;
+            require(std::abs(result->measured_outward_currents_a[terminal] - expected) <=
+                    1.0e-18 + 1.0e-8 * std::abs(expected),
+                "physical terminal signed current failed its own requested-current scale");
+            require(result->terminal_boundary_face_vertex_ids[terminal] == candidate.terminals[terminal].boundary_face_vertex_ids &&
+                    result->requested_outward_currents_a[terminal] == expected &&
+                    std::abs(result->current_residuals_a[terminal]) <= 1.0e-18 + 1.0e-8 * std::abs(expected),
+                "physical terminal result did not retain its face groups and signed certificate");
+            require(std::abs(result->terminal_voltages_v[terminal] -
+                    (result->terminal_ids[terminal] == "left" ? scale / 4.0 : 0.0)) < 1.0e-10,
+                "physical terminal voltage/reference has the wrong sign");
+        }
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            require(std::abs(result->accepted_solution->potential_vertex_values_v[vertex] -
+                    scale * (1.0 - mesh.GetVertex(vertex)[0]) / 4.0) < 1.0e-10,
+                "physical terminal V disagrees with the analytic constant-conductivity bar");
+        }
+    };
+    check(request, 1.0);
+    auto reversed = request;
+    for (auto &terminal : reversed.terminals) terminal.requested_outward_current_a *= -1.0;
+    check(reversed, -1.0);
+    auto doubled = request;
+    for (auto &terminal : doubled.terminals) terminal.requested_outward_current_a *= 2.0;
+    check(doubled, 2.0);
+    std::reverse(doubled.terminals.begin(), doubled.terminals.end());
+    check(doubled, 2.0);
+    auto single = request;
+    single.terminals = {request.terminals.back()};
+    single.terminals.front().requested_outward_current_a = 0.0;
+    const auto zero = solve_charge_terminal_current_constraints(single);
+    require(zero->response == nullptr && zero->measured_outward_currents_a == std::vector<double>{0.0} &&
+            zero->reference_terminal_ids == std::vector<std::string>{"right"},
+        "single zero-current terminal manufactured an empty response or omitted its measurement");
+    for (double value : zero->accepted_solution->potential_vertex_values_v) require(value == 0.0, "single-terminal zero source generated V");
+    auto unknown = request;
+    unknown.terminals.front().boundary_face_vertex_ids.front() = {999990u, 999991u, 999992u};
+    require_terminal_adapter_rejected(unknown, "unknown or nonboundary");
+    auto duplicate = request;
+    duplicate.terminals.front().boundary_face_vertex_ids.back() = duplicate.terminals.front().boundary_face_vertex_ids.front();
+    require_terminal_adapter_rejected(duplicate, "globally unique");
+    auto shared = request;
+    bool found_shared = false;
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        mfem::Array<int> vertices;
+        mesh.GetBdrElementVertices(boundary, vertices);
+        bool touches_right = false, all_right = true;
+        for (int vertex : vertices) {
+            const bool right = std::abs(mesh.GetVertex(vertex)[0] - 1.0) < 1.0e-13;
+            touches_right = touches_right || right;
+            all_right = all_right && right;
+        }
+        if (touches_right && !all_right) {
+            shared.terminals.front().boundary_face_vertex_ids.push_back(sorted_face_key(mesh, ids, boundary));
+            found_shared = true;
+            break;
+        }
+    }
+    require(found_shared, "shared-electrode fixture found no side triangle");
+    require_terminal_adapter_rejected(shared, "share an essential DOF");
+}
+
+void physical_charge_terminal_currents_keep_components_and_zero_jump_interfaces()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTerminalCurrentRequest;
+    using fullmag::fem::antenna_field_solve::solve_charge_terminal_current_constraints;
+    auto lower = shifted_unit_cube(0.0, 1);
+    auto upper = shifted_unit_cube(0.0, 2);
+    auto isolated = shifted_unit_cube(0.0, 3);
+    for (int vertex = 0; vertex < upper.GetNV(); ++vertex) upper.GetVertex(vertex)[1] += 2.0;
+    for (int vertex = 0; vertex < isolated.GetNV(); ++vertex) isolated.GetVertex(vertex)[1] += 4.0;
+    const auto pair = combine_disjoint_tetrahedral_meshes(lower, upper);
+    auto mesh = combine_disjoint_tetrahedral_meshes(pair, isolated);
+    mfem::Vector values(3);
+    values[0] = 4.0;
+    values[1] = 4.0e-4;
+    values[2] = 4.0;
+    mfem::PWConstCoefficient conductivity(values);
+    const auto ids = stable_vertex_ids(mesh);
+    ChargeTerminalCurrentRequest request;
+    request.conductor.mesh = &mesh;
+    request.conductor.conductivity = &conductivity;
+    request.conductor.stable_vertex_identities = ids;
+    request.terminals = {fixture_terminal_on_x(mesh, ids, "a-left", 0.0, -1.0, 0.0, 1.0),
+        fixture_terminal_on_x(mesh, ids, "a-right", 1.0, 1.0, 0.0, 1.0),
+        fixture_terminal_on_x(mesh, ids, "b-left", 0.0, -1.0e-4, 2.0, 3.0),
+        fixture_terminal_on_x(mesh, ids, "b-right", 1.0, 1.0e-4, 2.0, 3.0)};
+    const auto result = solve_charge_terminal_current_constraints(request);
+    require(result->reference_terminal_ids == std::vector<std::string>({"a-left", "b-left"}) &&
+            result->accepted_solution->gauge_vertex_ids.size() == 1 &&
+            result->terminal_component_ids[0] == result->terminal_component_ids[1] &&
+            result->terminal_component_ids[2] == result->terminal_component_ids[3] &&
+            result->terminal_component_ids[0] != result->terminal_component_ids[2],
+        "physical terminal gauges/components collapsed independent conductors");
+    for (std::size_t terminal = 0; terminal < request.terminals.size(); ++terminal) {
+        const double expected = request.terminals[terminal].requested_outward_current_a;
+        require(std::abs(result->measured_outward_currents_a[terminal] - expected) <= 1.0e-18 + 1.0e-8 * std::abs(expected),
+            "small disconnected terminal was certified using another component's current scale");
+    }
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        const double expected = mesh.GetVertex(vertex)[1] > 3.5 ? 0.0 : -mesh.GetVertex(vertex)[0] / 4.0;
+        require(std::abs(result->accepted_solution->potential_vertex_values_v[vertex] - expected) < 1.0e-10,
+            "disconnected or isolated physical terminal V has the wrong analytic gradient");
+    }
+    auto unbalanced = request;
+    unbalanced.terminals[0].requested_outward_current_a += 0.25;
+    unbalanced.terminals[2].requested_outward_current_a -= 0.25;
+    require_terminal_adapter_rejected(unbalanced, "do not balance on an electrical component");
+    auto spanning = request;
+    spanning.terminals[0].boundary_face_vertex_ids.insert(spanning.terminals[0].boundary_face_vertex_ids.end(),
+        spanning.terminals[2].boundary_face_vertex_ids.begin(), spanning.terminals[2].boundary_face_vertex_ids.end());
+    spanning.terminals.erase(spanning.terminals.begin() + 2);
+    require_terminal_adapter_rejected(spanning, "spans electrical components");
+
+    auto left = shifted_unit_cube(0.0, 1);
+    auto right = shifted_unit_cube(1.0, 1);
+    auto joined = combine_disjoint_tetrahedral_meshes(left, right);
+    mfem::ConstantCoefficient joined_conductivity(4.0);
+    const auto joined_ids = stable_vertex_ids(joined); // Coincident interface vertices remain distinct.
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&joined, &collection);
+    ChargeTerminalCurrentRequest connected;
+    connected.conductor.mesh = &joined;
+    connected.conductor.conductivity = &joined_conductivity;
+    connected.conductor.stable_vertex_identities = joined_ids;
+    connected.terminals = {fixture_terminal_on_x(joined, joined_ids, "left", 0.0, -1.0),
+        fixture_terminal_on_x(joined, joined_ids, "right", 2.0, 1.0)};
+    for (int vertex = 0; vertex < left.GetNV(); ++vertex) {
+        if (std::abs(joined.GetVertex(vertex)[0] - 1.0) > 1.0e-13) continue;
+        int match = -1;
+        for (int other = left.GetNV(); other < joined.GetNV(); ++other) {
+            const auto *point = joined.GetVertex(other);
+            if (std::abs(point[0] - 1.0) < 1.0e-13 &&
+                std::abs(point[1] - joined.GetVertex(vertex)[1]) < 1.0e-13 &&
+                std::abs(point[2] - joined.GetVertex(vertex)[2]) < 1.0e-13) match = other;
+        }
+        require(match >= 0, "zero-jump interface fixture has no paired vertex");
+        mfem::Array<int> minus, plus;
+        space.GetVertexDofs(vertex, minus);
+        space.GetVertexDofs(match, plus);
+        require(minus.Size() == 1 && plus.Size() == 1, "interface vertex has no scalar P1 DOF");
+        connected.conductor.trace_relations.push_back({minus[0], plus[0], 0.0, "interface:" + std::to_string(vertex)});
+    }
+    require(!connected.conductor.trace_relations.empty(), "zero-jump fixture created no interface");
+    const auto continuous = solve_charge_terminal_current_constraints(connected);
+    require(continuous->reference_terminal_ids == std::vector<std::string>{"left"} &&
+            continuous->terminal_component_ids[0] == continuous->terminal_component_ids[1] &&
+            continuous->accepted_solution->component_ids.size() == 1,
+        "zero-jump interface did not join electrical components");
+    for (std::size_t terminal = 0; terminal < connected.terminals.size(); ++terminal) {
+        const double expected = connected.terminals[terminal].requested_outward_current_a;
+        require(std::abs(continuous->measured_outward_currents_a[terminal] - expected) <= 1.0e-18 + 1.0e-8 * std::abs(expected),
+            "zero-jump interface lost the physical terminal current");
+    }
+    for (int vertex = 0; vertex < joined.GetNV(); ++vertex) {
+        require(std::abs(continuous->accepted_solution->potential_vertex_values_v[vertex] + joined.GetVertex(vertex)[0] / 4.0) < 1.0e-10,
+            "zero-jump interface V disagrees with the full two-volume series bar");
+    }
+    auto nonzero = connected;
+    nonzero.conductor.trace_relations.front().potential_jump_v = 0.1;
+    require_terminal_adapter_rejected(nonzero, "nonzero cut actuators");
+    auto aliased = connected;
+    mfem::Array<int> electrode;
+    space.GetVertexDofs(0, electrode);
+    require(std::abs(joined.GetVertex(0)[0]) < 1.0e-13 && electrode.Size() == 1,
+        "trace alias fixture did not select a left electrode vertex");
+    aliased.conductor.trace_relations.push_back({electrode[0], connected.conductor.trace_relations.front().minus_dof, 0.0, "electrode-alias"});
+    require_terminal_adapter_rejected(aliased, "trace-aliased electrode DOFs");
+}
+
+void physical_charge_terminal_faces_require_complete_dirichlet_closure()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTerminalCurrentRequest;
+    using fullmag::fem::antenna_field_solve::solve_charge_terminal_current_constraints;
+    mfem::Mesh pyramid(3, 6, 4, 8, 3);
+    const double positions[6][3] = {{0.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
+        {0.0, 1.0, 1.0}, {0.0, 0.0, 1.0}, {0.0, 0.5, 0.5}, {1.0, 0.5, 0.5}};
+    for (const auto &position : positions) pyramid.AddVertex(position);
+    for (int corner = 0; corner < 4; ++corner) {
+        const int next = (corner + 1) % 4;
+        int tetrahedron[4] = {4, corner, next, 5};
+        int base[3] = {4, next, corner};
+        int side[3] = {corner, next, 5};
+        pyramid.AddTet(tetrahedron, 1);
+        pyramid.AddBdrTriangle(base, 1);
+        pyramid.AddBdrTriangle(side, 2);
+    }
+    pyramid.FinalizeTetMesh(1, 1, true);
+    mfem::ConstantCoefficient conductivity(4.0);
+    const auto ids = stable_vertex_ids(pyramid);
+    ChargeTerminalCurrentRequest complete;
+    complete.conductor.mesh = &pyramid;
+    complete.conductor.conductivity = &conductivity;
+    complete.conductor.stable_vertex_identities = ids;
+    complete.terminals = {fixture_terminal_on_x(pyramid, ids, "base", 0.0, 0.0)};
+    require(complete.terminals.front().boundary_face_vertex_ids.size() == 4, "pyramid fixture has no four-face base fan");
+    auto incomplete = complete;
+    incomplete.terminals.front().boundary_face_vertex_ids.pop_back();
+    require_terminal_adapter_rejected(incomplete, "not closed under its essential P1 DOFs");
+    const auto accepted = solve_charge_terminal_current_constraints(complete);
+    require(accepted->response == nullptr && accepted->measured_outward_currents_a == std::vector<double>{0.0} &&
+            accepted->terminal_boundary_face_vertex_ids.front() == complete.terminals.front().boundary_face_vertex_ids,
+        "complete pyramid base did not preserve its physical terminal zero-current result");
+    for (double value : accepted->accepted_solution->potential_vertex_values_v) require(value == 0.0, "complete zero-current pyramid created V");
+    auto coarse = mfem::Mesh::MakeCartesian3D(1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    const auto coarse_ids = stable_vertex_ids(coarse);
+    ChargeTerminalCurrentRequest mixed;
+    mixed.conductor.mesh = &coarse;
+    mixed.conductor.conductivity = &conductivity;
+    mixed.conductor.stable_vertex_identities = coarse_ids;
+    mixed.terminals = {fixture_terminal_on_x(coarse, coarse_ids, "left", 0.0, 0.0),
+        fixture_terminal_on_x(coarse, coarse_ids, "right", 1.0, 0.0)};
+    require_terminal_adapter_rejected(mixed, "separator face has no free P1 DOF");
+}
+
+void terminal_constrained_rt0_projection_preserves_measured_h1_currents()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTerminalCurrentRequest;
+    using fullmag::fem::antenna_field_solve::solve_charge_terminal_current_constraints;
+    using fullmag::fem::transport::Rt0TerminalFluxConstraint;
+    using fullmag::fem::transport::TerminalConstrainedRt0Projection;
+    using fullmag::fem::transport::project_terminal_constrained_rt0;
+    const auto check_field = [](const TerminalConstrainedRt0Projection::Ptr &projection, double expected_x) {
+        const auto &field = projection->field();
+        auto *mesh = field.FESpace()->GetMesh();
+        require(mesh != nullptr && mesh->GetNE() > 0, "terminal RT0 projection lost its owned field mesh");
+        for (int element = 0; element < mesh->GetNE(); ++element) {
+            auto *transformation = mesh->GetElementTransformation(element);
+            const auto &rule = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 4);
+            for (int point = 0; point < rule.GetNPoints(); ++point) {
+                transformation->SetIntPoint(&rule.IntPoint(point));
+                mfem::Vector value(3);
+                field.GetVectorValue(*transformation, rule.IntPoint(point), value);
+                require(std::abs(value[0] - expected_x) < 1.0e-10 &&
+                        std::abs(value[1]) < 1.0e-10 && std::abs(value[2]) < 1.0e-10,
+                    "terminal-constrained RT0 did not recover the analytic signed current density");
+            }
+        }
+    };
+    TerminalConstrainedRt0Projection::Ptr retained;
+    StableMeshVertexIdentities retained_ids;
+    int retained_element_count = 0;
+    {
+        auto mesh = shifted_unit_cube(0.0, 1);
+        mfem::ConstantCoefficient conductivity(4.0);
+        const auto ids = stable_vertex_ids(mesh);
+        mfem::Vector raw_value(3);
+        raw_value = 0.0;
+        raw_value[0] = 1.0; // Deliberately differs from the measured H1 source.
+        mfem::VectorConstantCoefficient raw_current(raw_value);
+        ChargeTerminalCurrentRequest request;
+        request.conductor.mesh = &mesh;
+        request.conductor.conductivity = &conductivity;
+        request.conductor.stable_vertex_identities = ids;
+        request.terminals = {fixture_terminal_on_x(mesh, ids, "left", 0.0, -2.0),
+            fixture_terminal_on_x(mesh, ids, "right", 1.0, 2.0)};
+        const auto from_h1 = [&](const ChargeTerminalCurrentRequest &source) {
+            const auto h1 = solve_charge_terminal_current_constraints(source);
+            std::vector<Rt0TerminalFluxConstraint> terminals;
+            for (std::size_t terminal = 0; terminal < h1->terminal_ids.size(); ++terminal) {
+                terminals.push_back({h1->terminal_ids[terminal], h1->terminal_boundary_face_vertex_ids[terminal],
+                    h1->measured_outward_currents_a[terminal]});
+            }
+            return terminals;
+        };
+        const auto terminals = from_h1(request);
+        retained = project_terminal_constrained_rt0(mesh, ids, raw_current, conductivity, terminals);
+        retained_ids = ids;
+        retained_element_count = mesh.GetNE();
+        const auto &rank = retained->constraint_rank_certificate();
+        require(rank.rows_before == static_cast<std::uint64_t>(mesh.GetNE() + 2) &&
+                rank.rank + 1 == rank.rows_before && rank.omitted_rows.size() == 1 &&
+                rank.omitted_rows.front().reason == ConstraintOmissionReason::ConsistentLinearDependency &&
+                std::abs(rank.omitted_rows.front().residual_a) <= 1.0e-18 +
+                    1.0e-10 * (std::abs(terminals[0].measured_outward_current_a) +
+                        std::abs(terminals[1].measured_outward_current_a)),
+            "terminal RT0 rank did not certify the one consistent global flux dependency");
+        const auto check_currents = [&](const TerminalConstrainedRt0Projection::Ptr &projection,
+                                        const std::vector<Rt0TerminalFluxConstraint> &constraints) {
+            require(projection->terminal_ids().size() == constraints.size() &&
+                    projection->measured_outward_currents_a().size() == constraints.size() &&
+                    projection->current_residuals_a().size() == constraints.size(),
+                "terminal RT0 omitted measurement of a dependent input terminal row");
+            for (std::size_t terminal = 0; terminal < constraints.size(); ++terminal) {
+                const double measured_h1 = constraints[terminal].measured_outward_current_a;
+                require(projection->terminal_ids()[terminal] == constraints[terminal].id &&
+                        std::abs(projection->measured_outward_currents_a()[terminal] - measured_h1) <=
+                            1.0e-18 + 1.0e-8 * std::abs(measured_h1) &&
+                        std::abs(projection->current_residuals_a()[terminal]) <=
+                            1.0e-18 + 1.0e-8 * std::abs(measured_h1),
+                    "terminal RT0 flux changed the measured H1 terminal current");
+            }
+        };
+        check_field(retained, 2.0);
+        check_currents(retained, terminals);
+        auto relabelled_ids = ids;
+        for (auto &id : relabelled_ids.local_to_stable) id = 2000u - id;
+        auto relabelled_terminals = terminals;
+        for (auto &terminal : relabelled_terminals) {
+            for (auto &key : terminal.boundary_face_vertex_ids) {
+                for (auto &id : key) id = 2000u - id;
+                std::sort(key.begin(), key.end());
+            }
+        }
+        const auto relabelled = project_terminal_constrained_rt0(
+            mesh, relabelled_ids, raw_current, conductivity, relabelled_terminals);
+        require(relabelled->stable_vertex_identities().local_to_stable == relabelled_ids.local_to_stable,
+            "terminal RT0 relabelling did not retain the actual stable vertex identities");
+        check_field(relabelled, 2.0);
+        check_currents(relabelled, relabelled_terminals);
+        auto reversed = request;
+        for (auto &terminal : reversed.terminals) terminal.requested_outward_current_a *= -1.0;
+        const auto reverse_terminals = from_h1(reversed);
+        const auto reverse_projection = project_terminal_constrained_rt0(mesh, ids, raw_current, conductivity, reverse_terminals);
+        check_field(reverse_projection, -2.0);
+        check_currents(reverse_projection, reverse_terminals);
+        auto zero = request;
+        for (auto &terminal : zero.terminals) terminal.requested_outward_current_a = 0.0;
+        const auto zero_terminals = from_h1(zero);
+        const auto zero_projection = project_terminal_constrained_rt0(mesh, ids, raw_current, conductivity, zero_terminals);
+        check_field(zero_projection, 0.0);
+        check_currents(zero_projection, zero_terminals);
+        auto inconsistent = terminals;
+        inconsistent.back().measured_outward_current_a += 0.25;
+        bool dependency_rejected = false;
+        try {
+            (void)project_terminal_constrained_rt0(mesh, ids, raw_current, conductivity, inconsistent);
+        } catch (const InconsistentDependentConstraint &error) {
+            dependency_rejected = !error.constraint_id().empty() && std::isfinite(error.residual_a()) &&
+                std::abs(error.residual_a()) > 1.0e-8;
+        }
+        require(dependency_rejected, "inconsistent H1 terminal RHS did not fail its exact dependent-row gate");
+        auto unknown = terminals;
+        unknown.front().boundary_face_vertex_ids.front() = {999990u, 999991u, 999992u};
+        require_rejected([&] {
+            (void)project_terminal_constrained_rt0(mesh, ids, raw_current, conductivity, unknown);
+        }, "terminal RT0 accepted an unknown physical face");
+        auto duplicate = terminals;
+        duplicate.front().boundary_face_vertex_ids.back() = duplicate.front().boundary_face_vertex_ids.front();
+        require_rejected([&] {
+            (void)project_terminal_constrained_rt0(mesh, ids, raw_current, conductivity, duplicate);
+        }, "terminal RT0 accepted a duplicate physical face");
+    }
+    require(retained->stable_vertex_identities().version == retained_ids.version &&
+            retained->stable_vertex_identities().local_to_stable == retained_ids.local_to_stable &&
+            retained->field().FESpace()->GetMesh()->GetNE() == retained_element_count &&
+            retained->measured_outward_currents_a().size() == 2,
+        "terminal RT0 projection lost stable topology or terminal measurements after source destruction");
+    check_field(retained, 2.0);
+}
+
+std::vector<fullmag::fem::transport::Rt0InterfaceFacePair> fixture_series_interface_pairs(
+    const mfem::Mesh &fixture, const StableMeshVertexIdentities &identities, int first_vertex_count)
+{
+    using fullmag::fem::transport::Rt0InterfaceFacePair;
+    std::vector<Rt0InterfaceFacePair> pairs;
+    for (int boundary : boundary_elements_on_x(fixture, 1.0)) {
+        mfem::Array<int> vertices;
+        fixture.GetBdrElementVertices(boundary, vertices);
+        if (vertices[0] >= first_vertex_count) continue;
+        Rt0InterfaceFacePair pair;
+        pair.id = "series-interface:" + std::to_string(pairs.size());
+        pair.first_face_vertex_ids = sorted_face_key(fixture, identities, boundary);
+        for (int corner = 0; corner < 3; ++corner) {
+            const int vertex = vertices[corner];
+            int match = -1;
+            for (int other = first_vertex_count; other < fixture.GetNV(); ++other) {
+                const double *a = fixture.GetVertex(vertex), *b = fixture.GetVertex(other);
+                if (a[0] == b[0] && a[1] == b[1] && a[2] == b[2]) match = other;
+            }
+            require(match >= 0, "explicit interface fixture has no coincident declared vertex");
+            pair.vertex_pairs[corner] = {identities.local_to_stable[vertex], identities.local_to_stable[match]};
+            pair.second_face_vertex_ids[corner] = identities.local_to_stable[match];
+        }
+        std::sort(pair.second_face_vertex_ids.begin(), pair.second_face_vertex_ids.end());
+        bool exterior_match = false;
+        for (int other : boundary_elements_on_x(fixture, 1.0)) {
+            exterior_match = exterior_match || sorted_face_key(fixture, identities, other) == pair.second_face_vertex_ids;
+        }
+        require(exterior_match, "declared interface fixture does not resolve to a real second boundary face");
+        pairs.push_back(pair);
+    }
+    require(pairs.size() == 2, "2x1x1 series fixture must declare both interface triangles");
+    return pairs;
+}
+
+void terminal_rt0_explicit_interfaces_preserve_signed_series_currents()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTerminalCurrentRequest;
+    using fullmag::fem::antenna_field_solve::solve_charge_terminal_current_constraints;
+    using fullmag::fem::transport::Rt0TerminalFluxConstraint;
+    using fullmag::fem::transport::project_terminal_constrained_rt0;
+    auto left = shifted_unit_cube(0.0, 1);
+    auto right = shifted_unit_cube(1.0, 1);
+    auto mesh = combine_disjoint_tetrahedral_meshes(left, right);
+    const auto ids = stable_vertex_ids(mesh); // Real fixture IDs, including distinct coincident vertices.
+    const auto interfaces = fixture_series_interface_pairs(mesh, ids, left.GetNV());
+    mfem::ConstantCoefficient conductivity(4.0);
+    mfem::Vector raw_value(3);
+    raw_value = 0.0;
+    raw_value[0] = 1.0;
+    mfem::VectorConstantCoefficient raw_current(raw_value);
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    ChargeTerminalCurrentRequest request;
+    request.conductor.mesh = &mesh;
+    request.conductor.conductivity = &conductivity;
+    request.conductor.stable_vertex_identities = ids;
+    request.terminals = {fixture_terminal_on_x(mesh, ids, "left", 0.0, -1.0),
+        fixture_terminal_on_x(mesh, ids, "right", 2.0, 1.0)};
+    std::set<std::array<std::uint64_t, 2>> declared_vertices;
+    for (const auto &pair : interfaces) {
+        for (const auto &map : pair.vertex_pairs) {
+            if (!declared_vertices.insert(map).second) continue;
+            const int first = static_cast<int>(std::find(ids.local_to_stable.begin(), ids.local_to_stable.end(), map[0]) - ids.local_to_stable.begin());
+            const int second = static_cast<int>(std::find(ids.local_to_stable.begin(), ids.local_to_stable.end(), map[1]) - ids.local_to_stable.begin());
+            mfem::Array<int> minus, plus;
+            space.GetVertexDofs(first, minus);
+            space.GetVertexDofs(second, plus);
+            require(minus.Size() == 1 && plus.Size() == 1, "declared interface vertex has no scalar P1 DOF");
+            request.conductor.trace_relations.push_back({minus[0], plus[0], 0.0, "declared-interface:" + std::to_string(map[0])});
+        }
+    }
+    const auto measured_h1 = [&](const ChargeTerminalCurrentRequest &source, double current) {
+        const auto h1 = solve_charge_terminal_current_constraints(source);
+        require(h1->accepted_solution->component_ids.size() == 1 &&
+                h1->reference_terminal_ids == std::vector<std::string>{"left"},
+            "declared P1 interface did not create one reference-anchored series conductor");
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            require(std::abs(h1->accepted_solution->potential_vertex_values_v[vertex] + current * mesh.GetVertex(vertex)[0] / 4.0) < 1.0e-10,
+                "declared P1 interface disagrees with analytic series V=-I*x/4");
+        }
+        std::vector<Rt0TerminalFluxConstraint> terminals;
+        for (std::size_t terminal = 0; terminal < h1->terminal_ids.size(); ++terminal) {
+            const double expected = source.terminals[terminal].requested_outward_current_a;
+            require(std::abs(h1->measured_outward_currents_a[terminal] - expected) <= 1.0e-18 + 1.0e-8 * std::abs(expected),
+                "declared P1 series source failed its own signed terminal certificate");
+            terminals.push_back({h1->terminal_ids[terminal], h1->terminal_boundary_face_vertex_ids[terminal],
+                h1->measured_outward_currents_a[terminal]});
+        }
+        return terminals;
+    };
+    const auto check_projection = [&](const auto &projection, const auto &terminals,
+                                      const auto &pairs, double current) {
+        const auto &rank = projection->constraint_rank_certificate();
+        require(rank.rows_before == static_cast<std::uint64_t>(mesh.GetNE() + pairs.size() + terminals.size()) &&
+                rank.rank + 1 == rank.rows_before && rank.omitted_rows.size() == 1 &&
+                rank.omitted_rows.front().reason == ConstraintOmissionReason::ConsistentLinearDependency &&
+                std::abs(rank.omitted_rows.front().residual_a) <= 1.0e-18 + 1.0e-10 *
+                    (std::abs(terminals[0].measured_outward_current_a) + std::abs(terminals[1].measured_outward_current_a)),
+            "series RT0 did not certify full div/pair/terminal rank and one compatible dependency");
+        require(projection->measured_outward_currents_a().size() == terminals.size() &&
+                projection->interface_flux_measurements().size() == pairs.size(),
+            "series RT0 lost an input terminal or interface measurement");
+        for (std::size_t terminal = 0; terminal < terminals.size(); ++terminal) {
+            const double expected = terminals[terminal].measured_outward_current_a;
+            require(projection->terminal_ids()[terminal] == terminals[terminal].id &&
+                    std::abs(projection->measured_outward_currents_a()[terminal] - expected) <= 1.0e-18 + 1.0e-8 * std::abs(expected) &&
+                    std::abs(projection->current_residuals_a()[terminal]) <= 1.0e-18 + 1.0e-8 * std::abs(expected),
+                "series RT0 changed a measured H1 terminal current, including its dependent row");
+        }
+        for (std::size_t pair = 0; pair < pairs.size(); ++pair) {
+            const auto &measurement = projection->interface_flux_measurements()[pair];
+            require(measurement.id == pairs[pair].id &&
+                    std::abs(measurement.first_outward_current_a - current / 2.0) < 1.0e-10 &&
+                    std::abs(measurement.second_outward_current_a + current / 2.0) < 1.0e-10 &&
+                    std::abs(measurement.mismatch_a) <= 1.0e-18 + 1.0e-10 *
+                        (std::abs(measurement.first_outward_current_a) + std::abs(measurement.second_outward_current_a)),
+                "series RT0 interface does not retain independently measured opposite signed triangle fluxes");
+        }
+        const auto &field = projection->field();
+        auto *owned_mesh = field.FESpace()->GetMesh();
+        for (int element = 0; element < owned_mesh->GetNE(); ++element) {
+            auto *transformation = owned_mesh->GetElementTransformation(element);
+            const auto &rule = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 4);
+            for (int point = 0; point < rule.GetNPoints(); ++point) {
+                transformation->SetIntPoint(&rule.IntPoint(point));
+                mfem::Vector value(3);
+                field.GetVectorValue(*transformation, rule.IntPoint(point), value);
+                require(std::abs(value[0] - current) < 1.0e-10 && std::abs(value[1]) < 1.0e-10 && std::abs(value[2]) < 1.0e-10,
+                    "series RT0 did not recover analytic J=(I,0,0) on both disconnected meshes");
+            }
+        }
+    };
+    const auto terminals = measured_h1(request, 1.0);
+    check_projection(project_terminal_constrained_rt0(mesh, ids, raw_current, conductivity, terminals, interfaces),
+        terminals, interfaces, 1.0);
+    auto reversed = request;
+    for (auto &terminal : reversed.terminals) terminal.requested_outward_current_a *= -1.0;
+    const auto reverse_terminals = measured_h1(reversed, -1.0);
+    auto permuted_pairs = interfaces;
+    std::reverse(permuted_pairs.begin(), permuted_pairs.end());
+    for (auto &pair : permuted_pairs) std::reverse(pair.vertex_pairs.begin(), pair.vertex_pairs.end());
+    check_projection(project_terminal_constrained_rt0(mesh, ids, raw_current, conductivity, reverse_terminals, permuted_pairs),
+        reverse_terminals, permuted_pairs, -1.0);
+    const auto reject = [&](mfem::Mesh &fixture, const auto &constraints, const auto &pairs, const std::string &fragment) {
+        bool rejected = false;
+        try {
+            (void)project_terminal_constrained_rt0(fixture, ids, raw_current, conductivity, constraints, pairs);
+        } catch (const std::invalid_argument &error) {
+            rejected = std::string(error.what()).find(fragment) != std::string::npos;
+        }
+        require(rejected, "explicit RT0 interface missed its specific rejection: " + fragment);
+    };
+    auto malformed = interfaces;
+    malformed[0].vertex_pairs[0][1] = 0;
+    reject(mesh, terminals, malformed, "vertex map is not a bijection");
+    malformed = interfaces;
+    malformed[0].vertex_pairs[1] = malformed[0].vertex_pairs[0];
+    reject(mesh, terminals, malformed, "vertex map is not a bijection");
+    malformed = interfaces;
+    std::swap(malformed[0].vertex_pairs[0][1], malformed[0].vertex_pairs[1][1]);
+    reject(mesh, terminals, malformed, "not exactly geometrically coincident");
+    malformed = interfaces;
+    malformed[1] = malformed[0];
+    malformed[1].id = "reused-interface-face";
+    reject(mesh, terminals, malformed, "not reused by a terminal or pair");
+    malformed = interfaces;
+    malformed[0].first_face_vertex_ids = terminals[0].boundary_face_vertex_ids[0];
+    reject(mesh, terminals, malformed, "not reused by a terminal or pair");
+    auto displaced = mfem::Mesh(mesh);
+    // Displace a declared interface vertex, not an arbitrary interior vertex.
+    const auto moved = std::find(ids.local_to_stable.begin(), ids.local_to_stable.end(), interfaces[0].vertex_pairs[0][1]);
+    displaced.GetVertex(static_cast<int>(moved - ids.local_to_stable.begin()))[1] += 0.01;
+    reject(displaced, terminals, interfaces, "not exactly geometrically coincident");
+    auto overlapping = combine_disjoint_tetrahedral_meshes(left, left);
+    const auto same_outward = fixture_series_interface_pairs(overlapping, ids, left.GetNV());
+    std::vector<Rt0TerminalFluxConstraint> overlap_terminals{{"first-left", {}, 0.0}, {"second-left", {}, 0.0}};
+    for (int boundary : boundary_elements_on_x(overlapping, 0.0)) {
+        mfem::Array<int> vertices;
+        overlapping.GetBdrElementVertices(boundary, vertices);
+        overlap_terminals[vertices[0] < left.GetNV() ? 0 : 1].boundary_face_vertex_ids.push_back(sorted_face_key(overlapping, ids, boundary));
+    }
+    reject(overlapping, overlap_terminals, same_outward, "outward normals are not opposite");
+}
+
+void terminal_rt0_projection_keeps_disconnected_current_scales()
+{
+    using fullmag::fem::antenna_field_solve::ChargeTerminalCurrentRequest;
+    using fullmag::fem::antenna_field_solve::solve_charge_terminal_current_constraints;
+    using fullmag::fem::transport::Rt0TerminalFluxConstraint;
+    using fullmag::fem::transport::project_terminal_constrained_rt0;
+    auto lower = shifted_unit_cube(0.0, 1);
+    auto upper = shifted_unit_cube(0.0, 2);
+    for (int vertex = 0; vertex < upper.GetNV(); ++vertex) upper.GetVertex(vertex)[1] += 2.0;
+    auto mesh = combine_disjoint_tetrahedral_meshes(lower, upper);
+    const auto ids = stable_vertex_ids(mesh);
+    mfem::Vector conductivity_values(2);
+    conductivity_values[0] = 4.0;
+    conductivity_values[1] = 4.0e-4;
+    mfem::PWConstCoefficient conductivity(conductivity_values);
+    ChargeTerminalCurrentRequest request;
+    request.conductor.mesh = &mesh;
+    request.conductor.conductivity = &conductivity;
+    request.conductor.stable_vertex_identities = ids;
+    request.terminals = {fixture_terminal_on_x(mesh, ids, "a-left", 0.0, -1.0, 0.0, 1.0),
+        fixture_terminal_on_x(mesh, ids, "a-right", 1.0, 1.0, 0.0, 1.0),
+        fixture_terminal_on_x(mesh, ids, "b-left", 0.0, -1.0e-4, 2.0, 3.0),
+        fixture_terminal_on_x(mesh, ids, "b-right", 1.0, 1.0e-4, 2.0, 3.0)};
+    const auto h1 = solve_charge_terminal_current_constraints(request);
+    require(h1->reference_terminal_ids == std::vector<std::string>({"a-left", "b-left"}),
+        "disconnected terminal RT0 fixture lost its two physical H1 references");
+    std::vector<Rt0TerminalFluxConstraint> terminals;
+    for (std::size_t terminal = 0; terminal < h1->terminal_ids.size(); ++terminal) {
+        terminals.push_back({h1->terminal_ids[terminal], h1->terminal_boundary_face_vertex_ids[terminal],
+            h1->measured_outward_currents_a[terminal]});
+    }
+    mfem::Vector raw_value(3);
+    raw_value = 0.0;
+    raw_value[0] = 1.0; // The small component must be constrained, not left at raw current.
+    mfem::VectorConstantCoefficient raw_current(raw_value);
+    const auto projection = project_terminal_constrained_rt0(mesh, ids, raw_current, conductivity, terminals);
+    const auto &rank = projection->constraint_rank_certificate();
+    require(rank.rows_before == static_cast<std::uint64_t>(mesh.GetNE() + 4) &&
+            rank.rank + 2 == rank.rows_before && rank.omitted_rows.size() == 2 &&
+            projection->terminal_ids().size() == 4 && projection->measured_outward_currents_a().size() == 4 &&
+            projection->current_residuals_a().size() == 4,
+        "disconnected terminal RT0 rank/results lost one component dependency or input terminal");
+    for (const auto &omitted : rank.omitted_rows) {
+        require(omitted.reason == ConstraintOmissionReason::ConsistentLinearDependency,
+            "disconnected terminal RT0 omitted an unjustified constraint row");
+    }
+    for (std::size_t terminal = 0; terminal < terminals.size(); ++terminal) {
+        const double expected = terminals[terminal].measured_outward_current_a;
+        const double own_tolerance = 1.0e-18 + 1.0e-8 * std::abs(expected);
+        require(projection->terminal_ids()[terminal] == terminals[terminal].id &&
+                std::abs(projection->measured_outward_currents_a()[terminal] - expected) <= own_tolerance &&
+                std::abs(projection->current_residuals_a()[terminal]) <= own_tolerance,
+            "disconnected RT0 terminal/ref current was certified against a foreign component scale");
+    }
+    const auto &field = projection->field();
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        auto *transformation = field.FESpace()->GetMesh()->GetElementTransformation(element);
+        const double expected = mesh.GetElement(element)->GetAttribute() == 1 ? 1.0 : 1.0e-4;
+        const auto &rule = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 4);
+        for (int point = 0; point < rule.GetNPoints(); ++point) {
+            transformation->SetIntPoint(&rule.IntPoint(point));
+            mfem::Vector value(3);
+            field.GetVectorValue(*transformation, rule.IntPoint(point), value);
+            require(std::abs(value[0] - expected) < 1.0e-10 &&
+                    std::abs(value[1]) < 1.0e-10 && std::abs(value[2]) < 1.0e-10,
+                "disconnected terminal RT0 retained raw J instead of the measured H1 current density");
+        }
+    }
+}
+
+void accepted_terminal_charge_source_freezes_layered_material_and_one_mesh()
+{
+    using fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest;
+    using fullmag::fem::antenna_field_solve::AcceptedTerminalChargeSource;
+    using fullmag::fem::antenna_field_solve::solve_accepted_terminal_charge_source;
+    AcceptedTerminalChargeSource::Ptr retained;
+    StableMeshVertexIdentities frozen_ids;
+    std::vector<double> frozen_sigma;
+    std::vector<int> frozen_attributes;
+    std::vector<std::array<double, 3>> frozen_positions;
+    const auto check = [&](const AcceptedTerminalChargeSource::Ptr &source, double sign) {
+        const auto &potential = source->potential();
+        const auto &current = source->rt0_projection().field();
+        auto *mesh = potential.FESpace()->GetMesh();
+        require(mesh == current.FESpace()->GetMesh(), "accepted terminal P1 and RT0 retain different owned meshes");
+        require(source->conductivity_spm_per_element() == frozen_sigma &&
+                source->rt0_projection().stable_vertex_identities().local_to_stable == frozen_ids.local_to_stable &&
+                source->terminal_solution().accepted_solution->stable_vertex_identities.local_to_stable == frozen_ids.local_to_stable,
+            "accepted terminal result changed frozen conductivity or real vertex identities");
+        require(source->terminal_solution().reference_terminal_ids == std::vector<std::string>{"left"},
+            "layered accepted terminal source did not retain the stable-ID reference");
+        for (int vertex = 0; vertex < mesh->GetNV(); ++vertex) {
+            for (int component = 0; component < 3; ++component) {
+                require(mesh->GetVertex(vertex)[component] == frozen_positions[vertex][component],
+                    "accepted terminal mesh aliases a mutated source vertex");
+            }
+            mfem::Array<int> dofs;
+            potential.FESpace()->GetVertexDofs(vertex, dofs);
+            require(dofs.Size() == 1 && dofs[0] >= 0, "retained P1 has no unique vertex DOF");
+            const double x = frozen_positions[vertex][0];
+            const double expected = sign * (x <= 0.5 ? -x / 4.0 : -0.125 - (x - 0.5) / 8.0);
+            require(std::abs(potential[dofs[0]] - expected) < 1.0e-10 &&
+                    std::abs(source->terminal_solution().accepted_solution->potential_vertex_values_v[vertex] - expected) < 1.0e-10,
+                "layered accepted terminal P1 V differs from the analytic series-conductor solution");
+        }
+        for (int element = 0; element < mesh->GetNE(); ++element) {
+            require(mesh->GetElement(element)->GetAttribute() == frozen_attributes[element],
+                "accepted terminal material attributes/order were rewritten to conductivity indices");
+            auto *transformation = mesh->GetElementTransformation(element);
+            const auto &rule = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 4);
+            for (int point = 0; point < rule.GetNPoints(); ++point) {
+                transformation->SetIntPoint(&rule.IntPoint(point));
+                mfem::Vector gradient(3), value(3);
+                potential.GetGradient(*transformation, gradient);
+                current.GetVectorValue(*transformation, rule.IntPoint(point), value);
+                for (int component = 0; component < 3; ++component) {
+                    const double expected_gradient = component == 0 ? -sign / frozen_sigma[element] : 0.0;
+                    const double expected_current = component == 0 ? sign : 0.0;
+                    require(std::abs(gradient[component] - expected_gradient) < 1.0e-10 &&
+                            std::abs(-frozen_sigma[element] * gradient[component] - expected_current) < 1.0e-10 &&
+                            std::abs(value[component] - expected_current) < 1.0e-10,
+                        "layered accepted source mixed P1 V, frozen sigma or reconstructed RT0 physics");
+                }
+            }
+        }
+        for (std::size_t terminal = 0; terminal < source->terminal_solution().terminal_ids.size(); ++terminal) {
+            const double expected = source->terminal_solution().terminal_ids[terminal] == "left" ? -sign : sign;
+            const double tolerance = 1.0e-18 + 1.0e-8 * std::abs(expected);
+            require(std::abs(source->terminal_solution().measured_outward_currents_a[terminal] - expected) <= tolerance &&
+                    std::abs(source->rt0_projection().measured_outward_currents_a()[terminal] - expected) <= tolerance,
+                "accepted terminal source did not preserve all requested H1/RT0 signed currents");
+        }
+    };
+    {
+        auto mesh = shifted_unit_cube(0.0, 1);
+        frozen_ids = stable_vertex_ids(mesh);
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            if (std::abs(mesh.GetVertex(vertex)[0]) < 1.0e-13) frozen_ids.local_to_stable[vertex] = 100u + vertex;
+            frozen_positions.push_back({mesh.GetVertex(vertex)[0], mesh.GetVertex(vertex)[1], mesh.GetVertex(vertex)[2]});
+        }
+        for (int element = 0; element < mesh.GetNE(); ++element) {
+            mfem::Array<int> vertices;
+            mesh.GetElementVertices(element, vertices);
+            double x = 0.0;
+            for (int vertex : vertices) x += mesh.GetVertex(vertex)[0] / vertices.Size();
+            frozen_sigma.push_back(x < 0.5 ? 4.0 : 8.0);
+            const int attribute = 17 + 3 * element;
+            mesh.GetElement(element)->SetAttribute(attribute);
+            frozen_attributes.push_back(attribute);
+        }
+        AcceptedTerminalChargeRequest request;
+        request.mesh = &mesh;
+        request.stable_vertex_identities = frozen_ids;
+        request.conductivity_spm_per_element = frozen_sigma;
+        request.terminals = {fixture_terminal_on_x(mesh, frozen_ids, "left", 0.0, -1.0),
+            fixture_terminal_on_x(mesh, frozen_ids, "right", 1.0, 1.0)};
+        retained = solve_accepted_terminal_charge_source(request);
+        check(retained, 1.0);
+        auto reversed = request;
+        for (auto &terminal : reversed.terminals) terminal.requested_outward_current_a *= -1.0;
+        check(solve_accepted_terminal_charge_source(reversed), -1.0);
+        auto zero = request;
+        for (auto &terminal : zero.terminals) terminal.requested_outward_current_a = 0.0;
+        check(solve_accepted_terminal_charge_source(zero), 0.0);
+        for (double jump : {0.0, 0.1}) {
+            auto trace = request;
+            trace.trace_relations.push_back({0, 0, jump, "unsupported-trace"});
+            require_rejected([&] { (void)solve_accepted_terminal_charge_source(trace); },
+                "accepted terminal source accepted a trace relation without RT0 pairing");
+        }
+        auto wrong_count = request;
+        wrong_count.conductivity_spm_per_element.pop_back();
+        require_rejected([&] { (void)solve_accepted_terminal_charge_source(wrong_count); },
+            "accepted terminal source accepted a foreign conductivity element count");
+        for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(),
+                                std::numeric_limits<double>::quiet_NaN()}) {
+            auto invalid_material = request;
+            invalid_material.conductivity_spm_per_element.front() = invalid;
+            require_rejected([&] { (void)solve_accepted_terminal_charge_source(invalid_material); },
+                "accepted terminal source accepted nonpositive or nonfinite conductivity");
+        }
+        std::fill(request.conductivity_spm_per_element.begin(), request.conductivity_spm_per_element.end(), 99.0);
+        std::fill(request.stable_vertex_identities.local_to_stable.begin(), request.stable_vertex_identities.local_to_stable.end(), 0u);
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) mesh.GetVertex(vertex)[0] += 7.0;
+        for (int element = 0; element < mesh.GetNE(); ++element) mesh.GetElement(element)->SetAttribute(99);
+        request.terminals.clear();
+        check(retained, 1.0);
+    }
+    check(retained, 1.0);
+}
+
+void accepted_terminal_charge_source_freezes_explicit_interface_series()
+{
+    using fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest;
+    using fullmag::fem::antenna_field_solve::AcceptedTerminalChargeSource;
+    using fullmag::fem::antenna_field_solve::solve_accepted_terminal_charge_source;
+    using fullmag::fem::transport::Rt0InterfaceFacePair;
+    AcceptedTerminalChargeSource::Ptr retained;
+    StableMeshVertexIdentities frozen_ids;
+    std::vector<Rt0InterfaceFacePair> frozen_pairs;
+    std::vector<double> frozen_sigma;
+    std::vector<std::array<double, 3>> frozen_positions;
+    const auto check = [&](const AcceptedTerminalChargeSource::Ptr &source, double current_a) {
+        const auto &potential = source->potential();
+        const auto &projection = source->rt0_projection();
+        auto *mesh = potential.FESpace()->GetMesh();
+        const auto &terminal = source->terminal_solution();
+        require(mesh == projection.field().FESpace()->GetMesh() &&
+                source->conductivity_spm_per_element() == frozen_sigma &&
+                projection.stable_vertex_identities().local_to_stable == frozen_ids.local_to_stable &&
+                terminal.accepted_solution->stable_vertex_identities.local_to_stable == frozen_ids.local_to_stable,
+            "accepted interface source did not freeze one P1/RT0 mesh, material and real identities");
+        require(terminal.terminal_ids == std::vector<std::string>({"left", "right"}) &&
+                terminal.reference_terminal_ids == std::vector<std::string>{"left"} &&
+                terminal.terminal_voltages_v.size() == 2 && terminal.measured_outward_currents_a.size() == 2 &&
+                terminal.current_residuals_a.size() == 2 && projection.measured_outward_currents_a().size() == 2 &&
+                projection.current_residuals_a().size() == 2 &&
+                terminal.terminal_component_ids.size() == 2 &&
+                terminal.terminal_component_ids[0] == terminal.terminal_component_ids[1] &&
+                terminal.accepted_solution->component_ids.size() == 1 &&
+                terminal.accepted_solution->gauge_vertex_ids.empty(),
+            "accepted interface source did not keep both terminals in one reference-anchored component");
+        require(source->interface_pairs().size() == frozen_pairs.size() &&
+                projection.interface_flux_measurements().size() == frozen_pairs.size(),
+            "accepted interface source did not retain all authored maps and independent measurements");
+        for (std::size_t pair = 0; pair < frozen_pairs.size(); ++pair) {
+            const auto &owned = source->interface_pairs()[pair];
+            const auto &expected = frozen_pairs[pair];
+            const auto &measurement = projection.interface_flux_measurements()[pair];
+            require(owned.id == expected.id && owned.first_face_vertex_ids == expected.first_face_vertex_ids &&
+                    owned.second_face_vertex_ids == expected.second_face_vertex_ids && owned.vertex_pairs == expected.vertex_pairs &&
+                    measurement.id == expected.id,
+                "accepted interface source aliases caller pair topology or changed measurement identity");
+            require(std::abs(measurement.first_outward_current_a - current_a / 2.0) < 1.0e-10 &&
+                    std::abs(measurement.second_outward_current_a + current_a / 2.0) < 1.0e-10 &&
+                    std::abs(measurement.mismatch_a) <= 1.0e-18 + 1.0e-10 *
+                        (std::abs(measurement.first_outward_current_a) + std::abs(measurement.second_outward_current_a)),
+                "accepted series interface lost its signed half-area flux or own continuity certificate");
+        }
+        for (int vertex = 0; vertex < mesh->GetNV(); ++vertex) {
+            for (int component = 0; component < 3; ++component) {
+                require(mesh->GetVertex(vertex)[component] == frozen_positions[vertex][component],
+                    "accepted interface mesh aliases a caller coordinate mutation");
+            }
+            mfem::Array<int> dofs;
+            potential.FESpace()->GetVertexDofs(vertex, dofs);
+            require(dofs.Size() == 1 && dofs[0] >= 0, "accepted interface vertex has no unique P1 DOF");
+            const double x = frozen_positions[vertex][0];
+            const double expected = current_a * (x <= 1.0 ? -x / 4.0 : -0.25 - (x - 1.0) / 8.0);
+            require(std::abs(potential[dofs[0]] - expected) < 1.0e-10 &&
+                    std::abs(terminal.accepted_solution->potential_vertex_values_v[vertex] - expected) < 1.0e-10,
+                "accepted interface P1 V disagrees with sigma4/8 full-series solution");
+        }
+        for (int element = 0; element < mesh->GetNE(); ++element) {
+            auto *transformation = mesh->GetElementTransformation(element);
+            const auto &rule = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 4);
+            for (int point = 0; point < rule.GetNPoints(); ++point) {
+                transformation->SetIntPoint(&rule.IntPoint(point));
+                mfem::Vector gradient(3), value(3);
+                potential.GetGradient(*transformation, gradient);
+                projection.field().GetVectorValue(*transformation, rule.IntPoint(point), value);
+                for (int component = 0; component < 3; ++component) {
+                    const double expected = component == 0 ? current_a : 0.0;
+                    require(std::abs(gradient[component] + expected / frozen_sigma[element]) < 1.0e-10 &&
+                            std::abs(-frozen_sigma[element] * gradient[component] - expected) < 1.0e-10 &&
+                            std::abs(value[component] - expected) < 1.0e-10,
+                        "accepted interface H1/material/RT0 do not describe the same series current");
+                }
+            }
+        }
+        require(std::abs(terminal.terminal_voltages_v[0]) < 1.0e-10 &&
+                std::abs(terminal.terminal_voltages_v[1] + 3.0 * current_a / 8.0) < 1.0e-10,
+            "accepted series terminal voltage differs from R=1/4+1/8 ohm");
+        for (std::size_t index = 0; index < 2; ++index) {
+            const double expected = index == 0 ? -current_a : current_a;
+            const double tolerance = 1.0e-18 + 1.0e-8 * std::abs(expected);
+            require(std::abs(terminal.measured_outward_currents_a[index] - expected) <= tolerance &&
+                    std::abs(terminal.current_residuals_a[index]) <= tolerance &&
+                    std::abs(projection.measured_outward_currents_a()[index] - expected) <= tolerance &&
+                    std::abs(projection.current_residuals_a()[index]) <= tolerance,
+                "accepted interface source lost an H1/RT0 terminal current, including reference or zero drive");
+        }
+    };
+    {
+        auto left = shifted_unit_cube(0.0, 1);
+        auto right = shifted_unit_cube(1.0, 2);
+        auto mesh = combine_disjoint_tetrahedral_meshes(left, right);
+        frozen_ids = stable_vertex_ids(mesh);
+        frozen_pairs = fixture_series_interface_pairs(mesh, frozen_ids, left.GetNV());
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            frozen_positions.push_back({mesh.GetVertex(vertex)[0], mesh.GetVertex(vertex)[1], mesh.GetVertex(vertex)[2]});
+        }
+        frozen_sigma.assign(static_cast<std::size_t>(left.GetNE()), 4.0);
+        frozen_sigma.insert(frozen_sigma.end(), static_cast<std::size_t>(right.GetNE()), 8.0);
+        AcceptedTerminalChargeRequest request;
+        request.mesh = &mesh;
+        request.stable_vertex_identities = frozen_ids;
+        request.conductivity_spm_per_element = frozen_sigma;
+        request.interface_pairs = frozen_pairs;
+        request.terminals = {fixture_terminal_on_x(mesh, frozen_ids, "left", 0.0, -1.0),
+            fixture_terminal_on_x(mesh, frozen_ids, "right", 2.0, 1.0)};
+        retained = solve_accepted_terminal_charge_source(request);
+        check(retained, 1.0);
+        auto reversed = request;
+        for (auto &terminal : reversed.terminals) terminal.requested_outward_current_a *= -1.0;
+        check(solve_accepted_terminal_charge_source(reversed), -1.0);
+        auto zero = request;
+        for (auto &terminal : zero.terminals) terminal.requested_outward_current_a = 0.0;
+        check(solve_accepted_terminal_charge_source(zero), 0.0);
+        const auto reject_before_h1 = [&](AcceptedTerminalChargeRequest invalid, const std::string &fragment) {
+            invalid.maximum_iterations = 0; // An H1-first implementation would fail the iteration gate instead.
+            bool rejected = false;
+            try {
+                (void)solve_accepted_terminal_charge_source(invalid);
+            } catch (const std::invalid_argument &error) {
+                rejected = std::string(error.what()).find(fragment) != std::string::npos;
+            }
+            require(rejected, "accepted interface missed its pre-H1 rejection: " + fragment);
+        };
+        auto malformed = request;
+        malformed.interface_pairs[0].vertex_pairs[0][1] = 0;
+        reject_before_h1(malformed, "vertex map is not a bijection");
+        malformed = request;
+        malformed.interface_pairs[0].first_face_vertex_ids = request.terminals[0].boundary_face_vertex_ids[0];
+        reject_before_h1(malformed, "not reused by a terminal or pair");
+        auto displaced = mfem::Mesh(mesh);
+        const auto moved = std::find(frozen_ids.local_to_stable.begin(), frozen_ids.local_to_stable.end(), frozen_pairs[0].vertex_pairs[0][1]);
+        displaced.GetVertex(static_cast<int>(moved - frozen_ids.local_to_stable.begin()))[1] += 0.01;
+        malformed = request;
+        malformed.mesh = &displaced;
+        reject_before_h1(malformed, "not exactly geometrically coincident");
+        malformed = request;
+        malformed.trace_relations.push_back({0, 0, 0.0, "caller-authored-trace"});
+        reject_before_h1(malformed, "trace");
+        request.interface_pairs[0].id = "mutated-pair";
+        request.interface_pairs[0].vertex_pairs[0] = {0u, 0u};
+        request.interface_pairs[0].first_face_vertex_ids = {0u, 0u, 0u};
+        request.interface_pairs.clear();
+        std::fill(request.conductivity_spm_per_element.begin(), request.conductivity_spm_per_element.end(), 99.0);
+        std::fill(request.stable_vertex_identities.local_to_stable.begin(), request.stable_vertex_identities.local_to_stable.end(), 0u);
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) mesh.GetVertex(vertex)[0] += 7.0;
+        request.terminals.clear();
+        check(retained, 1.0);
+    }
+    check(retained, 1.0); // All borrowed mesh/material/pair inputs have been destroyed.
+}
+
+std::string independent_accepted_terminal_content_digest(
+    const fullmag::fem::antenna_field_solve::AcceptedTerminalChargeSource &source,
+    const fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest &policy,
+    Bytes *preimage = nullptr)
+{
+    static_assert(sizeof(double) == 8 && std::numeric_limits<double>::is_iec559,
+        "independent accepted digest oracle requires IEEE-754 binary64");
+    Bytes bytes;
+    const auto be64 = [&](std::uint64_t value) {
+        for (int shift = 56; shift >= 0; shift -= 8) bytes.push_back(static_cast<std::uint8_t>(value >> shift));
+    };
+    const auto header = [&](const std::string &name, std::uint8_t type, std::uint64_t size) {
+        be64(name.size());
+        bytes.insert(bytes.end(), name.begin(), name.end());
+        bytes.push_back(type);
+        be64(size);
+    };
+    const auto text = [&](const std::string &name, const std::string &value) {
+        header(name, 1, value.size());
+        bytes.insert(bytes.end(), value.begin(), value.end());
+    };
+    const auto integer = [&](const std::string &name, std::uint64_t value) {
+        header(name, 2, 8);
+        be64(value);
+    };
+    const auto real = [&](const std::string &name, double value) {
+        require(std::isfinite(value), "independent accepted digest oracle encountered a nonfinite double");
+        std::uint64_t bits = 0;
+        if (value != 0.0) std::memcpy(&bits, &value, sizeof(bits)); // Canonical +0 includes negative zero.
+        header(name, 4, 8);
+        be64(bits);
+    };
+    const auto signed_integer = [&](const std::string &name, int value) {
+        integer(name, static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
+    };
+    text("schema", "accepted_terminal_charge_source.ordered.v1");
+    text("operator", "fem_accepted_terminal_charge_source.v1");
+    real("absolute_jump_tolerance_v", policy.absolute_jump_tolerance_v);
+    real("relative_jump_tolerance", policy.relative_jump_tolerance);
+    real("algebraic_relative_tolerance", policy.algebraic_relative_tolerance);
+    integer("maximum_iterations", policy.maximum_iterations);
+    const auto &projection = source.rt0_projection();
+    const auto &ids = projection.stable_vertex_identities();
+    const auto &field = projection.field();
+    const auto &space = *field.FESpace();
+    const auto &mesh = *space.GetMesh();
+    const auto &terminal = source.terminal_solution();
+    const auto &charge = *terminal.accepted_solution;
+    integer("vertices", mesh.GetNV());
+    text("stable_vertex_version", ids.version);
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        integer("vertex_id", ids.local_to_stable.at(vertex));
+        for (int axis = 0; axis < 3; ++axis) real("xyz_m", mesh.GetVertex(vertex)[axis]);
+        real("potential_v", charge.potential_vertex_values_v.at(vertex));
+        real("reaction_a", charge.reaction_vertex_values_a.at(vertex));
+        integer("vertex_component_id", charge.vertex_component_ids.at(vertex));
+    }
+    const auto vertex_ids = [&](const mfem::Array<int> &vertices) {
+        for (int vertex : vertices) integer("vertex_id", ids.local_to_stable.at(vertex));
+    };
+    integer("elements", mesh.GetNE());
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        signed_integer("attribute", mesh.GetElement(element)->GetAttribute());
+        mfem::Array<int> vertices;
+        mesh.GetElementVertices(element, vertices);
+        vertex_ids(vertices);
+        real("conductivity_spm", source.conductivity_spm_per_element().at(element));
+    }
+    integer("boundary", mesh.GetNBE());
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        signed_integer("attribute", mesh.GetBdrElement(boundary)->GetAttribute());
+        mfem::Array<int> vertices;
+        mesh.GetBdrElementVertices(boundary, vertices);
+        vertex_ids(vertices);
+    }
+    integer("faces", mesh.GetNumFaces());
+    for (int face = 0; face < mesh.GetNumFaces(); ++face) {
+        mfem::Array<int> vertices, dofs;
+        mesh.GetFaceVertices(face, vertices);
+        vertex_ids(vertices);
+        int first = -1, second = -1;
+        mesh.GetFaceElements(face, &first, &second);
+        signed_integer("first_element", first);
+        signed_integer("second_element", second);
+        space.GetFaceDofs(face, dofs);
+        require(dofs.Size() == 1, "independent accepted digest oracle requires one actual RT0 face DOF");
+        signed_integer("signed_rt0_dof", dofs[0]);
+    }
+    integer("rt0", field.Size());
+    for (int dof = 0; dof < field.Size(); ++dof) real("rt0_flux_a", field[dof]);
+    integer("terminals", terminal.terminal_ids.size());
+    for (std::size_t index = 0; index < terminal.terminal_ids.size(); ++index) {
+        text("terminal_id", terminal.terminal_ids[index]);
+        const auto &faces = terminal.terminal_boundary_face_vertex_ids.at(index);
+        integer("terminal_faces", faces.size());
+        for (const auto &face : faces) for (auto id : face) integer("vertex_id", id);
+        real("requested_current_a", terminal.requested_outward_currents_a.at(index));
+        real("h1_current_a", terminal.measured_outward_currents_a.at(index));
+        real("h1_residual_a", terminal.current_residuals_a.at(index));
+        real("rt0_current_a", projection.measured_outward_currents_a().at(index));
+        real("rt0_residual_a", projection.current_residuals_a().at(index));
+        real("terminal_voltage_v", terminal.terminal_voltages_v.at(index));
+        integer("terminal_component_id", terminal.terminal_component_ids.at(index));
+    }
+    integer("references", terminal.reference_terminal_ids.size());
+    for (std::size_t index = 0; index < terminal.reference_terminal_ids.size(); ++index) {
+        text("terminal_id", terminal.reference_terminal_ids[index]);
+        integer("component_id", terminal.reference_component_ids.at(index));
+    }
+    integer("components", charge.component_ids.size());
+    for (std::size_t index = 0; index < charge.component_ids.size(); ++index) {
+        integer("component_id", charge.component_ids[index]);
+        real("component_relative_residual", charge.component_relative_residuals.at(index));
+    }
+    integer("gauges", charge.gauge_vertex_ids.size());
+    for (auto id : charge.gauge_vertex_ids) integer("vertex_id", id);
+    integer("interfaces", source.interface_pairs().size());
+    for (std::size_t index = 0; index < source.interface_pairs().size(); ++index) {
+        const auto &pair = source.interface_pairs()[index];
+        text("interface_id", pair.id);
+        for (auto id : pair.first_face_vertex_ids) integer("vertex_id", id);
+        for (auto id : pair.second_face_vertex_ids) integer("vertex_id", id);
+        for (const auto &map : pair.vertex_pairs) for (auto id : map) integer("vertex_id", id);
+        const auto &measurement = projection.interface_flux_measurements().at(index);
+        real("first_current_a", measurement.first_outward_current_a);
+        real("second_current_a", measurement.second_outward_current_a);
+        real("interface_mismatch_a", measurement.mismatch_a);
+    }
+    const auto &rank = projection.constraint_rank_certificate();
+    integer("rows_before", rank.rows_before);
+    integer("rank", rank.rank);
+    integer("omitted", rank.omitted_rows.size());
+    for (const auto &row : rank.omitted_rows) {
+        text("constraint_id", row.constraint_id);
+        integer("omission_reason", static_cast<std::uint64_t>(row.reason));
+        real("omitted_residual_a", row.residual_a);
+        for (auto id : row.closed_component_anchor_element) integer("vertex_id", id);
+    }
+    if (preimage != nullptr) *preimage = bytes;
+    return sha256_hex(bytes);
+}
+
+void accepted_terminal_content_digest_matches_independent_owned_codec()
+{
+    using fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest;
+    using fullmag::fem::antenna_field_solve::AcceptedTerminalChargeSource;
+    using fullmag::fem::antenna_field_solve::solve_accepted_terminal_charge_source;
+    require(sha256_hex(Bytes{'a', 'b', 'c'}) ==
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "independent accepted digest SHA-256 oracle failed its abc known-answer selfcheck");
+    AcceptedTerminalChargeSource::Ptr retained;
+    AcceptedTerminalChargeRequest frozen_policy;
+    std::string frozen_digest;
+    {
+        auto left = shifted_unit_cube(0.0, 1);
+        auto right = shifted_unit_cube(1.0, 2);
+        auto mesh = combine_disjoint_tetrahedral_meshes(left, right);
+        AcceptedTerminalChargeRequest request;
+        request.mesh = &mesh;
+        request.stable_vertex_identities = stable_vertex_ids(mesh);
+        request.conductivity_spm_per_element.assign(static_cast<std::size_t>(left.GetNE()), 4.0);
+        request.conductivity_spm_per_element.insert(request.conductivity_spm_per_element.end(), static_cast<std::size_t>(right.GetNE()), 8.0);
+        request.terminals = {fixture_terminal_on_x(mesh, request.stable_vertex_identities, "left", 0.0, -1.0),
+            fixture_terminal_on_x(mesh, request.stable_vertex_identities, "right", 2.0, 1.0)};
+        request.interface_pairs = fixture_series_interface_pairs(mesh, request.stable_vertex_identities, left.GetNV());
+        const auto solve_and_check = [&](const AcceptedTerminalChargeRequest &input) {
+            const auto source = solve_accepted_terminal_charge_source(input);
+            Bytes preimage;
+            require(source->content_digest() == independent_accepted_terminal_content_digest(*source, input, &preimage),
+                "accepted source digest disagrees with independent typed big-endian owned-content codec");
+            require(source->canonical_content_bytes() == std::string(preimage.begin(), preimage.end()),
+                "accepted source returned bytes differ from the independent digest preimage");
+            return source;
+        };
+        retained = solve_and_check(request);
+        frozen_digest = retained->content_digest();
+        frozen_policy.absolute_jump_tolerance_v = request.absolute_jump_tolerance_v;
+        frozen_policy.relative_jump_tolerance = request.relative_jump_tolerance;
+        frozen_policy.algebraic_relative_tolerance = request.algebraic_relative_tolerance;
+        frozen_policy.maximum_iterations = request.maximum_iterations;
+        require(solve_and_check(request)->content_digest() == frozen_digest,
+            "equivalent repeated accepted source request changed its ordered content digest");
+        const auto differs = [&](const AcceptedTerminalChargeRequest &input, const std::string &label) {
+            require(solve_and_check(input)->content_digest() != frozen_digest,
+                "accepted source digest did not bind changed " + label);
+        };
+        auto changed = request;
+        for (auto &terminal : changed.terminals) terminal.requested_outward_current_a *= -1.0;
+        differs(changed, "signed current");
+        changed = request;
+        for (auto &sigma : changed.conductivity_spm_per_element) sigma *= 2.0;
+        differs(changed, "conductivity");
+        auto moved = mfem::Mesh(mesh);
+        for (int vertex = 0; vertex < moved.GetNV(); ++vertex) moved.GetVertex(vertex)[0] += 0.125;
+        changed = request;
+        changed.mesh = &moved;
+        differs(changed, "geometry");
+        changed = request;
+        for (auto &id : changed.stable_vertex_identities.local_to_stable) id += 5000u;
+        for (auto &terminal : changed.terminals) for (auto &face : terminal.boundary_face_vertex_ids) for (auto &id : face) id += 5000u;
+        for (auto &pair : changed.interface_pairs) {
+            for (auto &id : pair.first_face_vertex_ids) id += 5000u;
+            for (auto &id : pair.second_face_vertex_ids) id += 5000u;
+            for (auto &map : pair.vertex_pairs) for (auto &id : map) id += 5000u;
+        }
+        differs(changed, "actual stable IDs");
+        auto attributed = mfem::Mesh(mesh);
+        attributed.GetElement(0)->SetAttribute(17);
+        changed = request;
+        changed.mesh = &attributed;
+        differs(changed, "element attribute");
+        auto boundary_attributed = mfem::Mesh(mesh);
+        boundary_attributed.GetBdrElement(0)->SetAttribute(23);
+        changed.mesh = &boundary_attributed;
+        differs(changed, "boundary attribute");
+        changed = request;
+        changed.terminals[0].id = "renamed-left";
+        differs(changed, "terminal ID");
+        changed = request;
+        changed.interface_pairs[0].id = "renamed-interface";
+        differs(changed, "interface ID");
+        changed = request;
+        changed.maximum_iterations += 1;
+        differs(changed, "solver policy");
+        request.interface_pairs.clear();
+        request.terminals.clear();
+        std::fill(request.conductivity_spm_per_element.begin(), request.conductivity_spm_per_element.end(), 99.0);
+        std::fill(request.stable_vertex_identities.local_to_stable.begin(), request.stable_vertex_identities.local_to_stable.end(), 0u);
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) mesh.GetVertex(vertex)[0] += 7.0;
+        require(retained->content_digest() == frozen_digest &&
+                independent_accepted_terminal_content_digest(*retained, frozen_policy) == frozen_digest,
+            "accepted digest or owned preimage changed after caller mutation");
+    }
+    require(retained->content_digest() == frozen_digest &&
+            independent_accepted_terminal_content_digest(*retained, frozen_policy) == frozen_digest,
+        "accepted digest or owned preimage changed after caller destruction");
+}
+
+void accepted_external_lead_finalizer_preserves_owned_series_and_rejects_foreign_descriptors()
+{
+    using namespace fullmag::fem::antenna_field_solve;
+    using fullmag::fem::transport::Rt0InterfaceFacePair;
+    AcceptedExternalLeadCurrentSource::Ptr retained;
+    std::string retained_digest, retained_bytes;
+    const auto exercise = [&](double scale, double current, bool negative_cases) {
+        auto left = shifted_unit_cube(0.0, 1);
+        auto device = shifted_unit_cube(1.0, 2);
+        auto right = shifted_unit_cube(2.0, 3);
+        auto first_two = combine_disjoint_tetrahedral_meshes(left, device);
+        auto mesh = combine_disjoint_tetrahedral_meshes(first_two, right);
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            for (int axis = 0; axis < 3; ++axis) mesh.GetVertex(vertex)[axis] *= scale;
+        }
+        const auto ids = stable_vertex_ids(mesh);
+        AcceptedTerminalChargeRequest charge;
+        charge.mesh = &mesh;
+        charge.stable_vertex_identities = ids;
+        charge.conductivity_spm_per_element.assign(mesh.GetNE(), scale == 1.0 ? 4.0 : 1.0e7);
+        charge.terminals = {fixture_terminal_on_x(mesh, ids, "outer-left", 0.0, -current),
+            fixture_terminal_on_x(mesh, ids, "outer-right", 3.0 * scale, current)};
+        AcceptedExternalLeadSourceRequest closure;
+        closure.closure_revision = "three-cube-series.v1";
+        const int device_begin = left.GetNV(), device_end = device_begin + device.GetNV();
+        for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+            (vertex >= device_begin && vertex < device_end ? closure.device_vertex_ids : closure.lead_vertex_ids)
+                .push_back(ids.local_to_stable[vertex]);
+        }
+        closure.branch_observations = {{"device-left", {}, -current}, {"device-right", {}, current}};
+        for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+            mfem::Array<int> vertices;
+            mesh.GetBdrElementVertices(boundary, vertices);
+            const bool device_face = vertices[0] >= device_begin && vertices[0] < device_end;
+            const double x = mesh.GetVertex(vertices[0])[0];
+            const bool contact = device_face && (x == scale || x == 2.0 * scale) &&
+                mesh.GetVertex(vertices[1])[0] == x && mesh.GetVertex(vertices[2])[0] == x;
+            if (!contact) continue;
+            Rt0InterfaceFacePair pair;
+            const std::size_t branch = x == scale ? 0 : 1;
+            pair.id = "device-lead:" + std::to_string(charge.interface_pairs.size());
+            pair.first_face_vertex_ids = sorted_face_key(mesh, ids, boundary);
+            for (int corner = 0; corner < 3; ++corner) {
+                int match = -1;
+                for (int other = 0; other < mesh.GetNV(); ++other) {
+                    if (other >= device_begin && other < device_end) continue;
+                    const double *a = mesh.GetVertex(vertices[corner]), *b = mesh.GetVertex(other);
+                    if (a[0] == b[0] && a[1] == b[1] && a[2] == b[2]) match = other;
+                }
+                require(match >= 0, "three-cube interface lacks an explicitly paired lead vertex");
+                pair.vertex_pairs[corner] = {ids.local_to_stable[vertices[corner]], ids.local_to_stable[match]};
+                pair.second_face_vertex_ids[corner] = ids.local_to_stable[match];
+            }
+            std::sort(pair.second_face_vertex_ids.begin(), pair.second_face_vertex_ids.end());
+            closure.branch_observations[branch].interface_pair_ids.push_back(pair.id);
+            charge.interface_pairs.push_back(pair);
+        }
+        require(charge.interface_pairs.size() == 4 && closure.branch_observations[0].interface_pair_ids.size() == 2 &&
+                closure.branch_observations[1].interface_pair_ids.size() == 2,
+            "three-cube fixture did not author both full contacts");
+        std::map<std::array<std::uint64_t, 3>, std::string> outer_faces, interface_faces;
+        for (const auto &terminal : charge.terminals) {
+            for (const auto &key : terminal.boundary_face_vertex_ids) outer_faces.emplace(key, terminal.id);
+        }
+        for (const auto &pair : charge.interface_pairs) {
+            interface_faces.emplace(pair.first_face_vertex_ids, pair.id);
+            interface_faces.emplace(pair.second_face_vertex_ids, pair.id);
+        }
+        for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+            const auto key = sorted_face_key(mesh, ids, boundary);
+            const auto role = outer_faces.count(key) ? ExternalLeadSourceBoundaryRole::OuterElectrode :
+                interface_faces.count(key) ? ExternalLeadSourceBoundaryRole::DeviceLeadInterface : ExternalLeadSourceBoundaryRole::Insulating;
+            const auto circuit_id = outer_faces.count(key) ? outer_faces.at(key) :
+                interface_faces.count(key) ? interface_faces.at(key) : std::string{};
+            closure.boundary_faces.push_back({key, role, circuit_id});
+        }
+        closure.accepted_source = solve_accepted_terminal_charge_source(charge);
+        closure.required_charge_content_digest = closure.accepted_source->content_digest();
+        const auto &projection = closure.accepted_source->rt0_projection();
+        const auto *owned_mesh = projection.field().FESpace()->GetMesh();
+        const auto *owned_field = &projection.field();
+        const auto *owned_potential = &closure.accepted_source->potential();
+        std::vector<double> frozen_dofs(projection.field().GetData(), projection.field().GetData() + projection.field().Size());
+        const auto rank = projection.constraint_rank_certificate();
+        const double kkt = projection.scaled_kkt_residual(), correction = projection.correction_norm_mw();
+        const auto accepted = AcceptedExternalLeadCurrentSource::Finalize(closure);
+        const auto repeated = AcceptedExternalLeadCurrentSource::Finalize(closure);
+        const auto &owned = accepted->charge_source();
+        const double expected_drop = -3.0 * current / (charge.conductivity_spm_per_element.front() * scale);
+        require(std::abs(owned.terminal_solution().terminal_voltages_v.back() - expected_drop) <=
+                1.0e-12 + 1.0e-8 * std::abs(expected_drop),
+            "three-cube fixture disagrees with its analytic R=3/(sigma*length) ohm");
+        require(&owned == closure.accepted_source.get() && &owned.rt0_projection().field() == owned_field &&
+                &owned.potential() == owned_potential && owned.potential().FESpace()->GetMesh() == owned_mesh &&
+                owned.rt0_projection().field().FESpace()->GetMesh() == owned_mesh,
+            "external lead finalizer replaced or copied the accepted H1/RT0 owner");
+        require(std::equal(frozen_dofs.begin(), frozen_dofs.end(), owned.rt0_projection().field().GetData()) &&
+                owned.rt0_projection().constraint_rank_certificate().rank == rank.rank &&
+                owned.rt0_projection().constraint_rank_certificate().rows_before == rank.rows_before &&
+                owned.rt0_projection().scaled_kkt_residual() == kkt && std::isfinite(kkt) &&
+                owned.rt0_projection().correction_norm_mw() == correction && std::isfinite(correction),
+            "external lead finalizer changed DOFs, rank or real projection diagnostics");
+        require(!accepted->canonical_content_bytes().empty() && accepted->content_digest().size() == 64 &&
+                repeated->content_digest() == accepted->content_digest() &&
+                repeated->canonical_content_bytes() == accepted->canonical_content_bytes(),
+            "repeated external lead finalization changed its canonical identity");
+        const auto &record_bytes = accepted->canonical_content_bytes();
+        require(sha256_hex(Bytes(record_bytes.begin(), record_bytes.end())) == accepted->content_digest(),
+            "external lead digest does not bind its exact retained canonical bytes");
+        require(accepted->branch_measurements().size() == 2 && accepted->component_measurements().size() == 1 &&
+                accepted->physical_measurements().elements.size() == static_cast<std::size_t>(mesh.GetNE()),
+            "external lead finalizer omitted local or branch/component measurements");
+        require(std::string(AcceptedExternalLeadCurrentSource::operator_version) == "fem_accepted_external_lead_current_source.v2" &&
+                std::string(AcceptedExternalLeadCurrentSource::digest_schema) == "accepted_external_lead_current_source.ordered.v2",
+            "external lead physical face ledger did not advance its source identity to v2");
+        std::map<std::array<std::uint64_t, 4>, double> element_flux_scales;
+        for (const auto &element : accepted->physical_measurements().elements) {
+            element_flux_scales.emplace(element.vertex_ids, element.absolute_flux_sum_a);
+        }
+        std::map<std::array<std::uint64_t, 3>, int> actual_faces;
+        for (int face = 0; face < owned_mesh->GetNumFaces(); ++face) {
+            mfem::Array<int> vertices;
+            owned_mesh->GetFaceVertices(face, vertices);
+            std::array<std::uint64_t, 3> key{};
+            for (int corner = 0; corner < 3; ++corner) key[corner] = ids.local_to_stable[vertices[corner]];
+            std::sort(key.begin(), key.end()); actual_faces.emplace(key, face);
+        }
+        require(accepted->physical_measurements().faces.size() == actual_faces.size(),
+            "source v2 omitted an actual face from its signed RT0 binding ledger");
+        for (const auto &row : accepted->physical_measurements().faces) {
+            const int face = actual_faces.at(row.vertex_ids);
+            mfem::Array<int> dofs;
+            owned_field->FESpace()->GetFaceDofs(face, dofs);
+            require(dofs.Size() == 1, "source v2 face has no unique actual RT0 moment");
+            const int dof = dofs[0] < 0 ? -1 - dofs[0] : dofs[0];
+            require(dof >= 0 && dof < owned_field->Size(), "source v2 face references a foreign RT0 DOF");
+            const double weight = row.rt0_dof_to_canonical_flux_weight;
+            const long double expected_flux = static_cast<long double>(weight) * (*owned_field)[dof];
+            int first = -1, second = -1;
+            owned_mesh->GetFaceElements(face, &first, &second);
+            long double adjacent_scale = 0.0L;
+            for (int element : {first, second}) {
+                if (element < 0) continue;
+                mfem::Array<int> vertices; owned_mesh->GetElementVertices(element, vertices);
+                std::array<std::uint64_t, 4> key{};
+                for (int corner = 0; corner < 4; ++corner) key[corner] = ids.local_to_stable[vertices[corner]];
+                std::sort(key.begin(), key.end()); adjacent_scale += element_flux_scales.at(key);
+            }
+            const long double gate = 1.0e-18L + 1.0e-10L * adjacent_scale;
+            require(std::isfinite(weight) && weight != 0.0 && std::isfinite(expected_flux) &&
+                    std::isfinite(adjacent_scale) && std::isfinite(gate) &&
+                    std::abs(static_cast<long double>(row.canonical_flux_a) - expected_flux) <= gate,
+                "source v2 canonical flux is not the signed basis-weight times retained raw RT0 DOF within its adjacent-element SI gate");
+        }
+        require(&owned.rt0_projection().field() == owned_field &&
+                std::equal(frozen_dofs.begin(), frozen_dofs.end(), owned_field->GetData()),
+            "source v2 physical face measurement modified its retained RT0 field");
+        for (std::size_t branch = 0; branch < 2; ++branch) {
+            const double expected = branch == 0 ? -current : current;
+            const auto &measured = accepted->branch_measurements()[branch];
+            const double tolerance = 1.0e-18 + 1.0e-8 * std::abs(expected);
+            require(measured.id == closure.branch_observations[branch].id && measured.requested_outward_current_a == expected &&
+                    std::abs(measured.h1_outward_current_a - expected) <= tolerance &&
+                    std::abs(measured.rt0_outward_current_a - expected) <= tolerance,
+                "external lead branch lost its signed device-outward current");
+        }
+        const auto &component = accepted->component_measurements().front();
+        require(std::abs(component.requested_outward_current_sum_a) <= 1.0e-18 &&
+                std::abs(component.h1_outward_current_sum_a) <= 1.0e-18 + 1.0e-8 * std::abs(current) &&
+                std::abs(component.rt0_outward_current_sum_a) <= 1.0e-18 + 1.0e-8 * std::abs(current),
+            "external lead component lacks its independent signed balance");
+        const std::vector<std::array<double, 3>> targets{{4.0 * scale, 2.0 * scale, 2.0 * scale}};
+        const auto field = evaluate_accepted_external_lead_field(*accepted, targets);
+        require(field.field_scope == "external_electrode_truncation" &&
+                field.accepted_external_source_digest == accepted->content_digest() &&
+                field.quadrature.source_view_identity_digest.empty() &&
+                field.quadrature.h_xyz_apm.size() == 3 &&
+                field.quadrature.diagnostics.unconverged_pair_count == 0 &&
+                std::all_of(field.quadrature.h_xyz_apm.begin(), field.quadrature.h_xyz_apm.end(),
+                    [](double value) { return std::isfinite(value); }),
+            "external lead field lost truncation scope, owned identity or finite converged quadrature");
+        require(field.charge_content_digest == owned.content_digest() &&
+                field.operator_version == "fem_accepted_external_lead_field.v1" &&
+                field.evaluation_content_digest.size() == 64 && !field.canonical_evaluation_bytes.empty() &&
+                sha256_hex(Bytes(field.canonical_evaluation_bytes.begin(), field.canonical_evaluation_bytes.end())) ==
+                    field.evaluation_content_digest,
+            "external lead evaluation digest does not bind its exact owned field record");
+        if (current == 0.0) {
+            require(std::all_of(field.quadrature.h_xyz_apm.begin(), field.quadrature.h_xyz_apm.end(),
+                    [](double value) { return value == 0.0; }),
+                "zero-drive external lead field is nonzero");
+        }
+        if (negative_cases) {
+            auto unresolved_closure = closure;
+            unresolved_closure.accepted_source.reset();
+            unresolved_closure.required_charge_content_digest.clear();
+            const auto bundle = solve_accepted_external_lead_bundle(charge, unresolved_closure, targets);
+            const auto repeated_bundle = solve_accepted_external_lead_bundle(charge, unresolved_closure, targets);
+            require(!bundle.canonical_content_bytes.empty() && bundle.content_digest.size() == 64 &&
+                    sha256_hex(Bytes(bundle.canonical_content_bytes.begin(), bundle.canonical_content_bytes.end())) == bundle.content_digest &&
+                    repeated_bundle.content_digest == bundle.content_digest &&
+                    repeated_bundle.canonical_content_bytes == bundle.canonical_content_bytes,
+                "one-call external lead bundle lost exact SHA, bytes or deterministic identity");
+            require_rejected([&] { (void)solve_accepted_external_lead_bundle(charge, closure, targets); },
+                "one-call bundle accepted a caller-owned charge result and precomputed content pin");
+            auto caller_pin = unresolved_closure;
+            caller_pin.required_charge_content_digest = closure.required_charge_content_digest;
+            require_rejected([&] { (void)solve_accepted_external_lead_bundle(charge, caller_pin, targets); },
+                "one-call bundle accepted a caller-supplied future charge content pin");
+            auto shifted_targets = targets;
+            shifted_targets.front()[0] += scale;
+            const auto shifted_field = evaluate_accepted_external_lead_field(*accepted, shifted_targets);
+            fullmag::fem::oersted::DirectTetraQuadratureOptions changed_policy;
+            changed_policy.base_quadrature_order = 6;
+            const auto policy_field = evaluate_accepted_external_lead_field(*accepted, targets, changed_policy);
+            require(shifted_field.evaluation_content_digest != field.evaluation_content_digest &&
+                    policy_field.evaluation_content_digest != field.evaluation_content_digest &&
+                    shifted_field.charge_content_digest == field.charge_content_digest &&
+                    policy_field.charge_content_digest == field.charge_content_digest &&
+                    sha256_hex(Bytes(shifted_field.canonical_evaluation_bytes.begin(), shifted_field.canonical_evaluation_bytes.end())) ==
+                        shifted_field.evaluation_content_digest &&
+                    sha256_hex(Bytes(policy_field.canonical_evaluation_bytes.begin(), policy_field.canonical_evaluation_bytes.end())) ==
+                        policy_field.evaluation_content_digest &&
+                    &accepted->charge_source().rt0_projection().field() == owned_field &&
+                    &accepted->charge_source().potential() == owned_potential &&
+                    accepted->charge_source().content_digest() == closure.required_charge_content_digest &&
+                    std::equal(frozen_dofs.begin(), frozen_dofs.end(), owned_field->GetData()),
+                "field targets/options did not change evaluation identity or modified accepted charge DOFs");
+            const auto reject_field_policy = [&](const fullmag::fem::oersted::DirectTetraQuadratureOptions &options) {
+                bool rejected = false;
+                try {
+                    (void)evaluate_accepted_external_lead_field(*accepted, targets, options);
+                } catch (const std::invalid_argument &error) {
+                    rejected = std::string(error.what()).find("bounded private contract") != std::string::npos;
+                }
+                require(rejected, "pathological field policy did not fail its specific pre-kernel bound");
+            };
+            for (int order : {17, std::numeric_limits<int>::max()}) {
+                auto options = changed_policy; options.base_quadrature_order = order; reject_field_policy(options);
+            }
+            for (int depth : {7, std::numeric_limits<int>::max()}) {
+                auto options = changed_policy; options.maximum_subdivision_depth = depth; reject_field_policy(options);
+            }
+            auto oversized_budget = changed_policy;
+            oversized_budget.maximum_source_target_pairs = 1'000'001;
+            reject_field_policy(oversized_budget);
+            const std::vector<std::array<double, 3>> oversized_targets(600'000, targets.front());
+            bool preimage_rejected = false;
+            try {
+                (void)evaluate_accepted_external_lead_field(*accepted, oversized_targets);
+            } catch (const std::invalid_argument &error) {
+                preimage_rejected = std::string(error.what()).find("preflight 128 MiB") != std::string::npos;
+            }
+            require(preimage_rejected,
+                "oversized field record did not fail its typed-preimage preflight before quadrature");
+            const auto reject = [&](const AcceptedExternalLeadSourceRequest &bad, const char *message) {
+                require_rejected([&] { (void)AcceptedExternalLeadCurrentSource::Finalize(bad); }, message);
+            };
+            auto bad = closure;
+            bad.required_charge_content_digest.assign(64, '0'); reject(bad, "external finalizer accepted stale charge SHA");
+            bad = closure; bad.device_vertex_ids.pop_back(); reject(bad, "external finalizer accepted missing partition ID");
+            bad = closure; bad.device_vertex_ids.push_back(std::numeric_limits<std::uint64_t>::max()); reject(bad, "external finalizer accepted foreign ID");
+            bad = closure; bad.lead_vertex_ids.push_back(bad.device_vertex_ids.back()); bad.device_vertex_ids.pop_back();
+            reject(bad, "external finalizer accepted an element split between device and lead");
+            bad = closure; bad.boundary_faces.pop_back(); reject(bad, "external finalizer accepted incomplete boundary roles");
+            bad = closure;
+            for (auto &face : bad.boundary_faces) if (face.role == ExternalLeadSourceBoundaryRole::OuterElectrode) { face.role = ExternalLeadSourceBoundaryRole::Insulating; break; }
+            reject(bad, "external finalizer accepted wrongly classified outer terminal");
+            bad = closure; bad.boundary_faces.front().circuit_id = "foreign-circuit";
+            reject(bad, "external finalizer accepted a foreign boundary circuit identity");
+            bad = closure; std::swap(bad.device_vertex_ids, bad.lead_vertex_ids); reject(bad, "external finalizer accepted swapped device/lead partition");
+            bad = closure; bad.branch_observations[1].interface_pair_ids.push_back(bad.branch_observations[0].interface_pair_ids.front());
+            reject(bad, "external finalizer accepted reused branch interface");
+            bad = closure; bad.branch_observations.pop_back();
+            reject(bad, "external finalizer accepted an unobserved interface branch");
+            bad = closure; bad.branch_observations[0].requested_device_outward_current_a += 0.1;
+            reject(bad, "external finalizer accepted a foreign observed branch current");
+            auto nonfinite_targets = targets;
+            nonfinite_targets.front()[0] = std::numeric_limits<double>::quiet_NaN();
+            require_rejected([&] { (void)evaluate_accepted_external_lead_field(*accepted, nonfinite_targets); },
+                "external lead field accepted nonfinite target coordinates");
+            fullmag::fem::oersted::DirectTetraQuadratureOptions insufficient_budget;
+            insufficient_budget.maximum_source_target_pairs = 1;
+            require_rejected([&] { (void)evaluate_accepted_external_lead_field(*accepted, targets, insufficient_budget); },
+                "external lead field exceeded its bounded quadrature budget");
+            retained = accepted; retained_digest = accepted->content_digest(); retained_bytes = accepted->canonical_content_bytes();
+            closure.accepted_source.reset(); closure.boundary_faces.clear(); closure.branch_observations.clear();
+            for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) mesh.GetVertex(vertex)[0] += 9.0;
+            require(retained->content_digest() == retained_digest && retained->canonical_content_bytes() == retained_bytes &&
+                    retained->charge_source().potential().FESpace()->GetMesh() == owned_mesh,
+                "external finalizer retained borrowed request state");
+        }
+    };
+    exercise(1.0, 1.0, true);
+    exercise(1.0, -1.0, false);
+    exercise(1.0, 0.0, false);
+    exercise(1.0e-9, 1.0e-9, false);
+    require(retained && retained->content_digest() == retained_digest && retained->canonical_content_bytes() == retained_bytes &&
+            retained->charge_source().rt0_projection().field().Size() > 0,
+        "external finalizer lost its owner after original mesh and requests were destroyed");
+}
+
+void accepted_terminal_charge_source_preserves_nanometre_scale_and_rejects_degeneracy()
+{
+    using fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest;
+    using fullmag::fem::antenna_field_solve::solve_accepted_terminal_charge_source;
+    constexpr double length_m = 1.0e-9;
+    constexpr double conductivity_spm = 1.0e7;
+    constexpr double current_a = 1.0e-9;
+    auto mesh = shifted_unit_cube(0.0, 1);
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        for (int component = 0; component < 3; ++component) mesh.GetVertex(vertex)[component] *= length_m;
+    }
+    const auto ids = stable_vertex_ids(mesh);
+    AcceptedTerminalChargeRequest request;
+    request.mesh = &mesh;
+    request.stable_vertex_identities = ids;
+    request.conductivity_spm_per_element.assign(static_cast<std::size_t>(mesh.GetNE()), conductivity_spm);
+    request.terminals = {fixture_terminal_on_x(mesh, ids, "left", 0.0, -current_a),
+        fixture_terminal_on_x(mesh, ids, "right", length_m, current_a)};
+    const auto source = solve_accepted_terminal_charge_source(request);
+    const auto &potential = source->potential();
+    const auto &rt0 = source->rt0_projection().field();
+    auto *owned_mesh = potential.FESpace()->GetMesh();
+    require(owned_mesh == rt0.FESpace()->GetMesh(), "nanometre accepted P1 and RT0 do not share one owned mesh");
+    require(source->terminal_solution().reference_terminal_ids == std::vector<std::string>{"left"},
+        "nanometre fixture did not retain the left reference");
+    for (int vertex = 0; vertex < owned_mesh->GetNV(); ++vertex) {
+        mfem::Array<int> dofs;
+        potential.FESpace()->GetVertexDofs(vertex, dofs);
+        require(dofs.Size() == 1 && dofs[0] >= 0, "nanometre retained P1 vertex lacks a scalar DOF");
+        require(std::abs(potential[dofs[0]] + 100.0 * owned_mesh->GetVertex(vertex)[0]) < 1.0e-17,
+            "nanometre conductor voltage differs from V=-100*x, right=-1e-7 V");
+    }
+    for (int element = 0; element < owned_mesh->GetNE(); ++element) {
+        auto *transformation = owned_mesh->GetElementTransformation(element);
+        const auto &rule = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, 4);
+        for (int point = 0; point < rule.GetNPoints(); ++point) {
+            transformation->SetIntPoint(&rule.IntPoint(point));
+            mfem::Vector gradient(3), value(3);
+            potential.GetGradient(*transformation, gradient);
+            rt0.GetVectorValue(*transformation, rule.IntPoint(point), value);
+            require(std::abs(gradient[0] + 100.0) < 1.0e-8 &&
+                    std::abs(gradient[1]) < 1.0e-8 && std::abs(gradient[2]) < 1.0e-8,
+                "nanometre retained P1 gradient differs from (-100,0,0) V/m");
+            require(std::abs(value[0] - 1.0e9) <= 1.0e-8 * 1.0e9 &&
+                    std::abs(value[1]) <= 1.0e-8 * 1.0e9 && std::abs(value[2]) <= 1.0e-8 * 1.0e9 &&
+                    std::abs(-conductivity_spm * gradient[0] - value[0]) <= 1.0e-8 * 1.0e9,
+                "nanometre accepted current differs from J=(1e9,0,0) A/m2 or its frozen constitutive relation");
+        }
+    }
+    for (std::size_t terminal = 0; terminal < request.terminals.size(); ++terminal) {
+        const double expected = request.terminals[terminal].requested_outward_current_a;
+        require(std::abs(source->terminal_solution().measured_outward_currents_a[terminal] - expected) <=
+                    1.0e-18 + 1.0e-8 * std::abs(expected) &&
+                std::abs(source->rt0_projection().measured_outward_currents_a()[terminal] - expected) <=
+                    1.0e-18 + 1.0e-8 * std::abs(expected),
+            "nanometre accepted terminal currents failed the unchanged signed certificate");
+    }
+    auto degenerate = mesh;
+    for (int vertex = 0; vertex < degenerate.GetNV(); ++vertex) degenerate.GetVertex(vertex)[2] = 0.0;
+    auto invalid = request;
+    invalid.mesh = &degenerate;
+    require_rejected([&] { (void)solve_accepted_terminal_charge_source(invalid); },
+        "nanometre geometry guard accepted a geometrically collapsed conductor");
 }
 
 void coupled_volumetric_external_lead_extension_is_accepted()
@@ -3041,11 +5228,37 @@ void coupled_volumetric_external_lead_extension_is_accepted()
     require(static_cast<int>(combined_ids.local_to_stable.size()) ==
             view->space().GetMesh()->GetNV(),
         "combined view did not preserve device-then-lead stable-ID ownership");
+    const auto check_charge_potential = [&](
+        const ConservativeCurrentView::Ptr &candidate, double current_a,
+        double lead_sigma) {
+        const auto *potential = candidate->charge_potential_vertex_values_v();
+        require(potential != nullptr && potential->size() ==
+                combined_ids.local_to_stable.size() &&
+                candidate->stable_vertex_identities().version ==
+                    combined_ids.version &&
+                candidate->stable_vertex_identities().local_to_stable ==
+                    combined_ids.local_to_stable,
+            "coupled charge snapshot omitted device/lead values or stable IDs");
+        const auto *mesh = candidate->space().GetMesh();
+        for (int vertex = 0; vertex < mesh->GetNV(); ++vertex) {
+            const double x = mesh->GetVertex(vertex)[0];
+            const double expected = x <= 0.0
+                ? -current_a * (x + 1.0) / lead_sigma
+                : x <= 1.0
+                    ? -current_a / lead_sigma - current_a * x / 4.0
+                    : -current_a / lead_sigma - current_a / 4.0 -
+                        current_a * (x - 1.0) / lead_sigma;
+            require(std::abs(potential->at(vertex) - expected) <= 1.0e-11,
+                "coupled charge potential differs from analytic series resistance");
+        }
+    };
     independently_decode_and_match_balance_artifact(view, combined_ids,
         expected_boundary_map(conductor.mesh, conductor_ids,
             request.boundary_faces), expected_pairs, expected_terminals,
         closure.drive_id);
     const double expected_current_a = 1.0 / (1.0 / 1.0 + 1.0 / 4.0 + 1.0 / 1.0);
+    check_charge_potential(view, expected_current_a, 1.0);
+    const auto original_potential = *view->charge_potential_vertex_values_v();
     require(std::abs(volume_average(view->field())[0] - expected_current_a) <=
             1.0e-11,
         "coupled lead/device current disagrees with analytic series resistance");
@@ -3064,6 +5277,11 @@ void coupled_volumetric_external_lead_extension_is_accepted()
     const auto feedback = ConservativeCurrentView::Build(request);
     const double expected_feedback_a =
         1.0 / (1.0 / 2.0 + 1.0 / 4.0 + 1.0 / 2.0);
+    check_charge_potential(feedback, expected_feedback_a, 2.0);
+    check_charge_potential(view, expected_current_a, 1.0);
+    require(*view->charge_potential_vertex_values_v() == original_potential &&
+            *feedback->charge_potential_vertex_values_v() != original_potential,
+        "a later coupled solve mutated or reused the prior charge snapshot");
     require(std::abs(volume_average(feedback->field())[0] -
                 expected_feedback_a) <= 1.0e-11 &&
             std::abs(expected_feedback_a - expected_current_a) > 0.1,
@@ -3312,6 +5530,7 @@ int main(int argc, char **argv)
             "usage: fem_conservative_current_view_contract");
 #endif
 
+        affine_trace_relations_preserve_independent_jumps_and_reject_cycles();
         deterministic_constraint_rank_oracle_is_exact();
         constraint_rank_row_semantics_are_explicit_and_validated();
         constraint_rank_resource_limits_are_bounded_without_large_fixtures();
@@ -3333,6 +5552,24 @@ int main(int argc, char **argv)
         imported_rt0_nonfinite_dof_is_rejected();
         certified_imported_rt0_is_accepted_and_deep_owned();
         two_disconnected_closed_components_have_two_certified_dependencies();
+        charge_trace_workspace_preserves_component_gauges_and_weak_reactions();
+        charge_trace_workspace_rejects_jumps_lost_after_anchoring();
+        charge_trace_workspace_reuses_owned_operator_after_sources_are_destroyed();
+        charge_current_response_preserves_sign_and_independent_component_scales();
+        charge_current_response_uses_terminal_anchors_and_rejects_common_mode();
+        prepared_charge_current_response_reuses_owned_operator_and_checks_topology();
+        charge_current_controls_require_exact_rank_modulo_original_volumes();
+        physical_charge_terminal_currents_preserve_signed_references_and_scale();
+        physical_charge_terminal_currents_keep_components_and_zero_jump_interfaces();
+        physical_charge_terminal_faces_require_complete_dirichlet_closure();
+        terminal_constrained_rt0_projection_preserves_measured_h1_currents();
+        terminal_rt0_explicit_interfaces_preserve_signed_series_currents();
+        terminal_rt0_projection_keeps_disconnected_current_scales();
+        accepted_terminal_charge_source_freezes_layered_material_and_one_mesh();
+        accepted_terminal_charge_source_freezes_explicit_interface_series();
+        accepted_terminal_content_digest_matches_independent_owned_codec();
+        accepted_terminal_charge_source_preserves_nanometre_scale_and_rejects_degeneracy();
+        accepted_external_lead_finalizer_preserves_owned_series_and_rejects_foreign_descriptors();
         incomplete_external_lead_extension_fails_closed();
         coupled_volumetric_external_lead_extension_is_accepted();
         canonical_records_ignore_real_mesh_face_and_rt_dof_permutations();

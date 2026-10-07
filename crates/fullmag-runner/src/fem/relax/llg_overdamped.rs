@@ -198,12 +198,15 @@ pub(crate) fn execute_llg_overdamped(
     let mut last_cached_preview_revision = last_preview_revision;
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut preview_handoff = FemPreviewHandoff::default();
-    let drive_discontinuities = crate::time_events::resolved_stage_drive_discontinuities(
-        &plan.field_drives,
-        plan.time_stage.start_time_s,
-        until_seconds,
-        crate::schedules::OUTPUT_TIME_TOLERANCE,
-    );
+    let drive_discontinuities =
+        crate::time_events::resolved_stage_drive_discontinuities_with_origin(
+            &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
+            plan.time_stage.start_time_s,
+            plan.time_stage.waveform_origin_time_s(),
+            until_seconds,
+            crate::schedules::OUTPUT_TIME_TOLERANCE,
+        );
 
     if let Some(action) = publish_initial_scalar_without_field_snapshot(
         live.as_deref_mut(),

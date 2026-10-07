@@ -87,6 +87,14 @@ pub(crate) fn resolve_current_transports(
                 definition,
                 ..
             } => {
+                if definition.as_ref().is_some_and(|charge| {
+                    charge.conservative_current_source.is_some()
+                }) {
+                    reasons.push(format!(
+                        "current_modules[{index}] conservative_current_source execution is unavailable: the current-driven owned-bundle producer is not connected; legacy voltage/current-density fallback is forbidden"
+                    ));
+                    continue;
+                }
                 if lane == CurrentTransportExecutableLane::Fem
                     && !problem
                         .spin_transport_modules
@@ -264,7 +272,10 @@ pub(crate) fn resolve_fdm_gpu_charge_transports_with_active_graph(
         scope_reasons.push("complete_charge_definition=missing".into());
         return Err(fdm_gpu_charge_scope_error(scope_reasons));
     };
-    if charge.conservative_current_view.is_some() || charge.structured_current_closure.is_some() {
+    if charge.conservative_current_source.is_some()
+        || charge.conservative_current_view.is_some()
+        || charge.structured_current_closure.is_some()
+    {
         scope_reasons.push("current_closure_or_conservative_view=unsupported".into());
     }
     if charge.solver.engine != "cg"
@@ -377,6 +388,9 @@ fn bounded_fdm_gpu_charge_boundary_profile(
         .count();
 
     match descriptor.charge_gauge {
+        ChargePotentialGaugeIR::TerminalReference => {
+            Err("terminal_reference_requires_dedicated_fem_antenna_solve")
+        }
         ChargePotentialGaugeIR::DirichletReference => {
             if voltage.len() != 2 || !current.is_empty() || insulating != 4 {
                 return Err("two_single_surface_voltage_electrodes_plus_insulating");
@@ -692,6 +706,7 @@ mod tests {
                     operator_version: "fv_charge_harmonic_v1".into(),
                 },
                 conservative_current_view: None,
+                conservative_current_source: None,
                 structured_current_closure: None,
             }),
         }];
@@ -1232,6 +1247,34 @@ mod tests {
             resolve_current_transports(&problem, CurrentTransportExecutableLane::Fem).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].name, "drive");
+    }
+
+    #[test]
+    fn unresolved_current_source_never_enters_legacy_planner_lanes() {
+        let mut problem = bounded_gpu_charge_problem();
+        // This intentionally unresolved source cannot be discarded before the
+        // mesh-exact producer exists, even when legacy charge inputs are valid.
+        charge_definition_mut(&mut problem).conservative_current_source =
+            Some(fullmag_ir::ConservativeCurrentSourceIR::ExternalLeadCurrent {
+                schema_version: fullmag_ir::CONSERVATIVE_CURRENT_SOURCE_SCHEMA_VERSION.into(),
+                revision: "unresolved-authoring-source".into(),
+                device_stable_vertex_ids: Vec::new(),
+                lead_mesh: fullmag_ir::MeshIR::default(),
+                lead_stable_vertex_ids: Vec::new(),
+                lead_conductivity_spm_per_element: Vec::new(),
+                interface_pairs: Vec::new(),
+                outer_terminals: Vec::new(),
+                terminal_observations: Vec::new(),
+                drives: Vec::new(),
+            });
+        for lane in [CurrentTransportExecutableLane::Fdm, CurrentTransportExecutableLane::Fem] {
+            let error = resolve_current_transports(&problem, lane)
+                .expect_err("an unresolved current source must not fall back to legacy charge");
+            assert!(error.reasons.iter().any(|reason| {
+                reason.contains("conservative_current_source")
+                    && reason.contains("fallback is forbidden")
+            }));
+        }
     }
 
     #[test]

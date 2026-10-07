@@ -724,11 +724,20 @@ pub struct TimeStageContextIR {
     pub active_stage_id: Option<String>,
     #[serde(default)]
     pub start_time_s: f64,
+    /// Absolute origin of stage-local waveforms. None preserves legacy plans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waveform_origin_time_s: Option<f64>,
     /// Semantic study family used by stage-scoped drive activation.  Missing
     /// values from older serialized plans remain `Unknown` and therefore do
     /// not enable an `AllTimeEvolution` drive accidentally.
     #[serde(default, skip_serializing_if = "StudyKindIR::is_unknown")]
     pub study_kind: StudyKindIR,
+}
+
+impl TimeStageContextIR {
+    pub fn waveform_origin_time_s(&self) -> f64 {
+        self.waveform_origin_time_s.unwrap_or(self.start_time_s)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2184,8 +2193,25 @@ mod tests {
         FemEigenExecutionResolutionIR, FemMeshTopologyFamilyIR, FemMixedTopologyCapabilityStatusIR,
         FemMixedTopologyProvenanceIR, RequestedFemDemagIR, ResolvedFemDemagIR,
         ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
-        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
+        TimeStageContextIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
+        SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+
+    #[test]
+    fn stage_waveform_origin_defaults_to_segment_start_and_round_trips() {
+        let legacy: TimeStageContextIR = serde_json::from_value(serde_json::json!({
+            "start_time_s": 10.5
+        }))
+        .expect("legacy stage context deserializes");
+        assert_eq!(legacy.waveform_origin_time_s(), 10.5);
+
+        let mut resumed = legacy;
+        resumed.waveform_origin_time_s = Some(10.0);
+        let decoded: TimeStageContextIR =
+            serde_json::from_value(serde_json::to_value(&resumed).unwrap()).unwrap();
+        assert_eq!(decoded.start_time_s, 10.5);
+        assert_eq!(decoded.waveform_origin_time_s(), 10.0);
+    }
 
     fn resolved_frozen_spins_fixture() -> ResolvedFrozenSpinsPlanIR {
         let mut hash = Sha256::new();

@@ -2612,6 +2612,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-inspect-enabled={sceneProps.inspectEnabled ? "true" : "false"}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
+      data-primitive-object-kinds={sceneProps.primitiveModel?.objects
+        .map((object) => `${object.objectId}:${object.kind}`).join(" ") ?? ""}
+      data-primitive-object-geometry-descriptors={sceneProps.primitiveModel?.objects
+        .map((object) => object.geometryKey.slice(0, 120)).join(" ") ?? ""}
       data-hysteresis-replay-snapshot-id={hysteresisReplayTarget?.snapshotId ?? ""}
       data-hysteresis-replay-stage-id={hysteresisReplayTarget?.stageId ?? ""}
       data-hysteresis-replay-field-direction={formatHysteresisReplayGlyphVector(
@@ -2662,6 +2666,11 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           </span>
         ) : null}
         <span>{status}</span>
+        {sceneProps.primitiveModel?.diagnostics?.map((issue) => (
+          <span key={issue.objectId} role="alert">
+            Geometry preview unavailable · {issue.objectId}: {issue.message}
+          </span>
+        ))}
         {sceneProps.regionOverlays.length > 0 ||
         sceneProps.meshRegionOverlays.length > 0 ? (
           <fieldset

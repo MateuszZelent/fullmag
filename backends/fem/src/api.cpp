@@ -4846,23 +4846,27 @@ int fullmag_fem_get_regional_field_drive_abi_layout(
     return FULLMAG_FEM_OK;
 }
 
-int fullmag_fem_backend_begin_stage(
+int fullmag_fem_backend_begin_stage_v2(
     fullmag_fem_backend *handle,
-    double stage_start_time_s)
+    double segment_start_time_s,
+    double waveform_origin_time_s)
 {
-    if (handle == nullptr || !std::isfinite(stage_start_time_s)) {
-        fullmag_fem_set_handle_error(handle, "begin_stage requires a non-null handle and finite stage start time");
+    if (handle == nullptr || !std::isfinite(segment_start_time_s) ||
+        segment_start_time_s < 0.0 || !std::isfinite(waveform_origin_time_s) ||
+        waveform_origin_time_s < 0.0 ||
+        waveform_origin_time_s > segment_start_time_s) {
+        fullmag_fem_set_handle_error(handle, "begin_stage_v2 requires finite non-negative times with waveform origin no later than segment start");
         return FULLMAG_FEM_ERR_INVALID;
     }
     auto &ctx = handle->context;
     const double tolerance = 64.0 * std::numeric_limits<double>::epsilon() *
-        std::max({1.0, std::abs(ctx.state.current_time), std::abs(stage_start_time_s)});
-    if (std::abs(ctx.state.current_time - stage_start_time_s) > tolerance) {
+        std::max({1.0, std::abs(ctx.state.current_time), std::abs(segment_start_time_s)});
+    if (std::abs(ctx.state.current_time - segment_start_time_s) > tolerance) {
         fullmag_fem_set_handle_error(handle,
             "begin_stage start time must equal the backend's current absolute time");
         return FULLMAG_FEM_ERR_INVALID;
     }
-    ctx.zeeman.stage_start_time_s = stage_start_time_s;
+    ctx.zeeman.stage_start_time_s = waveform_origin_time_s;
     ctx.zeeman.regional_drive_revision += 1;
     ctx.stepper.workspace.fsal_valid = false;
     ctx.gpu_state.device.rk.fsal_valid = false;
@@ -4877,6 +4881,14 @@ int fullmag_fem_backend_begin_stage(
     std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
     handle->last_error.clear();
     return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_begin_stage(
+    fullmag_fem_backend *handle,
+    double stage_start_time_s)
+{
+    return fullmag_fem_backend_begin_stage_v2(
+        handle, stage_start_time_s, stage_start_time_s);
 }
 
 int fullmag_fem_backend_set_gpu_execution_request_v1(

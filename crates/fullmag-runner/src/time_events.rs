@@ -1,5 +1,6 @@
 use fullmag_ir::{
-    FieldTimeOriginIR, OutputIR, RegionalFieldDriveIR, TimeDependenceIR, TimeStageContextIR,
+    FieldTimeOriginIR, OutputIR, RegionalFieldDriveIR, ResolvedSolvedAntennaDriveBasisIR,
+    TimeDependenceIR, TimeStageContextIR,
 };
 
 pub(crate) fn resolved_field_drive_is_active(
@@ -100,18 +101,29 @@ pub(crate) fn build_time_event_schedule(
 /// Builds the executable schedule for one already-resolved stage. The planner
 /// has removed drives inactive in this stage, so activation is intentionally
 /// not re-evaluated here.
-pub(crate) fn build_resolved_stage_event_schedule(
+pub(crate) fn build_resolved_stage_event_schedule_with_origin(
     drives: &[RegionalFieldDriveIR],
+    solved_bases: &[ResolvedSolvedAntennaDriveBasisIR],
     stage_start_s: f64,
+    waveform_origin_s: f64,
     stage_end_s: f64,
     outputs: &[OutputIR],
     tolerance_s: f64,
 ) -> TimeEventSchedule {
     let mut times = vec![stage_start_s, stage_end_s];
-    for drive in drives.iter().filter(|drive| drive.enabled) {
-        for offset in waveform_event_offsets(&drive.waveform) {
-            let time = match drive.time_origin {
-                FieldTimeOriginIR::StageLocal => stage_start_s + offset,
+    for (waveform, time_origin) in drives
+        .iter()
+        .filter(|drive| drive.enabled)
+        .map(|drive| (&drive.waveform, drive.time_origin))
+        .chain(
+            solved_bases
+                .iter()
+                .map(|basis| (&basis.drive.waveform, basis.drive.time_origin)),
+        )
+    {
+        for offset in waveform_event_offsets(waveform) {
+            let time = match time_origin {
+                FieldTimeOriginIR::StageLocal => waveform_origin_s + offset,
                 FieldTimeOriginIR::Absolute => offset,
             };
             if time >= stage_start_s - tolerance_s && time <= stage_end_s + tolerance_s {
@@ -150,6 +162,7 @@ pub(crate) fn build_resolved_stage_event_schedule(
 #[cfg(any(feature = "fem-gpu", test))]
 pub(crate) fn build_native_fem_stage_event_schedule(
     drives: &[RegionalFieldDriveIR],
+    solved_bases: &[ResolvedSolvedAntennaDriveBasisIR],
     stage_start_s: f64,
     stage_end_s: f64,
     outputs: &[OutputIR],
@@ -157,8 +170,10 @@ pub(crate) fn build_native_fem_stage_event_schedule(
     physical_time_events_required: bool,
 ) -> Option<TimeEventSchedule> {
     physical_time_events_required.then(|| {
-        build_resolved_stage_event_schedule(
+        build_resolved_stage_event_schedule_with_origin(
             drives,
+            solved_bases,
+            stage_start_s,
             stage_start_s,
             stage_end_s,
             outputs,
@@ -167,20 +182,28 @@ pub(crate) fn build_native_fem_stage_event_schedule(
     })
 }
 
-pub(crate) fn resolved_stage_drive_discontinuities(
+pub(crate) fn resolved_stage_drive_discontinuities_with_origin(
     drives: &[RegionalFieldDriveIR],
+    solved_bases: &[ResolvedSolvedAntennaDriveBasisIR],
     stage_start_s: f64,
+    waveform_origin_s: f64,
     stage_end_s: f64,
     tolerance_s: f64,
 ) -> Vec<f64> {
     let mut times = drives
         .iter()
         .filter(|drive| drive.enabled)
-        .flat_map(|drive| {
-            waveform_event_offsets(&drive.waveform)
+        .map(|drive| (&drive.waveform, drive.time_origin))
+        .chain(
+            solved_bases
+                .iter()
+                .map(|basis| (&basis.drive.waveform, basis.drive.time_origin)),
+        )
+        .flat_map(|(waveform, time_origin)| {
+            waveform_event_offsets(waveform)
                 .into_iter()
-                .map(|offset| match drive.time_origin {
-                    FieldTimeOriginIR::StageLocal => stage_start_s + offset,
+                .map(|offset| match time_origin {
+                    FieldTimeOriginIR::StageLocal => waveform_origin_s + offset,
                     FieldTimeOriginIR::Absolute => offset,
                 })
                 .collect::<Vec<_>>()
@@ -243,6 +266,7 @@ mod tests {
         let mut stage = TimeStageContextIR {
             active_stage_id: Some("run".into()),
             start_time_s: 0.0,
+            waveform_origin_time_s: None,
             study_kind: StudyKindIR::Relaxation,
         };
         assert!(!resolved_field_drive_is_active(&drive, &stage));
@@ -325,11 +349,71 @@ mod tests {
             name: "mx".into(),
             every_seconds: 0.75,
         }];
-        let schedule = build_resolved_stage_event_schedule(&drives, 10.0, 13.0, &outputs, 1e-12);
+        let schedule = build_resolved_stage_event_schedule_with_origin(
+            &drives,
+            &[],
+            10.0,
+            10.0,
+            13.0,
+            &outputs,
+            1e-12,
+        );
         assert_eq!(
             schedule.times_s,
             vec![10.0, 10.75, 11.0, 11.5, 12.0, 12.25, 13.0]
         );
+    }
+
+    #[test]
+    fn resumed_segment_keeps_original_stage_local_waveform_events() {
+        let drives = vec![pulse(
+            FieldTimeOriginIR::StageLocal,
+            DriveActivationIR::AllTimeEvolution {},
+        )];
+        let schedule = build_resolved_stage_event_schedule_with_origin(
+            &drives,
+            &[],
+            10.5,
+            10.0,
+            13.0,
+            &[],
+            1e-12,
+        );
+        assert_eq!(schedule.times_s, vec![10.5, 11.0, 12.0, 13.0]);
+    }
+
+    #[test]
+    fn solved_antenna_pulse_contributes_resume_events() {
+        let basis = ResolvedSolvedAntennaDriveBasisIR {
+            drive: fullmag_ir::SolvedAntennaDriveIR {
+                id: "antenna-drive".into(),
+                name: "Antenna drive".into(),
+                projection_ref: "projection".into(),
+                port_mode_id: "port".into(),
+                peak_current_a: 1.0,
+                waveform: TimeDependenceIR::Pulse {
+                    t_on: 1.0,
+                    t_off: 2.0,
+                },
+                bandwidth_declaration: None,
+                time_origin: FieldTimeOriginIR::StageLocal,
+                activation: DriveActivationIR::AllTimeEvolution {},
+            },
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            field_xyz_apm_per_a: vec![[1.0, 0.0, 0.0]],
+            projection_signature: "verified".into(),
+        };
+        let schedule = build_resolved_stage_event_schedule_with_origin(
+            &[],
+            &[basis],
+            10.5,
+            10.0,
+            13.0,
+            &[],
+            1e-12,
+        );
+        assert_eq!(schedule.times_s, vec![10.5, 11.0, 12.0, 13.0]);
     }
 
     #[test]
@@ -340,8 +424,15 @@ mod tests {
             every_seconds: sample_period_s,
         }];
 
-        let schedule =
-            build_resolved_stage_event_schedule(&[], 0.0, 4.0 * sample_period_s, &outputs, 1e-24);
+        let schedule = build_resolved_stage_event_schedule_with_origin(
+            &[],
+            &[],
+            0.0,
+            0.0,
+            4.0 * sample_period_s,
+            &outputs,
+            1e-24,
+        );
 
         assert_eq!(
             schedule.times_s,
@@ -363,6 +454,7 @@ mod tests {
         }];
         let schedule = build_native_fem_stage_event_schedule(
             &[],
+            &[],
             0.0,
             1.0,
             &outputs,
@@ -380,6 +472,7 @@ mod tests {
         }];
 
         let schedule = build_native_fem_stage_event_schedule(
+            &[],
             &[],
             0.0,
             f64::INFINITY,
@@ -399,7 +492,7 @@ mod tests {
             DriveActivationIR::AllTimeEvolution {},
         )];
         assert_eq!(
-            resolved_stage_drive_discontinuities(&drives, 10.0, 13.0, 1e-12),
+            resolved_stage_drive_discontinuities_with_origin(&drives, &[], 10.0, 10.0, 13.0, 1e-12,),
             vec![11.0, 12.0]
         );
     }

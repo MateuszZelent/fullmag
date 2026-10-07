@@ -38,6 +38,7 @@
   --fm-chart-blue:    #89b4fa;
   --fm-chart-green:   #a6e3a1;
   --fm-chart-yellow:  #f9e2af;
+  --fm-surface-antenna: var(--fm-chart-yellow);
   --fm-chart-red:     #f38ba8;
   --fm-chart-mauve:   #cba6f7;
   --fm-chart-peach:   #fab387;
@@ -148,6 +149,7 @@
   --fm-chart-blue:    #1e66f5;
   --fm-chart-green:   #40a02b;
   --fm-chart-yellow:  #df8e1d;
+  --fm-surface-antenna: var(--fm-chart-yellow);
   --fm-chart-red:     #d20f39;
   --fm-chart-mauve:   #8839ef;
   --fm-chart-peach:   #fe640b;

@@ -87,6 +87,7 @@ export function antennaFieldSolutionIdentityStatus(
     catalog.data.stage_id !== ids.stageId ||
     catalog.data.session_id !== data.session_id ||
     catalog.data.session_epoch !== data.session_epoch ||
+    catalog.data.request_scope_epoch !== data.request_scope_epoch ||
     !output ||
     output.solution_ref.stage_id !== ids.stageId ||
     output.solution_ref.asset_id !== data.asset_id ||
@@ -128,6 +129,7 @@ export function antennaSpectrumIdentityStatus(
     catalog.data.stage_id !== ids.stageId ||
     catalog.data.session_id !== data.session_id ||
     catalog.data.session_epoch !== data.session_epoch ||
+    catalog.data.request_scope_epoch !== data.request_scope_epoch ||
     !output ||
     output.solution_ref.stage_id !== ids.stageId ||
     output.solution_ref.content_digest !== data.solution_content_digest

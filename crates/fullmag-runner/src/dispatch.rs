@@ -1799,6 +1799,48 @@ pub(crate) enum FemStaticPbcLane {
     Unsupported,
 }
 
+/// Time coordinate emitted by the selected stage runner in StepStats and live callbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageStepTimeFrame {
+    StageLocal,
+    Absolute,
+}
+
+/// Resolve the clock contract from the same execution lanes used by dispatch.
+pub fn stage_step_time_frame(
+    problem: &ProblemIR,
+    plan: &ExecutionPlanIR,
+) -> Result<StageStepTimeFrame, RunError> {
+    let frame = match &plan.backend_plan {
+        BackendPlanIR::Fdm(_) => {
+            let runtime = crate::resolve_planned_runtime_engine(problem, plan)?;
+            fdm_stage_step_time_frame(&runtime.engine_id)?
+        }
+        BackendPlanIR::FdmMultilayer(_) => StageStepTimeFrame::StageLocal,
+        BackendPlanIR::Fem(fem) => {
+            if fem_static_periodic_decision(fem).lane == FemStaticPbcLane::ReferenceReduction {
+                StageStepTimeFrame::StageLocal
+            } else {
+                StageStepTimeFrame::Absolute
+            }
+        }
+        BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => {
+            StageStepTimeFrame::StageLocal
+        }
+    };
+    Ok(frame)
+}
+
+fn fdm_stage_step_time_frame(engine_id: &str) -> Result<StageStepTimeFrame, RunError> {
+    match engine_id {
+        "fdm_cpu_reference" => Ok(StageStepTimeFrame::Absolute),
+        "fdm_cuda" => Ok(StageStepTimeFrame::StageLocal),
+        engine => Err(RunError {
+            message: format!("unknown FDM stage step clock for engine '{engine}'"),
+        }),
+    }
+}
+
 /// Result of the FEM static PBC capability decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FemStaticPbcDecision {
@@ -3301,6 +3343,7 @@ fn execute_native_fem(
         crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref());
     let time_events = crate::time_events::build_native_fem_stage_event_schedule(
         &plan.field_drives,
+        &plan.solved_antenna_drive_bases,
         0.0,
         until_seconds,
         outputs,
@@ -3315,12 +3358,19 @@ fn execute_native_fem(
         !field_schedules.is_empty(),
     );
 
+    let eager_initial_effective_field = needs_initial_snapshot
+        && plan.time_stage.waveform_origin_time_s() == plan.time_stage.start_time_s;
     let native_execution_mode = native_fem_execution_mode(plan);
     let mut backend = create_native_fem_backend_after_strict_gpu_mode_preflight(
         engine,
         execution_mode,
         native_execution_mode,
-        || NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot),
+        || {
+            NativeFemBackend::create_with_initial_effective_field(
+                plan,
+                eager_initial_effective_field,
+            )
+        },
     )?;
     if engine == FemEngine::NativeGpu {
         backend.set_gpu_execution_request(execution_mode == ExecutionMode::Strict)?;
@@ -3360,7 +3410,10 @@ fn execute_native_fem(
         || backend.validate_strict_gpu_rk_plan(),
     );
     begin_native_fem_stage_after_strict_gpu_preflight(strict_gpu_preflight, || {
-        backend.begin_stage(plan.time_stage.start_time_s)
+        backend.begin_stage_with_waveform_origin(
+            plan.time_stage.start_time_s,
+            plan.time_stage.waveform_origin_time_s(),
+        )
     })?;
     let device_info = backend.device_info()?;
     let gpu_state_info = backend.gpu_state_info()?;
@@ -3736,6 +3789,20 @@ mod tests {
     use crate::solvers::fdm::interactions::capabilities::unsupported_cpu_fdm_terms;
 
     use super::*;
+
+    #[test]
+    fn fdm_stage_step_clock_uses_resolved_engine_not_backend_family() {
+        assert_eq!(
+            fdm_stage_step_time_frame("fdm_cpu_reference").unwrap(),
+            StageStepTimeFrame::Absolute
+        );
+        assert_eq!(
+            fdm_stage_step_time_frame("fdm_cuda").unwrap(),
+            StageStepTimeFrame::StageLocal
+        );
+        assert!(fdm_stage_step_time_frame("unknown").is_err());
+    }
+
 
     #[test]
     fn eigen_path_handoff_identity_binds_root_and_matching_sample_diagnostics() {

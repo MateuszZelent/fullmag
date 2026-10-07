@@ -31,6 +31,7 @@ import type {
   AuthoringTransactionRequest,
   JsonObject,
   JsonValue,
+  LiveStatusResource,
   MeshCapabilitiesResource,
   RequestOptions,
 } from "../api/apiTypes";
@@ -60,6 +61,10 @@ import {
 } from "./authoringHistoryMutation";
 import { awaitMeshBuildConfirmation, type MeshBuildConfirmCommandId } from "./meshBuildConfirmation";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import {
+  resolveActiveLaneDiscretization,
+  resolveActiveLaneOperation,
+} from "../resources/useActiveLaneCapabilities";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -243,15 +248,17 @@ export function resolveMeshCommandLane(
 }
 
 function meshCommandLane(context: CommandContext): MeshCommandLane {
-  const status = asRecord(resourceData(context, SESSION_STATUS_RESOURCE_KEY));
-  return resolveMeshCommandLane(asRecord(status?.domain)?.discretization);
+  const status = resourceData(context, SESSION_STATUS_RESOURCE_KEY) as LiveStatusResource | null;
+  return resolveActiveLaneDiscretization(status?.capabilities?.active_lane ?? null);
 }
 
 function femMeshCommandDisabledReason(context: CommandContext): string | null {
   const lane = meshCommandLane(context);
   if (lane === "fdm") return FDM_MESH_COMMAND_NOT_APPLICABLE_REASON;
   if (lane === "unknown") return UNKNOWN_MESH_COMMAND_LANE_REASON;
-  return null;
+  const status = resourceData(context, SESSION_STATUS_RESOURCE_KEY) as LiveStatusResource | null;
+  const operation = resolveActiveLaneOperation(status?.capabilities?.active_lane ?? null, "shared_mesh_build");
+  return operation.enabled ? null : operation.reason;
 }
 
 export const FEM_GRID_COMMAND_NOT_APPLICABLE_REASON =
@@ -265,6 +272,9 @@ function fdmGridBuildDisabledReason(context: CommandContext): string | null {
   const lane = meshCommandLane(context);
   if (lane === "fem") return FEM_GRID_COMMAND_NOT_APPLICABLE_REASON;
   if (lane === "unknown") return UNKNOWN_GRID_COMMAND_LANE_REASON;
+  const status = resourceData(context, SESSION_STATUS_RESOURCE_KEY) as LiveStatusResource | null;
+  const operation = resolveActiveLaneOperation(status?.capabilities?.active_lane ?? null, "grid_build");
+  if (!operation.enabled) return operation.reason;
   return sceneBaseRevision(context) === null
     ? "The canonical scene revision is unavailable. Refetch the scene before building the grid."
     : null;
@@ -1099,13 +1109,6 @@ function sceneObjects(scene: unknown): JsonObject[] {
     : [];
 }
 
-function sceneFieldDrives(scene: unknown): JsonObject[] {
-  const drives = asRecord(asRecord(scene)?.field_drives)?.drives;
-  return Array.isArray(drives)
-    ? drives.filter((drive): drive is JsonObject => Boolean(drive && typeof drive === "object" && !Array.isArray(drive)))
-    : [];
-}
-
 function defaultPrimitiveGeometry(
   primitiveKind: "box" | "cylinder" | "sphere",
 ): JsonObject {
@@ -1137,8 +1140,32 @@ function draftObjectId(primitiveKind: string): string {
 function defaultMicrostripAntennaObject(objectId: string): JsonObject {
   return {
     geometry: {
-      geometry_kind: "Box",
-      geometry_params: { size: [50e-9, 1e-6, 10e-9] },
+      geometry_kind: "MicrostripAntennaLayout",
+      geometry_params: {
+        length_m: 1e-6,
+        thickness_m: 10e-9,
+        conductivity_s_per_m: 5.8e7,
+        stations: [
+          { s: 0, signal_width_m: 50e-9 },
+          { s: 1, signal_width_m: 50e-9 },
+        ],
+        transform: {
+          rotation_matrix: [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+          translation_m: [0, -0.5e-6, 0],
+        },
+        return_width_m: 500e-9,
+        return_offset_m: 30e-9,
+        conductors: [
+          { id: "signal", kind: "signal" },
+          { id: "return", kind: "return" },
+        ],
+        terminal_faces: {
+          signal: { inlet: "local_u_min", outlet: "local_u_max" },
+          return: { inlet: "local_u_min", outlet: "local_u_max" },
+        },
+      },
+      bounds_min: [-250e-9, -0.5e-6, -45e-9],
+      bounds_max: [250e-9, 0.5e-6, 5e-9],
     },
     id: objectId,
     locked: false,
@@ -1172,48 +1199,41 @@ function defaultMicrostripCurrentTransport(objectId: string): JsonObject {
     boundaries: [
       {
         id: "signal_in",
-        kind: "voltage_electrode",
-        potential_V: 1,
-        surfaces: [{ object_id: objectId, orientation: [0, -1, 0], surface_id: "y_min" }],
+        kind: "equipotential_current_terminal",
+        surfaces: [{ object_id: objectId, orientation: [0, -1, 0], surface_id: "antenna_terminal:signal:local_u_min" }],
       },
       {
         id: "signal_out",
-        kind: "voltage_electrode",
-        potential_V: 0,
-        surfaces: [{ object_id: objectId, orientation: [0, 1, 0], surface_id: "y_max" }],
+        kind: "equipotential_current_terminal",
+        surfaces: [{ object_id: objectId, orientation: [0, 1, 0], surface_id: "antenna_terminal:signal:local_u_max" }],
       },
       {
         id: "return_in",
-        kind: "voltage_electrode",
-        potential_V: 1,
-        surfaces: [{ object_id: objectId, orientation: [0, 0, -1], surface_id: "z_min" }],
+        kind: "equipotential_current_terminal",
+        surfaces: [{ object_id: objectId, orientation: [0, -1, 0], surface_id: "antenna_terminal:return:local_u_min" }],
       },
       {
         id: "return_out",
-        kind: "voltage_electrode",
-        potential_V: 0,
-        surfaces: [{ object_id: objectId, orientation: [0, 0, 1], surface_id: "z_max" }],
+        kind: "equipotential_current_terminal",
+        surfaces: [{ object_id: objectId, orientation: [0, 1, 0], surface_id: "antenna_terminal:return:local_u_max" }],
       },
       {
         id: "insulating_outer",
         kind: "insulating",
-        surfaces: [
-          { object_id: objectId, orientation: [-1, 0, 0], surface_id: "x_min" },
-          { object_id: objectId, orientation: [1, 0, 0], surface_id: "x_max" },
-        ],
+        surfaces: [{ object_id: objectId, orientation: [0, 0, 1], surface_id: "antenna_nonterminal" }],
       },
     ],
     coupling: "one_way",
     domain: [{ object_id: objectId }],
-    gauge: "dirichlet_reference",
+    gauge: "terminal_reference",
     kind: "current_transport",
     materials: [{ material: { sigma_Spm: 5.8e7 }, region: { object_id: objectId } }],
     model: "ohmic_poisson",
     name: currentId,
     solver: {
       engine: "cg",
-      linear: { absolute_tolerance: 1e-12, max_iterations: 500, relative_tolerance: 1e-10 },
-      operator_version: "fv_charge_harmonic_v1",
+      linear: { absolute_tolerance: 0, max_iterations: 500, relative_tolerance: 1e-10 },
+      operator_version: "fem_charge_conforming_h1_p1.transparent.v1",
       physical_residual_version: "charge_balance_integrated_l2.v1",
     },
   };
@@ -1484,7 +1504,7 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       );
       assertCurrentSessionScope(context);
       invalidateSceneAuthoringResources(context, response.scene_revision);
-      return { message: "Microstrip antenna added.", status: "completed" };
+      return { message: "Microstrip antenna draft added; field solve requires a mesh-exact ConservativeCurrentView.", status: "completed" };
     },
   },
   {

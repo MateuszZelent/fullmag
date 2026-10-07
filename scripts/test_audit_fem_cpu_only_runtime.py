@@ -332,6 +332,18 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn(': > "$report_dir/test.log"', runner)
         self.assertIn("printf '=== %s ===\\n' \"$executable\"", runner)
 
+    def test_cpu_contract_reuses_managed_build_without_recursive_delete(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        runner = (repository_root / "scripts/run_fem_cpu_only_contract.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("${FULLMAG_FEM_CPU_BUILD_ROOT:?missing managed FEM CPU build root}", runner)
+        self.assertIn("${FULLMAG_RUNTIME_ROOT:?missing managed runtime root}", runner)
+        self.assertIn('cmake --fresh -S native -B "$build_dir"', runner)
+        self.assertNotIn('rm -rf "$build_dir"', runner)
+        self.assertNotIn('/tmp/fullmag-fem-cpu-only-build', runner)
+
     def test_disabled_or_non_strict_demag_returns_before_cuda_compile_gate(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         source = (

@@ -1,4 +1,5 @@
 use crate::types::{AuxiliaryArtifact, FieldSnapshot, RunError, TransportExecutionProvenance};
+use crate::AntennaFieldStageStatus;
 use fullmag_fem_sys as ffi;
 use fullmag_ir::{
     AntennaFieldSolvePlanIR, ChargePotentialGaugeIR, ExecutionDevice, ExecutionMode,
@@ -34,6 +35,7 @@ struct NativeFemChargeTransportRequest {
     absolute_tolerance: f64,
     maximum_iterations: u32,
     charge_dirichlet: Vec<(u32, f64)>,
+    prescribed_terminal_currents: Option<Vec<(Vec<u32>, f64)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +47,10 @@ struct NativeFemChargeTransportResult {
     net_boundary_current_a: f64,
     current_density_volume_average_apm2: [f64; 3],
     dirichlet_boundary_currents_a: Vec<f64>,
+    resolved_charge_dirichlet: Vec<(u32, f64)>,
+    measured_terminal_currents_a: Vec<f64>,
+    terminal_voltages_v: Vec<f64>,
+    gauge_terminal_indices: Vec<u32>,
     diagnostics: Value,
 }
 
@@ -65,12 +71,16 @@ pub(crate) fn execute_native_fem_charge_transport_plans(
         &plan.mesh.nodes,
         None,
         None,
+        None,
     )
 }
 
 pub(crate) fn execute_native_fem_antenna_field_solve_plan_interruptible(
     plan: &AntennaFieldSolvePlanIR,
     interrupt_requested: Option<&AtomicBool>,
+    progress: Option<
+        &mut dyn FnMut(AntennaFieldStageStatus, Option<String>) -> Result<(), RunError>,
+    >,
 ) -> Result<Option<NativeFemSteadyTransportBundle>, RunError> {
     execute_native_fem_charge_transport(
         &plan.conductor.mesh,
@@ -79,6 +89,7 @@ pub(crate) fn execute_native_fem_antenna_field_solve_plan_interruptible(
         &plan.field_sampling.positions_xyz_m,
         Some(plan),
         interrupt_requested,
+        progress,
     )
 }
 
@@ -88,9 +99,7 @@ fn ensure_antenna_not_cancelled(
 ) -> Result<(), RunError> {
     if interrupt_requested.is_some_and(|signal| signal.load(Ordering::Acquire)) {
         return Err(RunError {
-            message: format!(
-                "antenna field solve cancelled at {boundary}: interrupt_requested"
-            ),
+            message: format!("antenna field solve cancelled at {boundary}: interrupt_requested"),
         });
     }
     Ok(())
@@ -122,6 +131,9 @@ fn execute_native_fem_charge_transport(
     field_sample_positions_xyz_m: &[[f64; 3]],
     antenna_plan: Option<&AntennaFieldSolvePlanIR>,
     interrupt_requested: Option<&AtomicBool>,
+    mut progress: Option<
+        &mut dyn FnMut(AntennaFieldStageStatus, Option<String>) -> Result<(), RunError>,
+    >,
 ) -> Result<Option<NativeFemSteadyTransportBundle>, RunError> {
     if charge_transport_plans.is_empty() {
         return Ok(None);
@@ -160,6 +172,14 @@ fn execute_native_fem_charge_transport(
         )?;
     }
     ensure_antenna_not_cancelled(interrupt_requested, "after_preflight")?;
+    if antenna_plan.is_some() {
+        if let Some(progress) = progress.as_deref_mut() {
+            progress(
+                AntennaFieldStageStatus::Meshing,
+                Some("reused conductor and field-sampling meshes resolved by planner".into()),
+            )?;
+        }
+    }
     let mut records = Vec::with_capacity(prepared.len());
     let mut snapshots = Vec::new();
     let mut provenance = Vec::with_capacity(prepared.len());
@@ -168,13 +188,17 @@ fn execute_native_fem_charge_transport(
 
     for prepared in prepared {
         ensure_antenna_not_cancelled(interrupt_requested, "before_charge_transport")?;
+        if let Some(progress) = progress.as_deref_mut() {
+            progress(AntennaFieldStageStatus::SolvingCurrent, None)?;
+        }
         let result = solve_native_fem_charge_transport(&prepared.request)?;
         ensure_antenna_not_cancelled(interrupt_requested, "after_charge_transport")?;
         let mut module_provenance = prepared.provenance;
         let mut rt0_record = None;
         let mut oersted_record = None;
         if let Some(view) = prepared.descriptor.conservative_current_view.as_ref() {
-            let compatibility_request = charge_request_for_rt0(&prepared.request);
+            let compatibility_request =
+                charge_request_for_rt0(&prepared.request, &result.resolved_charge_dirichlet);
             let targets = match method {
                 NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature => {
                     Some(field_sample_positions_xyz_m)
@@ -182,6 +206,9 @@ fn execute_native_fem_charge_transport(
                 NativeFemSteadyTransportOerstedMethod::FemVectorPotential => Some(&[][..]),
             };
             ensure_antenna_not_cancelled(interrupt_requested, "before_rt0_oersted")?;
+            if let Some(progress) = progress.as_deref_mut() {
+                progress(AntennaFieldStageStatus::EvaluatingField, None)?;
+            }
             // This calls only the RT0/Oersted ABI. The historical request
             // prefix contains spin slots, but no spin equation is executed.
             let rt0 = solve_native_fem_steady_transport_rt0(
@@ -252,12 +279,22 @@ fn execute_native_fem_charge_transport(
                             ),
                         });
                     }
-                    let measured_positive_terminal_current_a = measured_port_current(
-                        request,
-                        &prepared.descriptor.charge_driven_boundaries,
-                        &prepared.request.charge_dirichlet,
-                        &result.dirichlet_boundary_currents_a,
-                    )?;
+                    let measured_positive_terminal_current_a = if let Some(targets) =
+                        prepared.request.prescribed_terminal_currents.as_ref()
+                    {
+                        measured_prescribed_port_current(
+                            request,
+                            targets,
+                            &result.measured_terminal_currents_a,
+                        )?
+                    } else {
+                        measured_port_current(
+                            request,
+                            &prepared.descriptor.charge_driven_boundaries,
+                            &prepared.request.charge_dirichlet,
+                            &result.dirichlet_boundary_currents_a,
+                        )?
+                    };
                     antenna_artifacts.extend(build_antenna_field_solution_artifacts(
                         &AntennaFieldSolutionInput {
                             asset_id,
@@ -270,8 +307,12 @@ fn execute_native_fem_charge_transport(
                             mesh_digest: request.mesh_digest.clone(),
                             requested_execution: request.requested_execution.clone(),
                             resolved_execution: request.resolved_execution.clone(),
-                            gauge_policy: format!("{:?}", prepared.descriptor.charge_gauge)
-                                .to_ascii_lowercase(),
+                            gauge_policy: match prepared.descriptor.charge_gauge {
+                                ChargePotentialGaugeIR::DirichletReference => "dirichlet_reference",
+                                ChargePotentialGaugeIR::ZeroMean => "zero_mean",
+                                ChargePotentialGaugeIR::TerminalReference => "terminal_reference",
+                            }
+                            .into(),
                             solver_policy: serde_json::to_value(&prepared.descriptor.charge_solver)
                                 .map_err(|error| RunError {
                                     message: format!(
@@ -281,6 +322,12 @@ fn execute_native_fem_charge_transport(
                             signatures,
                             conductor_positions_xyz_m: mesh.nodes.clone(),
                             sample_positions_xyz_m: field_sample_positions_xyz_m.to_vec(),
+                            sample_carrier: crate::antenna_field_solution::AntennaSampleCarrier {
+                                domain: antenna_plan.field_sampling.domain.clone(),
+                                carrier_kind: antenna_plan.field_sampling.carrier_kind.clone(),
+                                location: antenna_plan.field_sampling.location.clone(),
+                                topology_digest: antenna_plan.field_sampling.topology_digest.clone(),
+                            },
                             sample_tet4_cells: antenna_sample_tet4_cells.clone().flatten(),
                             bases: vec![AntennaFieldBasisInput {
                                 port_mode_id: request.port_mode_id.clone(),
@@ -297,6 +344,9 @@ fn execute_native_fem_charge_transport(
                                     .oersted_diagnostics
                                     .clone()
                                     .unwrap_or(serde_json::Value::Null),
+                                oersted_operator_version: rt0.oersted_operator_version.clone()
+                                    .ok_or_else(|| RunError { message: "antenna solve lacks native Oersted operator identity".into() })?,
+                                direct_quadrature_snapshot: rt0.oersted_quadrature_snapshot.clone(),
                             }],
                         },
                     )?);
@@ -358,6 +408,11 @@ fn execute_native_fem_charge_transport(
                 "net_boundary_current_a": result.net_boundary_current_a,
                 "current_density_volume_average_apm2": result.current_density_volume_average_apm2,
                 "dirichlet_boundary_currents_a": result.dirichlet_boundary_currents_a,
+                "resolved_charge_dirichlet": result.resolved_charge_dirichlet,
+                "requested_terminal_currents_a": prepared.request.prescribed_terminal_currents,
+                "measured_terminal_currents_a": result.measured_terminal_currents_a,
+                "terminal_voltages_v": result.terminal_voltages_v,
+                "gauge_terminal_indices": result.gauge_terminal_indices,
                 "diagnostics": result.diagnostics,
             }
         }));
@@ -393,6 +448,148 @@ fn execute_native_fem_charge_transport(
     }))
 }
 
+fn validate_antenna_terminal_mapping(
+    request: &fullmag_ir::ResolvedAntennaFieldSolutionRequestIR,
+    driven_boundaries: &[fullmag_ir::ResolvedFemBoundaryMarkerSetIR],
+    charge_dirichlet: &[(u32, f64)],
+) -> Result<(), RunError> {
+    let mut dirichlet_attributes = std::collections::BTreeSet::new();
+    for (attribute, _) in charge_dirichlet {
+        if !dirichlet_attributes.insert(*attribute) {
+            return Err(RunError {
+                message: format!(
+                    "antenna port '{}' repeats native Dirichlet boundary attribute {}",
+                    request.port_mode_id, attribute
+                ),
+            });
+        }
+    }
+    let mut terminal_ids = std::collections::BTreeSet::new();
+    let mut terminal_by_attribute = std::collections::BTreeMap::new();
+    let legacy_voltage_terminals = !charge_dirichlet.is_empty();
+    for boundary in driven_boundaries {
+        if !terminal_ids.insert(boundary.id.as_str()) {
+            return Err(RunError {
+                message: format!(
+                    "antenna port '{}' repeats terminal id '{}'",
+                    request.port_mode_id, boundary.id
+                ),
+            });
+        }
+        for attribute in &boundary.boundary_attributes {
+            if legacy_voltage_terminals && !dirichlet_attributes.contains(attribute) {
+                return Err(RunError {
+                    message: format!(
+                        "antenna terminal '{}' is not present in the native Dirichlet solve",
+                        boundary.id
+                    ),
+                });
+            }
+            if let Some(other_terminal) = terminal_by_attribute.insert(*attribute, &boundary.id) {
+                return Err(RunError {
+                    message: format!(
+                        "antenna port '{}' assigns boundary attribute {} to both '{}' and '{}'",
+                        request.port_mode_id, attribute, other_terminal, boundary.id
+                    ),
+                });
+            }
+        }
+    }
+    for attribute in &dirichlet_attributes {
+        if !terminal_by_attribute.contains_key(attribute) {
+            return Err(RunError {
+                message: format!(
+                    "antenna port '{}' leaves native Dirichlet boundary attribute {} outside all current-driven terminals",
+                    request.port_mode_id, attribute
+                ),
+            });
+        }
+    }
+    for branch in &request.branches {
+        for terminal_id in [
+            &branch.inlet_terminal_boundary_id,
+            &branch.outlet_terminal_boundary_id,
+        ] {
+            if !terminal_ids.contains(terminal_id.as_str()) {
+                return Err(RunError {
+                    message: format!(
+                        "antenna port '{}' references unresolved terminal '{}'",
+                        request.port_mode_id, terminal_id
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn requested_antenna_terminal_currents(
+    request: &fullmag_ir::ResolvedAntennaFieldSolutionRequestIR,
+    driven_boundaries: &[fullmag_ir::ResolvedFemBoundaryMarkerSetIR],
+    charge_dirichlet: &[(u32, f64)],
+) -> Result<Vec<(Vec<u32>, f64)>, RunError> {
+    validate_antenna_terminal_mapping(request, driven_boundaries, charge_dirichlet)?;
+    let mut currents = std::collections::BTreeMap::<&str, f64>::new();
+    for boundary in driven_boundaries {
+        currents.insert(&boundary.id, 0.0);
+    }
+    for branch in &request.branches {
+        if !branch.signed_weight.is_finite() || branch.signed_weight == 0.0 {
+            return Err(RunError {
+                message: format!(
+                    "antenna port '{}' contains a zero or non-finite branch weight",
+                    request.port_mode_id
+                ),
+            });
+        }
+        *currents
+            .get_mut(branch.inlet_terminal_boundary_id.as_str())
+            .expect("terminal mapping validated") -= branch.signed_weight;
+        *currents
+            .get_mut(branch.outlet_terminal_boundary_id.as_str())
+            .expect("terminal mapping validated") += branch.signed_weight;
+    }
+    driven_boundaries
+        .iter()
+        .map(|boundary| {
+            let current = currents[boundary.id.as_str()];
+            if boundary.boundary_attributes.is_empty() || !current.is_finite() {
+                return Err(RunError {
+                    message: format!(
+                        "antenna terminal '{}' has no boundary attributes or a non-finite requested current",
+                        boundary.id
+                    ),
+                });
+            }
+            Ok((boundary.boundary_attributes.clone(), current))
+        })
+        .collect()
+}
+
+fn measured_prescribed_port_current(
+    request: &fullmag_ir::ResolvedAntennaFieldSolutionRequestIR,
+    targets: &[(Vec<u32>, f64)],
+    measured_currents_a: &[f64],
+) -> Result<f64, RunError> {
+    if targets.len() != measured_currents_a.len() || targets.is_empty() {
+        return Err(RunError {
+            message: "antenna terminal-current certificate length mismatch".into(),
+        });
+    }
+    for ((_, expected), measured) in targets.iter().zip(measured_currents_a) {
+        if !measured.is_finite() || (measured - expected).abs() > 1.0e-18 + 1.0e-8 * expected.abs()
+        {
+            return Err(RunError {
+                message: format!(
+                    "antenna port '{}' signed terminal-current certificate failed: expected={expected:.17e} A, measured={measured:.17e} A",
+                    request.port_mode_id
+                ),
+            });
+        }
+    }
+    Ok(1.0)
+}
+
 fn measured_port_current(
     request: &fullmag_ir::ResolvedAntennaFieldSolutionRequestIR,
     driven_boundaries: &[fullmag_ir::ResolvedFemBoundaryMarkerSetIR],
@@ -404,6 +601,7 @@ fn measured_port_current(
             message: "antenna terminal-current result does not match Dirichlet ordering".into(),
         });
     }
+    validate_antenna_terminal_mapping(request, driven_boundaries, charge_dirichlet)?;
     let current_by_attribute = charge_dirichlet
         .iter()
         .zip(boundary_currents_a)
@@ -457,7 +655,7 @@ fn measured_port_current(
                 ),
             });
         }
-        // `boundary_current_a` is the outward flux. The outlet is therefore
+        // The weak terminal current is the outward flux. The outlet is therefore
         // the single canonical positive orientation for a branch; the inlet
         // is used only to certify local current balance.
         branch_currents.push((branch.signed_weight, outlet_current));
@@ -535,6 +733,9 @@ fn preflight_charge_transport_plans<'a>(
                 NativeFemSteadyTransportGauge::BoundaryReference
             }
             ChargePotentialGaugeIR::ZeroMean => NativeFemSteadyTransportGauge::ZeroMeanPotential,
+            ChargePotentialGaugeIR::TerminalReference => {
+                NativeFemSteadyTransportGauge::BoundaryReference
+            }
         };
         prepared.push(PreparedChargeTransport {
             resolved,
@@ -549,6 +750,17 @@ fn preflight_charge_transport_plans<'a>(
                 absolute_tolerance: descriptor.charge_solver.linear.absolute_tolerance,
                 maximum_iterations: descriptor.charge_solver.linear.max_iterations,
                 charge_dirichlet: descriptor.charge_dirichlet.clone(),
+                prescribed_terminal_currents: resolved
+                    .antenna_field_solution_request
+                    .as_ref()
+                    .map(|request| {
+                        requested_antenna_terminal_currents(
+                            request,
+                            &descriptor.charge_driven_boundaries,
+                            &descriptor.charge_dirichlet,
+                        )
+                    })
+                    .transpose()?,
             },
             provenance: charge_transport_provenance(resolved, descriptor, mesh.cell_count()),
         });
@@ -561,10 +773,24 @@ fn validate_resolved_descriptor(
     resolved: &ResolvedChargeTransportPlanIR,
     descriptor: &ResolvedFemChargeTransportIR,
 ) -> Result<(), RunError> {
+    if descriptor.charge_definition.conservative_current_source.is_some() {
+        return Err(RunError {
+            message: format!(
+                "FEM charge transport '{}' conservative_current_source requires a current-driven owned-bundle request; legacy native charge execution is forbidden",
+                resolved.module_id
+            ),
+        });
+    }
     let boundaries_valid = descriptor
         .charge_insulating_boundaries
         .iter()
         .flat_map(|set| set.boundary_attributes.iter().copied())
+        .chain(
+            descriptor
+                .charge_driven_boundaries
+                .iter()
+                .flat_map(|set| set.boundary_attributes.iter().copied()),
+        )
         .chain(
             descriptor
                 .charge_dirichlet
@@ -617,6 +843,12 @@ fn validate_resolved_descriptor(
         || descriptor.resolved_charge_engine != "cg"
         || descriptor.stage_coupling != expected_stage
         || !boundaries_valid
+        || (descriptor.charge_gauge == ChargePotentialGaugeIR::TerminalReference
+            && (resolved.antenna_field_solution_request.is_none()
+                || !descriptor.charge_dirichlet.is_empty()))
+        || (resolved.antenna_field_solution_request.is_some()
+            && descriptor.charge_dirichlet.is_empty()
+            && descriptor.charge_gauge != ChargePotentialGaugeIR::TerminalReference)
         || (descriptor.charge_gauge == ChargePotentialGaugeIR::DirichletReference
             && descriptor.charge_dirichlet.is_empty())
         || (descriptor.charge_gauge == ChargePotentialGaugeIR::ZeroMean
@@ -646,6 +878,13 @@ fn validate_resolved_descriptor(
                 resolved.module_id
             ),
         });
+    }
+    if let Some(request) = resolved.antenna_field_solution_request.as_ref() {
+        requested_antenna_terminal_currents(
+            request,
+            &descriptor.charge_driven_boundaries,
+            &descriptor.charge_dirichlet,
+        )?;
     }
     Ok(())
 }
@@ -709,30 +948,140 @@ fn solve_native_fem_charge_transport(
         error_message: [0; 256],
         diagnostics_json: [0; 1024],
     };
-    let mut terminal_currents = vec![0.0; attributes.len()];
-    let mut result_ffi = ffi::fullmag_fem_charge_transport_result_v2 {
-        base: result_v1,
-        dirichlet_boundary_currents_a: terminal_currents.as_mut_ptr(),
-        dirichlet_boundary_currents_a_capacity: terminal_currents.len() as u64,
-        dirichlet_boundary_currents_a_len: 0,
+    let (
+        result,
+        terminal_currents,
+        resolved_charge_dirichlet,
+        measured_terminal_currents_a,
+        terminal_voltages_v,
+        gauge_terminal_indices,
+    ) = if let Some(targets) = request.prescribed_terminal_currents.as_ref() {
+        let mut offsets = Vec::with_capacity(targets.len() + 1);
+        let mut terminal_attributes = Vec::new();
+        let mut requested_currents = Vec::with_capacity(targets.len());
+        offsets.push(0);
+        for (group, current_a) in targets {
+            terminal_attributes.extend(group);
+            offsets.push(terminal_attributes.len() as u64);
+            requested_currents.push(*current_a);
+        }
+        let mut base = request_ffi;
+        base.dirichlet_boundary_attributes = ptr::null();
+        base.dirichlet_boundary_values_v = ptr::null();
+        base.dirichlet_boundary_count = 0;
+        let request_v3 = ffi::fullmag_fem_charge_transport_request_v3 {
+            abi_version: ffi::FULLMAG_FEM_CHARGE_TERMINAL_CURRENT_ABI_VERSION,
+            reserved_flags: 0,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_charge_transport_request_v3>() as u64,
+            base,
+            terminal_attribute_offsets: offsets.as_ptr(),
+            terminal_attribute_offsets_len: offsets.len() as u64,
+            terminal_boundary_attributes: terminal_attributes.as_ptr(),
+            terminal_boundary_attributes_len: terminal_attributes.len() as u64,
+            requested_outward_currents_a: requested_currents.as_ptr(),
+            terminal_count: targets.len() as u64,
+        };
+        let mut voltages = vec![0.0; targets.len()];
+        let mut measured = vec![0.0; targets.len()];
+        let mut gauge_indices = vec![0; targets.len()];
+        let mut result_v3 = ffi::fullmag_fem_charge_transport_result_v3 {
+            abi_version: ffi::FULLMAG_FEM_CHARGE_TERMINAL_CURRENT_ABI_VERSION,
+            reserved_flags: 0,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_charge_transport_result_v3>() as u64,
+            base: result_v1,
+            terminal_voltages_v: voltages.as_mut_ptr(),
+            terminal_voltages_v_capacity: voltages.len() as u64,
+            terminal_voltages_v_len: 0,
+            measured_outward_currents_a: measured.as_mut_ptr(),
+            measured_outward_currents_a_capacity: measured.len() as u64,
+            measured_outward_currents_a_len: 0,
+            gauge_terminal_indices: gauge_indices.as_mut_ptr(),
+            gauge_terminal_indices_capacity: gauge_indices.len() as u64,
+            gauge_terminal_indices_len: 0,
+        };
+        let status =
+            unsafe { ffi::fullmag_fem_solve_charge_transport_v3(&request_v3, &mut result_v3) };
+        if status != ffi::FULLMAG_FEM_OK {
+            return Err(RunError {
+                message: chars(&result_v3.base.error_message),
+            });
+        }
+        if result_v3.terminal_voltages_v_len as usize != targets.len()
+            || result_v3.measured_outward_currents_a_len as usize != targets.len()
+            || result_v3.gauge_terminal_indices_len == 0
+            || result_v3.gauge_terminal_indices_len as usize > targets.len()
+            || voltages
+                .iter()
+                .chain(&measured)
+                .any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "native FEM terminal-current solve returned malformed terminal output"
+                    .into(),
+            });
+        }
+        gauge_indices.truncate(result_v3.gauge_terminal_indices_len as usize);
+        if gauge_indices
+            .iter()
+            .any(|index| *index as usize >= targets.len())
+        {
+            return Err(RunError {
+                message: "native FEM terminal-current solve returned an invalid gauge index".into(),
+            });
+        }
+        let resolved = targets
+            .iter()
+            .zip(&voltages)
+            .flat_map(|((group, _), voltage)| {
+                group.iter().map(move |attribute| (*attribute, *voltage))
+            })
+            .collect();
+        (
+            result_v3.base,
+            Vec::new(),
+            resolved,
+            measured,
+            voltages,
+            gauge_indices,
+        )
+    } else {
+        let mut terminal_currents = vec![0.0; attributes.len()];
+        let mut result_v2 = ffi::fullmag_fem_charge_transport_result_v2 {
+            base: result_v1,
+            dirichlet_boundary_currents_a: terminal_currents.as_mut_ptr(),
+            dirichlet_boundary_currents_a_capacity: terminal_currents.len() as u64,
+            dirichlet_boundary_currents_a_len: 0,
+        };
+        let status =
+            unsafe { ffi::fullmag_fem_solve_charge_transport_v2(&request_ffi, &mut result_v2) };
+        if status != ffi::FULLMAG_FEM_OK {
+            return Err(RunError {
+                message: chars(&result_v2.base.error_message),
+            });
+        }
+        if result_v2.dirichlet_boundary_currents_a_len as usize != terminal_currents.len()
+            || terminal_currents.iter().any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "native FEM charge-only solve returned invalid terminal currents".into(),
+            });
+        }
+        (
+            result_v2.base,
+            terminal_currents,
+            request.charge_dirichlet.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     };
-    let status =
-        unsafe { ffi::fullmag_fem_solve_charge_transport_v2(&request_ffi, &mut result_ffi) };
-    let result = &result_ffi.base;
-    if status != ffi::FULLMAG_FEM_OK {
-        return Err(RunError {
-            message: chars(&result.error_message),
-        });
-    }
     if result.charge_converged == 0
         || result.electric_potential_v_len as usize != potential.len()
         || result.charge_current_density_xyz_apm2_len as usize != current.len()
-        || result_ffi.dirichlet_boundary_currents_a_len as usize != terminal_currents.len()
         || potential
             .iter()
             .chain(&current)
             .any(|value| !value.is_finite())
-        || terminal_currents.iter().any(|value| !value.is_finite())
     {
         return Err(RunError {
             message: "native FEM charge-only solve returned invalid or unconverged output".into(),
@@ -750,12 +1099,17 @@ fn solve_native_fem_charge_transport(
         net_boundary_current_a: result.net_boundary_current_a,
         current_density_volume_average_apm2: result.current_density_volume_average_apm2,
         dirichlet_boundary_currents_a: terminal_currents,
+        resolved_charge_dirichlet,
+        measured_terminal_currents_a,
+        terminal_voltages_v,
+        gauge_terminal_indices,
         diagnostics,
     })
 }
 
 fn charge_request_for_rt0(
     request: &NativeFemChargeTransportRequest,
+    resolved_charge_dirichlet: &[(u32, f64)],
 ) -> NativeFemSteadyTransportRequest {
     NativeFemSteadyTransportRequest {
         mesh: request.mesh.clone(),
@@ -782,7 +1136,7 @@ fn charge_request_for_rt0(
         relative_tolerance: request.relative_tolerance,
         absolute_tolerance: request.absolute_tolerance,
         maximum_iterations: request.maximum_iterations,
-        charge_dirichlet: request.charge_dirichlet.clone(),
+        charge_dirichlet: resolved_charge_dirichlet.to_vec(),
         spin_dirichlet: Vec::new(),
     }
 }
@@ -1020,6 +1374,77 @@ mod tests {
     }
 
     #[test]
+    fn antenna_port_requests_signed_terminal_fluxes() {
+        let request = port_request(&[
+            ("signal_in", "signal_out", 1.0),
+            ("return_a_in", "return_a_out", -0.5),
+            ("return_b_in", "return_b_out", -0.5),
+        ]);
+        let dirichlet = (11..=16)
+            .map(|attribute| (attribute, 0.0))
+            .collect::<Vec<_>>();
+        let terminals =
+            requested_antenna_terminal_currents(&request, &driven_boundaries(), &dirichlet)
+                .expect("balanced port must produce signed outward terminal fluxes");
+        assert_eq!(
+            terminals,
+            vec![
+                (vec![11], -1.0),
+                (vec![12], 1.0),
+                (vec![13], 0.5),
+                (vec![14], -0.5),
+                (vec![15], 0.5),
+                (vec![16], -0.5),
+            ]
+        );
+        assert_eq!(
+            measured_prescribed_port_current(
+                &request,
+                &terminals,
+                &[-1.0, 1.0, 0.5, -0.5, 0.5, -0.5],
+            )
+            .expect("signed terminal currents agree with the one-ampere basis"),
+            1.0
+        );
+        assert!(measured_prescribed_port_current(
+            &request,
+            &terminals,
+            &[-1.0, 1.0, -0.5, 0.5, 0.5, -0.5],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn antenna_port_rejects_reversed_sub_picoampere_return() {
+        let request = port_request(&[
+            ("signal_in", "signal_out", 1.0),
+            ("return_a_in", "return_a_out", -1.0e-13),
+            ("return_b_in", "return_b_out", -0.9999999999999),
+        ]);
+        let terminals = vec![
+            (vec![11], -1.0),
+            (vec![12], 1.0),
+            (vec![13], 1.0e-13),
+            (vec![14], -1.0e-13),
+            (vec![15], 0.9999999999999),
+            (vec![16], -0.9999999999999),
+        ];
+        assert!(measured_prescribed_port_current(
+            &request,
+            &terminals,
+            &[
+                -1.0,
+                1.0,
+                -1.0e-13,
+                1.0e-13,
+                0.9999999999999,
+                -0.9999999999999,
+            ],
+        )
+        .is_err());
+    }
+
+    #[test]
     fn antenna_port_current_requires_balance_and_authored_branch_split() {
         let request = port_request(&[
             ("signal_in", "signal_out", 1.0),
@@ -1084,6 +1509,47 @@ mod tests {
     }
 
     #[test]
+    fn antenna_port_current_rejects_ambiguous_terminal_attributes() {
+        let request = port_request(&[
+            ("signal_in", "signal_out", 1.0),
+            ("return_a_in", "return_a_out", -1.0),
+        ]);
+        let charge_dirichlet = vec![(11, 1.0), (12, 0.0), (13, 1.0), (14, 0.0)];
+        let currents = [-1.0, 1.0, 1.0, -1.0];
+        let mut boundaries = driven_boundaries();
+        boundaries.truncate(4);
+
+        let duplicate_dirichlet = vec![(11, 1.0), (11, 0.0), (13, 1.0), (14, 0.0)];
+        let error = measured_port_current(&request, &boundaries, &duplicate_dirichlet, &currents)
+            .unwrap_err();
+        assert!(error
+            .message
+            .contains("repeats native Dirichlet boundary attribute 11"));
+
+        boundaries[1].boundary_attributes = vec![11];
+        let error =
+            measured_port_current(&request, &boundaries, &charge_dirichlet, &currents).unwrap_err();
+        assert!(error
+            .message
+            .contains("assigns boundary attribute 11 to both"));
+
+        boundaries[1].boundary_attributes = vec![12];
+        boundaries[1].id = "signal_in".into();
+        let error =
+            measured_port_current(&request, &boundaries, &charge_dirichlet, &currents).unwrap_err();
+        assert!(error.message.contains("repeats terminal id 'signal_in'"));
+
+        let mut boundaries = driven_boundaries();
+        boundaries.truncate(4);
+        let extra_dirichlet = vec![(11, 1.0), (12, 1.0), (13, 0.0), (14, 0.0), (99, 0.0)];
+        let error = requested_antenna_terminal_currents(&request, &boundaries, &extra_dirichlet)
+            .unwrap_err();
+        assert!(error
+            .message
+            .contains("attribute 99 outside all current-driven terminals"));
+    }
+
+    #[test]
     fn charge_only_runtime_source_never_invokes_spin_solve() {
         let source = include_str!("charge_transport.rs");
         let production_source = source
@@ -1091,6 +1557,7 @@ mod tests {
             .next()
             .expect("charge-only runtime source before its test module");
         assert!(production_source.contains("fullmag_fem_solve_charge_transport_v2"));
+        assert!(production_source.contains("fullmag_fem_solve_charge_transport_v3"));
         assert!(!production_source.contains("ffi::fullmag_fem_solve_steady_transport_v1"));
         assert!(!production_source.contains("solve_native_fem_steady_transport(&"));
     }
@@ -1146,6 +1613,7 @@ mod tests {
             absolute_tolerance: 0.0,
             maximum_iterations: 500,
             charge_dirichlet: vec![(1, 0.0), (2, 1.0)],
+            prescribed_terminal_currents: None,
         })
         .expect("charge-only Rust runner must execute the standalone native charge ABI");
 

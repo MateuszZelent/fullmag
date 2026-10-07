@@ -475,7 +475,7 @@ impl LocalLiveWorkspace {
         Ok(())
     }
 
-    fn current_artifact_dir(&self) -> Result<PathBuf> {
+    pub(crate) fn current_artifact_dir(&self) -> Result<PathBuf> {
         let path = self
             .state
             .lock()

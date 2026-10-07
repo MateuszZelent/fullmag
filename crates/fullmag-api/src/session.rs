@@ -3549,6 +3549,7 @@ mod tests {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                antenna_solve_stage_id: None,
                 kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
@@ -3717,6 +3718,87 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_reconciliation_does_not_apply_foreign_identified_logs_to_solver_commands() {
+        for kind in ["run", "relax", "solve"] {
+            let mut current = test_current_snapshot();
+            current.session.status = "awaiting_command".to_string();
+            current.runtime_status = build_runtime_status_view("awaiting_command");
+            let record = tracked_command("cmd-target", kind);
+            let dispatched_at = record.dispatched_at_unix_ms.unwrap();
+            for (log_id, timestamp, marker, expected) in [
+                (Some("cmd-other"), dispatched_at, "failed antenna stage-output resolution", CommandCompletionState::Completed),
+                (Some("cmd-other"), dispatched_at, "cancelled", CommandCompletionState::Completed),
+                (Some("cmd-target"), dispatched_at - 1, "failed", CommandCompletionState::Completed),
+                (Some("cmd-target"), dispatched_at, "failed antenna stage-output resolution", CommandCompletionState::Failed),
+                (Some("cmd-target"), dispatched_at, "Error", CommandCompletionState::Failed),
+                (Some("cmd-target"), dispatched_at, "cancelled", CommandCompletionState::Cancelled),
+                (None, dispatched_at, "failed", CommandCompletionState::Failed),
+                (None, dispatched_at, "cancelled", CommandCompletionState::Cancelled),
+            ] {
+                let entry = match log_id {
+                    Some(command_id) => command_engine_log(command_id, timestamp, "system", marker),
+                    None => engine_log(timestamp, "system", marker),
+                };
+                current.engine_log = vec![entry];
+                assert_eq!(
+                    infer_dispatched_command_completion(&record, &current),
+                    Some(expected),
+                    "{kind} must isolate named logs while preserving legacy anonymous outcomes"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_reconciliation_requires_fresh_exact_identity_for_compute_and_import_results() {
+        let cases = [
+            ("compute_fields", "Field snapshots computed", CommandCompletionState::Completed),
+            ("compute_fields", "Compute fields failed", CommandCompletionState::Failed),
+            ("compute_energies", "Energies computed", CommandCompletionState::Completed),
+            ("compute_energies", "Compute energies failed", CommandCompletionState::Failed),
+            ("load_state", "Loaded workspace state from state.h5", CommandCompletionState::Completed),
+            ("load_state", "Failed to load workspace state", CommandCompletionState::Failed),
+        ];
+        for (kind, marker, expected) in cases {
+            let mut current = test_current_snapshot();
+            current.metadata = Some(json!({
+                "artifact_layout": { "backend": "fdm", "grid_cells": [1, 1, 1] }
+            }));
+            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
+            let mut record = tracked_command("cmd-target", kind);
+            if kind == "compute_fields" {
+                record.command.field_materialization_requirements =
+                    vec![crate::schemas::runtime::FieldMaterializationRequirement {
+                        quantity_ids: vec!["m".to_string()],
+                        scope_kind: "full".to_string(),
+                        scope_id: None,
+                        generation_id: domain_generation_id(&current),
+                        carrier_fingerprint: None,
+                    }];
+                assert_eq!(command_readiness_matches_requirements(&record, &current), Ok(true));
+            }
+            let dispatched_at = record.dispatched_at_unix_ms.unwrap();
+            assert_eq!(infer_dispatched_command_completion(&record, &current), None);
+            for entry in [
+                engine_log(dispatched_at, "system", marker),
+                command_engine_log("cmd-other", dispatched_at, "system", marker),
+                command_engine_log("cmd-target", dispatched_at - 1, "system", marker),
+            ] {
+                current.engine_log = vec![entry];
+                assert_eq!(
+                    infer_dispatched_command_completion(&record, &current),
+                    None,
+                    "{kind} must not accept an uncorrelated, foreign or stale result"
+                );
+            }
+            current.engine_log = vec![command_engine_log(
+                "cmd-target", dispatched_at, "system", marker,
+            )];
+            assert_eq!(infer_dispatched_command_completion(&record, &current), Some(expected));
+        }
+    }
+
+    #[test]
     fn runtime_status_prefers_waiting_for_compute_gate_over_stale_live_state() {
         let mut current = test_current_snapshot();
         current.session.status = "waiting_for_compute".to_string();
@@ -3823,87 +3905,6 @@ mod tests {
         assert_eq!(current.runtime_status.kind, RuntimeStatus::AwaitingCommand);
         assert!(!current.runtime_status.is_busy);
         assert!(current.runtime_status.can_accept_commands);
-    }
-
-    #[test]
-    fn snapshot_reconciliation_requires_fresh_exact_identity_for_compute_and_import_results() {
-        let cases = [
-            ("compute_fields", "Field snapshots computed", CommandCompletionState::Completed),
-            ("compute_fields", "Compute fields failed", CommandCompletionState::Failed),
-            ("compute_energies", "Energies computed", CommandCompletionState::Completed),
-            ("compute_energies", "Compute energies failed", CommandCompletionState::Failed),
-            ("load_state", "Loaded workspace state from state.h5", CommandCompletionState::Completed),
-            ("load_state", "Failed to load workspace state", CommandCompletionState::Failed),
-        ];
-        for (kind, marker, expected) in cases {
-            let mut current = test_current_snapshot();
-            current.metadata = Some(json!({
-                "artifact_layout": { "backend": "fdm", "grid_cells": [1, 1, 1] }
-            }));
-            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
-            let mut record = tracked_command("cmd-target", kind);
-            if kind == "compute_fields" {
-                record.command.field_materialization_requirements =
-                    vec![crate::schemas::runtime::FieldMaterializationRequirement {
-                        quantity_ids: vec!["m".to_string()],
-                        scope_kind: "full".to_string(),
-                        scope_id: None,
-                        generation_id: domain_generation_id(&current),
-                        carrier_fingerprint: None,
-                    }];
-                assert_eq!(command_readiness_matches_requirements(&record, &current), Ok(true));
-            }
-            let dispatched_at = record.dispatched_at_unix_ms.unwrap();
-            assert_eq!(infer_dispatched_command_completion(&record, &current), None);
-            for entry in [
-                engine_log(dispatched_at, "system", marker),
-                command_engine_log("cmd-other", dispatched_at, "system", marker),
-                command_engine_log("cmd-target", dispatched_at - 1, "system", marker),
-            ] {
-                current.engine_log = vec![entry];
-                assert_eq!(
-                    infer_dispatched_command_completion(&record, &current),
-                    None,
-                    "{kind} must not accept an uncorrelated, foreign or stale result"
-                );
-            }
-            current.engine_log = vec![command_engine_log(
-                "cmd-target", dispatched_at, "system", marker,
-            )];
-            assert_eq!(infer_dispatched_command_completion(&record, &current), Some(expected));
-        }
-    }
-
-    #[test]
-    fn snapshot_reconciliation_does_not_apply_foreign_identified_logs_to_solver_commands() {
-        for kind in ["run", "relax", "solve"] {
-            let mut current = test_current_snapshot();
-            current.session.status = "awaiting_command".to_string();
-            current.runtime_status = build_runtime_status_view("awaiting_command");
-            let record = tracked_command("cmd-target", kind);
-            let dispatched_at = record.dispatched_at_unix_ms.unwrap();
-            for (log_id, timestamp, marker, expected) in [
-                (Some("cmd-other"), dispatched_at, "failed antenna stage-output resolution", CommandCompletionState::Completed),
-                (Some("cmd-other"), dispatched_at, "cancelled", CommandCompletionState::Completed),
-                (Some("cmd-target"), dispatched_at - 1, "failed", CommandCompletionState::Completed),
-                (Some("cmd-target"), dispatched_at, "failed antenna stage-output resolution", CommandCompletionState::Failed),
-                (Some("cmd-target"), dispatched_at, "Error", CommandCompletionState::Failed),
-                (Some("cmd-target"), dispatched_at, "cancelled", CommandCompletionState::Cancelled),
-                (None, dispatched_at, "failed", CommandCompletionState::Failed),
-                (None, dispatched_at, "cancelled", CommandCompletionState::Cancelled),
-            ] {
-                let entry = match log_id {
-                    Some(command_id) => command_engine_log(command_id, timestamp, "system", marker),
-                    None => engine_log(timestamp, "system", marker),
-                };
-                current.engine_log = vec![entry];
-                assert_eq!(
-                    infer_dispatched_command_completion(&record, &current),
-                    Some(expected),
-                    "{kind} must isolate named logs while preserving legacy anonymous outcomes"
-                );
-            }
-        }
     }
 
     #[test]
@@ -4416,6 +4417,7 @@ mod tests {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                antenna_solve_stage_id: None,
                 kind: None,
                 status: StageLifecycleState::Paused,
                 command_id: Some("cmd-stage-0".into()),
@@ -4471,6 +4473,7 @@ mod tests {
                     completed_stage_indexes: vec![0],
                     stages: vec![StageExecutionRecord {
                         stage_id: None,
+                        antenna_solve_stage_id: None,
                         kind: None,
                         status: StageLifecycleState::Completed,
                         command_id: Some("cmd-stage-0".into()),
@@ -5051,6 +5054,7 @@ mod tests {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                antenna_solve_stage_id: None,
                 kind: None,
                 status: stage_status,
                 command_id: None,

@@ -1318,6 +1318,8 @@ pub(crate) struct StageExecutionRecord {
     #[serde(default)]
     pub stage_id: Option<String>,
     #[serde(default)]
+    pub antenna_solve_stage_id: Option<String>,
+    #[serde(default)]
     pub kind: Option<String>,
     pub status: StageLifecycleState,
     #[serde(default)]

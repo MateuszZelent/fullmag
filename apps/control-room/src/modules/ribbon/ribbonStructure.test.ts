@@ -134,8 +134,41 @@ function selectedMeshObject() {
   };
 }
 
+function ribbonActiveLane(discretization: "fdm" | "fem"): ReturnType<typeof activeLaneCapabilityFixture> {
+  const activeLane = activeLaneCapabilityFixture();
+  return {
+    ...activeLane,
+    authored: { ...activeLane.authored, backend: discretization, discretization },
+    requested: { ...activeLane.requested, backend: discretization, discretization },
+    resolved: { ...activeLane.resolved!, backend: discretization, discretization },
+    source: { ...activeLane.source, engine_id: `${discretization}_cpu_reference` },
+    operations: {
+      ...activeLane.operations,
+      grid_build: {
+        ...activeLane.operations.grid_build,
+        state: discretization === "fdm" ? "supported" as const : "unsupported" as const,
+        reason_code: discretization === "fdm" ? "capability_supported" : "capability_unsupported",
+        reason: "Grid building follows the resolved planner lane.",
+      },
+      "interaction.frozen_spins": {
+        state: discretization === "fdm" ? "supported" as const : "unsupported" as const,
+        reason_code: discretization === "fdm" ? "capability_supported" : "capability_unsupported",
+        reason: "Frozen spins are available on the resolved FDM lane only.",
+        requires: ["discretization:fdm"],
+      },
+      shared_mesh_build: {
+        state: discretization === "fem" ? "supported" as const : "unsupported" as const,
+        reason_code: discretization === "fem" ? "capability_supported" : "capability_unsupported",
+        reason: "Shared meshing follows the resolved planner lane.",
+        requires: ["discretization:fem"],
+      },
+    },
+  };
+}
+
 function femRibbonSessionStatus() {
   return {
+    capabilities: { active_lane: ribbonActiveLane("fem") },
     domain: { discretization: "fem" as const },
     resources: { field_revision: 1, fields_revision: 1 },
   };
@@ -1583,6 +1616,7 @@ describe("ribbon structure", () => {
     const content = buildRibbonTabContent("physics", {
       commands: createRibbonCommandRegistry(),
       sessionStatus: {
+        capabilities: { active_lane: ribbonActiveLane("fem") },
         domain: { discretization: "fem" },
         resources: { field_revision: 0, fields_revision: 0 },
       },
@@ -1667,6 +1701,59 @@ describe("ribbon structure", () => {
         objectId: "free-layer",
       }),
     ]);
+  });
+
+  it.each([
+    { scope: undefined, role: "magnet", nodeId: "model:object:waveguide:physics:exchange", status: "completed" },
+    { scope: "global", role: "magnet", nodeId: "model:physics:exchange", status: "completed" },
+    { scope: undefined, role: "conductor", nodeId: null, status: "failed" },
+  ])("keeps explicit Exchange scope honest: $scope / $role", async ({ scope, role, nodeId, status }) => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      {
+        resourceData: {
+          [MODEL_SCENE_PATH]: { revision: 6, objects: [{ id: "waveguide", role }] },
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              active_lane: {
+                ...activeLaneCapabilityFixture(),
+                operations: {
+                  "interaction.exchange": {
+                    state: "supported",
+                    reason: "Exchange is supported.",
+                    requires: [],
+                  },
+                },
+              },
+            },
+            domain: { discretization: "fdm" },
+          },
+        },
+        selection: {
+          get: () => ({
+            objectId: "waveguide",
+            ref: { type: "scene-object", objectId: "waveguide", regionId: "core" },
+          }),
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+      { interactionId: "exchange", ...(scope ? { scope } : {}) },
+    );
+    expect(result.status).toBe(status);
+    if (nodeId) {
+      expect(selections).toEqual([expect.objectContaining({ nodeId })]);
+      if (!scope) {
+        expect(selections[0]).toMatchObject({
+          objectId: "waveguide",
+          ref: { objectId: "waveguide", type: "scene-object" },
+        });
+        expect((selections[0] as { ref: object }).ref).not.toHaveProperty("regionId");
+      }
+    } else {
+      expect(selections).toEqual([]);
+    }
   });
 
   it("requires an object or region before opening object-scoped spin torque", async () => {
@@ -1830,6 +1917,7 @@ describe("ribbon structure", () => {
     const fdmView = buildRibbonTabContent("view", {
       ...baseContext,
       sessionStatus: {
+        capabilities: { active_lane: ribbonActiveLane("fdm") },
         domain: { discretization: "fdm" },
         resources: { field_revision: 0, fields_revision: 0 },
       },
@@ -1856,7 +1944,7 @@ describe("ribbon structure", () => {
       },
       resourceData: {
         [SESSION_STATUS_RESOURCE_KEY]: {
-          data: { domain: { discretization: "fdm" } },
+          data: { capabilities: { active_lane: ribbonActiveLane("fdm") }, domain: { discretization: "fdm" } },
         },
       },
       selection: {
@@ -1906,7 +1994,7 @@ describe("ribbon structure", () => {
     const content = buildRibbonTabContent("physics", {
       sessionStatus: {
         capabilities: {
-          active_lane: activeLaneCapabilityFixture(),
+          active_lane: ribbonActiveLane("fem"),
         },
         domain: { discretization: "fem" },
       },
@@ -1928,6 +2016,12 @@ describe("ribbon structure", () => {
     expect(items.slice(0, 4).every(
       (node) => node.commandId === RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
     )).toBe(true);
+    expect(items.slice(0, 4).map((node) => node.commandInput)).toEqual([
+      { interactionId: "exchange", scope: "global" },
+      { interactionId: "demag", scope: "global" },
+      { interactionId: "zeeman", scope: "global" },
+      { interactionId: "rotated_interfacial_dmi", scope: "global" },
+    ]);
     expect(items[4]).toMatchObject({
       commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
       label: "Field Drive",
@@ -2054,6 +2148,7 @@ describe("ribbon structure", () => {
         layout: { setPanelVisible: vi.fn() },
         resourceData: {
           [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: { active_lane: ribbonActiveLane("fdm") },
             domain: { discretization: "fdm" },
           },
         },
@@ -2093,7 +2188,7 @@ describe("ribbon structure", () => {
     const base = {
       api: {} as never,
       resourceData: {
-        [SESSION_STATUS_RESOURCE_KEY]: { domain: { discretization: "fdm" } },
+        [SESSION_STATUS_RESOURCE_KEY]: { capabilities: { active_lane: ribbonActiveLane("fdm") }, domain: { discretization: "fdm" } },
       },
       source: "test" as const,
     };
@@ -2134,7 +2229,7 @@ describe("ribbon structure", () => {
       registry.isEnabled(RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND, {
         ...base,
         resourceData: {
-          [SESSION_STATUS_RESOURCE_KEY]: { domain: { discretization: "fem" } },
+          [SESSION_STATUS_RESOURCE_KEY]: { capabilities: { active_lane: ribbonActiveLane("fem") }, domain: { discretization: "fem" } },
         },
         selection: { get: () => magnetSelection } as never,
       }),
@@ -2206,7 +2301,7 @@ describe("ribbon structure", () => {
       const content = buildRibbonTabContent("physics", {
         sessionStatus: {
           capabilities: {
-            active_lane: activeLaneCapabilityFixture(),
+            active_lane: ribbonActiveLane(discretization),
           },
           domain: { discretization },
         },
@@ -4153,10 +4248,11 @@ describe("ribbon structure", () => {
     });
   });
 
-  it("exposes Build Grid without FEM mesh actions for an explicit FDM session", () => {
+  it("exposes Build Grid for a resolved FDM lane despite a retained FEM domain", () => {
     const visualization = new ObjectVisualizationController();
     const sessionStatus = {
-      domain: { discretization: "fdm" },
+      capabilities: { active_lane: ribbonActiveLane("fdm") },
+      domain: { discretization: "fem" },
       resources: { field_revision: 1, fields_revision: 1 },
     } as const;
     const context = {
@@ -4282,7 +4378,23 @@ describe("ribbon structure", () => {
     ).toEqual(["mesh.open-overview"]);
   });
 
-  it("preserves FEM mesh ribbon copy for an explicit FEM session", () => {
+  it.each(["fem", "fdm"] as const)("does not infer mesh actions from a retained %s domain with an unavailable planner lane", (discretization) => {
+    const activeLane = ribbonActiveLane(discretization);
+    const context = {
+      sessionStatus: {
+        capabilities: { active_lane: { ...activeLane, resolved: null } },
+        domain: { discretization },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+    } as never;
+    const geometry = buildRibbonTabContent("geometry", context);
+    expect(geometry?.groups.find((group) => group.id === "builder-lifecycle")?.actions
+      .some((action) => action.id === "mesh.build-selected")).not.toBe(true);
+    const mesh = buildRibbonTabContent("mesh", context);
+    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
+  });
+
+  it("exposes FEM meshing before the bootstrap FDM domain is replaced", () => {
     const visualization = new ObjectVisualizationController();
     const context = {
       commandContext: { source: "test" as const },
@@ -4295,7 +4407,8 @@ describe("ribbon structure", () => {
         ref: null,
       },
       sessionStatus: {
-        domain: { discretization: "fem" },
+        capabilities: { active_lane: ribbonActiveLane("fem") },
+        domain: { discretization: "fdm" },
         resources: { field_revision: 1, fields_revision: 1 },
       } as const,
       visualization,

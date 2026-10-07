@@ -40,6 +40,11 @@ pub(crate) fn time_stage_context(problem: &ProblemIR) -> fullmag_ir::TimeStageCo
             .get("stage_start_time_s")
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
+        waveform_origin_time_s: problem
+            .problem_meta
+            .runtime_metadata
+            .get("stage_waveform_origin_time_s")
+            .and_then(Value::as_f64),
         study_kind: problem.study.kind(),
     }
 }

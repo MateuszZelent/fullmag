@@ -5,6 +5,24 @@ import { selectionRefFromNode } from "../explorerSelection";
 import { buildObjectExplorerNode } from "./objectExplorerNodes";
 
 describe("antenna composition explorer nodes", () => {
+  it("marks a solve-stage draft without its mesh-exact current view invalid", () => {
+    const node = buildObjectExplorerNode(
+      { id: "antenna", label: "Microstrip", objectRole: "antenna" } as never,
+      { scene: {
+        current_transports: [{ name: "transport-1", kind: "current_transport", model: "ohmic_poisson" }],
+        antenna_port_modes: [{ id: "port-1", source_object_id: "antenna", current_transport_id: "transport-1", branches: [] }],
+        antenna_field_solve_stages: [{
+          id: "solve-1", source_object_id: "antenna", current_transport_id: "transport-1",
+          conservative_current_view_ref: "transport-1:rt0", port_mode_ids: ["port-1"],
+          outputs: [{ id: "basis-1", quantity: "H_ant_basis" }],
+        }],
+      } } as never,
+    );
+    const solve = node.children?.find((child) => child.kind === "object.antenna")
+      ?.children?.find((child) => child.kind === "object.antenna.solution");
+    expect(solve).toMatchObject({ badge: "1 outputs · invalid", status: "warning" });
+  });
+
   it("marks an incomplete port as warning instead of ready", () => {
     const node = buildObjectExplorerNode(
       { id: "antenna", label: "Microstrip", objectRole: "antenna" } as never,

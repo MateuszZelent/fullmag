@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 from uuid import uuid4
 
 from fullmag.model import Problem, Relaxation, StageAutosave, TableAutosave, TimeEvolution
+from fullmag.model.antenna_inventory import AntennaAuthoringInventory
 from fullmag.runtime.output_storage_lowering import configure_problem_ir_autosave
 
 
@@ -165,10 +166,11 @@ class LoadedProblem:
     stages: tuple[LoadedStage, ...] = ()
     workspace_problem: Problem | None = None
     auto_execute_stages: bool = False
+    antenna_inventory: AntennaAuthoringInventory = field(default_factory=AntennaAuthoringInventory)
 
     def pipeline_base_problem(self, problem: Problem | None = None) -> Problem:
         """Return persistent problem state before ordered action stages run."""
-        candidate = problem or self.problem
+        candidate = self.antenna_inventory.execution_base(problem or self.problem)
         introduced_ids: set[str] = set()
         introduced_antenna_drive_ids: set[str] = set()
         introduced_projection_ids: set[str] = set()
@@ -328,6 +330,10 @@ def load_problem_from_script(
         spec.loader.exec_module(module)
         script_source = source_path.read_text(encoding="utf-8")
         workspace_problem = world.capture_workspace_problem()
+        execution_problem = workspace_problem
+        antenna_inventory = world.capture_antenna_authoring_inventory()
+        if workspace_problem is not None:
+            workspace_problem = antenna_inventory.merge_into(workspace_problem)
         declared_stages = world.capture_declared_stages()
         captured_stages = world.finish_script_capture()
         if captured_stages:
@@ -354,6 +360,7 @@ def load_problem_from_script(
                 stages=loaded_stages,
                 workspace_problem=workspace_problem,
                 auto_execute_stages=True,
+                antenna_inventory=antenna_inventory,
             )
 
         if declared_stages and workspace_problem is not None:
@@ -371,7 +378,7 @@ def load_problem_from_script(
                 for stage in declared_stages
             )
             return LoadedProblem(
-                problem=workspace_problem,
+                problem=execution_problem,
                 source_path=source_path,
                 script_source=script_source,
                 entrypoint_kind="flat_workspace",
@@ -379,17 +386,19 @@ def load_problem_from_script(
                 stages=loaded_stages,
                 workspace_problem=workspace_problem,
                 auto_execute_stages=False,
+                antenna_inventory=antenna_inventory,
             )
 
         if workspace_problem is not None:
             return LoadedProblem(
-                problem=workspace_problem,
+                problem=execution_problem,
                 source_path=source_path,
                 script_source=script_source,
                 entrypoint_kind="flat_workspace",
                 default_until_seconds=None,
                 stages=(),
                 workspace_problem=workspace_problem,
+                antenna_inventory=antenna_inventory,
             )
 
         problem, entrypoint_kind = _extract_problem(module)

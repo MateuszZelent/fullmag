@@ -65,6 +65,18 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   useSceneResource: () => ({ ...mocks.sceneResource, refetch: mocks.refetch }),
 }));
 
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => ({
+    sessionId: "antenna-session",
+    sessionEpoch: "1",
+    requestScopeEpoch: "antenna-request",
+  }),
+}));
+
+const sessionRequestOptions = {
+  sessionScopeKey: "session=antenna-session&epoch=1&request_scope_epoch=antenna-request",
+};
+
 const selection: Selection = {
   kind: "object.antenna",
   label: "Antenna",
@@ -155,6 +167,7 @@ describe("AntennaObjectPanel authoring stability", () => {
             },
           }),
         }),
+        sessionRequestOptions,
       );
       frequency.focus();
       expect(frequency.disabled).toBe(false);
@@ -172,6 +185,7 @@ describe("AntennaObjectPanel authoring stability", () => {
   });
 
   it("keeps an unsaved draft when an unrelated scene revision arrives", async () => {
+    mocks.replaceFieldDrive.mockResolvedValue({ scene_revision: 14 });
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const { createRoot } = await import("react-dom/client");
@@ -180,14 +194,127 @@ describe("AntennaObjectPanel authoring stability", () => {
       await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
       await act(async () => changeInput(container, "Amplitude", "0.002"));
 
+      const currentScene = mocks.sceneResource.data as {
+        field_drives: { drives: Array<{ waveform: Record<string, unknown> }> };
+      };
       mocks.sceneResource.data = {
-        ...(mocks.sceneResource.data as Record<string, unknown>),
+        ...currentScene,
+        field_drives: {
+          drives: currentScene.field_drives.drives.map((drive) => ({
+            ...drive,
+            waveform: { ...drive.waveform, phase_rad: 0.8, offset: 0.3 },
+          })),
+        },
         revision: 13,
       };
       mocks.sceneResource.revision = 13;
       await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
 
       expect(findElement(container, "Amplitude").value).toBe("0.002");
+      expect(findElement(container, "Phase").value).toBe("0.8");
+      expect(findElement(container, "Offset").value).toBe("0.3");
+      await act(async () => findButton(container, "Save field drive").click());
+      expect(mocks.replaceFieldDrive).toHaveBeenCalledWith(
+        "antenna-drive",
+        expect.objectContaining({
+          base_revision: 13,
+          drive: expect.objectContaining({
+            amplitude_B_T: 0.002,
+            waveform: {
+              frequency_hz: 1e9,
+              kind: "sinusoidal",
+              offset: 0.3,
+              phase_rad: 0.8,
+            },
+          }),
+        }),
+        sessionRequestOptions,
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("requires an explicit rebase when the server changes an edited field", async () => {
+    mocks.replaceFieldDrive.mockResolvedValue({ scene_revision: 14 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
+      await act(async () => changeInput(container, "Amplitude", "0.002"));
+
+      const currentScene = mocks.sceneResource.data as {
+        field_drives: { drives: Array<Record<string, unknown>> };
+      };
+      mocks.sceneResource.data = {
+        ...currentScene,
+        field_drives: {
+          drives: currentScene.field_drives.drives.map((drive) => ({
+            ...drive,
+            amplitude_B_T: 0.003,
+          })),
+        },
+        revision: 13,
+      };
+      mocks.sceneResource.revision = 13;
+      await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
+
+      expect(findElement(container, "Amplitude").value).toBe("0.002");
+      expect(container.textContent).toContain("Concurrent field edit");
+      expect(container.textContent).toContain("0.003");
+      expect(findButton(container, "Save field drive").disabled).toBe(true);
+      expect(mocks.replaceFieldDrive).not.toHaveBeenCalled();
+
+      await act(async () => findButton(container, "Rebase Draft").click());
+      expect(findButton(container, "Save field drive").disabled).toBe(false);
+      await act(async () => findButton(container, "Save field drive").click());
+      expect(mocks.replaceFieldDrive).toHaveBeenCalledWith(
+        "antenna-drive",
+        expect.objectContaining({
+          base_revision: 13,
+          drive: expect.objectContaining({ amplitude_B_T: 0.002 }),
+        }),
+        sessionRequestOptions,
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("uses the acknowledged value as the base for a later edit", async () => {
+    mocks.replaceFieldDrive.mockResolvedValue({ scene_revision: 13 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
+      await act(async () => changeInput(container, "Amplitude", "0.002"));
+      await act(async () => findButton(container, "Save field drive").click());
+
+      const currentScene = mocks.sceneResource.data as {
+        field_drives: { drives: Array<Record<string, unknown>> };
+      };
+      mocks.sceneResource.data = {
+        ...currentScene,
+        field_drives: {
+          drives: currentScene.field_drives.drives.map((drive) => ({
+            ...drive,
+            amplitude_B_T: 0.002,
+          })),
+        },
+        revision: 13,
+      };
+      mocks.sceneResource.revision = 13;
+      await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
+      await act(async () => changeInput(container, "Amplitude", "0.004"));
+
+      expect(container.textContent).not.toContain("Concurrent field edit");
+      expect(findButton(container, "Save field drive").disabled).toBe(false);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -223,6 +350,7 @@ describe("AntennaObjectPanel authoring stability", () => {
             },
           }),
         }),
+        sessionRequestOptions,
       );
     } finally {
       await act(async () => root.unmount());
@@ -295,6 +423,7 @@ describe("AntennaObjectPanel authoring stability", () => {
       await act(async () => findButton(container, "Migrate and save").click());
 
       expect(mocks.commitTransaction).toHaveBeenCalledOnce();
+      expect(mocks.commitTransaction.mock.calls[0]?.[1]).toEqual(sessionRequestOptions);
       const request = mocks.commitTransaction.mock.calls[0]?.[0] as {
         base_revision: number;
         kind: string;
@@ -397,6 +526,7 @@ describe("AntennaObjectPanel authoring stability", () => {
             },
           }),
         }),
+        sessionRequestOptions,
       );
     } finally {
       await act(async () => root.unmount());

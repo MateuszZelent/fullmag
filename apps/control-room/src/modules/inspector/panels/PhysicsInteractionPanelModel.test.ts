@@ -69,6 +69,31 @@ describe("PhysicsInteractionPanelModel", () => {
     });
   });
 
+  it("authors Exchange on the explicit object without changing the global Study switch", () => {
+    const draft = draftFromInteractionResource("exchange", {
+      ...defaultObjectInteractionResource("waveguide", "exchange"),
+      enabled: true,
+      present: true,
+    });
+    expect(isWritableObjectInteraction("exchange", "waveguide")).toBe(true);
+    expect(isWritableObjectInteraction("demag", "waveguide")).toBe(false);
+    expect(buildInteractionApplyPatch(draft, null, "waveguide")).toEqual({
+      patch: { enabled: true, params: {}, present: true },
+      storage: "object_interaction",
+    });
+    expect(buildInteractionApplyPatch({ ...draft, enabled: false }, null, "waveguide")).toEqual({
+      patch: { enabled: false, params: {}, present: true },
+      storage: "object_interaction",
+    });
+    expect(buildInteractionApplyPatch({ ...draft, present: false }, null, "waveguide")).toEqual({
+      error: "Exchange is required and cannot be removed.",
+    });
+    expect(buildInteractionApplyPatch(draft)).toEqual({
+      patch: { study: { exchange_enabled: true } },
+      storage: "study",
+    });
+  });
+
   it("creates global study drafts for exchange, demag, and uniform Zeeman", () => {
     const scene = {
       revision: 4,

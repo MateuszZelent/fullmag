@@ -40,6 +40,62 @@ pub(crate) fn has_time_varying_antenna_zeeman_masks(masks: &[ResolvedAntennaZeem
     masks.iter().any(|mask| mask.waveform.is_some())
 }
 
+pub(crate) fn validate_antenna_zeeman_mask_lengths(
+    masks: &[ResolvedAntennaZeemanMaskIR],
+    sample_count: usize,
+) -> Result<(), RunError> {
+    for mask in masks {
+        if mask.field_xyz.len() != sample_count {
+            return Err(RunError {
+                message: format!(
+                    "antenna Zeeman mask '{}' has {} field samples; expected {sample_count}",
+                    mask.source,
+                    mask.field_xyz.len()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_fdm_antenna_sample_counts(
+    plan: &fullmag_ir::FdmPlanIR,
+    sample_count: usize,
+) -> Result<(), RunError> {
+    validate_antenna_zeeman_mask_lengths(&plan.antenna_zeeman_masks, sample_count)?;
+    let expected_projection_suffix = if plan.solved_antenna_drive_bases.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ":target_topology:{}",
+            crate::antenna_field_solution::fdm_target_topology_digest(plan)?
+        )
+    };
+    for basis in &plan.solved_antenna_drive_bases {
+        if basis.field_xyz_apm_per_a.len() != sample_count {
+            return Err(RunError {
+                message: format!(
+                    "solved antenna drive '{}' has {} projected field samples; expected {sample_count} FDM cells",
+                    basis.drive.id,
+                    basis.field_xyz_apm_per_a.len()
+                ),
+            });
+        }
+        if !basis
+            .projection_signature
+            .ends_with(&expected_projection_suffix)
+        {
+            return Err(RunError {
+                message: format!(
+                    "solved antenna drive '{}' target topology differs from the resolved FDM grid",
+                    basis.drive.id
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn combined_antenna_zeeman_mask_field_at_time(
     masks: &[ResolvedAntennaZeemanMaskIR],
     n: usize,
@@ -158,13 +214,15 @@ pub(crate) fn dynamic_antenna_drive_terms(
     plan: &FemPlanIR,
     per_unit_fields: &[Vec<[f64; 3]>],
 ) -> Vec<RegionalFieldDriveTerm> {
+    // FEM reference advances a stage-relative solver clock. An absolute
+    // waveform therefore adds the physical stage start via a negative offset.
     let mut terms = Vec::new();
     for mask in &plan.antenna_zeeman_masks {
         if let Some(waveform) = &mask.waveform {
             terms.push(RegionalFieldDriveTerm {
                 basis_field: mask.field_xyz.clone(),
                 waveform: waveform.clone(),
-                time_offset_s: 0.0,
+                time_offset_s: -plan.time_stage.start_time_s,
                 enabled: true,
             });
         }
@@ -187,8 +245,10 @@ pub(crate) fn dynamic_antenna_drive_terms(
                     .collect(),
                 waveform: basis.drive.waveform.clone(),
                 time_offset_s: match basis.drive.time_origin {
-                    FieldTimeOriginIR::StageLocal => plan.time_stage.start_time_s,
-                    FieldTimeOriginIR::Absolute => 0.0,
+                    FieldTimeOriginIR::StageLocal => {
+                        plan.time_stage.waveform_origin_time_s() - plan.time_stage.start_time_s
+                    }
+                    FieldTimeOriginIR::Absolute => -plan.time_stage.start_time_s,
                 },
                 enabled: true,
             });
@@ -214,7 +274,7 @@ pub(crate) fn dynamic_antenna_drive_terms(
                         })
                         .collect(),
                     waveform: waveform.clone(),
-                    time_offset_s: 0.0,
+                    time_offset_s: -plan.time_stage.start_time_s,
                     enabled: true,
                 });
             }
@@ -232,6 +292,7 @@ pub(crate) fn compute_antenna_field_at_time(
     plan: &FemPlanIR,
     absolute_time_s: f64,
 ) -> Result<Vec<[f64; 3]>, RunError> {
+    validate_antenna_zeeman_mask_lengths(&plan.antenna_zeeman_masks, plan.mesh.nodes.len())?;
     if plan.current_modules.is_empty()
         && plan.antenna_zeeman_masks.is_empty()
         && plan.solved_antenna_drive_bases.is_empty()
@@ -245,7 +306,8 @@ pub(crate) fn compute_antenna_field_at_time(
             plan.mesh.nodes.len(),
             absolute_time_s,
         );
-        add_solved_antenna_fields(plan, absolute_time_s, &mut total);
+        validate_observed_antenna_field(&total, absolute_time_s)?;
+        add_solved_antenna_fields(plan, absolute_time_s, &mut total)?;
         return Ok(total);
     };
 
@@ -254,7 +316,8 @@ pub(crate) fn compute_antenna_field_at_time(
         plan.mesh.nodes.len(),
         absolute_time_s,
     );
-    add_solved_antenna_fields(plan, absolute_time_s, &mut total);
+    validate_observed_antenna_field(&total, absolute_time_s)?;
+    add_solved_antenna_fields(plan, absolute_time_s, &mut total)?;
     for module in &plan.current_modules {
         match module {
             CurrentModuleIR::AntennaFieldSource {
@@ -275,27 +338,75 @@ pub(crate) fn compute_antenna_field_at_time(
             | CurrentModuleIR::CurrentTransport { .. } => {}
         }
     }
+    validate_observed_antenna_field(&total, absolute_time_s)?;
     Ok(total)
 }
 
-fn add_solved_antenna_fields(plan: &FemPlanIR, absolute_time_s: f64, total: &mut [[f64; 3]]) {
+fn validate_observed_antenna_field(
+    field: &[[f64; 3]],
+    absolute_time_s: f64,
+) -> Result<(), RunError> {
+    if field.iter().flatten().any(|component| !component.is_finite()) {
+        return Err(RunError {
+            message: format!(
+                "antenna observation contains a non-finite H field at time {absolute_time_s}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn add_solved_antenna_fields(
+    plan: &FemPlanIR,
+    absolute_time_s: f64,
+    total: &mut [[f64; 3]],
+) -> Result<(), RunError> {
     for basis in &plan.solved_antenna_drive_bases {
         if !drive_is_active(&basis.drive.activation, plan) {
             continue;
         }
+        if basis.field_xyz_apm_per_a.len() != total.len() {
+            return Err(RunError {
+                message: format!(
+                    "solved antenna drive '{}' has {} projected field samples; expected {} FEM nodes",
+                    basis.drive.id,
+                    basis.field_xyz_apm_per_a.len(),
+                    total.len()
+                ),
+            });
+        }
         let local_time = match basis.drive.time_origin {
-            FieldTimeOriginIR::StageLocal => absolute_time_s - plan.time_stage.start_time_s,
+            FieldTimeOriginIR::StageLocal => {
+                absolute_time_s - plan.time_stage.waveform_origin_time_s()
+            }
             FieldTimeOriginIR::Absolute => absolute_time_s,
         };
         let multiplier =
             crate::time_dependence::evaluate_time_dependence(&basis.drive.waveform, local_time)
                 * basis.drive.peak_current_a;
+        if !multiplier.is_finite() {
+            return Err(RunError {
+                message: format!(
+                    "solved antenna drive '{}' has a non-finite current multiplier at time {absolute_time_s}",
+                    basis.drive.id
+                ),
+            });
+        }
         for (target, value) in total.iter_mut().zip(&basis.field_xyz_apm_per_a) {
             target[0] += value[0] * multiplier;
             target[1] += value[1] * multiplier;
             target[2] += value[2] * multiplier;
+            if target.iter().any(|component| !component.is_finite()) {
+                return Err(RunError {
+                    message: format!(
+                        "solved antenna drive '{}' produced a non-finite observed H field at time {absolute_time_s}",
+                        basis.drive.id
+                    ),
+                });
+            }
         }
     }
+    Ok(())
 }
 
 fn add_antenna_field(
@@ -466,6 +577,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn antenna_mask_length_must_match_target_even_when_waveform_is_zero() {
+        let mask = ResolvedAntennaZeemanMaskIR {
+            source: "antenna_1".into(),
+            object: "magnet".into(),
+            amplitude_b_t: 0.0,
+            direction: [1.0, 0.0, 0.0],
+            spatial_profile: None,
+            waveform: None,
+            field_xyz: vec![[0.0; 3]],
+        };
+        let error = validate_antenna_zeeman_mask_lengths(&[mask.clone()], 2).unwrap_err();
+        assert!(error.message.contains("expected 2"));
+        validate_antenna_zeeman_mask_lengths(&[mask], 1).unwrap();
+    }
+
+    #[test]
     fn legacy_antenna_current_applies_sinusoidal_waveform_at_physical_time() {
         let drive = fullmag_ir::RfDriveIR {
             current_a: 2.0,
@@ -488,5 +615,58 @@ mod tests {
         };
         assert_eq!(legacy_antenna_current_at_time(&drive, 0.0), -3.5);
         assert_eq!(legacy_antenna_current_at_time(&drive, 12.0), -3.5);
+    }
+
+    #[test]
+    fn solved_antenna_observation_rejects_waveform_scaled_field_overflow() {
+        let mut plan = FemPlanIR::default();
+        plan.time_stage.study_kind = fullmag_ir::StudyKindIR::TimeEvolution;
+        plan.solved_antenna_drive_bases = vec![fullmag_ir::ResolvedSolvedAntennaDriveBasisIR {
+            drive: fullmag_ir::SolvedAntennaDriveIR {
+                id: "drive_1".into(),
+                name: "Drive 1".into(),
+                projection_ref: "projection_1".into(),
+                port_mode_id: "port_1".into(),
+                peak_current_a: 1.0,
+                waveform: TimeDependenceIR::Sinusoidal {
+                    frequency_hz: 1.0,
+                    phase_rad: std::f64::consts::FRAC_PI_2,
+                    offset: 2.0,
+                },
+                bandwidth_declaration: None,
+                time_origin: FieldTimeOriginIR::Absolute,
+                activation: fullmag_ir::DriveActivationIR::AllTimeEvolution {},
+            },
+            solution_id: "solution_1".into(),
+            source_object_id: "antenna_1".into(),
+            field_xyz_apm_per_a: vec![[0.75 * f64::MAX, 0.0, 0.0]],
+            projection_signature: "projection".into(),
+        }];
+        let mut total = vec![[0.0; 3]];
+        let error = add_solved_antenna_fields(&plan, 0.0, &mut total)
+            .expect_err("finite waveform inputs must not publish an overflowing H observation");
+        assert!(error.message.contains("non-finite observed H field"));
+    }
+
+    #[test]
+    fn antenna_observation_rejects_legacy_mask_field_overflow() {
+        let mut plan = FemPlanIR::default();
+        plan.mesh.nodes = vec![[0.0, 0.0, 0.0]];
+        plan.antenna_zeeman_masks = vec![ResolvedAntennaZeemanMaskIR {
+            source: "antenna_1".into(),
+            object: "magnet".into(),
+            amplitude_b_t: 0.0,
+            direction: [1.0, 0.0, 0.0],
+            spatial_profile: None,
+            waveform: Some(TimeDependenceIR::Sinusoidal {
+                frequency_hz: 1.0,
+                phase_rad: std::f64::consts::FRAC_PI_2,
+                offset: 2.0,
+            }),
+            field_xyz: vec![[0.75 * f64::MAX, 0.0, 0.0]],
+        }];
+        let error = compute_antenna_field_at_time(&plan, 0.0)
+            .expect_err("a legacy mask must not publish an overflowing H observation");
+        assert!(error.message.contains("non-finite H field"));
     }
 }

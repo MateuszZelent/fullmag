@@ -9,7 +9,10 @@ import type {
   Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
-import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
+import type {
+  Viewport3DMagnetizationTexturePreview,
+  Viewport3DPrimitiveRenderModel,
+} from "../viewport3dPrimitiveModel";
 import {
   isViewport3DTopologyCurrent,
   resolveUnavailableTopologyVisualizationSettings,
@@ -22,6 +25,7 @@ import type {
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { MeshPartLayer } from "./MeshPartLayer";
+import { resolveMeshPartPresentationColor } from "./viewport3DLayerSettings";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
@@ -30,6 +34,7 @@ import { modeCompositionTargetIdForMeshPart } from "../model/modeCompositionView
 export function TopologyMeshLayer({
   adoptionRegistry,
   colors,
+  primitiveModel,
   sessionIdentity,
   vectorColorMode,
   vectorScale,
@@ -50,6 +55,7 @@ export function TopologyMeshLayer({
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
+  primitiveModel?: Viewport3DPrimitiveRenderModel | null;
   sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
   vectorScale: number;
@@ -91,6 +97,11 @@ export function TopologyMeshLayer({
             <MeshPartLayer
               adoptionRegistry={adoptionRegistry}
               colors={colors}
+              surfaceFallbackColor={resolveMeshPartPresentationColor(
+                partModel.part.object_id,
+                primitiveModel?.objects ?? [],
+                colors,
+              )}
               sessionIdentity={sessionIdentity}
               fieldModel={resolvedFieldModel}
               key={partModel.part.id}

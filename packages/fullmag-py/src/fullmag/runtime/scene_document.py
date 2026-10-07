@@ -12,6 +12,11 @@ from fullmag.runtime.output_storage_lowering import (
     configure_study_pipeline_autosaves,
 )
 from fullmag.model.current_transport import (
+    ExternalLeadCurrentSource,
+    CurrentSourceInterfacePair,
+    CurrentSourceOuterTerminal,
+    CurrentSourceTerminalObservation,
+    CurrentSourceDrive,
     ConservativeCurrentBoundaryFace,
     ConservativeCurrentClosedGeometry,
     ConservativeCurrentExternalLead,
@@ -29,6 +34,7 @@ from fullmag.model.current_transport import (
     ChargeTransportMaterialAssignment,
     CurrentTransport,
     NormalCurrentElectrode,
+    EquipotentialCurrentTerminal,
     StructuredCurrentClosure,
     StructuredCurrentSourceCut,
     StructuredCutPlane,
@@ -97,6 +103,7 @@ _CURRENT_TRANSPORT_FIELDS = frozenset(
         "solver",
         "time_envelope",
         "conservative_current_view",
+        "conservative_current_source",
         "structured_current_closure",
     }
 )
@@ -349,6 +356,9 @@ def _decode_current_transport(value: object) -> CurrentTransport:
         kind = boundary.get("kind")
         boundary_fields = (
             {
+                "equipotential_current_terminal": frozenset(
+                    {"id", "kind", "surfaces"}
+                ),
                 "voltage_electrode": frozenset(
                     {"id", "kind", "surfaces", "potential_V"}
                 ),
@@ -364,7 +374,9 @@ def _decode_current_transport(value: object) -> CurrentTransport:
             raise ValueError(f"unsupported charge boundary kind {kind!r}")
         _reject_unknown_fields(boundary, boundary_fields, boundary_context)
         boundary_id = _nonempty_string(boundary.get("id"), f"{boundary_context}.id")
-        if kind == "voltage_electrode":
+        if kind == "equipotential_current_terminal":
+            boundaries.append(EquipotentialCurrentTerminal(boundary_id, surfaces))
+        elif kind == "voltage_electrode":
             boundaries.append(
                 VoltageElectrode(
                     boundary_id,
@@ -478,12 +490,45 @@ def _decode_current_transport(value: object) -> CurrentTransport:
             if conservative_view_value is not None
             else None
         ),
+        conservative_current_source=(
+            _decode_conservative_current_source(entry["conservative_current_source"])
+            if entry.get("conservative_current_source") is not None
+            else None
+        ),
         structured_current_closure=(
             _decode_structured_current_closure(structured_closure_value)
             if structured_closure_value is not None
             else None
         ),
     )
+
+
+def _decode_conservative_current_source(value: object) -> ExternalLeadCurrentSource:
+    entry = dict(_mapping(value, "conservative_current_source"))
+    fields = {"schema_version", "kind", "revision", "device_stable_vertex_ids", "lead_mesh",
+              "lead_stable_vertex_ids", "lead_conductivity_spm_per_element", "interface_pairs",
+              "outer_terminals", "terminal_observations", "drives"}
+    if set(entry) != fields:
+        raise ValueError("conservative_current_source has unknown or missing fields")
+    if entry.pop("kind") != "external_lead_current":
+        raise ValueError("unsupported conservative_current_source kind")
+    groups = (
+        ("interface_pairs", CurrentSourceInterfacePair, {"id", "device_face_vertex_ids", "lead_face_vertex_ids", "vertex_pairs"}),
+        ("outer_terminals", CurrentSourceOuterTerminal, {"id", "boundary_face_vertex_ids"}),
+        ("terminal_observations", CurrentSourceTerminalObservation, {"id", "object_id", "interface_pair_ids"}),
+        ("drives", CurrentSourceDrive, {"id", "port_mode_ref", "outer_terminal_currents_a"}),
+    )
+    for name, cls, keys in groups:
+        if not isinstance(entry[name], list):
+            raise ValueError(f"conservative_current_source.{name} must be a list")
+        values = []
+        for raw in entry[name]:
+            item = _mapping(raw, f"conservative_current_source.{name}")
+            if set(item) != keys:
+                raise ValueError(f"conservative_current_source.{name} has unknown or missing fields")
+            values.append(cls(**item))
+        entry[name] = values
+    return ExternalLeadCurrentSource(**entry)
 
 
 def _decode_structured_current_closure(value: object) -> StructuredCurrentClosure:
@@ -1682,11 +1727,6 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         geometry_params = dict(geometry.get("geometry_params") or {})
         object_id = str(obj.get("id") or obj.get("name") or "")
         name = str(obj.get("name") or obj.get("id") or "")
-        if is_auxiliary and object_id != name:
-            raise ValueError(
-                "scene_document_auxiliary_object_id_unsupported: "
-                f"object '{object_id}' has a name that cannot preserve its identity"
-            )
         transform = dict(obj.get("transform") or {})
         translation = _owner_frame_translation(transform, object_id)
         if any(abs(value) > 0 for value in translation):

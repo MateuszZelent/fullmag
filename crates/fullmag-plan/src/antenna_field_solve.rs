@@ -24,6 +24,11 @@ fn preflight_direct_oersted_pair_budget(
     source_cell_count: usize,
     target_point_count: usize,
 ) -> Result<u64, PlanError> {
+    if source_cell_count == 0 || target_point_count == 0 {
+        return Err(fail(format!(
+            "antenna direct Oersted preflight requires nonempty source tetrahedra and target points ({source_cell_count} source tetrahedra x {target_point_count} target points)"
+        )));
+    }
     let source_count = u64::try_from(source_cell_count).map_err(|_| {
         fail("antenna direct Oersted preflight source cell count is not representable")
     })?;
@@ -45,28 +50,45 @@ fn preflight_direct_oersted_pair_budget(
     Ok(pairs)
 }
 
+fn direct_oersted_known_target_buffer_bytes(target_point_count: usize) -> Result<u64, PlanError> {
+    let targets = u64::try_from(target_point_count)
+        .map_err(|_| fail("antenna direct Oersted target count is not representable"))?;
+    targets
+        .checked_mul(4 * 3 * std::mem::size_of::<f64>() as u64)
+        .ok_or_else(|| fail("antenna direct Oersted target-buffer byte count overflows"))
+}
+
 fn sha256_json(value: &impl serde::Serialize, label: &str) -> Result<String, PlanError> {
     let bytes =
         serde_json::to_vec(value).map_err(|error| fail(format!("serialize {label}: {error}")))?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
-fn geometry_name_for_object<'a>(
+pub(crate) fn geometry_name_for_object<'a>(
     problem: &'a ProblemIR,
     object_id: &str,
 ) -> Result<&'a str, PlanError> {
-    if let Some(entry) = problem
-        .geometry
-        .entries
-        .iter()
-        .find(|entry| entry.name() == object_id)
-    {
-        return Ok(entry.name());
-    }
-    let magnet = problem
+    let explicit_object = problem
         .magnets
         .iter()
-        .find(|magnet| magnet.name == object_id || magnet.object_id.as_deref() == Some(object_id))
+        .find(|magnet| magnet.object_id.as_deref() == Some(object_id));
+    if explicit_object.is_none() {
+        if let Some(entry) = problem
+            .geometry
+            .entries
+            .iter()
+            .find(|entry| entry.name() == object_id)
+        {
+            return Ok(entry.name());
+        }
+    }
+    let magnet = explicit_object
+        .or_else(|| {
+            problem
+                .magnets
+                .iter()
+                .find(|magnet| magnet.name == object_id)
+        })
         .ok_or_else(|| {
             fail(format!(
                 "antenna object '{object_id}' has no geometry binding in ProblemIR 0.3"
@@ -210,6 +232,30 @@ pub(crate) fn plan_antenna_field_solve_v03(
     stage_id: &str,
     port_mode_id: &str,
 ) -> Result<AntennaFieldSolvePlanIR, PlanError> {
+    match plan_antenna_field_solve_execution(problem, stage_id, port_mode_id)? {
+        AntennaFieldSolveExecutionPlan::FieldBasis(plan) => Ok(plan),
+        AntennaFieldSolveExecutionPlan::ExternalLeadInspection { .. } => Err(fail(
+            "source_not_qualified: external-lead inspection is not a legacy antenna field basis; use the dedicated inspection stage execution",
+        )),
+    }
+}
+
+/// Execution routing only; both branches originate from the same authored stage.
+#[derive(Debug, Clone)]
+pub enum AntennaFieldSolveExecutionPlan {
+    FieldBasis(AntennaFieldSolvePlanIR),
+    ExternalLeadInspection {
+        input: fullmag_ir::ResolvedAntennaExternalLeadCurrentInputIR,
+        requested_execution: fullmag_ir::RequestedTransportExecutionIR,
+        output_id: String,
+    },
+}
+
+pub fn plan_antenna_field_solve_execution(
+    problem: &ProblemIR,
+    stage_id: &str,
+    port_mode_id: &str,
+) -> Result<AntennaFieldSolveExecutionPlan, PlanError> {
     problem
         .validate()
         .map_err(|reasons| PlanError { reasons })?;
@@ -295,6 +341,11 @@ pub(crate) fn plan_antenna_field_solve_v03(
     if object_ids.is_empty() {
         return Err(fail("antenna CurrentTransport domain must not be empty"));
     }
+    if definition.conservative_current_source.is_some() && object_ids.len() != 1 {
+        return Err(fail(
+            "antenna external-lead inspection requires one original device object mesh; multi-object merge remaps markers and ordinals without a stable-ID ownership contract",
+        ));
+    }
 
     let mut geometry_by_object = BTreeMap::new();
     let mut meshes = Vec::with_capacity(object_ids.len());
@@ -312,14 +363,81 @@ pub(crate) fn plan_antenna_field_solve_v03(
     }
     let mesh_parts = build_conductor_mesh_parts_from_segments(&mesh, &object_segments);
 
+    if definition.conservative_current_source.is_some() {
+        if problem
+            .antenna_target_projections
+            .iter()
+            .any(|projection| projection.solution.stage_id() == stage_id)
+            || problem
+                .antenna_spectrum_requests
+                .iter()
+                .any(|request| request.solution_ref.stage_id() == stage_id)
+        {
+            return Err(fail(
+                "source_not_qualified: external-lead inspection cannot be referenced by target projection, solved drive or source spectrum",
+            ));
+        }
+        if problem.backend_policy.execution_precision != fullmag_ir::ExecutionPrecision::Double
+            || problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict
+        {
+            return Err(fail(
+                "antenna conservative_current_source requires the explicit FEM strict/double input lane",
+            ));
+        }
+        let device = match crate::util::runtime_device_request(problem) {
+            None | Some("auto") => fullmag_ir::ExecutionDevice::Auto,
+            Some("cpu") => fullmag_ir::ExecutionDevice::Cpu,
+            Some(device) => {
+                return Err(fail(format!(
+                    "antenna conservative_current_source has no realization for requested device '{device}'; a forced device cannot fall back to CPU"
+                )));
+            }
+        };
+        if stage.port_mode_ids.len() != 1 {
+            return Err(fail(
+                "antenna conservative_current_source input requires one independently selected port mode per dedicated stage",
+            ));
+        }
+        let port = problem
+            .antenna_port_modes
+            .iter()
+            .find(|port| port.id == port_mode_id)
+            .ok_or_else(|| fail(format!("antenna port mode '{port_mode_id}' does not exist")))?;
+        let field_sampling = resolve_field_sampling(problem, &stage.field_sampling_domain)?;
+        let input = crate::antenna_current_source::materialize_antenna_external_lead_current_input(
+            &mesh,
+            &object_segments,
+            definition,
+            stage,
+            port,
+            &field_sampling,
+        )?;
+        // Raw inspection is a separate result, never a per-ampere drive basis.
+        return Ok(AntennaFieldSolveExecutionPlan::ExternalLeadInspection {
+            input,
+            requested_execution: fullmag_ir::RequestedTransportExecutionIR {
+                discretization: problem.backend_policy.requested_backend,
+                device,
+                precision: problem.backend_policy.execution_precision,
+                execution_mode: problem.validation_profile.execution_mode,
+            },
+            output_id: solution_id,
+        });
+    }
+
     let mut charge_problem = problem.clone();
     charge_problem.current_modules.retain(|module| {
         matches!(module, CurrentModuleIR::CurrentTransport { name, .. } if name == &stage.current_transport_id)
     });
     charge_problem.spin_transport_modules.clear();
     charge_problem.energy_terms.clear();
-    let charge_transport_plans =
-        resolve_fem_charge_only_transport(&charge_problem, &mesh, &object_segments, &mesh_parts)?;
+    let charge_transport_plans = resolve_fem_charge_only_transport(
+        &charge_problem,
+        &mesh,
+        &object_segments,
+        &mesh_parts,
+        true,
+    )?;
     if charge_transport_plans.len() != 1 {
         return Err(fail(format!(
             "antenna field-solve stage '{stage_id}' must resolve exactly one charge-only CurrentTransport, resolved {}",
@@ -353,16 +471,18 @@ pub(crate) fn plan_antenna_field_solve_v03(
     };
     bind_antenna_field_solve_v03(problem, stage_id, port_mode_id, &mut conductor)?;
     let field_sampling = resolve_field_sampling(problem, &stage.field_sampling_domain)?;
-    let direct_oersted_pairs = if matches!(
+    let (direct_oersted_pairs, known_target_buffer_bytes) = if matches!(
         stage.oersted_realization,
         AntennaOerstedRealizationIR::DirectTetraQuadrature
     ) {
-        Some(preflight_direct_oersted_pair_budget(
+        let pairs = preflight_direct_oersted_pair_budget(
             conductor.mesh.cells.len(),
             field_sampling.positions_xyz_m.len(),
-        )?)
+        )?;
+        let bytes = direct_oersted_known_target_buffer_bytes(field_sampling.positions_xyz_m.len())?;
+        (Some(pairs), Some(bytes))
     } else {
-        None
+        (None, None)
     };
 
     let mut provenance_notes = vec![
@@ -378,41 +498,51 @@ pub(crate) fn plan_antenna_field_solve_v03(
                 .map_or_else(|| "not_applicable".to_string(), |pairs| pairs.to_string()),
             fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
         ),
+        format!(
+            "direct Oersted known concurrent target buffers (input/output in Rust and native): bytes={}, excludes mesh, solver and allocator overhead",
+            known_target_buffer_bytes.map_or_else(|| "not_applicable".to_string(), |bytes| bytes.to_string()),
+        ),
     ];
-    provenance_notes.extend(crate::antenna_validity::antenna_waveform_bandwidth_notes(problem));
-    provenance_notes.push(
-        crate::antenna_validity::antenna_waveform_bandwidth_aggregate_note(problem),
-    );
+    provenance_notes.extend(crate::antenna_validity::antenna_waveform_bandwidth_notes(
+        problem,
+    ));
+    provenance_notes
+        .push(crate::antenna_validity::antenna_waveform_bandwidth_aggregate_note(problem));
     provenance_notes.extend(crate::antenna_validity::antenna_validity_notes(problem));
 
-    Ok(AntennaFieldSolvePlanIR {
-        schema_version: ANTENNA_FIELD_SOLVE_PLAN_SCHEMA_VERSION.into(),
-        stage_id: stage_id.into(),
-        port_mode_id: port_mode_id.into(),
-        source_object_id: stage.source_object_id.clone(),
-        solution_id,
-        common: CommonPlanMeta {
-            ir_version: IR_VERSION.into(),
-            requested_backend: problem.backend_policy.requested_backend,
-            resolved_backend: BackendTarget::Fem,
-            execution_mode: problem.validation_profile.execution_mode,
-            material_field_plans: Vec::new(),
+    Ok(AntennaFieldSolveExecutionPlan::FieldBasis(
+        AntennaFieldSolvePlanIR {
+            schema_version: ANTENNA_FIELD_SOLVE_PLAN_SCHEMA_VERSION.into(),
+            stage_id: stage_id.into(),
+            port_mode_id: port_mode_id.into(),
+            source_object_id: stage.source_object_id.clone(),
+            solution_id,
+            common: CommonPlanMeta {
+                ir_version: IR_VERSION.into(),
+                requested_backend: problem.backend_policy.requested_backend,
+                resolved_backend: BackendTarget::Fem,
+                execution_mode: problem.validation_profile.execution_mode,
+                material_field_plans: Vec::new(),
+            },
+            conductor,
+            field_sampling,
+            target_refs: stage.target_refs.clone(),
+            provenance: ProvenancePlanIR {
+                notes: provenance_notes,
+                integrator_resolution: None,
+                physics_graph: None,
+                fem_eigen_execution_resolution: None,
+            },
         },
-        conductor,
-        field_sampling,
-        target_refs: stage.target_refs.clone(),
-        provenance: ProvenancePlanIR {
-            notes: provenance_notes,
-            integrator_resolution: None,
-            physics_graph: None,
-            fem_eigen_execution_resolution: None,
-        },
-    })
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{preflight_direct_oersted_pair_budget, require_tetrahedral_field_sampling_mesh};
+    use super::{
+        direct_oersted_known_target_buffer_bytes, preflight_direct_oersted_pair_budget,
+        require_tetrahedral_field_sampling_mesh,
+    };
     use fullmag_ir::{
         FemCellTypeIR, FemConnectivityIR, MeshIR, ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
         ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
@@ -424,6 +554,21 @@ mod tests {
             preflight_direct_oersted_pair_budget(1_000, 1_000).unwrap(),
             ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS
         );
+    }
+
+    #[test]
+    fn direct_oersted_preflight_reports_known_concurrent_target_buffers() {
+        assert_eq!(
+            direct_oersted_known_target_buffer_bytes(1_000).unwrap(),
+            96_000
+        );
+        if usize::BITS == 64 {
+            assert!(direct_oersted_known_target_buffer_bytes(usize::MAX)
+                .unwrap_err()
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("byte count overflows")));
+        }
     }
 
     #[test]
@@ -442,6 +587,17 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.contains("pair count overflows")));
+    }
+
+    #[test]
+    fn direct_oersted_preflight_rejects_empty_source_or_target() {
+        for (sources, targets) in [(0, usize::MAX), (1, 0)] {
+            let error = preflight_direct_oersted_pair_budget(sources, targets).unwrap_err();
+            assert!(error
+                .reasons
+                .join("; ")
+                .contains("nonempty source tetrahedra and target points"));
+        }
     }
 
     #[test]
