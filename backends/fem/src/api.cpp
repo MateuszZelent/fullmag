@@ -592,6 +592,7 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
     case FULLMAG_FEM_OBSERVABLE_H_EX:
         return &context.gpu_state.device.fields.h_ex;
     case FULLMAG_FEM_OBSERVABLE_H_DEMAG:
+#if FULLMAG_HAS_MFEM_STACK
         if (context.demag.enabled &&
             (context.poisson_demag.gpu_demag_mode ==
                  FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
@@ -599,6 +600,7 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
                  FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM)) {
             return &context.gpu_state.device.demag_poisson.poisson_gradient;
         }
+#endif
         return nullptr;
     case FULLMAG_FEM_OBSERVABLE_H_EXT:
         return &context.gpu_state.device.fields.h_ext;
@@ -617,13 +619,17 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
     case FULLMAG_FEM_OBSERVABLE_H_MEL:
         return &context.gpu_state.device.fields.h_mel;
     case FULLMAG_FEM_OBSERVABLE_H_EFF:
-        if (!context.demag.enabled ||
-            (context.poisson_demag.gpu_demag_mode ==
-                 FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
-             context.poisson_demag.gpu_demag_mode ==
-                 FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM)) {
+        if (!context.demag.enabled) {
             return &context.gpu_state.device.fields.h_eff;
         }
+#if FULLMAG_HAS_MFEM_STACK
+        if (context.poisson_demag.gpu_demag_mode ==
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+            context.poisson_demag.gpu_demag_mode ==
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+            return &context.gpu_state.device.fields.h_eff;
+        }
+#endif
         return nullptr;
     case FULLMAG_FEM_OBSERVABLE_DEMAG_PHI:
         return nullptr;
@@ -4877,8 +4883,10 @@ int fullmag_fem_backend_begin_stage(
     ctx.gpu_state.device.rk.endpoint_operator_signature = 0;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.adaptive_dt.has_prev_error_norm = false;
+#if FULLMAG_HAS_MFEM_STACK
     ctx.poisson_demag.fresh_initial_guess_required =
         ctx.demag.enabled && ctx.gpu_state.device.lifecycle.allocated;
+#endif
     std::fill(ctx.zeeman.h_drive_xyz.begin(), ctx.zeeman.h_drive_xyz.end(), 0.0);
     std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
     handle->last_error.clear();
@@ -5433,6 +5441,7 @@ int fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
 
+#if FULLMAG_HAS_MFEM_STACK
     if (handle->context.gpu_state.device.lifecycle.allocated &&
         handle->context.poisson_demag.gpu_demag_mode ==
             FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
@@ -5450,6 +5459,8 @@ int fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
         }
         return FULLMAG_FEM_OK;
     }
+
+#endif
 
     const int tangent_status = fullmag_fem_backend_apply_demag_tangent_f64(
         handle,

@@ -378,3 +378,8 @@ Planner przekazuje rzeczywiste k_sampling do walidacji outputów. Niepuste branc
 Run 37632606743 dla 202c3e82453beab5fa46905adc1b2aa5e24ebc31: SQLite queue suite oraz cały packaged Runner Console Node/browser step SUCCESS; 205 wierszy FIFO i reconnect planu potwierdzone. Run 37630198767 Rust job SUCCESS obejmuje full IR i nowe policy planner tests. Paginacja i policy są implemented, bez deklaracji całego workflow green.
 
 No-provider CABI dotarł następnie do MFEM-owned assembly types w modal_eigen_solver.cpp. Osłonięto wyłącznie provider declarations/helper/body/probe; żądany k0 shared-domain z payloadem dostaje unavailable z powodem shared_domain_requires_mfem_stack, zachowanym targetem i transformem. Brak payloadu nadal jest validation_error. Pozostałe tiny/dense/legacy CSR/nonzero-k admission nie zostały wyłączone. Assembly DTO zawiera mfem-owned matrices, więc nie wyniesiono go poza guard ani nie dodano fałszywego stubu fizyki. Nowy test trafia w tę gałąź; niezależny source review i diff PASS, GHA compile/run nadal wymagany.
+
+
+## Kolejny blad kompilacji CABI - api.cpp
+
+Run 37641245535 dla 947161f010666cd9e1b2f611d60e8fbb2bd6f8a0 wskazal odczyty MFEM-owned gpu_demag_mode i fresh_initial_guess_required bez MFEM. Oslonieto te odczyty, zachowujac H_EFF przy wylaczonym demag, walidacje argumentow tangent i istniejacy blad unavailable bez providera. MFEM=ON zachowuje warunki wykonania. Niezalezny source review i diff PASS; compile/run CABI nadal NOT VERIFIED do swiezego wykonania GHA. Lokalnie nie kompilowano testow.
