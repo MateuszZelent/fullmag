@@ -656,6 +656,7 @@ bool json_has_top_level_field(
     return false;
 }
 
+#if FULLMAG_HAS_MFEM_STACK
 std::string shared_domain_operator_provenance_json(
     const PoissonAirboxSharedDomainAssemblyResult &assembly,
     const char *scope)
@@ -673,6 +674,7 @@ std::string shared_domain_operator_provenance_json(
         escape_json_string(assembly.operator_digest) +
         "\",\"quadrature\":" + assembly.quadrature_provenance_json + "}";
 }
+#endif
 
 void append_shared_domain_operator_provenance(
     FrequencyDomainContractResult &result,
@@ -2057,8 +2059,10 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
     bool native_nonzero_k_shared_domain_provider = false;
     std::string k0_shared_domain_provenance;
     std::string assembled_operator_provenance;
+#if FULLMAG_HAS_MFEM_STACK
     PoissonAirboxSharedDomainAssemblyResult native_floquet_sparse_assembly{};
     FloquetSharedDomainSparseModalOperator native_floquet_sparse_operator{};
+#endif
     std::string floquet_potential_certificate;
     FloquetPotentialReconstruction floquet_reconstruction;
 #if FULLMAG_HAS_MFEM_STACK
@@ -2276,7 +2280,9 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 : "production_cpu_nonzero_k_floquet_k0_poisson_path_unavailable");
         return result;
     }
+#if FULLMAG_HAS_MFEM_STACK
     PoissonAirboxSharedDomainAssemblyResult shared_domain_assembly{};
+#endif
     if (request.poisson_airbox_shared_domain_enabled != 0 &&
         !native_nonzero_k_shared_domain_provider) {
         if (request.poisson_airbox_shared_domain_payload == nullptr) {
@@ -2286,6 +2292,7 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 "missing_shared_domain_payload",
                 request.operator_request.operator_diagnostics_json);
         }
+#if FULLMAG_HAS_MFEM_STACK
         const FrequencyDomainStatus assembly_status =
             assemble_poisson_airbox_shared_domain_payload(
                 *request.poisson_airbox_shared_domain_payload,
@@ -2333,6 +2340,37 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             shared_domain_assembly.assembly_kind;
         effective_request.poisson_airbox_target_frequency_hz =
             request.target_frequency_hz;
+#else
+        FrequencyDomainContractResult result{};
+        result.status = FrequencyDomainStatus::unavailable;
+        result.error_message =
+            "native FEM modal_eigen shared-domain assembly requires an MFEM-enabled build";
+        result.diagnostics_json =
+            "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+            "\"study_product\":\"modal_eigen\","
+            "\"status\":\"unavailable\","
+            "\"complete\":false,"
+            "\"solver_adapter_status\":\"unsupported\","
+            "\"unsupported_reason\":\"shared_domain_requires_mfem_stack\"}";
+        result.diagnostics_json = with_operator_diagnostics(
+            std::move(result.diagnostics_json),
+            request.operator_request.operator_diagnostics_json);
+        result.result_json =
+            "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+            "\"study_product\":\"modal_eigen\","
+            "\"status\":\"unavailable\","
+            "\"accepted_mode_count\":0,"
+            "\"unsupported_reason\":\"shared_domain_requires_mfem_stack\"}";
+        result.result_json = with_operator_diagnostics(
+            std::move(result.result_json),
+            request.operator_request.operator_diagnostics_json);
+        set_modal_execution(
+            result,
+            request.execution_target,
+            request.spectral_transform_kind,
+            "shared_domain_requires_mfem_stack");
+        return result;
+#endif
     }
     {
     const ModalEigenRequest &request = effective_request;
@@ -2345,10 +2383,12 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         problem.A_phiq = request.poisson_airbox_a_phiq_csr;
         problem.A_phiphi = request.poisson_airbox_a_phiphi_csr;
         problem.B_qq = request.poisson_airbox_b_qq_csr;
+#if FULLMAG_HAS_MFEM_STACK
         if (request.execution_target != ModalExecutionTarget::production_gpu &&
             !shared_domain_assembly.k0_demag_probe.q_global_y.empty()) {
             problem.k0_demag_probe = &shared_domain_assembly.k0_demag_probe;
         }
+#endif
         problem.phi_mean_weights = request.poisson_airbox_phi_mean_weights;
         problem.phi_mean_weights_count =
             request.poisson_airbox_phi_mean_weights_count;

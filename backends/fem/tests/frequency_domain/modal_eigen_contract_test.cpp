@@ -3465,6 +3465,47 @@ void modal_nonzero_k_floquet_legacy_poisson_block_never_enters_k0_solver()
           "nonzero-k Floquet legacy Poisson diagnostics must expose the k=0 routing guard");
 }
 
+void modal_k0_shared_domain_without_mfem_is_unavailable()
+{
+#if !FULLMAG_HAS_MFEM_STACK
+    FullmagFemModalSharedDomainPayload payload{};
+    fd::ModalEigenRequest request{};
+    request.abi_version = fd::kFrequencyDomainAbiVersion;
+    request.operator_request.abi_version = fd::kFrequencyDomainAbiVersion;
+    request.operator_request.gamma_rad_s_T = 1.760859e11;
+    request.operator_request.mu0_T_m_A = 1.25663706212e-6;
+    request.execution_target = fd::ModalExecutionTarget::production_cpu;
+    request.spectral_transform_kind = fd::ModalSpectralTransformKind::shift_invert;
+    request.result_field_representation = fd::ModalResultFieldRepresentation::tangent_q;
+    request.poisson_airbox_shared_domain_enabled = 1;
+    request.poisson_airbox_shared_domain_payload = &payload;
+
+    const fd::FrequencyDomainContractResult present_payload_result =
+        fd::solve_modal_eigen_contract(request);
+    check(present_payload_result.status == fd::FrequencyDomainStatus::unavailable,
+          "no-MFEM k=0 shared-domain request with a payload is explicitly unavailable");
+    check(present_payload_result.diagnostics_json.find(
+              "\"unsupported_reason\":\"shared_domain_requires_mfem_stack\"") !=
+              std::string::npos,
+          "no-MFEM shared-domain diagnostics name the required MFEM stack");
+    check(present_payload_result.modal_execution.execution_target ==
+              static_cast<std::uint32_t>(fd::ModalExecutionTarget::production_cpu),
+          "no-MFEM shared-domain result preserves the requested CPU execution target");
+    check(present_payload_result.modal_execution.spectral_transform_kind ==
+              static_cast<std::uint32_t>(fd::ModalSpectralTransformKind::shift_invert),
+          "no-MFEM shared-domain result preserves the requested spectral transform");
+
+    request.poisson_airbox_shared_domain_payload = nullptr;
+    const fd::FrequencyDomainContractResult missing_payload_result =
+        fd::solve_modal_eigen_contract(request);
+    check(missing_payload_result.status == fd::FrequencyDomainStatus::validation_error,
+          "no-MFEM k=0 shared-domain request still validates a missing payload first");
+    check(missing_payload_result.diagnostics_json.find(
+              "\"reason\":\"missing_shared_domain_payload\"") != std::string::npos,
+          "missing shared-domain payload retains its validation reason without MFEM");
+#endif
+}
+
 void modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
@@ -4295,6 +4336,7 @@ int main()
     modal_nonzero_k_floquet_payload_rejects_until_production_operator_exists();
     modal_nonzero_k_floquet_never_enters_k0_poisson_path();
     modal_nonzero_k_floquet_legacy_poisson_block_never_enters_k0_solver();
+    modal_k0_shared_domain_without_mfem_is_unavailable();
     modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract();
     modal_nonzero_k_floquet_bloch_payload_reaches_production_solver();
     modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms();
