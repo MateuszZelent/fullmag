@@ -445,6 +445,10 @@ function buildEdgeAnnotations({
     result.edgeIds.push(edge.id);
 
     if (showTicks) {
+      // Tick values are rounded to 12 significant digits around the frame
+      // centre; a span tiny relative to its centre collapses several values
+      // onto one, so each major index is labelled once.
+      const labelledTicks = new Set<number>();
       for (const value of centeredTicksBetween({
         max,
         min,
@@ -460,8 +464,9 @@ function buildEdgeAnnotations({
         ) {
           pushSegment(major ? result.majorTickLines : result.minorTickLines, start, end);
         }
-        if (major && tickLabelCount < LABEL_CAP) {
-          const tickIndex = Math.round((value - center) / step);
+        const tickIndex = Math.round((value - center) / step);
+        if (major && tickLabelCount < LABEL_CAP && !labelledTicks.has(tickIndex)) {
+          labelledTicks.add(tickIndex);
           tickLabelCount += 1;
           result.labels.push({
             axis: edge.axis,

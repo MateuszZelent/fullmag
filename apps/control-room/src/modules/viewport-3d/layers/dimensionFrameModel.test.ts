@@ -189,4 +189,19 @@ describe("buildDimensionFrameModel", () => {
       ["extent", "z", "20", "nm"],
     ]);
   });
+
+  it("labels each tick once when the span is tiny relative to its centre", () => {
+    const model = buildDimensionFrameModel({
+      bounds: { center: [1e-3, 1e-3, 1e-3], radius: 1e-15, size: [2e-15, 2e-15, 2e-15] },
+      cameraProjection: "perspective",
+      cameraState,
+      density: "auto",
+      labelsVisible: true,
+      mode: "floor",
+      unitMode: "auto",
+    });
+
+    const keys = model.labels.map((label) => label.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
 });
