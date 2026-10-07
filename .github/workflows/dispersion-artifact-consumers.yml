@@ -3,16 +3,16 @@ name: dispersion-artifact-consumers
 on:
   pull_request:
     paths:
-      - 'scripts/*signed_de_campaign*.py'
-      - 'scripts/*serial_adaptive_probe*.py'
-      - 'scripts/*managed_runtime_artifact_root*.py'
+      # Consumers import validators, receipts and analytic oracles across scripts.
+      - 'scripts/**/*.py'
+      - 'packages/fullmag-py/**'
       - '.github/workflows/dispersion-artifact-consumers.yml'
   push:
     branches: [master, 'codex/**']
     paths:
-      - 'scripts/*signed_de_campaign*.py'
-      - 'scripts/*serial_adaptive_probe*.py'
-      - 'scripts/*managed_runtime_artifact_root*.py'
+      # Consumers import validators, receipts and analytic oracles across scripts.
+      - 'scripts/**/*.py'
+      - 'packages/fullmag-py/**'
       - '.github/workflows/dispersion-artifact-consumers.yml'
 
 permissions:

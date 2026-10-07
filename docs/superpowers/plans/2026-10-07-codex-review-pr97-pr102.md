@@ -293,3 +293,8 @@ Przygotowana poprawka sprawdza jawny wektor przed tiny dispatch: dokładnie 3 sk
 ## Pierwsze wykonanie nowego kontraktu ABI
 
 Run 37625114591 dla 6ac65fd0710537a7e537867bccdfc69decae21dd wykrył błąd kompilacji no-provider: steady_transport_c_api.cpp używa std::snprintf także bez MFEM, lecz cstdio było pod warunkiem MFEM. Przeniesiono include poza warunek, zachowując kod obu realizacji. Python workflow contract wykrył starszą wersję nowego upload-artifact; dostosowano ją do wymaganej v7. Nie omijano żadnego testu ani nie wyłączono transportu. Ponowne wykonanie ABI nadal wymagane; wynik pierwotny FAILURE zachowany z receipt.
+
+
+## Filtry zależności konsumentów — uwaga 4206379830
+
+Ponowne pobranie GitHub wykazało kolejne 27 uwag, które są oceniane względem źródeł. Workflow konsumentów rzeczywiście pomijał zmiany importowanych validators, receipts i oracle. Filtry push oraz PR obejmują teraz cały Python w scripts i pakiet fullmag-py, więc także zależności przechodnie. Zachowano dotychczasowy zestaw testów i jawne GHA-only wykonanie. Source diff PASS; run workflow pozostaje wymagany.
