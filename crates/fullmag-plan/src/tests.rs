@@ -11689,6 +11689,70 @@ fn k0_periodic_airbox_fem_eigen_ir() -> ProblemIR {
     ir
 }
 
+fn branch_selector_fem_eigen_ir(k_sampling: Option<fullmag_ir::KSamplingIR>) -> ProblemIR {
+    let is_path = matches!(
+        k_sampling.as_ref(),
+        Some(fullmag_ir::KSamplingIR::Path { .. })
+    );
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.problem_meta
+        .runtime_metadata
+        .remove("k0_kittel_validation");
+    ir.pbc = None;
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+    let fullmag_ir::StudyIR::Eigenmodes {
+        operator,
+        k_sampling: study_k_sampling,
+        spin_wave_bc,
+        magnetostatic_bc,
+        sampling,
+        ..
+    } = &mut ir.study
+    else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    operator.kind = fullmag_ir::EigenOperatorIR::LinearizedLlg;
+    operator.include_demag = false;
+    *study_k_sampling = k_sampling;
+    *spin_wave_bc = if is_path {
+        fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+            boundary_pair_id: Some("x_faces".to_string()),
+            pair_ids: Vec::new(),
+            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+            surface_anisotropy_ks: None,
+            surface_anisotropy_axis: None,
+        })
+    } else {
+        fullmag_ir::SpinWaveBoundaryConditionIR::default()
+    };
+    *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::Open;
+    sampling.outputs = vec![fullmag_ir::OutputIR::EigenSpectrum {
+        quantity: "eigenfrequency".to_string(),
+    }];
+    ir
+}
+
+fn eigen_mode_output(indices: Vec<u32>, branches: Vec<u32>) -> fullmag_ir::OutputIR {
+    fullmag_ir::OutputIR::EigenMode {
+        field: "mode".to_string(),
+        all_modes: false,
+        indices,
+        branches,
+        sample_selector: None,
+    }
+}
+
+fn set_eigen_mode_outputs(ir: &mut ProblemIR, outputs: Vec<fullmag_ir::OutputIR>) {
+    let fullmag_ir::StudyIR::Eigenmodes { sampling, .. } = &mut ir.study else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    sampling.outputs = vec![fullmag_ir::OutputIR::EigenSpectrum {
+        quantity: "eigenfrequency".to_string(),
+    }];
+    sampling.outputs.extend(outputs);
+}
+
 #[test]
 fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
     let ir = k0_periodic_airbox_fem_eigen_ir();
@@ -12198,6 +12262,86 @@ fn fem_eigen_modal_solver_policy_preserves_partial_values_through_planning() {
         panic!("round-tripped plan must remain FEM eigen")
     };
     assert_eq!(fem.solver_policy.as_ref(), Some(policy));
+}
+
+#[test]
+fn fem_eigen_branch_selectors_require_path_sampling() {
+    for k_sampling in [
+        None,
+        Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+    ] {
+        let mut ir = branch_selector_fem_eigen_ir(k_sampling);
+        set_eigen_mode_outputs(&mut ir, vec![eigen_mode_output(Vec::new(), vec![0])]);
+        let error = plan(&ir).expect_err("branch selection requires a multi-k path");
+        assert_eq!(
+            error.reasons.len(),
+            1,
+            "unexpected planner errors: {error:?}"
+        );
+        assert!(error.reasons[0].contains("branch tracking requires k_sampling=Path"));
+    }
+
+    let mut mixed_single = branch_selector_fem_eigen_ir(Some(fullmag_ir::KSamplingIR::Single {
+        k_vector: [0.0, 0.0, 0.0],
+    }));
+    set_eigen_mode_outputs(&mut mixed_single, vec![eigen_mode_output(vec![0], vec![0])]);
+    let error = plan(&mixed_single)
+        .expect_err("mixed raw-index and branch selection must reject ignored branches");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("branch tracking requires k_sampling=Path")));
+}
+
+#[test]
+fn fem_eigen_raw_mode_indices_remain_valid_without_path_sampling() {
+    for k_sampling in [
+        None,
+        Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+    ] {
+        let mut ir = branch_selector_fem_eigen_ir(k_sampling);
+        set_eigen_mode_outputs(&mut ir, vec![eigen_mode_output(vec![0], Vec::new())]);
+        let planned = plan(&ir).expect("raw mode indices remain valid for single-k studies");
+        assert!(matches!(planned.backend_plan, BackendPlanIR::FemEigen(_)));
+    }
+}
+
+#[test]
+fn fem_eigen_branch_only_and_mixed_selectors_remain_valid_for_paths() {
+    let path = fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Gamma".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    };
+
+    for output in [
+        eigen_mode_output(Vec::new(), vec![0]),
+        eigen_mode_output(vec![0], vec![0]),
+    ] {
+        let mut ir = branch_selector_fem_eigen_ir(Some(path.clone()));
+        set_eigen_mode_outputs(&mut ir, vec![output]);
+        let planned = plan(&ir).expect("branch selectors remain valid for path sampling");
+        let BackendPlanIR::FemEigen(fem) = planned.backend_plan else {
+            panic!("expected FEM eigen plan")
+        };
+        assert!(matches!(
+            fem.k_sampling,
+            Some(fullmag_ir::KSamplingIR::Path { .. })
+        ));
+    }
 }
 
 #[test]
@@ -18940,14 +19084,14 @@ mod eigen_output_validation_tests {
             field: "mode".into(), all_modes: true, indices: vec![], branches: vec![], sample_selector: None,
         };
         let mut errors = Vec::new();
-        validate_eigen_outputs(&[output.clone()], &mut errors);
+        validate_eigen_outputs(&[output.clone()], None, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
-        validate_eigen_outputs(&[output.clone(), output.clone()], &mut errors);
+        validate_eigen_outputs(&[output.clone(), output.clone()], None, &mut errors);
         assert!(errors.iter().any(|error| error.contains("all modes more than once")));
         errors.clear();
         let mut conflicting = output;
         if let OutputIR::EigenMode { indices, .. } = &mut conflicting { indices.push(64); }
-        validate_eigen_outputs(&[conflicting], &mut errors);
+        validate_eigen_outputs(&[conflicting], None, &mut errors);
         assert!(errors.iter().any(|error| error.contains("all_modes cannot be combined")));
     }
 
@@ -18976,7 +19120,7 @@ mod eigen_output_validation_tests {
         let outputs = [mode_output(2, &[0]), mode_output(2, &[1])];
         let mut errors = Vec::new();
 
-        validate_eigen_outputs(&outputs, &mut errors);
+        validate_eigen_outputs(&outputs, None, &mut errors);
 
         assert!(
             errors.is_empty(),
@@ -18989,7 +19133,7 @@ mod eigen_output_validation_tests {
         let outputs = [mode_output(2, &[0, 1]), mode_output(2, &[1, 2])];
         let mut errors = Vec::new();
 
-        validate_eigen_outputs(&outputs, &mut errors);
+        validate_eigen_outputs(&outputs, None, &mut errors);
 
         assert!(
             errors.is_empty(),
@@ -19017,7 +19161,7 @@ mod eigen_output_validation_tests {
         ];
         let mut errors = Vec::new();
 
-        validate_eigen_outputs(&outputs, &mut errors);
+        validate_eigen_outputs(&outputs, None, &mut errors);
 
         assert!(
             errors

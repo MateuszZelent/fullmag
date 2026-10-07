@@ -5380,7 +5380,11 @@ pub(crate) fn plan_fem_eigen(
         _ => {}
     }
 
-    validate_eigen_outputs(&problem.study.sampling().outputs, &mut errors);
+    validate_eigen_outputs(
+        &problem.study.sampling().outputs,
+        k_sampling.as_ref(),
+        &mut errors,
+    );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
         errors.push(fem_single_precision_rejection(
             runtime_requests_cuda(problem),

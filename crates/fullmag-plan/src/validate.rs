@@ -1,8 +1,8 @@
 use fullmag_ir::{
     BackendTarget, CouplingCapabilityPolicyIR, CouplingEndpointIR, CouplingKindIR,
     CouplingParametersIR, ExchangeCouplingModeIR, FdmGridAssetIR, FieldRefreshPolicyIR,
-    IntegratorChoice, OutputIR, ProblemIR, RegionRealizationPolicyIR, RelaxationAlgorithmIR,
-    RelaxationControlIR, SampleSelectorIR,
+    IntegratorChoice, KSamplingIR, OutputIR, ProblemIR, RegionRealizationPolicyIR,
+    RelaxationAlgorithmIR, RelaxationControlIR, SampleSelectorIR,
 };
 use std::collections::BTreeSet;
 
@@ -946,10 +946,15 @@ fn canonical_sample_selector(
     })
 }
 
-pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<String>) {
+pub(crate) fn validate_eigen_outputs(
+    outputs: &[OutputIR],
+    k_sampling: Option<&KSamplingIR>,
+    errors: &mut Vec<String>,
+) {
     let mut seen = BTreeSet::new();
     let mut seen_eigen_modes = BTreeSet::new();
     let mut seen_eigen_branches = BTreeSet::new();
+    let branch_tracking_supported = matches!(k_sampling, Some(KSamplingIR::Path { .. }));
     for output in outputs {
         match output {
             OutputIR::EigenSpectrum { quantity } => {
@@ -971,6 +976,12 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
                 if !all_modes && indices.is_empty() && branches.is_empty() {
                     errors.push(format!(
                         "eigen mode output '{}' must request at least one mode or branch index",
+                        field
+                    ));
+                }
+                if !branches.is_empty() && !branch_tracking_supported {
+                    errors.push(format!(
+                        "eigen mode output '{}' requests branches but branch tracking requires k_sampling=Path",
                         field
                     ));
                 }

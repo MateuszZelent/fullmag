@@ -84,6 +84,12 @@ jobs:
       - name: Run canonical IR, waveguide and typed V04 migration contracts
         run: cargo test -p fullmag-ir --no-fail-fast
 
+      - name: Run eigen branch selector planning contracts
+        run: |
+          cargo test -p fullmag-plan fem_eigen_branch --lib
+          cargo test -p fullmag-plan fem_eigen_raw_mode_indices_remain_valid_without_path_sampling --lib
+          cargo test -p fullmag-plan eigen_output_validation_tests --lib
+
       - name: Run modal solver policy planning contracts
         run: cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
 
