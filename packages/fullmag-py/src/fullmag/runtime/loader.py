@@ -330,6 +330,11 @@ def load_problem_from_script(
         spec.loader.exec_module(module)
         script_source = source_path.read_text(encoding="utf-8")
         workspace_problem = world.capture_workspace_problem()
+        extracted_entrypoint_kind = None
+        if workspace_problem is None and not world.capture_executed_stages():
+            # build() can author declarations itself. Keep capture alive until
+            # it returns, and use its returned Problem rather than ambient world.
+            workspace_problem, extracted_entrypoint_kind = _extract_problem(module)
         execution_problem = workspace_problem
         antenna_inventory = world.capture_antenna_authoring_inventory()
         if workspace_problem is not None:
@@ -381,8 +386,8 @@ def load_problem_from_script(
                 problem=execution_problem,
                 source_path=source_path,
                 script_source=script_source,
-                entrypoint_kind="flat_workspace",
-                default_until_seconds=None,
+                entrypoint_kind=extracted_entrypoint_kind or "flat_workspace",
+                default_until_seconds=_extract_default_until(module) if extracted_entrypoint_kind else None,
                 stages=loaded_stages,
                 workspace_problem=workspace_problem,
                 auto_execute_stages=False,
@@ -394,22 +399,13 @@ def load_problem_from_script(
                 problem=execution_problem,
                 source_path=source_path,
                 script_source=script_source,
-                entrypoint_kind="flat_workspace",
-                default_until_seconds=None,
+                entrypoint_kind=extracted_entrypoint_kind or "flat_workspace",
+                default_until_seconds=_extract_default_until(module) if extracted_entrypoint_kind else None,
                 stages=(),
                 workspace_problem=workspace_problem,
                 antenna_inventory=antenna_inventory,
             )
 
-        problem, entrypoint_kind = _extract_problem(module)
-        return LoadedProblem(
-            problem=problem,
-            source_path=source_path,
-            script_source=script_source,
-            entrypoint_kind=entrypoint_kind,
-            default_until_seconds=_extract_default_until(module),
-            stages=(),
-        )
     finally:
         world.finish_script_capture()
 

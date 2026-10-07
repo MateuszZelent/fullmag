@@ -98,6 +98,54 @@ class AntennaAuthoringInventoryTests(unittest.TestCase):
             self.assert_no_active_drives(result.problem)
             self.assert_full_inventory(result)
 
+    def test_build_entrypoint_preserves_declarations_without_activating_them(self):
+        source = "DEFAULT_UNTIL = 1e-12\ndef build():\n" + "\n".join(
+            "    " + line for line in (BASE + DECLARE).splitlines()
+        ) + """
+    return fm.Problem(
+        name='returned-problem',
+        magnets=[fm.Ferromagnet(name='film', geometry=fm.Box(100e-9,40e-9,10e-9,name='film'), material=fm.Material(name='Py',Ms=800e3,A=13e-12,alpha=0.01))],
+        energy=[fm.Exchange()],
+        study=fm.TimeEvolution(dynamics=fm.LLG(),outputs=[]),
+        auxiliary_geometries=[fm.Box(200e-9,20e-9,10e-9,name='antenna')],
+        antenna_port_modes=[fm.AntennaPortMode(id='port',source_object_id='antenna',current_transport_id='transport',branches=(fm.AntennaPortBranch('signal','signal-in','signal-out',1),fm.AntennaPortBranch('return','return-in','return-out',-1)))],
+    )
+"""
+        loaded = self.reimport(source)
+        self.assertEqual(loaded.entrypoint_kind, "build")
+        self.assertEqual(loaded.default_until_seconds, 1e-12)
+        self.assertEqual(loaded.problem.name, "returned-problem")
+        self.assertEqual(loaded.stages, ())
+        self.assertEqual(loaded.problem.antenna_field_solve_stages, ())
+        self.assert_no_active_drives(loaded.problem)
+        self.assert_full_inventory(loaded)
+        self.assertEqual(loaded.workspace_problem.name, "returned-problem")
+        for collection in COLLECTIONS:
+            self.assertEqual(len(getattr(loaded.antenna_inventory, collection)), 1)
+        for rendered in (
+            render_loaded_problem_as_script(loaded),
+            render_scene_document_as_script(build_scene_document_from_builder(export_builder_draft(loaded))),
+        ):
+            rebuilt = self.reimport(rendered)
+            self.assert_full_inventory(rebuilt)
+            # The legacy build() TimeEvolution intent still exports one Run;
+            # declarations must not add actions or activate the antenna drive.
+            self.assertEqual(len(rebuilt.stages), 1)
+            self.assertEqual(rebuilt.stages[0].entrypoint_kind, "flat_run")
+            self.assert_no_active_drives(rebuilt.problem)
+
+    def test_flat_run_then_reset_keeps_captured_stage_without_build_fallback(self):
+        for has_build in (False, True):
+            with self.subTest(has_build=has_build):
+                path = self.root / f"run-reset-{has_build}.py"
+                fallback = "def build():\n    raise AssertionError('captured Run takes precedence')\n" if has_build else ""
+                path.write_text(BASE + "fm.run(1e-12)\nfm.reset()\n" + fallback, encoding="utf-8")
+                loaded = load_problem_from_script(path, lightweight_assets=True)
+                self.assertTrue(loaded.auto_execute_stages)
+                self.assertEqual(len(loaded.stages), 1)
+                self.assertEqual(loaded.stages[0].entrypoint_kind, "flat_run")
+                self.assertEqual(loaded.problem.name, "antenna-inventory-regression")
+
     def test_declaration_then_run_does_not_activate_fields_or_create_actions(self):
         loaded = self.load(DECLARE + "study.stages.add_run(stage_id='run',until=1e-12)\n")
         self.assertEqual([stage.stage_id for stage in loaded.stages], ["run"])

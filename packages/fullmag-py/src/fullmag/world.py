@@ -3869,6 +3869,11 @@ def finish_script_capture() -> list[CapturedStage]:
     return captured
 
 
+def capture_executed_stages() -> list[CapturedStage]:
+    """Read executed stages without ending capture or resetting authoring state."""
+    return list(_capture_binding.current().stages)
+
+
 def capture_workspace_problem() -> Problem | None:
     """Materialize the current flat-script world without requiring run()/relax()."""
     if not _capture_binding.current().enabled or not _state._magnets:
