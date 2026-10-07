@@ -4,6 +4,7 @@ import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import {
   buildDimensionFrameModel,
   formatDimensionFrameTickValue,
+  resolveDimensionFrameEdges,
   resolveDimensionFrameStep,
   resolveDimensionFrameUnit,
 } from "./dimensionFrameModel";
@@ -78,8 +79,10 @@ describe("buildDimensionFrameModel", () => {
     expect(model.unit.id).toBe("nm");
     expect(model.majorLines.length).toBeGreaterThan(0);
     expect(model.minorLines.length).toBeGreaterThan(0);
-    expect(model.tickLabels.length).toBeGreaterThan(0);
-    expect(model.tickLabels.length).toBeLessThanOrEqual(36);
+    const tickLabels = model.labels.filter((label) => label.kind === "tick");
+    expect(tickLabels.length).toBeGreaterThan(0);
+    expect(tickLabels.length).toBeLessThanOrEqual(36);
+    expect(model.majorTickLines.length).toBeGreaterThan(0);
   });
 
   it("switches vertical cage planes from camera quadrant", () => {
@@ -127,6 +130,78 @@ describe("buildDimensionFrameModel", () => {
     expect(model.planes).toEqual([]);
     expect(model.majorLines).toHaveLength(0);
     expect(model.minorLines).toHaveLength(0);
-    expect(model.tickLabels).toHaveLength(0);
+    expect(model.labels).toHaveLength(0);
+    expect(model.majorTickLines).toHaveLength(0);
+  });
+
+  it("puts the scale on the floor edges facing the camera", () => {
+    const box = { max: [1, 2, 3] as [number, number, number], min: [-1, -2, -3] as [number, number, number] };
+    const front = resolveDimensionFrameEdges(box, cameraState);
+    expect(front.map((edge) => edge.id)).toEqual(["x@ymax", "y@xmax", "z@xmaxymin"]);
+    expect(front[0]?.outward).toEqual([0, 1, 0]);
+
+    const behind = resolveDimensionFrameEdges(box, {
+      ...cameraState,
+      position: [-1e-6, -1e-6, 1e-6],
+    });
+    expect(behind.map((edge) => edge.id)).toEqual(["x@ymin", "y@xmin", "z@xminymax"]);
+  });
+
+  it("titles each annotated axis with its unit", () => {
+    const model = buildDimensionFrameModel({
+      bounds,
+      cameraProjection: "perspective",
+      cameraState,
+      density: "auto",
+      labelsVisible: true,
+      mode: "floor",
+      unitMode: "auto",
+    });
+
+    const titles = model.labels.filter((label) => label.kind === "title");
+    expect(titles.map((label) => [label.text, label.unitLabel])).toEqual([
+      ["x", "nm"],
+      ["y", "nm"],
+      ["z", "nm"],
+    ]);
+    expect(model.extentLines).toHaveLength(0);
+  });
+
+  it("draws overall extents instead of ticks in extents mode", () => {
+    const model = buildDimensionFrameModel({
+      annotation: "extents",
+      bounds,
+      cameraProjection: "perspective",
+      cameraState,
+      density: "auto",
+      labelsVisible: true,
+      mode: "floor",
+      unitMode: "auto",
+    });
+
+    expect(model.majorTickLines).toHaveLength(0);
+    expect(model.extentLines.length).toBeGreaterThan(0);
+    expect(
+      model.labels.map((label) => [label.kind, label.axis, label.text, label.unitLabel]),
+    ).toEqual([
+      ["extent", "x", "100", "nm"],
+      ["extent", "y", "80", "nm"],
+      ["extent", "z", "20", "nm"],
+    ]);
+  });
+
+  it("labels each tick once when the span is tiny relative to its centre", () => {
+    const model = buildDimensionFrameModel({
+      bounds: { center: [1e-3, 1e-3, 1e-3], radius: 1e-15, size: [2e-15, 2e-15, 2e-15] },
+      cameraProjection: "perspective",
+      cameraState,
+      density: "auto",
+      labelsVisible: true,
+      mode: "floor",
+      unitMode: "auto",
+    });
+
+    const keys = model.labels.map((label) => label.key);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });

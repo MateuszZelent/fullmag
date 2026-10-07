@@ -35,6 +35,7 @@ export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
 export type Viewport3DCameraProjection = "perspective" | "orthographic";
 export type Viewport3DDimensionFrameDensity = "auto" | "coarse" | "fine";
 export type Viewport3DDimensionFrameMode = "off" | "floor" | "cage";
+export type Viewport3DDimensionFrameAnnotation = "ticks" | "extents" | "both";
 export type Viewport3DFdmTopographyComponent = "magnitude" | "x" | "y" | "z";
 export type Viewport3DRotationMode = "camera" | "object";
 export type Viewport3DScaleUnitMode = "auto" | "nm" | "um" | "mm" | "m";
@@ -110,6 +111,7 @@ interface Viewport3DWidgetState {
   cameraDialogOpen: boolean;
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
+  dimensionFrameAnnotation: Viewport3DDimensionFrameAnnotation;
   dimensionFrameDensity: Viewport3DDimensionFrameDensity;
   dimensionFrameMode: Viewport3DDimensionFrameMode;
   effectAmbientOcclusion: boolean;
@@ -149,6 +151,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
     cameraDialogOpen: false,
     cameraOrthographicScale: DEFAULT_CAMERA_REGISTRY_STATE.orthographic_scale ?? null,
     cameraProjection: DEFAULT_CAMERA_REGISTRY_STATE.projection,
+    dimensionFrameAnnotation: "ticks",
     dimensionFrameDensity: "auto",
     dimensionFrameMode: "floor",
     effectAmbientOcclusion: false,
@@ -297,6 +300,20 @@ class Viewport3DStore {
       widgets: {
         ...this.snapshot.widgets,
         dimensionFrameMode: mode,
+      },
+    };
+    this.notify();
+  }
+
+  setDimensionFrameAnnotation(
+    annotation: Viewport3DDimensionFrameAnnotation,
+  ): void {
+    if (this.snapshot.widgets.dimensionFrameAnnotation === annotation) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        dimensionFrameAnnotation: annotation,
       },
     };
     this.notify();
