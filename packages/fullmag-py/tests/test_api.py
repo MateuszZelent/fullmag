@@ -7368,6 +7368,122 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("samples_per_segment=[41]", rewritten)
         self.assertIn('bc=fm.FloquetBC(["x_periodic"])', rewritten)
 
+    def test_script_rewrite_applies_eigen_solver_policy_overrides(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen_solver_policy_stage_override")
+        study.engine("fem")
+        study.device("cpu", precision="double")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_eigenmodes(
+            count=4,
+            include_demag=False,
+            solver_rtol=1e-6,
+            solver_max_outer_iterations=100,
+            solver_max_linear_iterations=200,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "eigen_solver_policy_stage_override.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        partial_override = rewrite_loaded_problem_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {"kind": "eigenmodes", "eigen_solver_rtol": 2e-6},
+                ],
+            },
+        )["rendered_source"]
+        self.assertIn("solver_rtol=2e-06", partial_override)
+        self.assertIn("solver_max_outer_iterations=100", partial_override)
+        self.assertIn("solver_max_linear_iterations=200", partial_override)
+
+        replaced_policy = rewrite_loaded_problem_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {
+                        "kind": "eigenmodes",
+                        "eigen_solver_rtol": 3e-6,
+                        "eigen_solver_max_outer_iterations": 300,
+                        "eigen_solver_max_linear_iterations": 400,
+                    },
+                ],
+            },
+        )["rendered_source"]
+        self.assertIn("solver_rtol=3e-06", replaced_policy)
+        self.assertIn("solver_max_outer_iterations=300", replaced_policy)
+        self.assertIn("solver_max_linear_iterations=400", replaced_policy)
+        self.assertNotIn("solver_max_outer_iterations=100", replaced_policy)
+        self.assertNotIn("solver_max_linear_iterations=200", replaced_policy)
+
+        cleared_policy = rewrite_loaded_problem_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {
+                        "kind": "eigenmodes",
+                        "eigen_solver_rtol": None,
+                        "eigen_solver_max_outer_iterations": "",
+                        "eigen_solver_max_linear_iterations": None,
+                    },
+                ],
+            },
+        )["rendered_source"]
+        self.assertNotIn("solver_rtol=", cleared_policy)
+        self.assertNotIn("solver_max_outer_iterations=", cleared_policy)
+        self.assertNotIn("solver_max_linear_iterations=", cleared_policy)
+
+        partially_cleared_policy = rewrite_loaded_problem_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {"kind": "eigenmodes", "eigen_solver_rtol": None},
+                ],
+            },
+        )["rendered_source"]
+        self.assertNotIn("solver_rtol=", partially_cleared_policy)
+        self.assertIn("solver_max_outer_iterations=100", partially_cleared_policy)
+        self.assertIn("solver_max_linear_iterations=200", partially_cleared_policy)
+
+        no_policy_script = script.replace(
+            "            solver_rtol=1e-6,\n"
+            "            solver_max_outer_iterations=100,\n"
+            "            solver_max_linear_iterations=200,\n",
+            "",
+        )
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "eigen_solver_policy_stage_without_policy.py"
+            path.write_text(textwrap.dedent(no_policy_script), encoding="utf-8")
+            loaded_without_policy = fm.load_problem_from_script(
+                path, lightweight_assets=True
+            )
+
+        authored_without_policy = rewrite_loaded_problem_script(
+            loaded_without_policy,
+            overrides={
+                "stages": [
+                    {
+                        "kind": "eigenmodes",
+                        "eigen_solver_rtol": 4e-6,
+                        "eigen_solver_max_outer_iterations": 500,
+                        "eigen_solver_max_linear_iterations": 600,
+                    },
+                ],
+            },
+        )["rendered_source"]
+        self.assertIn("solver_rtol=4e-06", authored_without_policy)
+        self.assertIn("solver_max_outer_iterations=500", authored_without_policy)
+        self.assertIn("solver_max_linear_iterations=600", authored_without_policy)
+
     def test_study_stage_preserves_floquet_k_path_demag_intent(self) -> None:
         script = """
         import fullmag as fm
