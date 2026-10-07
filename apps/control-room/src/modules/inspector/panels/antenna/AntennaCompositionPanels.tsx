@@ -15,6 +15,7 @@ import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { AntennaSourceSpectrumPayloadView } from "./AntennaSourceSpectrumPayloadView";
 import { AntennaProjectionDriveComposer } from "./AntennaProjectionDriveComposer";
+import { AntennaSolveTargetsEditor } from "./AntennaSolveTargetsEditor";
 import { AntennaSpectrumComposer } from "./AntennaSpectrumComposer";
 import { SolvedAntennaDriveEditor } from "./SolvedAntennaDriveEditor";
 import { antennaWaveformBandwidthValue } from "./AntennaCompositionModel";
@@ -905,6 +906,7 @@ export function AntennaCompositionPanel({
           />
         ) : null}
       </InspectorGroup>
+      {kind === "solution" && objectId && resourceId ? <AntennaSolveTargetsEditor key={`targets:${objectId}:${resourceId}`} objectId={objectId} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
       {kind === "solution" && resourceId ? <AntennaProjectionDriveComposer key={`projection:${resourceId}`} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
       {kind === "solution" && resourceId ? <AntennaSpectrumComposer key={`spectrum:${resourceId}`} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
       {kind === "drive" && resourceId ? <SolvedAntennaDriveEditor driveId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
