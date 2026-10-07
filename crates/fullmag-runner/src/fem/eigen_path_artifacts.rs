@@ -528,6 +528,84 @@ mod output_publication_tests {
     }
 
     #[test]
+    fn remaps_current_sample_mode_artifacts_and_rejects_other_indices() {
+        let published_modes = BTreeSet::from([3_u32]);
+
+        for sample_index in [1_usize, 7, 10_000] {
+            let selected = BTreeSet::from([SampleModeId::new(sample_index, 3)]);
+            for source_sample_index in [0, sample_index] {
+                let metadata = AuxiliaryArtifact {
+                    relative_path: format!(
+                        "eigen/modes/sample_{source_sample_index:04}/mode_0003.json"
+                    ),
+                    bytes: serde_json::json!({
+                        "sample_index": source_sample_index,
+                        "preimage_path": format!("eigen/modes/sample_{source_sample_index:04}/mode_0003.json"),
+                    })
+                    .to_string()
+                    .into_bytes(),
+                };
+                let field = AuxiliaryArtifact {
+                    relative_path: format!(
+                        "eigen/mode_fields/sample_{source_sample_index:04}/mode_0003/vector.bin"
+                    ),
+                    bytes: vec![0; 3 * 2 * std::mem::size_of::<f64>()],
+                };
+
+                let remapped = remap_single_k_mode_artifacts(
+                    &[metadata, field],
+                    sample_index,
+                    &published_modes,
+                )
+                .expect("valid zero-based or already-indexed artifacts should remap");
+                assert_eq!(remapped.len(), 2);
+                assert_eq!(
+                    remapped[0].relative_path,
+                    format!("eigen/modes/sample_{sample_index:04}/mode_0003.json")
+                );
+                assert_eq!(
+                    remapped[1].relative_path,
+                    format!("eigen/mode_fields/sample_{sample_index:04}/mode_0003/vector.bin")
+                );
+                let metadata: Value =
+                    serde_json::from_slice(&remapped[0].bytes).expect("metadata remains JSON");
+                assert_eq!(metadata["sample_index"], sample_index);
+                assert_eq!(
+                    metadata["preimage_path"],
+                    format!("eigen/modes/sample_{sample_index:04}/mode_0003.json")
+                );
+                validate_eigen_path_selected_mode_artifacts(&remapped, &selected)
+                    .expect("matching sample metadata and field payload satisfy selection");
+            }
+
+            let foreign_sample_index = sample_index + 1;
+            let foreign_artifacts = [
+                AuxiliaryArtifact {
+                    relative_path: format!(
+                        "eigen/modes/sample_{foreign_sample_index:04}/mode_0003.json"
+                    ),
+                    bytes: serde_json::json!({
+                        "sample_index": foreign_sample_index,
+                    })
+                    .to_string()
+                    .into_bytes(),
+                },
+                AuxiliaryArtifact {
+                    relative_path: format!(
+                        "eigen/mode_fields/sample_{foreign_sample_index:04}/mode_0003/vector.bin"
+                    ),
+                    bytes: vec![0; 3 * 2 * std::mem::size_of::<f64>()],
+                },
+            ];
+            let remapped =
+                remap_single_k_mode_artifacts(&foreign_artifacts, sample_index, &published_modes)
+                    .expect("foreign mode artifacts are excluded");
+            assert!(remapped.is_empty());
+            assert!(validate_eigen_path_selected_mode_artifacts(&remapped, &selected).is_err());
+        }
+    }
+
+    #[test]
     fn remaps_full_potential_sidecars_to_sample_seven_and_filters_modes() {
         let manifest = serde_json::json!({
             "schema_version": "fem_modal_physical_potential.v1",
@@ -2598,21 +2676,40 @@ pub(super) fn remap_single_k_mode_artifact_path(
     {
         return Some(relative_path.to_string());
     }
-    if matches!(
-        relative_path,
-        "eigen/mode_fields.zarr/sample_0000/.zgroup" | "eigen/mode_fields.zarr/sample_0000/.zattrs"
-    ) {
-        return Some(relative_path.replace("sample_0000", &sample_path));
-    }
-    if relative_path.starts_with("eigen/modes/sample_0000/")
-        || relative_path.starts_with("eigen/mode_fields/sample_0000/")
-        || relative_path.starts_with("eigen/mode_fields.zarr/sample_0000/")
-    {
-        let raw_mode_index = single_k_mode_artifact_raw_mode_index(relative_path)?;
-        if !published_mode_indices.contains(&(raw_mode_index as u32)) {
+
+    for root in ["eigen/modes", "eigen/mode_fields", "eigen/mode_fields.zarr"] {
+        let Some(rest) = relative_path
+            .strip_prefix(root)
+            .and_then(|suffix| suffix.strip_prefix('/'))
+        else {
+            continue;
+        };
+        let Some((source_sample_path, suffix)) = rest.split_once('/') else {
+            continue;
+        };
+        let Some(source_sample_index) = source_sample_path
+            .strip_prefix("sample_")
+            .and_then(|index| index.parse::<usize>().ok())
+        else {
+            return None;
+        };
+        if source_sample_path != format!("sample_{source_sample_index:04}")
+            || (source_sample_index != 0 && source_sample_index != sample_index)
+        {
             return None;
         }
-        return Some(relative_path.replace("sample_0000", &sample_path));
+
+        let target_path = format!("{root}/{sample_path}/{suffix}");
+        if root == "eigen/mode_fields.zarr" && matches!(suffix, ".zgroup" | ".zattrs") {
+            return Some(target_path);
+        }
+
+        let raw_mode_index =
+            u32::try_from(single_k_mode_artifact_raw_mode_index(relative_path)?).ok()?;
+        if !published_mode_indices.contains(&raw_mode_index) {
+            return None;
+        }
+        return Some(target_path);
     }
     None
 }

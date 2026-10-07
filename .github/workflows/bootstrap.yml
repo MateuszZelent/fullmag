@@ -43,6 +43,9 @@ jobs:
       - name: Run native modal cancellation completion contract
         run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
 
+      - name: Run sample-scoped eigen artifact contracts
+        run: cargo test -p fullmag-runner output_publication_tests --lib
+
       - name: Run adaptive eigen process pool contracts
         run: |
           cargo test -p fullmag-runner k_process_pool --no-fail-fast
