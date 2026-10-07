@@ -3,20 +3,20 @@
 
 **Cały cel S00–S12 pozostaje aktywny.** Poniższa tabela opisuje aktualny
 stan; dalsze checkpointy zachowują historię i nie zastępują bieżących dowodów.
-Zweryfikowany source checkpoint:62a3a6bbfc0ab96f5dc78e8b4dc9525123b033a5.
-Bootstrap CI37583935792:8/8jobs PASS po merge master c6b8 i poprawce strict
-standalone SpatialRepresentationIR.32 V04 tests oraz runner retention regressions
-wchodzą w tę bramkę. Kolejny przyrost source: strict V04 material decoder,
-pełny remote mirror24 pól wspólnego MaterialIR oraz5 przygotowanych regresji.
-Nie zmienia legacy deserializacji, fizyki ani dostępności2.5D; nowe CI pending.
+Zweryfikowany source checkpoint:9ea7279e629d54b5b2ef5710d688775cf487d087.
+Bootstrap CI37590655747:8/8jobs PASS.37 V04 tests obejmuje strict materiały,
+standalone spatial representation i migracje. Kolejny przyrost source zamyka
+dekodery equilibrium/k_sampling/KPoint w obu spectral study kinds, zachowując
+legacy, SI, signed vectors, null/defaults i atomowość migracji. Source review/
+parser PASS; nowe regresje wymagają świeżego CI. Runtime236 pozostaje dokładnie62a3.
 
 | Zakres | Potwierdzone | Pozostaje |
 |---|---|---|
-| Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | Świeże CI dla strict V04 materiałów oraz terminalny build236/runtime dla NCV4; source CI nie jest walidacją eigensolve |
+| Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | Świeże CI dla strict V04 spectral intent oraz terminalny build236/runtime dla NCV4; source CI nie jest walidacją eigensolve |
 | Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Nowy attested build, pełny window certificate Γ, potem15 punktów i sprawdzony wykres |
 | Adaptive k pool | Poprawka exit telemetry, deterministyczny plan digest i kontrakty CI | Rzeczywisty świeży przebieg, pomiary CPU/RAM i serial/adaptive parity |
 | Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Pełna scoped kompozycja lower bounds i runtime consumer regionalnych minima pozostają oddzielnymi lukami |
-| S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,32 regresje CI PASS; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
+| S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,37 regresji CI PASS; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
 | Nauka | Wstępne benchmarki i analityczne oracles nie domykają kwalifikacji | DE/BV, zbieżności siatki/airboxu/liczby modów, identyczny COMSOL A1 i GPU |
 | GUI/integracja | Frontend/browser fixture CI PASS; PR97 otwarty | Rzeczywisty workspace z modelem/wynikami, pełne review/science gates, merge i bezpieczne cleanup worktree |
 

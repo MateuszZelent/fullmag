@@ -110,8 +110,13 @@ pub enum StudyIRV04 {
         operator: EigenOperatorConfigIR,
         count: u32,
         target: EigenTargetIR,
+        #[serde(deserialize_with = "crate::v04_spectral_wire::deserialize_equilibrium")]
         equilibrium: EquilibriumSourceIR,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::v04_spectral_wire::deserialize_optional_k_sampling",
+            skip_serializing_if = "Option::is_none"
+        )]
         k_sampling: Option<KSamplingIR>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bias_field_sweep: Option<BiasFieldSweepIR>,
@@ -133,8 +138,13 @@ pub enum StudyIRV04 {
     FrequencyResponse {
         dynamics: DynamicsIR,
         operator: EigenOperatorConfigIR,
+        #[serde(deserialize_with = "crate::v04_spectral_wire::deserialize_equilibrium")]
         equilibrium: EquilibriumSourceIR,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::v04_spectral_wire::deserialize_optional_k_sampling",
+            skip_serializing_if = "Option::is_none"
+        )]
         k_sampling: Option<KSamplingIR>,
         normalization: FrequencyResponseNormalizationIR,
         damping_policy: EigenDampingPolicyIR,

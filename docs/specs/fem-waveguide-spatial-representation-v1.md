@@ -391,3 +391,18 @@ powoduje błąd bez mutacji wejścia. Regresje pełnego round-trip, null/default
 legacy, indeksu1 i migracji pozostają do wykonania w CI. To nie nadaje sampled
 polom brakującego topology binding, nie wystawia structural_2d ani nie
 certyfikuje equilibrium czy providera MFEM2D.
+
+## Źródło równowagi i signed k bez pomijania intentu — 2026-10-07
+
+`crates/fullmag-ir/src/v04_spectral_wire.rs::deserialize_equilibrium` i
+`deserialize_optional_k_sampling` odrzucają dodatkowe pola we wszystkich
+wspieranych wariantach w V04 Eigenmodes i FrequencyResponse. `KPointIRV04Def`
+oraz `KPointV04Seed` zachowują etykiety/wektory i indeks błędu
+`/study/k_sampling/points/<index>`. Unknown units/parametry nie mogą zniknąć
+przed projekcją signed k czy wyborem źródła equilibrium. Wektory nie są
+normalizowane ani przeliczane: kanoniczne SI i walidacja pozostają wcześniejsze.
+Brak/null k_sampling nadal oznacza None, closed nadal ma default false;
+poprawny wire oraz dekodery legacy pozostają zgodne. Migracja jest atomowa.
+Parser nie traktuje size_hint jako budżetu alokacji. Regresje wire/source/path/
+legacy/migration są przygotowane do CI; nie potwierdzają accepted equilibrium,
+invariance, assembly ani runtime2.5D.

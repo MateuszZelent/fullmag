@@ -1,8 +1,9 @@
 use fullmag_ir::waveguide_mesh::{WaveguideCrossSectionMeshIR, WaveguideCrossSectionRegionIR};
 use fullmag_ir::{
-    migrate_v0_3_problem_ir_to_v0_4, GeometryEntryIR, MaterialIR, ObjectRegionIR, PhysicsObjectIR,
-    PhysicsObjectTypeIR, ProblemIR, ProblemIRV04, RegionFrameIR, RegionIR,
-    RegionRealizationPolicyIR, RegionShapeIR, SpatialRepresentationIR, StudyIRV04,
+    migrate_v0_3_problem_ir_to_v0_4, EquilibriumSourceIR, GeometryEntryIR, KPointIR, KSamplingIR,
+    MaterialIR, ObjectRegionIR, PhysicsObjectIR, PhysicsObjectTypeIR, ProblemIR, ProblemIRV04,
+    RegionFrameIR, RegionIR, RegionRealizationPolicyIR, RegionShapeIR, SpatialRepresentationIR,
+    StudyIRV04,
 };
 use serde_json::{json, Value};
 
@@ -1026,4 +1027,288 @@ fn migration_rejects_unknown_material_intent_without_mutating_input() {
     assert!(error.contains("/materials/0"), "{error}");
     assert!(error.contains("future_dmi_model"), "{error}");
     assert_eq!(value, original);
+}
+
+fn spectral_v04_study_builders() -> [fn(Value, Option<Value>) -> Value; 2] {
+    [eigenmodes_v04, frequency_response_v04]
+}
+
+#[test]
+fn v04_equilibrium_variants_reject_unknown_fields_in_standalone_and_root_wires() {
+    let unknown_sources = [
+        json!({ "kind": "provided", "future_source_flag": true }),
+        json!({ "kind": "relaxed_initial_state", "future_source_flag": true }),
+        json!({ "kind": "artifact", "path": "storage/equilibrium.fld", "units": "A/m" }),
+    ];
+
+    for build_study in spectral_v04_study_builders() {
+        for equilibrium in unknown_sources.iter().cloned() {
+            let mut study = build_study(full_3d(), Some(json!("open")));
+            study["equilibrium"] = equilibrium;
+
+            let standalone_error = serde_json::from_value::<StudyIRV04>(study.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                standalone_error.contains("/study/equilibrium"),
+                "{standalone_error}"
+            );
+
+            let root_error =
+                serde_json::from_value::<ProblemIRV04>(problem_value_with_study(study))
+                    .unwrap_err()
+                    .to_string();
+            assert!(root_error.contains("/study/equilibrium"), "{root_error}");
+        }
+    }
+}
+
+#[test]
+fn v04_equilibrium_variants_round_trip_without_losing_source_intent() {
+    let sources = [
+        json!({ "kind": "provided" }),
+        json!({ "kind": "relaxed_initial_state" }),
+        json!({ "kind": "artifact", "path": "storage/equilibrium.fld" }),
+    ];
+
+    for build_study in spectral_v04_study_builders() {
+        for equilibrium in sources.iter().cloned() {
+            let mut study = build_study(full_3d(), Some(json!("open")));
+            study["equilibrium"] = equilibrium.clone();
+
+            let standalone: StudyIRV04 = serde_json::from_value(study.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(standalone).unwrap()["equilibrium"],
+                equilibrium
+            );
+
+            let root: ProblemIRV04 =
+                serde_json::from_value(problem_value_with_study(study)).unwrap();
+            assert_eq!(
+                serde_json::to_value(root).unwrap()["study"]["equilibrium"],
+                equilibrium
+            );
+        }
+    }
+}
+
+#[test]
+fn v04_k_sampling_rejects_unknown_single_path_and_point_intent() {
+    let unknown_cases = [
+        (
+            json!({
+                "kind": "single",
+                "k_vector": [-0.25, 0.5, -0.75],
+                "future_sampling_flag": true
+            }),
+            "/study/k_sampling",
+        ),
+        (
+            json!({
+                "kind": "path",
+                "points": [
+                    { "label": "Γ", "k_vector": [-0.5, 0.0, 0.0] },
+                    { "label": "X", "k_vector": [0.25, 0.0, 0.0] }
+                ],
+                "samples_per_segment": [4],
+                "closed": true,
+                "future_path_policy": "keep"
+            }),
+            "/study/k_sampling",
+        ),
+        (
+            json!({
+                "kind": "path",
+                "points": [
+                    {
+                        "label": "Γ",
+                        "k_vector": [-0.5, 0.0, 0.0],
+                        "units": "1/m"
+                    }
+                ],
+                "samples_per_segment": [4]
+            }),
+            "/study/k_sampling/points/0",
+        ),
+    ];
+
+    for build_study in spectral_v04_study_builders() {
+        for (k_sampling, pointer) in unknown_cases.iter() {
+            let mut study = build_study(full_3d(), Some(json!("open")));
+            study["k_sampling"] = k_sampling.clone();
+
+            let standalone_error = serde_json::from_value::<StudyIRV04>(study.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(standalone_error.contains(*pointer), "{standalone_error}");
+
+            let root_error =
+                serde_json::from_value::<ProblemIRV04>(problem_value_with_study(study))
+                    .unwrap_err()
+                    .to_string();
+            assert!(root_error.contains(*pointer), "{root_error}");
+        }
+    }
+}
+
+#[test]
+fn v04_k_sampling_round_trips_signed_vectors_labels_closed_and_optional_defaults() {
+    let single = json!({
+        "kind": "single",
+        "k_vector": [-0.75, 0.125, -1.25]
+    });
+    let closed_path = json!({
+        "kind": "path",
+        "points": [
+            { "label": "Γ", "k_vector": [-1.0, 0.0, 0.0] },
+            { "label": "X", "k_vector": [0.25, -0.5, 1.5] }
+        ],
+        "samples_per_segment": [4],
+        "closed": true
+    });
+    let mut open_path = closed_path.clone();
+    open_path.as_object_mut().unwrap().remove("closed");
+    let mut open_path_with_default = open_path.clone();
+    open_path_with_default["closed"] = json!(false);
+
+    for build_study in spectral_v04_study_builders() {
+        for (k_sampling, expected) in [
+            (single.clone(), single.clone()),
+            (closed_path.clone(), closed_path.clone()),
+            (open_path.clone(), open_path_with_default.clone()),
+        ] {
+            let mut study = build_study(full_3d(), Some(json!("open")));
+            study["k_sampling"] = k_sampling;
+
+            let standalone: StudyIRV04 = serde_json::from_value(study.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(standalone).unwrap()["k_sampling"],
+                expected
+            );
+
+            let root: ProblemIRV04 =
+                serde_json::from_value(problem_value_with_study(study)).unwrap();
+            assert_eq!(
+                serde_json::to_value(root).unwrap()["study"]["k_sampling"],
+                expected
+            );
+        }
+
+        for use_null in [false, true] {
+            let mut study = build_study(full_3d(), Some(json!("open")));
+            if use_null {
+                study["k_sampling"] = Value::Null;
+            } else {
+                study.as_object_mut().unwrap().remove("k_sampling");
+            }
+
+            let standalone: StudyIRV04 = serde_json::from_value(study.clone()).unwrap();
+            assert!(serde_json::to_value(standalone)
+                .unwrap()
+                .get("k_sampling")
+                .is_none());
+
+            let root: ProblemIRV04 =
+                serde_json::from_value(problem_value_with_study(study)).unwrap();
+            assert!(serde_json::to_value(root).unwrap()["study"]
+                .get("k_sampling")
+                .is_none());
+        }
+    }
+}
+
+#[test]
+fn legacy_shared_spectral_types_keep_their_lenient_decode_policy() {
+    for (value, expected) in [
+        (
+            json!({ "kind": "provided", "future_source_flag": true }),
+            EquilibriumSourceIR::Provided,
+        ),
+        (
+            json!({ "kind": "relaxed_initial_state", "future_source_flag": true }),
+            EquilibriumSourceIR::RelaxedInitialState,
+        ),
+        (
+            json!({
+                "kind": "artifact",
+                "path": "storage/equilibrium.fld",
+                "units": "A/m"
+            }),
+            EquilibriumSourceIR::Artifact {
+                path: "storage/equilibrium.fld".to_string(),
+            },
+        ),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<EquilibriumSourceIR>(value).unwrap(),
+            expected
+        );
+    }
+
+    assert_eq!(
+        serde_json::from_value::<KSamplingIR>(json!({
+            "kind": "single",
+            "k_vector": [-0.5, 0.0, 0.0],
+            "future_sampling_flag": true
+        }))
+        .unwrap(),
+        KSamplingIR::Single {
+            k_vector: [-0.5, 0.0, 0.0]
+        }
+    );
+    assert_eq!(
+        serde_json::from_value::<KSamplingIR>(json!({
+            "kind": "path",
+            "points": [{
+                "label": "Γ",
+                "k_vector": [-0.5, 0.25, 0.0],
+                "units": "1/m",
+                "future_point_flag": true
+            }],
+            "samples_per_segment": [3],
+            "closed": true,
+            "future_path_flag": "ignore"
+        }))
+        .unwrap(),
+        KSamplingIR::Path {
+            points: vec![KPointIR {
+                label: Some("Γ".to_string()),
+                k_vector: [-0.5, 0.25, 0.0]
+            }],
+            samples_per_segment: vec![3],
+            closed: true
+        }
+    );
+}
+
+#[test]
+fn migration_rejects_unknown_spectral_intent_without_mutating_input() {
+    let mut unknown_equilibrium = legacy_eigen_problem_value(Some(json!("open")));
+    unknown_equilibrium["study"]["equilibrium"]["future_source_flag"] = json!(true);
+
+    let mut unknown_point = legacy_eigen_problem_value(Some(json!("open")));
+    unknown_point["study"]["k_sampling"] = json!({
+        "kind": "path",
+        "points": [{
+            "label": "Γ",
+            "k_vector": [-0.5, 0.25, 0.0],
+            "units": "1/m"
+        }],
+        "samples_per_segment": [3]
+    });
+
+    for (mut value, pointer, unknown_field) in [
+        (
+            unknown_equilibrium,
+            "/study/equilibrium",
+            "future_source_flag",
+        ),
+        (unknown_point, "/study/k_sampling/points/0", "units"),
+    ] {
+        let original = value.clone();
+        let error = migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap_err();
+        assert!(error.contains(pointer), "{error}");
+        assert!(error.contains(unknown_field), "{error}");
+        assert_eq!(value, original);
+    }
 }
