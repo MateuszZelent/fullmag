@@ -54,6 +54,9 @@ jobs:
       - name: Run canonical IR, waveguide and typed V04 migration contracts
         run: cargo test -p fullmag-ir --no-fail-fast
 
+      - name: Run scene periodic boundary intent contracts
+        run: cargo test -p fullmag-authoring scene_pbc --lib
+
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
 

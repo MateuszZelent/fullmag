@@ -101,7 +101,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
                 .unwrap_or_else(|| "strict".to_string()),
             requested_cpu_threads: builder.cpu_threads,
             parallel_execution: builder.parallel_execution.clone().unwrap_or_default(),
-            pbc: builder.pbc.clone(),
+            pbc: Some(builder.pbc.clone()),
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
             exchange_enabled: builder.exchange_enabled,
             demag_enabled: builder.demag_enabled,
@@ -236,7 +236,7 @@ pub fn scene_document_to_script_builder(
         requested_mode: Some(normalized_scene.study.requested_mode.clone()),
         cpu_threads: normalized_scene.study.requested_cpu_threads,
         parallel_execution: Some(normalized_scene.study.parallel_execution.clone()),
-        pbc: normalized_scene.study.pbc.clone(),
+        pbc: normalized_scene.study.pbc.clone().flatten(),
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
         exchange_enabled: normalized_scene.study.exchange_enabled,
         demag_enabled: normalized_scene.study.demag_enabled,
@@ -512,6 +512,12 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     });
+    if scene.study.pbc.is_none() {
+        overrides
+            .as_object_mut()
+            .expect("script builder overrides are an object")
+            .remove("pbc");
+    }
     if let Some(profile) = builder.execution_profile.as_ref() {
         overrides["execution_profile"] =
             serde_json::to_value(profile).expect("execution profile is serializable");
@@ -2275,17 +2281,17 @@ mod tests {
             image_counts: Some([4, 0, 7]),
         });
         let scene = scene_document_from_script_builder(&builder);
-        assert_eq!(scene.study.pbc, builder.pbc);
+        assert_eq!(scene.study.pbc, Some(builder.pbc.clone()));
         let restored = scene_document_to_script_builder(&scene).expect("valid PBC scene");
         assert_eq!(restored.pbc, builder.pbc);
         let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
         assert_eq!(overrides["pbc"], serde_json::to_value(&builder.pbc).unwrap());
         let encoded = serde_json::to_value(&scene).unwrap();
         let decoded: SceneDocument = serde_json::from_value(encoded).unwrap();
-        assert_eq!(decoded.study.pbc, builder.pbc);
+        assert_eq!(decoded.study.pbc, Some(builder.pbc.clone()));
 
         let mut cleared = decoded;
-        cleared.study.pbc = None;
+        cleared.study.pbc = Some(None);
         assert!(scene_document_to_script_builder(&cleared).unwrap().pbc.is_none());
         assert!(scene_document_to_script_builder_overrides(&cleared).unwrap()["pbc"].is_null());
         let mut legacy = serde_json::to_value(&cleared).unwrap();
@@ -2294,20 +2300,32 @@ mod tests {
         legacy["study"].as_object_mut().unwrap().remove("pbc");
         let legacy: SceneDocument = serde_json::from_value(legacy).unwrap();
         assert!(legacy.study.pbc.is_none());
+        let legacy_overrides = scene_document_to_script_builder_overrides(&legacy).unwrap();
+        assert!(legacy_overrides.get("pbc").is_none());
+        assert!(serde_json::to_value(&legacy).unwrap()["study"].get("pbc").is_none());
+
+        let explicit_clear: SceneDocument =
+            serde_json::from_value(serde_json::to_value(&cleared).unwrap()).unwrap();
+        assert_eq!(explicit_clear.study.pbc, Some(None));
+        assert_eq!(
+            scene_document_to_script_builder_overrides(&explicit_clear).unwrap().get("pbc"),
+            Some(&serde_json::Value::Null),
+        );
     }
 
     #[test]
     fn scene_pbc_rejects_inconsistent_demag_policy() {
         let mut scene = scene_document_from_script_builder(&sample_builder());
-        scene.study.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        scene.study.pbc = Some(Some(fullmag_ir::FdmPeriodicityIR {
             axes: [fullmag_ir::AxisBoundary::Periodic, fullmag_ir::AxisBoundary::Open,
                    fullmag_ir::AxisBoundary::Open],
             demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
             image_counts: None,
-        });
+        }));
         assert!(scene_document_to_script_builder(&scene).is_err());
-        scene.study.pbc.as_mut().unwrap().demag = fullmag_ir::FdmDemagPeriodicityIR::Open;
-        scene.study.pbc.as_mut().unwrap().image_counts = Some([1, 0, 0]);
+        let pbc = scene.study.pbc.as_mut().unwrap().as_mut().unwrap();
+        pbc.demag = fullmag_ir::FdmDemagPeriodicityIR::Open;
+        pbc.image_counts = Some([1, 0, 0]);
         assert!(scene_document_to_script_builder(&scene).is_err());
     }
 

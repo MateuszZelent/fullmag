@@ -315,6 +315,15 @@ pub struct SceneCurrentModulesState {
     pub excitation_analysis: Option<ScriptBuilderExcitationAnalysisState>,
 }
 
+fn deserialize_scene_pbc_presence<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<fullmag_ir::FdmPeriodicityIR>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<fullmag_ir::FdmPeriodicityIR>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SceneStudyState {
@@ -332,8 +341,13 @@ pub struct SceneStudyState {
     pub requested_cpu_threads: Option<u32>,
     #[serde(default, deserialize_with = "fullmag_ir::deserialize_parallel_execution_policy")]
     pub parallel_execution: fullmag_ir::ParallelExecutionPolicyIR,
-    #[serde(default)]
-    pub pbc: Option<fullmag_ir::FdmPeriodicityIR>,
+    // Missing preserves an existing script; null explicitly clears its PBC.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_scene_pbc_presence"
+    )]
+    pub pbc: Option<Option<fullmag_ir::FdmPeriodicityIR>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
     #[serde(default = "default_true")]

@@ -202,3 +202,12 @@ The API must reject:
 - no hierarchy or parenting
 - no undo/redo
 - no direct `ProblemIR -> SceneDocument` reconstruction contract
+
+## Obecność `study.pbc` przy synchronizacji skryptu
+
+Adapter rozróżnia trzy stany: brak pola zachowuje PBC istniejącego skryptu,
+jawne `null` usuwa PBC, a wartość ustawia zadane osie i politykę demag.
+Brak pola w starszym dokumencie pozostaje brakiem po serializacji i nie
+tworzy nadpisania `pbc`. Dokument utworzony z buildera zapisuje jawny stan,
+również `null` dla modelu bez PBC. Typ JSON wartości pozostaje bez zmian.
+Walidacja polityki fizycznej dotyczy wyłącznie obecnej wartości.

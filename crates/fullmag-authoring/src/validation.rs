@@ -198,7 +198,7 @@ fn validate_scene_document_with_mode(
             ),
         ));
     }
-    if let Some(pbc) = &scene.study.pbc {
+    if let Some(Some(pbc)) = &scene.study.pbc {
         if pbc.demag != fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
             && pbc.image_counts.is_some()
         {
