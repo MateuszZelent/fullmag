@@ -232,6 +232,112 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
                 )
             )
 
+    @unittest.skipIf(os.name == "nt", "directory fsync is not supported on Windows")
+    def test_source_parent_sync_precedes_checkpoint_and_completed_receipt(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-compaction-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-a")
+            source_parent = source / "tree"
+            events: list[tuple[object, ...]] = []
+            real_sync = source_compaction._fsync_source_parent
+            real_write_receipt = source_compaction._write_receipt
+
+            def observe_sync(directory: Path) -> None:
+                events.append(("source_parent_fsync", directory))
+                real_sync(directory)
+
+            def observe_receipt(path: Path, receipt: dict[str, object]) -> None:
+                if receipt.get("checkpoint_files", 0) > 0:
+                    events.append(("receipt", receipt.get("state"), receipt["checkpoint_files"]))
+                real_write_receipt(path, receipt)
+
+            with (
+                patch.object(source_compaction, "_CHECKPOINT_FILES", 1),
+                patch.object(source_compaction, "_fsync_source_parent", side_effect=observe_sync),
+                patch.object(source_compaction, "_write_receipt", side_effect=observe_receipt),
+            ):
+                result = source_compaction.compact_source_capsule(
+                    storage, source, manifest["source_digest"]
+                )
+
+            self.assertEqual(result["state"], "completed")
+            sync_indices = [
+                index
+                for index, event in enumerate(events)
+                if event == ("source_parent_fsync", source_parent)
+            ]
+            self.assertEqual(len(sync_indices), 1)
+            receipt_indices = [
+                index for index, event in enumerate(events) if event[0] == "receipt"
+            ]
+            self.assertEqual(
+                [events[index][1] for index in receipt_indices],
+                ["running", "completed"],
+            )
+            self.assertTrue(all(sync_indices[0] < index for index in receipt_indices))
+
+    @unittest.skipIf(os.name == "nt", "directory fsync is not supported on Windows")
+    def test_source_parent_sync_failure_is_partial_and_resume_completes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-compaction-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-a")
+            source_file = source / "tree" / "a.txt"
+
+            real_sync = source_compaction._fsync_source_parent
+
+            def fail_source_parent_sync(directory: Path) -> None:
+                if directory == source_file.parent:
+                    raise OSError("injected source-parent fsync failure")
+                real_sync(directory)
+
+            with patch.object(
+                source_compaction,
+                "_fsync_source_parent",
+                side_effect=fail_source_parent_sync,
+            ):
+                with self.assertRaises(source_compaction.SourceCompactionError):
+                    source_compaction.compact_source_capsule(
+                        storage, source, manifest["source_digest"]
+                    )
+
+            receipt_path = source_compaction.compaction_receipt_path(storage, source)
+            failed_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(failed_receipt["state"], "partial_failure")
+            self.assertEqual(
+                verify_source(source, manifest["source_digest"])["source_digest"],
+                manifest["source_digest"],
+            )
+            entry = manifest["files"][0]
+            object_path = SourceContentStore(
+                storage / "cache" / "source-content-v1"
+            )._object_path(entry["sha256"], entry["mode"])
+            self.assertTrue(os.path.samefile(source_file, object_path))
+
+            resumed = source_compaction.compact_source_capsule(
+                storage, source, manifest["source_digest"]
+            )
+            final_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(resumed["state"], "completed")
+            self.assertEqual(resumed["skipped_count"], 1)
+            self.assertEqual(final_receipt["state"], "completed")
+
+    def test_source_parent_sync_does_not_open_directories_on_windows(self) -> None:
+        directory = Path("unused-source-parent")
+        with (
+            patch.object(source_compaction.os, "name", "nt"),
+            patch.object(source_compaction.os, "open") as open_directory,
+            patch.object(source_compaction.os, "fsync") as fsync_directory,
+        ):
+            source_compaction._fsync_source_parent(directory)
+        open_directory.assert_not_called()
+        fsync_directory.assert_not_called()
+
     def test_unsafe_source_symlink_is_rejected_without_touching_target(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fullmag-source-compaction-") as raw:
             root = Path(raw)

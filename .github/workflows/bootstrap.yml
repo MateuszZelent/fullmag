@@ -58,6 +58,7 @@ jobs:
           PYTHONPATH: scripts
         run: |
           python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py'
+          python -B -m unittest discover -s scripts -p 'test_local_runner_source_compaction.py'
           python -B -m unittest discover -s scripts/tests/local_runner -p 'test_container_api.py'
           python -B -m unittest discover -s scripts -p 'test_local_runner_cli.py'
           python -B -m unittest discover -s scripts/tests/local_runner -p 'test_observability_review_regressions.py'

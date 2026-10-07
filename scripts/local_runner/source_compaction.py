@@ -226,6 +226,25 @@ def _write_receipt(path: Path, receipt: dict[str, Any]) -> None:
                 pass
 
 
+def _fsync_source_parent(directory: Path) -> None:
+    """Make a source-capsule directory-entry change durable on POSIX."""
+
+    if os.name == "nt":
+        return
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        descriptor = os.open(directory, flags)
+        os.fsync(descriptor)
+    except OSError as error:
+        raise SourceCompactionError(
+            f"cannot sync source parent directory: {directory}"
+        ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _relative_file(tree: Path, relative: str) -> Path:
     if not isinstance(relative, str) or not relative or "\\" in relative or "\x00" in relative:
         raise SourceCompactionError("manifest contains an unsafe source path")
@@ -550,6 +569,7 @@ def _compact_one(
 ) -> str:
     source_metadata = _regular_file(source_file, "capsule source file")
     if _cas_linked(source_file, store, entry):
+        _fsync_source_parent(source_file.parent)
         return "skipped"
     if source_metadata.st_nlink != 1:
         return "protected"
@@ -570,6 +590,7 @@ def _compact_one(
         raise SourceCompactionError("source parent directory identity changed")
 
     stage_owned = False
+    source_entry_changed = False
     try:
         stage_identity = _copy_private_stage(source_file, stage_path, entry)
         stage_owned = True
@@ -601,9 +622,11 @@ def _compact_one(
                 raise SourceCompactionError("capsule file identity changed while clearing read-only state")
         try:
             os.replace(stage_path, source_file)
+            source_entry_changed = True
         except OSError:
             if not _cas_linked(source_file, store, entry):
                 raise
+            source_entry_changed = True
         if not _cas_linked(source_file, store, entry):
             raise SourceCompactionError("atomic replacement did not install the verified CAS hard link")
         return "converted"
@@ -635,6 +658,8 @@ def _compact_one(
             original_directory_mode = int(directory_item["mode"])
             if current_mode == (original_directory_mode | stat.S_IWUSR):
                 parent.chmod(original_directory_mode)
+        if source_entry_changed:
+            _fsync_source_parent(parent)
 
 
 def _compact_source_capsule(
