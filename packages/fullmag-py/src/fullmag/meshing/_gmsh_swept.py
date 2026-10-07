@@ -196,7 +196,7 @@ def _apply_mixed_source_face_mesh_options(
         gmsh,
         hmax_scaled,
         order,
-        _dc_replace(opts, size_fields=generic_fields),
+        _dc_replace(opts, size_fields=generic_fields, lower_bound_fields=[]),
         hscale=hscale,
         preexisting_field_ids=source_field_ids,
         component_surface_tags={name: [source_surface] for name in geometry_names},
@@ -1860,6 +1860,16 @@ def _box_airbox_layer_levels(
     return [*reversed(lower), *film, *upper]
 
 
+def _scaled_airbox_maximum_element_size(
+    airbox: AirboxOptions | None,
+    *,
+    scale: float,
+) -> float | None:
+    if airbox is None or airbox.maximum_element_size is None:
+        return None
+    return float(airbox.maximum_element_size) * float(scale)
+
+
 def generate_swept_tetrahedral_box_airbox_mesh(
     geometry: Box, hmax: float, n_layers: int, *, order: int,
     distribution: str, recombine: bool, airbox: AirboxOptions | None,
@@ -2149,7 +2159,12 @@ def _generate_coincident_ring_airbox_mesh(
                 air_volume_tags=air_volumes,
             )
 
-        final_options = _dc_replace(options, size_fields=[])
+        final_options = _dc_replace(
+            options,
+            size_fields=(
+                list(options.size_fields) if options.lower_bound_fields else []
+            ),
+        )
         preexisting_fields = list(source_fields)
         if airbox_field is not None:
             preexisting_fields.append(int(airbox_field))
@@ -2161,6 +2176,19 @@ def _generate_coincident_ring_airbox_mesh(
             hscale=SCALE,
             preexisting_field_ids=preexisting_fields,
             airbox_maximum_element_size=airbox_scaled.maximum_element_size,
+            component_volume_tags={geometry.geometry_name: body_volumes},
+            component_surface_tags={
+                geometry.geometry_name: sorted(
+                    {
+                        abs(int(tag))
+                        for dim, tag in gmsh.model.getBoundary(
+                            [(3, volume) for volume in body_volumes],
+                            oriented=False,
+                        )
+                        if int(dim) == 2
+                    }
+                )
+            },
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
@@ -2510,7 +2538,10 @@ def generate_swept_box_cylinder_ring_mesh(
                 "mag_air_interface",
             )
 
-        final_options = _dc_replace(opts, size_fields=[])
+        final_options = _dc_replace(
+            opts,
+            size_fields=(list(opts.size_fields) if opts.lower_bound_fields else []),
+        )
         preexisting_field_ids = list(source_field_ids)
         if airbox_field_id is not None:
             preexisting_field_ids.append(int(airbox_field_id))
@@ -2526,6 +2557,8 @@ def generate_swept_box_cylinder_ring_mesh(
                 if airbox_scaled is not None
                 else None
             ),
+            component_volume_tags={geometry.geometry_name: [body_volume]},
+            component_surface_tags={geometry.geometry_name: body_surfaces},
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
@@ -2618,6 +2651,7 @@ def generate_swept_cylinder_mesh(
     recombine: bool = False,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    geometry_name: str | None = None,
 ) -> MeshData:
     """Generate a swept (extruded) mesh for a thin cylinder.
 
@@ -2647,7 +2681,13 @@ def generate_swept_cylinder_mesh(
         )
         from ._gmsh_generators import generate_cylinder_mesh
         return generate_cylinder_mesh(
-            radius, height, hmax, order=order, airbox=airbox, options=options,
+            radius,
+            height,
+            hmax,
+            order=order,
+            airbox=airbox,
+            options=options,
+            geometry_name=geometry_name,
         )
 
     layer_heights = _compute_layer_heights(
@@ -2718,6 +2758,41 @@ def generate_swept_cylinder_mesh(
             recombine=recombine,
         )
         gmsh.model.geo.synchronize()
+
+        if opts.lower_bound_fields:
+            body_volumes = [
+                int(tag) for dim, tag in extrude_result if int(dim) == 3
+            ]
+            component_volume_tags = (
+                {geometry_name: body_volumes}
+                if isinstance(geometry_name, str)
+                and geometry_name.strip()
+                and body_volumes
+                else None
+            )
+            component_surface_tags = None
+            if component_volume_tags is not None:
+                component_surface_tags = {
+                    geometry_name: sorted(
+                        {
+                            abs(int(tag))
+                            for dim, tag in gmsh.model.getBoundary(
+                                [(3, volume) for volume in body_volumes],
+                                oriented=False,
+                            )
+                            if int(dim) == 2
+                        }
+                    )
+                }
+            _apply_mesh_options(
+                gmsh,
+                hmax_scaled,
+                order,
+                opts,
+                hscale=SCALE,
+                component_volume_tags=component_volume_tags,
+                component_surface_tags=component_surface_tags,
+            )
 
         # Generate 3D mesh from the extrusion
         gmsh.model.mesh.generate(3)
@@ -2878,6 +2953,7 @@ def generate_swept_box_mesh(
     recombine: bool = False,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    geometry_name: str | None = None,
     requested_direction: str | None = None,
 ) -> MeshData:
     """Generate a native ``prism6`` mesh for an axis-aligned box.
@@ -3211,7 +3287,49 @@ def generate_swept_box_mesh(
             )
             if field_id is not None
         ]
-        if len(active_background_fields) > 1:
+        if opts.lower_bound_fields:
+            if domain_volume_entities is not None:
+                body_volumes = [int(domain_volume_entities[0])]
+            else:
+                body_volumes = [
+                    int(tag) for dim, tag in extrusion_entities if int(dim) == 3
+                ]
+            component_volume_tags = (
+                {geometry_name: body_volumes}
+                if isinstance(geometry_name, str)
+                and geometry_name.strip()
+                and body_volumes
+                else None
+            )
+            component_surface_tags = None
+            if component_volume_tags is not None:
+                component_surface_tags = {
+                    geometry_name: sorted(
+                        {
+                            abs(int(tag))
+                            for dim, tag in gmsh.model.getBoundary(
+                                [(3, volume) for volume in body_volumes],
+                                oriented=False,
+                            )
+                            if int(dim) == 2
+                        }
+                    )
+                }
+            _apply_mesh_options(
+                gmsh,
+                hmax_scaled,
+                order,
+                opts,
+                hscale=SCALE,
+                preexisting_field_ids=active_background_fields,
+                airbox_maximum_element_size=_scaled_airbox_maximum_element_size(
+                    airbox,
+                    scale=SCALE,
+                ),
+                component_volume_tags=component_volume_tags,
+                component_surface_tags=component_surface_tags,
+            )
+        elif len(active_background_fields) > 1:
             combined_background = gmsh.model.mesh.field.add("Min")
             gmsh.model.mesh.field.setNumbers(
                 combined_background,
@@ -3593,7 +3711,10 @@ def generate_swept_mesh(
             geometry.radius, geometry.height, hmax, n_layers,
             order=order, distribution=distribution,
             element_ratio=element_ratio, symmetric=symmetric,
-            recombine=recombine, airbox=airbox, options=options,
+            recombine=recombine,
+            airbox=airbox,
+            options=options,
+            geometry_name=geometry.geometry_name,
         )
     if isinstance(geometry, Box):
         if options is not None and options.mesh_strategy == "thin_film_tetrahedral":
@@ -3614,6 +3735,7 @@ def generate_swept_mesh(
             distribution=distribution, element_ratio=element_ratio,
             symmetric=symmetric, recombine=recombine,
             airbox=airbox, options=options,
+            geometry_name=geometry.geometry_name,
             requested_direction=(
                 options.sweep_direction if options is not None else None
             ),
@@ -3645,6 +3767,7 @@ def generate_swept_mesh(
                 order=order,
                 airbox=airbox,
                 options=options,
+                geometry_name=geometry.geometry_name,
             )
     raise TypeError(
         f"Swept meshing not supported for geometry type {type(geometry).__name__}. "

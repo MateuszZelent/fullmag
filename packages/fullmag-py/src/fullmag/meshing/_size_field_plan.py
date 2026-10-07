@@ -1245,7 +1245,7 @@ def _build_field_stack(
     region_fields = []
     if object_regions:
         from fullmag.model.domain_frame import geometry_bounds
-        for region in object_regions:
+        for region_index, region in enumerate(object_regions):
             if not region.get("enabled", True):
                 continue
             owner = region.get("owner_object")
@@ -1253,7 +1253,13 @@ def _build_field_stack(
             geometry = next((g for g in geometries if g.geometry_name in aliases), None)
 
             mesh_policy = region.get("mesh_policy")
-            if not mesh_policy or mesh_policy.get("maximum_element_size") is None:
+            if not isinstance(mesh_policy, Mapping):
+                continue
+            region_id = str(
+                region.get("region_id") or region.get("name") or f"{owner}:{region_index}"
+            )
+            r_order = _validate_region_mesh_policy_order(region_id, mesh_policy)
+            if mesh_policy.get("maximum_element_size") is None:
                 continue
 
             if geometry is None:
@@ -1267,15 +1273,6 @@ def _build_field_stack(
             r_hmin = mesh_policy.get("minimum_element_size")
             if r_hmin is not None:
                 r_hmin = float(r_hmin)
-            r_order = mesh_policy.get("order")
-            if r_order is not None:
-                r_order = int(r_order)
-                if r_order != 1:
-                    raise ValueError(
-                        "region_mesh_policy_order_unsupported: "
-                        f"region='{region.get('region_id') or region.get('name')}' "
-                        f"requested_order={r_order}; only first-order mesh extraction is supported"
-                    )
             r_trans = mesh_policy.get("transition_distance")
             if r_trans is not None:
                 r_trans = float(r_trans)
@@ -1310,6 +1307,11 @@ def _build_field_stack(
 
             common_params = {
                 "GeometryName": geometry.geometry_name,
+                "RegionId": str(
+                    region.get("region_id")
+                    or region.get("name")
+                    or f"{owner}:{region_index}"
+                ),
                 "Source": "region_mesh_policy",
             }
             if r_hmin is not None:
@@ -1527,6 +1529,205 @@ def _resolve_per_object_mesh_options(
 # MeshOptions from workflow metadata
 # ===================================================================
 
+def _validate_region_mesh_policy_order(
+    region_id: str,
+    mesh_policy: Mapping[str, object],
+) -> int | None:
+    raw_order = mesh_policy.get("order")
+    if raw_order is None:
+        return None
+    try:
+        order = int(raw_order)
+    except (TypeError, ValueError, OverflowError):
+        order = raw_order
+    if order != 1:
+        raise ValueError(
+            "region_mesh_policy_order_unsupported: "
+            f"region='{region_id}' requested_order={order}; "
+            "only first-order mesh extraction is supported"
+        )
+    return 1
+
+
+def _build_scoped_lower_bound_fields(
+    geometries: list[Geometry],
+    *,
+    per_geometry: list[object],
+    per_object_recipes: dict[str, PerObjectMeshRecipe] | None,
+    object_regions: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Preserve body and material-region lower bounds with their owners.
+
+    These are semantic lower-bound descriptors.  Gmsh realization happens in
+    ``_configure_mesh_size_fields`` where component volume identity is known.
+    """
+    lower_bounds: list[dict[str, object]] = []
+    per_geometry_by_name = _parse_per_geometry_overrides(per_geometry)
+    geometry_aliases = {
+        alias
+        for geometry in geometries
+        for alias in _geometry_name_aliases(geometry.geometry_name)
+    }
+
+    def _has_geometry_binding(owner: object) -> bool:
+        return (
+            isinstance(owner, str)
+            and bool(set(_geometry_name_aliases(owner)) & geometry_aliases)
+        )
+
+    for entry in per_geometry:
+        if not isinstance(entry, Mapping):
+            continue
+        raw_hmin = _first_defined(entry, "hmin", "minimum_element_size")
+        if _coerce_positive_float(raw_hmin) is None:
+            continue
+        owner = entry.get("geometry") or entry.get("geometry_name")
+        if not _has_geometry_binding(owner):
+            raise ValueError(
+                "mesh_lower_bound_owner_binding_missing: "
+                f"per_geometry owner='{owner}' has no matching mesh geometry"
+            )
+
+    for owner, recipe in (per_object_recipes or {}).items():
+        if not isinstance(recipe, PerObjectMeshRecipe):
+            continue
+        recipe_payload = recipe.to_ir()
+        recipe_hmin = _first_defined(recipe_payload, "hmin", "minimum_element_size")
+        if _coerce_positive_float(recipe_hmin) is None:
+            continue
+        if not _has_geometry_binding(owner):
+            raise ValueError(
+                "mesh_lower_bound_owner_binding_missing: "
+                f"per-object recipe owner='{owner}' has no matching mesh geometry"
+            )
+
+    for geometry in geometries:
+        recipe = _lookup_geometry_name_alias(per_object_recipes or {}, geometry.geometry_name)
+        recipe_payload = recipe.to_ir() if isinstance(recipe, PerObjectMeshRecipe) else {}
+        recipe_hmin = _first_defined(recipe_payload, "hmin", "minimum_element_size")
+        per_geometry_entry = _lookup_geometry_name_alias(
+            per_geometry_by_name,
+            geometry.geometry_name,
+        )
+        per_geometry_hmin = (
+            _first_defined(per_geometry_entry, "hmin", "minimum_element_size")
+            if isinstance(per_geometry_entry, Mapping)
+            else None
+        )
+        raw_hmin = recipe_hmin if recipe_hmin is not None else per_geometry_hmin
+        body_hmin = _coerce_positive_float(raw_hmin)
+        if body_hmin is None:
+            continue
+        lower_bounds.append(
+            {
+                "kind": "ComponentVolumeLowerBound",
+                "params": {
+                    "GeometryName": geometry.geometry_name,
+                    "MinimumElementSize": float(body_hmin),
+                    "Source": (
+                        "per_object_mesh_recipe"
+                        if recipe_hmin is not None
+                        else "per_geometry_mesh_policy"
+                    ),
+                },
+            }
+        )
+
+    for index, region in enumerate(object_regions):
+        if not isinstance(region, Mapping) or not region.get("enabled", True):
+            continue
+        mesh_policy = region.get("mesh_policy")
+        if not isinstance(mesh_policy, Mapping):
+            continue
+        region_id = str(region.get("region_id") or region.get("name") or f"{region.get('owner_object')}:{index}")
+        _validate_region_mesh_policy_order(region_id, mesh_policy)
+        region_hmin = _coerce_positive_float(
+            _first_defined(mesh_policy, "minimum_element_size", "hmin")
+        )
+        if region_hmin is None:
+            continue
+
+        owner = region.get("owner_object")
+        aliases = _geometry_name_aliases(owner)
+        geometry = next((g for g in geometries if g.geometry_name in aliases), None)
+        if geometry is None:
+            raise ValueError(
+                "mesh_lower_bound_owner_binding_missing: "
+                f"region='{region_id}' owner='{owner}' has no matching mesh geometry"
+            )
+
+        shape = region.get("shape")
+        if not isinstance(shape, Mapping):
+            raise ValueError(
+                "mesh_lower_bound_shape_unsupported: "
+                f"region='{region_id}' has no supported geometric shape"
+            )
+        kind = shape.get("kind")
+        if kind not in {"box", "cylinder", "sphere"}:
+            raise ValueError(
+                "mesh_lower_bound_shape_unsupported: "
+                f"region='{region_id}' shape_kind='{kind}'"
+            )
+
+        bounds = geometry_bounds(geometry, source_root=None)
+        if bounds is None or bounds[0] is None or bounds[1] is None:
+            raise ValueError(
+                "mesh_lower_bound_owner_binding_missing: "
+                f"region='{region_id}' owner='{owner}' has no recoverable geometry bounds"
+            )
+        g_min, g_max = bounds
+        owner_center = [0.5 * (g_min[axis] + g_max[axis]) for axis in range(3)]
+        frame = region.get("frame", "object")
+        raw_center = shape.get("center", [0.0, 0.0, 0.0])
+        if not isinstance(raw_center, (list, tuple)) or len(raw_center) != 3:
+            raise ValueError(
+                "mesh_lower_bound_shape_unsupported: "
+                f"region='{region_id}' center must have three coordinates"
+            )
+        center = [
+            float(raw_center[axis]) + owner_center[axis]
+            if frame == "object"
+            else float(raw_center[axis])
+            for axis in range(3)
+        ]
+        params: dict[str, object] = {
+            "GeometryName": geometry.geometry_name,
+            "RegionId": region_id,
+            "ShapeKind": str(kind),
+            "Center": center,
+            "MinimumElementSize": float(region_hmin),
+            "Source": "region_mesh_policy",
+        }
+        if kind == "box":
+            size = shape.get("size")
+            if not isinstance(size, (list, tuple)) or len(size) != 3:
+                raise ValueError(
+                    "mesh_lower_bound_shape_unsupported: "
+                    f"region='{region_id}' box size must have three coordinates"
+                )
+            params["Size"] = [float(value) for value in size]
+        elif kind == "cylinder":
+            params["Radius"] = float(shape.get("radius"))
+            params["Height"] = float(shape.get("height"))
+            axis = shape.get("axis", [0.0, 0.0, 1.0])
+            if not isinstance(axis, (list, tuple)) or len(axis) != 3:
+                raise ValueError(
+                    "mesh_lower_bound_shape_unsupported: "
+                    f"region='{region_id}' cylinder axis must have three coordinates"
+                )
+            params["Axis"] = [float(value) for value in axis]
+        else:
+            params["Radius"] = float(shape.get("radius"))
+
+        lower_bounds.append(
+            {
+                "kind": "ComponentRegionLowerBound",
+                "params": params,
+            }
+        )
+    return lower_bounds
+
+
 def _mesh_options_from_runtime_metadata(
     mesh_workflow: Mapping[str, object] | None,
     *,
@@ -1640,15 +1841,21 @@ def _mesh_options_from_runtime_metadata(
     patch_object_regions = patch.get("object_regions") if isinstance(patch, Mapping) else None
     effective_object_regions = patch_object_regions or object_regions
 
+    scoped_lower_bound_fields = _build_scoped_lower_bound_fields(
+        geometries,
+        per_geometry=raw_per_geometry,
+        per_object_recipes=per_object_recipes,
+        object_regions=(
+            [region for region in effective_object_regions if isinstance(region, dict)]
+            if isinstance(effective_object_regions, list)
+            else []
+        ),
+    )
+
     def _mesh_hmin_value() -> object | None:
-        values = [
-            parsed
-            for value in (
-                _mesh_option_value("hmin", "minimum_element_size", reducer="min"),
-            )
-            if (parsed := _coerce_positive_float(value)) is not None
-        ]
-        return min(values) if values else None
+        # Only mesh_options carries the operator-global floor. Per-geometry
+        # recipes and body overrides are retained in scoped_lower_bound_fields.
+        return _first_defined(raw_mesh_options, "hmin", "minimum_element_size")
 
     def _shared_per_geometry_value(key: str) -> object | None:
         values = _per_geometry_values(key)
@@ -1872,6 +2079,7 @@ def _mesh_options_from_runtime_metadata(
         optimize=str(optimize) if isinstance(optimize, str) and optimize.strip() else None,
         optimize_iters=int(_legacy_int(raw_optimize_iters, "optimize_iters", minimum=1, default=1)),
         size_fields=size_fields,
+        lower_bound_fields=scoped_lower_bound_fields,
         compute_quality=_legacy_bool(raw_compute_quality, "compute_quality", default=True),
         per_element_quality=_legacy_bool(
             raw_per_element_quality,

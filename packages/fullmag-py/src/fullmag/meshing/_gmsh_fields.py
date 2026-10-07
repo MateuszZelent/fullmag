@@ -123,6 +123,8 @@ def resolve_effective_algorithm_3d(
     active_sources: list[str] = []
     if opts.size_fields:
         active_sources.append("authored size fields")
+    if opts.lower_bound_fields:
+        active_sources.append("scoped lower-bound fields")
     resolved_controls = resolve_mesh_size_controls(opts)
     if int(resolved_controls["resolved_size_from_curvature"]) > 0:
         active_sources.append("curvature refinement")
@@ -170,9 +172,13 @@ def _apply_mesh_options(
     emit_progress("Gmsh: applying mesh options")
     selector_resolution: list[dict[str, object]] = []
     resolved_size_controls = resolve_mesh_size_controls(opts)
+    preexisting_background_field_ids = [
+        *(preexisting_field_ids or []),
+        *(preexisting_lower_bound_field_ids or []),
+    ]
     algorithm_3d, algorithm_3d_fallback_reason = resolve_effective_algorithm_3d(
         opts,
-        preexisting_field_ids=preexisting_field_ids,
+        preexisting_field_ids=preexisting_background_field_ids,
     )
     if algorithm_3d_fallback_reason is not None:
         # MMG3D has proven unstable for imported/shared-domain workflows when a
@@ -209,7 +215,18 @@ def _apply_mesh_options(
 
     resolved_curvature = int(resolved_size_controls["resolved_size_from_curvature"])
     if resolved_curvature > 0:
-        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", resolved_curvature)
+        # When lower-bound fields are active, keep curvature refinement in the
+        # background upper-field stack below. The native Gmsh curvature target
+        # is another direct minimum and would bypass Max(lower) outside that
+        # pointwise composition.
+        scoped_lower_bounds_active = (
+            bool(opts.lower_bound_fields)
+            or bool(preexisting_lower_bound_field_ids)
+        )
+        gmsh.option.setNumber(
+            "Mesh.MeshSizeFromCurvature",
+            0 if scoped_lower_bounds_active else resolved_curvature,
+        )
 
     resolved_growth_rate = resolved_size_controls["resolved_growth_rate"]
     if isinstance(resolved_growth_rate, (int, float)):
@@ -301,12 +318,24 @@ def _apply_mesh_options(
     # MeshSizeFromPoints and MeshSizeExtendFromBoundary across the whole
     # volume, completely overriding per-geometry Box fields and making local
     # refinement settings have no visible effect on the final mesh.
-    has_active_fields = bool(extra_field_ids) or bool(opts.size_fields)
+    has_active_fields = (
+        bool(extra_field_ids)
+        or bool(opts.size_fields)
+        or bool(opts.lower_bound_fields)
+        or bool(preexisting_lower_bound_field_ids)
+    )
     if has_active_fields:
         gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
 
-    if opts.size_fields:
+    if (
+        opts.size_fields
+        or opts.lower_bound_fields
+        or extra_field_ids
+        or preexisting_lower_bound_field_ids
+    ):
+        # A lower-only policy is still a complete background field and must
+        # reach the same final pointwise composition as upper fields.
         emit_progress("Gmsh: configuring mesh size fields")
         _configure_mesh_size_fields(
             gmsh,
@@ -316,18 +345,8 @@ def _apply_mesh_options(
             list(preexisting_lower_bound_field_ids or []),
             component_volume_tags=component_volume_tags,
             component_surface_tags=component_surface_tags,
-        )
-    elif extra_field_ids:
-        # No explicit size_fields but we have auto-generated fields (e.g. narrow regions)
-        emit_progress("Gmsh: configuring mesh size fields")
-        _configure_mesh_size_fields(
-            gmsh,
-            [],
-            hscale,
-            extra_field_ids,
-            list(preexisting_lower_bound_field_ids or []),
-            component_volume_tags=component_volume_tags,
-            component_surface_tags=component_surface_tags,
+            lower_bound_fields=opts.lower_bound_fields,
+            default_upper_size=effective_hmax,
         )
     return MeshOptionsApplicationReport(
         selector_resolution=selector_resolution,
@@ -1506,6 +1525,8 @@ def _configure_mesh_size_fields(
     lower_bound_field_ids: list[int] | None = None,
     component_volume_tags: dict[str, list[int]] | None = None,
     component_surface_tags: dict[str, list[int]] | None = None,
+    lower_bound_fields: list[dict[str, Any]] | None = None,
+    default_upper_size: float | None = None,
 ) -> None:
     """Configure Gmsh mesh size fields from JSON-serializable configs.
 
@@ -1528,6 +1549,7 @@ def _configure_mesh_size_fields(
     _METADATA_PARAMS = {"Source"}
 
     field_ids = []
+    resolved_lower_bound_field_ids = list(lower_bound_field_ids or [])
 
     def _mark_field(
         config: dict[str, Any],
@@ -1541,6 +1563,129 @@ def _configure_mesh_size_fields(
             config["_gmsh_reason"] = reason
         if field_id is not None:
             config["_gmsh_field_id"] = int(field_id)
+
+    def _required_owner_volumes(config: dict[str, Any], geometry_name: object) -> list[int]:
+        if not isinstance(geometry_name, str) or not geometry_name.strip():
+            reason = "mesh_lower_bound_owner_binding_missing: GeometryName is required"
+            _mark_field(config, status="rejected", reason=reason)
+            raise ValueError(reason)
+        volume_tags = _component_volume_tags_for_geometry(
+            geometry_name,
+            component_volume_tags,
+        )
+        if not volume_tags:
+            reason = (
+                "mesh_lower_bound_owner_binding_missing: "
+                f"no exact component volumes for geometry='{geometry_name}'"
+            )
+            _mark_field(config, status="rejected", reason=reason)
+            raise ValueError(reason)
+        return volume_tags
+
+    def _add_component_volume_lower_bound(config: dict[str, Any]) -> int:
+        params = config.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: params must be an object")
+        geometry_name = params.get("GeometryName")
+        volume_tags = _required_owner_volumes(config, geometry_name)
+        size = float(params["MinimumElementSize"]) * hscale
+        field_id = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(field_id, "VolumesList", volume_tags)
+        gmsh.model.mesh.field.setNumber(field_id, "VIn", size)
+        # Constant fields use VOut outside VolumesList.  Zero is the neutral
+        # value for the later Max(lower) composition.
+        gmsh.model.mesh.field.setNumber(field_id, "VOut", 0.0)
+        return field_id
+
+    def _add_component_region_lower_bound(config: dict[str, Any]) -> int:
+        params = config.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: params must be an object")
+        geometry_name = params.get("GeometryName")
+        volume_tags = _required_owner_volumes(config, geometry_name)
+        shape_kind = params.get("ShapeKind")
+        size = float(params["MinimumElementSize"]) * hscale
+        center = [float(value) * hscale for value in params.get("Center", [])]
+        if len(center) != 3:
+            raise ValueError("mesh_lower_bound_shape_unsupported: region center must be 3D")
+
+        if shape_kind == "box":
+            box_size = [float(value) * hscale for value in params.get("Size", [])]
+            if len(box_size) != 3:
+                raise ValueError("mesh_lower_bound_shape_unsupported: box size must be 3D")
+            shape_field = gmsh.model.mesh.field.add("Box")
+            gmsh.model.mesh.field.setNumber(shape_field, "VIn", size)
+            gmsh.model.mesh.field.setNumber(shape_field, "VOut", 0.0)
+            for axis, name in enumerate(("X", "Y", "Z")):
+                half_size = 0.5 * box_size[axis]
+                gmsh.model.mesh.field.setNumber(
+                    shape_field, f"{name}Min", center[axis] - half_size
+                )
+                gmsh.model.mesh.field.setNumber(
+                    shape_field, f"{name}Max", center[axis] + half_size
+                )
+        elif shape_kind == "cylinder":
+            axis = [float(value) for value in params.get("Axis", [0.0, 0.0, 1.0])]
+            if len(axis) != 3:
+                raise ValueError("mesh_lower_bound_shape_unsupported: cylinder axis must be 3D")
+            axis_norm = math.sqrt(sum(value * value for value in axis))
+            if axis_norm <= 0.0:
+                raise ValueError("mesh_lower_bound_shape_unsupported: cylinder axis is zero")
+            axis_unit = [value / axis_norm for value in axis]
+            height = float(params["Height"]) * hscale
+            half_axis = [0.5 * height * value for value in axis_unit]
+            bottom_center = [center[index] - half_axis[index] for index in range(3)]
+            top_center = [center[index] + half_axis[index] for index in range(3)]
+            cylinder_fields: list[int] = []
+            for origin, direction in (
+                (bottom_center, axis_unit),
+                (top_center, [-value for value in axis_unit]),
+            ):
+                cylinder = gmsh.model.mesh.field.add("Cylinder")
+                gmsh.model.mesh.field.setNumber(cylinder, "VIn", size)
+                gmsh.model.mesh.field.setNumber(cylinder, "VOut", 0.0)
+                gmsh.model.mesh.field.setNumber(
+                    cylinder, "Radius", float(params["Radius"]) * hscale
+                )
+                gmsh.model.mesh.field.setNumber(cylinder, "XCenter", origin[0])
+                gmsh.model.mesh.field.setNumber(cylinder, "YCenter", origin[1])
+                gmsh.model.mesh.field.setNumber(cylinder, "ZCenter", origin[2])
+                for axis_name, value in zip(("XAxis", "YAxis", "ZAxis"), direction):
+                    gmsh.model.mesh.field.setNumber(cylinder, axis_name, value * height)
+                cylinder_fields.append(cylinder)
+            shape_field = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(shape_field, "FieldsList", cylinder_fields)
+        elif shape_kind == "sphere":
+            shape_field = gmsh.model.mesh.field.add("Ball")
+            gmsh.model.mesh.field.setNumber(shape_field, "VIn", size)
+            gmsh.model.mesh.field.setNumber(shape_field, "VOut", 0.0)
+            gmsh.model.mesh.field.setNumber(shape_field, "Radius", float(params["Radius"]) * hscale)
+            gmsh.model.mesh.field.setNumber(shape_field, "XCenter", center[0])
+            gmsh.model.mesh.field.setNumber(shape_field, "YCenter", center[1])
+            gmsh.model.mesh.field.setNumber(shape_field, "ZCenter", center[2])
+        else:
+            region_id = params.get("RegionId", "<unknown>")
+            reason = (
+                "mesh_lower_bound_shape_unsupported: "
+                f"region='{region_id}' shape_kind='{shape_kind}'"
+            )
+            _mark_field(config, status="rejected", reason=reason)
+            raise ValueError(reason)
+
+        # A scoped lower field must be zero outside both its geometric core and
+        # its exact owner volumes. Restrict's large outside value is unsuitable
+        # for Max(lower), so combine zero-outside shape and volume-mask fields.
+        owner_mask = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(owner_mask, "VolumesList", volume_tags)
+        gmsh.model.mesh.field.setNumber(owner_mask, "VIn", 1.0)
+        gmsh.model.mesh.field.setNumber(owner_mask, "VOut", 0.0)
+        scoped_field = gmsh.model.mesh.field.add("MathEval")
+        expr = (
+            f"Min(F{shape_field}, "
+            f"{_math_number(size)}*F{owner_mask})"
+        )
+        gmsh.model.mesh.field.setString(scoped_field, "F", expr)
+        return scoped_field
 
     for config in fields:
         validate_size_field_config(config)
@@ -1980,7 +2125,37 @@ def _configure_mesh_size_fields(
     if extra_field_ids:
         field_ids.extend(extra_field_ids)
 
-    if not field_ids and not lower_bound_field_ids:
+    for config in lower_bound_fields or []:
+        kind = config.get("kind")
+        if kind == "ComponentVolumeLowerBound":
+            fid = _add_component_volume_lower_bound(config)
+        elif kind == "ComponentRegionLowerBound":
+            fid = _add_component_region_lower_bound(config)
+        else:
+            reason = f"mesh_lower_bound_field_unsupported: kind='{kind}'"
+            _mark_field(config, status="rejected", reason=reason)
+            raise ValueError(reason)
+        resolved_lower_bound_field_ids.append(fid)
+        _mark_field(config, status="applied", field_id=fid)
+
+    if not field_ids and resolved_lower_bound_field_ids:
+        if (
+            default_upper_size is None
+            or not math.isfinite(float(default_upper_size))
+            or float(default_upper_size) <= 0.0
+        ):
+            raise ValueError(
+                "mesh_lower_bound_upper_target_missing: lower-only fields require a finite positive default upper size"
+            )
+        default_upper = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(
+            default_upper,
+            "F",
+            _math_number(float(default_upper_size) * hscale),
+        )
+        field_ids.append(default_upper)
+
+    if not field_ids and not resolved_lower_bound_field_ids:
         return
 
     size_upper_field = None
@@ -1992,14 +2167,14 @@ def _configure_mesh_size_fields(
             size_upper_field = field_ids[0]
 
     size_lower_field = None
-    if lower_bound_field_ids:
-        if len(lower_bound_field_ids) > 1:
+    if resolved_lower_bound_field_ids:
+        if len(resolved_lower_bound_field_ids) > 1:
             size_lower_field = gmsh.model.mesh.field.add("Max")
             gmsh.model.mesh.field.setNumbers(
-                size_lower_field, "FieldsList", lower_bound_field_ids
+                size_lower_field, "FieldsList", resolved_lower_bound_field_ids
             )
         else:
-            size_lower_field = lower_bound_field_ids[0]
+            size_lower_field = resolved_lower_bound_field_ids[0]
 
     if size_upper_field is not None and size_lower_field is not None:
         bounded = gmsh.model.mesh.field.add("Max")

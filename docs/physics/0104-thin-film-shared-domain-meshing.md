@@ -57,6 +57,43 @@ through-thickness layers gwarantują wyłącznie liczbę warstw 3D i ich płaszc
 **nie** gwarantują structured in-plane meshing. Wspólne równania, znaki, jednostki
 i obserwable FEM CPU/GPU pozostają backend-neutral.
 
+(thin-film-scoped-lower-bound-contract)=
+### Zakres dolnych ograniczeń — kontrakt naprawy 2026-10-07
+
+Dolne ograniczenie obiektu obowiązuje w jego rzeczywistej domenie geometrycznej,
+a dolne ograniczenie regionu w przecięciu geometrycznego rdzenia regionu i domeny
+jego właściciela. W rdzeniu oba ograniczenia są eligible i równanie
+`eq-thin-film-size-composition` zachowuje większe z nich. Poza własnym zakresem
+wkład regionalnego lub obiektowego lower field wynosi zero, neutralne dla
+agregacji `Max`. Jawne globalne minimum nadal obowiązuje globalnie.
+
+`ObjectRegion.mesh.transition_distance` opisuje istniejące przejście górnego
+celu rozmiaru do celu obiektu. Nie rozszerza geometrycznego członkostwa regionu
+ani nie definiuje interpolacji dolnego ograniczenia. W halo przejścia obowiązuje
+lower obiektu, jeśli punkt należy do obiektu; lower regionu pozostaje ograniczony
+do rdzenia. Nie zmienia to materiałów, interakcji ani stanu równowagi.
+
+Realizacja wymaga exact component ownership. Fallback bez przypisanych volume
+tags nie może zastępować go AABB, które obejmuje również inne obiekty lub
+powietrze. Dla żądanego scoped lower i brakującego exact owner binding kontrakt
+wymaga jawnego błędu przed generacją, zamiast ignorowania wartości lub cichego
+obniżenia globalnego minimum. Pełne wsparcie tego fallbacku pozostaje otwarte.
+
+Owner kompozycji to
+`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py::_configure_mesh_size_fields`;
+caller `_apply_mesh_options`, producent `_size_field_plan.py::_build_field_stack`.
+Należy wykorzystać istniejące `Min` upper, `Max` lower i końcowe `Max`.
+Zakres musi być neutralny poza domeną również po ograniczeniu polem Gmsh;
+nie należy wymyślać opcji `OutsideValue` dla `Restrict`. Opcje `Restrict` oraz
+semantykę `Threshold` określa [oficjalny manual Gmsh](https://gmsh.info/doc/texinfo/gmsh.html).
+
+Stan źródeł po review 2026-10-07: scoped producer/consumer, lower-only region
+i exact owner propagation są zaimplementowane; regresje oczekują świeżego CI.
+FEM CPU/GPU: zamierzona wspólna semantyka generatora; kwalifikacja obu realizacji
+pozostaje **NOT VERIFIED**. FDM CPU/GPU: nie dotyczy siatki Gmsh. Wymagane są
+regresje scope/precedence/lower-only/hscale, rzeczywisty rozkład rozmiarów elementów
+oraz managed meshing evidence. Zielony parser dokumentacji nie zamyka tych bramek.
+
 (thin-film-mesh-python-api)=
 ## Python API
 

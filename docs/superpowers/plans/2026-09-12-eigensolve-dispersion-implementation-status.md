@@ -3,16 +3,16 @@
 
 **Cały cel S00–S12 pozostaje aktywny.** Poniższa tabela opisuje aktualny
 stan; dalsze checkpointy zachowują historię i nie zastępują bieżących dowodów.
-Zweryfikowany source checkpoint: `28d7482d98144302cfeb2c64f03d8624bd158242`.
-Bootstrap CI `37593653430`: **8/8 jobs PASS**. Obejmuje regresje strict V04
+Zweryfikowany source checkpoint: `5693275a9dda336470265b0ce0b619caf0346788`.
+Bootstrap CI `37600848376`: **8/8 jobs PASS**. Obejmuje regresje strict V04
 material/spatial/equilibrium/k_sampling oraz atomowości migracji. Są to dowody
 kontraktów źródeł, nie walidacji naukowej eigensolve. Runtime #236 pozostaje
 przypięty do `62a3a6bbfc0ab96f5dc78e8b4dc9525123b033a5`.
 
 | Zakres | Potwierdzone | Pozostaje |
 |---|---|---|
-| Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | CI strict V04 spectral intent i build236 PASS; pełny certificate Γ dla NCV4 nadal oczekiwany; source CI nie jest walidacją eigensolve |
-| Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Build236 i świeży managed OpenAPI PASS; kontrolny Γ uruchomiony. Pozostaje pełny window certificate Γ, potem15 punktów i sprawdzony wykres |
+| Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | CI strict V04 spectral intent i build236 PASS; pełny certificate Γ dla NCV4 PASS; source CI nie jest walidacją eigensolve |
+| Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Build236 i świeży managed OpenAPI PASS; Γ KSP1e-12:50/50 PASS. Seria15 zlecona przez managed driver; pozostają terminalne artefakty i sprawdzony wykres |
 | Adaptive k pool | Poprawka exit telemetry, deterministyczny plan digest i kontrakty CI | Rzeczywisty świeży przebieg, pomiary CPU/RAM i serial/adaptive parity |
 | Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Pełna scoped kompozycja lower bounds i runtime consumer regionalnych minima pozostają oddzielnymi lukami |
 | S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,37 regresji CI PASS; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
@@ -37,16 +37,30 @@ i został uruchomiony przez managed driver z niezmienionymi parametrami:
 L2, trzy warstwy grubości, okno8.5–16GHz, EPS/KSP1e-9, FGMRES/restart8,
 policy `bounded_quadruple_nev_window_v2`. Output:
 `storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/3355bd40acaf4f59b63afb538577248e/comsol-dispersion/2a75f2e8cbba4ef2aa7464682c5c6fc2`.
-Kontener `6d9a558541b5` potwierdzony aktywny; relaksacja osiągnęła torque
-`4.7383e-11 A/m`, poniżej progu1A/m. Solver wykonuje base schedule, aktualnie
-podokno5/50. Sesja obserwacji procesu36792 pozostaje aktywna.
+Próba Γ zakończyła się terminalnie failed/exit1 po około4001s, z pełnym
+trace50 podokien. PolicyNCV4 była rzeczywiście queried: baseNEV4/NCV16/MPD16,
+refinementNEV8/NCV32/MPD32.47/50 podokien ma statusok; trzy osiągnęły
+EPS iterationlimit2000 (baseindex4, refinement22/24). Poprzedni runtime234
+miał siedem takich podokien. Nie ma odrzuceń pełnego residualu; kandydat około
+9.299249697GHz i partial certified Ritz nie zastępują full window certificate.
+Sesje36792 i81063 są terminalne exit1; kontrolowana kontynuacja nie zleciła
+signed15. Kontener został zweryfikowany jako nieobecny, wyniki/logi zachowane.
+
+Diagnostyka: lokalny checkpoint
+`runtime236-controlled-gamma-window-failure-diagnostics.json`; output pozostaje
+w wskazanym wyżej canonicalstorage. Kolejna próba zmienia wyłącznie KSP rtol
+z1e-9 na1e-11 przy niezmienionym EPS1e-9, FGMRES/restart8, NCV4, modelu,
+siatce, BC i oknie8.5–16GHz. To test hipotezy inexact shift-invert, nie
+potwierdzona przyczyna ani złagodzenie fizycznego progu1e-8. Recepta
+`gamma-window-controlled-ksp-1e-11-trial-20261007.json`, dry-run exit0;
+manageddriver zlecony raz, sesja54733 wymaga potwierdzenia kontenera/wyniku.
+SLEPc opisuje potrzebę dokładniejszych inner solves w manualu ST:
+https://slepc.upv.es/release/documentation/manual/st.html.
 
 Poprzedni Γ w signed15 również wskazuje adapter
-`k0_poisson_airbox_cpu_schur_slepc`; obecny standalone k0 nie jest dowodem
-parytetu całej ścieżki ani poprawności nonzero-k. Wymagane są terminalny wynik,
-pełny certificate wszystkich50 podokien, queried NEV/NCV/MPD, residuale i
-postsolve gates. Dopiero potem signed15 i serial/adaptive parity. Częstotliwość
-kandydata ani postęp kompilacji nie zamykają tych bramek.
+`k0_poisson_airbox_cpu_schur_slepc`; standalone k0 nie jest dowodem parytetu
+całej ścieżki ani poprawności nonzero-k. Wymagane są full certificate,
+residuale i postsolve gates; dopiero potem signed15 i serial/adaptive parity.
 Nie mamy jeszcze nowych zaakceptowanych punktów ani kwalifikacji science/GUI.
 Upload dwóch synthetic failure artifacts nadal nieaktywny po odmowie auto-review;
 aktualny density test już przechodzi, więc jest to opcjonalna diagnostyka przyszłych
@@ -63,9 +77,38 @@ prywatny clock anchor `steady_clock` od wejścia do shifted solve; callback
 KSP/cancel emituje aktualną kopię progress snapshot, a retry odświeża oba
 bazowe czasy. Publiczny ABI v6, operator i solver controls nie zmieniają się.
 Review source PASS; YAML/wiring/diff checks PASS. Regresja standalone C++
-helper/emitter jest podpięta do GitHub Actions; lokalnie jej nie kompilowano
-ani nie wykonywano. Test i świeży managed runtime poprawki: NOT VERIFIED.
+helper/emitter została skompilowana i wykonana w GitHub Actions37600848376
+z wynikiem PASS; lokalnie jej nie kompilowano ani nie wykonywano. Pierwszy
+CI37600094196 odmówił kompilacji z powodu brakującego -Inative/include;
+commit5693275a9 naprawił konfigurację, świeży bootstrap8/8PASS.
+Test helper/emitter nie zastępuje actual KSP/retry. Świeży managed runtime
+poprawki: NOT VERIFIED.
 Obecny aktywny runtime236 pozostaje immutable62a3, nie zawiera tej poprawki.
+
+Kontrolowana próba KSP1e-11 zakończyła się failed/exit1 po1271s:49/50
+podokien PASS, baseindex4 osiągnął EPS iterationlimit. Kolejna próba zmieniała
+wyłącznie inner KSP rtol na1e-12: output37fcaf2ea668400883591903f03bf914,
+terminal completed_unqualified/exit0 po289.754s,50/50 podokien PASS.
+Γ:9.299249697067612GHz, pełny descriptor residual8.074329828516117e-14,
+Nz0.997506234413904 (geometry expected0.9975062344139651).
+Próg fizyczny1e-8 pozostał niezmieniony; science qualification nadal OPEN.
+
+Pierwszy obserwator Γ→signed15 zakończył się przed dispatch: błędnie szukał
+artefaktów w katalogu runtime.log. Zachowano failed state/claim. Recovery
+korzysta z resolve_runtime_artifact_root, ponownie sprawdza binding i oba
+certyfikaty oraz brak wcześniejszych dispatch logs. Dry-run PASS; managed
+serial signed15 zlecony raz: output2faecc6085ec48b49c23c541bb8a9ea0,
+observer106320,driver154924, tool session82638. Kontrole:KSP1e-12,
+EPS1e-9,FGMRES/restart8,L2/3layers,window8.5–16GHz,immutable runtime236.
+Nie jest to jeszcze terminalny wynik sweepa ani serial/adaptive parity.
+
+Scoped lower bounds: producer/Gmsh/report oraz exact owner propagation
+zaimplementowane. Wszystkie findings review zamknięte źródłowo, w tym
+body minima/aliases, direct/swept tags, P1 guard, legalny density interval,
+scaled airbox cap oraz dwie niepowiązane asercje nowego testu.
+Oryginalny benchmark zachowuje threshold5nm. Bounded source review PASS;
+AST/diff PASS. Świeże CI, actual density i managed meshing pozostają
+NOT VERIFIED; source review nie zastępuje measured runtime qualification.
 <!-- current-eigensolve-status-end -->
 
 <!-- master1bdb-integration-20261006 -->
