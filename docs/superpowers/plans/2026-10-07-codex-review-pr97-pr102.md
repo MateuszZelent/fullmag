@@ -361,3 +361,8 @@ Regresje serde i rzeczywistego planera obejmują typo alone/alongside valid, abs
 ## Dalsze naprawy konfiguracji bez providerów
 
 Run 37630198767 wykrył analogiczne niezabezpieczone odwołania do MFEM-owned state w stage_compute.cpp oraz fem_bem.cpp. Osłonięto dispatch i dostęp do workspace, zachowując gałęzie MFEM=ON i strict unavailable dla aktywnego demag bez providerów. Przejrzano pozostałe odwołania w obu plikach; nie wyłączono źródeł ani nie zastąpiono realizacji CPU/GPU. Niezależny source review i diff PASS; świeży ABI compile/run nadal wymagany.
+
+
+## Fixture odtwarzania planu retencji
+
+W run 37630198767 wszystkie testy Node Runner Console przeszły, a browser zatrzymał się później na reconnect. Fixture używała plan-browser-smoke-preview, podczas gdy rzeczywisty klient odzyskuje tylko plan- + 8–32 znaków hex. Nadano fixture prawidłowy ID plan-b0123456789abcdef; zachowano guard aplikacji i rzeczywiste API/scope assertions. Pełny browser smoke nadal wymaga ponownego wykonania; nie zgłoszono całego joba jako SUCCESS.

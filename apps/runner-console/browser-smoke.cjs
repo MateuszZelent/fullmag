@@ -56,7 +56,7 @@ const ids = {
 let mockMode = 'healthy';
 const requestLog = [];
 const queuePageRequests = [];
-const retentionPlanId = 'plan-browser-smoke-preview';
+const retentionPlanId = 'plan-b0123456789abcdef';
 let retentionScope = 'execution';
 let retentionPlanStatus = 'preview';
 
@@ -716,7 +716,7 @@ async function run() {
     await page.locator('#btn-create-plan').click();
     await page.locator('#retention-plan-section').waitFor({ state: 'visible', timeout: 5000 });
     assert.equal(await textOf('#plan-title'), 'Retencja kopii roboczych');
-    assert.match(await textOf('#plan-metadata'), /plan-browser-smoke-preview/);
+    assert.match(await textOf('#plan-metadata'), /plan-b0123456789abcdef/);
     assert.match(await textOf('#plan-metadata'), /Status: preview/);
     await page.locator('#btn-apply-plan').click();
     await wait(150);
@@ -727,7 +727,7 @@ async function run() {
     await gotoView('storage');
     await page.locator('#retention-plan-section').waitFor({ state: 'visible', timeout: 5000 });
     await page.waitForFunction(() => document.querySelector('#plan-metadata')?.textContent.includes('Status: preview_only'));
-    assert.match(await textOf('#plan-metadata'), /plan-browser-smoke-preview/);
+    assert.match(await textOf('#plan-metadata'), /plan-b0123456789abcdef/);
     console.log('[browser-smoke] retention reconnect: saved plan scope and getRetentionPlan response restored');
 
     mockMode = 'unavailable';
