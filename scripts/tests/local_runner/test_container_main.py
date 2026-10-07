@@ -711,10 +711,18 @@ class ContainerMainTests(unittest.TestCase):
                      "running" if i == 0 else "queued" if i < 3 else "succeeded", i, i))
         app = self.app(db)
         result = app.paginated_jobs({"status": "queue", "sort": "oldest", "limit": 2})
-        self.assertEqual(3, result["total"])
         self.assertEqual(["job-0000", "job-0001"], [j["job_id"] for j in result["items"]])
-        page2 = app.paginated_jobs({"status": "queue", "sort": "oldest", "limit": 2, "page": 2})
+        self.assertIsInstance(result["next_cursor"], str)
+        self.assertEqual(205, result["as_of_sequence"])
+        self.assertNotIn("total", result)
+        self.assertNotIn("pages", result)
+        page2 = app.paginated_jobs({
+            "status": "queue", "sort": "oldest", "limit": 2,
+            "cursor": result["next_cursor"],
+        })
         self.assertEqual(["job-0002"], [j["job_id"] for j in page2["items"]])
+        self.assertEqual(result["as_of_sequence"], page2["as_of_sequence"])
+        self.assertIsNone(page2["next_cursor"])
         for status in ("all", "queue"):
             page = app.paginated_jobs({"status": status, "limit": 200})
             self.assertLess(len(_json_bytes(page)), 200000)
@@ -726,6 +734,117 @@ class ContainerMainTests(unittest.TestCase):
         self.assertEqual(3, result["total"])
         self.assertEqual(["job-0000", "job-0001"], [j["job_id"] for j in result["items"]])
         self.assertTrue(all("payload" not in j for j in result["items"]))
+
+    def test_queue_keyset_pages_survive_active_row_shrink_and_bound_new_submissions(self):
+        queue = JobQueue(self.root / "index" / "queue.db")
+        records = [
+            (f"job-{i:04d}", "alice", f"request-{i}", "h" * 64, "wt", "a" * 64,
+             "fem-cpu-release", "build", "{}", "queued", float(i), float(i))
+            for i in range(1105)
+        ]
+        with queue.transaction() as db:
+            db.executemany(
+                "INSERT INTO jobs (job_id, owner, request_key, request_hash, worktree_id, source_digest, profile, operation, payload, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                records,
+            )
+
+        app = self.app(queue)
+        query = {"status": "queue", "sort": "oldest", "limit": 200}
+        first = app.paginated_jobs(query)
+        self.assertEqual(200, len(first["items"]))
+        self.assertEqual("job-0000", first["items"][0]["job_id"])
+        self.assertEqual("job-0199", first["items"][-1]["job_id"])
+        self.assertEqual(1105, first["as_of_sequence"])
+        self.assertIsNotNone(first["next_cursor"])
+        collected = list(first["items"])
+
+        # Completed rows disappear from the active filter after page one.
+        with queue.transaction() as db:
+            db.execute(
+                "UPDATE jobs SET state='succeeded' WHERE owner=? AND sequence<=?",
+                ("alice", first["items"][-1]["sequence"]),
+            )
+
+        submitted_after_watermark = queue.submit(
+            owner="alice",
+            worktree_id="wt",
+            source_digest="b" * 64,
+            profile="fem-cpu-release",
+            operation="build",
+            request_key="request-after-watermark",
+            payload={},
+        )
+
+        second = app.paginated_jobs({**query, "cursor": first["next_cursor"]})
+        self.assertEqual("job-0200", second["items"][0]["job_id"])
+        self.assertEqual(first["as_of_sequence"], second["as_of_sequence"])
+        collected.extend(second["items"])
+        cursor = second["next_cursor"]
+        pages_seen = 2
+        while cursor is not None:
+            self.assertLess(pages_seen, 8, "cursor paging must terminate")
+            page = app.paginated_jobs({**query, "cursor": cursor})
+            self.assertEqual(first["as_of_sequence"], page["as_of_sequence"])
+            collected.extend(page["items"])
+            cursor = page["next_cursor"]
+            pages_seen += 1
+
+        collected_ids = [job["job_id"] for job in collected]
+        expected_ids = [f"job-{i:04d}" for i in range(1105)]
+        self.assertEqual(expected_ids, collected_ids)
+        self.assertEqual(len(collected_ids), len(set(collected_ids)))
+        self.assertNotIn(submitted_after_watermark["job_id"], collected_ids)
+
+        refreshed = app.paginated_jobs({
+            "status": "queue", "sort": "oldest", "limit": 1000,
+        })
+        self.assertEqual(906, len(refreshed["items"]))
+        self.assertEqual(1106, refreshed["as_of_sequence"])
+        self.assertIn(submitted_after_watermark["job_id"], [job["job_id"] for job in refreshed["items"]])
+        self.assertIsNone(refreshed["next_cursor"])
+
+    def test_queue_cursor_rejects_invalid_tokens_and_filter_or_owner_reuse(self):
+        queue = JobQueue(self.root / "index" / "queue.db")
+        records = [
+            (f"keep-job-{i}", "alice", f"request-{i}", "h" * 64, "wt-a", "a" * 64,
+             "fem-cpu-release", "build", "{}", "queued", float(i), float(i))
+            for i in range(3)
+        ]
+        with queue.transaction() as db:
+            db.executemany(
+                "INSERT INTO jobs (job_id, owner, request_key, request_hash, worktree_id, source_digest, profile, operation, payload, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                records,
+            )
+
+        app = self.app(queue)
+        query = {
+            "status": "queue", "sort": "oldest", "profile": "fem-cpu-release",
+            "worktree": "wt-a", "search": "keep", "limit": 2,
+        }
+        first = app.paginated_jobs(query)
+        cursor = first["next_cursor"]
+        self.assertIsInstance(cursor, str)
+
+        with self.assertRaises(ValueError):
+            app.paginated_jobs({**query, "cursor": "not-a-valid-cursor"})
+        for changed_filter in (
+            {"profile": "fdm-cpu-release"},
+            {"worktree": "wt-b"},
+            {"search": "missing"},
+            {"limit": 1},
+            {"sort": "newest"},
+            {"status": "history"},
+        ):
+            with self.subTest(changed_filter=changed_filter):
+                with self.assertRaises(ValueError):
+                    app.paginated_jobs({**query, **changed_filter, "cursor": cursor})
+
+        other_owner_app = self.app(queue)
+        other_owner_app.owner = "bob"
+        with self.assertRaises(ValueError):
+            other_owner_app.paginated_jobs({**query, "cursor": cursor})
 
     def test_paginated_jobs_sqlite_full_pagination_over_1000_items(self):
         db_path = self.root / "index" / "queue.db"

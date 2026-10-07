@@ -177,6 +177,7 @@ class RunnerAPI {
     if (params.worktree) qs.set('worktree', params.worktree);
     if (params.search) qs.set('search', params.search);
     if (params.sort) qs.set('sort', params.sort);
+    if (params.cursor) qs.set('cursor', params.cursor);
     if (params.page) qs.set('page', params.page);
     if (params.limit) qs.set('limit', params.limit);
 
@@ -278,11 +279,15 @@ class RunnerAPI {
     return await this.request('/api/v1/retention/plans');
   }
 
-  async createRetentionPlan() {
-    return await this.request('/api/v1/retention/plans', {
+  async createRetentionPlan(scope = 'execution') {
+    const result = await this.request('/api/v1/retention/plans', {
       method: 'POST',
-      body: '{}',
+      body: JSON.stringify({ scope }),
     });
+    if (result.scope !== scope) {
+      throw new Error('Koordynator nie potwierdził wybranego zakresu operacji. Odśwież panel po jego aktualizacji.');
+    }
+    return result;
   }
 
   async applyRetentionPlan(planId) {
@@ -290,6 +295,10 @@ class RunnerAPI {
       method: 'POST',
       body: '{}',
     });
+  }
+
+  async getRetentionPlan(planId) {
+    return await this.request(`/api/v1/retention/plans/${encodeURIComponent(planId)}`);
   }
 
   async pinResource(resourceId, pinned, reason = '') {

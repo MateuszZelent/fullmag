@@ -1,6 +1,8 @@
 """Trusted Docker-resident queue owner. Workers never receive its socket/token."""
-import json
+import base64
+import binascii
 import hashlib
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
@@ -41,6 +43,60 @@ _JOB_SUMMARY_FIELDS = (
     'updated_at', 'coordinator', 'exit_code',
 )
 _QUEUE_STATES = ('running', 'queued', 'cancel_requested')
+_QUEUE_CURSOR_VERSION = 1
+_SQLITE_MAX_INTEGER = (1 << 63) - 1
+
+
+def _queue_filter_digest(filters):
+    encoded = json.dumps(filters, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _encode_queue_cursor(owner, filters, limit, high_water, after_sequence):
+    payload = {
+        'version': _QUEUE_CURSOR_VERSION,
+        'owner': owner,
+        'status': 'queue',
+        'sort': 'oldest',
+        'filters_sha256': _queue_filter_digest(filters),
+        'limit': limit,
+        'high_water': high_water,
+        'after_sequence': after_sequence,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+    return base64.urlsafe_b64encode(encoded).rstrip(b'=').decode('ascii')
+
+
+def _decode_queue_cursor(cursor, *, owner, filters, limit):
+    try:
+        if not isinstance(cursor, str) or not cursor or len(cursor) > 16384:
+            raise ValueError
+        encoded = cursor.encode('ascii')
+        payload_bytes = base64.b64decode(
+            encoded + b'=' * (-len(encoded) % 4), altchars=b'-_', validate=True)
+        payload = json.loads(payload_bytes.decode('utf-8'))
+    except (binascii.Error, UnicodeError, TypeError, ValueError, RecursionError):
+        raise ValueError('Invalid queue cursor') from None
+
+    expected_keys = {
+        'version', 'owner', 'status', 'sort', 'filters_sha256', 'limit',
+        'high_water', 'after_sequence',
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise ValueError('Invalid queue cursor')
+    if (type(payload['version']) is not int or payload['version'] != _QUEUE_CURSOR_VERSION or
+            payload['owner'] != owner or payload['status'] != 'queue' or
+            payload['sort'] != 'oldest' or
+            payload['filters_sha256'] != _queue_filter_digest(filters) or
+            type(payload['limit']) is not int or payload['limit'] != limit):
+        raise ValueError('Invalid queue cursor')
+
+    high_water = payload['high_water']
+    after_sequence = payload['after_sequence']
+    if (type(high_water) is not int or type(after_sequence) is not int or
+            not 1 <= after_sequence < high_water <= _SQLITE_MAX_INTEGER):
+        raise ValueError('Invalid queue cursor')
+    return high_water, after_sequence
 
 
 def _job_summary(job):
@@ -542,6 +598,17 @@ class Application:
             and getattr(self.queue, 'path', None)
             and Path(self.queue.path).is_file()
         )
+        cursor_filters = {
+            'profile': profile if profile and profile != 'all' else None,
+            'worktree': worktree if worktree and worktree != 'all' else None,
+            'search': search,
+        }
+        uses_queue_cursor = status == 'queue' and sort == 'oldest'
+        if 'cursor' in query and (not has_sqlite or not uses_queue_cursor):
+            raise ValueError('Queue cursors are only valid for SQLite queue pagination')
+        if has_sqlite and uses_queue_cursor:
+            cursor = query['cursor'] if 'cursor' in query else None
+            return self._paginated_queue_jobs(cursor_filters, limit, cursor)
 
         if has_sqlite:
             where_clauses = ["(? IS NULL OR owner=?)"]
@@ -650,6 +717,73 @@ class Application:
                 'pages': (total + limit - 1) // limit if limit > 0 else 1,
                 'worktrees': unique_worktrees,
             }
+
+    def _paginated_queue_jobs(self, filters, limit, cursor):
+        if cursor is None:
+            high_water = None
+            after_sequence = 0
+        else:
+            high_water, after_sequence = _decode_queue_cursor(
+                cursor, owner=self.owner, filters=filters, limit=limit)
+
+        with self.queue.connection() as db:
+            # Keep the owner high-water read and first page in one SQLite snapshot.
+            # Later pages recheck active state; this cursor is not a full status snapshot.
+            db.execute('BEGIN')
+            if high_water is None:
+                high_water_row = db.execute(
+                    'SELECT MAX(sequence) AS high_water FROM jobs WHERE owner=?',
+                    (self.owner,),
+                ).fetchone()
+                high_water = high_water_row['high_water'] or 0
+
+            where_clauses = [
+                'owner = ?',
+                "state IN ('running', 'queued', 'cancel_requested')",
+                'sequence <= ?',
+                'sequence > ?',
+            ]
+            params = [self.owner, high_water, after_sequence]
+            if filters['profile'] is not None:
+                where_clauses.append('profile = ?')
+                params.append(filters['profile'])
+            if filters['worktree'] is not None:
+                where_clauses.append('worktree_id = ?')
+                params.append(filters['worktree'])
+            if filters['search']:
+                where_clauses.append(
+                    '(LOWER(job_id) LIKE ? OR LOWER(worktree_id) LIKE ? OR LOWER(source_digest) LIKE ?)')
+                search_pattern = f"%{filters['search']}%"
+                params.extend([search_pattern, search_pattern, search_pattern])
+
+            columns = ', '.join(_JOB_SUMMARY_FIELDS)
+            rows = db.execute(
+                f"SELECT {columns} FROM jobs WHERE {' AND '.join(where_clauses)} "
+                'ORDER BY sequence ASC LIMIT ?',
+                params + [limit + 1],
+            ).fetchall()
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            worktree_rows = db.execute(
+                'SELECT DISTINCT worktree_id FROM jobs WHERE owner=? AND worktree_id IS NOT NULL',
+                (self.owner,),
+            ).fetchall()
+            unique_worktrees = sorted(row['worktree_id'] for row in worktree_rows if row['worktree_id'])
+            db.execute('COMMIT')
+
+        items = [dict(row) for row in rows]
+        next_cursor = None
+        if has_more and items:
+            next_cursor = _encode_queue_cursor(
+                self.owner, filters, limit, high_water, items[-1]['sequence'])
+        return {
+            'items': items,
+            'next_cursor': next_cursor,
+            'as_of_sequence': high_water,
+            'limit': limit,
+            'is_truncated': False,
+            'worktrees': unique_worktrees,
+        }
 
     def job_detail(self, job_id):
         job = self.get(job_id)

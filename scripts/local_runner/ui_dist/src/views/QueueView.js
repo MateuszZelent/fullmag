@@ -4,7 +4,6 @@ import { formatDuration, formatDurationBetween, formatRelative, formatTimestamp,
 
 export function renderQueueView(container) {
   const health = state.healthData || {};
-  let jobs = [];
 
   container.innerHTML = `
     <div class="view-container queue-view">
@@ -67,18 +66,41 @@ export function renderQueueView(container) {
     if (!card) return;
     try {
       const queueJobs = [];
-      let page = 1;
-      let pages = 1;
+      const seenJobIds = new Set();
+      const seenCursors = new Set();
+      let cursor = null;
+      let asOfSequence = null;
       do {
-        const res = await api.getJobs({ status: 'queue', sort: 'oldest', limit: 200, page });
-        if (!Array.isArray(res?.items) || !Number.isInteger(res.pages) || res.pages < 0 || res.page !== page) {
+        const params = { status: 'queue', sort: 'oldest', limit: 200 };
+        if (cursor !== null) params.cursor = cursor;
+        const res = await api.getJobs(params);
+        if (!Array.isArray(res?.items) ||
+            !Object.prototype.hasOwnProperty.call(res, 'next_cursor') ||
+            !Number.isInteger(res.as_of_sequence) || res.as_of_sequence < 0 ||
+            (res.next_cursor !== null && typeof res.next_cursor !== 'string')) {
           throw new Error('Nieprawidłowa odpowiedź kolejki');
         }
+        if (asOfSequence !== null && res.as_of_sequence !== asOfSequence) {
+          throw new Error('Nieprawidłowa odpowiedź kolejki');
+        }
+        asOfSequence = res.as_of_sequence;
         if (res.is_truncated) throw new Error('Lista kolejki jest niekompletna');
-        queueJobs.push(...res.items);
-        pages = res.pages;
-        page += 1;
-      } while (page <= pages);
+        for (const job of res.items) {
+          if (!job || typeof job.job_id !== 'string' || !job.job_id || seenJobIds.has(job.job_id)) {
+            throw new Error('Nieprawidłowa odpowiedź kolejki');
+          }
+          seenJobIds.add(job.job_id);
+          queueJobs.push(job);
+        }
+        const nextCursor = res.next_cursor;
+        if (nextCursor !== null) {
+          if (!nextCursor || nextCursor === cursor || seenCursors.has(nextCursor)) {
+            throw new Error('Nieprawidłowa odpowiedź kolejki');
+          }
+          seenCursors.add(nextCursor);
+        }
+        cursor = nextCursor;
+      } while (cursor !== null);
 
       if (queueJobs.length === 0) {
         card.innerHTML = `

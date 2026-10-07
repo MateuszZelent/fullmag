@@ -413,11 +413,15 @@ class ContainerAPITests(unittest.TestCase):
             pin_resource=lambda rid, body: recorded.setdefault("pin_resource", (rid, body)) or {"resource_id": rid, "pinned": body.get("pinned", True)},
         )
 
-        self.assertEqual(200, self.request("GET", "/api/v1/jobs?status=running&page=2&worktree=master&sort=oldest")[0])
+        self.assertEqual(200, self.request(
+            "GET",
+            "/api/v1/jobs?status=running&page=2&worktree=master&sort=oldest&cursor=opaque-cursor",
+        )[0])
         self.assertEqual("running", recorded["paginated_jobs"]["status"])
         self.assertEqual("2", recorded["paginated_jobs"]["page"])
         self.assertEqual("master", recorded["paginated_jobs"]["worktree"])
         self.assertEqual("oldest", recorded["paginated_jobs"]["sort"])
+        self.assertEqual("opaque-cursor", recorded["paginated_jobs"]["cursor"])
 
         self.assertEqual(200, self.request("GET", "/api/v1/jobs/job-xyz")[0])
         self.assertEqual("job-xyz", recorded["job_detail"])

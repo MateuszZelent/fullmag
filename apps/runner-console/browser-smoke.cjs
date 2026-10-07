@@ -5,6 +5,7 @@
  * the Fullmag coordinator, submit jobs, mutate a queue, or call a real API.
  * Paths can be overridden for another checkout/runtime with:
  *   FULLMAG_RUNNER_UI_ROOT
+ *   FULLMAG_RUNNER_CONSOLE_ASSETS
  *   FULLMAG_RUNNER_PLAYWRIGHT
  *   FULLMAG_RUNNER_CHROMIUM
  *   FULLMAG_RUNNER_SMOKE_SCREENSHOT
@@ -20,6 +21,7 @@ const repositoryRoot = path.resolve(
   process.env.FULLMAG_RUNNER_UI_ROOT || path.resolve(__dirname, '..', '..'),
 );
 const appRoot = path.join(repositoryRoot, 'apps', 'runner-console');
+const assetRoot = path.resolve(process.env.FULLMAG_RUNNER_CONSOLE_ASSETS || appRoot);
 const playwrightModule = process.env.FULLMAG_RUNNER_PLAYWRIGHT
   || 'C:/Users/Mateusz/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright';
 const chromiumExecutable = process.env.FULLMAG_RUNNER_CHROMIUM
@@ -53,6 +55,10 @@ const ids = {
 
 let mockMode = 'healthy';
 const requestLog = [];
+const queuePageRequests = [];
+const retentionPlanId = 'plan-browser-smoke-preview';
+let retentionScope = 'execution';
+let retentionPlanStatus = 'preview';
 
 function json(res, status, value) {
   const body = JSON.stringify(value);
@@ -135,6 +141,23 @@ const queuedJob = {
   created_at: timestamps.queuedCreated,
   updated_at: timestamps.queuedCreated,
 };
+
+const queueJobs = Array.from({ length: 205 }, (_, index) => {
+  const sequence = index + 1;
+  return {
+    sequence,
+    job_id: `job-queue-browser-smoke-${String(sequence).padStart(4, '0')}`,
+    state: sequence === 1 ? 'running' : 'queued',
+    profile: 'fem-cpu-release',
+    owner: 'browser-smoke',
+    worktree_id: 'runner-review-queue',
+    source_digest: `sha256:browser-smoke-queue-${sequence}`,
+    created_at: timestamps.queuedCreated,
+    started_at: sequence === 1 ? timestamps.activeStarted : null,
+    updated_at: timestamps.now,
+  };
+});
+const queueAfterFirstPageCursor = 'browser-smoke-queue-after-200';
 
 const successJob = {
   job_id: ids.success,
@@ -327,12 +350,13 @@ function detailFixture(jobId) {
   };
 }
 
-function retentionPlanFixture() {
+function retentionPlanFixture(scope = retentionScope) {
   return {
-    plan_id: 'plan-browser-smoke-preview',
+    plan_id: retentionPlanId,
+    scope,
     policy_version: 'smoke-1',
     created_at: timestamps.now,
-    status: 'preview_only',
+    status: retentionPlanStatus,
     estimated_reclaimed_bytes: 20 * GIB,
     candidates_count: 1,
     retained_count: 2,
@@ -405,18 +429,31 @@ async function handleApi(req, res, url) {
     json(res, 200, retentionPolicyFixture());
     return;
   }
+  if (reqPath === `/api/v1/retention/plans/${retentionPlanId}` && req.method === 'GET') {
+    json(res, 200, retentionPlanFixture());
+    return;
+  }
   if (reqPath === '/api/v1/retention/plans' && req.method === 'GET') {
     json(res, 200, { items: [], total: 0 });
     return;
   }
   if (reqPath === '/api/v1/retention/plans' && req.method === 'POST') {
-    await readBody(req);
+    const body = JSON.parse(await readBody(req) || '{}');
+    if (!['execution', 'sources', 'runtime'].includes(body.scope)) {
+      json(res, 400, { error: 'invalid_retention_scope' });
+      return;
+    }
+    retentionScope = body.scope;
+    retentionPlanStatus = 'preview';
     json(res, 200, retentionPlanFixture());
     return;
   }
-  if (reqPath === '/api/v1/retention/plans/plan-browser-smoke-preview/apply' && req.method === 'POST') {
+  if (reqPath === `/api/v1/retention/plans/${retentionPlanId}/apply` && req.method === 'POST') {
     await readBody(req);
+    retentionPlanStatus = 'preview_only';
     json(res, 200, {
+      plan_id: retentionPlanId,
+      scope: retentionScope,
       status: 'preview_only',
       applied: false,
       message: 'Fixture preview-only: brak usuwania plików.',
@@ -441,9 +478,27 @@ async function handleApi(req, res, url) {
   }
   if (reqPath === '/api/v1/jobs') {
     const status = url.searchParams.get('status');
-    const items = status === 'history' || status === 'succeeded' || status === 'failed' || status === 'cancelled'
-      ? historyJobs
-      : [activeJob, queuedJob, ...historyJobs];
+    if (status === 'queue') {
+      const cursor = url.searchParams.get('cursor');
+      const limit = Number(url.searchParams.get('limit'));
+      const start = cursor === null ? 0 : cursor === queueAfterFirstPageCursor ? 200 : -1;
+      queuePageRequests.push({ cursor, limit });
+      if (limit !== 200 || start < 0) {
+        json(res, 400, { error: 'invalid_queue_cursor' });
+        return;
+      }
+      json(res, 200, {
+        items: queueJobs.slice(start, start + limit),
+        next_cursor: start === 0 ? queueAfterFirstPageCursor : null,
+        as_of_sequence: queueJobs.length,
+        is_truncated: false,
+        worktrees: ['runner-review-queue'],
+      });
+      return;
+    }
+
+    const historyRequested = status === 'history' || status === 'succeeded' || status === 'failed' || status === 'cancelled';
+    const items = historyRequested ? historyJobs : [activeJob, queuedJob, ...historyJobs];
     json(res, 200, {
       items,
       total: items.length,
@@ -512,9 +567,9 @@ function createFixtureServer() {
 
       let relative = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
       if (!relative) relative = 'index.html';
-      const filePath = path.resolve(appRoot, relative);
-      const appPrefix = `${appRoot}${path.sep}`;
-      if (filePath !== appRoot && !filePath.startsWith(appPrefix)) {
+      const filePath = path.resolve(assetRoot, relative);
+      const appPrefix = `${assetRoot}${path.sep}`;
+      if (filePath !== assetRoot && !filePath.startsWith(appPrefix)) {
         res.writeHead(403);
         res.end('Forbidden');
         return;
@@ -563,6 +618,9 @@ function wait(ms) {
 
 async function run() {
   assert(fs.existsSync(appRoot), `Runner Console source not found: ${appRoot}`);
+  assert(fs.existsSync(assetRoot) && fs.statSync(assetRoot).isDirectory() &&
+    fs.existsSync(path.join(assetRoot, 'index.html')),
+  `Runner Console assets not found: ${assetRoot}`);
   assert(fs.existsSync(chromiumExecutable), `Chromium executable not found: ${chromiumExecutable}`);
 
   const server = createFixtureServer();
@@ -616,6 +674,7 @@ async function run() {
     }
 
     console.log(`[browser-smoke] fixture server: ${baseUrl}`);
+    console.log(`[browser-smoke] assets: ${assetRoot}`);
     console.log(`[browser-smoke] chromium: ${chromiumExecutable}`);
 
     mockMode = 'healthy';
@@ -628,8 +687,27 @@ async function run() {
 
     const views = ['overview', 'queue', 'history', 'storage', 'processes', 'logs', 'policies', 'diagnostics'];
     for (const view of views.slice(1)) {
+      if (view === 'queue') queuePageRequests.length = 0;
       await clickView(view);
       assert(await page.locator(`#main-content .${view}-view`).count() === 1, `view did not render: ${view}`);
+      if (view === 'queue') {
+        const details = page.locator('#queue-table-card .btn-table-details');
+        await details.nth(204).waitFor({ state: 'visible', timeout: 5000 });
+        const visibleQueueIds = await details.evaluateAll(buttons =>
+          buttons.map(button => button.getAttribute('data-id')));
+        assert.equal(visibleQueueIds.length, 205, 'QueueView must render all 205 fixture jobs');
+        assert.equal(new Set(visibleQueueIds).size, 205, 'QueueView must render each fixture job only once');
+        assert.deepEqual(visibleQueueIds, queueJobs.map(job => job.job_id), 'QueueView must preserve cursor FIFO order');
+        assert(queuePageRequests.length >= 2 && queuePageRequests.length % 2 === 0,
+          'QueueView must fetch the fixture in complete two-page cursor walks');
+        for (let index = 0; index < queuePageRequests.length; index += 2) {
+          assert.deepEqual(queuePageRequests.slice(index, index + 2), [
+            { cursor: null, limit: 200 },
+            { cursor: queueAfterFirstPageCursor, limit: 200 },
+          ], 'QueueView must follow the returned next_cursor without OFFSET pages');
+        }
+        console.log('[browser-smoke] queue cursor: 205 visible unique rows across two pages');
+      }
     }
     console.log(`[browser-smoke] healthy navigation: ${views.length}/8 views`);
 
@@ -637,12 +715,20 @@ async function run() {
     await gotoView('storage');
     await page.locator('#btn-create-plan').click();
     await page.locator('#retention-plan-section').waitFor({ state: 'visible', timeout: 5000 });
-    assert.match(await textOf('#retention-plan-section'), /Podgląd planu retencji/);
-    assert.match(await textOf('#retention-plan-section'), /plan-browser-smoke-preview/);
+    assert.equal(await textOf('#plan-title'), 'Retencja kopii roboczych');
+    assert.match(await textOf('#plan-metadata'), /plan-browser-smoke-preview/);
+    assert.match(await textOf('#plan-metadata'), /Status: preview/);
     await page.locator('#btn-apply-plan').click();
     await wait(150);
     assert(dialogMessages.some(message => message.includes('Tryb podglądu')), 'preview-only apply did not show the safety notice');
-    console.log('[browser-smoke] preview_only: plan preview and guarded apply exercised');
+    console.log('[browser-smoke] preview_only: execution-scoped plan, guarded apply, no deletion');
+
+    mockMode = 'healthy';
+    await gotoView('storage');
+    await page.locator('#retention-plan-section').waitFor({ state: 'visible', timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector('#plan-metadata')?.textContent.includes('Status: preview_only'));
+    assert.match(await textOf('#plan-metadata'), /plan-browser-smoke-preview/);
+    console.log('[browser-smoke] retention reconnect: saved plan scope and getRetentionPlan response restored');
 
     mockMode = 'unavailable';
     await gotoView('storage');

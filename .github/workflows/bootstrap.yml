@@ -60,6 +60,7 @@ jobs:
           python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py'
           python -B -m unittest discover -s scripts -p 'test_local_runner_source_compaction.py'
           python -B -m unittest discover -s scripts/tests/local_runner -p 'test_container_api.py'
+          python -B -m unittest discover -s scripts/tests/local_runner -p 'test_container_main.py'
           python -B -m unittest discover -s scripts -p 'test_local_runner_cli.py'
           python -B -m unittest discover -s scripts/tests/local_runner -p 'test_observability_review_regressions.py'
 
@@ -222,6 +223,17 @@ jobs:
 
       - name: Install Chromium for browser fixture smoke
         run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
+
+      - name: Run packaged Runner Console queue contracts
+        env:
+          FULLMAG_RUNNER_UI_ROOT: ${{ github.workspace }}
+          FULLMAG_RUNNER_CONSOLE_ASSETS: ${{ github.workspace }}/scripts/local_runner/ui_dist
+          FULLMAG_RUNNER_PLAYWRIGHT: ${{ github.workspace }}/apps/control-room/node_modules/playwright
+          FULLMAG_RUNNER_SMOKE_SCREENSHOT: ${{ runner.temp }}/viewport-3d-browser-audit/runner-console.png
+        run: |
+          node apps/runner-console/test.mjs
+          export FULLMAG_RUNNER_CHROMIUM="$(node -p "require('./apps/control-room/node_modules/playwright').chromium.executablePath()")"
+          node apps/runner-console/browser-smoke.cjs
 
       - name: Run browser fixture smoke
         env:

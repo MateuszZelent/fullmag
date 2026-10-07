@@ -177,6 +177,7 @@ class RunnerAPI {
     if (params.worktree) qs.set('worktree', params.worktree);
     if (params.search) qs.set('search', params.search);
     if (params.sort) qs.set('sort', params.sort);
+    if (params.cursor) qs.set('cursor', params.cursor);
     if (params.page) qs.set('page', params.page);
     if (params.limit) qs.set('limit', params.limit);
 

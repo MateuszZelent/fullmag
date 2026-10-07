@@ -465,3 +465,29 @@ Przed użyciem potrzebne są sprawdzone CI, zgodna aktualizacja jednego runnera,
 attestacja obrazu, pusta aktywna ścieżka builda i preserved queue/profiles/data.
 Dla starego koordynatora brak obsługi oznacza unavailable; nie udajemy anulowania.
 Reguły autoryzacji i ochrony kandydatów przy rzeczywistym cleanup pozostają bez zmian.
+
+
+## Stabilny odczyt aktywnej kolejki
+
+Panel kolejki pobiera `GET /api/v1/jobs?status=queue&sort=oldest&limit=200`.
+Dla kolejki SQLite odpowiedź zawiera `items`, `next_cursor`, `as_of_sequence`,
+`limit`, `is_truncated` i `worktrees`. Kolejną stronę pobiera się z tym samym
+zestawem filtrów oraz `cursor=<next_cursor>`; odczyt kończy wyłącznie jawne
+`next_cursor: null`. Kursor jest związany z operatorem, filtrami, kolejnością
+i limitem; zmiana któregokolwiek z nich wymaga rozpoczęcia nowego odczytu.
+
+Pierwszy odczyt ustala maksymalny numer `sequence` w tej samej transakcji co
+strona. Wszystkie kolejne strony zachowują ten `as_of_sequence`; nowe zgłoszenia
+po tej granicy pojawiają się przy następnym odświeżeniu. Stan aktywności jest
+sprawdzany na każdej stronie, więc zadanie zakończone przed swoim odczytem może
+zniknąć. Zakończenie wcześniejszych zadań nie przesuwa dalszych aktywnych
+rekordów poza kursor. Nie jest to snapshot wszystkich statusów z jednego momentu.
+Historia zachowuje dotychczasowe `page/pages` i OFFSET.
+
+Źródła Runner Console znajdują się w `apps/runner-console/src`; koordynator
+serwuje pakiet `scripts/local_runner/ui_dist`. `node apps/runner-console/build.mjs`
+kopiuje kanoniczne zasoby do obu katalogów dystrybucji. Zmiana panelu wymaga
+zachowania zgodności źródeł i pakietu; nie wolno nadpisywać działających funkcji
+nowszą albo starszą kopią bez sprawdzenia diffu. GHA wykonuje regresję SQLite,
+testy Node oraz lokalną fixture przeglądarki serwującą `ui_dist`. Fixture nie
+zgłasza prawdziwych buildów ani nie usuwa danych.

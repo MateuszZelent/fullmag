@@ -225,17 +225,18 @@ renderBuildDetailsModal(container);
 renderAuthModal(container);
 console.log('✓ All 5 components successfully rendered');
 
-// 4b. Test api.getJobs URL query construction including sort
+// 4b. Test api.getJobs URL query construction including pagination
 let capturedUrl = null;
 api.request = async (url) => { capturedUrl = url; return []; };
-await api.getJobs({ status: 'succeeded', profile: 'fem-cpu-release', worktree: 'wt-1', sort: 'oldest', page: 2, limit: 25 });
+await api.getJobs({ status: 'succeeded', profile: 'fem-cpu-release', worktree: 'wt-1', sort: 'oldest', page: 2, limit: 25, cursor: 'opaque-cursor' });
 assert(capturedUrl.includes('status=succeeded'), 'getJobs must include status in query');
 assert(capturedUrl.includes('profile=fem-cpu-release'), 'getJobs must include profile in query');
 assert(capturedUrl.includes('worktree=wt-1'), 'getJobs must include worktree in query');
 assert(capturedUrl.includes('sort=oldest'), 'getJobs must include sort in query');
 assert(capturedUrl.includes('page=2'), 'getJobs must include page in query');
 assert(capturedUrl.includes('limit=25'), 'getJobs must include limit in query');
-console.log('✓ api.getJobs query parameters including sort verified');
+assert(capturedUrl.includes('cursor=opaque-cursor'), 'getJobs must include cursor in query');
+console.log('✓ api.getJobs query parameters including cursor verified');
 
 // 6b. Test state tab switching and details modal tab selection
 const { state } = await import('./src/state.js');
@@ -551,29 +552,99 @@ console.log('✓ api.js error honesty verified (no synthetic fallback on 500)');
 
 console.log('[test] All Runner Console unit and smoke tests passed successfully!');
 
-// Queue pagination must retrieve active jobs in FIFO order without history.
+// Queue pagination follows a stable keyset cursor through a mutable active set.
 const { renderQueueView } = await import('./src/views/QueueView.js');
 const originalGetJobs = api.getJobs;
+const expectedQueueIds = Array.from({ length: 205 }, (_, index) =>
+  `queue-job-${String(index).padStart(4, '0')}`);
 const queueRequests = [];
+const queuePages = [
+  {
+    items: expectedQueueIds.slice(0, 200).map(job_id => ({job_id, state: 'queued', created_at: 10})),
+    next_cursor: 'watermark-after-200',
+    as_of_sequence: 205,
+    page: 1,
+    pages: 1,
+    total: 201,
+    is_truncated: false,
+  },
+  {
+    items: expectedQueueIds.slice(200).map(job_id => ({job_id, state: 'queued', created_at: 10})),
+    next_cursor: null,
+    as_of_sequence: 205,
+    page: 1,
+    pages: 1,
+    total: 5,
+    is_truncated: false,
+  },
+];
 api.getJobs = async (params) => {
   queueRequests.push(params);
-  return { items: [{job_id: `queue-page-${params.page}`, state: 'queued', created_at: 10}],
-    page: params.page, pages: 2, is_truncated: false };
+  return queuePages.shift();
 };
 const queueContainer = new MockElement('div');
 renderQueueView(queueContainer);
 await new Promise(resolve => setTimeout(resolve, 0));
 assert.deepEqual(queueRequests, [
-  {status: 'queue', sort: 'oldest', limit: 200, page: 1},
-  {status: 'queue', sort: 'oldest', limit: 200, page: 2},
+  {status: 'queue', sort: 'oldest', limit: 200},
+  {status: 'queue', sort: 'oldest', limit: 200, cursor: 'watermark-after-200'},
 ]);
 const queueHtml = queueContainer.querySelector('#queue-table-card').innerHTML;
-assert(queueHtml.includes('queue-page-1') && queueHtml.includes('queue-page-2'));
-assert(queueHtml.indexOf('queue-page-1') < queueHtml.indexOf('queue-page-2'));
-api.getJobs = async () => ({items: [], page: 1, pages: 1, is_truncated: true});
+const renderedQueueIds = [...queueHtml.matchAll(/title="([^"]+)"/g)].map(match => match[1]);
+assert.deepEqual(renderedQueueIds, expectedQueueIds, 'QueueView must render every cursor page in FIFO order');
+assert.strictEqual(new Set(renderedQueueIds).size, expectedQueueIds.length,
+  'QueueView must not render duplicate jobs across cursor pages');
+
+api.getJobs = async () => ({items: [], next_cursor: null, as_of_sequence: 205, is_truncated: true});
 const truncatedQueue = new MockElement('div');
 renderQueueView(truncatedQueue);
 await new Promise(resolve => setTimeout(resolve, 0));
 assert(truncatedQueue.querySelector('#queue-table-card').innerHTML.includes('niekompletna'));
+
+api.getJobs = async () => ({
+  items: [{job_id: 'legacy-offset-only', state: 'queued', created_at: 10}],
+  page: 1, pages: 1, total: 1, is_truncated: false,
+});
+const legacyOffsetQueue = new MockElement('div');
+renderQueueView(legacyOffsetQueue);
+await new Promise(resolve => setTimeout(resolve, 0));
+const legacyOffsetHtml = legacyOffsetQueue.querySelector('#queue-table-card').innerHTML;
+assert(legacyOffsetHtml.includes('Nieprawidłowa odpowiedź kolejki'),
+  'QueueView must reject an old OFFSET response without cursor and watermark fields');
+assert(!legacyOffsetHtml.includes('legacy-offset-only'),
+  'QueueView must not present a partial first OFFSET page as a complete queue');
+
+api.getJobs = async () => ({items: [], next_cursor: null, as_of_sequence: -1, is_truncated: false});
+const invalidWatermarkQueue = new MockElement('div');
+renderQueueView(invalidWatermarkQueue);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert(invalidWatermarkQueue.querySelector('#queue-table-card').innerHTML.includes('Nieprawidłowa odpowiedź kolejki'),
+  'QueueView must reject a negative as-of watermark');
+
+const repeatedCursorResponses = [
+  {items: [{job_id: 'cursor-page-one', state: 'queued'}], next_cursor: 'repeat-cursor', as_of_sequence: 10},
+  {items: [{job_id: 'cursor-page-two', state: 'queued'}], next_cursor: 'repeat-cursor', as_of_sequence: 10},
+];
+api.getJobs = async () => repeatedCursorResponses.shift();
+const repeatedCursorQueue = new MockElement('div');
+renderQueueView(repeatedCursorQueue);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert(repeatedCursorQueue.querySelector('#queue-table-card').innerHTML.includes('Nieprawidłowa odpowiedź kolejki'),
+  'QueueView must reject a cursor repeated across pages');
+
+const duplicateJobResponses = [
+  {items: [{job_id: 'duplicate-queue-job', state: 'queued'}], next_cursor: 'next-cursor', as_of_sequence: 10},
+  {items: [{job_id: 'duplicate-queue-job', state: 'queued'}], next_cursor: null, as_of_sequence: 10},
+];
+api.getJobs = async () => duplicateJobResponses.shift();
+const duplicateJobQueue = new MockElement('div');
+renderQueueView(duplicateJobQueue);
+await new Promise(resolve => setTimeout(resolve, 0));
+const duplicateJobHtml = duplicateJobQueue.querySelector('#queue-table-card').innerHTML;
+assert(duplicateJobHtml.includes('Nieprawidłowa odpowiedź kolejki'),
+  'QueueView must reject a duplicate job id across cursor pages');
+assert(!duplicateJobHtml.includes('duplicate-queue-job'),
+  'QueueView must not present duplicate rows as a valid queue');
+
 api.getJobs = originalGetJobs;
-console.log('✓ Queue active-only FIFO pagination and incomplete response verified');
+console.log('✓ Queue cursor completeness, stable watermark, FIFO order, duplicate cursor/job rejection and legacy response rejection verified');
