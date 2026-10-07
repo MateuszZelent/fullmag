@@ -25,7 +25,7 @@ import numbers
 import tempfile
 from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Iterator, Literal, Mapping
 
 import numpy as np
 from numpy.typing import NDArray
@@ -35,6 +35,8 @@ from fullmag.model.geometry import ArchWaveguide, Box, Cylinder, Difference, Geo
 
 from ._gmsh_types import (
     AirboxOptions,
+    FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M,
+    FEM_EXACT_LAYER_PLANE_REL_TOLERANCE,
     FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS,
     MeshData,
     MeshRealizationReport,
@@ -140,6 +142,74 @@ def _resolve_sweep_axis(
             "layered ArchWaveguide meshing supports only sweep_direction='z'"
         )
     return axis
+
+
+_SCOPED_LAYER_PLANE_PROOF_TOKEN = object()
+_SCOPED_LAYER_PLANE_PROOF_KEY = "_gmsh_layer_plane_proof"
+
+
+def _clear_scoped_layer_plane_proofs(options: MeshOptions) -> None:
+    """Invalidate prior mesh-attempt evidence before direct option reuse."""
+    for config in [*options.size_fields, *options.lower_bound_fields]:
+        if isinstance(config, dict):
+            config.pop(_SCOPED_LAYER_PLANE_PROOF_KEY, None)
+
+
+def _fresh_scoped_layer_plane_attempt_options(options: MeshOptions) -> MeshOptions:
+    """Clone size descriptors and remove proof before planning a new attempt."""
+
+    def _clone_descriptors(
+        descriptors: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        cloned: list[dict[str, Any]] = []
+        for descriptor in descriptors:
+            if isinstance(descriptor, Mapping):
+                entry = dict(descriptor)
+                entry.pop(_SCOPED_LAYER_PLANE_PROOF_KEY, None)
+                cloned.append(entry)
+            else:
+                cloned.append(descriptor)
+        return cloned
+
+    return _dc_replace(
+        options,
+        size_fields=_clone_descriptors(options.size_fields),
+        lower_bound_fields=_clone_descriptors(options.lower_bound_fields),
+    )
+
+
+THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED = (
+    "thin_film_scoped_fields_require_exact_cell_geometric_airbox"
+)
+THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON = (
+    "scoped thin-film fields currently require the exact-cell GEO Box path and "
+    "a geometric bbox airbox so requested body layer planes can be built before "
+    "3D meshing"
+)
+
+
+def _has_component_scoped_size_fields(options: MeshOptions) -> bool:
+    return bool(options.lower_bound_fields) or any(
+        isinstance(config, dict)
+        and isinstance(config.get("params"), dict)
+        and isinstance(config["params"].get("GeometryName"), str)
+        and bool(config["params"]["GeometryName"].strip())
+        for config in options.size_fields
+    )
+
+
+def _supports_scoped_layer_partitioned_box(
+    geometry: Geometry,
+    *,
+    airbox: AirboxOptions | None,
+) -> bool:
+    """Whether the Box domain supports exact GEO z-layer volume partitions."""
+    return (
+        isinstance(geometry, Box)
+        and airbox is not None
+        and airbox.grading_mode == "geometric"
+        and _coincident_ring_airbox_bounds(geometry, airbox) is not None
+    )
 
 
 def _apply_mixed_source_face_mesh_options(
@@ -1875,7 +1945,8 @@ def generate_swept_tetrahedral_box_airbox_mesh(
     distribution: str, recombine: bool, airbox: AirboxOptions | None,
     options: MeshOptions,
 ) -> MeshData:
-    """Realize a fixed-layer Tet4 Box in its exact lateral periodic cell."""
+    """Realize a fixed-layer Tet4 Box, partitioning scoped fields by exact z layers."""
+    _clear_scoped_layer_plane_proofs(options)
     if order != 1 or distribution != DISTRIBUTION_FIXED or recombine:
         raise ValueError("layered tetrahedral Box requires P1 fixed non-recombined layers")
     if options.sweep_direction not in (None, "auto", "z"):
@@ -1886,6 +1957,13 @@ def generate_swept_tetrahedral_box_airbox_mesh(
         raise ValueError("layered tetrahedral Box requires uniform film layers")
     if airbox is None:
         raise ValueError("layered tetrahedral Box currently requires an exact-cell bbox airbox")
+    if _has_component_scoped_size_fields(
+        options
+    ) and not _supports_scoped_layer_partitioned_box(geometry, airbox=airbox):
+        raise ValueError(
+            f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED}: "
+            f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON}"
+        )
     if airbox.grading_mode != "geometric":
         raise ValueError("layered tetrahedral Box currently supports only geometric airbox grading")
     if isinstance(n_layers, bool) or not isinstance(n_layers, int) or n_layers < 1:
@@ -1981,34 +2059,48 @@ def _generate_coincident_ring_airbox_mesh(
             hole_surface = gmsh.model.geo.addPlaneSurface([circle_loop])
         gmsh.model.geo.synchronize()
 
-        source_fields: list[int] = []
-        if options.size_fields:
-            source_fields.append(
-                _apply_mixed_source_face_mesh_options(
-                    gmsh,
-                    source_surface=annulus_surface,
-                    hmax_scaled=source_hmax_scaled,
-                    order=order,
-                    opts=options,
-                    hscale=SCALE,
-                )
+        scoped_layer_partitioning = (
+            isinstance(geometry, Box)
+            and _has_component_scoped_size_fields(options)
+        )
+        if scoped_layer_partitioning and not _supports_scoped_layer_partitioned_box(
+            geometry,
+            airbox=airbox,
+        ):
+            raise ValueError(
+                f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED}: "
+                f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON}"
             )
-        else:
-            # The final air field must not coarsen the magnetic source face.
-            source_field = gmsh.model.mesh.field.add("Constant")
-            gmsh.model.mesh.field.setNumbers(source_field, "SurfacesList", [annulus_surface])
-            gmsh.model.mesh.field.setNumber(source_field, "VIn", source_hmax_scaled)
-            gmsh.model.mesh.field.setNumber(source_field, "VOut", 1.0e22)
-            gmsh.model.mesh.field.setNumber(source_field, "IncludeBoundary", 1)
-            gmsh.model.mesh.field.setAsBackgroundMesh(source_field)
-            source_fields.append(source_field)
-            gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
-            gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
-            gmsh.option.setNumber("Mesh.CharacteristicLengthMax", source_hmax_scaled)
-            gmsh.option.setNumber("Mesh.Algorithm", options.algorithm_2d)
-            if options.hmin is not None:
-                gmsh.option.setNumber("Mesh.CharacteristicLengthMin", options.hmin * SCALE)
-        gmsh.model.mesh.generate(2)
+
+        source_fields: list[int] = []
+        if not scoped_layer_partitioning:
+            if options.size_fields:
+                source_fields.append(
+                    _apply_mixed_source_face_mesh_options(
+                        gmsh,
+                        source_surface=annulus_surface,
+                        hmax_scaled=source_hmax_scaled,
+                        order=order,
+                        opts=options,
+                        hscale=SCALE,
+                    )
+                )
+            else:
+                # The final air field must not coarsen the magnetic source face.
+                source_field = gmsh.model.mesh.field.add("Constant")
+                gmsh.model.mesh.field.setNumbers(source_field, "SurfacesList", [annulus_surface])
+                gmsh.model.mesh.field.setNumber(source_field, "VIn", source_hmax_scaled)
+                gmsh.model.mesh.field.setNumber(source_field, "VOut", 1.0e22)
+                gmsh.model.mesh.field.setNumber(source_field, "IncludeBoundary", 1)
+                gmsh.model.mesh.field.setAsBackgroundMesh(source_field)
+                source_fields.append(source_field)
+                gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
+                gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+                gmsh.option.setNumber("Mesh.CharacteristicLengthMax", source_hmax_scaled)
+                gmsh.option.setNumber("Mesh.Algorithm", options.algorithm_2d)
+                if options.hmin is not None:
+                    gmsh.option.setNumber("Mesh.CharacteristicLengthMin", options.hmin * SCALE)
+            gmsh.model.mesh.generate(2)
 
         annulus_volumes: list[int] = []
         hole_volumes: list[int] = []
@@ -2016,15 +2108,29 @@ def _generate_coincident_ring_airbox_mesh(
         current_hole = int(hole_surface) if hole_surface is not None else None
         for level_index in range(len(levels) - 1):
             step = float(levels[level_index + 1] - levels[level_index])
-            extruded = gmsh.model.geo.extrude(
-                [(2, current_annulus)] + ([(2, current_hole)] if current_hole is not None else []),
-                0.0,
-                0.0,
-                step,
-                numElements=[1],
-                heights=[1.0],
-                recombine=True,
+            source_entities = [(2, current_annulus)] + (
+                [(2, current_hole)] if current_hole is not None else []
             )
+            if scoped_layer_partitioning:
+                # Build the exact layer volumes and owner tags before any mesh
+                # exists, so scoped 3D fields can be evaluated without sharing
+                # a premeshed source face across magnetic and air layers.
+                extruded = gmsh.model.geo.extrude(
+                    source_entities,
+                    0.0,
+                    0.0,
+                    step,
+                )
+            else:
+                extruded = gmsh.model.geo.extrude(
+                    source_entities,
+                    0.0,
+                    0.0,
+                    step,
+                    numElements=[1],
+                    heights=[1.0],
+                    recombine=True,
+                )
             gmsh.model.geo.synchronize()
             volumes = [int(tag) for dim, tag in extruded if int(dim) == 3]
             if len(volumes) != (2 if tool is not None else 1):
@@ -2162,7 +2268,9 @@ def _generate_coincident_ring_airbox_mesh(
         final_options = _dc_replace(
             options,
             size_fields=(
-                list(options.size_fields) if options.lower_bound_fields else []
+                list(options.size_fields)
+                if options.lower_bound_fields or scoped_layer_partitioning
+                else []
             ),
         )
         preexisting_fields = list(source_fields)
@@ -2223,13 +2331,87 @@ def _generate_coincident_ring_airbox_mesh(
         magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
         if not np.any(magnetic_mask):
             raise RuntimeError("coincident ring realization produced no magnetic cells")
-        magnetic_nodes = np.unique(elements[magnetic_mask].reshape(-1))
-        resolved_layers = _count_exact_layer_planes(nodes[magnetic_nodes], 2) - 1
-        if resolved_layers != n_layers:
-            raise RuntimeError(
-                f"coincident ring realization requested {n_layers} layers but resolved {resolved_layers}"
+        magnetic_elements = elements[magnetic_mask]
+        magnetic_nodes = np.unique(magnetic_elements.reshape(-1))
+        if scoped_layer_partitioning:
+            layer_planes = np.linspace(
+                body_bottom / SCALE,
+                body_top / SCALE,
+                n_layers + 1,
+                dtype=np.float64,
             )
-        return MeshData(
+            body_node_z = nodes[magnetic_nodes, 2]
+            plane_tolerance = max(
+                FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M,
+                FEM_EXACT_LAYER_PLANE_REL_TOLERANCE * (body_top - body_bottom) / SCALE,
+            )
+            exact_plane_count = _count_exact_layer_planes(nodes[magnetic_nodes], 2)
+            resolved_layers = exact_plane_count - 1
+            if resolved_layers != n_layers:
+                raise RuntimeError(
+                    "scoped layer-partitioned realization requested "
+                    f"{n_layers} layers but resolved {resolved_layers} exact z intervals"
+                )
+            node_plane_distance = np.min(
+                np.abs(body_node_z[:, None] - layer_planes[None, :]),
+                axis=1,
+            )
+            if np.any(node_plane_distance > plane_tolerance):
+                raise RuntimeError(
+                    "scoped layer-partitioned realization has magnetic nodes outside "
+                    "the requested through-thickness planes"
+                )
+            plane_incidence = [
+                int(np.count_nonzero(np.abs(body_node_z - plane) <= plane_tolerance))
+                for plane in layer_planes
+            ]
+            if any(count == 0 for count in plane_incidence):
+                raise RuntimeError(
+                    "scoped layer-partitioned realization lost a requested body plane: "
+                    f"incidence={plane_incidence}"
+                )
+            body_cell_z = nodes[magnetic_elements, 2]
+            for plane in layer_planes[1:-1]:
+                crosses_plane = (
+                    np.min(body_cell_z, axis=1) < plane - plane_tolerance
+                ) & (
+                    np.max(body_cell_z, axis=1) > plane + plane_tolerance
+                )
+                if np.any(crosses_plane):
+                    raise RuntimeError(
+                        "scoped layer-partitioned realization has tetrahedra crossing "
+                        f"requested body plane z={plane:.17g} m"
+                    )
+            body_centroid_z = np.mean(body_cell_z, axis=1)
+            for lower_plane, upper_plane in zip(layer_planes[:-1], layer_planes[1:], strict=True):
+                in_partition = (
+                    (body_centroid_z >= lower_plane - plane_tolerance)
+                    & (body_centroid_z <= upper_plane + plane_tolerance)
+                )
+                if not np.any(in_partition):
+                    raise RuntimeError(
+                        "scoped layer-partitioned realization has an empty body layer "
+                        f"[{lower_plane:.17g}, {upper_plane:.17g}] m"
+                    )
+            layer_plane_proof: dict[str, object] = {
+                "_verification_token": _SCOPED_LAYER_PLANE_PROOF_TOKEN,
+                "geometry_name": geometry.geometry_name,
+                "requested_layer_partitions": int(n_layers),
+                "resolved_layer_partitions": int(resolved_layers),
+                "exact_plane_count": int(exact_plane_count),
+                "layer_planes_m": [float(value) for value in layer_planes],
+                "all_magnetic_nodes_on_requested_planes": True,
+                "no_magnetic_tetrahedra_cross_requested_planes": True,
+                "verification": "passed",
+            }
+        else:
+            exact_plane_count = _count_exact_layer_planes(nodes[magnetic_nodes], 2)
+            resolved_layers = exact_plane_count - 1
+            if resolved_layers != n_layers:
+                raise RuntimeError(
+                    f"coincident ring realization requested {n_layers} layers but resolved {resolved_layers}"
+                )
+        result = MeshData(
             nodes=nodes,
             cell_types=raw_mesh.cell_types,
             cell_offsets=raw_mesh.cell_offsets,
@@ -2252,6 +2434,24 @@ def _generate_coincident_ring_airbox_mesh(
             quality=raw_mesh.quality,
             per_domain_quality=raw_mesh.per_domain_quality,
         )
+        if scoped_layer_partitioning:
+            scoped_descriptors = [
+                config
+                for config in [*options.size_fields, *options.lower_bound_fields]
+                if isinstance(config, dict)
+                and isinstance(config.get("params"), dict)
+                and isinstance(config["params"].get("GeometryName"), str)
+            ]
+            if not scoped_descriptors or any(
+                config.get("_gmsh_status") != "applied"
+                for config in scoped_descriptors
+            ):
+                raise RuntimeError(
+                    "scoped layer-plane proof requires every component field to be applied"
+                )
+            for config in scoped_descriptors:
+                config[_SCOPED_LAYER_PLANE_PROOF_KEY] = layer_plane_proof
+        return result
     finally:
         gmsh.finalize()
 

@@ -41,7 +41,15 @@ from .gmsh_bridge import (
     generate_mesh_from_file,
     generate_shared_domain_mesh_from_components,
 )
-from ._gmsh_swept import _is_box_cylinder_ring
+from ._gmsh_swept import (
+    THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED,
+    THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON,
+    _SCOPED_LAYER_PLANE_PROOF_KEY,
+    _fresh_scoped_layer_plane_attempt_options,
+    _has_component_scoped_size_fields,
+    _is_box_cylinder_ring,
+    _supports_scoped_layer_partitioned_box,
+)
 from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
@@ -2775,6 +2783,27 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     list(mesh_options.size_fields), per_object_recipes
                 )
                 mesh_options = _dc_replace(mesh_options, size_fields=recipe_fields + existing)
+        mesh_options = _fresh_scoped_layer_plane_attempt_options(mesh_options)
+        scoped_layer_partitioned_geo = False
+        scoped_thin_film_box = (
+            len(geometries) == 1
+            and isinstance(geometries[0], Box)
+            and mesh_options.mesh_strategy == "thin_film_tetrahedral"
+            and airbox is not None
+            and _has_component_scoped_size_fields(mesh_options)
+        )
+        if scoped_thin_film_box:
+            if not _supports_scoped_layer_partitioned_box(
+                geometries[0],
+                airbox=airbox,
+            ):
+                raise ValueError(
+                    f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED}: "
+                    f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON}"
+                )
+            scoped_layer_partitioned_geo = True
+            box_layered_geo_direct = True
+            single_geometry_occ_direct = True
         effective_airbox_target, effective_per_object_targets = _resolve_effective_shared_domain_targets(
             geometries,
             hints,
@@ -2823,6 +2852,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         build_mode = "component_aware"
 
         def _emit_mesh_build_failed(exc: Exception) -> None:
+            for descriptor in [*mesh_options.size_fields, *mesh_options.lower_bound_fields]:
+                if isinstance(descriptor, dict):
+                    descriptor.pop(_SCOPED_LAYER_PLANE_PROOF_KEY, None)
             payload: dict[str, object] = {
                 "kind": "mesh_build_failed",
                 "phase": latest_mesh_phase,
@@ -2913,7 +2945,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             else (
                                 "Generating shared-GEO ring tetrahedral mesh"
                                 if ring_shared_geo_direct
-                                else ("Generating shared-GEO layered Box tetrahedral mesh" if box_layered_geo_direct else "Generating direct OCC 3D tetrahedral mesh")
+                                else (
+                                    "Generating shared-GEO layer-partitioned tetrahedral Box mesh"
+                                    if scoped_layer_partitioned_geo
+                                    else (
+                                        "Generating shared-GEO layered Box tetrahedral mesh"
+                                        if box_layered_geo_direct
+                                        else "Generating direct OCC 3D tetrahedral mesh"
+                                    )
+                                )
                             )
                         ),
                     }
@@ -2924,7 +2964,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     else (
                         "Single-geometry shared-GEO ring mesh path selected"
                         if ring_shared_geo_direct
-                        else ("Single-geometry layered Box mesh path selected" if box_layered_geo_direct else "Single-geometry OCC mesh path selected (skipping STL component import)")
+                        else (
+                            "Single-geometry shared-GEO layer-partitioned Box mesh path selected"
+                            if scoped_layer_partitioned_geo
+                            else (
+                                "Single-geometry layered Box mesh path selected"
+                                if box_layered_geo_direct
+                                else "Single-geometry OCC mesh path selected (skipping STL component import)"
+                            )
+                        )
                     )
                 )
                 mesh = generate_mesh(
@@ -3194,12 +3242,18 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         surface_path = Path(tmp_dir) / "shared_domain_surface.stl"
                         combined_surface.export(surface_path)
                         from .gmsh_bridge import generate_mesh_from_file
+                        fallback_geometry_binding = (
+                            {"geometry_name": geometries[0].geometry_name}
+                            if len(geometries) == 1
+                            else {}
+                        )
                         mesh = generate_mesh_from_file(
                             surface_path,
                             hmax=effective_hmax,
                             order=hints.order,
                             airbox=airbox,
                             options=mesh_options,
+                            **fallback_geometry_binding,
                         )
         except Exception as exc:
             _emit_mesh_build_failed(exc)

@@ -94,6 +94,35 @@ pozostaje **NOT VERIFIED**. FDM CPU/GPU: nie dotyczy siatki Gmsh. Wymagane są
 regresje scope/precedence/lower-only/hscale, rzeczywisty rozkład rozmiarów elementów
 oraz managed meshing evidence. Zielony parser dokumentacji nie zamyka tych bramek.
 
+(thin-film-scoped-layer-realization)=
+### Scoped fields i exact layers — realizacja GEO
+
+Dla exact-cell Box z geometrycznym airboxem scoped pola muszą zostać
+skomponowane po utworzeniu dokładnych objętości właściciela. Dotychczasowa
+triangulacja jednej ściany źródłowej airboxu, ekstruzowana przez wszystkie
+warstwy, ignorowała te pola przed powstaniem body tags. Projekcja regionalnego
+minimum na tę ścianę rozszerzałaby jego zakres na powietrze i inne wysokości.
+
+Nowa trasa tworzy najpierw niesiatkowane objętości GEO w zadanych przedziałach
+z, następnie wiąże body/air tags, nakłada tę samą kompozycję upper/lower i
+uruchamia meshing3D. Nie nadaje nowego znaczenia `through_thickness_elements`:
+wynik musi przejść istniejący exact count, wszystkie węzły magnetyczne muszą
+leżeć na dokładnie zadanych płaszczyznach, każda warstwa musi być niepusta,
+a żaden tetraedr magnetyczny nie może przecinać wewnętrznej płaszczyzny.
+Dodatkowe poziomy z są błędem, nie dopuszczoną przybliżoną realizacją.
+
+Raport rozróżnia plan od wyniku. Przed meshingiem oraz po błędzie nie wolno
+emitować potwierdzenia `layer_planes_realized`. Dowód powstaje dopiero po
+walidacji `MeshData`, jest unieważniany przy następnej próbie i nie trafia jako
+prywatny token do serializowanych metadanych. Brak exact-cell/geometric route
+wymaga jawnej odmowy; nie wprowadza cichego free-tet fallbacku bez warstw.
+
+Owner pozostaje `_generate_coincident_ring_airbox_mesh` w `_gmsh_swept.py`.
+Source review/AST PASS; świeże actualGmsh density/plane/periodicity CI oraz
+managed runtime pozostają **NOT VERIFIED**. Model regresji i threshold12nm
+nie zostały zmienione. Jest to metoda wspólnego mesha FEM CPU/GPU; solver GPU
+wymaga oddzielnej kwalifikacji. Nie zmienia równań ani FDM CPU/GPU.
+
 (thin-film-mesh-python-api)=
 ## Python API
 

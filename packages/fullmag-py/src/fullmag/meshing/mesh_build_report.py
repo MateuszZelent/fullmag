@@ -10,7 +10,13 @@ from fullmag.model.discretization import FEM, PerObjectMeshRecipe
 from fullmag.model.geometry import ArchWaveguide, Box, Geometry
 
 from ._gmsh_fields import resolve_effective_algorithm_3d
-from ._gmsh_swept import classify_sweepability
+from ._gmsh_swept import (
+    _SCOPED_LAYER_PLANE_PROOF_KEY,
+    _SCOPED_LAYER_PLANE_PROOF_TOKEN,
+    _has_component_scoped_size_fields,
+    _supports_scoped_layer_partitioned_box,
+    classify_sweepability,
+)
 from ._gmsh_types import AirboxOptions, MeshOptions, resolve_mesh_size_controls
 from ._mesh_targets import (
     MeshOperationStatus,
@@ -621,16 +627,58 @@ def _build_mesh_operation_statuses(
         for geometry in geometries:
             sweepability = classify_sweepability(geometry)
             scope = getattr(geometry, "geometry_name", type(geometry).__name__)
+            scoped_layer_partitioning = (
+                exact_box_layers
+                and _has_component_scoped_size_fields(opts)
+                and _supports_scoped_layer_partitioned_box(
+                    geometry,
+                    airbox=airbox,
+                )
+            )
+            expected_layer_partitions = int(opts.through_thickness_elements or 6)
+            layer_plane_proof = next(
+                (
+                    config.get(_SCOPED_LAYER_PLANE_PROOF_KEY)
+                    for config in [*opts.size_fields, *opts.lower_bound_fields]
+                    if isinstance(config, Mapping)
+                    and isinstance(config.get(_SCOPED_LAYER_PLANE_PROOF_KEY), Mapping)
+                ),
+                None,
+            )
+            layer_planes_realized = (
+                scoped_layer_partitioning
+                and isinstance(layer_plane_proof, Mapping)
+                and layer_plane_proof.get("_verification_token")
+                is _SCOPED_LAYER_PLANE_PROOF_TOKEN
+                and layer_plane_proof.get("verification") == "passed"
+                and layer_plane_proof.get("geometry_name") == str(scope)
+                and layer_plane_proof.get("requested_layer_partitions")
+                == expected_layer_partitions
+                and layer_plane_proof.get("resolved_layer_partitions")
+                == expected_layer_partitions
+                and layer_plane_proof.get("exact_plane_count")
+                == expected_layer_partitions + 1
+                and layer_plane_proof.get("all_magnetic_nodes_on_requested_planes") is True
+                and layer_plane_proof.get("no_magnetic_tetrahedra_cross_requested_planes") is True
+                and isinstance(layer_plane_proof.get("layer_planes_m"), list)
+                and len(layer_plane_proof["layer_planes_m"])
+                == expected_layer_partitions + 1
+            )
             statuses.append(
                 MeshOperationStatus(
                     kind="thin_film",
                     scope=str(scope),
                     requested=True,
-                    status="applied" if exact_box_layers or sweepability.sweepable else "skipped",
+                    status=(
+                        ("applied" if layer_planes_realized else "requested")
+                        if scoped_layer_partitioning
+                        else ("applied" if exact_box_layers or sweepability.sweepable else "skipped")
+                    ),
                     requested_method=requested_thin_film,
                     actual_method=(
-                        "geo_layered_tetrahedral" if exact_box_layers else
-                        ("feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral")
+                        "geo_layer_partitioned_tetrahedral" if scoped_layer_partitioning else
+                        ("geo_layered_tetrahedral" if exact_box_layers else
+                         ("feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral"))
                     ),
                     reason=None if exact_box_layers or sweepability.sweepable else sweepability.reason,
                     details={
@@ -642,6 +690,27 @@ def _build_mesh_operation_statuses(
                             ("xyz"[sweepability.thin_axis] if sweepability.thin_axis is not None else None)
                         ),
                         "airbox_present": airbox is not None,
+                        **(
+                            {
+                                "resolved_layer_partitions": (
+                                    layer_plane_proof["resolved_layer_partitions"]
+                                    if layer_planes_realized
+                                    else None
+                                ),
+                                "resolved_layer_planes_m": (
+                                    list(layer_plane_proof["layer_planes_m"])
+                                    if layer_planes_realized
+                                    else None
+                                ),
+                                "layer_planes_realized": bool(layer_planes_realized),
+                                "layer_plane_verification": (
+                                    "verified" if layer_planes_realized else "pending"
+                                ),
+                                "layer_mesh_mode": "unstructured_tetrahedra_per_layer_volume",
+                            }
+                            if scoped_layer_partitioning
+                            else {}
+                        ),
                     },
                 )
             )
@@ -756,7 +825,7 @@ def _build_thin_film_diagnostics(
     swept_fallback_scopes = {
         status.scope
         for status in operation_statuses
-        if status.kind == "swept_prism" and status.status == "fallback"
+        if status.kind in {"swept_prism", "thin_film"} and status.status == "fallback"
     }
     for geometry in geometries:
         name = getattr(geometry, "geometry_name", type(geometry).__name__)
@@ -788,9 +857,13 @@ def _build_thin_film_diagnostics(
         warnings: list[str] = []
         if opts.through_thickness_elements is not None and opts.through_thickness_elements < 4:
             warnings.append("requested through-thickness layer count is below 4")
-        if actual_method != "geo_layered_tetrahedral" and estimated_layers is not None and estimated_layers < 4:
+        layer_planes_are_realized = actual_method in {
+            "geo_layered_tetrahedral",
+            "geo_layer_partitioned_tetrahedral",
+        }
+        if not layer_planes_are_realized and estimated_layers is not None and estimated_layers < 4:
             warnings.append("estimated layers from maximum element size across thickness is below 4")
-        if actual_method != "geo_layered_tetrahedral" and hmax_ratio is not None and hmax_ratio > 0.5:
+        if not layer_planes_are_realized and hmax_ratio is not None and hmax_ratio > 0.5:
             warnings.append("maximum element size is too large relative to thin-film thickness")
         if opts.smoothing_steps == 0:
             warnings.append("smoothing is disabled for a thin-film mesh")
@@ -801,7 +874,13 @@ def _build_thin_film_diagnostics(
         ):
             warnings.append("thin-film object is using free tetrahedral meshing")
         if str(name) in swept_fallback_scopes:
-            warnings.append("requested swept/prism meshing fell back to free tetrahedral")
+            if requested_thin_film is not None and actual_method == "free_tetrahedral":
+                warnings.append(
+                    "requested layered thin-film tetrahedral meshing fell back to free "
+                    "tetrahedral; requested through-thickness layer planes were not realized"
+                )
+            else:
+                warnings.append("requested swept/prism meshing fell back to free tetrahedral")
         if not warnings and not sweepability.sweepable:
             continue
         diagnostics.append(

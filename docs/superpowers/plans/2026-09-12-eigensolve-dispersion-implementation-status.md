@@ -12,9 +12,9 @@ przypięty do `62a3a6bbfc0ab96f5dc78e8b4dc9525123b033a5`.
 | Zakres | Potwierdzone | Pozostaje |
 |---|---|---|
 | Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | CI strict V04 spectral intent i build236 PASS; pełny certificate Γ dla NCV4 PASS; source CI nie jest walidacją eigensolve |
-| Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Build236 i świeży managed OpenAPI PASS; Γ KSP1e-12:50/50 PASS. Seria15 zlecona przez managed driver; pozostają terminalne artefakty i sprawdzony wykres |
+| Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Build236 i świeży managed OpenAPI PASS; Γ KSP1e-12:50/50 PASS. Seria15 failed przy+15:innerKSP. Poprawka8cb0a4b4 ma realPETScCI PASS; build237 blocked przez storage guard. Pozostają retry+15, pełne15 artefaktów i wykres |
 | Adaptive k pool | Poprawka exit telemetry, deterministyczny plan digest i kontrakty CI | Rzeczywisty świeży przebieg, pomiary CPU/RAM i serial/adaptive parity |
-| Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Pełna scoped kompozycja lower bounds i runtime consumer regionalnych minima pozostają oddzielnymi lukami |
+| Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Scoped kompozycja w źródłach; CI ujawniło swept density failure. WIP zachowuje exactlayer guards i wymaga świeżego actualmesh CI |
 | S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,37 regresji CI PASS; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
 | Nauka | Wstępne benchmarki i analityczne oracles nie domykają kwalifikacji | DE/BV, zbieżności siatki/airboxu/liczby modów, identyczny COMSOL A1 i GPU |
 | GUI/integracja | Frontend/browser fixture CI PASS; PR97 otwarty | Rzeczywisty workspace z modelem/wynikami, pełne review/science gates, merge i bezpieczne cleanup worktree |
@@ -147,6 +147,36 @@ trueKSPcriterion,maxrelative3.633466546860508e-10 vs1e-12.
 Nie promujemy tego kandydata do zaakceptowanego punktu lub pełnego wykresu.
 Diagnostyka rozbieżności KSP convergence/true residual trwa; nie zmieniono
 progu fizycznego1e-8 ani bramki true residual. Kontenery obu prób nie są aktywne.
+
+## Przyrost true KSP convergence — 2026-10-07
+
+Commit8cb0a4b4cf949ca33ed9ba5abc0ae1989ff07118 jest na remote. Osobny
+callback wstrzymuje dodatni KSP reason, dopóki bieżący reconstructed solution
+nie przejdzie true ||b-A_sigma*x|| criterion z niezmienionymi rtol/atol.
+PETSc negative/divergence/budget pozostają wiążące. Workspace preallocated
+perKSP i reuse; postsolve pomiary wszystkichRHS zachowane. Operator, publiczny
+ABI/Python/IR oraz physical1e-8 gate niezmienione. Source review i validator
+noty0831 PASS. GitHubActions37615363444 skompilował i wykonał realPETSc
+regresję: tinyrecursive/liveactualcallback, secondRHSsameKSP, GMRES/FGMRES,
+zeroRHS i iterationbudget PASS. To nie jest proof MFEM/SLEPc produkcji.
+
+Wolne miejsce wzrosło z0.713GB do10.818GB; freshhealth PASS, admission>=8GiB.
+Build237 `77e1e096a5ed462f94761c4787325500` przyjęty raz, source8cb0a4b4,
+digest `ef3d71cfe6041ffc62a1d518fd04feb8a840ebaae5e0a03634c5bb64cf0fd92c`,
+capture `2acefe2d5caf4a6cae09c6e0243f660e`, native snapshot
+`e0d2efa0cf35339aa163b1628b8f0be510f2f217071033437238189c9516d1a2`.
+Profil runtime-v2 bez kompilowania testów lokalnych. APIstate blocked/terminal przed kontenerem:po preparation wolne8.429945GB
+<8GiB. Kontener i kompilacja nie wystartowały. Po spełnieniu admission
+następna próba użyje zachowanej kapsuły, bez ponownego capture worktree. Pozostają
+terminalny receipt+artifacthashes, kontrolowany+15 i cały signed15/parity.
+
+MeshWIP nie włączony do commita/build237: źródłowa diagnoza wykazała
+siatkowanie jednego airbox-sourceface przed exactbodytags. Odrzucono fallback
+free-tet bez warstw oraz słabszą gwarancję samych geometrycznych partitions.
+Nowa trasa GEO musi zachować dokładneN+1 bodyzplanes/allnodes/no tetcross,
+kompozycję pól poexactvolume binding i density12nm. Review wykryło staleproof
+replay kolejnej próby; invalidation+serializationregression ma source review PASS. ActualGmshCI
+pending; żadnej deklaracji ukończonego regional/swept scope.
 <!-- current-eigensolve-status-end -->
 
 <!-- master1bdb-integration-20261006 -->

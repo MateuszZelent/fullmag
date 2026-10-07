@@ -62,7 +62,13 @@ from fullmag.meshing._mesh_targets import (
     resolve_shared_domain_targets,
 )
 from fullmag.meshing._size_field_plan import _build_scoped_lower_bound_fields
-from fullmag.meshing._gmsh_swept import _scaled_airbox_maximum_element_size
+from fullmag.meshing._gmsh_swept import (
+    _SCOPED_LAYER_PLANE_PROOF_KEY,
+    _SCOPED_LAYER_PLANE_PROOF_TOKEN,
+    _fresh_scoped_layer_plane_attempt_options,
+    _scaled_airbox_maximum_element_size,
+    generate_swept_tetrahedral_box_airbox_mesh,
+)
 from fullmag.meshing._gmsh_types import (
     FEM_TOPOLOGY_VOLUME_EPS,
     MixedPeriodicTopologyError,
@@ -12211,6 +12217,156 @@ class RegionMeshPolicyTests(unittest.TestCase):
             self.assertEqual(evidence["mesh_payload"]["element_count"], 1)
             self.assertEqual(evidence["report"]["build_mode"], "conformal_occ")
 
+    def test_scoped_layer_plane_report_waits_for_postmesh_proof(self) -> None:
+        geometry = fm.Box(120e-9, 80e-9, 20e-9, name="thin_box")
+        airbox = AirboxOptions(
+            size=(120e-9, 80e-9, 80e-9),
+            center=(0.0, 0.0, 0.0),
+            maximum_element_size=40e-9,
+            minimum_element_size=10e-9,
+        )
+        size_field = {
+            "kind": "ComponentRestrictedGradedCylinder",
+            "params": {
+                "GeometryName": "thin_box",
+                "VIn": 3e-9,
+                "VOut": 20e-9,
+                "TransitionDistance": 5e-9,
+                "Radius": 15e-9,
+                "Height": 8e-9,
+                "Center": [0.0, 0.0, 0.0],
+            },
+        }
+        lower_field = {
+            "kind": "ComponentRegionLowerBound",
+            "params": {
+                "GeometryName": "thin_box",
+                "RegionId": "thin_box:core",
+                "ShapeKind": "cylinder",
+                "Center": [0.0, 0.0, 0.0],
+                "Radius": 15e-9,
+                "Height": 8e-9,
+                "Axis": [0.0, 0.0, 1.0],
+                "MinimumElementSize": 8e-9,
+            },
+        }
+        options = MeshOptions(
+            mesh_strategy="thin_film_tetrahedral",
+            through_thickness_elements=2,
+            size_fields=[size_field],
+            lower_bound_fields=[lower_field],
+        )
+
+        def status_for_current_options(current_options: MeshOptions = options):
+            return next(
+                status
+                for status in mesh_asset_pipeline._build_mesh_operation_statuses(
+                    [geometry],
+                    current_options,
+                    airbox=airbox,
+                    build_mode="single_geometry_geo_layered_box",
+                    fallbacks_triggered=[],
+                )
+                if status.kind == "thin_film"
+            )
+
+        planned = status_for_current_options()
+        self.assertEqual(planned.status, "requested")
+        self.assertFalse(planned.details["layer_planes_realized"])
+        self.assertEqual(planned.details["layer_plane_verification"], "pending")
+        self.assertIsNone(planned.details["resolved_layer_partitions"])
+
+        proof = {
+            "_verification_token": _SCOPED_LAYER_PLANE_PROOF_TOKEN,
+            "geometry_name": "thin_box",
+            "requested_layer_partitions": 2,
+            "resolved_layer_partitions": 2,
+            "exact_plane_count": 3,
+            "layer_planes_m": [-10e-9, 0.0, 10e-9],
+            "all_magnetic_nodes_on_requested_planes": True,
+            "no_magnetic_tetrahedra_cross_requested_planes": True,
+            "verification": "passed",
+        }
+        size_field[_SCOPED_LAYER_PLANE_PROOF_KEY] = proof
+        lower_field[_SCOPED_LAYER_PLANE_PROOF_KEY] = proof
+        verified = status_for_current_options()
+        self.assertEqual(verified.status, "applied")
+        self.assertTrue(verified.details["layer_planes_realized"])
+        self.assertEqual(verified.details["layer_plane_verification"], "verified")
+        self.assertEqual(verified.details["resolved_layer_partitions"], 2)
+        serialized_status = json.dumps(verified.to_dict(), allow_nan=False)
+        self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, serialized_status)
+        self.assertNotIn("_verification_token", serialized_status)
+
+        # A second attempt may reuse the same MeshOptions, geometry, and layer
+        # count while changing the sizing input. Its pre-mesh status must not
+        # inherit the prior mesh's private proof.
+        size_field["params"]["VIn"] = 2e-9
+        next_attempt = _fresh_scoped_layer_plane_attempt_options(options)
+        self.assertEqual(next_attempt.size_fields[0]["params"]["GeometryName"], "thin_box")
+        self.assertEqual(next_attempt.through_thickness_elements, 2)
+        self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, next_attempt.size_fields[0])
+        self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, next_attempt.lower_bound_fields[0])
+        self.assertIs(options.size_fields[0][_SCOPED_LAYER_PLANE_PROOF_KEY], proof)
+        pending_again = status_for_current_options(next_attempt)
+        self.assertEqual(pending_again.status, "requested")
+        self.assertFalse(pending_again.details["layer_planes_realized"])
+        self.assertEqual(pending_again.details["layer_plane_verification"], "pending")
+        self.assertIsNone(pending_again.details["resolved_layer_partitions"])
+        serialized_premesh_event = json.dumps(
+            pending_again.to_dict(), allow_nan=False
+        )
+        self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, serialized_premesh_event)
+        self.assertNotIn("_verification_token", serialized_premesh_event)
+
+        raw_metadata_field = {
+            "kind": "ComponentRestrictedGradedCylinder",
+            "params": {
+                "GeometryName": "thin_box",
+                "VIn": 2e-9,
+                "VOut": 20e-9,
+                "TransitionDistance": 5e-9,
+                "Radius": 15e-9,
+                "Height": 8e-9,
+                "Center": [0.0, 0.0, 0.0],
+            },
+        }
+        mesh_workflow = {"mesh_options": {"size_fields": [raw_metadata_field]}}
+        built_options = _mesh_options_from_runtime_metadata(
+            mesh_workflow,
+            geometries=[geometry],
+            default_hmax=20e-9,
+        )
+        self.assertIs(built_options.size_fields[0], raw_metadata_field)
+        attempt_options = _fresh_scoped_layer_plane_attempt_options(built_options)
+        attempt_field = next(
+            field
+            for field in attempt_options.size_fields
+            if field.get("kind") == "ComponentRestrictedGradedCylinder"
+        )
+        self.assertIsNot(attempt_field, raw_metadata_field)
+        attempt_field[_SCOPED_LAYER_PLANE_PROOF_KEY] = proof
+        serialized_metadata = json.dumps(mesh_workflow, allow_nan=False)
+        self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, serialized_metadata)
+        self.assertNotIn("_verification_token", serialized_metadata)
+        self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, raw_metadata_field)
+
+        # Direct generator callers can reuse MeshOptions without going through
+        # asset_pipeline. Cleanup occurs before validation or any Gmsh work.
+        with self.assertRaisesRegex(ValueError, "film layer count must be a positive integer"):
+            generate_swept_tetrahedral_box_airbox_mesh(
+                geometry,
+                10e-9,
+                0,
+                order=1,
+                distribution="fixed",
+                recombine=False,
+                airbox=airbox,
+                options=options,
+            )
+        self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, size_field)
+        self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, lower_field)
+
     def test_direct_layered_box_region_floor_beats_eligible_upper_actual_density(self) -> None:
         try:
             import gmsh
@@ -12287,7 +12443,105 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     mesh_workflow=mesh_workflow,
                 )
 
-                self.assertEqual(report.build_mode, "single_geometry_occ")
+                self.assertEqual(
+                    report.build_mode,
+                    "single_geometry_geo_layered_box"
+                    if strategy == "thin_film_tetrahedral"
+                    else "single_geometry_occ",
+                )
+                serialized_report = json.dumps(report.to_dict(), allow_nan=False)
+                serialized_metadata = json.dumps(mesh_workflow, allow_nan=False)
+                self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, serialized_report)
+                self.assertNotIn("_verification_token", serialized_report)
+                self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, serialized_metadata)
+                self.assertNotIn("_verification_token", serialized_metadata)
+                if strategy == "thin_film_tetrahedral":
+                    thin_film_status = next(
+                        status
+                        for status in report.operation_statuses
+                        if status.kind == "thin_film" and status.scope == "thin_box"
+                    )
+                    self.assertEqual(thin_film_status.status, "applied")
+                    self.assertEqual(
+                        thin_film_status.requested_method,
+                        "thin_film_tetrahedral",
+                    )
+                    self.assertEqual(
+                        thin_film_status.actual_method,
+                        "geo_layer_partitioned_tetrahedral",
+                    )
+                    self.assertEqual(
+                        thin_film_status.details["through_thickness_elements"],
+                        layer_count,
+                    )
+                    self.assertEqual(
+                        thin_film_status.details["resolved_layer_partitions"],
+                        layer_count,
+                    )
+                    self.assertTrue(thin_film_status.details["layer_planes_realized"])
+                    self.assertEqual(
+                        thin_film_status.details["layer_plane_verification"],
+                        "verified",
+                    )
+                    self.assertTrue(
+                        np.allclose(
+                            thin_film_status.details["resolved_layer_planes_m"],
+                            np.linspace(-10e-9, 10e-9, layer_count + 1),
+                            rtol=0.0,
+                            atol=1e-15,
+                        )
+                    )
+                    self.assertEqual(
+                        thin_film_status.details["layer_mesh_mode"],
+                        "unstructured_tetrahedra_per_layer_volume",
+                    )
+                    diagnostic = next(
+                        item
+                        for item in report.thin_film_diagnostics
+                        if item.geometry_name == "thin_box"
+                    )
+                    self.assertEqual(
+                        diagnostic.actual_method,
+                        "geo_layer_partitioned_tetrahedral",
+                    )
+
+                    body_mask = np.asarray(mesh.element_markers) == 1
+                    body_elements = np.asarray(mesh.elements)[body_mask]
+                    self.assertGreater(len(body_elements), 0)
+                    body_nodes = np.unique(body_elements.reshape(-1))
+                    layer_planes = np.linspace(-10e-9, 10e-9, layer_count + 1)
+                    plane_tolerance = 1e-15
+                    body_node_z = np.asarray(mesh.nodes)[body_nodes, 2]
+                    plane_incidence = [
+                        np.count_nonzero(np.abs(body_node_z - plane) <= plane_tolerance)
+                        for plane in layer_planes
+                    ]
+                    self.assertEqual(len(plane_incidence), layer_count + 1)
+                    self.assertTrue(all(count > 0 for count in plane_incidence))
+                    node_plane_distance = np.min(
+                        np.abs(body_node_z[:, None] - layer_planes[None, :]),
+                        axis=1,
+                    )
+                    self.assertTrue(np.all(node_plane_distance <= plane_tolerance))
+                    body_cell_z = np.asarray(mesh.nodes)[body_elements, 2]
+                    for plane in layer_planes[1:-1]:
+                        crosses_plane = (
+                            np.min(body_cell_z, axis=1) < plane - plane_tolerance
+                        ) & (
+                            np.max(body_cell_z, axis=1) > plane + plane_tolerance
+                        )
+                        self.assertFalse(np.any(crosses_plane))
+                    body_centroid_z = np.mean(body_cell_z, axis=1)
+                    for lower_plane, upper_plane in zip(
+                        layer_planes[:-1], layer_planes[1:], strict=True
+                    ):
+                        self.assertGreater(
+                            np.count_nonzero(
+                                (body_centroid_z >= lower_plane - plane_tolerance)
+                                & (body_centroid_z <= upper_plane + plane_tolerance)
+                            ),
+                            0,
+                        )
                 self.assertEqual(report.authored_regions_count, 2)
                 self.assertEqual(report.realized_regions_count, 2)
                 scoped_lowers = [
