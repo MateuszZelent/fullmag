@@ -2121,6 +2121,79 @@ class ProblemApiTests(unittest.TestCase):
         )
         self.assertEqual(reloaded.stages[0].problem.study.to_ir(), original_ir)
 
+    def test_study_save_mode_accepts_numpy_and_sequence_selectors(self) -> None:
+        cases = (
+            (
+                {"indices": np.array([0, 2], dtype=np.int64)},
+                {"kind": "eigen_mode", "field": "mode", "indices": [0, 2]},
+            ),
+            (
+                {"indices": np.array([0], dtype=np.int64)},
+                {"kind": "eigen_mode", "field": "mode", "indices": [0]},
+            ),
+            (
+                {
+                    "indices": (0,),
+                    "branches": np.array([3, 1], dtype=np.int64),
+                    "sample_indices": np.array([0, 2], dtype=np.int64),
+                    "sample_labels": np.array(["Gamma", "X"]),
+                },
+                {
+                    "kind": "eigen_mode",
+                    "field": "mode",
+                    "indices": [0],
+                    "branches": [3, 1],
+                    "sample_selector": {
+                        "sample_indices": [0, 2],
+                        "sample_labels": ["Gamma", "X"],
+                    },
+                },
+            ),
+            (
+                {
+                    "indices": range(1, 3),
+                    "sample_indices": (2, 0),
+                    "sample_labels": ["X", "M"],
+                },
+                {
+                    "kind": "eigen_mode",
+                    "field": "mode",
+                    "indices": [1, 2],
+                    "sample_selector": {
+                        "sample_indices": [2, 0],
+                        "sample_labels": ["X", "M"],
+                    },
+                },
+            ),
+        )
+        for selectors, expected in cases:
+            with self.subTest(selectors=tuple(selectors)):
+                fm.reset()
+                try:
+                    fm.study("numpy_save_mode").save("mode", **selectors)
+                    outputs = flat_world._state._outputs
+                    self.assertEqual(len(outputs), 1)
+                    self.assertEqual(outputs[0].to_ir(), expected)
+                finally:
+                    fm.reset()
+
+    def test_study_save_mode_preserves_empty_and_invalid_selectors(
+        self,
+    ) -> None:
+        invalid_cases = (
+            ({"indices": np.array([], dtype=np.int64)}, "requires at least one"),
+            ({"indices": np.array([-1], dtype=np.int64)}, "must be >= 0"),
+            ({"indices": np.array([True])}, "integers"),
+        )
+        for selectors, error in invalid_cases:
+            with self.subTest(selectors=tuple(selectors)):
+                fm.reset()
+                try:
+                    with self.assertRaisesRegex(ValueError, error):
+                        fm.study("invalid_save_mode").save("mode", **selectors)
+                finally:
+                    fm.reset()
+
     def test_eigenmodes_rejects_frequency_response_outputs(self) -> None:
         with self.assertRaisesRegex(ValueError, "Eigenmodes outputs"):
             fm.Eigenmodes(outputs=[fm.SaveResponse("susceptibility_tensor")])

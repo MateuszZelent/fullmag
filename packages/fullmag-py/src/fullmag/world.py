@@ -8824,11 +8824,19 @@ def save(
             _state._outputs.append(
                 SaveMode(
                     field=field,
-                    indices=tuple(indices or ()),
-                    branches=tuple(branches or ()),
+                    indices=(
+                        tuple(indices) if indices is not None else ()
+                    ),
+                    branches=(
+                        tuple(branches) if branches is not None else ()
+                    ),
                     all_modes=all_modes,
-                    sample_indices=tuple(sample_indices or ()),
-                    sample_labels=tuple(sample_labels or ()),
+                    sample_indices=(
+                        tuple(sample_indices) if sample_indices is not None else ()
+                    ),
+                    sample_labels=(
+                        tuple(sample_labels) if sample_labels is not None else ()
+                    ),
                 )
             )
         elif quantity == "dispersion":

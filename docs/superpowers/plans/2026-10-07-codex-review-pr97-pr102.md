@@ -189,3 +189,7 @@ Każdy ID oceniany wobec aktualnego kodu i konsumentów, również historyczne u
 Uwagi 4061684290 i 5440044234: wspólny konstruktor native modal wiąże completion z rzeczywistym RunStatus, również dla nie-współdzielonej ścieżki Bloch/Floquet. Regresja sprawdza cancelled, brak converged i UserCancelled oraz przypadek completed. CI jawnie wybiera ten test w fullmag-runner. Review źródeł przeszło; test kompilowany wyłącznie w GitHub Actions, wynik tej poprawki oczekuje CI.
 
 Poprzedni commit f0594581b17e107446343c7a851016f193ee5009: bootstrap 37606427947 zakończony success (8 jobów); obejmuje regresję LU i budżetu workspace. To dowód kontraktów źródeł, nie kwalifikacji produkcyjnego FEM.
+
+## Selektory NumPy — 2026-10-07
+
+Uwagi 4060116283 i 4080865455: study.save(mode) odróżnia None od przekazanej sekwencji zamiast wywoływać bool tablic NumPy. Dotyczy indices, branches, sample_indices i sample_labels. SaveMode zachowuje dotychczasową walidację pustych i błędnych selektorów. Dodano testy tablic wieloelementowych i singleton [0], tuple/range/list oraz błędów walidacji. AST/diff PASS; istniejący krok Run Python API tests w bootstrap pokrywa regresje, wynik oczekuje CI.
