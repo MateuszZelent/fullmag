@@ -332,6 +332,13 @@ SessionStore i nie uruchomienie LLG. Wymaga terminalnego, udanego buildu
 Nowy przykład jest osobnym, dokładnie zahashowanym wejściem naukowym;
 nie wolno przypisywać go wcześniejszej kapsule buildu.
 
+Launcher przyjmuje kapsułę `snapshot` albo czystą kapsułę `commit`; obie wymagają
+pełnego SHA commita oraz obu jawnych digestów. `commit` wymaga dodatkowo
+`source_snapshot_dirty=false`. Tryb źródeł nie pomija kontroli trusted documents,
+hashy pakietu ani pełnego `verify_source`. Obserwator ponawia te same kontrole.
+Regresja interpretowana: `scripts/test_antenna_ram_source_modes.py::AntennaRamSourceModesTests`;
+nie jest wykonaniem solvera ani kwalifikacją naukową.
+
 Sesja, cache siatki i oryginalny wynik znajdują się wyłącznie na ograniczonym
 tmpfs `/ram` (768 MiB). Kontener ma 2 CPU, 2 GiB RAM, 128 procesów, UID/GID
 65532, read-only rootfs, brak capabilities, podwyższonych uprawnień, sieci,

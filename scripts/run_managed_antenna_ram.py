@@ -129,8 +129,11 @@ def resolved_build(repo, job_id, commit, source_digest, native_snapshot_sha256):
         raise ValueError("Managed capsule mount missing or ambiguous")
     capsule = storage.validate_path(host_path(mounts[0][1]), base)
     manifest = verify_source(capsule, source_digest)
-    if manifest.get("resolved_commit") != commit or manifest.get("source_mode") != "snapshot":
-        raise ValueError("Scientific run requires the exact requested snapshot")
+    if manifest.get("resolved_commit") != commit or manifest.get("source_mode") not in ("commit", "snapshot"):
+        raise ValueError("Scientific run requires the exact requested source capsule")
+    if manifest["source_mode"] == "commit" \
+            and context["native_source_identity"]["source_snapshot_dirty"] is not False:
+        raise ValueError("Scientific commit capsule requires clean native source identity")
     package = storage.validate_path(build / "artifacts/outputs/.fullmag/local", build)
     return layout, build, context, built, capsule, package
 
