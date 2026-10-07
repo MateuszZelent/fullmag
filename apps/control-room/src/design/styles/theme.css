@@ -104,9 +104,9 @@
   --fm-hud-grid: #bac2de;
   --fm-hud-chip: #1e1e2e;
   --fm-hud-chip-border: #7f849c;
-  --fm-hud-cube-face: #313244;
-  --fm-hud-cube-edge: #7f849c;
-  --fm-hud-cube-shade: #000000;
+  --fm-hud-cube-face: #585b70;
+  --fm-hud-cube-edge: #9399b2;
+  --fm-hud-cube-shade: #11111b;
 }
 
 /* ===== Catppuccin Latte (light) ===== */
