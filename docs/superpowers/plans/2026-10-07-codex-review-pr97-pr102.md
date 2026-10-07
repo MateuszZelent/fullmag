@@ -251,3 +251,7 @@ Ponowna ocena4205652672: not_actionable. Nie ma auto/default/fallback do modal-v
 ## Rotated DMI i PBC w authoringu Python — 2026-10-07
 
 Uwaga4205406974: oba guard call sites otrzymują PBC; Exchange jest nadal wymagane przy niezerowym rotated DMI i jakiejkolwiek otwartej osi. Jawnie w pełni periodyczny model3D nie ma tej otwartej granicy i nie jest już błędnie odrzucany podczas round-trip. Test pozytywny używa legalnego truncated_images z image_counts1/1/1 (nie periodic_airbox_k0, które wymaga openz), a negatywne obejmują brak PBC i częściowe PBC. Reguła odtwarza istniejący kontrakt plannera; walidacji airbox ani fizyki nie poluzowano. AST/diff/source review PASS; istniejący suite test_scene_document_problem_ir.py w GHA pokrywa regresje. Wykonanie CI jeszcze wymagane.
+
+## Jawna weryfikacja GitHub Actions — 2026-10-07
+
+Dla SHAe54c81a18 API actions/runs zwróciło total_count0, mimo aktywnego bootstrap i enabled Actions. Przyczyny braku automatycznego eventu nie potwierdzono. Dodano workflow_dispatch do istniejącego bootstrap, zachowując push/pull_request; umożliwia to zwykłe jawne zlecenie zaakceptowanych przez użytkownika testów w GHA na branchu zadania. Nie wprowadzono lokalnej kompilacji ani obejścia runnera FEM. Wymagane są run ID, faktyczny head_sha i wyniki pokrywających kroków; push sam w sobie nie jest dowodem uruchomienia CI.
