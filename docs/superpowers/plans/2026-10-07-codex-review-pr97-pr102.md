@@ -237,3 +237,7 @@ Oryginalna regresja completion anulowania zakończyła się SUCCESS w kroku Run 
 ## Regresja rzeczywistego eksportu PBC — 2026-10-07
 
 Test scene_pbc_overrides_roundtrip_via_python_helper korzysta z istniejących helperów API: Python export-scene → Rust scene_document_overrides → Python rewrite-script do kopii → ponowny export-scene. Przypadki missing/null/value sprawdzają pełne osie, demag i image_counts oraz niezmienione bajty oryginału. Bez skipu przy braku środowiska; jawny filtr GHA fullmag-api binary ma setup Python i editable fullmag-py. Niezależne review źródeł bez blockerów; wykonanie testu w CI oczekiwane. Nie jest to test HTTP ani solvera.
+
+## Regresja wewnętrznych kandydatów trackingu — 2026-10-07
+
+Pełny output_publication_tests ujawnił przestarzałe oczekiwanie indeksów 0..count w teście internal_tracking_requests_all_modes_without_public_path_selectors. Produkcyjny helper już emituje all_modes, a selector używa rzeczywistych ID wyników. Zmieniono wyłącznie test: zachowano kontrolę usunięcia publicznych selektorów i dodano rzeczywisty select_eigen_outputs dla dwóch próbek oraz nieciągłych raw IDs4/9/11. Stary kontrakt i przeciek publicznych selektorów muszą ten test odrzucić. Niezależne source review bez blockerów, diff PASS; ponowne wykonanie całego modułu w GHA wymagane.

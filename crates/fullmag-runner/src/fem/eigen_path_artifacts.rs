@@ -1120,18 +1120,69 @@ mod output_publication_tests {
             .iter()
             .filter_map(|output| match output {
                 OutputIR::EigenMode {
+                    all_modes,
                     indices,
                     branches,
                     sample_selector,
                     ..
-                } => Some((indices, branches, sample_selector)),
+                } => Some((all_modes, indices, branches, sample_selector)),
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(modes.len(), 1);
-        assert_eq!(modes[0].0, &[0, 1, 2]);
+        assert!(*modes[0].0);
         assert!(modes[0].1.is_empty());
-        assert!(modes[0].2.is_none());
+        assert!(modes[0].2.is_empty());
+        assert!(modes[0].3.is_none());
+
+        // Candidate IDs come from the solved spectrum, not 0..requested_count.
+        let model = crate::eigen::EigenSolverModel::ReferenceScalarTangent;
+        let result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5,
+            samples: [7, 20]
+                .into_iter()
+                .map(|sample_index| crate::eigen::SingleKSolveResult {
+                    sample: KSampleDescriptor {
+                        sample_index,
+                        label: None,
+                        segment_index: None,
+                        path_s: sample_index as f64,
+                        t_in_segment: 0.0,
+                        k_vector: [0.0, sample_index as f64, 0.0],
+                    },
+                    modes: [4, 9, 11]
+                        .into_iter()
+                        .map(|raw_mode_index| {
+                            let mut mode = residual_transport_test_mode(Some(1.0e-9));
+                            mode.raw_mode_index = raw_mode_index;
+                            mode.branch_id = None;
+                            mode
+                        })
+                        .collect(),
+                    relaxation_steps: 0,
+                    solver_model: model,
+                    solver_notes: Vec::new(),
+                    solver_diagnostics: None,
+                })
+                .collect(),
+            branches: Vec::new(),
+            solver_model: model,
+            notes: Vec::new(),
+            include_demag: false,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            solver_policy: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+        let selection = crate::eigen::output_selection::select_eigen_outputs(&result, &internal)
+            .expect("internal tracking selects every returned candidate at every sample");
+        for sample_index in [7, 20] {
+            assert_eq!(
+                selection.field_modes_for_sample(sample_index).collect::<Vec<_>>(),
+                vec![4, 9, 11],
+            );
+        }
         assert!(!internal
             .iter()
             .any(|output| matches!(output, OutputIR::DispersionCurve { .. })));
