@@ -321,6 +321,9 @@ jobs:
           g++ -std=c++17 -Inative/include -Ibackends/fem/include -Ibackends/fem/cpu backends/fem/tests/frequency_domain/modal_progress_elapsed_test.cpp -o "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
           "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
 
+      - name: Run COMSOL scientific gate regression suite
+        run: python -B scripts/test_validate_comsol_dispersion_scientific_gate.py -v
+
       - name: Run DE Gamma Krylov trial contracts
         run: python scripts/test_de_gamma_krylov_trial.py -v
 

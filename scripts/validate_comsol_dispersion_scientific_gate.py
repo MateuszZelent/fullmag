@@ -1600,7 +1600,7 @@ def _validate_dispersion_analytic_coverage(
     )
 
 
-def _safe_relative_path(case_dir: Path, value: object, label: str, reasons: list[str]) -> Path | None:
+def _safe_relative_path(case_dir: Path, value: object, label: str, reasons: list[str], *, directory: bool = False) -> Path | None:
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         reasons.append(f"{label} is not a safe relative path")
         return None
@@ -1622,8 +1622,8 @@ def _safe_relative_path(case_dir: Path, value: object, label: str, reasons: list
     except (OSError, ValueError):
         reasons.append(f"{label} escapes the case output directory")
         return None
-    if candidate.is_symlink() or not candidate.is_file():
-        reasons.append(f"{label} is not a regular file")
+    if candidate.is_symlink() or not (candidate.is_dir() if directory else candidate.is_file()):
+        reasons.append(f"{label} is not a directory" if directory else f"{label} is not a regular file")
         return None
     return candidate
 
@@ -1657,6 +1657,10 @@ def _load_numeric_bundle(
     if not isinstance(root, str) or not root or not isinstance(artifacts, Mapping):
         reasons.append(f"{label} must contain root and artifacts")
         return None
+    bundle_root = _safe_relative_path(case_dir, root, f"{label}.root", reasons, directory=True)
+    if bundle_root is None:
+        return None
+    resolved_bundle_root = bundle_root.resolve()
     default_paths = {
         "metadata": "metadata.json",
         "spectrum": "eigen/spectrum.v2.json",
@@ -1676,6 +1680,11 @@ def _load_numeric_bundle(
         path = _safe_relative_path(case_dir, relative, f"{label}.{logical}", reasons)
         expected_hash = spec.get("sha256")
         if path is None:
+            continue
+        try:
+            path.resolve().relative_to(resolved_bundle_root)
+        except (OSError, ValueError):
+            reasons.append(f"{label}.{logical} is outside the declared numeric run root")
             continue
         if not isinstance(expected_hash, str) or expected_hash != _sha256(path):
             reasons.append(f"{label}.{logical} SHA256 does not match the referenced artifact")
@@ -2495,7 +2504,7 @@ def _validate_convergence_pair(
         reasons.append(f"convergence.{key} is missing {len(missing)} required sample/band comparisons")
     maximum = max(errors, default=math.inf)
     return _new_check(
-        "pass" if len(reasons) == reason_count and section.get("status") == "pass" and not missing and errors and maximum <= CONVERGENCE_RELATIVE_TOLERANCE else "fail",
+        "pass" if len(reasons) == reason_count and section.get("status") == "pass" and not missing and errors and maximum <= (AIRBOX_CONVERGENCE_RELATIVE_TOLERANCE if key == "airbox" else CONVERGENCE_RELATIVE_TOLERANCE) else "fail",
         relative_changes=changes,
         comparison_count=len(comparisons),
         expected_comparison_count=len(expected_pairs),
@@ -2770,6 +2779,27 @@ def validate_case(
                                       qualification="NOT VERIFIED", verified_step_count=len(steps) if isinstance(steps, list) else 0)
         if not assignment_pass:
             reasons.append("scientific tracking assignment/cluster-selection replay remains NOT VERIFIED")
+    checks = {
+        "artifact_binding": evidence_check,
+        "numeric_source": source_check,
+        "modal_field_phase": field_check,
+        "finite_values": finite_check,
+        "spectrum_samples": _new_check("pass" if len(sample_map) == (1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT) else "fail", sample_count=len(sample_map)),
+        "tracked_branches": branch_check,
+        "tracking_field_metric_replay": tracking_replay,
+        "tracking_assignment_replay": assignment_replay,
+        "dispersion_csv": csv_check,
+        "postsolve_analytic_columns": analytic_columns_check,
+        "kittel": kittel_check,
+        "kalinikos_slab_n0": ks_check,
+        "dispersion_analytic_coverage": dispersion_analytic_check,
+        "mesh_convergence": convergence["mesh"],
+        "airbox_convergence": convergence["airbox"],
+        "mode_count_convergence": convergence["mode_count"],
+    }
+    for name, check in checks.items():
+        if check.get("status") not in {"pass", "not_applicable"}:
+            reasons.append(f"required scientific check {name} did not pass: {check.get('status')!r}")
     status = "qualified" if not reasons else "not_qualified"
     return {
         "schema_version": GATE_SCHEMA,
@@ -2779,24 +2809,7 @@ def validate_case(
         "campaign_contract_status": campaign_contract_status,
         "scientific_qualification": "qualified" if status == "qualified" else "not_verified",
         "reasons": reasons,
-        "checks": {
-            "artifact_binding": evidence_check,
-            "numeric_source": source_check,
-            "modal_field_phase": field_check,
-            "finite_values": finite_check,
-            "spectrum_samples": _new_check("pass" if len(sample_map) == (1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT) else "fail", sample_count=len(sample_map)),
-            "tracked_branches": branch_check,
-            "tracking_field_metric_replay": tracking_replay,
-            "tracking_assignment_replay": assignment_replay,
-            "dispersion_csv": csv_check,
-            "postsolve_analytic_columns": analytic_columns_check,
-            "kittel": kittel_check,
-            "kalinikos_slab_n0": ks_check,
-            "dispersion_analytic_coverage": dispersion_analytic_check,
-            "mesh_convergence": convergence["mesh"],
-            "airbox_convergence": convergence["airbox"],
-            "mode_count_convergence": convergence["mode_count"],
-        },
+        "checks": checks,
         "artifact_bindings": {path.as_posix(): record for path, record in artifacts.items()},
         "evidence_path": EVIDENCE_RELATIVE_PATH.as_posix(),
         "parameters_path": str(parameters_path),
@@ -2808,7 +2821,7 @@ def validate_requested_cases(case_results: Mapping[str, Mapping[str, Any]], case
 
     reasons: list[str] = []
     requested = tuple(cases)
-    if requested != EXPECTED_CASES:
+    if len(requested) != len(EXPECTED_CASES) or set(requested) != set(EXPECTED_CASES):
         reasons.append(f"complete COMSOL qualification requires cases {','.join(EXPECTED_CASES)}; requested {','.join(requested)}")
     for case in requested:
         result = case_results.get(case)

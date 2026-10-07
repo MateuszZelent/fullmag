@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import importlib.util
+import itertools
 import math
 import struct
 import subprocess
@@ -14,6 +15,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -629,6 +631,7 @@ class ScientificGateTests(unittest.TestCase):
             report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
         self.assertEqual(report["campaign_contract_status"], "pass", report["reasons"][:12])
         airbox_check = report["checks"]["airbox_convergence"]
+        self.assertEqual(airbox_check["status"], "pass", report["reasons"][:12])
         self.assertTrue(airbox_check["adjacent_comparisons"])
         self.assertTrue(all(
             item["comparison_reference"] == "adjacent_airbox_boundary_sweep"
@@ -1367,6 +1370,47 @@ class ScientificGateTests(unittest.TestCase):
             report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
         self.assertEqual(report["status"], "not_qualified")
         self.assertTrue(any("complete tracked branches" in reason for reason in report["reasons"]))
+
+    def test_complete_case_selection_accepts_all_permutations(self):
+        results = {case: {"status": "qualified", "scientific_qualification": "qualified", "reasons": []}
+                   for case in gate.EXPECTED_CASES}
+        for cases in itertools.permutations(gate.EXPECTED_CASES):
+            with self.subTest(cases=cases):
+                self.assertEqual(gate.validate_requested_cases(results, cases)["status"], "qualified")
+        self.assertEqual(gate.validate_requested_cases(results, ("c0", "c1", "c1"))["status"], "not_qualified")
+
+    def test_numeric_bundle_cannot_mix_files_from_other_declared_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            evidence = json.loads((case_dir / gate.EVIDENCE_RELATIVE_PATH).read_text(encoding="utf-8"))
+            runs = evidence["convergence"]["mesh"]["runs"]
+            descriptor = copy.deepcopy(runs["coarse"])
+            descriptor["artifacts"]["spectrum"] = copy.deepcopy(runs["fine"]["artifacts"]["spectrum"])
+            reasons = []
+            bundle = gate._load_numeric_bundle(case_dir, descriptor, "mixed", reasons, require_demag=True)
+        self.assertIsNone(bundle)
+        self.assertTrue(any("outside the declared numeric run root" in reason for reason in reasons), reasons)
+
+    def test_numeric_bundle_root_must_be_an_existing_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory)
+            (case_dir / "regular-file").write_text("{}", encoding="utf-8")
+            for root in ("regular-file", "missing-directory"):
+                with self.subTest(root=root):
+                    reasons = []
+                    result = gate._load_numeric_bundle(case_dir, {"root": root, "artifacts": {}},
+                                                       "bundle", reasons, require_demag=True)
+                    self.assertIsNone(result)
+                    self.assertTrue(any("root is not a directory" in reason for reason in reasons), reasons)
+
+    def test_failed_check_without_reason_cannot_qualify(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            with mock.patch.object(gate, "_validate_convergence", return_value={"status": "fail"}):
+                report = gate.validate_case(case_dir, "c0", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("required scientific check mesh_convergence did not pass" in reason
+                            for reason in report["reasons"]), report["reasons"])
 
     def test_partial_case_selection_cannot_be_promoted(self):
         result = gate.validate_requested_cases({"c1": {"status": "qualified", "reasons": []}}, ("c1",))
