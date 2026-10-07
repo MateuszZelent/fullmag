@@ -14,6 +14,8 @@ use crate::terminal_logs::{terminal_logger, TerminalLogSource};
 use crate::types::*;
 
 mod development_consumer_probe;
+mod development_active_run_probe;
+mod development_workspace_probe;
 
 pub(crate) const LOCALHOST_HTTP_HOST: &str = "localhost";
 pub(crate) const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
@@ -3386,6 +3388,8 @@ pub(crate) fn verify_development_restart_consumer() -> Result<()> {
     match std::env::var("FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE").as_deref() {
         Ok("empty" | "scene") => verify_development_api_owner(),
         Ok("readiness") => development_consumer_probe::verify(),
+        Ok("active-run" | "active-run-paused") => development_active_run_probe::verify(),
+        Ok("browser-workspace") => development_workspace_probe::verify(),
         Ok("preparation-faults") => {
             crate::development_api_owner::verify_candidate_preparation_faults(&repo_root())
         }
@@ -3478,8 +3482,25 @@ fn verify_owned_restart_consumer(
         emit_development_restart_probe_progress,
     )?;
     let token_sha = fullmag_session::hex_sha256(token.as_bytes());
-    let result = transport::read_result(&storage, &worktree, &request_id, &token_sha)?
-        .context("native consumer did not publish its terminal result")?;
+    let result_deadline = Instant::now() + Duration::from_secs(145);
+    let result = loop {
+        if let Some(result) =
+            transport::read_result(&storage, &worktree, &request_id, &token_sha)?
+        {
+            break result;
+        }
+        if Instant::now() >= result_deadline {
+            bail!("native consumer did not publish its terminal result before the diagnostic deadline");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        pump.step_observed(
+            root,
+            guard,
+            &mut attach,
+            &mut scratch,
+            emit_development_restart_probe_progress,
+        )?;
+    };
     if result.state != transport::RestartResultState::Ready
         || result.editor.as_ref() != Some(&editor)
         || result.workspace.as_ref() != Some(&workspace)

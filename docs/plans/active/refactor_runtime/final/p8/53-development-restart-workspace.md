@@ -1,5 +1,32 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53BC](53bc-real-active-run-restart-refusal.md), 06.10.2026:
+bramka odmowy restartu podczas rzeczywistego FDM CPU solve **CLOSED**.
+Trzy managed receipts z manifestu
+`44a976d76203ce65d8cdb36a447ec62cd09c32c0b757bb181d76827ee896d549`
+potwierdzają `running`, `paused` i wyścig Start/freeze. Odmowa zachowuje
+API/session/run i epoch; running kontynuuje kroki, paused pozostaje na
+kroku 15 i po jawnym wznowieniu osiąga krok 16. Wszystkie własne procesy
+mają terminalny wait. Publiczny restart, powtórny restart, Compute po
+odtworzeniu i pozostałe wymagane bramki pozostają otwarte. Poniższe
+checkpointy opisują wcześniejsze stany i nie cofają zamknięcia P8-53BC.
+
+[P8-53AZ](53az-native-browser-inspector-draft-guard.md): rzeczywisty szkic
+Inspectora zablokował restart bez utraty danych i bez replacement. Po jawnym
+Revert odtworzenie modelu i dirty document **PASS**, receipt
+`4d829bea8f7746a78c889c99c4fddfdc`, exit 0. Próba utrwala bieżącą diagnostykę
+osobno od produkcyjnych źródeł frozen D. Dowód nie obejmuje Apply, wszystkich
+typów szkiców ani aktywnego solvera; publiczny restart pozostaje wyłączony.
+
+[P8-53AY](53ay-native-browser-workspace-restart.md), 06.10.2026: rzeczywisty
+restart C→D niepustego idle workspace FDM **PASS**, receipt
+`6379d58c5ac14c9b8c956bd775c3e9cc`, exit 0, 7 kontroli. Scena z obiektem,
+regionem i materiałem oraz dirty project document zostały odtworzone bez
+zmiany treści i rewizji; nowe API/session scope, kernel generation 1,
+visible WebGL bez utraty kontekstu. Procesy testowe terminalnie odebrane.
+Pozostałe fault gates, warianty szkiców i publiczne udostępnienie pozostają
+otwarte. Poniższe checkpointy opisują wcześniejsze stany.
+
 [P8-53AV](53av-asynchronous-candidate-preparation.md) zamyka pozytywny cykl
 gotowości pompy między dwoma zweryfikowanymi buildami: 13 kontroli, pierwszy
 krok 17 ms, odnowienie i wygaśnięcie lease, reuse kandydata, odebrane własne

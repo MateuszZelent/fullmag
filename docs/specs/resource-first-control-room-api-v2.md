@@ -47,6 +47,14 @@ kompatybilny z bootstrapem i klientami
 w migracji; nie jest dowodem ochrony wieloetapowej operacji. Szczegóły
 ograniczeń i usunięcia adaptera: ADR 0011, uzupełnienie P3a z 22.09.2026.
 
+Pierwsza zaakceptowana publikacja sesji przez wewnętrzny publisher solvera
+również zwiększa licznik inkarnacji API (`current_live_session_epoch`), nawet
+gdy sesja nie powstała przez komendę Create v2. Licznik jest publikowany pod
+blokadą transition razem z pierwszym snapshotem. Kolejne klatki tej samej
+sesji nie zwiększają licznika; odrzucona pierwsza klatka ani wyczerpanie
+licznika nie publikują sesji. Nie zmienia to naukowego `session_epoch`
+zapisanego w metadanych sesji ani kształtu zasobów OpenAPI.
+
 WebSocket nie przenosi scope w URL. Pierwszy `hello.payload.request_scope_epoch`
 jest wymagany i odpowiada inkarnacji przechwyconej przy upgrade. Klient ze
 znanym statusem nie przetwarza kolejnych zdarzeń przed zgodnym `hello`; przy

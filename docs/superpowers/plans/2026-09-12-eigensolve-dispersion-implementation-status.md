@@ -8120,3 +8120,26 @@ Dopiero jej wynik może potwierdzić wykonanie/regresje tego przyrostu.
 Publiczny writer/API0.3 i capability nie przełączone. Cały S00–S12 i naukowy
 runtime C58 Γ/signed15/COMSOL/GUI/GPU/integracja pozostają otwarte. Równoległy
 cooperative preview cancel jest oddzielnym źródłowym przyrostem, niewdrożonym.
+
+<!-- master-c6b8-integration-20261007 -->
+## Checkpoint — integracja master c6b8, jeden konflikt stanu sesji
+
+Pobrano origin/master c6b8e4f08be06e39a7e3855bc01f72dcce1a6f26 do
+brancha zadania po czystym checkpointcie74d4f124194232d87dc82283b6ce0db88e1bf329.
+Zachowano29 plików mastera. Jedyny konflikt main.rs w publikacji bieżącej sesji
+rozwiązano przez zachowanie guardu modal scalar QoS oraz atomowego first_session_epoch
+pod write lock current_live_state; zewnętrzny transition lock chroni oba.
+Checked overflow i ścieżki odmowy pozostają zachowane. Source review bez findings;
+parser Rust i AST zmienionych skryptów Python PASS. Nie kompilowano ani nie
+uruchamiano testów lokalnych. Nowe CI wymaga zakończenia merge/push; poprzedni
+sprawdzony f8b616509 miał8/8 bootstrap PASS. To integracja mastera do brancha,
+nie merge PR97 na master ani naukowa kwalifikacja solvera.
+
+Runner odzyskany healthy/accepting bez aktywnych jobów. Wąski preview233/234
+terminal preview: dwa execution,1288484419B. Użytkownik zatwierdził dokładnie te
+katalogi; managed apply przyjęty dla plan-9eb148b0b26c4b27944ee4eba61b0f58,
+ostatni odczyt running/applied=false. Przed mutacją klient sprawdził dokładne
+IDs/ścieżki, świeży health i pusty slot; wykonawca ponawia guards źródeł,
+receiptów, użytkowników i mountów. Wynik terminalny/odzyskane bajty jeszcze
+niepotwierdzone. Równoległe zwolnienie miejsca zwiększyło free do13.75GB;
+nie przypisujemy tej zmiany niedokończonemu cleanup. Pełny S00–S12 nadal OPEN.

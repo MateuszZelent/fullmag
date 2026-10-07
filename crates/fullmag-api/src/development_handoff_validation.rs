@@ -382,7 +382,8 @@ pub(crate) fn validate_cold_commit(
         &current.id,
         &current.source_sha256,
         &request.target_build_id,
-    )?;
+    )
+    .context("cold_commit_phase:workspace_binding")?;
 
     let store_root = state
         .submit_store_root
@@ -393,7 +394,8 @@ pub(crate) fn validate_cold_commit(
     {
         bail!("accepted store is not an existing canonical path");
     }
-    validate_managed_store_location(storage_root, worktree, store_root)?;
+    validate_managed_store_location(storage_root, worktree, store_root)
+        .context("cold_commit_phase:store_location")?;
     let accepted_store_binding = fullmag_runtime_control::accepted_store::store_binding(store_root)
         .context("accepted store binding is unavailable")?;
     validate_lower_hex(&accepted_store_binding, 64, "accepted-store binding")?;
@@ -403,7 +405,7 @@ pub(crate) fn validate_cold_commit(
     if store.root() != store_root {
         bail!("accepted store changed during validation");
     }
-    require_cold_store(&store)?;
+    require_cold_store(&store).context("cold_commit_phase:store_admission")?;
     let fence = store
         .read_development_idle_fence()?
         .context("cold handoff admission fence is absent")?;
@@ -433,7 +435,8 @@ pub(crate) fn validate_cold_commit(
     ensure_before_deadline(deadline, "staged handoff snapshot digest")?;
     let snapshot: HandoffSnapshot =
         serde_json::from_slice(&snapshot_bytes).context("parsing strict handoff snapshot")?;
-    validate_snapshot(&snapshot, &expected, request, Some(&expected.scene))?;
+    validate_snapshot(&snapshot, &expected, request, Some(&expected.scene))
+        .context("cold_commit_phase:snapshot_binding")?;
     let expected_binding = handoff_binding(&expected);
     validate_capsule_semantics(
         state,
@@ -444,7 +447,8 @@ pub(crate) fn validate_cold_commit(
         snapshot.assets.len(),
         None,
         deadline,
-    )?;
+    )
+    .context("cold_commit_phase:capsule_semantics")?;
 
     ensure_before_deadline(deadline, "candidate bundle validation")?;
     validate_candidate_bundle(
@@ -454,7 +458,8 @@ pub(crate) fn validate_cold_commit(
         &request.target_build_id,
         &request.candidate_manifest_sha256,
         deadline,
-    )?;
+    )
+    .context("cold_commit_phase:candidate_bundle")?;
     ensure_before_deadline(deadline, "cold handoff validation")?;
 
     Ok(ValidatedColdCommit {
@@ -738,9 +743,30 @@ fn validate_capsule_semantics(
     Ok(())
 }
 
+pub(crate) fn cold_commit_failure_stage(error: &anyhow::Error) -> &'static str {
+    // Emit only source-owned labels. Never return the underlying error text.
+    let mut stage = "validate_cold_commit";
+    for cause in error.chain() {
+        stage = match cause.to_string().as_str() {
+            "cold_commit_phase:workspace_binding" => "workspace_binding",
+            "cold_commit_phase:store_location" => "store_location",
+            "cold_commit_phase:store_admission" => "store_admission",
+            "cold_commit_phase:snapshot_binding" => "snapshot_binding",
+            "cold_commit_phase:capsule_semantics" => "capsule_semantics",
+            "cold_commit_phase:candidate_bundle" => "candidate_bundle",
+            "cold_commit_phase:deadline" => "validation_deadline",
+            _ => stage,
+        };
+    }
+    stage
+}
+
 fn ensure_before_deadline(deadline: Instant, operation: &str) -> Result<()> {
     if Instant::now() >= deadline {
-        bail!("absolute cold handoff deadline expired during {operation}");
+        return Err(anyhow::anyhow!(
+            "absolute cold handoff deadline expired during {operation}"
+        ))
+        .context("cold_commit_phase:deadline");
     }
     Ok(())
 }
@@ -1124,6 +1150,26 @@ struct RuntimeBundleSource {
     cuda: bool,
     features: Vec<String>,
     executable_sha256: BTreeMap<String, String>,
+    #[serde(default, deserialize_with = "deserialize_build_source_snapshot")]
+    build_source_snapshot: Option<RuntimeBuildSourceSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeBuildSourceSnapshot {
+    record_path: String,
+    inventory_sha256: String,
+    source_root: String,
+}
+
+fn deserialize_build_source_snapshot<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<RuntimeBuildSourceSnapshot>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Omission is compatible with older bundles; an explicit null is invalid.
+    RuntimeBuildSourceSnapshot::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1192,6 +1238,31 @@ fn validate_bundle_manifest(
     }
     if let Some(commit) = &source.source_commit_after {
         validate_lower_hex(commit, 40, "candidate post-build source commit")?;
+    }
+    if let Some(snapshot) = &source.build_source_snapshot {
+        validate_lower_hex(
+            &snapshot.inventory_sha256,
+            64,
+            "candidate source inventory SHA-256",
+        )?;
+        // These fields describe publisher provenance. Do not open them or use
+        // them to choose executable paths; the fixed bundle inventory owns that.
+        let record = Path::new(&snapshot.record_path);
+        let source_root = Path::new(&snapshot.source_root);
+        if !record.is_absolute()
+            || !source_root.is_absolute()
+            || record.file_name().and_then(|name| name.to_str()) != Some("record.json")
+            || source_root.file_name().and_then(|name| name.to_str()) != Some("source")
+            || record.parent() != source_root.parent()
+            || [record, source_root].iter().any(|path| {
+                path.components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+            })
+            || snapshot.record_path.chars().any(char::is_control)
+            || snapshot.source_root.chars().any(char::is_control)
+        {
+            bail!("candidate frozen source metadata has invalid locations");
+        }
     }
     let build_version = source
         .build_version

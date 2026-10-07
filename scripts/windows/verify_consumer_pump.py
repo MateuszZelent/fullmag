@@ -1,8 +1,8 @@
-"""Drive a managed cross-build native consumer-readiness pump probe.
+"""Drive managed cross-build native consumer-pump probes.
 
-This proves the B CLI/pump selecting and renewing B's real ready candidate
-while owned by a separately verified A API. It does not prove the production
-launcher, public UI availability, solver execution, or release qualification.
+The readiness case proves B candidate selection/lease behavior under A. The
+active-run case proves a real FDM CPU worker remains active across a refused
+restart acquisition. Neither proves solver physics or release qualification.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -31,6 +32,7 @@ from windows import runtime_bundle
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 BUNDLE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 REQUEST_SCHEMA = "fullmag.development-cli-consumer-pump-request.v1"
+ACTIVE_RUN_REQUEST_SCHEMA = "fullmag.development-cli-active-run-request.v2"
 RESULT_SCHEMA = "fullmag.development-cli-consumer-pump-check.v1"
 HELPER_PROGRESS_SCHEMA = "fullmag.development-cli-consumer-pump-helper.v1"
 PREPARATION_PROGRESS_SCHEMA = "fullmag.development-cli-candidate-preparation-progress.v1"
@@ -38,6 +40,9 @@ OWNER_PROGRESS_SCHEMA = "fullmag.development-cli-owner-progress.v1"
 # Covers the dedicated 120s preparation, 20s owner verifier, API startup and
 # lease observation windows. This is only the owned diagnostic process budget.
 PROBE_TIMEOUT_SECONDS = 240
+# The active-run diagnostic includes the real solver start/advance windows;
+# this remains an outer owned-process budget, not an API or solver timeout.
+ACTIVE_RUN_PROBE_TIMEOUT_SECONDS = 360
 EXPECTED_CHECKS = frozenset({
     "cross_build_owner_confirmed",
     "initial_readiness_absent",
@@ -57,12 +62,77 @@ EXPECTED_CHECKS = frozenset({
     "scope_loss_no_candidate",
     "scope_loss_no_replacement",
 })
+ACTIVE_RUN_RESULT_SCHEMA = "fullmag.development-cli-active-run-check.v3"
+ACTIVE_RUN_PROGRESS_SCHEMA = "fullmag.development-cli-active-run-progress.v1"
+ACTIVE_RUN_COMMON_CHECKS = frozenset({
+    "idle_owner_acquire_accepted_and_aborted",
+    "candidate_ready_observed",
+    "active_run_steps_positive",
+    "typed_restart_intent_published",
+    "active_run_refusal_failed",
+    "no_handoff_staged",
+    "no_old_api_exit",
+    "no_replacement_started",
+    "same_owner_session_run_after_refusal",
+    "solver_worker_alive_after_refusal",
+})
+ACTIVE_RUN_EXPECTED_CHECKS = ACTIVE_RUN_COMMON_CHECKS | {
+    "active_run_running_observed",
+    "solver_steps_advanced_after_refusal",
+}
+ACTIVE_RUN_PAUSED_EXPECTED_CHECKS = frozenset({
+    *ACTIVE_RUN_COMMON_CHECKS,
+    "active_run_running_observed",
+    "active_run_paused_before_refusal",
+    "pause_command_terminal",
+    "paused_state_preserved_after_refusal",
+    "resume_command_terminal",
+    "solver_resumed_after_refusal",
+    "solver_steps_advanced_after_resume",
+})
+ACTIVE_RUN_ALL_CHECKS = ACTIVE_RUN_EXPECTED_CHECKS | ACTIVE_RUN_PAUSED_EXPECTED_CHECKS
+ACTIVE_RUN_RESULT_FIELDS = frozenset({
+    "schema",
+    "status",
+    "scenario",
+    "request_id",
+    "old_api_instance_id",
+    "session_id",
+    "api_transition_epoch_before",
+    "api_transition_epoch_after",
+    "run_id",
+    "solver_steps_before",
+    "solver_steps_at_refusal",
+    "solver_steps_after",
+    "solver_state_before",
+    "solver_state_after",
+    "pause_command_id",
+    "resume_command_id",
+    "solver_steps_after_resume",
+    "solver_state_after_resume",
+    "active_run_result_state",
+    "active_run_public_reason",
+    "refusal_reason_attribution",
+    "api_process",
+    "solver_process",
+    "helper_processes",
+    "checks",
+})
+ACTIVE_RUN_REFUSAL_ATTRIBUTION = "unavailable_private_api_handler_discards_api_error"
 HASHED_HELPERS = (
     "scripts/windows/verify_consumer_pump.py",
     "scripts/windows/validate_candidate_owner.py",
     "scripts/windows/select_development_candidate.py",
     "scripts/windows/check_development_candidate.py",
 )
+
+
+def _case_schemas(case: str) -> tuple[str, str]:
+    if case == "readiness":
+        return REQUEST_SCHEMA, RESULT_SCHEMA
+    if case in {"active-run", "active-run-paused"}:
+        return ACTIVE_RUN_REQUEST_SCHEMA, ACTIVE_RUN_RESULT_SCHEMA
+    raise storage.StorageError("Consumer pump case is not supported")
 
 
 def _terminal_helper(value, canceled_pid):
@@ -120,9 +190,9 @@ def _sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _hash_helpers(repo: Path) -> dict[str, str]:
+def _hash_helpers(repo: Path, *, extra_paths: tuple[str, ...] = ()) -> dict[str, str]:
     result: dict[str, str] = {}
-    for relative in HASHED_HELPERS:
+    for relative in (*HASHED_HELPERS, *extra_paths):
         path = storage.validate_path(repo / relative, repo, f"consumer pump helper {relative}")
         runtime_bundle._require_regular_file(path, f"consumer pump helper {relative}", nonempty=True)
         result[relative] = _sha256(path.read_bytes())
@@ -151,6 +221,186 @@ def _valid_uuid(value: Any) -> bool:
     except (ValueError, AttributeError):
         return False
     return parsed.int != 0 and str(parsed) == value
+
+
+def _valid_simulation_command_id(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("fm-") and _valid_uuid(value[3:])
+
+
+def validate_active_run_result(
+    result: Any,
+    *,
+    api_pid: int,
+    solver_pid: int,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Validate the distinct active-run refusal result without claiming its private API error."""
+    if not isinstance(result, dict) or set(result) != ACTIVE_RUN_RESULT_FIELDS:
+        raise storage.StorageError("Active-run refusal result fields differ from the pinned contract")
+    scenario = result.get("scenario") if isinstance(result, dict) else None
+    if scenario not in {"running", "paused"}:
+        raise storage.StorageError("Active-run refusal result has an unsupported solver scenario")
+    expected_checks = (
+        ACTIVE_RUN_EXPECTED_CHECKS if scenario == "running"
+        else ACTIVE_RUN_PAUSED_EXPECTED_CHECKS
+    )
+    if (
+        result.get("schema") != ACTIVE_RUN_RESULT_SCHEMA
+        or result.get("status") != "passed"
+        or not _valid_uuid(result.get("request_id"))
+        or (request_id is not None and result.get("request_id") != request_id)
+        or not _valid_uuid(result.get("old_api_instance_id"))
+        or not isinstance(result.get("session_id"), str)
+        or not result["session_id"]
+        or len(result["session_id"]) > 512
+        or any(ord(character) < 32 for character in result["session_id"])
+        or type(result.get("api_transition_epoch_before")) is not int
+        or not 0 < result["api_transition_epoch_before"] < 2**64
+        or type(result.get("api_transition_epoch_after")) is not int
+        or result["api_transition_epoch_after"] != result["api_transition_epoch_before"]
+        or not isinstance(result.get("run_id"), str)
+        or not result["run_id"]
+        or len(result["run_id"]) > 512
+        or any(ord(character) < 32 for character in result["run_id"])
+        or type(result.get("solver_steps_before")) is not int
+        or result["solver_steps_before"] <= 0
+        or type(result.get("solver_steps_at_refusal")) is not int
+        or result["solver_steps_at_refusal"] < result["solver_steps_before"]
+        or type(result.get("solver_steps_after")) is not int
+        or (scenario == "running" and result["solver_steps_after"] <= result["solver_steps_at_refusal"])
+        or (scenario == "paused" and (
+            result["solver_steps_at_refusal"] != result["solver_steps_before"]
+            or result["solver_steps_after"] != result["solver_steps_at_refusal"]
+        ))
+        or result.get("solver_state_before") != scenario
+        or result.get("solver_state_after") != scenario
+        or (scenario == "running" and any(result.get(field) is not None for field in (
+            "pause_command_id", "resume_command_id", "solver_steps_after_resume",
+            "solver_state_after_resume",
+        )))
+        or (scenario == "paused" and (
+            not _valid_simulation_command_id(result.get("pause_command_id"))
+            or not _valid_simulation_command_id(result.get("resume_command_id"))
+            or type(result.get("solver_steps_after_resume")) is not int
+            or result["solver_steps_after_resume"] <= result["solver_steps_after"]
+            or result.get("solver_state_after_resume") != "running"
+        ))
+        or result.get("active_run_result_state") != "failed"
+        or result.get("active_run_public_reason") != "restart_preparation_refused"
+        or result.get("refusal_reason_attribution") != ACTIVE_RUN_REFUSAL_ATTRIBUTION
+    ):
+        raise storage.StorageError("Active-run refusal result identity or continuation evidence is invalid")
+    checks = result.get("checks")
+    if (
+        not isinstance(checks, dict)
+        or set(checks) != ACTIVE_RUN_ALL_CHECKS
+        or any(checks[name] is not (name in expected_checks) for name in ACTIVE_RUN_ALL_CHECKS)
+    ):
+        raise storage.StorageError("Active-run refusal result does not satisfy its exact checks")
+
+    for label, process, expected_pid in (
+        ("API", result.get("api_process"), api_pid),
+        ("solver", result.get("solver_process"), solver_pid),
+    ):
+        if (
+            not isinstance(process, dict)
+            or set(process) != {"pid", "waited", "exit_code"}
+            or type(process.get("pid")) is not int
+            or process["pid"] <= 0
+            or process["pid"] != expected_pid
+            or process.get("waited") is not True
+            or type(process.get("exit_code")) is not int
+        ):
+            raise storage.StorageError(f"Active-run refusal result lacks terminal {label} process custody")
+
+    helpers = result.get("helper_processes")
+    if not isinstance(helpers, list) or not helpers:
+        raise storage.StorageError("Active-run refusal result lacks terminal helper custody")
+    helper_pids: set[int] = set()
+    for helper in helpers:
+        if (
+            not isinstance(helper, dict)
+            or set(helper) != {"pid", "waited", "exit_code"}
+            or type(helper.get("pid")) is not int
+            or helper["pid"] <= 0
+            or helper["pid"] in helper_pids
+            or helper["pid"] in {api_pid, solver_pid}
+            or helper.get("waited") is not True
+            or type(helper.get("exit_code")) is not int
+            or helper["exit_code"] != 0
+        ):
+            raise storage.StorageError("Active-run refusal result has invalid helper process custody")
+        helper_pids.add(helper["pid"])
+    return result
+
+
+def _active_solver_start_pid(
+    frames: list[dict[str, Any]],
+    *,
+    failed_or_timed_out: bool,
+) -> tuple[int | None, str | None]:
+    if len(frames) > 1:
+        return None, "active-run probe emitted duplicate solver start frames"
+    if not frames:
+        if failed_or_timed_out:
+            return None, None
+        return None, "active-run probe omitted solver start progress"
+    frame = frames[0]
+    pid = frame.get("pid")
+    if (
+        set(frame) != {"schema", "event", "pid"}
+        or frame.get("schema") != ACTIVE_RUN_PROGRESS_SCHEMA
+        or frame.get("event") != "solver_started"
+        or type(pid) is not int
+        or pid <= 0
+    ):
+        return None, "active-run probe emitted an invalid solver start frame"
+    return pid, None
+
+
+def _bounded_error_tail_text(text: str, limit: int = 2048) -> str:
+    error_lines = [line.strip() for line in text.splitlines() if "Error:" in line]
+    if not error_lines:
+        return "Error: no Error: line in the bounded native CLI log tail"
+    error_line = error_lines[-1]
+    marker = error_line.rfind("Error:")
+    bounded = error_line[marker:]
+    if len(bounded) > limit:
+        bounded = "Error:" + bounded[-(limit - len("Error:")):]
+    return bounded
+
+
+def _bounded_error_tail(path: Path, *, byte_limit: int = 16 * 1024) -> str:
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        stream.seek(max(0, size - byte_limit))
+        tail = stream.read(byte_limit)
+    return _bounded_error_tail_text(tail.decode("utf-8", errors="replace"))
+
+
+def _active_run_cli_failure_detail(log_tail: str, solver_frame_error: str | None) -> str:
+    error_tail = _bounded_error_tail_text(log_tail)
+    return f"{solver_frame_error}; {error_tail}" if solver_frame_error is not None else error_tail
+
+
+def _retain_unknown_active_processes(
+    *,
+    api_started: bool,
+    api_terminal: bool,
+    api_records: dict[int, dict[str, Any]],
+    solver_records: dict[int, dict[str, Any]],
+) -> bool:
+    safe_to_restore_status = True
+    if api_started and not api_terminal:
+        safe_to_restore_status = False
+        for record in api_records.values():
+            if record.get("waited") is not True:
+                record.update(waited=False, outcome="unknown")
+    for record in solver_records.values():
+        if record.get("waited") is not True:
+            record.update(waited=False, outcome="unknown")
+            safe_to_restore_status = False
+    return safe_to_restore_status
 
 
 def _restore_diagnostic_status(
@@ -188,6 +438,35 @@ def _reserve_port() -> int:
             return port
 
 
+def _check_active_candidate_capacity(
+    build_root: Path, storage_root: Path, runtime_root: Path,
+    manifest_path: Path, build_id: str, receipt: dict[str, Any],
+    *, additional_copy_bytes: int = 0,
+    receipt_key: str = "active_run_candidate_capacity",
+) -> None:
+    from windows.select_development_candidate import COPY_HEADROOM_BYTES, _source_inventory_bytes
+
+    binary_bytes = _source_inventory_bytes(build_root, storage_root, manifest_path, build_id)
+    evidence = {
+        "binary_bytes": binary_bytes,
+        "headroom_bytes": COPY_HEADROOM_BYTES,
+        "additional_copy_bytes": additional_copy_bytes,
+        "required_bytes": binary_bytes + COPY_HEADROOM_BYTES + additional_copy_bytes,
+        "available_bytes": None,
+    }
+    receipt[receipt_key] = evidence
+    try:
+        evidence["available_bytes"] = shutil.disk_usage(runtime_root).free
+    except OSError as error:
+        raise storage.StorageError("Active-run candidate storage capacity could not be verified") from error
+    if evidence["available_bytes"] < evidence["required_bytes"]:
+        raise storage.StorageError(
+            "Active-run candidate storage insufficient: "
+            f"required={evidence['required_bytes']} available={evidence['available_bytes']}. "
+            "No API or solver was started."
+        )
+
+
 def exercise(
     repo: Path,
     run_root: Path,
@@ -195,12 +474,44 @@ def exercise(
     receipt: dict[str, Any],
     binaries: Path,
     owner_bundle: str,
+    *,
+    case: str = "readiness",
 ) -> None:
-    """Run the bounded B-pump probe against an immutable, verified A bundle."""
+    """Run a bounded B-pump probe against an immutable, verified A bundle."""
+    if case not in {"readiness", "active-run", "active-run-paused"}:
+        raise storage.StorageError("Consumer pump case is not supported")
+    active_run_case = case in {"active-run", "active-run-paused"}
+    paused_case = case == "active-run-paused"
+    request_schema, result_schema = _case_schemas(case)
     if not BUNDLE_ID_RE.fullmatch(owner_bundle):
         raise storage.StorageError("Consumer pump owner bundle must be a lowercase bundle ID")
 
-    fixture = run_root / "consumer-pump-fixture"
+    fixture_name = {
+        "readiness": "consumer-pump-fixture",
+        "active-run": "active-run-refusal-fixture",
+        "active-run-paused": "active-run-paused-refusal-fixture",
+    }[case]
+    fixture_key = {
+        "readiness": "consumer_pump_fixture",
+        "active-run": "active_run_refusal_fixture",
+        "active-run-paused": "active_run_paused_refusal_fixture",
+    }[case]
+    result_key = {
+        "readiness": "consumer_pump_result",
+        "active-run": "active_run_refusal_result",
+        "active-run-paused": "active_run_paused_refusal_result",
+    }[case]
+    receipt_prefix = {
+        "readiness": "consumer_pump",
+        "active-run": "active_run_refusal",
+        "active-run-paused": "active_run_paused_refusal",
+    }[case]
+    process_prefix = {
+        "readiness": "consumer-pump",
+        "active-run": "active-run-refusal",
+        "active-run-paused": "active-run-paused-refusal",
+    }[case]
+    fixture = run_root / fixture_name
     fixture.mkdir(parents=True, exist_ok=False)
     native = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
     checks = storage.resolve_layout(repo, "development-backend-api-checks")
@@ -222,9 +533,12 @@ def exercise(
     original_status = status.read_bytes() if status.exists() else None
     if original_status is not None:
         (fixture / "preexisting-diagnostic-status.json").write_bytes(original_status)
-        receipt["consumer_pump_prior_status_sha256"] = _sha256(original_status)
+        receipt[f"{receipt_prefix}_prior_status_sha256"] = _sha256(original_status)
 
-    helper_hashes_before = _hash_helpers(repo)
+    active_run_helper_paths = (
+        ("scripts/verify_project_active_run_runtime.py",) if active_run_case else ()
+    )
+    helper_hashes_before = _hash_helpers(repo, extra_paths=active_run_helper_paths)
 
     # B is the actual source-pinned managed build admitted by the outer verifier.
     ready_manifest_path = storage.validate_path(
@@ -254,6 +568,64 @@ def exercise(
         or ready_manifest_path.read_bytes() != raw_ready_manifest
     ):
         raise storage.StorageError("Consumer pump B manifest changed during identity verification")
+
+    active_run_script: Path | None = None
+    active_python_package: dict[str, Any] | None = None
+    active_python_binding: dict[str, Any] | None = None
+    active_python_receipt: dict[str, Any] | None = None
+    if active_run_case:
+        _check_active_candidate_capacity(
+            Path(native["build_root"]), storage_root, runtime_root,
+            ready_manifest_path, ready_build_id, receipt,
+        )
+        from verify_project_active_run_runtime import (
+            measure_frozen_python_binding,
+            verify_frozen_native_package,
+            write_fixture,
+        )
+
+        active_python_package = verify_frozen_native_package(repo, ready_build_id)
+        python_manifest = active_python_package.get("manifest")
+        frozen_python_source = active_python_package.get("frozen_python_source")
+        python_executable = active_python_package.get("python_executable")
+        if (
+            active_python_package.get("manifest_sha256") != ready_build_id
+            or not isinstance(python_manifest, dict)
+            or python_manifest.get("backend_source_sha256") != ready_source_sha256
+            or not isinstance(frozen_python_source, Path)
+            or not isinstance(python_executable, Path)
+            or not (frozen_python_source / "fullmag" / "__init__.py").is_file()
+            or os.path.normcase(os.path.abspath(frozen_python_source))
+            == os.path.normcase(os.path.abspath(repo / "packages" / "fullmag-py" / "src"))
+        ):
+            raise storage.StorageError("Active-run DSL must use the verified B frozen Python source binding")
+        receipt["frozen_python_binding"] = {
+            "interpreter": str(python_executable),
+            "interpreter_sha256_before": active_python_package["python_sha256"],
+            "expected_abi": active_python_package["expected_python_abi"],
+            "expected_package_version": active_python_package["expected_python_version"],
+            "build_python_package_version": active_python_package["build_python_package_version"],
+            "python_sync_required": active_python_package["python_sync_required"],
+            "historical_python_hash_binding": active_python_package["historical_python_hash_binding"],
+            "frozen_python_source": str(frozen_python_source),
+        }
+        active_python_binding = measure_frozen_python_binding(active_python_package, receipt)
+        active_run_script = storage.validate_path(
+            fixture / "active-run.py", storage_root, "active-run frozen DSL fixture"
+        )
+        write_fixture(active_run_script)
+        runtime_bundle._require_regular_file(active_run_script, "active-run frozen DSL fixture", nonempty=True)
+        if active_run_script.stat().st_size > 256 * 1024:
+            raise storage.StorageError("Active-run frozen DSL fixture exceeds its size limit")
+        active_python_receipt = {
+            "script_path": str(active_run_script),
+            "script_sha256": _sha256(active_run_script.read_bytes()),
+            "frozen_python_source": str(frozen_python_source),
+            "python_executable": str(python_executable),
+            "python_binding": active_python_binding,
+            "source_identity": active_python_package["source_identity"],
+            "manifest_sha256": active_python_package["manifest_sha256"],
+        }
 
     # A is accepted only after complete bundle validation in this same resolved
     # worktree/runtime namespace. Pin the raw manifest around the validation.
@@ -292,7 +664,7 @@ def exercise(
 
     generation = uuid.uuid4().hex
     accepted_store_scope = str(uuid.uuid4())
-    case_root = fixture / "readiness"
+    case_root = fixture / case
     state_root = case_root / "state"
     state_root.mkdir(parents=True, exist_ok=False)
     port = _reserve_port()
@@ -322,8 +694,18 @@ def exercise(
         "FULLMAG_API_PORT": str(port),
         "FULLMAG_ACCEPTED_STORE_SCOPE": accepted_store_scope,
         "FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation,
-        "FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE": "readiness",
+        "FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE": case,
     }
+    if active_run_case:
+        if active_run_script is None or active_python_package is None:
+            raise storage.StorageError("Active-run case lacks its verified frozen DSL inputs")
+        env.update({
+            "FULLMAG_DEVELOPMENT_ACTIVE_RUN_SCRIPT": str(active_run_script),
+            "FULLMAG_PYTHON": str(active_python_package["python_executable"]),
+            "PYTHONPATH": str(active_python_package["frozen_python_source"]),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        })
     # The probe itself creates a fresh private owner token; no credential is
     # supplied to or recorded by the Python driver.
     for key in (
@@ -353,7 +735,7 @@ def exercise(
             _restore_diagnostic_status(status, worktree, generation, original_status)
         raise
 
-    receipt["consumer_pump_fixture"] = {
+    fixture_record = {
         "generation_id": generation,
         "worktree_id": worktree,
         "accepted_store_scope": accepted_store_scope,
@@ -377,6 +759,18 @@ def exercise(
         },
         "helper_sha256_before": helper_hashes_before,
     }
+    if active_python_receipt is not None:
+        fixture_record["frozen_python_dsl"] = active_python_receipt
+        fixture_record["solver_native"] = {
+            "bundle_id": owner_bundle,
+            "executable": str(owner_root / "bin" / "fullmag.exe"),
+            "executable_sha256": owner_file_hashes["bin/fullmag.exe"],
+            "bundle_manifest_sha256": owner_manifest_sha256,
+            "git_commit": owner_source["git_commit"],
+            "source_snapshot_sha256": owner_source["source_snapshot_sha256"],
+            "backend_source_sha256": owner_source_sha256,
+        }
+    receipt[fixture_key] = fixture_record
 
     try:
         initializer_path = fixture / "accepted-store-initializer.log"
@@ -391,7 +785,7 @@ def exercise(
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             initializer_record = {
-                "label": "consumer-pump-accepted-store-initializer",
+                "label": f"{process_prefix}-accepted-store-initializer",
                 "pid": initializer.pid,
                 "waited": False,
             }
@@ -417,18 +811,25 @@ def exercise(
             or not accepted_store.is_dir()
         ):
             raise storage.StorageError("Consumer pump accepted-store initialization evidence is invalid")
-        receipt["consumer_pump_fixture"]["accepted_store_binding"] = initializer_frames[0]["binding"]
+        receipt[fixture_key]["accepted_store_binding"] = initializer_frames[0]["binding"]
 
         request = {
-            "schema": REQUEST_SCHEMA,
+            "schema": request_schema,
             "owner_bundle_id": owner_bundle,
             "owner_manifest_sha256": owner_manifest_sha256,
             "owner_source_sha256": owner_source_sha256,
             "ready_build_id": ready_build_id,
             "ready_source_sha256": ready_source_sha256,
         }
+        if active_run_case:
+            request["scenario"] = "paused" if paused_case else "running"
         request_bytes = json.dumps(request, separators=(",", ":")).encode("utf-8")
-        log_path = fixture / "consumer-pump.log"
+        log_name = {
+            "readiness": "consumer-pump.log",
+            "active-run": "active-run-refusal.log",
+            "active-run-paused": "active-run-paused-refusal.log",
+        }[case]
+        log_path = fixture / log_name
         cli_record: dict[str, Any]
         timed_out = False
         with log_path.open("wb") as log:
@@ -442,13 +843,16 @@ def exercise(
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             cli_record = {
-                "label": "consumer-pump-cli-b",
+                "label": f"{process_prefix}-cli-b",
                 "pid": process.pid,
                 "waited": False,
             }
             receipt["processes"].append(cli_record)
             try:
-                process.communicate(input=request_bytes, timeout=PROBE_TIMEOUT_SECONDS)
+                process.communicate(
+                    input=request_bytes,
+                    timeout=(PROBE_TIMEOUT_SECONDS if case == "readiness" else ACTIVE_RUN_PROBE_TIMEOUT_SECONDS),
+                )
                 cli_record.update(waited=True, exit_code=process.returncode)
             except subprocess.TimeoutExpired:
                 timed_out = True
@@ -459,7 +863,7 @@ def exercise(
         frames = _json_frames(log_path)
         helper_progress = [frame for frame in frames if frame.get("schema") == HELPER_PROGRESS_SCHEMA]
         api_starts = [frame for frame in frames if frame.get("schema") == OWNER_PROGRESS_SCHEMA]
-        results = [frame for frame in frames if frame.get("schema") == RESULT_SCHEMA]
+        results = [frame for frame in frames if frame.get("schema") == result_schema]
         api_started = bool(api_starts)
         api_records: dict[int, dict[str, Any]] = {}
         for frame in api_starts:
@@ -471,14 +875,40 @@ def exercise(
                 or pid in api_records
             ):
                 raise storage.StorageError("Consumer pump emitted invalid owned API start progress")
-            record = {"label": "consumer-pump-owned-api-a", "pid": pid,
+            record = {"label": f"{process_prefix}-owned-api-a", "pid": pid,
                       "api_port": port, "waited": False,
                       "outcome": "unknown" if timed_out else "pending"}
             api_records[pid] = record
             receipt["processes"].append(record)
+        active_run_progress = [
+            frame for frame in frames if frame.get("schema") == ACTIVE_RUN_PROGRESS_SCHEMA
+        ]
+        solver_records: dict[int, dict[str, Any]] = {}
+        solver_frame_error: str | None = None
+        if case == "readiness" and active_run_progress:
+            raise storage.StorageError("Readiness pump emitted an unexpected active-run progress frame")
+        if active_run_case:
+            solver_pid, solver_frame_error = _active_solver_start_pid(
+                active_run_progress,
+                failed_or_timed_out=(
+                    timed_out or (process.returncode is not None and process.returncode != 0)
+                ),
+            )
+            if solver_pid is not None:
+                if solver_pid in api_records:
+                    solver_frame_error = "active-run solver PID collides with the owned API PID"
+                else:
+                    solver_record = {
+                        "label": f"{process_prefix}-solver-cli",
+                        "pid": solver_pid,
+                        "waited": False,
+                        "outcome": "unknown" if timed_out else "pending",
+                    }
+                    solver_records[solver_pid] = solver_record
+                    receipt["processes"].append(solver_record)
         preparation_records = {}
         def remember_preparation(pid):
-            record = {"label": "consumer-pump-candidate-preparation", "pid": pid,
+            record = {"label": f"{process_prefix}-candidate-preparation", "pid": pid,
                       "waited": False, "outcome": "unknown"}
             preparation_records[pid] = record
             receipt["processes"].append(record)
@@ -487,8 +917,10 @@ def exercise(
         )
         helper_records = dict(preparation_records)
         result = results[0] if len(results) == 1 else None
-        canceled_pid = (_canceled_preparation_pid(result, preparation_starts)
-                        if result is not None else None)
+        canceled_pid = (
+            _canceled_preparation_pid(result, preparation_starts)
+            if result is not None and case == "readiness" else None
+        )
 
         helper_evidence: dict[int, dict[str, Any]] = {}
         for frame in helper_progress:
@@ -497,7 +929,7 @@ def exercise(
                      "exit_code": frame.get("helper_exit_code")}
             observed = _terminal_helper(value, pid)
             if pid not in helper_records:
-                helper_records[pid] = {"label": "consumer-pump-owned-helper"}
+                helper_records[pid] = {"label": f"{process_prefix}-owned-helper"}
                 receipt["processes"].append(helper_records[pid])
             helper_records[pid].update(observed, outcome="terminal")
             terminal = _terminal_helper(
@@ -523,15 +955,21 @@ def exercise(
                 if pid in helper_evidence and helper_evidence[pid] != terminal:
                     raise storage.StorageError("Consumer pump helper exit differs from terminal progress")
                 helper_evidence.setdefault(pid, terminal)
-            if len(helper_progress) != 4 or len(result_helpers) != 4:
+            if case == "readiness" and (len(helper_progress) != 4 or len(result_helpers) != 4):
                 raise storage.StorageError("Consumer pump omitted owner and selector/verifier helper evidence")
+            if active_run_case and (not helper_progress or not result_helpers):
+                raise storage.StorageError("Active-run refusal omitted owner or candidate helper evidence")
             if set(helper_evidence) != result_helpers:
                 raise storage.StorageError("Consumer pump result helper PIDs differ from terminal progress")
-            if (len(preparation_starts) != 2
-                    or not set(preparation_starts).issubset(result_helpers)
-                    or any(start["api_instance_id"] != result.get("api_instance_id")
-                           for start in preparation_starts.values())):
-                raise storage.StorageError("Consumer pump lacks matching early preparation custody evidence")
+            if case == "readiness":
+                if (len(preparation_starts) != 2
+                        or not set(preparation_starts).issubset(result_helpers)
+                        or any(start["api_instance_id"] != result.get("api_instance_id")
+                               for start in preparation_starts.values())):
+                    raise storage.StorageError("Consumer pump lacks matching early preparation custody evidence")
+            elif (not preparation_starts
+                    or not set(preparation_starts).issubset(result_helpers)):
+                raise storage.StorageError("Active-run refusal lacks matching early preparation custody evidence")
 
         for pid in sorted(set(helper_evidence) | set(preparation_starts)):
             helper = helper_evidence.get(pid, {"pid": pid, "waited": False, "outcome": "unknown"})
@@ -540,27 +978,57 @@ def exercise(
                 if helper.get("waited") is True:
                     helper_records[pid]["outcome"] = "terminal"
                 continue
-            label = "consumer-pump-candidate-preparation" if pid in preparation_starts else "consumer-pump-owned-helper"
+            label = (f"{process_prefix}-candidate-preparation" if pid in preparation_starts
+                     else f"{process_prefix}-owned-helper")
             receipt["processes"].append({"label": label, **helper})
 
         if result is not None:
-            api_pid = result.get("api_pid")
-            if (
-                len(api_records) != 1
-                or type(api_pid) is not int
-                or api_pid not in api_records
-                or result.get("api_waited") is not True
-                or type(result.get("api_exit_code")) is not int
-            ):
-                raise storage.StorageError("Consumer pump result lacks terminal evidence for its exact API child")
-            api_records[api_pid].update(
-                waited=True,
-                exit_code=result["api_exit_code"],
-                outcome="terminal",
-                termination_reason="explicit owned probe shutdown after readiness proof",
-            )
-            api_terminal = True
-            safe_to_restore_status = True
+            if case == "readiness":
+                api_pid = result.get("api_pid")
+                if (
+                    len(api_records) != 1
+                    or type(api_pid) is not int
+                    or api_pid not in api_records
+                    or result.get("api_waited") is not True
+                    or type(result.get("api_exit_code")) is not int
+                ):
+                    raise storage.StorageError("Consumer pump result lacks terminal evidence for its exact API child")
+                api_records[api_pid].update(
+                    waited=True,
+                    exit_code=result["api_exit_code"],
+                    outcome="terminal",
+                    termination_reason="explicit owned probe shutdown after readiness proof",
+                )
+                api_terminal = True
+                safe_to_restore_status = True
+            else:
+                if len(api_records) != 1 or len(solver_records) != 1:
+                    if not timed_out and process.returncode == 0:
+                        raise storage.StorageError("Active-run result lacks unique owned API/solver start progress")
+                else:
+                    api_pid = next(iter(api_records))
+                    solver_pid = next(iter(solver_records))
+                    validate_active_run_result(
+                        result,
+                        api_pid=api_pid,
+                        solver_pid=solver_pid,
+                    )
+                    api_terminal = True
+                    safe_to_restore_status = True
+                    api_process = result["api_process"]
+                    solver_process = result["solver_process"]
+                    api_records[api_pid].update(
+                        waited=True,
+                        exit_code=api_process["exit_code"],
+                        outcome="terminal",
+                        termination_reason="explicit owned API shutdown after active-run refusal proof",
+                    )
+                    solver_records[solver_pid].update(
+                        waited=True,
+                        exit_code=solver_process["exit_code"],
+                        outcome="terminal",
+                        termination_reason="explicit owned solver shutdown after active-run refusal proof",
+                    )
 
         if timed_out:
             raise storage.StorageError(
@@ -571,9 +1039,83 @@ def exercise(
                 safe_to_restore_status = False
                 for record in api_records.values():
                     record.update(waited=False, outcome="unknown")
+            for record in solver_records.values():
+                if record.get("waited") is not True:
+                    record.update(waited=False, outcome="unknown")
+            if active_run_case:
+                detail = _active_run_cli_failure_detail(
+                    _bounded_error_tail(log_path), solver_frame_error
+                )
+                raise storage.StorageError(
+                    f"Active-run refusal native CLI failed with exit code {process.returncode}; {detail}; see {log_path}"
+                )
             raise storage.StorageError(
                 f"Consumer pump CLI failed with exit code {process.returncode}; see {log_path}"
             )
+        if active_run_case:
+            if (
+                len(api_starts) != 1
+                or len(active_run_progress) != 1
+                or len(results) != 1
+                or not preparation_starts
+                or not helper_progress
+            ):
+                raise storage.StorageError("Active-run refusal did not produce one complete owned API/solver/result trace")
+            if any(
+                start.get("api_instance_id") != result["old_api_instance_id"]
+                for start in preparation_starts.values()
+            ):
+                raise storage.StorageError("Active-run candidate preparation is pinned to another API instance")
+            if (
+                active_python_package is None
+                or active_run_script is None
+                or active_python_receipt is None
+                or active_python_binding is None
+            ):
+                raise storage.StorageError("Active-run refusal lost its frozen Python/DSL binding")
+            if (
+                _sha256(active_run_script.read_bytes()) != active_python_receipt["script_sha256"]
+                or runtime_bundle._sha256_file(active_python_package["python_executable"])
+                != active_python_package["python_sha256"]
+                or ready_manifest_path.read_bytes() != raw_ready_manifest
+            ):
+                raise storage.StorageError("Active-run frozen DSL, interpreter, or B manifest changed during the probe")
+            from verify_project_active_run_runtime import verify_frozen_native_package
+
+            after_package = verify_frozen_native_package(repo, ready_build_id)
+            post_run_script_sha256 = _sha256(active_run_script.read_bytes())
+            if (
+                after_package.get("manifest_sha256") != active_python_package.get("manifest_sha256")
+                or after_package.get("source_identity") != active_python_package.get("source_identity")
+                or after_package.get("source_root") != active_python_package.get("source_root")
+                or after_package.get("python_sha256") != active_python_package.get("python_sha256")
+                or runtime_bundle._sha256_file(active_python_package["python_executable"])
+                != active_python_package["python_sha256"]
+                or ready_manifest_path.read_bytes() != raw_ready_manifest
+                or post_run_script_sha256 != active_python_receipt["script_sha256"]
+            ):
+                raise storage.StorageError("Active-run frozen B source snapshot binding changed during the probe")
+            receipt[fixture_key]["post_run_frozen_binding"] = {
+                "manifest_sha256": after_package["manifest_sha256"],
+                "source_identity": after_package["source_identity"],
+                "source_root": str(after_package["source_root"]),
+                "interpreter_sha256": active_python_package["python_sha256"],
+                "script_sha256": post_run_script_sha256,
+            }
+            _, after_owner_hashes = runtime_bundle.validate_bundle(owner_root, runtime_root, "dev")
+            if (after_owner_hashes != owner_file_hashes
+                    or owner_manifest_path.read_bytes() != raw_owner_manifest):
+                raise storage.StorageError("Active-run owner A API/solver bundle changed during the probe")
+            receipt[fixture_key]["post_run_owner_files"] = after_owner_hashes
+            receipt[result_key] = result
+            receipt["checks"].extend(
+                f"{receipt_prefix}-{name}"
+                for name in sorted(
+                    ACTIVE_RUN_PAUSED_EXPECTED_CHECKS if paused_case else ACTIVE_RUN_EXPECTED_CHECKS
+                )
+            )
+            heartbeat.raise_if_failed()
+            return
         if len(helper_progress) != 4 or len(api_starts) != 1 or len(results) != 1:
             raise storage.StorageError("Consumer pump did not produce exactly one complete owner/API/result trace")
 
@@ -670,15 +1212,22 @@ def exercise(
         )
         heartbeat.raise_if_failed()
     finally:
-        if api_started and not api_terminal:
+        if active_run_case:
+            safe_to_restore_status = safe_to_restore_status and _retain_unknown_active_processes(
+                api_started=api_started,
+                api_terminal=api_terminal,
+                api_records=api_records,
+                solver_records=solver_records,
+            )
+        elif api_started and not api_terminal:
             safe_to_restore_status = False
         if heartbeat is not None:
             heartbeat.stop()
         if status_published and safe_to_restore_status:
             _restore_diagnostic_status(status, worktree, generation, original_status)
         elif status_published:
-            receipt["consumer_pump_diagnostic_status"] = "retained; owned API process outcome is unknown"
-        helper_hashes_after = _hash_helpers(repo)
-        receipt["consumer_pump_fixture"]["helper_sha256_after"] = helper_hashes_after
+            receipt[f"{receipt_prefix}_diagnostic_status"] = "retained; owned process outcome is unknown"
+        helper_hashes_after = _hash_helpers(repo, extra_paths=active_run_helper_paths)
+        receipt[fixture_key]["helper_sha256_after"] = helper_hashes_after
         if helper_hashes_after != helper_hashes_before and sys.exc_info()[0] is None:
             raise storage.StorageError("Consumer pump helpers changed during the managed probe")

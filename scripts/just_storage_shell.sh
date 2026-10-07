@@ -127,11 +127,47 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
     ;;
     *"scripts/verify_development_backend_api.py"*)
+    frozen_native_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --frozen-native-build-id "([0-9a-f]{64})"$'
+    if [[ "${recipe}" =~ ${frozen_native_pattern} ]]; then
+      if ! is_windows_shell; then
+        echo "[fullmag just] frozen native package verification requires Windows" >&2
+        exit 2
+      fi
+      exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --frozen-native-build-id "${BASH_REMATCH[1]}"
+    fi
+      workspace_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --workspace-browser-owner-bundle "([0-9a-f]{32})"$'
+      if [[ "${recipe}" =~ ${workspace_browser_pattern} ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --workspace-browser-owner-bundle "${BASH_REMATCH[1]}"
+      fi
       candidate_preparation_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --candidate-preparation-only$'
       if [[ "${recipe}" =~ ${candidate_preparation_pattern} ]]; then
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --candidate-preparation-only
       fi
       consumer_pump_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --consumer-pump-owner-bundle "([0-9a-f]{32})"$'
+      active_run_paused_refusal_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --active-run-refusal-owner-bundle "([0-9a-f]{32})" --active-run-scenario "paused"$'
+      if [[ "${recipe}" =~ ${active_run_paused_refusal_pattern} ]]; then
+        if ! is_windows_shell; then
+          echo "[fullmag just] active-run restart verification requires Windows" >&2
+          exit 2
+        fi
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --active-run-refusal-owner-bundle "${BASH_REMATCH[1]}" --active-run-scenario paused
+      fi
+      active_run_refusal_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --active-run-refusal-owner-bundle "([0-9a-f]{32})"$'
+      if [[ "${recipe}" =~ ${active_run_refusal_pattern} ]]; then
+        if ! is_windows_shell; then
+          echo "[fullmag just] active-run restart verification requires Windows" >&2
+          exit 2
+        fi
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --active-run-refusal-owner-bundle "${BASH_REMATCH[1]}"
+      fi
+      start_freeze_race_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --start-freeze-race-only$'
+      if [[ "${recipe}" =~ ${start_freeze_race_pattern} ]]; then
+        if ! is_windows_shell; then
+          echo "[fullmag just] Start/freeze race verification requires Windows" >&2
+          exit 2
+        fi
+        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --start-freeze-race-only
+      fi
       if [[ "${recipe}" =~ ${consumer_pump_pattern} ]]; then
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --consumer-pump-owner-bundle "${BASH_REMATCH[1]}"
       fi
@@ -300,6 +336,18 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/verify_accepted_fdm_gpu_runtime.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_project_active_run_runtime.py"*)
+    frozen_active_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_project_active_run_runtime.py" --repo-root "[^"]+" --frozen-native-build-id "([0-9a-f]{64})"$'
+    if [[ "${recipe}" =~ ${frozen_active_pattern} ]]; then
+      if ! is_windows_shell; then
+        echo "[fullmag just] frozen active-run verification requires Windows" >&2
+        exit 2
+      fi
+      exec "${python_cmd}" "${script_dir}/verify_project_active_run_runtime.py" --repo-root "${repo_root}" --frozen-native-build-id "${BASH_REMATCH[1]}"
+    fi
+    if [[ "${recipe}" == *"--frozen-native-build-id"* ]]; then
+      echo "[fullmag just] frozen active-run verification requires a lowercase SHA-256 build ID" >&2
+      exit 2
+    fi
     exec "${python_cmd}" "${script_dir}/verify_project_active_run_runtime.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_session_persistence.py"*"--route project-application-check"*)
