@@ -64,6 +64,7 @@ pub use antenna_stage::{
 };
 mod antenna_fields;
 pub mod artifact_pipeline;
+mod artifact_json;
 mod artifacts;
 pub use artifacts::fem_p1_magnetization_field_semantics;
 #[cfg(feature = "stage-autosave-hdf5")]

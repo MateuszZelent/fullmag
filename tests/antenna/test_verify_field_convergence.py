@@ -228,9 +228,22 @@ class FieldConvergenceTests(unittest.TestCase):
 
     def test_manifest_duplicate_keys_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
+            for key, earlier in (("status", '"failed"'),
+                                 ("measured_positive_terminal_current_a", "0.0"),
+                                 ("quadrature_scope", '"local_pair"'),
+                                 ("target_count", "0")):
+                with self.subTest(key=key):
+                    path = write_v3_solution(Path(temporary))
+                    text = path.read_text(encoding="utf-8")
+                    prefix = f'"{key}":'
+                    duplicate = text.replace(prefix, f"{prefix}{earlier},{prefix}")
+                    self.assertEqual(json.loads(duplicate), json.loads(text))
+                    path.write_text(duplicate, encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "duplicate manifest"):
+                        read_solution(path, "wire-port")
             path = write_v3_solution(Path(temporary))
             text = path.read_text(encoding="utf-8")
-            path.write_text(text.replace('"status": "ready"', '"status": "failed", "status": "ready"'), encoding="utf-8")
+            path.write_text(text.replace('"status":', r'"\u0073tatus":"failed","status":', 1), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "duplicate manifest"):
                 read_solution(path, "wire-port")
 

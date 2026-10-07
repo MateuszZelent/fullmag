@@ -265,7 +265,7 @@ fn parse_verified_manifest(
     manifest_bytes: &[u8],
 ) -> Result<(String, StoredSolutionManifest), RunError> {
     crate::antenna_external_lead_solution::reject_unqualified_external_lead_source(manifest_bytes)?;
-    let mut canonical_value: serde_json::Value =
+    let crate::artifact_json::UnambiguousJson(mut canonical_value) =
         serde_json::from_slice(manifest_bytes).map_err(|error| RunError {
             message: format!("parse antenna field solution manifest: {error}"),
         })?;
@@ -2340,6 +2340,46 @@ mod tests {
                 1, &fixture.sample_positions_xyz_m, None,
             ).is_err(), "{field}");
         }
+    }
+
+    #[test]
+    fn readers_refuse_duplicate_manifest_keys_even_when_last_value_and_digest_are_valid() {
+        let mut fixture = direct_evidence_fixture();
+        let mut other = fixture.bases[0].clone();
+        other.port_mode_id = "other".into();
+        fixture.bases.push(other);
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let payloads = &artifacts[..artifacts.len() - 1];
+        let published = &artifacts.last().unwrap().bytes;
+        verify_antenna_field_solution_asset(published, payloads).unwrap();
+        let digest = manifest_digest(published);
+        let text = std::str::from_utf8(published).unwrap();
+        for (key, earlier_value) in [
+            ("status", "\"failed\""),
+            ("measured_positive_terminal_current_a", "0.0"),
+            ("quadrature_scope", "\"local_pair\""),
+            ("target_count", "0"),
+            ("content_digest", "\"invalid\""),
+        ] {
+            let prefix = format!("\"{key}\":");
+            assert!(text.contains(&prefix));
+            let duplicate = text.replace(&prefix, &format!("{prefix}{earlier_value},{prefix}"));
+            // A last-key-wins reader sees exactly the original valid manifest.
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&duplicate).unwrap(),
+                       serde_json::from_slice::<serde_json::Value>(published).unwrap());
+            let bytes = duplicate.as_bytes();
+            assert!(verify_antenna_field_solution_manifest(bytes).unwrap_err().message.contains("duplicate JSON key"), "{key}");
+            assert!(verify_antenna_field_solution_asset(bytes, payloads).is_err(), "{key}");
+            assert!(load_antenna_field_solution_samples(
+                bytes, payloads, "common", "solution_1", "antenna_1", &digest,
+            ).is_err(), "{key}");
+            assert!(load_solved_antenna_drive_basis_projected(
+                bytes, payloads, drive(), "solution_1", "antenna_1", &digest,
+                fixture.sample_positions_xyz_m.len(), &fixture.sample_positions_xyz_m, None,
+            ).is_err(), "{key}");
+        }
+        let escaped_duplicate = text.replacen("\"status\":", r#""\u0073tatus":"failed","status":"#, 1);
+        assert!(verify_antenna_field_solution_manifest(escaped_duplicate.as_bytes()).is_err());
     }
 
     fn direct_evidence_fixture() -> AntennaFieldSolutionInput {
