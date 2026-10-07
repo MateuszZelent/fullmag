@@ -3,17 +3,16 @@
 
 **Cały cel S00–S12 pozostaje aktywny.** Poniższa tabela opisuje aktualny
 stan; dalsze checkpointy zachowują historię i nie zastępują bieżących dowodów.
-Zweryfikowany source checkpoint:9ea7279e629d54b5b2ef5710d688775cf487d087.
-Bootstrap CI37590655747:8/8jobs PASS.37 V04 tests obejmuje strict materiały,
-standalone spatial representation i migracje. Kolejny przyrost source zamyka
-dekodery equilibrium/k_sampling/KPoint w obu spectral study kinds, zachowując
-legacy, SI, signed vectors, null/defaults i atomowość migracji. Source review/
-parser PASS; nowe regresje wymagają świeżego CI. Runtime236 pozostaje dokładnie62a3.
+Zweryfikowany source checkpoint: `28d7482d98144302cfeb2c64f03d8624bd158242`.
+Bootstrap CI `37593653430`: **8/8 jobs PASS**. Obejmuje regresje strict V04
+material/spatial/equilibrium/k_sampling oraz atomowości migracji. Są to dowody
+kontraktów źródeł, nie walidacji naukowej eigensolve. Runtime #236 pozostaje
+przypięty do `62a3a6bbfc0ab96f5dc78e8b4dc9525123b033a5`.
 
 | Zakres | Potwierdzone | Pozostaje |
 |---|---|---|
-| Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | Świeże CI dla strict V04 spectral intent oraz terminalny build236/runtime dla NCV4; source CI nie jest walidacją eigensolve |
-| Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Nowy attested build, pełny window certificate Γ, potem15 punktów i sprawdzony wykres |
+| Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | CI strict V04 spectral intent i build236 PASS; pełny certificate Γ dla NCV4 nadal oczekiwany; source CI nie jest walidacją eigensolve |
+| Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Build236 i świeży managed OpenAPI PASS; kontrolny Γ uruchomiony. Pozostaje pełny window certificate Γ, potem15 punktów i sprawdzony wykres |
 | Adaptive k pool | Poprawka exit telemetry, deterministyczny plan digest i kontrakty CI | Rzeczywisty świeży przebieg, pomiary CPU/RAM i serial/adaptive parity |
 | Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Pełna scoped kompozycja lower bounds i runtime consumer regionalnych minima pozostają oddzielnymi lukami |
 | S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,37 regresji CI PASS; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
@@ -25,16 +24,30 @@ Zatwierdzony cleanup plan-9eb148b0b26c4b27944ee4eba61b0f58 zakończył się
 succeeded/applied=true: usunięto tylko execution jobów233/234,1288484419B
 logicznych. Potwierdzono zachowanie artifacts/receipt.json/worker.log/pełnych
 logów kontenerów. Zmiana wolnego miejsca nie jest utożsamiana z tym zakresem.
-Runner zdrowy/accepting; nowy build236 3355bd40acaf4f59b63afb538577248e
-przyjęty dokładnie raz po świeżych guardach i aktualnie running. Source commit62a3,
-digest d912feb0287423ba6a7adc832de6af14d192281cf9235c87c11c0d5f77e534ac,
-profil fem-cpu-slepc-runtime-v2 bez kompilacji testów. Kontener
-7643eefb3c789b0bb7fc1ac317696be313b9e5c08e1ecb847b19fc29f87e60a4 potwierdzony
-running. Logi native-build wykazują postęp kompilacji bibliotek projektu/CLI;
-observer89998 obserwuje ten sam job. Po sukcesie wymagane receipt/hashes,
-świeży managed OpenAPI, controlled Gamma8.5–16GHz z NCV4 i niezmienionym
-modelem/parametrami, full50 window certificate; dopiero potem signed15.
-Nie mamy jeszcze nowych punktów solvera ani kwalifikacji runtime/science/GUI.
+Build #236 `3355bd40acaf4f59b63afb538577248e` zakończył się terminalnie
+`succeeded`, exit 0. Source commit62a3, digest
+`d912feb0287423ba6a7adc832de6af14d192281cf9235c87c11c0d5f77e534ac`,
+profil `fem-cpu-slepc-runtime-v2` bez kompilacji testów. Managed exporter
+zweryfikował receipt, źródła i hashe artefaktów oraz wykonał świeży OpenAPI:
+`storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/openapi-export/b57f9e1d8a324eb7a2dc2e04ad319ce9`.
+
+Kontrolny Γ przeszedł dry-run (exit0, model SHA256
+`33f647c06c9666563452db0d74079ba1b7cdc6e04115b4e25ad4baf4f19c7e77`)
+i został uruchomiony przez managed driver z niezmienionymi parametrami:
+L2, trzy warstwy grubości, okno8.5–16GHz, EPS/KSP1e-9, FGMRES/restart8,
+policy `bounded_quadruple_nev_window_v2`. Output:
+`storage/runs/eigensolve-dispersion-plan-20260-c5dfad6d7f548079/3355bd40acaf4f59b63afb538577248e/comsol-dispersion/2a75f2e8cbba4ef2aa7464682c5c6fc2`.
+Kontener `6d9a558541b5` potwierdzony aktywny; relaksacja osiągnęła torque
+`4.7383e-11 A/m`, poniżej progu1A/m. Solver wykonuje base schedule, aktualnie
+podokno5/50. Sesja obserwacji procesu36792 pozostaje aktywna.
+
+Poprzedni Γ w signed15 również wskazuje adapter
+`k0_poisson_airbox_cpu_schur_slepc`; obecny standalone k0 nie jest dowodem
+parytetu całej ścieżki ani poprawności nonzero-k. Wymagane są terminalny wynik,
+pełny certificate wszystkich50 podokien, queried NEV/NCV/MPD, residuale i
+postsolve gates. Dopiero potem signed15 i serial/adaptive parity. Częstotliwość
+kandydata ani postęp kompilacji nie zamykają tych bramek.
+Nie mamy jeszcze nowych zaakceptowanych punktów ani kwalifikacji science/GUI.
 Upload dwóch synthetic failure artifacts nadal nieaktywny po odmowie auto-review;
 aktualny density test już przechodzi, więc jest to opcjonalna diagnostyka przyszłych
 błędów. Zwolnienie miejsca potwierdzono, ale sam próg8GiB nie gwarantuje miejsca
