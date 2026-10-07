@@ -1,6 +1,31 @@
 # Plan implementacji refaktoryzacji modułu anten mikrofalowych
 
-**Aktualny punkt wznowienia — 2026-10-06 (katalog → zweryfikowany asset, WIP):**
+**Aktualny punkt wznowienia — 2026-10-08 (produkcyjny typecheck źródeł):**
+`just check-cli-source` dla czystego HEAD
+`fbae293cca60562d71a404b954e7444138f45a45` zakończył się `passed`, exit 0.
+Receipt `c090f270323a4b8eb041f1823e2002ed` i `cargo.log` znajdują się pod
+resolverowym profilem `windows-api-source-check/cli-source-check` tego worktree.
+Digest przed/po jest identyczny:
+`df7087213f62b18acd9a112d66d5a75312cb429348bda195f360e13c85c19bfd`.
+Kontrola obejmuje produkcyjny CLI i jego zależności, w tym runner, planner i IR;
+potwierdza typy zmian duplicate-key, cold-load, inventory oraz agregacji pamięci.
+Uzupełniający `just check-api-source` również zakończył się `passed`, exit 0:
+receipt `f7003a6a749b421b8350027bb5060bed`, profil
+`windows-api-source-check/api-source-check`; digest przed/po
+`b0aa57eba67541e57f930325cb9152e03989e9857a3917273ecaa579c6a17514`.
+HEAD ten sam, podczas kontroli zmienione wyłącznie checkpointy dokumentacji;
+źródła objęte receiptem pozostały niezmienione. API check obejmuje produkcyjne
+konsumery sceny/inventory, nie uruchamia endpointów ani komend.
+Nie kompiluje `cfg(test)`, native FEM/CUDA ani kompletnego pakietu wykonawczego.
+Ostrzeżenia kompilatora pozostają w logu; wynik nie oznacza warning-free build.
+Wykonane wcześniej regresje Python authoringu opisano w checkpointach pasma
+i próbkowania widma. PR #147 pozostaje Draft, bez merge.
+Sesja `session-18dc56634a2145f00000e874` nadal odpowiada jako
+„Antenna frontend regression 2026-10-07”, `awaiting_command`; nie zamykano jej.
+Następny krok: bezpieczna przebudowa pakietu po rozwiązaniu blokady aktywnego
+workspace i wykonanie native/cold-load/static/LLG/FFT. T00–T18 pozostaje otwarte.
+
+**Poprzedni punkt wznowienia — 2026-10-06 (katalog → zweryfikowany asset, WIP):**
 `crates/fullmag-cli/src/orchestrator.rs::read_ready_antenna_stage_outputs`
 nie traktuje już samego istnienia manifestu jako wystarczającego odbioru wyniku.
 Wspólny `crates/fullmag-runner/src/antenna_stage.rs::load_published_antenna_field_solution_for_port`

@@ -51,6 +51,13 @@ otrzymuje na podstawie tej zmiany nowej kwalifikacji wykonania lub fizyki.
 
 ## Pozostałe bramki
 
+Uzupełnienie dowodu 2026-10-08: `just check-cli-source`, czysty HEAD
+`fbae293cca60562d71a404b954e7444138f45a45`, receipt
+`c090f270323a4b8eb041f1823e2002ed`: PASS, exit 0. Produkcyjny runner i jego
+konsumenci w CLI przeszli typecheck, z identycznym digestem źródeł przed/po.
+To zastępuje wcześniejszy brak dowodu typecheck dla tej konfiguracji Windows;
+nie wykonuje testów Rust, I/O, race qualification ani natywnych solverów.
+
 Deklarowana długość jest dokładnym limitem jednego odczytu, a nie globalnym
 budżetem RAM. Duży, poprawnie zadeklarowany plik i wiele portów nadal wymagają
 estymacji łącznej pamięci oraz polityki kosztu z T11. `try_reserve_exact` umożliwia

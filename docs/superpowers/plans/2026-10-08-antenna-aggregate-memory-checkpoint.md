@@ -45,3 +45,9 @@ oraz cold-load. Nie wolno uznać tego checkpointu za zamknięcie tej bramki.
 Następne bramki: wspólny kontrakt twardego budżetu RAM, blokowanie targetów,
 pomiar peak memory, anulowania i globalnego kosztu; wykonanie regresji po
 odwołaniu zakazu oraz managed runtime i naukowe testy T00–T18.
+
+Uzupełnienie 2026-10-08: produkcyjny typecheck `just check-cli-source` dla HEAD
+`fbae293cca60562d71a404b954e7444138f45a45` przeszedł (receipt
+`c090f270323a4b8eb041f1823e2002ed`, exit 0). Obejmuje runner i zależności CLI,
+lecz nie `cfg(test)` ani native FEM/CUDA. Pełny build, RED/GREEN Rust i runtime
+pozostają NOT VERIFIED; nie utożsamia się tej kontroli z egzekwowaniem RAM.
