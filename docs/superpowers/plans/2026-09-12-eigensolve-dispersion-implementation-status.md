@@ -109,6 +109,30 @@ scaled airbox cap oraz dwie niepowiązane asercje nowego testu.
 Oryginalny benchmark zachowuje threshold5nm. Bounded source review PASS;
 AST/diff PASS. Świeże CI, actual density i managed meshing pozostają
 NOT VERIFIED; source review nie zastępuje measured runtime qualification.
+
+Aktualizacja konsumentów 2026-10-07: commit859ea38d632198a59c1b5615ee7837e69fcb4b56
+jest na remote. Plot signed15 i validator serial/adaptive probe korzystają z
+resolve_runtime_artifact_root i wymagają dokładnej zgodności ponownie
+rozwiązanego bindingu z result.runtime_output_binding; istniejące identity,
+artifact hashes i row/parity gates zachowane. Nested workspace fixtures oraz
+missing/tampered/stale regressions mają source review PASS; świeże focused
+CI37611133357/37611123869 uruchomione, wykonanie jeszcze NOT VERIFIED.
+
+CI37609656076 wykryło błędny duplikat importu helpera w test_meshing;
+commitc483362639c80a3399ace236022e71f5c9c94375 usuwa tylko ten import i jest
+na remote. Kolejne CI37610122549 wykonało308 testów meshing:1failure,1skip.
+Nowy actualdensity case dla thin_film_tetrahedral:mediana19.657793nm >12nm;
+OCCBox i oryginalny Arch threshold5nm nie zgłosiły awarii. Nie zmieniono
+progu12nm; diagnoza realizacji swept field trwa. Source review nie wystarczyło
+więc do potwierdzenia actualdensity, bramka pozostaje OPEN.
+
+Postsolve Γ z parametrów metadata:finite Dirichlet n=0
+9299249697.068401Hz versus FEM9299249697.067612Hz,delta−0.000789642Hz
+(relative−8.49146e-14). Openfilm n=0/N32 daje9309813711.433355Hz,
+delta−10.564014MHz/−0.1134718%. Różne BC wyjaśniają tę różnicę dlaΓ;
+nie jest to dowód dla nonzero-k. Evidence JSON:
+runtime236-gamma-ksp12-analytic-comparison.json. Signed15 nadal liczy tym samym
+kontenerem8250b6637cad/toolhandle82638, bez terminalnych artefaktów.
 <!-- current-eigensolve-status-end -->
 
 <!-- master1bdb-integration-20261006 -->
