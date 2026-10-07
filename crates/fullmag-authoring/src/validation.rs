@@ -267,13 +267,10 @@ fn validate_scene_document_with_mode(
                 scene.study.requested_mode != "extended",
             )?;
         }
-        if object.role != "magnet" {
-            continue;
-        }
-        if !require_solve_refs {
-            continue;
-        }
-        if !material_ids.contains(&object.material_ref) {
+        let requires_magnetic_refs = require_solve_refs && object.role == "magnet";
+        if (requires_magnetic_refs || !object.material_ref.trim().is_empty())
+            && !material_ids.contains(&object.material_ref)
+        {
             return Err(SceneDocumentValidationError::new(format!(
                 "object '{}' references missing material '{}'",
                 object.id, object.material_ref
@@ -282,18 +279,21 @@ fn validate_scene_document_with_mode(
         let magnetization_ref = object
             .magnetization_ref
             .as_ref()
-            .filter(|reference| !reference.trim().is_empty())
-            .ok_or_else(|| {
-                SceneDocumentValidationError::new(format!(
+            .filter(|reference| !reference.trim().is_empty());
+        match magnetization_ref {
+            Some(reference) if !magnetization_ids.contains(reference) => {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "object '{}' references missing magnetization asset '{}'",
+                    object.id, reference
+                )));
+            }
+            None if requires_magnetic_refs => {
+                return Err(SceneDocumentValidationError::new(format!(
                     "object '{}' must reference a magnetization asset",
                     object.id
-                ))
-            })?;
-        if !magnetization_ids.contains(magnetization_ref) {
-            return Err(SceneDocumentValidationError::new(format!(
-                "object '{}' references missing magnetization asset '{}'",
-                object.id, magnetization_ref
-            )));
+                )));
+            }
+            _ => {}
         }
     }
     validate_region_owned_scene_payloads(scene, &object_ids)?;
@@ -3335,6 +3335,44 @@ mod tests {
             .expect("geometry may be authored before material and texture assignment");
         validate_scene_document(&scene)
             .expect_err("execution validation must still require material and texture");
+    }
+
+    #[test]
+    fn authoring_and_execution_reject_explicit_dangling_object_assignments() {
+        for role in ["magnet", "antenna", "conductor", "geometry"] {
+            let mut scene = region_owned_scene();
+            scene.objects[0].role = role.to_string();
+            validate_scene_document(&scene).expect("existing assignments remain valid");
+            validate_scene_document_for_authoring(&scene)
+                .expect("existing assignments remain authorable");
+            scene.objects[0].material_ref = "mat:missing".to_string();
+            for validate in [validate_scene_document, validate_scene_document_for_authoring] {
+                let error = validate(&scene).expect_err("explicit dangling material must fail");
+                assert!(error.message.contains("mat:missing"));
+            }
+            scene.objects[0].material_ref = "mat:body".to_string();
+            scene.objects[0].magnetization_ref = Some("mag:missing".to_string());
+            for validate in [validate_scene_document, validate_scene_document_for_authoring] {
+                let error = validate(&scene).expect_err("explicit dangling texture must fail");
+                assert!(error.message.contains("mag:missing"));
+            }
+        }
+    }
+
+    #[test]
+    fn auxiliary_authoring_does_not_require_magnetic_assignments() {
+        for role in ["antenna", "conductor", "geometry"] {
+            let mut scene = region_owned_scene();
+            scene.objects[0].role = role.to_string();
+            scene.objects[0].material_ref.clear();
+            scene.objects[0].magnetization_ref = None;
+            scene.objects[0].regions.clear();
+            scene.objects[0].material_parameter_fields.clear();
+            validate_scene_document_for_authoring(&scene)
+                .expect("auxiliary geometry does not imply magnetic physics");
+            validate_scene_document(&scene)
+                .expect("auxiliary geometry does not require magnetic solve assets");
+        }
     }
 
     #[test]

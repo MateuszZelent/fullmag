@@ -1765,6 +1765,20 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
         else:
             raise AssertionError("Authoring accepted a read-only future project")
         checks.append("project-authoring-rejects-read-only-before-rendering")
+        for role in ("magnet", "antenna", "conductor", "geometry"):
+            for field, missing_id in (("material_ref", "material:missing"),
+                                      ("magnetization_ref", "magnetization:missing")):
+                invalid_scene = json.loads(json.dumps(scene))
+                invalid_scene["objects"][0].update(role=role, **{field: missing_id})
+                try:
+                    get("/v2/persistence/projects/authoring", method="POST", payload={
+                        **request, "scene_document": invalid_scene}, timeout=30)
+                except urllib.error.HTTPError as error:
+                    body = error.read().decode("utf-8")
+                    assert error.code == 400 and missing_id in body, (role, field, error.code, body)
+                else:
+                    raise AssertionError(f"Authoring accepted dangling {role} {field}")
+                checks.append(f"project-authoring-rejects-dangling-{role}-{field}")
         for label, changes, expected_status in (
             ("wrong-project", {"expected_project_id": "project-wrong"}, 409),
             ("wrong-revision", {"expected_revision": created["revision"] + 1}, 409),
