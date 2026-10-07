@@ -132,7 +132,7 @@ describe("frequencyDomainChartModels", () => {
     });
   });
 
-  it("requires a published mode-field resource key before exposing a 3D handoff", () => {
+  it("does not infer field availability from an unconfirmed mode field id", () => {
     const model = buildEigenSpectrumChartModel(
       jsonResource({
         modes: [{
@@ -156,6 +156,64 @@ describe("frequencyDomainChartModels", () => {
       modeFieldId: null,
       modeFieldResourceKey: "data/fields/orphaned",
     })).toBe(false);
+  });
+
+  it("derives the canonical vector resource for a published available spectrum.v2 field", () => {
+    const fieldId = "analysis:eigen:sample-0003:mode-0001";
+    const model = buildEigenSpectrumChartModel(jsonResource({
+      samples: [{
+        sample_index: 3,
+        modes: [{
+          frequency_hz: 2.25e9,
+          mode_field_available: true,
+          mode_field_id: fieldId,
+          mode_id: "sample-0003/mode-0001",
+          raw_mode_index: 1,
+        }],
+      }],
+      schema_version: "eigen_spectrum.v2",
+    }));
+
+    const point = model.points[0]!;
+    expect(point).toMatchObject({
+      modeFieldAvailable: true,
+      modeFieldId: fieldId,
+      modeFieldResourceKey: fieldVectorResourceKey(fieldId),
+      sampleIndex: 3,
+      rawModeIndex: 1,
+    });
+    expect(buildEigenModeSelectionRef(point)).toMatchObject({
+      fieldId,
+      resourceRef: fieldVectorResourceKey(fieldId),
+      modeId: "sample-0003/mode-0001",
+    });
+  });
+
+  it("does not fabricate a spectrum field resource for omitted or unidentified payloads", () => {
+    const model = buildEigenSpectrumChartModel(jsonResource({
+      modes: [
+        {
+          frequency_hz: 2e9,
+          mode_field_available: false,
+          mode_field_id: "analysis:eigen:sample-0000:mode-0000",
+          raw_mode_index: 0,
+        },
+        {
+          frequency_hz: 3e9,
+          mode_field_available: true,
+          raw_mode_index: 1,
+        },
+      ],
+    }));
+
+    expect(model.points).toHaveLength(2);
+    expect(model.points[0]?.modeFieldId).toBe("analysis:eigen:sample-0000:mode-0000");
+    for (const point of model.points) {
+      expect(point.modeFieldAvailable).toBe(false);
+      expect(point.modeFieldResourceKey).toBeNull();
+      expect(buildEigenModeSelectionRef(point)).not.toHaveProperty("fieldId");
+      expect(buildEigenModeSelectionRef(point)).not.toHaveProperty("resourceRef");
+    }
   });
 
   it("maps canonical v2 sample modes into finite spectrum points with field ids", () => {
