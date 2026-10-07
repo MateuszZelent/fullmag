@@ -1,0 +1,36 @@
+name: scoped-mesh-fields
+
+on:
+  push:
+    branches: [master, 'codex/**']
+    paths:
+      - 'packages/fullmag-py/src/fullmag/meshing/**'
+      - 'packages/fullmag-py/tests/test_meshing.py'
+      - '.github/workflows/scoped-mesh-fields.yml'
+  pull_request:
+    paths:
+      - 'packages/fullmag-py/src/fullmag/meshing/**'
+      - 'packages/fullmag-py/tests/test_meshing.py'
+      - '.github/workflows/scoped-mesh-fields.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actual-gmsh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install Gmsh system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libglu1-mesa
+      - name: Install meshing dependencies
+        run: python -m pip install -e 'packages/fullmag-py[meshing,figures]'
+      - name: Validate actual density, exact layers and reporting
+        run: python -B -m unittest discover -s packages/fullmag-py/tests -p test_meshing.py -v
