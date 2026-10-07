@@ -12112,6 +12112,95 @@ fn fem_eigen_k0_plan_deserializes_without_optional_execution_resolution() {
 }
 
 #[test]
+fn fem_eigen_modal_solver_policy_rejects_unknown_metadata() {
+    for (description, policy) in [
+        (
+            "unknown field alone",
+            serde_json::json!({"residual_tolerence": 1.0e-8}),
+        ),
+        (
+            "unknown field alongside a valid field",
+            serde_json::json!({
+                "residual_tolerence": 1.0e-8,
+                "max_outer_iterations": 12,
+            }),
+        ),
+    ] {
+        let mut ir = k0_periodic_airbox_fem_eigen_ir();
+        ir.problem_meta
+            .runtime_metadata
+            .insert("modal_solver_policy".to_string(), policy);
+        let error = plan(&ir).expect_err(&format!(
+            "planner must reject modal solver policy with {description}"
+        ));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("modal_solver_policy")),
+            "unexpected error for {description}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn fem_eigen_modal_solver_policy_absence_and_empty_metadata_keep_native_defaults() {
+    for policy in [
+        None,
+        Some(serde_json::json!({})),
+        Some(serde_json::json!({
+            "residual_tolerance": null,
+            "max_outer_iterations": null,
+            "max_linear_iterations": null,
+        })),
+    ] {
+        let mut ir = k0_periodic_airbox_fem_eigen_ir();
+        if let Some(policy) = policy {
+            ir.problem_meta
+                .runtime_metadata
+                .insert("modal_solver_policy".to_string(), policy);
+        }
+        let planned = plan(&ir).expect("absent/empty modal policy leaves native defaults selected");
+        let BackendPlanIR::FemEigen(fem) = planned.backend_plan else {
+            panic!("expected FEM eigen plan")
+        };
+        assert!(fem.solver_policy.is_none());
+    }
+}
+
+#[test]
+fn fem_eigen_modal_solver_policy_preserves_partial_values_through_planning() {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({
+            "residual_tolerance": 1.0e-8,
+            "max_outer_iterations": 24,
+        }),
+    );
+
+    let planned = plan(&ir).expect("valid partial modal solver policy should plan");
+    let BackendPlanIR::FemEigen(fem) = &planned.backend_plan else {
+        panic!("expected FEM eigen plan")
+    };
+    let policy = fem
+        .solver_policy
+        .as_ref()
+        .expect("explicit partial policy must be carried into the plan");
+    assert_eq!(policy.residual_tolerance, Some(1.0e-8));
+    assert_eq!(policy.max_outer_iterations, Some(24));
+    assert_eq!(policy.max_linear_iterations, None);
+
+    let encoded = serde_json::to_value(&planned).expect("planned execution serializes");
+    let decoded: fullmag_ir::ExecutionPlanIR =
+        serde_json::from_value(encoded).expect("planned execution round-trips");
+    let BackendPlanIR::FemEigen(fem) = decoded.backend_plan else {
+        panic!("round-tripped plan must remain FEM eigen")
+    };
+    assert_eq!(fem.solver_policy.as_ref(), Some(policy));
+}
+
+#[test]
 fn object_object_exchange_without_coupling_defaults_none() {
     let ir = stacked_two_body_multilayer_problem();
     assert!(

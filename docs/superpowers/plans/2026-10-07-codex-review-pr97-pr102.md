@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 179 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 63, `implemented`: 23, `implemented_pending_browser`: 7, `implemented_pending_ci`: 2, `not_actionable`: 2, `unsupported_recommendation`: 2, `valid_unfixed`: 86. Łącznie 207 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 63, `implemented`: 23, `implemented_pending_browser`: 7, `implemented_pending_ci`: 3, `not_actionable`: 2, `unsupported_recommendation`: 2, `valid_unfixed`: 85. Łącznie 207 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -220,7 +220,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4207003038](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003038) / #97 | `scripts/managed_runtime_artifact_root.py` | valid_unfixed | Nowy producer-binding gap: terminal manifest wiąże metadata tylko path/kind i identity source/run; resolver hashuje aktualne bajty. Zmiana payloadu zachowująca identity przechodzi i otrzymuje nowy binding. Nie jest tym samym co brak weryfikacji już producer-recorded hashes w comparatorze. |
 | [4207003048](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003048) / #97 | `crates/fullmag-plan/src/validate.rs` | duplicate | Branch selectors poza Path nadal admitted, single-k requested indices nie obsługuje branches. Ten sam utracony output contract. Powtórzenie 4060116309. |
 | [4207003056](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003056) / #97 | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | duplicate | Naprawione źródłowo: declared Floquet vector jest sprawdzany dokładnie3finite przed tiny/production dispatch, a predicate korzysta z walidującego helpera. Pełna raw/fixed matrix dodana; native CI rerun po brakującym cstdio pending. Powtórzenie 4060116253. |
-| [4207003063](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003063) / #97 | `crates/fullmag-ir/src/plan.rs` | valid_unfixed | Nowy validation/provenance bug: FemEigenSolverPolicyIR nie ma deny_unknown_fields, więc typo daje allNone policy; planner przyjmuje ją, runner raportuje resolved_fem_eigen_plan/delegates=false mimo zlecenia native defaults. Unknown keys odrzucić; pusty policy jawnie normalizować do None albo odrzucać po udokumentowaniu, nie zakładać automatycznie zakazu {}. |
+| [4207003063](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003063) / #97 | `crates/fullmag-ir/src/plan.rs` | implemented_pending_ci | Nowy validation/provenance bug: FemEigenSolverPolicyIR nie ma deny_unknown_fields, więc typo daje allNone policy; planner przyjmuje ją, runner raportuje resolved_fem_eigen_plan/delegates=false mimo zlecenia native defaults. Unknown keys odrzucić; pusty policy jawnie normalizować do None albo odrzucać po udokumentowaniu, nie zakładać automatycznie zakazu {}. |
 
 ## Przygotowane przyrosty
 
@@ -349,3 +349,10 @@ Pakowanie wykryło wcześniejszy rozjazd appsource/ui_dist w retencji. Zachowano
 
 
 Scalenie appsource StorageView.js oraz PoliciesView.js z wcześniej wdrożonym ui_dist jest przygotowane lokalnie i zweryfikowane byte-equal. Automatyczna kontrola dwukrotnie odmówiła stagingu tych dwóch plików jako zakresu niezwiązanego z kursorem, mimo sprawdzenia czystego preimage i guarded hunks. Zgoda na konkretny commit tych dwóch kopii źródłowych jest oczekiwana; pozostają poza commitem kolejki. Pakiet runtime zachowuje wcześniejsze funkcje retencji i dostaje wyłącznie zmiany kursora. Nie uznaje się jeszcze za zamkniętą pełnej synchronizacji source/package na remote.
+
+
+## Polityka modalna — uwaga 4207003063
+
+Serde odrzuca nieznane pola przed rozwiązywaniem planu. Znana pusta polityka lub wszystkie pola null normalizują się do None, co wybiera native defaults i poprawne provenance z delegowaniem. Częściowe wartości są zachowane wraz z istniejącą walidacją finite/positive/signed bounds. Nie wdrożono sugestii odrzucania pustego obiektu: publiczny FemEigenSolverPolicy() od początku oznacza brak overrides, więc normalizacja naprawia provenance bez zmiany tego zachowania. Cały metadata null pozostaje błędnym typem.
+
+Regresje serde i rzeczywistego planera obejmują typo alone/alongside valid, absent/empty/all-null i partial roundtrip. Niezależny source review oraz diff PASS; pełne IR i nowy jawny filtr planner test są w GHA. Wykonanie pending. Kontrakt: [walidacja polityki](../../specs/fem-eigen-solver-policy-validation.md).

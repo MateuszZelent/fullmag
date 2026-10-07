@@ -1262,6 +1262,13 @@ fn eigen_solver_policy(problem: &ProblemIR) -> Result<Option<FemEigenSolverPolic
                 )],
             }
         })?;
+    if policy.residual_tolerance.is_none()
+        && policy.max_outer_iterations.is_none()
+        && policy.max_linear_iterations.is_none()
+    {
+        // An empty policy requests no overrides, so preserve native defaults.
+        return Ok(None);
+    }
     let mut errors = Vec::new();
     if let Some(tolerance) = policy.residual_tolerance {
         if !tolerance.is_finite() || tolerance <= 0.0 {

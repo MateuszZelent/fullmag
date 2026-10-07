@@ -84,6 +84,9 @@ jobs:
       - name: Run canonical IR, waveguide and typed V04 migration contracts
         run: cargo test -p fullmag-ir --no-fail-fast
 
+      - name: Run modal solver policy planning contracts
+        run: cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
+
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
 

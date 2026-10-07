@@ -1604,6 +1604,7 @@ pub struct FemEigenDispersionValidationIR {
 /// runner-side iteration cap.  Values supplied here are requested limits,
 /// while the native diagnostics remain the authority for resolved limits.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct FemEigenSolverPolicyIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub residual_tolerance: Option<f64>,
@@ -2118,11 +2119,47 @@ mod tests {
 
     use super::{
         FdmGridCertificateIR, FdmPlanIR, FdmRegionLegendEntryIR, FemEigenEngineIR,
-        FemEigenExecutionResolutionIR, FemMeshTopologyFamilyIR, FemMixedTopologyCapabilityStatusIR,
-        FemMixedTopologyProvenanceIR, RequestedFemDemagIR, ResolvedFemDemagIR,
-        ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
-        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
+        FemEigenExecutionResolutionIR, FemEigenSolverPolicyIR, FemMeshTopologyFamilyIR,
+        FemMixedTopologyCapabilityStatusIR, FemMixedTopologyProvenanceIR, RequestedFemDemagIR,
+        ResolvedFemDemagIR, ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR,
+        SelectionCertificateIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
+        SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+
+    #[test]
+    fn fem_eigen_solver_policy_preserves_partial_fields_and_rejects_unknown_fields() {
+        let policy: FemEigenSolverPolicyIR = serde_json::from_value(serde_json::json!({
+            "residual_tolerance": 1.0e-8,
+            "max_outer_iterations": 24,
+        }))
+        .expect("known partial modal policy deserializes");
+        assert_eq!(
+            policy,
+            FemEigenSolverPolicyIR {
+                residual_tolerance: Some(1.0e-8),
+                max_outer_iterations: Some(24),
+                max_linear_iterations: None,
+            }
+        );
+
+        let encoded = serde_json::to_value(&policy).expect("modal policy serializes");
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "residual_tolerance": 1.0e-8,
+                "max_outer_iterations": 24,
+            })
+        );
+        let decoded: FemEigenSolverPolicyIR =
+            serde_json::from_value(encoded).expect("partial modal policy round-trips");
+        assert_eq!(decoded, policy);
+
+        let error = serde_json::from_value::<FemEigenSolverPolicyIR>(serde_json::json!({
+            "residual_tolerence": 1.0e-8,
+        }))
+        .expect_err("misspelled modal policy fields must not be silently ignored");
+        assert!(error.to_string().contains("residual_tolerence"));
+    }
 
     fn resolved_frozen_spins_fixture() -> ResolvedFrozenSpinsPlanIR {
         let mut hash = Sha256::new();
