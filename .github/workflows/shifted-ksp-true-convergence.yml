@@ -1,0 +1,42 @@
+name: Shifted KSP true-convergence regression
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/shifted-ksp-true-convergence.yml
+      - backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp
+      - backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp
+      - backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp
+  push:
+    paths:
+      - .github/workflows/shifted-ksp-true-convergence.yml
+      - backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp
+      - backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp
+      - backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  petsc-real:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install real PETSc development package
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends g++ pkg-config openmpi-bin libopenmpi-dev libpetsc-real-dev
+      - name: Build PETSc regression
+        shell: bash
+        run: |
+          pkg-config --exists PETSc
+          mpicxx -std=c++17 -O2 -Wall -Wextra \
+            $(pkg-config --cflags PETSc) \
+            -Ibackends/fem/cpu/frequency_domain/modal \
+            backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp \
+            $(pkg-config --libs PETSc) \
+            -o "$RUNNER_TEMP/shifted-ksp-true-convergence"
+      - name: Run PETSc regression
+        run: "$RUNNER_TEMP/shifted-ksp-true-convergence"

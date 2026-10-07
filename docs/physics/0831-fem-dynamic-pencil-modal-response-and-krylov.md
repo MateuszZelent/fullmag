@@ -336,6 +336,59 @@ r_gauge = c^T phi
 eps_full = max(eps_q, eps_phi, eps_gauge)
 ```
 
+(floquet-shifted-true-convergence)=
+### Shifted KSP: true residual before convergence
+
+The controlled DE trial at $k_y=15\cdot10^6\,\mathrm{rad/m}$ exposed a
+recursive/true-residual gap. A positive recursive KSP reason is insufficient
+for an inner solve. The production convergence decision must separately check
+
+```{math}
+:label: eq-floquet-shifted-true-convergence
+\lVert b_\sigma-A_\sigma x_\sigma\rVert_2
+\leq \max(\mathrm{atol},\mathrm{rtol}\lVert b_\sigma\rVert_2).
+```
+
+| Field or symbol | Meaning | SI unit / allowed representation |
+|---|---|---|
+| $A_\sigma$ | Actual PETSc shifted Schur operator, in the existing normalized solver coefficient equation | $1$ (normalized algebraic operator) |
+| $x_\sigma$ | Current reconstructed coefficient vector of the inner shifted solve; no new physical observable | $1$ (solver coefficients) |
+| $b_\sigma$ | Current normalized algebraic RHS of the inner shifted solve | $1$ (normalized solver equation) |
+| $\mathrm{rtol}$ | Requested dimensionless shifted-solve relative tolerance | $1$ |
+| $\mathrm{atol}$ | Requested shifted-solve absolute tolerance in the same normalized algebraic units as the RHS norm | $1$ (normalized solver equation) |
+
+The symbols $x_\sigma$ and $b_\sigma$ denote the existing normalized
+algebraic coefficient equation, not the physical RF drive $b$ defined elsewhere.
+No extra normalization is introduced by the convergence callback.
+
+Here $A_\sigma$ is the actual shifted Schur operator applied by PETSc,
+$x_\sigma$ is the current reconstructed coefficient vector and $b_\sigma$ its current RHS.
+The residual and absolute tolerance use the same algebraic units as $b_\sigma$;
+relative tolerance is dimensionless. This inner algebraic criterion is distinct
+from mode-frequency error, mesh convergence and the original descriptor gate.
+A zero RHS uses the absolute criterion, including exact zero when both
+thresholds are zero. No multiplier relaxes the requested tolerance.
+
+A dedicated convergence callback preserves PETSc's negative divergence,
+iteration-budget and cancellation outcomes. A provisional positive recursive
+reason requires reconstruction of the current solution and explicit shifted
+operator application; if the true criterion fails, convergence is withheld.
+Postsolve measurements remain an independent check for every inner RHS,
+including historical violations. Workspace vectors belong to one shifted KSP
+and are reused; a measurement error must fail the solve rather than certify it.
+The operator, Poisson realization, public Python/IR and physical $10^{-8}$
+mode gate do not change. The FEM CPU callback is in implementation; managed
+runtime proof and the $+15$ retry remain **NOT VERIFIED**. FEM GPU requires its
+own realization and evidence; FDM CPU/GPU are outside this callback's scope.
+
+Source owner: `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp`
+and its shifted-convergence helper. Required regression: an artificially small
+recursive norm with a large true residual must not return a positive reason;
+zero RHS and negative/budget outcomes must retain their semantics.
+PETSc documents the convergence extension point and approximate default norm:
+[KSPSetConvergenceTest](https://petsc.org/release/manualpages/KSP/KSPSetConvergenceTest/),
+[KSPBuildSolution](https://petsc.org/release/manualpages/KSP/KSPBuildSolution/).
+
 Every reported mode carries an `original_operator_residual` derived from these
 blockwise scaled residuals. It may not be capped by or reconstructed from the
 solver-reported residual. Driven solves similarly report tracked Krylov
@@ -2108,6 +2161,11 @@ Repository-owned related contracts:
 
 (source-code-index)=
 ## 9. Source-code index
+
+| Source path | Symbol | Responsibility |
+|---|---|---|
+| backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Withhold positive shifted KSP convergence until the current reconstructed solution satisfies the requested true residual criterion; preserve default negative outcomes and iteration budget with per-KSP reusable workspace. |
+
 
 Stable repository-relative `path + symbol` is the primary source identity.
 The links below resolve the committed source baseline

@@ -20,6 +20,7 @@
 #if FULLMAG_FEM_WITH_SLEPC
 #include <petscksp.h>
 #include <slepceps.h>
+#include "cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp"
 #endif
 
 namespace fullmag::fem::frequency_domain {
@@ -3295,6 +3296,9 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     Vec xr = nullptr;
     Vec xi = nullptr;
     LastFloquetShiftedSolveSnapshot last_shifted_solve{};
+    std::unique_ptr<detail::FloquetShiftedKspTrueConvergenceContext>
+        shifted_ksp_true_convergence_context{};
+    bool shifted_ksp_true_convergence_test_registration_attempted = false;
     auto destroy_all = [&]() noexcept {
         if (last_shifted_solve.rhs != nullptr) {
             VecDestroy(&last_shifted_solve.rhs);
@@ -3311,8 +3315,19 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         if (xi != nullptr) {
             VecDestroy(&xi);
         }
+        PetscErrorCode eps_destroy_error = 0;
         if (eps != nullptr && eps_cleanup_is_safe) {
-            EPSDestroy(&eps);
+            eps_destroy_error = EPSDestroy(&eps);
+        }
+        if (shifted_ksp_true_convergence_context != nullptr) {
+            if ((!eps_cleanup_is_safe ||
+                 (eps_destroy_error != 0 && eps != nullptr)) &&
+                shifted_ksp_true_convergence_test_registration_attempted) {
+                (void)shifted_ksp_true_convergence_context.release();
+            } else {
+                (void)detail::clear_floquet_shifted_ksp_true_convergence_context(
+                    shifted_ksp_true_convergence_context.get());
+            }
         }
         if (last_shifted_solve.shifted_operator != nullptr) {
             MatDestroy(&last_shifted_solve.shifted_operator);
@@ -3761,6 +3776,63 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.preconditioner_normalization_scale,
         &result.floquet_schur_action_diagnostic);
 
+    // Configure the ST operator before allocating callback work vectors. This
+    // makes the workspaces match the actual shifted system, not its
+    // preconditioner approximation.
+    if (EPSSetUp(eps) != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_slepc_setup_failed";
+        state->invalidated = true;
+        state->eps_lifetime_unsafe = true;
+        eps_cleanup_is_safe = false;
+        return result;
+    }
+    const char *resolved_shifted_ksp_type_after_setup = nullptr;
+    if (KSPGetType(shifted_ksp, &resolved_shifted_ksp_type_after_setup) != 0 ||
+        resolved_shifted_ksp_type_after_setup == nullptr ||
+        std::strcmp(
+            resolved_shifted_ksp_type_after_setup,
+            requested_shifted_ksp_type) != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_shifted_ksp_type_mismatch_after_setup";
+        destroy_all();
+        return result;
+    }
+    detail::FloquetShiftedKspTrueConvergenceContext *raw_true_convergence_context =
+        nullptr;
+    if (detail::create_floquet_shifted_ksp_true_convergence_context(
+            shifted_ksp, &raw_true_convergence_context) != 0 ||
+        raw_true_convergence_context == nullptr) {
+        result.status = "solve_error";
+        result.unsupported_reason =
+            "floquet_shifted_true_convergence_setup_failed";
+        destroy_all();
+        return result;
+    }
+    shifted_ksp_true_convergence_context.reset(raw_true_convergence_context);
+    if (shifted_ksp_true_convergence_context->rtol != shifted_actual_rtol ||
+        shifted_ksp_true_convergence_context->atol != shifted_actual_atol ||
+        shifted_ksp_true_convergence_context->max_iterations !=
+            shifted_actual_max_iterations) {
+        result.status = "solve_error";
+        result.unsupported_reason =
+            "floquet_shifted_ksp_tolerances_changed_during_setup";
+        destroy_all();
+        return result;
+    }
+    shifted_ksp_true_convergence_test_registration_attempted = true;
+    if (KSPSetConvergenceTest(
+            shifted_ksp,
+            detail::floquet_shifted_true_convergence_test,
+            shifted_ksp_true_convergence_context.get(),
+            detail::destroy_floquet_shifted_ksp_true_convergence_context) != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason =
+            "floquet_shifted_true_convergence_registration_failed";
+        destroy_all();
+        return result;
+    }
+
     // Monitor data is copied during KSP iterations, before a hard EPSSolve
     // error can unwind through PETSc. Registration failure is diagnostic-only.
     last_shifted_solve.monitor_registered =
@@ -3823,6 +3895,11 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         // leaves the process-bounded object graph alive for OS reclamation.
         state->invalidated = true;
         state->eps_lifetime_unsafe = true;
+        if (shifted_ksp_true_convergence_test_registration_attempted) {
+            // Keep the callback context alive with the intentionally retained
+            // EPS/KSP graph after an unsafe hard failure.
+            (void)shifted_ksp_true_convergence_context.release();
+        }
         return result;
     }
     PetscInt resolved_nev = 0;

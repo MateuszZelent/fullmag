@@ -585,6 +585,21 @@
       "sources": [
         "source-k0-bounded-krylov-policy"
       ]
+    },
+    {
+      "id": "eq-floquet-shifted-true-convergence",
+      "symbols": [
+        "shifted_operator",
+        "shifted_candidate_solution",
+        "shifted_algebraic_rhs",
+        "shifted_relative_tolerance",
+        "shifted_absolute_tolerance",
+        "norm_operators"
+      ],
+      "sources": [
+        "source-native-floquet-modal",
+        "source-floquet-shifted-true-convergence"
+      ]
     }
   ],
   "symbols": [
@@ -1217,6 +1232,36 @@
       "latex": "$\\chi$",
       "meaning": "Mnożnik nadpróbkowania",
       "si_unit": "$1$"
+    },
+    {
+      "id": "shifted_operator",
+      "latex": "$A_\\sigma$",
+      "meaning": "Actual PETSc shifted Schur operator, in the existing normalized solver coefficient equation",
+      "si_unit": "$1$ (normalized algebraic operator)"
+    },
+    {
+      "id": "shifted_candidate_solution",
+      "latex": "$x_\\sigma$",
+      "meaning": "Current reconstructed coefficient vector of the inner shifted solve; no new physical observable",
+      "si_unit": "$1$ (solver coefficients)"
+    },
+    {
+      "id": "shifted_algebraic_rhs",
+      "latex": "$b_\\sigma$",
+      "meaning": "Current normalized algebraic RHS of the inner shifted solve",
+      "si_unit": "$1$ (normalized solver equation)"
+    },
+    {
+      "id": "shifted_relative_tolerance",
+      "latex": "$\\mathrm{rtol}$",
+      "meaning": "Requested dimensionless shifted-solve relative tolerance",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "shifted_absolute_tolerance",
+      "latex": "$\\mathrm{atol}$",
+      "meaning": "Requested shifted-solve absolute tolerance in the same normalized algebraic units as the RHS norm",
+      "si_unit": "$1$ (normalized solver equation)"
     }
   ],
   "sources": [
@@ -2457,6 +2502,13 @@
       "path": "scripts/test_de_gamma_krylov_trial.py",
       "symbol": "class GammaWindowPolicyPilotRoutingTests",
       "responsibility": "Prepared forwarding/no-dispatch regressions, GitHub Actions only"
+    },
+    {
+      "id": "source-floquet-shifted-true-convergence",
+      "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp",
+      "symbol": "floquet_shifted_true_convergence_test",
+      "responsibility": "Withhold positive shifted KSP convergence until the current reconstructed solution satisfies the requested true residual criterion; preserve default negative outcomes and iteration budget with per-KSP reusable workspace.",
+      "evidence_status": "Source reviewed; standalone real-PETSc CI and fresh managed production runtime pending."
     }
   ],
   "public_api": {
