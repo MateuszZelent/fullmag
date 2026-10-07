@@ -7513,9 +7513,9 @@ def _render_geometry_expr_from_override(
         translation = params.get("translate")
     if isinstance(translation, list) and len(translation) == 3 and any(float(value) != 0 for value in translation):
         expr = (
-            f"{expr}.translate(({_py_number(float(translation[0]))}, "
-            f"{_py_number(float(translation[1]))}, "
-            f"{_py_number(float(translation[2]))}))"
+            f"{expr}.translate(({_py_float_roundtrip(translation[0])}, "
+            f"{_py_float_roundtrip(translation[1])}, "
+            f"{_py_float_roundtrip(translation[2])}))"
         )
     return expr
 
@@ -7599,7 +7599,7 @@ def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Pa
         )
     if isinstance(geometry, Translate):
         base = _render_geometry_expr(geometry.geometry, magnet_name=magnet_name, source_root=source_root)
-        offset = ", ".join(_py_number(value) for value in geometry.offset)
+        offset = ", ".join(_py_float_roundtrip(value) for value in geometry.offset)
         return f"{base}.translate(({offset}))"
     raise ValueError(f"unsupported geometry kind for canonical rewrite: {type(geometry).__name__}")
 
