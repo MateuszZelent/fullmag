@@ -43,6 +43,18 @@ kontrakt i wykrywalne braki, a nie pełną gwarancję wykonawczą.
 
 ## Granica projektu
 
+### Wyjątek: ulotne dane natywnej kompilacji Windows
+
+Na żądanie użytkownika z 05.10.2026 opcjonalny hostowy
+`FULLMAG_WINDOWS_VOLATILE_ROOT` może wskazywać lokalny RAM-disk poza trwałym
+storage. Dotyczy wyłącznie odtwarzalnej kopii wejść kompilatora i jego
+`TEMP`/`TMP`/`TMPDIR` w natywnym launcherze Windows. Właściciel projektu,
+worktree, profil i trwały build root są sprawdzane przed użyciem katalogu.
+Recepta zachowuje istniejące blokady i końcowy receipt. Trwałe snapshoty,
+cache Cargo, gotowe pakiety, manifesty, logi i sesje nadal podlegają
+kanonicznemu resolverowi. Brak dysku nie powoduje fallbacku nowego buildu.
+Szczegóły: [Windows-first development](windows-first-development.md#ulotne-dane-kompilacji-na-ram-disku).
+
 Fizyczną ścieżkę storage danego hosta deklaruje operator w `.env` głównego
 checkoutu przez `FULLMAG_PROJECT_STORAGE_ROOT`. `.env.example` dokumentuje klucz,
 ale nie narzuca lokalizacji Windows/Linux. Resolver czyta tylko zarządzane

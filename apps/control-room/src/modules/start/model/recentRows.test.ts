@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { apiItem } from "./__fixtures__/workspaceApi";
 import { project, script } from "./__fixtures__/workspaceScripts";
 import {
   buildRows,
@@ -7,7 +8,9 @@ import {
   filterScripts,
   isKindFilter,
   isSortKey,
+  filterResults,
   projectRow,
+  resultRow,
   scriptRow,
   sortKeysFor,
   sortRows,
@@ -183,7 +186,7 @@ describe("pinned rows come first in every sort", () => {
     it(`sort ${key}`, () => {
       const sorted = sortRows(rows, key);
       expect(sorted.slice(0, 2).map((r) => r.key).sort()).toEqual(["project:pinned-project", "script:1"]);
-      expect(sorted.slice(2).every((r) => !(r.kind === "script" ? r.item.pinned : r.entry.pinned))).toBe(
+      expect(sorted.slice(2).every((r) => !(r.kind === "project" ? r.entry.pinned : r.item.pinned))).toBe(
         true,
       );
     });
@@ -254,5 +257,57 @@ describe("buildRows", () => {
     expect(build("script", { sort: "use_count" })).toEqual(["script:2", "script:1"]);
     expect(build("all", { sort: "use_count" })).toEqual(build("all"));
     expect(build("project", { sort: "use_count" })).toEqual(build("project"));
+  });
+});
+
+describe("result rows", () => {
+  const results = [
+    apiItem({ id: "r1", kind: "result", name: "run-0003", lastUsedAt: "2026-10-03T09:00:00Z", sizeBytes: 5 }),
+    apiItem({ id: "r2", kind: "result", name: "run-0010", lastUsedAt: "2026-10-02T09:00:00Z", sizeBytes: 90, pinned: true }),
+  ];
+  const entries = [project({ projectId: "p1", name: "Vortex", lastOpenedAt: "2026-10-03T10:00:00Z" })];
+  const scripts = [script({ id: "s1", name: "bench", lastUsedAt: "2026-10-03T11:00:00Z" })];
+  const build = (kind: KindFilter, over: Partial<Parameters<typeof buildRows>[0]> = {}) =>
+    keys(buildRows({ kind, entries, scripts, results, filter: "all", query: "", sort: "last_used", ...over }));
+
+  it("is a kind of its own, with its own key", () => {
+    expect(isKindFilter("result")).toBe(true);
+    expect(resultRow(results[0]!).key).toBe("result:r1");
+    expect(build("result")).toEqual(["result:r2", "result:r1"]);
+  });
+
+  it("joins All as a third kind, pinned first and then newest first", () => {
+    expect(build("all")).toEqual(["result:r2", "script:s1", "project:p1", "result:r1"]);
+  });
+
+  it("is left out of the project and script lists, and of a list built without results", () => {
+    expect(build("project")).toEqual(["project:p1"]);
+    expect(build("script")).toEqual(["script:s1"]);
+    expect(keys(buildRows({ kind: "all", entries, scripts, filter: "all", query: "", sort: "last_used" }))).toEqual([
+      "script:s1",
+      "project:p1",
+    ]);
+  });
+
+  it("offers Size, not Created or Most used", () => {
+    expect(sortKeysFor("result")).toEqual(["last_used", "name", "modified", "size"]);
+    expect(build("result", { sort: "size" })).toEqual(["result:r2", "result:r1"]);
+    expect(build("result", { sort: "use_count" })).toEqual(build("result"));
+  });
+
+  it("filters by name and path and drops folders when a solver chip is on", () => {
+    expect(filterResults(results, "all", "0010").map((r) => r.id)).toEqual(["r2"]);
+    expect(filterResults(results, "pinned", "").map((r) => r.id)).toEqual(["r2"]);
+    expect(filterResults(results, "fdm", "")).toEqual([]);
+    expect(build("all", { filter: "fem" })).toEqual([]);
+  });
+
+  it("sorts string script ids and result ids after project rows on a full tie", () => {
+    const tied = [
+      resultRow(apiItem({ id: "b", kind: "result", name: "same", path: "/same" })),
+      scriptRow(script({ id: "a", name: "same", path: "/same" })),
+      projectRow(project({ projectId: "c", name: "same", path: "/same" })),
+    ];
+    expect(keys(sortRows(tied, "name"))).toEqual(["project:c", "script:a", "result:b"]);
   });
 });

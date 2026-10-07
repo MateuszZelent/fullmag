@@ -25,12 +25,13 @@ mod live_workspace;
 mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
+mod run_manifest;
 mod runtime_service_client;
 mod runtime_supervisor;
 mod saved_fem_snapshot_gate;
+mod scratch_runtime;
 mod script_inspect;
 mod script_launch;
-mod scratch_runtime;
 mod simulation_preparation;
 mod solver_profile_persistence;
 mod stage_heartbeat;
@@ -263,6 +264,28 @@ fn main() -> Result<()> {
             execution_plan,
         } => {
             let mut ir = read_ir(&path)?;
+            if ir
+                .problem_meta
+                .runtime_metadata
+                .contains_key("execution_materialization")
+            {
+                if let Some(value) = backend {
+                    ir = fullmag_application::bind_declared_execution(
+                        &ir,
+                        vec![fullmag_ir::ExecutionRequestLayerIR {
+                            origin: fullmag_ir::ExecutionFieldOriginIR {
+                                kind: fullmag_ir::ExecutionOriginKindIR::Cli,
+                                location: "cli.plan-json.backend".into(),
+                            },
+                            request: fullmag_ir::ExecutionRequestPatchIR {
+                                backend: fullmag_ir::FieldPatch::Value(BackendTarget::from(value)),
+                                ..Default::default()
+                            },
+                        }],
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                }
+            }
             if execution_plan {
                 if let Some(backend) = backend {
                     ir.backend_policy.requested_backend = BackendTarget::from(backend);

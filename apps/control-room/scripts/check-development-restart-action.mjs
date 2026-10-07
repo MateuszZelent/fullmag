@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { webcrypto } from "node:crypto";
 import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
+import { runMaterialAssignmentDraftCheck } from "./check-material-assignment-draft.mjs";
 
 // Interpret the production service, controller, and Host. Owner and typed API
 // protocols are controlled fixtures; this is not browser or native qualification.
@@ -14,6 +15,7 @@ const pin = source("src/kernel/api/apiInstancePin.ts");
 const controller = source("src/kernel/development/DevelopmentRestartController.ts");
 const service = source("src/kernel/development/DevelopmentRestartActionService.ts");
 const host = source("src/kernel/development/DevelopmentKernelHost.ts");
+const buildService = source("src/kernel/development/DevelopmentBackendBuildActionService.ts");
 const apiPaths = new vm.SourceTextModule(
   'export const PLATFORM_DEVELOPMENT_BACKEND_PATH = "/v2/platform/development-backend";',
   { context },
@@ -46,12 +48,18 @@ await service.link((specifier) => {
   throw new Error(`Unexpected service dependency: ${specifier}`);
 });
 await service.evaluate();
+await buildService.link((specifier) => {
+  assert.equal(specifier, "../api/apiInstancePin");
+  return pin;
+});
+await buildService.evaluate();
 modules.set("../api/apiInstancePin", pin);
 modules.set("../api/apiPaths", apiPaths);
 modules.set("../resources/ResourceRuntimeStore", resourceStore);
 modules.set("../resources/resourceClientScope", clientScope);
 modules.set("./DevelopmentKernelOwners", ownerAdapter);
 modules.set("./DevelopmentRestartActionService", service);
+modules.set("./DevelopmentBackendBuildActionService", buildService);
 await host.link((specifier) => {
   assert.ok(modules.has(specifier), `Unexpected Host dependency: ${specifier}`);
   return modules.get(specifier);
@@ -623,6 +631,7 @@ for (const fresh of [
   groups += 1;
 }
 
+console.log(JSON.stringify(await runMaterialAssignmentDraftCheck()));
 console.log(JSON.stringify({
   check: "development-restart-action",
   groups,

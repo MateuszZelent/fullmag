@@ -11,20 +11,25 @@ import {
   templateCreateState,
   type ScriptSaver,
 } from "../model/scriptOpen";
+import { buildTemplateProjectSource, type ProjectCreator } from "../model/scriptProject";
 import { startScreenStore } from "../model/startScreenState";
 import { estimateFor, templateScript, templateScriptFileName, type StudyTemplate } from "../model/templates";
 import type { ComputeProbeState } from "../model/types";
+import { CreateProjectAction } from "../ui/CreateProjectAction";
 import { SolverBadge } from "../ui/SolverBadge";
 
 export function TemplateDetails({
   template,
   compute,
   scriptSaver = null,
+  projectCreator = null,
 }: {
   readonly template: StudyTemplate;
   readonly compute: ComputeProbeState;
   /** Saves the template script as a new file; null where there is no desktop host. */
   readonly scriptSaver?: ScriptSaver | null;
+  /** Creates a project from the template script after consent; null without a project document service. */
+  readonly projectCreator?: ProjectCreator | null;
 }) {
   const estimate = estimateFor(template, compute);
   const create = templateCreateState(template, scriptSaver);
@@ -91,6 +96,10 @@ export function TemplateDetails({
               Recent scripts and selects it; nothing runs until you choose Run in new window. Or run
               it yourself with <code>{`fullmag ${fileName}`}</code>.
             </p>
+            <p className="fm-start-inspector__note">
+              Create project runs the script once, after you confirm, to read its model into a
+              project that keeps the original script. It also works in the browser.
+            </p>
             <div className="fm-start-report__actions">
               <Button onClick={save} size="sm" type="button" variant="secondary">
                 <Download aria-hidden="true" size={12} /> {`Download ${fileName}`}
@@ -98,6 +107,12 @@ export function TemplateDetails({
               <Button onClick={() => void copy()} size="sm" type="button" variant="secondary">
                 <Copy aria-hidden="true" size={12} /> Copy script
               </Button>
+              <CreateProjectAction
+                creator={projectCreator}
+                size="sm"
+                source={buildTemplateProjectSource(template)}
+                variant="secondary"
+              />
             </div>
           </section>
         ) : null}

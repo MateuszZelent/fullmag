@@ -47,6 +47,14 @@ kompatybilny z bootstrapem i klientami
 w migracji; nie jest dowodem ochrony wieloetapowej operacji. Szczegóły
 ograniczeń i usunięcia adaptera: ADR 0011, uzupełnienie P3a z 22.09.2026.
 
+Pierwsza zaakceptowana publikacja sesji przez wewnętrzny publisher solvera
+również zwiększa licznik inkarnacji API (`current_live_session_epoch`), nawet
+gdy sesja nie powstała przez komendę Create v2. Licznik jest publikowany pod
+blokadą transition razem z pierwszym snapshotem. Kolejne klatki tej samej
+sesji nie zwiększają licznika; odrzucona pierwsza klatka ani wyczerpanie
+licznika nie publikują sesji. Nie zmienia to naukowego `session_epoch`
+zapisanego w metadanych sesji ani kształtu zasobów OpenAPI.
+
 WebSocket nie przenosi scope w URL. Pierwszy `hello.payload.request_scope_epoch`
 jest wymagany i odpowiada inkarnacji przechwyconej przy upgrade. Klient ze
 znanym statusem nie przetwarza kolejnych zdarzeń przed zgodnym `hello`; przy
@@ -315,6 +323,26 @@ An unknown schema remains read-only and is returned byte-for-byte. These
 endpoints are not runtime-session import or restore aliases; durable Save,
 host file selection, and the UI document lifecycle remain separate follow-up
 work.
+
+`POST /v2/persistence/projects/from-script` tworzy projekt ze skryptu Python i
+WYKONUJE ten skrypt w pomocniku Pythona (ten sam model zaufania co uruchomienie
+skryptu), dlatego żądanie musi zawierać `consent.executed_by_user: true`
+(inaczej 400 `consent_required`, bez uruchomienia). Treść `source.text` ma co
+najwyżej 1 MiB UTF-8 (413 `script_too_large`); `script_item_id` jest odrzucane
+(400 `script_item_unsupported`). Skrypt trafia do prywatnego katalogu w
+`current_workspace_root`, jest eksportowany przez `export-scene-document`
+(limit 30 s) i katalog jest usuwany. Błąd eksportu to 422
+(`script_export_failed`, `script_export_timeout`, `script_export_too_large`)
+z komunikatem pomocnika; nic nie jest zachowane. Sukces (201) zwraca kształt
+`ProjectDocumentResource` oraz `script_import { name, sha256, origin,
+exported_at, script_path, fidelity }`; archiwum zawiera wyeksportowany
+`scene.v2`, oryginalny skrypt jako opaque `project/source/script.py`,
+`project/source/script.json` i `project/provenance.json` (wpis historii
+`import`). `fidelity.round_trip` (`verified`, `failed`, `not_checked`) wynika z
+porównania ProblemIR oryginału z ProblemIR sceny wyrenderowanej z powrotem do
+Pythona (geometria, materiały, komórka FDM, dynamika i etapy badania);
+`verified` nie oznacza, że scena jest skryptem. Aktualizacja authoring, open i
+save nie zmieniają osadzonego skryptu. Odpowiedź ma `memory_only` durability.
 
 `POST /v2/persistence/projects/authoring` aktualizuje dostarczone archiwum
 przez ten sam use case dokumentu. Wymaga oczekiwanego ProjectId i rewizji oraz

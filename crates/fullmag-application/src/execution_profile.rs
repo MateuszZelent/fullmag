@@ -1,10 +1,10 @@
 //! Replay immutable execution-profile intent into a pinned request snapshot.
 
 use fullmag_ir::{
-    BackendTarget, ComputeResourcePatchIR, ComputeResourcesIR, EXECUTION_REQUEST_SCHEMA,
-    ExecutionDevice, ExecutionFieldOriginIR, ExecutionOriginKindIR, ExecutionProfileIR,
-    ExecutionRequestIR, ExecutionRequestLayerIR, ExecutionRequestPatchIR, FieldPatch,
-    MaterializedExecutionRequestIR,
+    BackendTarget, ComputeResourcePatchIR, ComputeResourcesIR, ExecutionDevice,
+    ExecutionFieldOriginIR, ExecutionOriginKindIR, ExecutionProfileIR, ExecutionRequestIR,
+    ExecutionRequestLayerIR, ExecutionRequestPatchIR, FieldPatch, MaterializedExecutionRequestIR,
+    EXECUTION_REQUEST_SCHEMA,
 };
 use std::collections::BTreeMap;
 
@@ -105,6 +105,28 @@ pub fn validate_execution_materialization(
     }
     Ok(())
 }
+
+/// Resolve an exact immutable reference through a caller-owned repository.
+/// The application never reads host state or substitutes a default profile.
+pub fn materialize_referenced_execution(
+    profile_id: &str,
+    version: &str,
+    layers: Vec<ExecutionRequestLayerIR>,
+    mut lookup: impl FnMut(&str, &str) -> Result<ExecutionProfileIR, String>,
+) -> Result<MaterializedExecutionRequestIR, String> {
+    let profile = lookup(profile_id, version)?;
+    if profile.profile_id != profile_id || profile.version != version {
+        return Err(
+            "execution_profile_reference_mismatch: repository returned a different profile version"
+                .into(),
+        );
+    }
+    materialize_execution_request(Some(profile), layers)
+}
+
+#[cfg(test)]
+#[path = "execution_profile_reference_tests.rs"]
+mod reference_tests;
 
 fn product_default_origins() -> BTreeMap<String, ExecutionFieldOriginIR> {
     ORIGIN_PATHS

@@ -9,8 +9,8 @@ use fullmag_authoring::{
     StudyPlan, StudyPlanMigrationDefaults, StudyPrimitiveStageKind, StudySolverConfigReference,
 };
 use fullmag_ir::ProblemIR;
-use fullmag_plan::{lower_study_plan_with_catalog, StudyProblemCatalog, StudyProblemCatalogEntry};
-use serde_json::{json, Value};
+use fullmag_plan::{StudyProblemCatalog, StudyProblemCatalogEntry, lower_study_plan_with_catalog};
+use serde_json::{Value, json};
 
 fn lower_steps(devices: &[&str]) -> (StudyProblemCatalog, fullmag_plan::StudyExecutionPlan) {
     let selections = devices
@@ -182,7 +182,11 @@ fn run_auto_preserves_per_step_device_intent_and_accepts_cuda_alias() {
         .expect("the GPU step preserves the run-wide minimum budget");
     assert_eq!(gpu_request.device, "gpu");
     assert_eq!(
-        gpu_request.minimum_resources.as_ref().unwrap().gpu_memory_bytes,
+        gpu_request
+            .minimum_resources
+            .as_ref()
+            .unwrap()
+            .gpu_memory_bytes,
         8_000
     );
     let cpu_request = specification
@@ -191,7 +195,11 @@ fn run_auto_preserves_per_step_device_intent_and_accepts_cuda_alias() {
         .expect("the CPU step normalizes the auto run's GPU minimum");
     assert_eq!(cpu_request.device, "cpu");
     assert_eq!(
-        cpu_request.minimum_resources.as_ref().unwrap().gpu_memory_bytes,
+        cpu_request
+            .minimum_resources
+            .as_ref()
+            .unwrap()
+            .gpu_memory_bytes,
         0
     );
 

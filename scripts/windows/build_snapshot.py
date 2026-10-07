@@ -8,6 +8,9 @@ This is source integrity evidence, not runtime or scientific qualification.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import copy
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -16,8 +19,22 @@ import re
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
+
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    class _FileTime(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+    _set_file_time = ctypes.WinDLL("kernel32", use_last_error=True).SetFileTime
+    _set_file_time.argtypes = [wintypes.HANDLE, ctypes.c_void_p,
+                              ctypes.POINTER(_FileTime), ctypes.POINTER(_FileTime)]
+    _set_file_time.restype = wintypes.BOOL
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from capture_source_snapshot_identity import (
@@ -25,7 +42,9 @@ from capture_source_snapshot_identity import (
     SourceIdentityError, _is_non_runtime_path, _read_regular_file_stable, capture,
 )
 from fullmag_storage import identifier
-from windows.workspace_backend_identity import DEPENDENCY_INPUTS, INPUTS, fingerprint
+from windows.workspace_backend_identity import (
+    DEPENDENCY_INPUTS, INPUTS, fingerprint, is_native_workspace_input,
+)
 
 SCHEMA = "fullmag.windows-build-snapshot.v1"
 HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -52,6 +71,23 @@ class SnapshotError(RuntimeError):
 
 class SourceChangedSnapshot(SnapshotError):
     """The live checkout changed during the short source-copy phase."""
+
+
+_SNAPSHOT_VERIFICATION_CACHE = ContextVar("fullmag_snapshot_verification_cache", default=None)
+
+
+@contextmanager
+def snapshot_verification_scope():
+    """Reuse checks within one operation; force a full final check before ACK.
+
+    Record/path validation on a hit is not proof of unchanged source bytes.
+    Callers must force fresh verification before publishing a dependent result.
+    """
+    token = _SNAPSHOT_VERIFICATION_CACHE.set((threading.current_thread(), {}))
+    try:
+        yield
+    finally:
+        _SNAPSHOT_VERIFICATION_CACHE.reset(token)
 
 
 def _json_bytes(value):
@@ -112,7 +148,8 @@ def _git(repo, *arguments):
 
 def _paths(repo, inputs=()):
     raw = _git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *inputs)
-    return sorted({entry.decode("utf-8") for entry in raw.split(b"\0") if entry})
+    return sorted({entry.decode("utf-8") for entry in raw.split(b"\0")
+                   if entry and (not inputs or is_native_workspace_input(entry.decode("utf-8")))})
 
 
 def _gitlinks(repo):
@@ -175,10 +212,31 @@ def _inventory(repo, paths):
 
 
 def _copy_file(source, destination):
-    entry, content = _file_entry(source, source.name)
+    _no_link(source)
+    if not stat.S_ISREG(source.lstat().st_mode):
+        raise SnapshotError(f"Source input must be a regular file: {source.name}")
+    metadata, content = _read_regular_file_stable(source, "snapshot source")
+    entry = {"path": source.name, "size": metadata.st_size, "sha256": _sha(content)}
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("xb") as stream:
         stream.write(content)
+        stream.flush()
+        # Keep the exact opened destination: Windows does not support utime
+        # with follow_symlinks=False, and a path fallback could follow a link.
+        if os.name == "nt":
+            def file_time(nanoseconds):
+                ticks = nanoseconds // 100 + 116444736000000000
+                if not 0 <= ticks < 2**64:
+                    raise SnapshotError("Source timestamp is outside the Windows FILETIME range")
+                return _FileTime(ticks & 0xffffffff, ticks >> 32)
+
+            accessed = file_time(metadata.st_atime_ns)
+            modified = file_time(metadata.st_mtime_ns)
+            if not _set_file_time(msvcrt.get_osfhandle(stream.fileno()), None,
+                                  ctypes.byref(accessed), ctypes.byref(modified)):
+                raise ctypes.WinError(ctypes.get_last_error())
+        else:
+            os.utime(stream.fileno(), ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
     return entry
 
 
@@ -211,7 +269,7 @@ def _metadata(record):
             if key not in {"inventory", "backend_input_paths", "dependency_input_paths"}}
 
 
-def verify_snapshot(record, build_root):
+def _verify_snapshot_full(record, build_root):
     """Check only frozen files and pinned provenance; origin may already differ."""
     build = _checked_root(build_root)
     supplied = record if isinstance(record, dict) else None
@@ -286,6 +344,89 @@ def verify_snapshot(record, build_root):
     return metadata
 
 
+def _stable_record_bytes(path):
+    try:
+        _, raw = _read_regular_file_stable(path, "frozen source snapshot record")
+        return raw
+    except (OSError, SourceIdentityError) as error:
+        raise SnapshotError("Snapshot record is unavailable or changed") from error
+
+
+def _validate_cached_paths(build, path, metadata):
+    if os.path.normcase(str(Path(metadata["record_path"]))) != os.path.normcase(str(path)):
+        raise SnapshotError("Cached snapshot record path differs from its verified location")
+    source = Path(metadata["source_root"])
+    checked_source = _checked_root(source)
+    if os.path.normcase(str(checked_source)) != os.path.normcase(str(source)):
+        raise SnapshotError("Cached snapshot source root is not canonical")
+    identity = Path(metadata["source_identity_file"])
+    if not identity.is_absolute() or build not in identity.parents:
+        raise SnapshotError("Cached snapshot identity file is outside the build root")
+    identity = _checked_child(build, identity.relative_to(build).as_posix())
+    try:
+        identity_metadata = identity.lstat()
+    except OSError as error:
+        raise SnapshotError("Cached snapshot identity file is unavailable") from error
+    if not stat.S_ISREG(identity_metadata.st_mode):
+        raise SnapshotError("Cached snapshot identity file is not regular")
+
+
+def verify_snapshot(record, build_root, *, force_verify=False):
+    """Verify a frozen snapshot, reusing only exact records in an active scope.
+
+    Calls outside ``snapshot_verification_scope`` retain full verification.
+    Within a scope, cache hits still validate the canonical roots and record
+    paths; callers can force a fresh inventory pass with ``force_verify=True``.
+    """
+    if type(force_verify) is not bool:
+        raise SnapshotError("force_verify must be a boolean")
+    cache_state = _SNAPSHOT_VERIFICATION_CACHE.get()
+    if cache_state is None or cache_state[0] is not threading.current_thread():
+        return _verify_snapshot_full(record, build_root)
+    cache = cache_state[1]
+
+    build = _checked_root(build_root)
+    supplied = record if isinstance(record, dict) else None
+    path = Path(supplied["record_path"] if supplied else record)
+    if not path.is_absolute() or build not in path.parents:
+        raise SnapshotError("Snapshot record must be below the canonical build root")
+    _checked_child(build, path.relative_to(build).as_posix())
+    key = (os.path.normcase(str(build)), os.path.normcase(str(path)))
+    if force_verify:
+        cache.pop(key, None)
+    try:
+        raw_before = _stable_record_bytes(path)
+    except Exception:
+        cache.pop(key, None)
+        raise
+
+    raw_sha256 = _sha(raw_before)
+    cached = cache.get(key)
+    if not force_verify and cached is not None:
+        cached_sha256, cached_raw, cached_metadata = cached
+        if cached_sha256 == raw_sha256 and cached_raw == raw_before:
+            try:
+                _validate_cached_paths(build, path, cached_metadata)
+            except Exception:
+                cache.pop(key, None)
+                raise
+            if supplied is not None and supplied != cached_metadata:
+                raise SnapshotError("Supplied snapshot metadata differs from its sealed record")
+            return copy.deepcopy(cached_metadata)
+        cache.pop(key, None)
+
+    try:
+        metadata = _verify_snapshot_full(record, build_root)
+        raw_after = _stable_record_bytes(path)
+        if raw_after != raw_before:
+            raise SnapshotError("Snapshot record changed during verification")
+    except Exception:
+        cache.pop(key, None)
+        raise
+    cache[key] = (raw_sha256, raw_before, copy.deepcopy(metadata))
+    return copy.deepcopy(metadata)
+
+
 def create_snapshot(repo_root, build_root):
     """Capture under caller-owned managed locks; never overwrite frozen sources."""
     repo, build = _checked_root(repo_root), _checked_root(build_root)
@@ -335,7 +476,9 @@ def create_snapshot(repo_root, build_root):
     for expected in entries:
         copied = _copy_file(_checked_child(repo, expected["path"]), _checked_child(source, expected["path"]))
         if expected["path"] in protected_paths and (copied["sha256"] != expected["sha256"] or copied["size"] != expected["size"]):
-            raise SourceChangedSnapshot("Origin changed while copying a source file")
+            raise SourceChangedSnapshot(
+                f"Origin changed while copying source input: {expected['path']}"
+            )
         copied_entries.append({**copied, "path": expected["path"]})
     confirm_origin()
     # Browser HMR/docs may keep moving during capture. Record their ACTUAL

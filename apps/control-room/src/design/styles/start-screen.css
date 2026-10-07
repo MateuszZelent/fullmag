@@ -1097,6 +1097,156 @@
   flex: 1;
 }
 
+/* Action bar of the sketch: primary button joined to its dropdown, then an
+   open-externally icon. Extra rows (Run in new window) sit above the bar. */
+.fm-start-actionbar {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.fm-start-actionbar__extra {
+  display: grid;
+  gap: var(--fm-space-1);
+}
+
+.fm-start-actionbar__bar {
+  display: flex;
+  gap: var(--fm-space-2);
+}
+
+.fm-start-btn-group {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.fm-start-btn-group .fm-start-inspector__open {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.fm-start-btn-group__split {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 0 var(--fm-space-2);
+}
+
+/* Runs tab: a run id that selects its result folder, and the viewer buttons. */
+.fm-start-runs__link {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.fm-start-runs__link:hover {
+  text-decoration: underline;
+}
+
+.fm-start-runs__actions {
+  display: flex;
+  gap: var(--fm-space-2);
+  margin-top: var(--fm-space-3);
+}
+
+.fm-start-runs__actions > :first-child {
+  flex: 1;
+}
+
+/* Adding a path by typing it (a browser has no file picker). */
+.fm-start-addpath {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--fm-space-2);
+  margin-top: var(--fm-space-2);
+}
+
+.fm-start-addpath__field {
+  display: grid;
+  flex: 1;
+  gap: var(--fm-space-1);
+  min-width: 14rem;
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-addpath__error {
+  margin: var(--fm-space-1) 0 0;
+  color: var(--fm-danger);
+  font-size: var(--fm-font-size-xs);
+  flex-basis: 100%;
+}
+
+/* Settings: indexed locations. */
+.fm-start-roots {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0 0 var(--fm-space-3);
+  padding: 0;
+  list-style: none;
+}
+
+.fm-start-roots__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-3);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-start-roots__path {
+  flex: 1 1 14rem;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-start-roots__kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-3);
+}
+
+.fm-start-roots__check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-start-roots__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2);
+  margin-top: var(--fm-space-3);
+}
+
+.fm-start-scan {
+  margin-top: var(--fm-space-2);
+}
+
+.fm-start-section__title + .fm-start-inspector__note {
+  margin: var(--fm-space-1) 0 var(--fm-space-3);
+}
+
+.fm-start-scan__warnings {
+  margin: var(--fm-space-1) 0 0;
+  padding-left: var(--fm-space-4);
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-xs);
+}
+
 /* ── Thumbnails, cards, view toggle ───────────────────────────────────── */
 
 /* A render is data: the frame keeps the viewport background in both themes. */
@@ -1156,7 +1306,7 @@
   top: var(--fm-space-2);
   left: var(--fm-space-3);
   z-index: var(--fm-z-base);
-  color: var(--fm-start-meta);
+  color: var(--fm-start-thumb-text);
   font-size: var(--fm-start-section-size);
   font-weight: var(--fm-font-weight-semibold);
   letter-spacing: var(--fm-start-section-tracking);
@@ -1419,6 +1569,15 @@
   flex-wrap: wrap;
   gap: var(--fm-space-2);
   margin-top: auto;
+}
+
+.fm-start-continue__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2);
+  font-size: var(--fm-font-size-xs);
+  color: var(--fm-start-meta);
 }
 
 /* ── Templates gallery ────────────────────────────────────────────────── */
@@ -2426,4 +2585,135 @@
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ── Saved-frame scrubber and status-strip telemetry ──────────────────── */
+
+.fm-start-frames {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0 0 var(--fm-space-4);
+}
+
+.fm-start-frames__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+}
+
+.fm-start-frames__slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--fm-accent);
+}
+
+.fm-start-frames__slider:focus-visible,
+.fm-start-frames__step:focus-visible,
+.fm-start-switch:focus-visible,
+.fm-start-status__info:focus-visible {
+  outline: 2px solid var(--fm-focus-ring);
+  outline-offset: 2px;
+}
+
+.fm-start-frames__step {
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  cursor: pointer;
+  padding: var(--fm-space-1);
+}
+
+.fm-start-frames__step:disabled {
+  color: var(--fm-text-disabled);
+  cursor: default;
+}
+
+.fm-start-frames__label {
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-start-frames__meta {
+  margin: 0;
+  color: var(--fm-start-meta);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-start-telemetry {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  margin-left: auto;
+}
+
+.fm-start-switch {
+  position: relative;
+  width: 26px;
+  height: 14px;
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-bg-panel-raised);
+  cursor: pointer;
+  padding: 0;
+}
+
+.fm-start-switch[data-checked="true"] {
+  border-color: var(--fm-accent);
+  background: var(--fm-accent-soft);
+}
+
+.fm-start-switch:disabled {
+  border-color: var(--fm-border-disabled);
+  cursor: default;
+}
+
+.fm-start-switch__thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-text-secondary);
+}
+
+.fm-start-switch[data-checked="true"] .fm-start-switch__thumb {
+  left: 13px;
+  background: var(--fm-accent);
+}
+
+.fm-start-status__info {
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--fm-start-meta);
+  cursor: pointer;
+  padding: var(--fm-space-1);
+}
+
+.fm-start-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--fm-space-2));
+  width: 320px;
+  max-width: 80vw;
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-elevated);
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.5;
+  padding: var(--fm-space-3);
+  white-space: normal;
+}
+
+.fm-start-telemetry__failure {
+  color: var(--fm-start-meta);
 }

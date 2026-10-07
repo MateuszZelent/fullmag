@@ -23,6 +23,7 @@ from fullmag._progress import (
     indeterminate_progress_phase,
 )
 from fullmag._validation import ensure_unique_names, require_non_empty
+from fullmag.model._incomplete import IncompletePhysicsError
 from fullmag.init.textures import PresetTexture
 from fullmag.model.antenna import (
     AntennaFieldSolveStage,
@@ -2462,7 +2463,7 @@ class Problem:
         if not self.energy and not any(
             _material_has_anisotropy(magnet.material) for magnet in self.magnets
         ):
-            raise ValueError(
+            raise IncompletePhysicsError(
                 "Problem requires at least one interaction or material anisotropy"
             )
 

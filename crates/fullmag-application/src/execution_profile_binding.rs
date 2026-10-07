@@ -66,6 +66,12 @@ pub fn bind_materialized_execution(
         "compute_resources".into(),
         serde_json::to_value(&requested.resources).map_err(|error| error.to_string())?,
     );
+    metadata.remove("execution_profile");
+    metadata.remove("execution_layers");
+    metadata.insert(
+        "execution_materialization".into(),
+        serde_json::to_value(materialization).map_err(|error| error.to_string())?,
+    );
     bound.validate().map_err(|errors| errors.join("; "))?;
     Ok(bound)
 }

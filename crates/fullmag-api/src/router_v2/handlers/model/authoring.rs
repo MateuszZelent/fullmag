@@ -3341,6 +3341,30 @@ fn dispatch_authoring_transaction(
     request_context: crate::types::CurrentLiveRequestContext,
 ) -> Pin<Box<dyn Future<Output = Result<Json<AuthoringTransactionResponse>, ApiError>> + Send>> {
     match req {
+        AuthoringTransactionRequest::AssignStudyExecution {
+            base_revision,
+            execution_profile,
+            execution_layers,
+        } => Box::pin(async move {
+            let current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
+            let assigned = assign_scene_execution(
+                &current_scene,
+                base_revision,
+                execution_profile,
+                execution_layers,
+            )?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                assigned,
+            )
+            .await?;
+            authoring_transaction_response("assign_study_execution", committed)
+        }),
         AuthoringTransactionRequest::ReplaceScene {
             base_revision,
             scene,
@@ -3882,6 +3906,15 @@ fn apply_scene_merge_patch(
     scene: &SceneDocument,
     merge_patch: &Value,
 ) -> Result<SceneDocument, ApiError> {
+    if merge_patch
+        .get("study")
+        .and_then(|study| study.get("execution_profile"))
+        .is_some_and(|profile| !profile.is_null())
+    {
+        return Err(ApiError::bad_request(
+            "execution_profile_requires_atomic_assignment: use assign_study_execution instead of recursively merging immutable profile defaults",
+        ));
+    }
     let mut scene_value = serde_json::to_value(scene).map_err(|error| {
         ApiError::internal(format!("failed to serialize scene document: {error}"))
     })?;
@@ -3889,6 +3922,25 @@ fn apply_scene_merge_patch(
     serde_json::from_value(scene_value)
         .map_err(|error| ApiError::bad_request(format!("invalid scene patch payload: {error}")))
 }
+
+fn assign_scene_execution(
+    scene: &SceneDocument,
+    base_revision: u64,
+    profile: fullmag_ir::ExecutionProfileIR,
+    layers: Vec<fullmag_ir::ExecutionRequestLayerIR>,
+) -> Result<SceneDocument, ApiError> {
+    check_base_scene_revision(scene, Some(base_revision))?;
+    let mut assigned = scene.clone();
+    assigned.study.execution_profile = Some(profile);
+    assigned.study.execution_layers = layers;
+    fullmag_authoring::validate_scene_document(&assigned)
+        .map_err(|error| ApiError::bad_request(error.message))?;
+    Ok(assigned)
+}
+
+#[cfg(test)]
+#[path = "study_execution_assignment_tests.rs"]
+mod study_execution_assignment_tests;
 
 fn apply_patch_magnetization_transaction(
     scene: &mut SceneDocument,

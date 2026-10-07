@@ -3,6 +3,9 @@ import type {
   ProjectAuthoringUpdateRequest,
   ProjectCreateRequest,
   ProjectDocumentResource,
+  ProjectFromScriptRequest,
+  ProjectFromScriptResource,
+  ScriptFidelityResource,
 } from "../api/apiTypes";
 import type { ControlRoomApi } from "../api/ControlRoomApi";
 import {
@@ -99,12 +102,29 @@ export type ProjectDocumentSnapshot =
       readonly hostPath: string | null;
     };
 
+/**
+ * What the last script import produced, kept beside (not inside) the document
+ * snapshot so it survives later saves and authoring updates until dismissed or
+ * until another project replaces it.
+ */
+export interface ScriptImportNotice {
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly scriptName: string;
+  readonly sha256: string;
+  readonly origin: string;
+  readonly fidelity: ScriptFidelityResource;
+}
+
 export interface ProjectDocumentApi {
   readonly persistence: {
     readonly projects: {
       create(
         request: ProjectCreateRequest,
       ): Promise<ProjectDocumentResource>;
+      fromScript(
+        request: ProjectFromScriptRequest,
+      ): Promise<ProjectFromScriptResource>;
       open(request: ProjectArchiveRequest): Promise<ProjectDocumentResource>;
       authoringUpdate(
         request: ProjectAuthoringUpdateRequest,
@@ -127,7 +147,14 @@ export interface ProjectDocumentDevelopmentGuard {
   release(): void;
 }
 
+export interface ProjectAuthoringSessionBinding {
+  readonly projectId: string;
+  readSceneDocument(): Promise<Record<string, unknown>>;
+  verifyCurrent(): Promise<void>;
+}
+
 export class ProjectDocumentController {
+  private authoringSessionBinding: ProjectAuthoringSessionBinding | null = null;
   private snapshot: ProjectDocumentSnapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
   private readonly listeners = new Set<() => void>();
   private developmentGuard: symbol | null = null;
@@ -136,6 +163,7 @@ export class ProjectDocumentController {
   private flushingOutcomes = false;
   private scheduledRunOutcomeCount = 0;
   private outcomeErrorSnapshot: ProjectDocumentSnapshot | null = null;
+  private scriptImportNotice: ScriptImportNotice | null = null;
 
   constructor(private readonly api: ProjectDocumentApi | ControlRoomApi) {}
 
@@ -146,6 +174,14 @@ export class ProjectDocumentController {
     return () => this.listeners.delete(listener);
   };
 
+  getScriptImportNotice = (): ScriptImportNotice | null => this.scriptImportNotice;
+
+  dismissScriptImportNotice(): void {
+    if (this.scriptImportNotice === null) return;
+    this.scriptImportNotice = null;
+    this.notify();
+  }
+
   canSave(): boolean {
     const document = this.documentView();
     return (
@@ -154,6 +190,20 @@ export class ProjectDocumentController {
       document.resource.mode.kind === "read_write" &&
       document.resource.archive_base64.length > 0
     );
+  }
+
+  /** Explicit association from a confirmed session create/restore operation. */
+  bindAuthoringSession(binding: ProjectAuthoringSessionBinding): void {
+    this.assertOperationAvailable();
+    const document = this.documentView();
+    if (!document || document.resource.project_id !== binding.projectId) {
+      throw new Error("The workspace belongs to a different project document.");
+    }
+    this.authoringSessionBinding = Object.freeze({
+      projectId: binding.projectId,
+      readSceneDocument: binding.readSceneDocument.bind(binding),
+      verifyCurrent: binding.verifyCurrent.bind(binding),
+    });
   }
 
   /**
@@ -176,6 +226,8 @@ export class ProjectDocumentController {
       if (!confirm) return false;
     }
     this.pendingOutcomes = [];
+    this.authoringSessionBinding = null;
+    this.scriptImportNotice = null;
     if (snapshot.state === "empty") return true;
     this.snapshot = EMPTY_PROJECT_DOCUMENT_SNAPSHOT;
     this.notify();
@@ -195,8 +247,48 @@ export class ProjectDocumentController {
         name: trimmedName,
       });
       this.pendingOutcomes = [];
+      this.authoringSessionBinding = null;
+      this.scriptImportNotice = null;
       this.setReady(resource, projectFileName(resource.name));
       return resource;
+    } catch (error) {
+      this.setError(error);
+      throw error;
+    } finally {
+      this.finishOperation("create");
+    }
+  }
+
+  /**
+   * Create the open project from a script. The API executes the script in the
+   * Python helper, so the caller must already hold the person's consent
+   * (`request.consent.executed_by_user`). A failure leaves the previous
+   * document in place and is rethrown with the helper's message.
+   */
+  async createFromScript(
+    request: ProjectFromScriptRequest,
+  ): Promise<ProjectFromScriptResource> {
+    this.assertOperationAvailable();
+    if (request.consent?.executed_by_user !== true) {
+      throw new Error("Creating a project from a script needs the person's consent to run it.");
+    }
+    this.beginOperation("create");
+    try {
+      this.setLoading();
+      const response = await this.api.persistence.projects.fromScript(request);
+      const { script_import: scriptImport, ...project } = response;
+      this.pendingOutcomes = [];
+      this.authoringSessionBinding = null;
+      this.scriptImportNotice = {
+        projectId: project.project_id,
+        projectName: project.name,
+        scriptName: scriptImport.name,
+        sha256: scriptImport.sha256,
+        origin: scriptImport.origin,
+        fidelity: scriptImport.fidelity,
+      };
+      this.setReady(project, projectFileName(project.name));
+      return response;
     } catch (error) {
       this.setError(error);
       throw error;
@@ -219,6 +311,8 @@ export class ProjectDocumentController {
       };
       const resource = await this.api.persistence.projects.open(request);
       this.pendingOutcomes = [];
+      this.authoringSessionBinding = null;
+      this.scriptImportNotice = null;
       this.setReady(
         resource,
         projectFileName(source.fileName || resource.name),
@@ -341,6 +435,7 @@ export class ProjectDocumentController {
    */
   async synchronizeAuthoring(
     sceneDocument: Record<string, unknown>,
+    verifyCurrent?: () => Promise<void>,
   ): Promise<ProjectDocumentResource> {
     this.assertOperationAvailable();
     const currentSnapshot = this.documentView();
@@ -376,9 +471,11 @@ export class ProjectDocumentController {
         expected_revision: currentResource.revision,
         scene_document: detachedSceneDocument,
       };
+      if (verifyCurrent) await verifyCurrent();
       const response = validateProjectDocumentResource(
         await this.api.persistence.projects.authoringUpdate(request),
       );
+      if (verifyCurrent) await verifyCurrent();
       assertAuthoringUpdateStableMetadata(currentResource, response);
 
       if (response.revision === currentResource.revision) {
@@ -444,6 +541,22 @@ export class ProjectDocumentController {
 
   async save(): Promise<void> {
     this.assertOperationAvailable();
+    const binding = this.authoringSessionBinding;
+    if (binding) {
+      const captured = this.documentView();
+      if (!captured || captured.resource.project_id !== binding.projectId) {
+        throw new Error("The bound project document is no longer current.");
+      }
+      const sceneDocument = await binding.readSceneDocument();
+      if (this.authoringSessionBinding !== binding || this.documentView()?.resource !== captured.resource) {
+        throw new Error("The project changed while reading its workspace. Save was stopped.");
+      }
+      await this.synchronizeAuthoring(sceneDocument, () => binding.verifyCurrent());
+      await binding.verifyCurrent();
+      if (this.authoringSessionBinding !== binding || this.documentView()?.resource.project_id !== binding.projectId) {
+        throw new Error("The project changed while preparing Save.");
+      }
+    }
     const document = this.documentView();
     if (!document) {
       throw new Error("No project document is open.");

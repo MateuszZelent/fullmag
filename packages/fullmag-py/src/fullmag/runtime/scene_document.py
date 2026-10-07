@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from fullmag.model.output_storage import OutputStorage
+from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer
 from fullmag.runtime.output_storage_lowering import (
     configure_scene_stage_autosaves,
     configure_study_pipeline_autosaves,
@@ -155,6 +156,27 @@ def _mapping(value: object, context: str) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{context} must be an object")
     return dict(value)
+
+
+def _execution_profile_fields(
+    source: Mapping[str, object],
+    context: str,
+) -> dict[str, object]:
+    has_profile = "execution_profile" in source
+    raw_layers = source.get("execution_layers", [])
+    if not isinstance(raw_layers, list):
+        raise ValueError(f"{context}.execution_layers must be a list")
+    if not has_profile:
+        if raw_layers:
+            raise ValueError(f"{context}.execution_layers requires execution_profile")
+        return {}
+
+    profile = ExecutionProfile.from_ir(source["execution_profile"])
+    layers = [ExecutionRequestLayer.from_ir(layer) for layer in raw_layers]
+    result: dict[str, object] = {"execution_profile": profile.to_ir()}
+    if layers:
+        result["execution_layers"] = [layer.to_ir() for layer in layers]
+    return result
 
 
 def _reject_unknown_fields(
@@ -1598,6 +1620,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             document[collection] = copy.deepcopy(value)
     if "fdm" in builder:
         document["study"]["fdm"] = copy.deepcopy(builder.get("fdm"))
+    document["study"].update(_execution_profile_fields(builder, "builder"))
     if "spin_torques" in builder:
         document["spin_torques"] = _canonical_spin_torques(
             builder["spin_torques"], scene_ids=True
@@ -1854,6 +1877,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "requested_precision": study.get("requested_precision", "double"),
         "requested_mode": study.get("requested_mode", "strict"),
         "cpu_threads": study.get("requested_cpu_threads"),
+        **_execution_profile_fields(study, "SceneDocument.study"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
         "exchange_enabled": bool(study.get("exchange_enabled", True)),
         "demag_enabled": bool(study.get("demag_enabled", True)),
@@ -2193,6 +2217,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                         for key, value in raw_grid.items()
                     }
         overrides["fdm"] = fdm
+    overrides.update(_execution_profile_fields(builder, "SceneDocument.study"))
     return overrides
 
 

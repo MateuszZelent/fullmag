@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any
 
 
+_SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
+
+
 BUNDLE_SCHEMA = "fullmag.native-runtime-bundle.v1"
 SOURCE_SCHEMA_VERSION = 1
 COMPILER_PROFILES = {"dev": "backend-dev", "release": "release"}
@@ -56,6 +61,29 @@ BUNDLE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 class BundleError(ValueError):
     """Input or bundle validation failed."""
+
+
+def _frozen_source_metadata(source: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate publisher provenance without opening or executing its paths."""
+    if "build_source_snapshot" not in source:
+        return None
+    frozen = source["build_source_snapshot"]
+    if not isinstance(frozen, dict) or set(frozen) != {"record_path", "inventory_sha256", "source_root"}:
+        raise BundleError("Invalid frozen source binding")
+    if not _is_sha256(frozen["inventory_sha256"]):
+        raise BundleError("Invalid frozen source inventory digest")
+    for name in ("record_path", "source_root"):
+        value = frozen[name]
+        if not isinstance(value, str) or not value or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+            raise BundleError("Invalid frozen source metadata location")
+    record = Path(frozen["record_path"])
+    source_root = Path(frozen["source_root"])
+    if (not record.is_absolute() or not source_root.is_absolute()
+            or record.name != "record.json" or source_root.name != "source"
+            or str(record.parent) != str(source_root.parent)
+            or ".." in record.parts or ".." in source_root.parts):
+        raise BundleError("Invalid frozen source metadata locations")
+    return frozen
 
 
 def _is_reparse_point(path: Path, info: os.stat_result | None = None) -> bool:
@@ -231,6 +259,19 @@ def _load_source_manifest(
     ):
         raise BundleError("Build manifest build_version does not match its source identity")
 
+    frozen = _frozen_source_metadata(manifest)
+    if frozen is not None:
+        from windows.build_snapshot import verify_snapshot
+        checked = verify_snapshot(frozen["record_path"], build_root)
+        if (checked["inventory_sha256"] != frozen["inventory_sha256"]
+                or checked["source_root"] != frozen["source_root"]
+                or checked["origin_worktree_id"] != manifest["workspace_namespace"]
+                or checked["backend_source_sha256"] != manifest["backend_source_sha256"]
+                or checked["dependency_source_sha256"] != manifest["dependency_source_sha256"]
+                or checked["source_identity"]["head_commit_full"] != manifest["git_commit"]
+                or checked["source_identity"]["source_snapshot_sha256"] != manifest["source_snapshot_sha256"]):
+            raise BundleError("Build manifest differs from its frozen source binding")
+
     target_root_value = manifest.get("cargo_target_dir")
     if not isinstance(target_root_value, str) or not target_root_value:
         raise BundleError("Build manifest cargo_target_dir is missing")
@@ -376,6 +417,8 @@ def create_bundle(
             "features": list(source_manifest["features"]),
             "executable_sha256": dict(source_hashes),
         }
+        if source_manifest.get("build_source_snapshot") is not None:
+            source_record["build_source_snapshot"] = dict(source_manifest["build_source_snapshot"])
         bundle_manifest = {
             "schema": BUNDLE_SCHEMA,
             "schema_version": 1,
@@ -461,6 +504,7 @@ def validate_bundle(
             raise BundleError(f"Runtime bundle source {field} is invalid")
     if not isinstance(source.get("workspace_namespace"), str) or not source["workspace_namespace"]:
         raise BundleError("Runtime bundle source workspace_namespace is missing")
+    _frozen_source_metadata(source)
     build_version = source.get("build_version")
     if (
         not isinstance(build_version, dict)

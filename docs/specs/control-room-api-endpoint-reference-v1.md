@@ -2098,6 +2098,35 @@ Degraded-success rule:
 | `time_s` | `f64` | Solver time | SI seconds. |
 | `created_at` | `string` | Checkpoint creation timestamp | Timestamp string as emitted by the persistence layer. |
 
+#### `DELETE /v2/sessions/current/persistence/checkpoints/{checkpoint_id}` (v2 only)
+
+- Status: `canonical` (v2); the v1 live routes above have no delete.
+- Purpose: discard one checkpoint of the current session's run. Used by the
+  Control Room start screen (Continue card, **Discard checkpoint**).
+- Scope: only checkpoints of the run of the current session; the
+  session-scope middleware applies as for the neighbouring persistence routes.
+- Responses:
+  - `204` the checkpoint is deleted. Idempotence is by outcome, not by status:
+    a repeated request answers `404`.
+  - `404` no active workspace, or no such checkpoint in the current run.
+  - `409` refused, error code text starts with `checkpoint_delete_referenced`.
+    A checkpoint is refused while a stage record of the run names it as
+    restore source (`resume_from_checkpoint_ref`) or loaded state
+    (`loaded_state_ref`), or while the run manifest names it as its latest
+    checkpoint.
+- Effects: the checkpoint-owned files (`checkpoint.json` first, then the common
+  state and per-checkpoint payload files) are removed under the store writer
+  lease. CAS objects are **not** deleted by this route; they become garbage
+  candidates of the store's reviewed GC (`gc_preview`/`gc_apply`) once nothing
+  references them, so an object shared with another checkpoint or a solution
+  set stays. A stage record that only *saved* the checkpoint
+  (`checkpoint_ref`) has that link, its artifact reference and its
+  `save_checkpoint` transition cleared so it does not dangle. The session
+  `state_version` advances by one; clients refetch the checkpoint catalogue and
+  the stage-execution resource.
+- Not covered: a project that is not open (no runtime). The desktop host has no
+  `discard_checkpoint` command for it, so the start screen hides Discard then.
+
 ### 11.5 `GET /v1/live/current/session/recovery`
 
 - Status: `canonical`
@@ -2257,6 +2286,78 @@ resource-first architecture.
 | `preview` | cached field/domain resources plus local adapters | should retire as independent transport field |
 | `command_status` | future command-status read model | target-only |
 | `step_update_v2` | derived internal bridge or future explicit runtime-step resource | unresolved cutover detail |
+
+## 17. v2 Workspace Database Endpoints (`/v2/workspace/...`)
+
+Status: canonical, v2 (added 2026-10-05). These are not session resources: the
+API process runs on the user's machine and serves the per-user workspace
+database (`workspace.db` in the Fullmag state directory, shared with the
+desktop host and the CLI; `docs/design/start-screen/docs/07-workspace-database.md`
+section 13) so the browser build shows the same recent projects, scripts and
+result folders. OpenAPI tag `workspace_items`. Ids are decimal strings,
+counters are numbers, Windows paths never carry the `\\?\` prefix.
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v2/workspace/items?kind=all\|project\|script\|result&sort=last_used\|name\|modified\|use_count&search=&limit=&include_missing=` | list; `all` is every kind; limit 1 to 1000 (default 200); pinned first |
+| `GET /v2/workspace/items/{id}` | item plus the facts read from its file now |
+| `GET /v2/workspace/items/{id}/thumbnail` | `image/png`, `ETag`, `304` on `If-None-Match`, `404` without a preview. A project serves its stored preview; a result serves the stored preview of the project named in its run manifest (`thumbnail_origin: source_project`), never a render of the result |
+| `GET /v2/workspace/items/{id}/archive` | result folders only: the folder as a streamed zip (`application/zip`, `Content-Disposition: attachment`, binary, no `Content-Length`). 400 not a result, 404 unknown/forgotten/missing, 409 `workspace_archive_link` (symlink, junction or non-UTF-8 name inside), 413 `workspace_archive_too_large` (over 2 GiB or 60 000 files); refusals come before the first byte, a failure mid-stream aborts the connection |
+| `POST /v2/workspace/items/{id}/pin` `{pinned}` | returns the item |
+| `POST /v2/workspace/items/{id}/forget` | `{id, forgotten: true}`; the file is untouched |
+| `GET /v2/workspace/items/{id}/history?limit=` | events, newest first (limit 1 to 500, default 100) |
+| `GET /v2/workspace/items/{id}/frames?from=&limit=` | page of a result folder's saved-frame index (`frames.json`): `{indexed, total, from, frames[], truncated}`; limit 1 to 1000, default 200; metadata only |
+| `GET /v2/workspace/settings/{key}` | allow-listed per-user setting: `telemetry.enabled` (bool, default false) or `update.available` (null until an updater stores it); 404 for other keys |
+| `PUT /v2/workspace/settings/{key}` | body `{value}`; only `telemetry.enabled` (boolean) is writable, `update.available` answers 400 |
+| `GET /v2/workspace/roots`, `PUT /v2/workspace/roots` | scan roots `{roots: [{path, kinds[], recursive, enabled}], source: configured\|legacy\|none}`; `legacy` offers the project folders the desktop host last scanned until roots are saved; `PUT` needs absolute existing folders without `..` (400 otherwise), at most 64 |
+| `POST /v2/workspace/scan` `{roots?}` | `{scanned, added, updated, missing, skipped, warnings}`; no body scans the saved roots; explicit roots are scanned once and not saved; 409 while another scan runs |
+| `POST /v2/workspace/items` `{path, kind?}` | add one existing absolute `.fms`, `.py` or results folder (no `..`, not a symlink or junction); counts as a use, records `import` `{"source":"add"}` actor `web`; returns the item |
+
+`WorkspaceItem`: `{id, kind: project|script|result, path, name, project_id?,
+first_seen_at, last_used_at, use_count, pinned, status:
+ready|missing|failed|migrate|readonly, size_bytes?, modified_at?, meta,
+has_thumbnail, thumbnail_origin?: item|source_project}`. `status` is checked against the file system on every request,
+so a deleted file reads `missing` without a database write.
+
+List response: `{items, outcome: {state: ready|created|migrated|quarantined|
+read_only_newer_schema, detail?}}`.
+
+Detail response: `{item, detail, events, read_at, linked_results[],
+linked_source?}`. `events` are the last 30; `linked_results` are result folders
+whose run manifest names this script or project; `linked_source` is the script
+or project of a result folder. `detail` is a union tagged by `kind`:
+
+- `project`: `read_error?`, `name`, `project_id`, `schema_version`, `revision`,
+  `solver`, `migrated`, `can_write`, `mode`, `mode_reason`, `warnings[]`,
+  `summary {model {discretisation, cell_size, periodicity, materials, ms, aex,
+  alpha, interactions}, execution {integrator, tolerance, excitation}, outputs
+  {frames, size_bytes}}` (unavailable fields `null`; `periodicity` is always
+  `null` until the scene carries it; outputs come from the latest recorded
+  run), `authors[]`, `citation`, `history[]`, `runs[]`, `provenance_recorded`,
+  `preview {colouring, run_id?, at?}`.
+- `script`: `read_error?`, `sha256`, `bytes`, `lines`, `encoding`
+  (`utf-8|utf-8-bom|other`), `truncated`, `summary`, `uses_fullmag`, `imports[]`
+  (top-level names), `env_reads[]` (literal names, never values),
+  `syntax? {ok, line?, column?, message?}`, `unresolved_imports?[]`,
+  `syntax_checked`, `degraded`, `degraded_reason?`. It starts as a bounded
+  static scan (`syntax_checked: false`, `degraded: true`). When a Python
+  interpreter resolves (the one `fullmag script inspect` uses) the never-executing
+  helper `inspect-script` (`ast` and `find_spec` of top-level names) runs with a
+  5 second deadline and fills `syntax`, `unresolved_imports` (names not found by
+  that interpreter), `imports` and `env_reads`, with `syntax_checked: true`,
+  `degraded: false`; a syntax error keeps `degraded: true`. Any failure keeps
+  the static scan and says why in `degraded_reason`. The script is never
+  executed; results are cached by content digest and folder.
+- `result`: `read_error?`, `format`, `has_manifest`, `run_id`, `status`,
+  `source {kind, path, sha256?, project_id?, revision?}`, `started_at`,
+  `finished_at`, `stages[{id, kind, steps, time_s}]`, `quantities[]`, `grid
+  {backend, cells, n_nodes, n_elements, hmax}`, `frames`, `total_bytes`,
+  `total_bytes_truncated`, `modified_at`, `outputs[{path, kind}]`.
+
+Viewing a script that changed since the last observation records one `edit`
+event (actor `web`). Errors: 400 invalid id/kind/sort/path, 404 unknown or
+forgotten item, 409 `workspace_read_only` (database from a newer schema, writes
+refused) or `workspace_scan_running`, 500 when the database cannot be opened.
 
 ## 16. Immediate Documentation Rule
 

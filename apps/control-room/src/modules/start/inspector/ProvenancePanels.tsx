@@ -1,14 +1,22 @@
 "use client";
 
-import { Copy } from "lucide-react";
+import { Activity, Copy, Download } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/shared/ui/Button";
 
+import {
+  RESULTS_DOWNLOAD_FOLDER_MISSING,
+  RESULTS_DOWNLOAD_NO_BACKEND,
+  RESULTS_DOWNLOAD_NO_FOLDER,
+  startDownload,
+} from "../model/downloadUrl";
 import { formatBytes, formatOpened } from "../model/recentIndex";
+import { resultChip } from "../model/resultModel";
+import { metaNumber, metaString, type ApiWorkspaceItem } from "../model/workspaceApiTypes";
 import { generateBibtex, type HistoryEntry, type Provenance, type RunRecord, type RunStatus } from "../model/provenance";
 import type { ProjectStatus, RecentEntry } from "../model/types";
-import { StatusPill } from "../ui/StatusPill";
+import { RunsTable, type RunRow } from "./InspectorParts";
 
 const RUN_PILL: Readonly<Record<RunStatus, { status: ProjectStatus; label: string }>> = {
   queued: { status: "draft", label: "Queued" },
@@ -133,43 +141,120 @@ export function HistoryPanel({ provenance }: { readonly provenance: Provenance }
   );
 }
 
-function duration(seconds: number | undefined): string {
-  if (seconds === undefined) return "—";
-  if (seconds < 90) return `${Math.round(seconds)} s`;
-  if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
-  return `${(seconds / 3600).toFixed(1)} h`;
+export interface RunsViewer {
+  /** Why "Open results viewer" is disabled; null when it can run. */
+  readonly disabledReason: string | null;
+  readonly onOpen: () => void;
+  readonly download: RunsDownload;
 }
 
-export function RunsPanel({ provenance }: { readonly provenance: Provenance }) {
-  if (provenance.runs.length === 0) {
+export interface RunsDownload {
+  /** The zip of the newest linked result folder; null with the reason it cannot be offered. */
+  readonly href: string | null;
+  readonly reason: string | null;
+}
+
+/**
+ * The download of a project's Runs tab is the newest linked result folder as a
+ * zip (`GET /v2/workspace/items/{id}/archive`); linked folders arrive newest
+ * first. A folder that is missing is skipped, not offered.
+ */
+export function resultsDownload(
+  linkedResults: readonly ApiWorkspaceItem[],
+  archiveUrl: ((id: string) => string) | undefined,
+): RunsDownload {
+  if (!archiveUrl) return { href: null, reason: RESULTS_DOWNLOAD_NO_BACKEND };
+  if (linkedResults.length === 0) return { href: null, reason: RESULTS_DOWNLOAD_NO_FOLDER };
+  const folder = linkedResults.find((item) => item.status !== "missing");
+  if (!folder) return { href: null, reason: RESULTS_DOWNLOAD_FOLDER_MISSING };
+  return { href: archiveUrl(folder.id), reason: null };
+}
+
+/**
+ * The Runs tab of the sketch: Run | Started | Duration | Output, then Open
+ * results viewer beside a download button. Result folders linked to the
+ * project are rows too; selecting one shows it in the list.
+ */
+export function RunsPanel({
+  provenance,
+  linkedResults = [],
+  onSelectResult,
+  viewer,
+}: {
+  readonly provenance: Provenance;
+  readonly linkedResults?: readonly ApiWorkspaceItem[];
+  readonly onSelectResult?: (id: string) => void;
+  readonly viewer?: RunsViewer;
+}) {
+  const runRows: RunRow[] = provenance.runs.map((run: RunRecord) => {
+    const pill = RUN_PILL[run.status];
+    return {
+      key: run.runId,
+      label: run.runId,
+      status: pill.status,
+      statusWord: `${pill.label}${run.error ? `: ${run.error}` : ""}`,
+      title: run.error,
+      startedAt: run.startedAt,
+      durationSeconds: run.durationSeconds,
+      outputBytes: run.outputBytes,
+    };
+  });
+  const knownRunIds = new Set(provenance.runs.map((run) => run.runId));
+  const folderRows: RunRow[] = linkedResults.flatMap((item): RunRow[] => {
+    // A folder that carries a run's id is that run's output, not a second run.
+    const runId = metaString(item, "run_id");
+    if (runId && knownRunIds.has(runId)) return [];
+    const chip = resultChip(item);
+    return [
+      {
+        key: `result:${item.id}`,
+        label: item.name,
+        status: chip?.status ?? "draft",
+        statusWord: chip?.label || chip?.title || "Result folder",
+        startedAt: metaString(item, "started_at") ?? item.firstSeenAt,
+        durationSeconds: metaNumber(item, "duration_seconds"),
+        outputBytes: item.sizeBytes,
+        onSelect: onSelectResult ? () => onSelectResult(item.id) : undefined,
+      },
+    ];
+  });
+  const rows = [...runRows, ...folderRows];
+  if (rows.length === 0) {
     return <p className="fm-start-inspector__note">{emptyNote(provenance.recorded, "runs")}</p>;
   }
   return (
-    <table className="fm-start-formats fm-start-runs">
-      <caption className="fm-start-visually-hidden">Runs</caption>
-      <thead>
-        <tr>
-          <th scope="col">Run</th>
-          <th scope="col">Started</th>
-          <th scope="col">Duration</th>
-          <th scope="col">Output</th>
-        </tr>
-      </thead>
-      <tbody>
-        {provenance.runs.map((run: RunRecord) => {
-          const pill = RUN_PILL[run.status];
-          return (
-            <tr key={run.runId} title={run.error}>
-              <th scope="row">
-                <StatusPill label={run.runId} status={pill.status} title={`${pill.label}${run.error ? `: ${run.error}` : ""}`} />
-              </th>
-              <td>{formatOpened(run.startedAt)}</td>
-              <td>{duration(run.durationSeconds)}</td>
-              <td>{run.outputBytes !== undefined ? formatBytes(run.outputBytes) : "—"}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <>
+      <RunsTable formatOutput={formatBytes} rows={rows} />
+      {viewer ? (
+        <div className="fm-start-runs__actions">
+          <Button
+            data-action="open-results-viewer"
+            disabled={viewer.disabledReason !== null}
+            onClick={viewer.onOpen}
+            size="sm"
+            title={viewer.disabledReason ?? undefined}
+            type="button"
+            variant="secondary"
+          >
+            <Activity aria-hidden="true" size={14} />
+            Open results viewer
+          </Button>
+          <Button
+            aria-label="Download results"
+            data-action="download-results"
+            disabled={viewer.download.href === null}
+            onClick={() => {
+              if (viewer.download.href) startDownload(viewer.download.href);
+            }}
+            size="icon"
+            title={viewer.download.reason ?? "Download the newest result folder as a zip"}
+            type="button"
+            variant="secondary"
+          >
+            <Download aria-hidden="true" size={14} />
+          </Button>
+        </div>
+      ) : null}
+    </>
   );
 }

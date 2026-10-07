@@ -7,6 +7,8 @@ import {
   formatSimTime,
   homeSubline,
   latestCheckpoint,
+  REASON_DISCARD_RESTORE_SOURCE,
+  REASON_DISCARD_RESTORING,
   REASON_FAMILY_MISMATCH,
   REASON_GPU_NOT_RESOLVED,
   REASON_LOADING,
@@ -17,6 +19,7 @@ import {
   REASON_PROJECT_CLOSED,
   REASON_RESTORING,
   resolveContinue,
+  resolveDiscard,
   resumeLabel,
   toCatalogState,
   type ContinueLiveInput,
@@ -342,6 +345,70 @@ describe("resolveContinue", () => {
       live({ catalog: { kind: "ready", checkpoints: [] } }),
     );
     expect(result.session.resumable).toBe(false);
+  });
+});
+
+describe("resolveDiscard", () => {
+  it("offers the latest checkpoint of the open run with its step", () => {
+    const result = resolveContinue(session, live());
+    expect(result.discard).toEqual({
+      kind: "enabled",
+      checkpointId: "c-2",
+      step: 256,
+      createdAt: "2026-10-03T12:04:02Z",
+    });
+  });
+
+  it("stays available when Resume is hidden for this machine", () => {
+    const result = resolveContinue(session, live({ compute: cpuEnv }));
+    expect(result.resume.kind).toBe("hidden");
+    expect(result.discard.kind).toBe("enabled");
+  });
+
+  it("is hidden without a matching open session: the desktop host cannot delete it", () => {
+    for (const input of [
+      null,
+      live({ run: null }),
+      live({ run: { runId: "other", requestedDevice: "cpu" } }),
+    ]) {
+      expect(resolveDiscard(session, input)).toEqual({ kind: "hidden" });
+    }
+  });
+
+  it("is hidden when the runtime holds no checkpoint for the run", () => {
+    expect(
+      resolveDiscard(session, live({ catalog: { kind: "ready", checkpoints: [] } })),
+    ).toEqual({ kind: "hidden" });
+  });
+
+  it("is disabled with a reason while restoring, loading or after a failed read", () => {
+    expect(resolveDiscard(session, live({ restoring: true }))).toEqual({
+      kind: "disabled",
+      reason: REASON_DISCARD_RESTORING,
+    });
+    expect(resolveDiscard(session, live({ catalog: { kind: "loading" } }))).toEqual({
+      kind: "disabled",
+      reason: REASON_LOADING,
+    });
+    expect(
+      resolveDiscard(session, live({ catalog: { kind: "error", message: "down" } })),
+    ).toEqual({ kind: "disabled", reason: "Could not read the checkpoints: down" });
+  });
+
+  it("is disabled for the checkpoint a stage was restored from", () => {
+    const result = resolveDiscard(
+      session,
+      live({
+        run: {
+          runId: "r",
+          requestedDevice: "gpu",
+          resolvedDevice: "gpu",
+          resolvedRuntimeFamily: "fdm_cuda",
+          restoreSourceCheckpointIds: ["c-2"],
+        },
+      }),
+    );
+    expect(result).toEqual({ kind: "disabled", reason: REASON_DISCARD_RESTORE_SOURCE });
   });
 });
 

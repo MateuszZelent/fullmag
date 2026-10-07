@@ -1,52 +1,22 @@
-import type { ReactNode } from "react";
-
 import { formatBytes } from "../model/recentIndex";
 import type { ModelSummary } from "../model/types";
 
-interface Row {
-  readonly label: string;
-  readonly value: ReactNode;
-}
-
-function Group({ rows, title }: { readonly rows: readonly Row[]; readonly title: string }) {
-  if (rows.length === 0) return null;
-  return (
-    <section className="fm-start-kv">
-      <h3 className="fm-start-kv__title">{title}</h3>
-      <dl className="fm-start-kv__grid">
-        {rows.map((row) => (
-          <div className="fm-start-kv__row" key={row.label}>
-            <dt>{row.label}</dt>
-            <dd>{row.value}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
-  );
-}
-
-function chips(items: readonly string[] | undefined): ReactNode {
-  if (!items || items.length === 0) return undefined;
-  return (
-    <span className="fm-start-chips">
-      {items.map((item) => (
-        <span className="fm-start-chip" key={item}>
-          {item}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-const row = (label: string, value: ReactNode): Row[] =>
-  value === undefined || value === null || value === "" ? [] : [{ label, value }];
+import { KvGroup, chipList, kvRow as kvRowIfPresent, kvRowOrUnavailable } from "./KeyValueGroup";
 
 /**
  * Answers "is this the project I mean, and can this machine run it?". Units
  * are part of each value, and a field the index did not record is left out
- * instead of shown as a dash.
+ * instead of shown as a dash, unless `listEveryField` asks for the sketch's
+ * full list, where a field the backend did not send reads "unavailable".
  */
-export function InspectorOverview({ summary }: { readonly summary: ModelSummary | undefined }) {
+export function InspectorOverview({
+  summary,
+  listEveryField = false,
+}: {
+  readonly summary: ModelSummary | undefined;
+  readonly listEveryField?: boolean;
+}) {
+  const kvRow = listEveryField ? kvRowOrUnavailable : kvRowIfPresent;
   if (!summary) {
     return (
       <p className="fm-start-inspector__note">
@@ -55,33 +25,33 @@ export function InspectorOverview({ summary }: { readonly summary: ModelSummary 
     );
   }
   const model = [
-    ...row("Discretisation", summary.discretisation),
-    ...row("Cell size", summary.cellSize),
-    ...row("Periodicity", summary.periodicity),
-    ...row("Material", summary.materials?.join(", ")),
-    ...row("Ms", summary.ms),
-    ...row("Aex", summary.aex),
-    ...row("α", summary.alpha),
-    ...row("Interactions", chips(summary.interactions)),
+    ...kvRow("Discretisation", summary.discretisation),
+    ...kvRow("Cell size", summary.cellSize),
+    ...kvRow("Periodicity", summary.periodicity),
+    ...kvRow("Material", summary.materials?.join(", ")),
+    ...kvRow("Ms", summary.ms),
+    ...kvRow("Aex", summary.aex),
+    ...kvRow("α", summary.alpha),
+    ...kvRow("Interactions", chipList(summary.interactions)),
   ];
   const execution = [
-    ...row("Integrator", summary.integrator),
-    ...row("Tolerance", summary.tolerance),
-    ...row("Excitation", summary.excitation),
+    ...kvRow("Integrator", summary.integrator),
+    ...kvRow("Tolerance", summary.tolerance),
+    ...kvRow("Excitation", summary.excitation),
   ];
   const outputs = [
-    ...row("Frames", summary.outputFrames?.toLocaleString()),
-    ...row("Size", summary.outputBytes === undefined ? undefined : formatBytes(summary.outputBytes)),
-    ...row("Fields", chips(summary.outputFields)),
+    ...kvRow("Frames", summary.outputFrames?.toLocaleString()),
+    ...kvRow("Size", summary.outputBytes === undefined ? undefined : formatBytes(summary.outputBytes)),
+    ...kvRow("Fields", chipList(summary.outputFields)),
   ];
   if (model.length + execution.length + outputs.length === 0) {
     return <p className="fm-start-inspector__note">The recorded summary is empty.</p>;
   }
   return (
     <>
-      <Group rows={model} title="Model" />
-      <Group rows={execution} title="Execution" />
-      <Group rows={outputs} title="Outputs" />
+      <KvGroup rows={model} title="Model" />
+      <KvGroup rows={execution} title="Execution" />
+      <KvGroup rows={outputs} title="Outputs" />
     </>
   );
 }

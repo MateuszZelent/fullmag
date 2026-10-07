@@ -1,14 +1,186 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53BE, 07.10.2026: [Compute po restore](p8/53be-compute-after-workspace-restore.md)
+**IN PROGRESS**. Real browser `bb551f895a854177939cd55e9fc1f54f`
+odtworzył błąd zapisu Run: numeric until_seconds trafiał do tekstowego
+builder stage DTO. Próba terminalna failed, 8/8 własnych procesów odebrane;
+nie wykonano replacement ani Compute. Rozdzielono stage SceneDocument od
+buildera, zachowując legacy drafts/extra i fail-closed eksport. Read-only
+review bez findings, Rust regression source NOT RUN. Nowa regresja HTTP
+sprawdza rzeczywistą transakcję/odczyt sceny. Produkcyjny native build exit 0,
+manifest `7d87e9c8bdeaf1ad95c9aa8884db6758e4e657f4bb852e90c5995b54a44dd74e`.
+Finalna managed regresja `0bdb5b739e864f8786433c83aa17ef28`:
+32 kontrole PASS, completed, exit 0, wszystkie 6 procesów odebrane,
+sealed źródła i pakiet zweryfikowane ponownie na końcu.
+**CLOSED** dla numeric stage authoring; Compute po restore pozostaje otwarte.
+Wcześniejsza próba 32 kontroli failed przez wygenerowany Python bytecode;
+naprawiono zapis cache bez osłabienia inventory checks.
+Pierwszy build odmówił podczas snapshotu przy zmianie
+źródeł; kontrola integralności nie została wyłączona. Osobno otwarte są
+poprawne raportowanie acquisition refusal, jawne retry po potwierdzonej
+odmowie i terminalny solver po restore. Publiczny restart pozostaje wyłączony,
+workspace 3197 nie był restartowany, procentów P0–P8 nie zwiększono.
+
+Checkpoint P8-53BD, 07.10.2026: [zapis projektu bez fizyki](p8/53bd-incomplete-physics-project-persistence.md)
+**CLOSED** dla zapisu i odtworzenia projektu z materiałem i magnetyzacją,
+lecz bez oddziaływań/anizotropii. Runtime i zwykły renderer pozostają ścisłe.
+Review bez findings. Finalne managed regresje 140/140, bez skipów:
+`0f5be07d23d84aea8f5a4527c680508d`. Produkcyjny native build completed,
+exit 0, manifest `4546a80021efcc6c9b8a1b5e1a8725a3a9b538f2222832ef70bc0f277087ecee`.
+Managed API `261180dbb23242f4a906d267bafdc7a2`: 28 kontroli PASS,
+exit 0; zachowanie sceny, assetów, historii, noop/reopen i odtworzenia źródła.
+Deadline i log overflow nadal są odrzucane. Finalny real browser
+`782a66b4710b494d820f07ee2978b06d`: completed, exit 0, 7/7 PASS,
+13/13 procesów oraz frontend odebrane. Projekt revision 2, dirty=true
+oraz scena revision 6 zachowane dokładnie po B → C; API, sesja i scope świeże.
+Canvas visible, contextLost=false, drawing buffer 519 × 297; noEmit/lint PASS.
+Historyczne nieudane próby pozostają opisane w raporcie, nie są liczone jako PASS.
+Workspace 3197 nie był restartowany. Compute po restore, publiczny restart
+oraz pełny plan pozostają otwarte; procentów P0–P8 nie zwiększono.
+
+Checkpoint P8-53BC, 06.10.2026: [real active-run restart refusal](p8/53bc-real-active-run-restart-refusal.md)
+**CLOSED** dla odmowy podczas `running` i `paused` oraz wyścigu Start/freeze.
+Potwierdzają to trzy managed receipts z finalnego builda
+`44a976d76203ce65d8cdb36a447ec62cd09c32c0b757bb181d76827ee896d549`:
+running `a58b6596bc394fd78fe06169471c6506`, Start/freeze
+`41e4f43bb559445e915fab3558ed9993` i paused
+`6312ce8eca0546daaa0047a5a489d43e`; każdy zakończył się `completed`, exit 0.
+Wariant paused zachował API/session/run i epoch `1 → 1`; licznik pozostał na 15
+przed odmową, w jej chwili i po niej, po terminalnym resume wzrósł do 16. W teście
+wyścigu Start-first zachowało przyjętą komendę i uniemożliwiło późniejszy acquire;
+freeze-first odrzucił Start kodem 409 `development_restart_in_progress`. Każdy
+własny proces ma terminalny wait. Natywny build `backend-dev` PASS, manifest
+`44a976d76203ce65d8cdb36a447ec62cd09c32c0b757bb181d76827ee896d549`; szczegóły
+i ograniczenia: [raport P8-53BC](p8/53bc-real-active-run-restart-refusal.md).
+Zamknięcie dotyczy tego wiersza runtime; publiczny restart, pozostałe scenariusze
+CAE, wymagane lane'y i release qualification pozostają otwarte. Procentów P0–P8
+nie zwiększono. Rust testy jednostkowe pozostają NOT RUN.
+Tabela zbiorcza poniżej podaje ocenę całej fazy, nie identyczny procent każdego
+podpakietu. P3a jest rozpisane oddzielnie poniżej tabeli (90%, ostatni zapisany
+inventory: 276 SOURCE PASS / 15 OPEN / 13 GLOBAL). Strumień backendu B obejmuje
+B-CORE/FDM/FEM/DEMAG/WORKFLOW/STATE/ABI/OBS; nie ma wiarygodnie zmierzonego
+osobnego procentu, więc śledzi się go przez bramki lane'ów.
+
+Checkpoint P8-53BB, 06.10.2026: [frozen active-run prerequisite](p8/53bb-frozen-active-run-prerequisite.md)
+**PASS**, receipt `c575d6492d504616bceb7622920a2070`, exit 0, bez Cargo.
+Zweryfikowany pakiet D wykonał rzeczywisty FDM CPU flat_relax do kroku 1;
+bounded websocket reconnect zachował session/run i stan running.
+Observer ma osobną utrwaloną kopię i hash, własne procesy waited.
+Poprawiono kontrolę ABI dla Windows CPython z null SOABI; 7/7 lekkich
+regresji PASS i review bez findings. Nie dowodzi to odmowy restartu podczas
+realnego solve, wyścigu Start/freezing ani długotrwałego postępu solvera.
+Te bramki i publiczny restart pozostają otwarte; procentów nie zwiększono.
+
+Checkpoint P8-53BA, 06.10.2026: [Apply Inspectora i restart](p8/53ba-native-browser-applied-inspector-draft.md)
+**PASS** dla jednej zatwierdzonej anizotropii w idle FDM workspace. Apply
+aktualizował kanoniczny physics_stack; po restarcie ten sam moduł i Ku1,
+scena revision 5 i dirty document zostały dokładnie odtworzone. Receipt
+`02254ad5af7e419db05d32657dfe78cf`: completed, exit 0, 7 kontroli, wszystkie
+własne procesy waited; noEmit/lint PASS, WebGL visible i contextLost false.
+Dotychczasowe 287 checks native nie obejmują rzeczywistego aktywnego solve
+ani Start-vs-freeze z działającym workerem. Te bramki, inne formularze
+i publiczny restart pozostają otwarte; procentów całego planu nie zwiększono.
+
+Checkpoint P8-53AZ, 06.10.2026: [ochrona szkicu Inspectora](p8/53az-native-browser-inspector-draft-guard.md)
+**PASS** dla jednego rzeczywistego szkicu anizotropii i jawnego Revert.
+Restart odmówił przed wysłaniem intentu, zachowując Ku1, panel, model i stary
+API; po Revert odtworzono model oraz dirty document w nowej sesji. Receipt
+`4d829bea8f7746a78c889c99c4fddfdc`: completed, exit 0, 7 kontroli, wszystkie
+własne procesy waited. Driver 20/20 interpretowanych regresji PASS.
+Naprawiono również wybór strony diagnostycznej: produkt pozostaje frozen D,
+a bieżąca fixture ma osobny snapshot i SHA-256 w receipt. Wcześniejszy AY
+receipt dowodzi odtworzenia modelu, lecz używał starszej diagnostyki z D.
+Nowa próba potwierdza bieżący overlay i linked-scene guard. Apply, pozostałe
+rodzaje szkiców, aktywne solve i publiczny restart pozostają otwarte;
+procentów całego planu nie zwiększono.
+
+Checkpoint P8-53AY, 06.10.2026: [native/browser restart niepustego workspace](p8/53ay-native-browser-workspace-restart.md)
+**PASS**, receipt `6379d58c5ac14c9b8c956bd775c3e9cc`, completed, exit 0,
+7 kontroli. Rzeczywisty model FDM z geometrią, regionem i materiałem oraz
+otwarty niezapisany dokument (revision 2, identyczny hash archiwum i sceny)
+zostały odtworzone po zmianie API, sesji i kernel generation. WebGL visible,
+contextLost false, niezerowy drawing buffer. Wszystkie 13 native/source
+procesów oraz Next waited; typecheck/lint PASS. Interpretowane regresje:
+driver 17/17 i status overlay 4/4 PASS. Wcześniejsze nieudane próby zachowano
+w raporcie. Dowód obejmuje jeden idle workspace; pozostałe bramki P8-53,
+publiczny restart i pełna kwalifikacja P0–P8 pozostają otwarte. Procentów
+całego planu nie zwiększono na podstawie tej wąskiej bramki.
+
+Aktualna bramka produkcyjnych typów Control Room, 05.10.2026:
+`just check-control-room-production-source` PASS, receipt
+`0a51bc82889b435aa2d781b6244b5c71`. Wcześniejsze diagnostyki Start/About
+opisane poniżej są historyczne; w tej próbie nie wystąpiły. Kontrola ma
+`noEmit` i wyklucza testy jednostkowe. Pełny lint również PASS, receipt
+`4b48e606f9b449cbb432d10e93120ca1`, exit 0, identyczny digest źródeł
+`6d1c959ed8598f83c434f953ba30c34666ae3b9d90b22f16aad77407724b93f0`
+w obu próbach. Są to bramki źródeł, nie browser/runtime/physics gates.
+
+Checkpoint P8-53AY, 05.10.2026: [native/browser restart niepustego workspace](p8/53ay-native-browser-workspace-restart.md).
+Build `native-build-5aa15ba41b0c4b0e9e9d7ccd596f17da.log` PASS, exit 0.
+Próba browser `b36fb7c3677744fb8b5ef2acc24c823c` potwierdziła utworzenie
+pustej symulacji, geometrii, regionu i przypisania materiału bez meshera/solvera;
+widoczny canvas, context_lost=false, drawing buffer 532×281. Restart nie
+został wykonany: diagnostyczna strona odrzuciła przygotowanie dokumentu.
+Odebrano terminalne wyniki API A, CLI i wszystkich zaobserwowanych helperów.
+NoEmit i lint stagingu PASS. Poprawiono rozróżnienie epoch i prywatnego overlay
+w fixture; kolejny build i pełna próba hydration pozostają w toku.
+Publiczny restart i procenty P0–P8 pozostają bez awansu.
+
+Checkpoint P8-53AV, 05.10.2026: [asynchroniczne przygotowanie kandydata](p8/53av-asynchronous-candidate-preparation.md).
+Zarządzany cykl pompy `c10afae06a774ddcb1307842bbf87aab`: completed,
+exit 0, 13 kontroli. Pierwszy krok 17 ms z działającym helperem; potwierdzono
+odnowienie/wygaśnięcie readiness, reuse jednej kopii i terminalne odebranie
+własnych procesów. Wcześniejszy timeout opisany poniżej zachowano jako historię.
+Realny Build backend z UI `1a86350e-94dd-4194-b07d-7365d7ed11c1`:
+completed, exit 0, 9 min 11 s łącznie; ten sam API/workspace pozostał aktywny.
+Commity lokalne: `3a157b229eb2a1111440f641b1cca7fef566bb36` oraz
+`7f5c52459dd0697d976c5e41eedab24cbf7b3c7d`. Publiczny restart pozostaje
+niedostępny. [P8-53AW — rzeczywiste awarie helpera](p8/53aw-candidate-preparation-fault-gates.md)
+ma natywny PASS: receipt `cce9f225893f4fae97c3a3d15906641e`, exit 0,
+10/10 kontroli i potwierdzone zakończenie CLI oraz siedmiu helperów.
+[P8-53AX — utrata owner scope](p8/53ax-owner-scope-loss-during-preparation.md)
+ma natywny PASS: receipt `8028a78624ef450887ed000915957a93`, exit 0,
+18/18 kontroli. Żywy drugi selector został odebrany po zamknięciu własnego
+API; najdłuższy krok drugiej pompy 34 ms, wszystkie siedem procesów waited.
+Następne bramki: native/browser restore niepustego modelu oraz pozostałe
+warianty zmiany gotowego buildu i cleanup. Nie podnosimy
+procentów całego planu na podstawie tej wąskiej kontroli.
+
+Checkpoint P8-54, 05.10.2026: [build natywny na żądanie](p8/54-manual-native-build-snapshot.md).
+Zarządzany Windows workspace uruchomiono ponownie za zgodą użytkownika.
+Rzeczywisty przycisk **Build backend** zakończył żądanie
+`584e9cff-8802-4f81-90ea-d88284600c7d` receiptem `completed`, exit 0.
+Podczas buildu utworzono pusty model FDM; po zakończeniu model i ten sam
+API instance pozostały aktywne. Build nie restartuje runtime.
+Kontrole storage/lease/status/odbiornika: 90 PASS, 2 skipped, 16 subtests PASS;
+dodatkowa regresja anulowania podczas przygotowania logu: zestaw storage
+39 PASS, 2 skipped, 12 subtests PASS. To testy interpretowane.
+Stałe wejścia Cargo zapisano w `bf32fda48868f5bda4a0aa3a314c0f680307257d`,
+usunięcie podwójnych skanów w `be87c55061e346029536596d3190f719716c490d`,
+a natywną trasę na żądanie w `5fe31538e5e061df76a78a9ebb2c60644990e7fb`.
+Kolejny rzeczywisty intent UI `4428c9b0-f1b1-4855-8c17-e4d56c087f31`
+zakończył się `ready`: CLI/API 32,46 s, desktop 45,93 s, pełna zarządzana
+operacja 5 min 30 s. Między oboma snapshots nie zmieniły się pliki Rust;
+to dowód reuse w tym scenariuszu, a nie benchmark wszystkich zmian backendu.
+Zapis statusu toleruje krótką odmowę rename Windows; interpretowane zestawy
+storage/status mają 50 PASS, 2 skipped, 19 subtests PASS, helper 12/12 PASS.
+Kontrolowany restart z odtworzeniem modelu pozostaje otwarty. Próba pompy
+P8-53AU `3c7f86cd3a3d4adea54909c868f3d747` zakończyła się timeoutem
+acquisition helper przed kontrolami (0 zaliczonych). API oznaczone jako
+unknown sprawdzono jako nieobecne, bez potwierdzonego exit code; zachowano
+receipt i osobny `process-reconciliation.json`. Ten checkpoint nie podnosi
+kwalifikacji FEM ani procentów całego planu.
+
 Checkpoint P8-53AU, 05.10.2026: [prywatne potwierdzenie konsumenta](p8/53au-private-consumer-readiness.md).
 Przygotowano uwierzytelniony stan w pamięci API z ważnością 5 sekund,
 odnowienie w pompie i ochronę przed powtarzaniem selekcji tego samego pakietu.
-Review i fokusowane sprawdzenia źródeł PASS. Pierwszy build zablokował
-równoległy import IR; kolejny skompilował wszystkie fazy, ale został odrzucony
-po aktualizacji mastera podczas buildu. Terminalna odmowa preflight i brak
-uruchomienia API potwierdzone. Dokładnie 18 plików zadania skopiowano do
-zarejestrowanej izolacji `p8-readiness-20261005`; build tej kopii jest w toku.
-Prywatny driver i aktualna pompa pozostają NOT VERIFIED do prób runtime.
+Review i fokusowane sprawdzenia źródeł PASS. Po odmowie zmieniającego się
+mastera build izolacji `p8-readiness-20261005` PASS. Prywatny protokół:
+40 kontroli i 3/3 procesy odebrane; regresja konsumenta empty/scene:
+39 kontroli i 20/20 procesów odebranych. Dowody obejmują wskazaną bazę i 18
+plików AU, nie późniejsze równoległe zmiany mastera. Cykl gotowości pompy
+z dwoma różnymi buildami oraz pełny native/browser flow pozostają otwarte.
+Nowa kontrola typów mastera nie wystartowała z powodu zajętej blokady.
 Publiczne `restart_available=false`, procenty P0–P8 bez awansu.
 
 Checkpoint P8-53AT, 04.10.2026: [jawna akcja restartu](p8/53at-development-restart-action.md).
@@ -1064,6 +1236,11 @@ otwarte. **P6 52%, cały plan około 49%**. Szczegóły:
 | **P6** | Trwałe wyniki, quantities, datasets i frontend analityczny | **52%** | Docelowe manifesty, dataset identity i wymagania Control Room są opisane. Publiczny katalog immutable observation frames oraz source-qualified odczyt historycznego `m` przez FMVP v4 mają kontrakt API, centralną fasadę i session-scoped resource hooks z exact field generation. Explorer pokazuje ramki pod Dynamics, każda ma exact selection i dedykowany Inspector; session-fenced workspace przechowuje wyłącznie mały pinned source descriptor. Pinned source zasila istniejący viewport przez wspólny bounded cache, exact-source validation i source-fenced retention; browser/WebGL potwierdza widoczny canvas, żywy kontekst i niezerowy buffer. `fullmag-quantities` ma fundament `DatasetDefinition`, osobnego `MaterializedDataset`, `DerivedValueDefinition` i `PlotDefinition`, stabilne axis/sample/item/branch, jawne stany unavailable oraz obowiązek projekcji niezgodnych przestrzeni. Storage-neutralny slice contract ponad istniejącym CAS/TensorDescriptor ma bounded request/response, exact range checksum i pełne real/imag planes; checksum-first decoder zachowuje precision/planes/harmonic convention bez dodatkowej kopii pełnego payloadu i odrzuca misalignment oraz NaN/Inf. Adapter session mapuje istniejące TensorDescriptor/chunki CAS na exact-range slice, a streaming CAS range-read hashuje cały obiekt stałym buforem i alokuje tylko bounded response. Field descriptor zachowuje pełne frame/sample/support/topology/carrier/function-space/basis/ordering/axes/complex/normalization metadata K11. Projection receipt wiąże exact source/target layout oraz measured/estimated/certified error metrics z jednostkami. Semantyka K18 rozróżnia pola fizyczne, modalne składowe fizyczne, współczynniki FEM i lokalnej bazy stycznej oraz przypina rekonstrukcję do zaakceptowanego stanu równowagi, linearyzacji, bazy, fazy, normalizacji i znaczenia amplitudy. `SolutionSetCatalog` zapisuje immutable monotonic revisions, append-only artifacts/coverage i atomowy current manifest; `SessionStore::open` współdzieli writer i automatycznie odzyskuje wszystkie poprawne orphan revisions, a `open_existing` pozostaje bezefektowe. Publikacja pod tym samym writer lease sprawdza streamingowo pełny hash i exact byte length wszystkich referencji CAS przed immutable revision, a następnie zwalnia wyłącznie piny tych obiektów; recovery domyka przerwany unpin po pełnej walidacji root graph. Store reachability zachowuje current, całą historię oraz wszystkie ich obiekty i blokuje GC przy niespójności. Profile solved/resume/archive przenoszą ten graf przez typed `.fms` preflight i restore z zachowaniem content identity. Accepted study publikuje SolutionSet, a identity-aware modal-eigen, Kittel i FMR writers zachowują exact session/run/stage/runtime w migrowanych manifestach. | Brak pełnego mappera wszystkich writerów runtime, raportowania recovery przez API, materializatora i publicznego dataset API, adapterów pól FDM/FEM, rzeczywistego projectora i CAE-40, porównań wielu ramek, ogólnego batch `ComputeQuantities`, migracji artifact keys, verified-generation cache, profilu dużego datasetu, frontendowych plot/export recipes, modalnego roundtripu renderera i pełnej kwalifikacji wyników. |
 | **P7** | Studies złożone, wiele projektów i targety | **0%** | Zależności, case mapping i target contracts są zaplanowane. | Brak study compiler, wieloprojektowego runtime, target adapters i raportów reprodukowalnych. |
 | **P8** | Cutover, dystrybucja, macierz CAE i wydanie | **2%** | Cutover, rollback, packaging i release gates są zdefiniowane; usunięto jawnie zaakceptowaną archiwalną kopię `_to_delete_legacy_web` (981 śledzonych plików), gdy aktywne skrypty root wskazują Control Room. | Brak usunięcia legacy writers backendu, pełnej kwalifikacji klientów/cutover, managed build/package, pełnej macierzy CAE, review/CI/merge i release qualification. |
+
+| Obszar uzupełniający | Postęp | Zadania / stan |
+|---|---:|---|
+| **P3a** | **90%** | P3a-A/B/C: context propagation, API/resource/cache migration i ograniczone compatibility aliases. Ostatni zapisany inventory: 276 SOURCE PASS / 15 OPEN / 13 GLOBAL; browser/managed cutover pozostaje NOT VERIFIED. |
+| **Strumień backendu B** | **Nieoszacowany** | B-CORE, B-FDM, B-FEM, B-DEMAG, B-WORKFLOW, B-STATE, B-ABI i B-OBS mają odrębne bramki architektury oraz walidacji lane'ów; nie wyliczamy jednego procentu z katalogów/plików. |
 
 Aktualizacja P4-C z 28.09.2026: Control Room ma jawne `Build Grid` dla FDM w
 ribbonie i Explorerze. Obie powierzchnie wywołują `grid.build-fdm`, wymagają

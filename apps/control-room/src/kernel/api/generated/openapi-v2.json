@@ -3271,8 +3271,73 @@
         ],
         "type": "object"
       },
+      "Author": {
+        "properties": {
+          "affiliation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "orcid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "role"
+        ],
+        "type": "object"
+      },
       "AuthoringTransactionRequest": {
         "oneOf": [
+          {
+            "description": "Replace an immutable profile snapshot atomically, without merging\nsparse defaults from a previously assigned version.",
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "execution_layers": {
+                "items": {
+                  "$ref": "#/components/schemas/ExecutionLayerSchema"
+                },
+                "type": "array"
+              },
+              "execution_profile": {
+                "$ref": "#/components/schemas/ExecutionProfileSchema"
+              },
+              "kind": {
+                "enum": [
+                  "assign_study_execution"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "base_revision",
+              "execution_profile",
+              "execution_layers",
+              "kind"
+            ],
+            "type": "object"
+          },
           {
             "properties": {
               "base_revision": {
@@ -4488,6 +4553,35 @@
         ],
         "type": "object"
       },
+      "Citation": {
+        "properties": {
+          "doi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "license": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preferred_bibtex": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ClipAxis": {
         "enum": [
           "x",
@@ -5199,6 +5293,340 @@
         ],
         "type": "string"
       },
+      "ComputeAdmissionState": {
+        "enum": [
+          "not_evaluated"
+        ],
+        "type": "string"
+      },
+      "ComputeParallelismSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "single_process"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "gpus_per_rank": {
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "distributed"
+                ],
+                "type": "string"
+              },
+              "ranks": {
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ranks_per_node": {
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "threads_per_rank": {
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ranks",
+              "threads_per_rank",
+              "ranks_per_node",
+              "gpus_per_rank",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ComputePlacementSchema": {
+        "enum": [
+          "balanced",
+          "throughput",
+          "pinned"
+        ],
+        "type": "string"
+      },
+      "ComputePreviewInput": {
+        "additionalProperties": false,
+        "properties": {
+          "layers": {
+            "description": "Missing layers mean an empty override list, as in ExecutionRequestLayerIR.",
+            "items": {
+              "$ref": "#/components/schemas/ExecutionLayerSchema"
+            },
+            "type": "array"
+          },
+          "problem": {
+            "additionalProperties": {},
+            "description": "ProblemIR remains the canonical transport and is validated by the Rust\ndomain type; OpenAPI treats its established JSON object shape as opaque.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "step_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_id",
+          "problem"
+        ],
+        "type": "object"
+      },
+      "ComputePreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_profile_catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/ComputePreviewInput"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "study_plan": {
+            "additionalProperties": {},
+            "description": "The canonical StudyPlan transport is opaque here; fullmag-authoring\nowns its deserialization and validation rules.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "expected_profile_catalog_revision",
+          "study_plan",
+          "inputs"
+        ],
+        "type": "object"
+      },
+      "ComputePreviewResource": {
+        "properties": {
+          "admission_state": {
+            "$ref": "#/components/schemas/ComputeAdmissionState"
+          },
+          "blocking_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "preview_id": {
+            "type": "string"
+          },
+          "profile_catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_digest": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ComputePreviewStep"
+            },
+            "type": "array"
+          },
+          "study_catalog_sha256": {
+            "type": "string"
+          },
+          "study_problem_catalog": {
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "preview_id",
+          "source_digest",
+          "profile_catalog_revision",
+          "study_problem_catalog",
+          "study_catalog_sha256",
+          "steps",
+          "admission_state",
+          "blocking_reasons"
+        ],
+        "type": "object"
+      },
+      "ComputePreviewStep": {
+        "properties": {
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionMaterializationSchema"
+          },
+          "step_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_id",
+          "execution"
+        ],
+        "type": "object"
+      },
+      "ComputeResourcePatchSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/CpuResourcePatchSchema"
+          },
+          "gpu": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GpuResourcesSchema"
+              }
+            ]
+          },
+          "parallelism": {
+            "$ref": "#/components/schemas/ComputeParallelismSchema"
+          },
+          "placement": {
+            "$ref": "#/components/schemas/ComputePlacementSchema"
+          },
+          "ram": {
+            "$ref": "#/components/schemas/MemoryResourcePatchSchema"
+          },
+          "scratch": {
+            "$ref": "#/components/schemas/MemoryResourcePatchSchema"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ComputeTargetSchema"
+          }
+        },
+        "type": "object"
+      },
+      "ComputeResourcesPreviewSchema": {
+        "description": "Fully materialized resource intent. This is deliberately separate from\nComputeResourcePatchSchema, whose optional members represent a sparse patch.",
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/CpuResourcesPreviewSchema"
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GpuResourcesPreviewSchema"
+          },
+          "parallelism": {
+            "$ref": "#/components/schemas/ComputeParallelismSchema"
+          },
+          "placement": {
+            "$ref": "#/components/schemas/ComputePlacementSchema"
+          },
+          "ram": {
+            "$ref": "#/components/schemas/MemoryReservationPreviewSchema"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scratch": {
+            "$ref": "#/components/schemas/MemoryReservationPreviewSchema"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ComputeTargetSchema"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "cpu",
+          "ram",
+          "scratch",
+          "parallelism",
+          "placement"
+        ],
+        "type": "object"
+      },
+      "ComputeTargetSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "local"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "node"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "pool"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ConstraintActivationSchema": {
         "oneOf": [
           {
@@ -5440,6 +5868,92 @@
           "source_resolution",
           "target_resolution",
           "params"
+        ],
+        "type": "object"
+      },
+      "CpuAffinitySchema": {
+        "enum": [
+          "auto",
+          "compact",
+          "spread",
+          "numa"
+        ],
+        "type": "string"
+      },
+      "CpuCorePolicySchema": {
+        "enum": [
+          "physical_first",
+          "logical"
+        ],
+        "type": "string"
+      },
+      "CpuResourcePatchSchema": {
+        "additionalProperties": false,
+        "description": "One sparse CPU patch. Missing fields inherit; nullable fields accept JSON\nnull as an explicit reset.",
+        "properties": {
+          "affinity": {
+            "$ref": "#/components/schemas/CpuAffinitySchema"
+          },
+          "blas_threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          },
+          "core_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CpuCorePolicySchema"
+              }
+            ]
+          },
+          "native_threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          },
+          "numa_node": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          }
+        },
+        "type": "object"
+      },
+      "CpuResourcesPreviewSchema": {
+        "properties": {
+          "affinity": {
+            "$ref": "#/components/schemas/CpuAffinitySchema"
+          },
+          "blas_threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          },
+          "core_policy": {
+            "$ref": "#/components/schemas/CpuCorePolicySchema"
+          },
+          "native_threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          },
+          "numa_node": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threads": {
+            "$ref": "#/components/schemas/RequestedThreadsSchema"
+          }
+        },
+        "required": [
+          "threads",
+          "affinity",
+          "native_threads",
+          "blas_threads"
         ],
         "type": "object"
       },
@@ -5932,6 +6446,69 @@
         ],
         "type": "object"
       },
+      "DevelopmentBackendBuildRequest": {
+        "additionalProperties": false,
+        "description": "Explicit build-only intent. The API derives and pins the managed worktree scope.",
+        "properties": {
+          "api_instance_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "request_id",
+          "api_instance_id"
+        ],
+        "type": "object"
+      },
+      "DevelopmentBackendBuildRequestResource": {
+        "description": "Bounded status for one authenticated build-only intent.",
+        "properties": {
+          "ready_build_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ready_source_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DevelopmentBackendBuildRequestState"
+          }
+        },
+        "required": [
+          "schema",
+          "request_id",
+          "state"
+        ],
+        "type": "object"
+      },
+      "DevelopmentBackendBuildRequestState": {
+        "enum": [
+          "pending",
+          "building",
+          "ready",
+          "failed",
+          "unknown"
+        ],
+        "type": "string"
+      },
       "DevelopmentBackendReason": {
         "enum": [
           "disabled",
@@ -5949,6 +6526,17 @@
       "DevelopmentBackendResource": {
         "description": "Compilation observation only; applying a build requires a separate guarded command.",
         "properties": {
+          "build_available": {
+            "description": "True when this pinned development API can accept an explicit build-only request.",
+            "type": "boolean"
+          },
+          "build_request_id": {
+            "description": "Owner request currently reflected by the native watcher status frame.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "configured": {
             "type": "boolean"
           },
@@ -7027,6 +7615,317 @@
           "total",
           "entries"
         ],
+        "type": "object"
+      },
+      "ExecutionBackendSchema": {
+        "enum": [
+          "auto",
+          "fdm",
+          "fem",
+          "hybrid"
+        ],
+        "type": "string"
+      },
+      "ExecutionDeviceSchema": {
+        "enum": [
+          "auto",
+          "cpu",
+          "gpu"
+        ],
+        "type": "string"
+      },
+      "ExecutionLayerSchema": {
+        "description": "OpenAPI shape for an incoming ExecutionRequestLayerIR. Its request patch is\noptional because the canonical IR defaults an omitted patch to empty.",
+        "properties": {
+          "origin": {
+            "$ref": "#/components/schemas/ExecutionOriginSchema"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ExecutionRequestPatchSchema"
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "type": "object"
+      },
+      "ExecutionMaterializationSchema": {
+        "description": "MaterializedExecutionRequestIR always has a bound immutable profile and\nits digest in a full Study preview, although the general IR type permits\nthose fields to be absent in other contexts.",
+        "properties": {
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/MaterializedExecutionLayerSchema"
+            },
+            "type": "array"
+          },
+          "origins": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExecutionOriginSchema"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ExecutionProfileSchema"
+          },
+          "profile_sha256": {
+            "type": "string"
+          },
+          "requested": {
+            "$ref": "#/components/schemas/RequestedExecutionPreviewSchema"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "profile_sha256",
+          "layers",
+          "requested",
+          "origins"
+        ],
+        "type": "object"
+      },
+      "ExecutionModeSchema": {
+        "enum": [
+          "strict",
+          "extended",
+          "hybrid"
+        ],
+        "type": "string"
+      },
+      "ExecutionOriginKindSchema": {
+        "enum": [
+          "product_default",
+          "profile",
+          "script",
+          "study",
+          "step",
+          "submit",
+          "cli",
+          "legacy_env"
+        ],
+        "type": "string"
+      },
+      "ExecutionOriginSchema": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ExecutionOriginKindSchema"
+          },
+          "location": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "location"
+        ],
+        "type": "object"
+      },
+      "ExecutionPrecisionSchema": {
+        "enum": [
+          "single",
+          "double"
+        ],
+        "type": "string"
+      },
+      "ExecutionProfileCatalogResource": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionProfileVersionResource"
+            },
+            "type": "array"
+          },
+          "next_offset": {
+            "format": "int32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "total": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "revision",
+          "total",
+          "offset",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "ExecutionProfileInputSchema": {
+        "additionalProperties": false,
+        "description": "Accepted profile input. `description` and `defaults` may be omitted because\n`ExecutionProfileIR` supplies defaults for them during deserialization.",
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/ExecutionRequestPatchSchema"
+          },
+          "description": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "profile_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schema_version": {
+            "$ref": "#/components/schemas/ExecutionProfileSchemaVersion"
+          },
+          "version": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile_id",
+          "version"
+        ],
+        "type": "object"
+      },
+      "ExecutionProfileSchema": {
+        "additionalProperties": false,
+        "description": "Serialized profile resource returned by catalog and publish operations.",
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/ExecutionRequestPatchSchema"
+          },
+          "description": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "profile_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schema_version": {
+            "$ref": "#/components/schemas/ExecutionProfileSchemaVersion"
+          },
+          "version": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile_id",
+          "version",
+          "description",
+          "defaults"
+        ],
+        "type": "object"
+      },
+      "ExecutionProfileSchemaVersion": {
+        "enum": [
+          "execution_profile.v1"
+        ],
+        "type": "string"
+      },
+      "ExecutionProfileVersionResource": {
+        "properties": {
+          "client_intent_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ExecutionProfileSchema"
+          },
+          "profile_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "profile_sha256",
+          "client_intent_id",
+          "published_at",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "ExecutionRequestPatchSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/ExecutionBackendSchema"
+          },
+          "device": {
+            "$ref": "#/components/schemas/ExecutionDeviceSchema"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionModeSchema"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/ExecutionPrecisionSchema"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ComputeResourcePatchSchema"
+          }
+        },
+        "type": "object"
+      },
+      "ExecutionSummary": {
+        "properties": {
+          "excitation": {
+            "description": "External field and enabled field drives, in words.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "integrator": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tolerance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "ExistingOutputSchema": {
@@ -10119,6 +11018,180 @@
           "abm3"
         ],
         "type": "string"
+      },
+      "FrameEntry": {
+        "description": "One saved frame of a results folder (an entry of `frames.json`).",
+        "properties": {
+          "bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "index": {
+            "description": "Position over the whole folder, across stages, from 0.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Location of the snapshot relative to the results folder.",
+            "type": "string"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "time_s": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "step",
+          "time_s",
+          "quantity_ids",
+          "path"
+        ],
+        "type": "object"
+      },
+      "FramesPage": {
+        "description": "A page of the frame index.",
+        "properties": {
+          "frames": {
+            "items": {
+              "$ref": "#/components/schemas/FrameEntry"
+            },
+            "type": "array"
+          },
+          "from": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "indexed": {
+            "description": "The folder has a frame index; false lists nothing and means no index was written.",
+            "type": "boolean"
+          },
+          "total": {
+            "description": "Frames in the whole index.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "indexed",
+          "total",
+          "from",
+          "frames",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "FramesStageCount": {
+        "description": "Frames saved per stage, in folder order.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "count"
+        ],
+        "type": "object"
+      },
+      "FramesSummary": {
+        "description": "What `frames.json` says without listing every frame.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "first_time_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "last_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_time_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "note": {
+            "description": "Why part of the index was not read (unknown schema, unreadable file).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema": {
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/FramesStageCount"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "The index reached its entry limit: later frames are not listed.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "schema",
+          "count",
+          "truncated",
+          "stages"
+        ],
+        "type": "object"
       },
       "FrequencyDomainArtifactExtras": {
         "additionalProperties": true,
@@ -13850,6 +14923,74 @@
         ],
         "type": "object"
       },
+      "GpuResourcesPreviewSchema": {
+        "properties": {
+          "device_uuids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "devices_per_task": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/GpuSelectorSchema"
+          },
+          "vram_per_device_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "selector",
+          "device_uuids",
+          "devices_per_task"
+        ],
+        "type": "object"
+      },
+      "GpuResourcesSchema": {
+        "additionalProperties": false,
+        "description": "Full GPU value accepted when the sparse `gpu` property is present. The\ncontaining property is separately nullable to represent an explicit reset.",
+        "properties": {
+          "device_uuids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "devices_per_task": {
+            "format": "int64",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/GpuSelectorSchema"
+          },
+          "vram_per_device_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "GpuSelectorSchema": {
+        "enum": [
+          "any_compatible",
+          "allow_list",
+          "required"
+        ],
+        "type": "string"
+      },
       "GpuTelemetryDevice": {
         "properties": {
           "index": {
@@ -13945,6 +15086,55 @@
           "uptime_seconds",
           "api_contract_version",
           "active_session"
+        ],
+        "type": "object"
+      },
+      "HistoryEntry": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "restorable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "at",
+          "kind",
+          "summary"
         ],
         "type": "object"
       },
@@ -16080,6 +17270,74 @@
           "error"
         ],
         "type": "string"
+      },
+      "ItemDetail": {
+        "description": "Inspector document of one workspace item.",
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProjectDetail"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "project"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScriptDetail"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "script"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResultDetail"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "result"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ]
       },
       "KnownSceneCurrentTransport": {
         "properties": {
@@ -18754,6 +20012,46 @@
           "modal_local_tangent_coefficients"
         ],
         "type": "string"
+      },
+      "MaterializedExecutionLayerSchema": {
+        "description": "The materialized output always serializes its request member, including an\nempty patch, unlike the optional input form in ExecutionLayerSchema.",
+        "properties": {
+          "origin": {
+            "$ref": "#/components/schemas/ExecutionOriginSchema"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ExecutionRequestPatchSchema"
+          }
+        },
+        "required": [
+          "origin",
+          "request"
+        ],
+        "type": "object"
+      },
+      "MemoryReservationPreviewSchema": {
+        "properties": {
+          "reservation_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "MemoryResourcePatchSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reservation_bytes": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "MeshActiveBuildResource": {
         "properties": {
@@ -22323,6 +23621,68 @@
         ],
         "type": "object"
       },
+      "ModelSummary": {
+        "properties": {
+          "aex": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "alpha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cell_size": {
+            "description": "Cell size in nm (FDM).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "discretisation": {
+            "description": "Cell counts `nx x ny x nz` (FDM).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interactions": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "materials": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ms": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "periodicity": {
+            "description": "The scene has no periodicity field yet, so this is always `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "NullableF64PatchValue": {
         "oneOf": [
           {
@@ -23103,6 +24463,28 @@
             "default": null,
             "type": [
               "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "OutputsSummary": {
+        "description": "Outputs of the latest recorded run.",
+        "properties": {
+          "frames": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           }
@@ -24964,6 +26346,11 @@
         ],
         "type": "object"
       },
+      "PositiveThreadCountSchema": {
+        "maximum": 4294967295,
+        "minimum": 1,
+        "type": "integer"
+      },
       "PreparationClockAdjustment": {
         "properties": {
           "backward_delta_ms": {
@@ -25273,6 +26660,30 @@
         ],
         "type": "string"
       },
+      "PreviewInfo": {
+        "description": "How the stored preview image was coloured.",
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "colouring": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "colouring"
+        ],
+        "type": "object"
+      },
       "PrimitiveGeometryCapability": {
         "properties": {
           "boolean": {
@@ -25311,6 +26722,13 @@
           "status"
         ],
         "type": "object"
+      },
+      "ProfilePublicationDispositionSchema": {
+        "enum": [
+          "published",
+          "existing"
+        ],
+        "type": "string"
       },
       "ProjectArchiveDurability": {
         "enum": [
@@ -25384,6 +26802,144 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "ProjectDetail": {
+        "description": "Facts of a `.fms` project read from its archive.",
+        "properties": {
+          "authors": {
+            "items": {
+              "$ref": "#/components/schemas/Author"
+            },
+            "type": "array"
+          },
+          "can_write": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "citation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Citation"
+              }
+            ]
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryEntry"
+            },
+            "type": "array"
+          },
+          "migrated": {
+            "description": "The archive was written by an older schema and is migrated in memory.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "mode": {
+            "description": "`read_write` or `read_only`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preview": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreviewInfo"
+              }
+            ]
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provenance_recorded": {
+            "description": "The provenance document exists; false for a project that predates tracking.",
+            "type": "boolean"
+          },
+          "read_error": {
+            "description": "Why the archive could not be read; every other field is then empty.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectRun"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "description": "Schema of the stored archive as `major.minor`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "solver": {
+            "description": "`fdm` or `fem`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectSummary"
+              }
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "warnings",
+          "authors",
+          "history",
+          "runs",
+          "provenance_recorded"
         ],
         "type": "object"
       },
@@ -25484,6 +27040,103 @@
         ],
         "type": "object"
       },
+      "ProjectFromScriptConsent": {
+        "description": "Explicit statement that the person agreed to run the script.",
+        "properties": {
+          "executed_by_user": {
+            "description": "Must be `true`: the operation executes the script in the Python helper.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "executed_by_user"
+        ],
+        "type": "object"
+      },
+      "ProjectFromScriptRequest": {
+        "description": "Turns a Python script into a project. The operation EXECUTES the script in\nthe Python helper (same trust model as a script run), so the request must\ncarry explicit consent.",
+        "properties": {
+          "consent": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFromScriptConsent"
+              }
+            ]
+          },
+          "origin": {
+            "description": "Where the script came from (for example `template:umag-sp1`,\n`mx3:model.mx3`, `script_file`); recorded in `script.json`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_name": {
+            "description": "Project name; defaults to the script file stem.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "script_item_id": {
+            "description": "Workspace script item. Not supported by the API; the host reads the\nfile and sends its text as `source`. A request that sets it is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFromScriptSource",
+                "description": "The script text. Required: the API cannot resolve workspace items."
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ProjectFromScriptResource": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProjectDocumentResource"
+          },
+          {
+            "properties": {
+              "script_import": {
+                "$ref": "#/components/schemas/ProjectScriptImportResource"
+              }
+            },
+            "required": [
+              "script_import"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "The created project (same fields as create/open) plus what was imported."
+      },
+      "ProjectFromScriptSource": {
+        "properties": {
+          "name": {
+            "description": "File name shown in provenance; it is not a filesystem path.",
+            "type": "string"
+          },
+          "text": {
+            "description": "UTF-8 Python source, at most 1 MiB.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "text"
+        ],
+        "type": "object"
+      },
       "ProjectMigrationResource": {
         "properties": {
           "can_write": {
@@ -25518,6 +27171,81 @@
           "can_write",
           "warnings",
           "preserved_paths"
+        ],
+        "type": "object"
+      },
+      "ProjectRun": {
+        "description": "A run recorded in the project's provenance.",
+        "properties": {
+          "backend": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_seconds": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frames": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "started_at",
+          "status"
         ],
         "type": "object"
       },
@@ -26034,6 +27762,102 @@
           "lifecycle",
           "readiness",
           "artifact_ids"
+        ],
+        "type": "object"
+      },
+      "ProjectScriptImportResource": {
+        "properties": {
+          "exported_at": {
+            "type": "string"
+          },
+          "fidelity": {
+            "$ref": "#/components/schemas/ScriptFidelityResource"
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "script_path": {
+            "description": "Archive path of the embedded original script.",
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sha256",
+          "origin",
+          "exported_at",
+          "script_path",
+          "fidelity"
+        ],
+        "type": "object"
+      },
+      "ProjectSummary": {
+        "properties": {
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionSummary"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelSummary"
+          },
+          "outputs": {
+            "$ref": "#/components/schemas/OutputsSummary"
+          }
+        },
+        "required": [
+          "model",
+          "execution",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "PublishExecutionProfileRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "client_intent_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ExecutionProfileInputSchema"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "client_intent_id",
+          "profile"
+        ],
+        "type": "object"
+      },
+      "PublishExecutionProfileResource": {
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/ProfilePublicationDispositionSchema"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/ExecutionProfileVersionResource"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "disposition",
+          "revision",
+          "entry"
         ],
         "type": "object"
       },
@@ -27196,6 +29020,44 @@
         ],
         "type": "string"
       },
+      "RequestedExecutionPreviewSchema": {
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/ExecutionBackendSchema"
+          },
+          "device": {
+            "$ref": "#/components/schemas/ExecutionDeviceSchema"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionModeSchema"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/ExecutionPrecisionSchema"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ComputeResourcesPreviewSchema"
+          }
+        },
+        "required": [
+          "backend",
+          "device",
+          "precision",
+          "mode",
+          "resources"
+        ],
+        "type": "object"
+      },
+      "RequestedThreadsSchema": {
+        "description": "`RequestedThreads` is an untagged union of the string `\"auto\"` and a\npositive u32 count. It is intentionally represented as an OpenAPI `oneOf`.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ThreadAutoSchema"
+          },
+          {
+            "$ref": "#/components/schemas/PositiveThreadCountSchema"
+          }
+        ]
+      },
       "ResolvedFallbackResource": {
         "properties": {
           "fallback_engine": {
@@ -27452,6 +29314,239 @@
           "config_only"
         ],
         "type": "string"
+      },
+      "ResultDetail": {
+        "description": "Facts of a Fullmag results folder, read from metadata files only.",
+        "properties": {
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "description": "`zarr`, `hdf5` or `unknown`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frames": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "frames_index": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FramesSummary",
+                "description": "Summary of the per-frame index (`frames.json`) the run wrote; absent\nfor a folder written before the index existed. Frames themselves\nare paged from `GET /v2/workspace/items/{id}/frames`."
+              }
+            ]
+          },
+          "grid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResultGrid"
+              }
+            ]
+          },
+          "has_manifest": {
+            "description": "The folder carries a `fullmag-run.json`.",
+            "type": "boolean"
+          },
+          "modified_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/RunOutput"
+            },
+            "type": "array"
+          },
+          "quantities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "read_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunSource"
+              }
+            ]
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/StageSummary"
+            },
+            "type": "array"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "Status from the manifest, or from `metadata.json` of the final stage.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "total_bytes_truncated": {
+            "description": "The walk stopped at a limit: `total_bytes` is a lower bound.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "has_manifest",
+          "stages",
+          "quantities",
+          "total_bytes_truncated",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "ResultGrid": {
+        "description": "Mesh or grid of the run, from `metadata.json` `artifact_layout`.",
+        "properties": {
+          "backend": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cells": {
+            "description": "Cell counts of an FDM grid.",
+            "items": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "hmax": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "n_elements": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "n_nodes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RunOutput": {
+        "description": "One output the run produced, relative to the results folder.",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "RunSource": {
+        "description": "What produced the results.",
+        "properties": {
+          "kind": {
+            "description": "`script` or `project`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute path as the user would type it (no `\\\\?\\` prefix). Empty when\nthe producer does not know the file (accepted project runs record the\nproject id and revision instead).",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "Stable project id (projects only).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "description": "Definition revision that was run (projects only).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sha256": {
+            "description": "SHA-256 of the script bytes (or of the archive) when known.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
       },
       "RunSummary": {
         "properties": {
@@ -31265,6 +33360,155 @@
         ],
         "type": "object"
       },
+      "ScriptDetail": {
+        "description": "Static facts of a Python script. Nothing is executed: the file is read\n(at most 16 MiB), hashed and scanned line by line.",
+        "properties": {
+          "bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "degraded": {
+            "description": "The facts come from a static line scan, not from Python's parser.",
+            "type": "boolean"
+          },
+          "degraded_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "encoding": {
+            "description": "`utf-8`, `utf-8-bom` or `other`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "env_reads": {
+            "description": "Names read through a literal `os.environ[...]`, `os.environ.get(...)`\nor `os.getenv(...)`; never values.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "imports": {
+            "description": "Top-level module names imported at any indentation.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lines": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "read_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "description": "First line of the module docstring.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "syntax": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScriptSyntax",
+                "description": "Result of `ast.parse` in the chosen interpreter; `null` when no\ninterpreter checked the file."
+              }
+            ]
+          },
+          "syntax_checked": {
+            "description": "Python's parser checked the syntax (`ast`, never executed).",
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "Only the first 1 MiB was scanned for the facts below.",
+            "type": "boolean"
+          },
+          "unresolved_imports": {
+            "description": "Top-level imports that `importlib.util.find_spec` did not find in\nthe chosen interpreter (nor next to the script); `null` when not\nchecked. This says nothing about the interpreter a run would use.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "uses_fullmag": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "truncated",
+          "syntax_checked",
+          "degraded"
+        ],
+        "type": "object"
+      },
+      "ScriptFidelityResource": {
+        "properties": {
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "round_trip": {
+            "$ref": "#/components/schemas/ScriptRoundTripState"
+          },
+          "scene_exported": {
+            "description": "The helper exported a SceneDocument from the script.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "scene_exported",
+          "round_trip",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "ScriptRoundTripState": {
+        "enum": [
+          "verified",
+          "failed",
+          "not_checked"
+        ],
+        "type": "string"
+      },
       "ScriptSourceResponse": {
         "properties": {
           "bytes": {
@@ -31343,6 +33587,41 @@
           "entrypoint_kind",
           "written",
           "bytes_written"
+        ],
+        "type": "object"
+      },
+      "ScriptSyntax": {
+        "description": "Outcome of parsing a script with Python's `ast` (never executed).",
+        "properties": {
+          "column": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "1-based line of the first syntax error.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
         ],
         "type": "object"
       },
@@ -36376,6 +38655,39 @@
         ],
         "type": "string"
       },
+      "StageSummary": {
+        "description": "One stage of a run.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "steps": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "time_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "StageTableAutosaveResource": {
         "additionalProperties": false,
         "properties": {
@@ -37330,6 +39642,12 @@
           "on_success",
           "always",
           "never"
+        ],
+        "type": "string"
+      },
+      "ThreadAutoSchema": {
+        "enum": [
+          "auto"
         ],
         "type": "string"
       },
@@ -40218,6 +42536,258 @@
         ],
         "type": "object"
       },
+      "WorkspaceAddRequest": {
+        "properties": {
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkspaceItemKind",
+                "description": "When given, the path must be of this kind."
+              }
+            ]
+          },
+          "path": {
+            "description": "Absolute path of an existing `.fms`, `.py` or results folder.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "WorkspaceEvent": {
+        "properties": {
+          "actor": {
+            "description": "`desktop`, `cli`, `python` or `web`.",
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "object"
+          },
+          "id": {
+            "description": "Row id as a decimal string.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`open`, `save`, `run`, `create`, `import`, `pin`, `unpin`, `forget` or `edit`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "kind",
+          "actor",
+          "detail"
+        ],
+        "type": "object"
+      },
+      "WorkspaceForgetResult": {
+        "properties": {
+          "forgotten": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "forgotten"
+        ],
+        "type": "object"
+      },
+      "WorkspaceHistory": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceEvent"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "type": "object"
+      },
+      "WorkspaceItem": {
+        "properties": {
+          "first_seen_at": {
+            "type": "string"
+          },
+          "has_thumbnail": {
+            "description": "`GET .../items/{id}/thumbnail` returns a PNG.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Row id as a decimal string.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WorkspaceItemKind"
+          },
+          "last_used_at": {
+            "type": "string"
+          },
+          "meta": {
+            "description": "Per-kind facts written by Fullmag front ends; unknown keys are kept.",
+            "type": "object"
+          },
+          "modified_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute path as the person would type it (no `\\\\?\\` prefix).",
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "project_id": {
+            "description": "Stable project id (projects only).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceItemStatus"
+          },
+          "thumbnail_origin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkspaceThumbnailOrigin",
+                "description": "Whose image the thumbnail is; absent without one. A result folder only\never shows `source_project`: the stored preview of the project its run\nmanifest names (a project preview, not a render of the result)."
+              }
+            ]
+          },
+          "use_count": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "path",
+          "name",
+          "first_seen_at",
+          "last_used_at",
+          "use_count",
+          "pinned",
+          "status",
+          "meta",
+          "has_thumbnail"
+        ],
+        "type": "object"
+      },
+      "WorkspaceItemDetail": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/ItemDetail",
+            "description": "Facts read from the file now; a reader failure is `read_error` inside."
+          },
+          "events": {
+            "description": "The last 30 events, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceEvent"
+            },
+            "type": "array"
+          },
+          "item": {
+            "$ref": "#/components/schemas/WorkspaceItem"
+          },
+          "linked_results": {
+            "description": "Result folders whose run manifest names this script or project.",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceItem"
+            },
+            "type": "array"
+          },
+          "linked_source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkspaceItem",
+                "description": "The script or project a result folder came from."
+              }
+            ]
+          },
+          "read_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "detail",
+          "events",
+          "read_at",
+          "linked_results"
+        ],
+        "type": "object"
+      },
+      "WorkspaceItemKind": {
+        "enum": [
+          "project",
+          "script",
+          "result"
+        ],
+        "type": "string"
+      },
+      "WorkspaceItemList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceItem"
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/WorkspaceOutcome"
+          }
+        },
+        "required": [
+          "items",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "WorkspaceItemStatus": {
+        "enum": [
+          "ready",
+          "missing",
+          "failed",
+          "migrate",
+          "readonly"
+        ],
+        "type": "string"
+      },
       "WorkspaceLayoutReplaceRequest": {
         "properties": {
           "active_workspace_tab_by_stage": {
@@ -40292,6 +42862,45 @@
         ],
         "type": "object"
       },
+      "WorkspaceOpenState": {
+        "enum": [
+          "ready",
+          "created",
+          "migrated",
+          "quarantined",
+          "read_only_newer_schema"
+        ],
+        "type": "string"
+      },
+      "WorkspaceOutcome": {
+        "description": "How the database was obtained for this request.",
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/WorkspaceOpenState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "WorkspacePinRequest": {
+        "properties": {
+          "pinned": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pinned"
+        ],
+        "type": "object"
+      },
       "WorkspaceRibbonReplaceRequest": {
         "properties": {
           "active_contextual_tab": {
@@ -40338,6 +42947,130 @@
           "workspace_mode",
           "active_core_tab"
         ],
+        "type": "object"
+      },
+      "WorkspaceRoot": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "kinds": {
+            "description": "Kinds to look for; empty means all three.",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceItemKind"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Absolute directory.",
+            "type": "string"
+          },
+          "recursive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "WorkspaceRoots": {
+        "properties": {
+          "roots": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceRoot"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/WorkspaceRootsSource"
+          }
+        },
+        "required": [
+          "roots",
+          "source"
+        ],
+        "type": "object"
+      },
+      "WorkspaceRootsRequest": {
+        "properties": {
+          "roots": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceRoot"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "roots"
+        ],
+        "type": "object"
+      },
+      "WorkspaceRootsSource": {
+        "enum": [
+          "configured",
+          "legacy",
+          "none"
+        ],
+        "type": "string"
+      },
+      "WorkspaceScanReport": {
+        "properties": {
+          "added": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "missing": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scanned": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skipped": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scanned",
+          "added",
+          "updated",
+          "missing",
+          "skipped",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "WorkspaceScanRequest": {
+        "properties": {
+          "roots": {
+            "description": "Roots to scan once instead of the saved ones; they are not saved.",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceRoot"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "WorkspaceSelectionReplaceRequest": {
@@ -40394,6 +43127,45 @@
         ],
         "type": "object"
       },
+      "WorkspaceSetting": {
+        "description": "One allow-listed setting of the per-user workspace database (`kv`).",
+        "properties": {
+          "is_default": {
+            "description": "Nothing is stored under the key: `value` is the default.",
+            "type": "boolean"
+          },
+          "key": {
+            "description": "`telemetry.enabled` or `update.available`.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The stored value, or the default (`false` / `null`) when unset.",
+            "type": "object"
+          },
+          "writable": {
+            "description": "The API accepts `PUT` for the key. `update.available` is written by an\nupdater, never by the renderer.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "is_default",
+          "writable"
+        ],
+        "type": "object"
+      },
+      "WorkspaceSettingRequest": {
+        "properties": {
+          "value": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "WorkspaceStageLayout": {
         "properties": {
           "bottom_dock": {
@@ -40422,6 +43194,13 @@
           }
         },
         "type": "object"
+      },
+      "WorkspaceThumbnailOrigin": {
+        "enum": [
+          "item",
+          "source_project"
+        ],
+        "type": "string"
       },
       "ZhangLiFormulaVersion": {
         "enum": [
@@ -40561,6 +43340,45 @@
           },
           "500": {
             "description": "Canonical source rendering failed"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/from-script": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_from_script",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectFromScriptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectFromScriptResource"
+                }
+              }
+            },
+            "description": "Project created from the script, with the original script embedded and a fidelity verdict"
+          },
+          "400": {
+            "description": "Missing consent, missing source, invalid name or unsupported script_item_id"
+          },
+          "413": {
+            "description": "Script text exceeds 1 MiB"
+          },
+          "422": {
+            "description": "The helper could not export a scene document from the script; nothing is kept"
           }
         },
         "tags": [
@@ -41905,6 +44723,182 @@
         ]
       }
     },
+    "/v2/platform/compute/preview": {
+      "post": {
+        "operationId": "platform_post_platform_compute_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComputePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputePreviewResource"
+                }
+              }
+            },
+            "description": "Canonical intent preview; host admission is not evaluated"
+          },
+          "400": {
+            "description": "Invalid or oversized canonical study inputs"
+          },
+          "409": {
+            "description": "Profile revision or immutable reference conflict"
+          },
+          "503": {
+            "description": "No configured profile store"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/compute/profiles": {
+      "get": {
+        "operationId": "platform_get_platform_compute_profiles",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "profile_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "client_intent_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionProfileCatalogResource"
+                }
+              }
+            },
+            "description": "Immutable profile versions and catalogue revision"
+          },
+          "304": {
+            "description": "Profile catalogue page is unchanged"
+          },
+          "400": {
+            "description": "Invalid catalogue query"
+          },
+          "409": {
+            "description": "Catalogue revision changed while paging"
+          },
+          "503": {
+            "description": "No configured profile store"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      },
+      "post": {
+        "operationId": "platform_post_platform_compute_profiles",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishExecutionProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishExecutionProfileResource"
+                }
+              }
+            },
+            "description": "Identical publication intent replayed"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishExecutionProfileResource"
+                }
+              }
+            },
+            "description": "Immutable profile version published"
+          },
+          "400": {
+            "description": "Invalid profile or publication identity"
+          },
+          "409": {
+            "description": "Revision, intent, version or catalogue capacity conflict"
+          },
+          "503": {
+            "description": "No configured profile store"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/v2/platform/development-backend": {
       "get": {
         "operationId": "platform_get_platform_development_backend",
@@ -41921,6 +44915,138 @@
           },
           "304": {
             "description": "Development backend status has not changed"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/development-backend/build-requests": {
+      "post": {
+        "operationId": "platform_post_platform_development_backend_build_requests",
+        "parameters": [
+          {
+            "description": "Bearer token generated before submission",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact launcher UI origin",
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current API instance pin",
+            "in": "header",
+            "name": "x-fullmag-api-instance",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentBackendBuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentBackendBuildRequestResource"
+                }
+              }
+            },
+            "description": "Build-only intent durably queued"
+          },
+          "409": {
+            "description": "Build coordinator unavailable or request conflicts"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/development-backend/build-requests/{request_id}": {
+      "get": {
+        "operationId": "platform_get_platform_development_backend_build_requests_request_id",
+        "parameters": [
+          {
+            "description": "Opaque build request identity",
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bearer status token",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact launcher UI origin when sent",
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact launcher UI origin echo for same-origin GET",
+            "in": "header",
+            "name": "x-fullmag-ui-origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current API instance pin",
+            "in": "header",
+            "name": "x-fullmag-api-instance",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentBackendBuildRequestResource"
+                }
+              }
+            },
+            "description": "Token-bound build request state"
+          },
+          "404": {
+            "description": "Request unavailable"
           }
         },
         "tags": [
@@ -57957,6 +61083,37 @@
       }
     },
     "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}": {
+      "delete": {
+        "operationId": "persistence_delete_sessions_current_persistence_checkpoints_checkpoint_id",
+        "parameters": [
+          {
+            "description": "Checkpoint id",
+            "in": "path",
+            "name": "checkpoint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Checkpoint deleted"
+          },
+          "404": {
+            "description": "No active workspace or checkpoint not found"
+          },
+          "409": {
+            "description": "Checkpoint is still referenced as a restore source or by the run manifest"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      },
       "get": {
         "operationId": "persistence_get_sessions_current_persistence_checkpoints_checkpoint_id",
         "parameters": [
@@ -59695,6 +62852,603 @@
           "workspace"
         ]
       }
+    },
+    "/v2/workspace/items": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items",
+        "parameters": [
+          {
+            "description": "`all` (default; every kind), `project`, `script` or `result`.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`last_used` (default), `name`, `modified` or `use_count`; pinned first.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Case-insensitive substring over name, path and authors.",
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "1 to 1000; default 200.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Default true; false drops items whose file is gone.",
+            "in": "query",
+            "name": "include_missing",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceItemList"
+                }
+              }
+            },
+            "description": "Recent projects, scripts and result folders"
+          },
+          "400": {
+            "description": "Unknown kind or sort"
+          },
+          "500": {
+            "description": "The workspace database could not be opened"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      },
+      "post": {
+        "operationId": "workspace_items_post_workspace_items",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceAddRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceItem"
+                }
+              }
+            },
+            "description": "The added (or refreshed) item"
+          },
+          "400": {
+            "description": "The path cannot be added"
+          },
+          "409": {
+            "description": "The database is read-only (newer schema)"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id",
+        "parameters": [
+          {
+            "description": "Item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceItemDetail"
+                }
+              }
+            },
+            "description": "Item with the facts read from its file now"
+          },
+          "404": {
+            "description": "Unknown or forgotten item"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/archive": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_archive",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Zip of the result folder, streamed"
+          },
+          "400": {
+            "description": "The item is not a result folder"
+          },
+          "404": {
+            "description": "Unknown, forgotten or missing item"
+          },
+          "409": {
+            "description": "The folder contains a link or a name that cannot be archived"
+          },
+          "413": {
+            "description": "The folder exceeds the archive size or file limit"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/forget": {
+      "post": {
+        "operationId": "workspace_items_post_workspace_items_id_forget",
+        "parameters": [
+          {
+            "description": "Item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceForgetResult"
+                }
+              }
+            },
+            "description": "The item no longer appears in lists; its file is untouched"
+          },
+          "404": {
+            "description": "Unknown item"
+          },
+          "409": {
+            "description": "The database is read-only (newer schema)"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/frames": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_frames",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Index of the first frame (default 0).",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Frames per page (default 200, at most 1000).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FramesPage"
+                }
+              }
+            },
+            "description": "A page of the saved-frame index (`frames.json`); `indexed` is false when the run wrote none"
+          },
+          "400": {
+            "description": "The item is not a result folder"
+          },
+          "404": {
+            "description": "Unknown, forgotten or missing item"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/history": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_history",
+        "parameters": [
+          {
+            "description": "Item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1 to 500; default 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceHistory"
+                }
+              }
+            },
+            "description": "Events of the item, newest first"
+          },
+          "404": {
+            "description": "Unknown item"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/pin": {
+      "post": {
+        "operationId": "workspace_items_post_workspace_items_id_pin",
+        "parameters": [
+          {
+            "description": "Item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspacePinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceItem"
+                }
+              }
+            },
+            "description": "The item with its new pin state"
+          },
+          "404": {
+            "description": "Unknown item"
+          },
+          "409": {
+            "description": "The database is read-only (newer schema)"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/thumbnail": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_thumbnail",
+        "parameters": [
+          {
+            "description": "Item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {}
+            },
+            "description": "PNG preview of the item"
+          },
+          "304": {
+            "description": "The preview did not change (ETag matched)"
+          },
+          "404": {
+            "description": "The item has no preview"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/roots": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_roots",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRoots"
+                }
+              }
+            },
+            "description": "Folders the scanner looks through"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      },
+      "put": {
+        "operationId": "workspace_items_put_workspace_roots",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceRootsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceRoots"
+                }
+              }
+            },
+            "description": "Roots saved"
+          },
+          "400": {
+            "description": "A root is not an absolute existing folder"
+          },
+          "409": {
+            "description": "The database is read-only (newer schema)"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/scan": {
+      "post": {
+        "operationId": "workspace_items_post_workspace_scan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceScanRequest"
+              }
+            }
+          },
+          "description": "Optional; an empty body scans the saved roots",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceScanReport"
+                }
+              }
+            },
+            "description": "What the scan found"
+          },
+          "400": {
+            "description": "Invalid roots or body"
+          },
+          "409": {
+            "description": "A scan is already running, or the database is read-only"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/settings/{key}": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_settings_key",
+        "parameters": [
+          {
+            "description": "`telemetry.enabled` or `update.available`",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSetting"
+                }
+              }
+            },
+            "description": "The stored value, or the default when unset"
+          },
+          "404": {
+            "description": "The key is not an allow-listed setting"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      },
+      "put": {
+        "operationId": "workspace_items_put_workspace_settings_key",
+        "parameters": [
+          {
+            "description": "`telemetry.enabled`",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceSettingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSetting"
+                }
+              }
+            },
+            "description": "Setting saved"
+          },
+          "400": {
+            "description": "The value has the wrong type, or the key is not writable through the API"
+          },
+          "404": {
+            "description": "The key is not an allow-listed setting"
+          },
+          "409": {
+            "description": "The database is read-only (newer schema)"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
     }
   },
   "tags": [
@@ -59729,6 +63483,10 @@
     {
       "description": "Workspace shell state owned by the frontend",
       "name": "workspace"
+    },
+    {
+      "description": "Per-user recent projects, scripts and result folders (shared workspace database)",
+      "name": "workspace_items"
     },
     {
       "description": "Analysis products such as eigenmodes and dispersion",

@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -46,6 +48,76 @@ def cargo_bin_names(path: Path) -> set[str]:
 
 
 class WindowsRuntimeBundleTests(unittest.TestCase):
+    def test_bundle_publisher_and_native_closed_source_schema_match(self):
+        # Cross-language contract check: inspect the real publisher and reader,
+        # rather than replacing Rust deserialization with a Python substitute.
+        repo = Path(__file__).resolve().parents[1]
+        publisher = ast.parse((repo / "scripts/windows/runtime_bundle.py").read_text())
+        keys = set()
+        for node in ast.walk(publisher):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "source_record" and isinstance(node.value, ast.Dict):
+                    keys.update(key.value for key in node.value.keys if isinstance(key, ast.Constant))
+                elif (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+                      and target.value.id == "source_record" and isinstance(target.slice, ast.Constant)):
+                    keys.add(target.slice.value)
+        native = (repo / "crates/fullmag-api/src/development_handoff_validation.rs").read_text()
+        source_body = re.search(r"struct RuntimeBundleSource \{(.*?)\n\}", native, re.S).group(1)
+        fields = set(re.findall(r"^\s*([a-z_][a-z0-9_]*):", source_body, re.M))
+        self.assertTrue(keys)
+        self.assertEqual(fields, keys, "the closed native parser must accept exactly the publisher's source fields")
+        frozen_keys = None
+        for node in ast.walk(publisher):
+            if (isinstance(node, ast.Compare) and isinstance(node.left, ast.Call)
+                    and isinstance(node.left.func, ast.Name) and node.left.func.id == "set"
+                    and len(node.left.args) == 1 and isinstance(node.left.args[0], ast.Name)
+                    and node.left.args[0].id == "frozen"):
+                for value in node.comparators:
+                    if isinstance(value, ast.Set):
+                        frozen_keys = {item.value for item in value.elts if isinstance(item, ast.Constant)}
+        snapshot_body = re.search(r"struct RuntimeBuildSourceSnapshot \{(.*?)\n\}", native, re.S).group(1)
+        self.assertIsNotNone(frozen_keys)
+        self.assertEqual(set(re.findall(r"^\s*([a-z_][a-z0-9_]*):", snapshot_body, re.M)), frozen_keys)
+
+    def test_frozen_metadata_omission_and_valid_shape(self) -> None:
+        self.assertIsNone(runtime_bundle._frozen_source_metadata({}))
+        base = self.root / "not-opened"
+        frozen = dict(record_path=str(base / "record.json"),
+                      inventory_sha256="a" * 64, source_root=str(base / "source"))
+        self.assertEqual(runtime_bundle._frozen_source_metadata(dict(build_source_snapshot=frozen)), frozen)
+        self.assertFalse(base.exists(), "metadata validation must not open or create source paths")
+
+    def test_frozen_metadata_null_and_invalid_shapes_are_rejected(self) -> None:
+        base = self.root / "not-opened"
+        valid = dict(record_path=str(base / "record.json"),
+                     inventory_sha256="a" * 64, source_root=str(base / "source"))
+        variants = (None, {}, {**valid, "extra": True}, {**valid, "inventory_sha256": "invalid"},
+                    {**valid, "record_path": None}, {**valid, "record_path": "record.json"},
+                    {**valid, "source_root": str(self.root / "other/source")},
+                    {**valid, "record_path": str(base / "../record.json")},
+                    {**valid, "source_root": valid["source_root"] + "\n"})
+        for value in variants:
+            with self.subTest(value=value), self.assertRaises(runtime_bundle.BundleError):
+                runtime_bundle._frozen_source_metadata(dict(build_source_snapshot=value))
+
+    def test_source_manifest_explicit_null_snapshot_is_rejected(self) -> None:
+        self.source_manifest["build_source_snapshot"] = None
+        self.write_source_manifest()
+        with self.assertRaisesRegex(runtime_bundle.BundleError, "Invalid frozen source binding"):
+            self.build_bundle()
+
+    def test_sealed_bundle_explicit_null_snapshot_is_rejected(self) -> None:
+        result = self.build_bundle()
+        manifest_path = Path(result["bundle_root"]) / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["source"]["build_source_snapshot"] = None
+        manifest_path.chmod(stat.S_IREAD | stat.S_IWRITE)  # Only this fixture's sealed manifest.
+        manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(runtime_bundle.BundleError, "Invalid frozen source binding"):
+            runtime_bundle.validate_bundle(result["bundle_root"], self.runtime_root, "dev")
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="fullmag-runtime-bundle-")
         self.root = Path(self.temp.name)
@@ -211,6 +283,22 @@ class WindowsRuntimeBundleTests(unittest.TestCase):
         self.write_source_manifest()
         with self.assertRaises(runtime_bundle.BundleError):
             self.build_bundle()
+
+    def test_direct_script_checks_frozen_binding_without_pythonpath(self) -> None:
+        self.source_manifest["build_source_snapshot"] = {}
+        self.write_source_manifest()
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, "-B", str(WINDOWS_SCRIPTS / "runtime_bundle.py"),
+             "--build-root", str(self.build_root), "--runtime-root", str(self.runtime_root),
+             "--manifest", str(self.manifest_path), "--profile", "dev"],
+            cwd=self.root, env=environment, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("runtime bundle error: Invalid frozen source binding", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse((self.runtime_root / "native-bundles").exists())
 
     def test_missing_required_worker_is_rejected(self) -> None:
         (self.profile_dir / "fullmag-api-accepted-worker.exe").unlink()

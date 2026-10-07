@@ -191,6 +191,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECT_AUTHORING_PATH,
+  PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
   PERSISTENCE_PROJECTS_PATH,
   PROJECT_MATERIALIZED_DATASET_PATH,
   PROJECT_MATERIALIZED_DATASET_SLICE_PATH,
@@ -208,8 +209,24 @@ import {
   PROJECT_RUN_TASK_CANCELLATION_PATH,
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_OUTPUT_STORAGE_PATH,
+  PLATFORM_COMPUTE_PROFILES_PATH,
+  PLATFORM_COMPUTE_PREVIEW_PATH,
   PLATFORM_HEALTH_PATH,
   PLATFORM_DEVELOPMENT_BACKEND_PATH,
+  WORKSPACE_ITEMS_PATH,
+  WORKSPACE_ITEM_FORGET_PATH,
+  WORKSPACE_ITEM_FRAMES_PATH,
+  WORKSPACE_ITEM_HISTORY_PATH,
+  WORKSPACE_ITEM_PATH,
+  WORKSPACE_ITEM_PIN_PATH,
+  WORKSPACE_ROOTS_PATH,
+  WORKSPACE_SETTING_PATH,
+  WORKSPACE_SCAN_PATH,
+  workspaceItemArchiveUrl,
+  workspaceItemThumbnailUrl,
+  PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUESTS_PATH,
+  PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUEST_PATH,
+  developmentBackendBuildRequestPathParams,
   PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH,
   PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH,
   developmentRestartRequestPathParams,
@@ -252,6 +269,11 @@ import {
   storedFieldQuantityId,
 } from "./quantityIds";
 import type { OutputStorageDefaultsResource, OutputStorageDefaultsRequest } from "./apiTypes";
+import type {
+  ExecutionProfileCatalogQuery, ExecutionProfileCatalogResource,
+  ComputePreviewRequest, ComputePreviewResource,
+  PublishExecutionProfileRequest, PublishExecutionProfileResource,
+} from "./apiTypes";
 import type {
   BinaryRequestOptions,
   BinaryResourceResult,
@@ -332,6 +354,10 @@ import type {
   GpuTelemetryResource,
   HealthResource,
   DevelopmentBackendResource,
+  WorkspaceItemsQuery,
+  WorkspaceRootWire,
+  DevelopmentBackendBuildRequest,
+  DevelopmentBackendBuildRequestResource,
   ImportSessionAssetRequest,
   JsonObject,
   LiveStatusResource,
@@ -476,6 +502,8 @@ import type {
   SessionImportInspectResponse,
   ProjectArchiveRequest,
   ProjectAuthoringUpdateRequest,
+  ProjectFromScriptRequest,
+  ProjectFromScriptResource,
   ProjectCreateRequest,
   ProjectDocumentResource,
   ProjectRunSubmitRequest,
@@ -963,6 +991,16 @@ function normalizeSolutionSetPageQuery<
   };
 }
 
+function workspaceQueryParams(query: WorkspaceItemsQuery): Record<string, unknown> {
+  const wire: Record<string, unknown> = {};
+  if (query.kind) wire.kind = query.kind;
+  if (query.sort) wire.sort = query.sort;
+  if (query.search) wire.search = query.search;
+  if (query.limit !== undefined) wire.limit = query.limit;
+  if (query.includeMissing !== undefined) wire.include_missing = query.includeMissing;
+  return wire;
+}
+
 function sessionScopeHeaders(options: RequestOptions): Record<string, string> {
   return options.sessionScopeKey
     ? { "x-fullmag-session-scope": options.sessionScopeKey }
@@ -1074,13 +1112,107 @@ export class ControlRoomApi {
     },
   };
 
+  /**
+   * The workspace database (projects, scripts, result folders) as the start
+   * screen reads it. Answers are `unknown` on purpose: the caller validates
+   * them (modules/start/model/workspaceApiTypes.ts) until generated types exist.
+   */
+  readonly workspace = {
+    items: (query: WorkspaceItemsQuery = {}, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEMS_PATH, options, {
+        query: workspaceQueryParams(query),
+      }),
+    item: (id: string, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEM_PATH, options, { path: { id } }),
+    history: (id: string, limit?: number, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEM_HISTORY_PATH, options, {
+        path: { id },
+        query: limit === undefined ? {} : { limit },
+      }),
+    /** One page of the saved-frame index (`frames.json`) of a result folder. */
+    frames: (id: string, from: number, limit: number, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ITEM_FRAMES_PATH, options, {
+        path: { id },
+        query: { from, limit },
+      }),
+    /** An allow-listed per-user setting (`telemetry.enabled`, `update.available`). */
+    setting: (key: string, options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_SETTING_PATH, options, { path: { key } }),
+    saveSetting: (key: string, value: boolean, options?: RequestOptions) =>
+      this.putJson<unknown, { value: boolean }>(
+        WORKSPACE_SETTING_PATH,
+        { value },
+        options,
+        { path: { key } },
+      ),
+    thumbnailUrl: (id: string) => workspaceItemThumbnailUrl(this.baseUrl, id),
+    archiveUrl: (id: string) => workspaceItemArchiveUrl(this.baseUrl, id),
+    setPinned: (id: string, pinned: boolean, options?: RequestOptions) =>
+      this.postJson<unknown, { pinned: boolean }>(
+        WORKSPACE_ITEM_PIN_PATH,
+        { pinned },
+        options,
+        { path: { id } },
+      ),
+    forget: (id: string, options?: RequestOptions) =>
+      this.postJson<unknown, Record<string, never>>(WORKSPACE_ITEM_FORGET_PATH, {}, options, {
+        path: { id },
+      }),
+    roots: (options?: RequestOptions) =>
+      this.requestJson<unknown>(WORKSPACE_ROOTS_PATH, options),
+    saveRoots: (roots: readonly WorkspaceRootWire[], options?: RequestOptions) =>
+      this.putJson<unknown, { roots: readonly WorkspaceRootWire[] }>(
+        WORKSPACE_ROOTS_PATH,
+        { roots },
+        options,
+      ),
+    scan: (roots?: readonly string[], options?: RequestOptions) =>
+      this.postJson<unknown, { roots?: readonly string[] }>(
+        WORKSPACE_SCAN_PATH,
+        roots ? { roots } : {},
+        options,
+      ),
+    addItem: (path: string, kind?: "project" | "script" | "result", options?: RequestOptions) =>
+      this.postJson<unknown, { path: string; kind?: string }>(
+        WORKSPACE_ITEMS_PATH,
+        kind ? { path, kind } : { path },
+        options,
+      ),
+  };
+
   readonly platform = {
+    computeExecutionPreview: (input: ComputePreviewRequest, options?: RequestOptions) =>
+      this.postJson<ComputePreviewResource, ComputePreviewRequest>(PLATFORM_COMPUTE_PREVIEW_PATH, input, options),
+    computeProfiles: (query: ExecutionProfileCatalogQuery = {}, options?: RequestOptions) =>
+      this.requestJson<ExecutionProfileCatalogResource>(PLATFORM_COMPUTE_PROFILES_PATH, options, { query }),
+    publishComputeProfile: (input: PublishExecutionProfileRequest, options?: RequestOptions) =>
+      this.postJson<PublishExecutionProfileResource, PublishExecutionProfileRequest>(PLATFORM_COMPUTE_PROFILES_PATH, input, options),
     outputStorageDefaults: (options?: RequestOptions) =>
       this.requestJson<OutputStorageDefaultsResource>(PLATFORM_OUTPUT_STORAGE_PATH, options),
     saveOutputStorageDefaults: (input: OutputStorageDefaultsRequest, options?: RequestOptions) =>
       this.putJson<OutputStorageDefaultsResource, OutputStorageDefaultsRequest>(PLATFORM_OUTPUT_STORAGE_PATH, input, options),
     developmentBackend: (options?: RequestOptions) =>
       this.requestJson<DevelopmentBackendResource>(PLATFORM_DEVELOPMENT_BACKEND_PATH, options),
+    submitDevelopmentBackendBuildRequest: (
+      request: DevelopmentBackendBuildRequest,
+      acknowledgementToken: string,
+      options?: RequestOptions,
+    ) =>
+      this.submitDevelopmentBackendBuildRequest(
+        request,
+        acknowledgementToken,
+        options,
+      ),
+    developmentBackendBuildRequest: (
+      requestId: string,
+      acknowledgementToken: string,
+      options?: RequestOptions,
+    ) =>
+      this.developmentBackendBuildRequest(
+        requestId,
+        acknowledgementToken,
+        options,
+      ),
     submitDevelopmentRestartRequest: (
       request: DevelopmentRestartRequest,
       acknowledgementToken: string,
@@ -2873,6 +3005,11 @@ export class ControlRoomApi {
           request,
           options,
         ),
+      /** 204 on success; 404 for an unknown id; 409 while still referenced. */
+      delete: (checkpointId: string, options?: RequestOptions) =>
+        this.deleteJson<void>(PERSISTENCE_CHECKPOINT_PATH, options, {
+          path: { checkpoint_id: checkpointId },
+        }),
       detail: (checkpointId: string, options?: RequestOptions) =>
         this.requestJson<CheckpointEntry>(
           PERSISTENCE_CHECKPOINT_PATH,
@@ -3212,6 +3349,17 @@ export class ControlRoomApi {
       open: (request: ProjectArchiveRequest, options?: RequestOptions) =>
         this.postJson<ProjectDocumentResource, ProjectArchiveRequest>(
           PERSISTENCE_PROJECT_OPEN_PATH,
+          request,
+          options,
+        ),
+      /**
+       * Executes the supplied script in the Python helper (the request must
+       * carry `consent.executed_by_user: true`) and returns a project with the
+       * script embedded plus a fidelity verdict.
+       */
+      fromScript: (request: ProjectFromScriptRequest, options?: RequestOptions) =>
+        this.postJson<ProjectFromScriptResource, ProjectFromScriptRequest>(
+          PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
           request,
           options,
         ),
@@ -3618,6 +3766,7 @@ export class ControlRoomApi {
     const groups: Array<[string, Record<string, unknown>]> = [
       ["sessions", this.sessions],
       ["platform", this.platform],
+      ["workspace", this.workspace],
       ["events", this.events],
       ["commands", this.commands],
       ["analysis", this.analysis],
@@ -3850,6 +3999,56 @@ export class ControlRoomApi {
     );
     this.requireApiInstanceCurrent();
     return readOpenApiResult<DevelopmentRestartResource>(result);
+  }
+
+  private async submitDevelopmentBackendBuildRequest(
+    request: DevelopmentBackendBuildRequest,
+    acknowledgementToken: string,
+    options: RequestOptions = {},
+  ): Promise<DevelopmentBackendBuildRequestResource> {
+    const result = await this.transport.POST(
+      PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUESTS_PATH as never,
+      {
+        body: request,
+        cache: "no-store",
+        headers: {
+          Authorization: developmentRestartAuthorization(acknowledgementToken),
+        },
+        signal: options.signal,
+      } as never,
+    );
+    this.requireApiInstanceCurrent();
+    return readOpenApiResult<DevelopmentBackendBuildRequestResource>(result);
+  }
+
+  private async developmentBackendBuildRequest(
+    requestId: string,
+    acknowledgementToken: string,
+    options: RequestOptions = {},
+  ): Promise<DevelopmentBackendBuildRequestResource> {
+    assertNonEmptyId("development backend build request id", requestId);
+    if (typeof window === "undefined" || !window.location.origin) {
+      throw new ControlRoomApiError(
+        "Development backend build status requires a browser UI origin",
+        0,
+        null,
+        "DEVELOPMENT_BACKEND_BUILD_ORIGIN_UNAVAILABLE",
+      );
+    }
+    const result = await this.transport.GET(
+      PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUEST_PATH as never,
+      {
+        cache: "no-store",
+        headers: {
+          Authorization: developmentRestartAuthorization(acknowledgementToken),
+          "x-fullmag-ui-origin": window.location.origin,
+        },
+        params: developmentBackendBuildRequestPathParams(requestId),
+        signal: options.signal,
+      } as never,
+    );
+    this.requireApiInstanceCurrent();
+    return readOpenApiResult<DevelopmentBackendBuildRequestResource>(result);
   }
 
   private async developmentRestartRequest(

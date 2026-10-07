@@ -19,6 +19,13 @@ use fullmag_session::runtime_service::{RuntimeServiceConfig, RuntimeServiceOwner
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[path = "development_candidate_preparation.rs"]
+mod candidate_preparation;
+#[path = "development_candidate_preparation_probe.rs"]
+mod candidate_preparation_probe;
+
+use self::candidate_preparation::{CandidateHelperProcess, HelperPoll};
+
 const OWNER_SCHEMA: &str = "fullmag.development-api-owner.v1";
 const CANDIDATE_OWNER_REQUEST_SCHEMA: &str = "fullmag.development-candidate-owner-request.v1";
 const ACQUISITION_SCHEMA: &str = "fullmag.development-authoring-acquisition.v1";
@@ -56,6 +63,7 @@ const READY_CANDIDATE_REQUEST_SCHEMA: &str = "fullmag.development-ready-candidat
 const READY_CANDIDATE_ACK_SCHEMA: &str = "fullmag.development-ready-candidate-ack.v1";
 const MAX_READY_CANDIDATE_REQUEST_BYTES: usize = 4 * 1024;
 const MAX_READY_CANDIDATE_OUTPUT_BYTES: usize = 4 * 1024;
+const CANDIDATE_PREPARATION_TIMEOUT: Duration = Duration::from_secs(120);
 const BACKEND_ENV_KEYS: [&str; 4] = [
     "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
     "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
@@ -76,6 +84,31 @@ pub(crate) struct OwnerLaunch {
     expected_build_commit: String,
     expected_build_snapshot: String,
     owner_token: String,
+}
+
+pub(crate) fn verify_candidate_preparation_faults(repo_root: &Path) -> Result<()> {
+    if env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1")
+        || env::var("FULLMAG_DEVELOPMENT_RESTART_PROBE_CASE").as_deref() != Ok("preparation-faults")
+        || env::var("FULLMAG_NATIVE_RUNTIME_ACTIVE").as_deref() != Ok("1")
+        || env::var("FULLMAG_STORAGE_PROFILE").as_deref() != Ok(NATIVE_DEV_PROFILE)
+    {
+        bail!("candidate preparation fault probe requires the managed probe gates");
+    }
+    let storage_root = validated_directory_root(
+        &required_environment_path("FULLMAG_PROJECT_STORAGE_ROOT")?,
+        "candidate preparation probe storage root",
+    )?;
+    let worktree = required_environment_value("FULLMAG_WORKTREE_ID")?;
+    fullmag_session::repository_path::validate_store_id(&worktree)
+        .context("candidate preparation probe worktree id is invalid")?;
+    let repo_root = validated_directory_root(repo_root, "candidate preparation probe repository")?;
+    let helper = checked_regular_file(
+        &repo_root,
+        "scripts/windows/candidate_helper_probe.py",
+        "candidate preparation fault helper",
+    )?;
+    let python = managed_development_python(&storage_root, &worktree)?;
+    candidate_preparation_probe::verify(&python, &helper, &repo_root, &worktree)
 }
 
 impl OwnerLaunch {
@@ -477,6 +510,206 @@ pub(crate) struct SelectedDevelopmentCandidate {
     pub(crate) owner_verifier_helper_pid: u32,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct CandidatePreparationIdentity {
+    pub(crate) api_instance_id: String,
+    pub(crate) worktree_id: String,
+    pub(crate) generation_id: String,
+    pub(crate) ready_build_id: String,
+    pub(crate) ready_source_sha256: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CanceledCandidateHelperEvidence {
+    pub(crate) pid: u32,
+    pub(crate) exit_code: Option<i32>,
+}
+
+pub(crate) enum CandidatePreparationPoll {
+    Pending { helper_pid: u32 },
+    Unconfirmed { helper_pid: u32 },
+    Ready(SelectedDevelopmentCandidate),
+    Unavailable { helper_pid: Option<u32> },
+}
+
+pub(crate) struct CandidatePreparationJob {
+    pub(crate) identity: CandidatePreparationIdentity,
+    deadline: Instant,
+    phase: CandidatePreparationPhase,
+    cancel_requested: bool,
+    cleanup_unconfirmed_reported: bool,
+    last_canceled_helper: Option<CanceledCandidateHelperEvidence>,
+}
+
+enum CandidatePreparationPhase {
+    Selector(CandidateHelperProcess),
+    OwnerVerifier {
+        helper: CandidateHelperProcess,
+        bundle_root: PathBuf,
+        candidate_bundle_id: String,
+        candidate_manifest_sha256: String,
+        selector_helper_pid: u32,
+    },
+    Terminal,
+}
+
+impl CandidatePreparationJob {
+    pub(crate) fn helper_pid(&self) -> Option<u32> {
+        match &self.phase {
+            CandidatePreparationPhase::Selector(helper)
+            | CandidatePreparationPhase::OwnerVerifier { helper, .. } => Some(helper.helper_pid()),
+            CandidatePreparationPhase::Terminal => None,
+        }
+    }
+
+    pub(crate) fn is_pending(&self) -> bool {
+        !matches!(&self.phase, CandidatePreparationPhase::Terminal)
+    }
+
+    pub(crate) fn cleanup_unconfirmed(&self) -> bool {
+        self.cleanup_unconfirmed_reported
+    }
+
+    pub(crate) fn last_canceled_helper_for_probe(&self) -> Option<CanceledCandidateHelperEvidence> {
+        self.last_canceled_helper
+    }
+
+    pub(crate) fn helper_running(&mut self) -> Result<Option<(u32, bool)>> {
+        match &mut self.phase {
+            CandidatePreparationPhase::Selector(helper)
+            | CandidatePreparationPhase::OwnerVerifier { helper, .. } => {
+                let helper_pid = helper.helper_pid();
+                Ok(Some((helper_pid, helper.is_running()?)))
+            }
+            CandidatePreparationPhase::Terminal => Ok(None),
+        }
+    }
+
+    pub(crate) fn cancel(&mut self) {
+        self.cancel_requested = true;
+        match &mut self.phase {
+            CandidatePreparationPhase::Selector(helper)
+            | CandidatePreparationPhase::OwnerVerifier { helper, .. } => helper.cancel(),
+            CandidatePreparationPhase::Terminal => {}
+        }
+    }
+
+    pub(crate) fn drain_after_cancel(&mut self) -> Result<bool> {
+        self.cancel();
+        let phase = std::mem::replace(&mut self.phase, CandidatePreparationPhase::Terminal);
+        match phase {
+            CandidatePreparationPhase::Selector(mut helper) => {
+                match helper.poll() {
+                    Ok(HelperPoll::Pending) => {
+                        self.phase = CandidatePreparationPhase::Selector(helper);
+                        Ok(false)
+                    }
+                    Ok(HelperPoll::Completed {
+                        helper_pid,
+                        exit_code,
+                        ..
+                    })
+                    | Ok(HelperPoll::Failed {
+                        helper_pid,
+                        exit_code,
+                        ..
+                    }) => {
+                        self.last_canceled_helper = Some(CanceledCandidateHelperEvidence {
+                            pid: helper_pid,
+                            exit_code,
+                        });
+                        Ok(true)
+                    }
+                    Ok(HelperPoll::Unconfirmed { helper_pid, reason }) => {
+                        self.phase = CandidatePreparationPhase::Selector(helper);
+                        self.report_cleanup_unconfirmed(helper_pid, reason);
+                        Ok(false)
+                    }
+                    Err(error) if helper.is_terminal() => {
+                        eprintln!("[fullmag] canceled candidate selector cleanup was unconfirmed: {error:#}");
+                        Ok(true)
+                    }
+                    Err(error) => {
+                        self.phase = CandidatePreparationPhase::Selector(helper);
+                        Err(error)
+                    }
+                }
+            }
+            CandidatePreparationPhase::OwnerVerifier {
+                mut helper,
+                bundle_root,
+                candidate_bundle_id,
+                candidate_manifest_sha256,
+                selector_helper_pid,
+            } => match helper.poll() {
+                Ok(HelperPoll::Pending) => {
+                    self.phase = CandidatePreparationPhase::OwnerVerifier {
+                        helper,
+                        bundle_root,
+                        candidate_bundle_id,
+                        candidate_manifest_sha256,
+                        selector_helper_pid,
+                    };
+                    Ok(false)
+                }
+                Ok(HelperPoll::Completed {
+                    helper_pid,
+                    exit_code,
+                    ..
+                })
+                | Ok(HelperPoll::Failed {
+                    helper_pid,
+                    exit_code,
+                    ..
+                }) => {
+                    self.last_canceled_helper = Some(CanceledCandidateHelperEvidence {
+                        pid: helper_pid,
+                        exit_code,
+                    });
+                    Ok(true)
+                }
+                Ok(HelperPoll::Unconfirmed { helper_pid, reason }) => {
+                    self.phase = CandidatePreparationPhase::OwnerVerifier {
+                        helper,
+                        bundle_root,
+                        candidate_bundle_id,
+                        candidate_manifest_sha256,
+                        selector_helper_pid,
+                    };
+                    self.report_cleanup_unconfirmed(helper_pid, reason);
+                    Ok(false)
+                }
+                Err(error) if helper.is_terminal() => {
+                    eprintln!(
+                        "[fullmag] canceled candidate owner cleanup was unconfirmed: {error:#}"
+                    );
+                    Ok(true)
+                }
+                Err(error) => {
+                    self.phase = CandidatePreparationPhase::OwnerVerifier {
+                        helper,
+                        bundle_root,
+                        candidate_bundle_id,
+                        candidate_manifest_sha256,
+                        selector_helper_pid,
+                    };
+                    Err(error)
+                }
+            },
+            CandidatePreparationPhase::Terminal => Ok(true),
+        }
+    }
+
+    fn report_cleanup_unconfirmed(&mut self, helper_pid: u32, reason: &str) {
+        if !self.cleanup_unconfirmed_reported {
+            eprintln!(
+                "[fullmag] candidate preparation cleanup remains unconfirmed for pid {helper_pid}: {reason}"
+            );
+            self.cleanup_unconfirmed_reported = true;
+        }
+    }
+}
+
 /// Private observation from the exact owned API. It never proves that a
 /// workspace or resident service is idle and cannot authorize a handoff.
 #[derive(Deserialize)]
@@ -567,14 +800,16 @@ impl OwnedDevelopmentApi {
         candidate: Option<&SelectedDevelopmentCandidate>,
     ) -> Result<ConsumerReadinessStatus> {
         let nonce = uuid::Uuid::new_v4().to_string();
-        let readiness = candidate.map(|candidate| serde_json::json!({
-            "worktree_id": candidate.worktree_id,
-            "generation_id": candidate.generation_id,
-            "ready_build_id": candidate.ready_build_id,
-            "ready_source_sha256": candidate.ready_source_sha256,
-            "candidate_bundle_id": candidate.candidate_bundle_id,
-            "candidate_manifest_sha256": candidate.candidate_manifest_sha256,
-        }));
+        let readiness = candidate.map(|candidate| {
+            serde_json::json!({
+                "worktree_id": candidate.worktree_id,
+                "generation_id": candidate.generation_id,
+                "ready_build_id": candidate.ready_build_id,
+                "ready_source_sha256": candidate.ready_source_sha256,
+                "candidate_bundle_id": candidate.candidate_bundle_id,
+                "candidate_manifest_sha256": candidate.candidate_manifest_sha256,
+            })
+        });
         let mut request = serde_json::to_vec(&serde_json::json!({
             "schema": CONTROL_SCHEMA,
             "owner_token": self.owner_token,
@@ -588,17 +823,25 @@ impl OwnedDevelopmentApi {
         }
         request.push(b'\n');
         let mut stream = TcpStream::connect_timeout(
-            &SocketAddr::V4(self.control_address), CONTROL_CONNECT_TIMEOUT,
-        ).context("unable to connect to consumer readiness control")?;
+            &SocketAddr::V4(self.control_address),
+            CONTROL_CONNECT_TIMEOUT,
+        )
+        .context("unable to connect to consumer readiness control")?;
         stream.set_nodelay(true)?;
         write_all_until(
-            &mut stream, &request, CONTROL_REQUEST_TIMEOUT, "consumer readiness request",
+            &mut stream,
+            &request,
+            CONTROL_REQUEST_TIMEOUT,
+            "consumer readiness request",
         )?;
         let bytes = read_line_until(
-            &mut stream, CONFIRM_RESPONSE_TIMEOUT, MAX_REQUEST_BYTES, "consumer readiness response",
+            &mut stream,
+            CONFIRM_RESPONSE_TIMEOUT,
+            MAX_REQUEST_BYTES,
+            "consumer readiness response",
         )?;
-        let response: ConsumerReadinessStatus = serde_json::from_slice(&bytes)
-            .context("invalid consumer readiness response")?;
+        let response: ConsumerReadinessStatus =
+            serde_json::from_slice(&bytes).context("invalid consumer readiness response")?;
         if response.schema != CONSUMER_READINESS_SCHEMA
             || response.nonce != nonce
             || response.api_instance_id != self.api_instance_id
@@ -616,18 +859,23 @@ impl OwnedDevelopmentApi {
         Ok(response)
     }
 
-    /// Select and validate a sealed candidate for the latest ready watcher
-    /// generation. The helper never builds; it only verifies and bundles the
-    /// already-published native development executables.
-    pub(crate) fn select_ready_candidate(
+    pub(crate) fn start_candidate_preparation(
         &self,
         repo_root: &Path,
-    ) -> Result<SelectedDevelopmentCandidate> {
+        identity: CandidatePreparationIdentity,
+    ) -> Result<CandidatePreparationJob> {
         if self.service_configured {
             bail!("ready candidate selection requires a cold development API");
         }
-        if !lower_hex(&self.generation, 32) {
-            bail!("ready candidate owner scope is invalid");
+        if identity.api_instance_id != self.api_instance_id
+            || identity.worktree_id != self.worktree
+            || identity.generation_id != self.generation
+            || !lower_hex(&self.generation, 32)
+            || !lower_hex(&identity.ready_build_id, 64)
+            || !lower_hex(&identity.ready_source_sha256, 64)
+            || identity.ready_source_sha256 == self.source
+        {
+            bail!("ready candidate preparation identity differs from the owned API scope");
         }
         fullmag_session::repository_path::validate_store_id(&self.worktree)
             .context("ready candidate owner worktree is invalid")?;
@@ -655,21 +903,232 @@ impl OwnedDevelopmentApi {
             bail!("ready candidate selection request exceeds its limit");
         }
 
-        let (ack_bytes, selector_helper_pid, selector_status) = run_stage_helper_with_output_limit(
+        let deadline = Instant::now() + CANDIDATE_PREPARATION_TIMEOUT;
+        let selector = CandidateHelperProcess::spawn(
             &python,
             &helper,
             &repo_root,
             request_bytes,
             MAX_READY_CANDIDATE_OUTPUT_BYTES,
+            deadline,
+            "development-candidate-selector",
         )?;
-        if !selector_status.success() {
-            bail!("ready candidate selection helper failed");
+        Ok(CandidatePreparationJob {
+            identity,
+            deadline,
+            phase: CandidatePreparationPhase::Selector(selector),
+            cancel_requested: false,
+            cleanup_unconfirmed_reported: false,
+            last_canceled_helper: None,
+        })
+    }
+
+    pub(crate) fn poll_candidate_preparation(
+        &self,
+        repo_root: &Path,
+        job: &mut CandidatePreparationJob,
+    ) -> CandidatePreparationPoll {
+        if !job.is_pending() {
+            return CandidatePreparationPoll::Unavailable { helper_pid: None };
         }
-        let acknowledgement: ReadyCandidateAcknowledgement = serde_json::from_slice(&ack_bytes)
-            .context("invalid ready candidate selection acknowledgement")?;
+        if Instant::now() >= job.deadline {
+            job.cancel_requested = true;
+        }
+        let phase = std::mem::replace(&mut job.phase, CandidatePreparationPhase::Terminal);
+        match phase {
+            CandidatePreparationPhase::Selector(mut helper) => {
+                if job.cancel_requested {
+                    helper.cancel();
+                }
+                match helper.poll() {
+                    Ok(HelperPoll::Pending) => {
+                        let helper_pid = helper.helper_pid();
+                        job.phase = CandidatePreparationPhase::Selector(helper);
+                        CandidatePreparationPoll::Pending { helper_pid }
+                    }
+                    Ok(HelperPoll::Failed {
+                        helper_pid, reason, ..
+                    }) => {
+                        eprintln!("[fullmag] candidate selector ended unavailable: {reason}");
+                        CandidatePreparationPoll::Unavailable {
+                            helper_pid: Some(helper_pid),
+                        }
+                    }
+                    Ok(HelperPoll::Unconfirmed { helper_pid, reason }) => {
+                        job.cancel_requested = true;
+                        job.report_cleanup_unconfirmed(helper_pid, reason);
+                        job.phase = CandidatePreparationPhase::Selector(helper);
+                        CandidatePreparationPoll::Unconfirmed { helper_pid }
+                    }
+                    Err(error) => {
+                        if helper.is_terminal() {
+                            eprintln!(
+                                "[fullmag] candidate selector cleanup ended unavailable: {error:#}"
+                            );
+                            CandidatePreparationPoll::Unavailable {
+                                helper_pid: Some(helper.helper_pid()),
+                            }
+                        } else {
+                            let helper_pid = helper.helper_pid();
+                            job.phase = CandidatePreparationPhase::Selector(helper);
+                            CandidatePreparationPoll::Pending { helper_pid }
+                        }
+                    }
+                    Ok(HelperPoll::Completed {
+                        helper_pid, output, ..
+                    }) => {
+                        if job.cancel_requested {
+                            return CandidatePreparationPoll::Unavailable {
+                                helper_pid: Some(helper_pid),
+                            };
+                        }
+                        let next = self.start_candidate_owner_verification(
+                            repo_root,
+                            &job.identity,
+                            &output,
+                            job.deadline,
+                        );
+                        match next {
+                            Ok((
+                                verifier,
+                                bundle_root,
+                                candidate_bundle_id,
+                                candidate_manifest_sha256,
+                            )) => {
+                                let verifier_helper_pid = verifier.helper_pid();
+                                job.phase = CandidatePreparationPhase::OwnerVerifier {
+                                    helper: verifier,
+                                    bundle_root,
+                                    candidate_bundle_id,
+                                    candidate_manifest_sha256,
+                                    selector_helper_pid: helper_pid,
+                                };
+                                CandidatePreparationPoll::Pending {
+                                    helper_pid: verifier_helper_pid,
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!("[fullmag] candidate selector result was unavailable: {error:#}");
+                                CandidatePreparationPoll::Unavailable {
+                                    helper_pid: Some(helper_pid),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            CandidatePreparationPhase::OwnerVerifier {
+                mut helper,
+                bundle_root,
+                candidate_bundle_id,
+                candidate_manifest_sha256,
+                selector_helper_pid,
+            } => {
+                if job.cancel_requested {
+                    helper.cancel();
+                }
+                match helper.poll() {
+                    Ok(HelperPoll::Pending) => {
+                        let helper_pid = helper.helper_pid();
+                        job.phase = CandidatePreparationPhase::OwnerVerifier {
+                            helper,
+                            bundle_root,
+                            candidate_bundle_id,
+                            candidate_manifest_sha256,
+                            selector_helper_pid,
+                        };
+                        CandidatePreparationPoll::Pending { helper_pid }
+                    }
+                    Ok(HelperPoll::Failed {
+                        helper_pid, reason, ..
+                    }) => {
+                        eprintln!("[fullmag] candidate owner verifier ended unavailable: {reason}");
+                        CandidatePreparationPoll::Unavailable {
+                            helper_pid: Some(helper_pid),
+                        }
+                    }
+                    Ok(HelperPoll::Unconfirmed { helper_pid, reason }) => {
+                        job.cancel_requested = true;
+                        job.report_cleanup_unconfirmed(helper_pid, reason);
+                        job.phase = CandidatePreparationPhase::OwnerVerifier {
+                            helper,
+                            bundle_root,
+                            candidate_bundle_id,
+                            candidate_manifest_sha256,
+                            selector_helper_pid,
+                        };
+                        CandidatePreparationPoll::Unconfirmed { helper_pid }
+                    }
+                    Err(error) => {
+                        if helper.is_terminal() {
+                            eprintln!("[fullmag] candidate owner verifier cleanup ended unavailable: {error:#}");
+                            CandidatePreparationPoll::Unavailable {
+                                helper_pid: Some(helper.helper_pid()),
+                            }
+                        } else {
+                            let helper_pid = helper.helper_pid();
+                            job.phase = CandidatePreparationPhase::OwnerVerifier {
+                                helper,
+                                bundle_root,
+                                candidate_bundle_id,
+                                candidate_manifest_sha256,
+                                selector_helper_pid,
+                            };
+                            CandidatePreparationPoll::Pending { helper_pid }
+                        }
+                    }
+                    Ok(HelperPoll::Completed {
+                        helper_pid, output, ..
+                    }) => {
+                        if job.cancel_requested {
+                            return CandidatePreparationPoll::Unavailable {
+                                helper_pid: Some(helper_pid),
+                            };
+                        }
+                        match self.finish_candidate_owner_verification(
+                            &job.identity,
+                            &bundle_root,
+                            &candidate_bundle_id,
+                            &candidate_manifest_sha256,
+                            selector_helper_pid,
+                            helper_pid,
+                            &output,
+                        ) {
+                            Ok(candidate) => CandidatePreparationPoll::Ready(candidate),
+                            Err(error) => {
+                                eprintln!("[fullmag] candidate owner verifier result was unavailable: {error:#}");
+                                CandidatePreparationPoll::Unavailable {
+                                    helper_pid: Some(helper_pid),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            CandidatePreparationPhase::Terminal => {
+                CandidatePreparationPoll::Unavailable { helper_pid: None }
+            }
+        }
+    }
+
+    fn start_candidate_owner_verification(
+        &self,
+        repo_root: &Path,
+        identity: &CandidatePreparationIdentity,
+        selector_output: &[u8],
+        preparation_deadline: Instant,
+    ) -> Result<(CandidateHelperProcess, PathBuf, String, String)> {
+        if Instant::now() >= preparation_deadline {
+            bail!("candidate preparation deadline expired before owner verification");
+        }
+        let acknowledgement: ReadyCandidateAcknowledgement =
+            serde_json::from_slice(selector_output)
+                .context("invalid ready candidate selection acknowledgement")?;
         if acknowledgement.schema != READY_CANDIDATE_ACK_SCHEMA
             || acknowledgement.worktree_id != self.worktree
             || acknowledgement.generation_id != self.generation
+            || acknowledgement.ready_build_id != identity.ready_build_id
+            || acknowledgement.ready_source_sha256 != identity.ready_source_sha256
             || !lower_hex(&acknowledgement.ready_build_id, 64)
             || !lower_hex(&acknowledgement.ready_source_sha256, 64)
             || !lower_hex(&acknowledgement.candidate_bundle_id, 32)
@@ -701,29 +1160,105 @@ impl OwnedDevelopmentApi {
             bail!("ready candidate bundle is outside its canonical native namespace");
         }
 
-        let (candidate_owner, owner_verifier_helper_pid) = self.candidate_owner(
-            &repo_root,
-            &acknowledgement.candidate_bundle_id,
-            &acknowledgement.candidate_manifest_sha256,
+        let helper = checked_regular_file(
+            repo_root,
+            "scripts/windows/validate_candidate_owner.py",
+            "candidate owner validation helper",
         )?;
-        if candidate_owner.worktree != acknowledgement.worktree_id
-            || candidate_owner.generation != acknowledgement.generation_id
-            || candidate_owner.source != acknowledgement.ready_source_sha256
-        {
-            bail!("candidate owner verification differs from the ready source identity");
+        let candidate_relative = format!(
+            "runtimes/{}/native-bundles/{}",
+            self.worktree, acknowledgement.candidate_bundle_id
+        );
+        let owner_candidate_root =
+            fullmag_session::repository_path::checked_path(&self.storage_root, &candidate_relative)
+                .context("invalid candidate bundle root")?;
+        validate_absolute_path_chain_no_reparse(&owner_candidate_root, "candidate bundle root")?;
+        validated_directory_root(&owner_candidate_root, "candidate bundle root")?;
+        let candidate_path_string = owner_candidate_root
+            .to_str()
+            .context("candidate bundle root is not valid UTF-8")?;
+        let storage_root = self
+            .storage_root
+            .to_str()
+            .context("managed storage root is not valid UTF-8")?;
+        let request = CandidateOwnerRequest {
+            schema: CANDIDATE_OWNER_REQUEST_SCHEMA,
+            storage_root,
+            worktree_id: &self.worktree,
+            candidate_bundle_root: candidate_path_string,
+            candidate_manifest_sha256: &acknowledgement.candidate_manifest_sha256,
+        };
+        let request_bytes = serde_json::to_vec(&request)
+            .context("unable to encode candidate owner validation request")?;
+        if request_bytes.len() > MAX_CANDIDATE_OWNER_REQUEST_BYTES {
+            bail!("candidate owner validation request exceeds its limit");
         }
+        let python = managed_development_python(&self.storage_root, &self.worktree)?;
+        let verifier_deadline = (Instant::now() + STAGE_HELPER_TIMEOUT).min(preparation_deadline);
+        let verifier = CandidateHelperProcess::spawn(
+            &python,
+            &helper,
+            repo_root,
+            request_bytes,
+            MAX_STAGE_OUTPUT_BYTES,
+            verifier_deadline,
+            "development-candidate-owner",
+        )?;
+        Ok((
+            verifier,
+            candidate_root,
+            acknowledgement.candidate_bundle_id,
+            acknowledgement.candidate_manifest_sha256,
+        ))
+    }
 
+    fn finish_candidate_owner_verification(
+        &self,
+        identity: &CandidatePreparationIdentity,
+        bundle_root: &Path,
+        candidate_bundle_id: &str,
+        candidate_manifest_sha256: &str,
+        selector_helper_pid: u32,
+        owner_verifier_helper_pid: u32,
+        output: &[u8],
+    ) -> Result<SelectedDevelopmentCandidate> {
+        let acknowledgement: CandidateOwnerAcknowledgement = serde_json::from_slice(output)
+            .context("invalid candidate owner validation acknowledgement")?;
+        if acknowledgement.schema != "fullmag.development-candidate-owner-ack.v1"
+            || acknowledgement.worktree_id != self.worktree
+            || acknowledgement.candidate_bundle_id != candidate_bundle_id
+            || acknowledgement.candidate_manifest_sha256 != candidate_manifest_sha256
+            || !lower_hex(&acknowledgement.git_commit, 40)
+            || !lower_hex(&acknowledgement.source_snapshot_sha256, 64)
+            || !lower_hex(&acknowledgement.backend_source_sha256, 64)
+            || acknowledgement.product_version.is_empty()
+            || acknowledgement.product_version.len() > 128
+            || !acknowledgement
+                .product_version
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b".-+".contains(&byte))
+        {
+            bail!("candidate owner validation acknowledgement does not match the request");
+        }
+        let acknowledged_storage = PathBuf::from(&acknowledgement.storage_root);
+        validate_absolute_path_chain_no_reparse(
+            &acknowledged_storage,
+            "candidate owner storage root acknowledgement",
+        )?;
+        if fs::canonicalize(&acknowledged_storage)? != fs::canonicalize(&self.storage_root)? {
+            bail!("candidate owner validation storage root differs from managed storage");
+        }
+        if acknowledgement.backend_source_sha256 != identity.ready_source_sha256 {
+            bail!("candidate owner source differs from the selected ready source");
+        }
         Ok(SelectedDevelopmentCandidate {
-            // Canonicalization proves physical containment, but Windows adds
-            // a verbatim prefix. Keep the verified managed spelling at the
-            // Python boundary, whose storage contract rejects that alias.
-            bundle_root: candidate_root,
-            candidate_bundle_id: acknowledgement.candidate_bundle_id,
-            candidate_manifest_sha256: acknowledgement.candidate_manifest_sha256,
-            ready_build_id: acknowledgement.ready_build_id,
-            ready_source_sha256: acknowledgement.ready_source_sha256,
-            generation_id: acknowledgement.generation_id,
-            worktree_id: acknowledgement.worktree_id,
+            bundle_root: bundle_root.to_path_buf(),
+            candidate_bundle_id: candidate_bundle_id.to_owned(),
+            candidate_manifest_sha256: candidate_manifest_sha256.to_owned(),
+            ready_build_id: identity.ready_build_id.clone(),
+            ready_source_sha256: identity.ready_source_sha256.clone(),
+            generation_id: identity.generation_id.clone(),
+            worktree_id: identity.worktree_id.clone(),
             selector_helper_pid,
             owner_verifier_helper_pid,
         })
@@ -933,10 +1468,7 @@ impl AuthoringAcquisition {
             MAX_REQUEST_BYTES,
             "cold commit rejection",
         )?;
-        let result: Value = serde_json::from_slice(&bytes)?;
-        if result
-            != serde_json::json!({"schema":CONTROL_SCHEMA,"status":"rejected","reason":"development_owner_request_rejected"})
-        {
+        if !is_generic_commit_rejection(&bytes) {
             bail!("invalid cold commit was not rejected by the API");
         }
         Ok(())
@@ -1197,6 +1729,9 @@ impl AuthoringAcquisition {
             MAX_REQUEST_BYTES,
             "development API commit acknowledgement; outcome must be reconciled on error",
         )?;
+        if is_generic_commit_rejection(&response) {
+            bail!("development API rejected the cold commit; outcome remains unknown and requires durable reconciliation after the owned API exits");
+        }
         let committed: CommitResponse = serde_json::from_slice(&response)
             .context("development commit outcome is unknown: invalid acknowledgement")?;
         if committed.schema != "fullmag.development-api-commit.v1"
@@ -1902,6 +2437,23 @@ struct CommitResponse {
     snapshot_sha256: String,
     target_build_id: String,
     accepted_store_binding: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommitControlRejection {
+    schema: String,
+    status: String,
+    reason: String,
+}
+
+fn is_generic_commit_rejection(response: &[u8]) -> bool {
+    let Ok(rejection) = serde_json::from_slice::<CommitControlRejection>(response) else {
+        return false;
+    };
+    rejection.schema == CONTROL_SCHEMA
+        && rejection.status == "rejected"
+        && rejection.reason == "development_owner_request_rejected"
 }
 
 #[derive(Deserialize, Serialize)]

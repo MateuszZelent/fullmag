@@ -9,6 +9,7 @@ mod material_requirements;
 mod physics_graph;
 mod region_revisions;
 mod scene;
+mod scene_study_plan;
 mod spin_transport;
 mod study_contract;
 mod validation;
@@ -32,6 +33,7 @@ pub use material_requirements::*;
 pub use physics_graph::*;
 pub use region_revisions::*;
 pub use scene::*;
+pub use scene_study_plan::scene_document_to_study_plan;
 pub use spin_transport::*;
 pub use study_contract::*;
 pub use validation::{

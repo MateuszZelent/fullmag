@@ -2011,6 +2011,7 @@ pub(crate) fn write_artifacts(
 
     if streamed.is_none() {
         let fields_dir = output_dir.join("fields");
+        let mut frames_index = crate::frames_index::FramesIndexWriter::new(output_dir, None);
         for snapshot in &executed.field_snapshots {
             write_field_snapshot_artifact(
                 &fields_dir,
@@ -2018,7 +2019,23 @@ pub(crate) fn write_artifacts(
                 &execution_provenance,
                 snapshot,
             )?;
+            let relative =
+                crate::frames_index::snapshot_relative_path(&snapshot.name, snapshot.step, true);
+            let single_file = output_dir.join(&relative);
+            let bytes = fs::metadata(&single_file).ok().map(|meta| meta.len());
+            let path = if single_file.is_file() {
+                relative
+            } else {
+                // Multilayer snapshots are one file per layer under the observable folder.
+                format!("fields/{}", snapshot.name)
+            };
+            frames_index
+                .record(&snapshot.name, snapshot.step, snapshot.time, path, bytes)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
         }
+        frames_index
+            .finish()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
     }
 
     let mut auxiliary_artifacts = executed.auxiliary_artifacts.clone();

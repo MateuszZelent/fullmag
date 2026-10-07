@@ -21,6 +21,7 @@ mod antenna_zeeman;
 mod compute_resources;
 mod current_transport;
 mod error;
+mod execution_profile_guard;
 mod fdm;
 mod fem;
 mod geometry;
@@ -105,8 +106,10 @@ pub use selection::{
     ResolvedFrozenSpinsReference, SelectionDofMembership,
 };
 pub use study_catalog::{
-    lower_study_plan_with_catalog, StudyCatalogError, StudyProblemCatalog,
-    StudyProblemCatalogEntry, STUDY_PROBLEM_CATALOG_SCHEMA, STUDY_PROBLEM_CATALOG_SCHEMA_V1,
+    capture_study_input_references, lower_study_plan_with_catalog, CapturedStudyInputIdentity,
+    CapturedStudyInputReferences, StudyCatalogError, StudyProblemCatalog, StudyProblemCatalogEntry,
+    CAPTURED_STUDY_INPUT_IDENTITY_SCHEMA_V1, STUDY_PROBLEM_CATALOG_SCHEMA,
+    STUDY_PROBLEM_CATALOG_SCHEMA_V1, STUDY_PROBLEM_CATALOG_SCHEMA_V3,
 };
 pub use study_lowering::{
     lower_study_plan, StudyExecutionPlan, StudyLoweringError, StudyStepExecutionPlan,
@@ -135,6 +138,9 @@ fn routes_to_fdm_multilayer(problem: &ProblemIR) -> bool {
 /// - executable multilayer FDM for stacked multi-body cases,
 /// - executable FEM / FEM eigen with precomputed mesh assets.
 pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
+    execution_profile_guard::validate_bound_intent(problem).map_err(|reason| PlanError {
+        reasons: vec![reason],
+    })?;
     if sampling::has_unresolved_auto_sampling(problem) {
         let context = if util::active_stage_id(problem).is_none() {
             "runtime_metadata.active_stage_id and an enabled active sinc drive"
@@ -158,8 +164,10 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         });
     }
 
-    if let Some(resources) = fullmag_ir::ComputeResourcesIR::from_problem(problem)
-        .map_err(|reason| PlanError { reasons: vec![reason] })?
+    if let Some(resources) =
+        fullmag_ir::ComputeResourcesIR::from_problem(problem).map_err(|reason| PlanError {
+            reasons: vec![reason],
+        })?
     {
         compute_resources::validate_current_runtime_support(&resources)
             .map_err(|reasons| PlanError { reasons })?;

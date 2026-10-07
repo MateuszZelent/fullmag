@@ -1,5 +1,7 @@
 import type { CommandContext, CommandResult } from "@/kernel/commands/commandTypes";
 
+import type { WorkspaceItemId } from "./workspaceItems";
+
 export type StartSection =
   | "home"
   | "templates"
@@ -29,7 +31,9 @@ export interface StartScreenSnapshot {
   /** Shared with the inspector, which describes the selection without opening it. */
   readonly selectedProjectId: string | null;
   /** A script selected in the list (workspace item id); exclusive with a project. */
-  readonly selectedScriptId: number | null;
+  readonly selectedScriptId: WorkspaceItemId | null;
+  /** A result folder selected in the list (workspace item id); exclusive with the others. */
+  readonly selectedResultId: string | null;
   /** Palette or tile request to run the native script picker; each one is distinct. */
   readonly openScriptNonce: number;
   /** The gallery card shown in the inspector while on Templates. */
@@ -54,6 +58,7 @@ const INITIAL_SNAPSHOT: StartScreenSnapshot = {
   section: "home",
   selectedProjectId: null,
   selectedScriptId: null,
+  selectedResultId: null,
   openScriptNonce: 0,
   selectedTemplateId: null,
   searchFocusNonce: 0,
@@ -109,33 +114,57 @@ class StartScreenStore {
     this.publish({ ...this.snapshot, selectedTemplateId });
   }
 
-  /** Selecting a project clears a script selection: the inspector shows one item. */
+  /** Selecting a project clears a script or result selection: the inspector shows one item. */
   setSelectedProject(selectedProjectId: string | null): void {
+    const { snapshot } = this;
     if (
-      this.snapshot.selectedProjectId === selectedProjectId &&
-      (selectedProjectId === null || this.snapshot.selectedScriptId === null)
+      snapshot.selectedProjectId === selectedProjectId &&
+      (selectedProjectId === null ||
+        (snapshot.selectedScriptId === null && snapshot.selectedResultId === null))
     ) {
       return;
     }
     this.publish({
-      ...this.snapshot,
+      ...snapshot,
       selectedProjectId,
-      selectedScriptId: selectedProjectId === null ? this.snapshot.selectedScriptId : null,
+      selectedScriptId: selectedProjectId === null ? snapshot.selectedScriptId : null,
+      selectedResultId: selectedProjectId === null ? snapshot.selectedResultId : null,
     });
   }
 
-  /** Selecting a script clears a project selection. */
-  setSelectedScript(selectedScriptId: number | null): void {
+  /** Selecting a script clears a project or result selection. */
+  setSelectedScript(selectedScriptId: WorkspaceItemId | null): void {
+    const { snapshot } = this;
     if (
-      this.snapshot.selectedScriptId === selectedScriptId &&
-      (selectedScriptId === null || this.snapshot.selectedProjectId === null)
+      snapshot.selectedScriptId === selectedScriptId &&
+      (selectedScriptId === null ||
+        (snapshot.selectedProjectId === null && snapshot.selectedResultId === null))
     ) {
       return;
     }
     this.publish({
-      ...this.snapshot,
+      ...snapshot,
       selectedScriptId,
-      selectedProjectId: selectedScriptId === null ? this.snapshot.selectedProjectId : null,
+      selectedProjectId: selectedScriptId === null ? snapshot.selectedProjectId : null,
+      selectedResultId: selectedScriptId === null ? snapshot.selectedResultId : null,
+    });
+  }
+
+  /** Selecting a result folder clears a project or script selection. */
+  setSelectedResult(selectedResultId: string | null): void {
+    const { snapshot } = this;
+    if (
+      snapshot.selectedResultId === selectedResultId &&
+      (selectedResultId === null ||
+        (snapshot.selectedProjectId === null && snapshot.selectedScriptId === null))
+    ) {
+      return;
+    }
+    this.publish({
+      ...snapshot,
+      selectedResultId,
+      selectedProjectId: selectedResultId === null ? snapshot.selectedProjectId : null,
+      selectedScriptId: selectedResultId === null ? snapshot.selectedScriptId : null,
     });
   }
 

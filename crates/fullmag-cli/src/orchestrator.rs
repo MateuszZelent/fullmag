@@ -2,9 +2,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use fullmag_ir::{
     AutosaveFormatIR, BackendPlanIR, BackendTarget, DiscretizationHintsIR, DynamicsIR,
-    ExecutionPlanIR, FdmHintsIR, FemHintsIR, GeometryEntryIR, MagnetIR,
-    MaterialIR, ObjectRegionIR, OutputDataFormatIR, OutputStorageIR, ProblemIR, RegionIR,
-    RelaxationAlgorithmIR, StudyIR,
+    ExecutionPlanIR, FdmHintsIR, FemHintsIR, GeometryEntryIR, MagnetIR, MaterialIR, ObjectRegionIR,
+    OutputDataFormatIR, OutputStorageIR, ProblemIR, RegionIR, RelaxationAlgorithmIR, StudyIR,
 };
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -71,14 +70,12 @@ impl ScriptOutputStorageLease {
     }
 }
 
-fn collect_authored_output_storage(config: &ScriptExecutionConfig) -> Result<Option<OutputStorageIR>> {
+fn collect_authored_output_storage(
+    config: &ScriptExecutionConfig,
+) -> Result<Option<OutputStorageIR>> {
     let mut candidates = Vec::new();
     for problem in std::iter::once(&config.ir).chain(config.stages.iter().map(|stage| &stage.ir)) {
-        if let Some(value) = problem
-            .problem_meta
-            .runtime_metadata
-            .get("output_storage")
-        {
+        if let Some(value) = problem.problem_meta.runtime_metadata.get("output_storage") {
             candidates.push(
                 serde_json::from_value::<OutputStorageIR>(value.clone())
                     .context("invalid output_storage metadata")?,
@@ -7839,7 +7836,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut workspace_dir = output_paths.workspace_dir.clone();
     let mut artifact_dir = output_paths.artifact_dir.clone();
     fs::create_dir_all(&artifact_dir).with_context(|| {
-        format!("failed to create session artifact directory {}", artifact_dir.display())
+        format!(
+            "failed to create session artifact directory {}",
+            artifact_dir.display()
+        )
     })?;
     // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations.
     // Keep FEM cadence aligned with interactive control-room expectations:
@@ -7971,6 +7971,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let phase1_backend = args.backend;
         let phase1_mode = args.mode;
         let phase1_precision = args.precision;
+        let phase1_execution_layers = crate::python_bridge::script_cli_execution_layers(&args)?;
         let phase1_runtime_device = crate::python_bridge::managed_execution_device(
             phase1_backend,
             std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
@@ -8024,8 +8025,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let stdout = String::from_utf8(output.stdout)
                         .context("phase-1 output not valid UTF-8")?;
                     let json_str = crate::python_bridge::extract_json_from_stdout(&stdout)?;
-                    serde_json::from_str(json_str)
-                        .context("failed to deserialize phase-1 script execution config")
+                    let mut config = serde_json::from_str(json_str)
+                        .context("failed to deserialize phase-1 script execution config")?;
+                    crate::python_bridge::bind_script_execution_profiles(
+                        &mut config,
+                        &phase1_execution_layers,
+                        phase1_runtime_device,
+                    )?;
+                    Ok(config)
                 })
                 .context("failed to spawn phase-1 materialization thread"),
         )?)
@@ -8038,15 +8045,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             &live_workspace,
             "control_room_bootstrap_failed",
             "Control Room bootstrap failed",
-            spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace, ui_plan)
-                .with_context(
-                || {
-                    format!(
-                        "failed to bootstrap control room for workspace {}",
-                        session_id
-                    )
-                },
-            ),
+            spawn_control_room(
+                &session_id,
+                args.dev,
+                args.web_port,
+                &live_workspace,
+                ui_plan,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to bootstrap control room for workspace {}",
+                    session_id
+                )
+            }),
         )?;
         eprintln!("fullmag control room bootstrap verified");
         crate::script_launch::note_ui_ready();
@@ -8296,10 +8307,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         is_sibling_zarr_bundle: storage_settings.data_format == OutputDataFormatIR::Zarr,
     };
     fs::create_dir_all(&artifact_dir).with_context(|| {
-        format!("failed to create project artifact directory {}", artifact_dir.display())
+        format!(
+            "failed to create project artifact directory {}",
+            artifact_dir.display()
+        )
     })?;
     fs::create_dir_all(workspace_dir.join("stages")).with_context(|| {
-        format!("failed to create project stage directory {}", workspace_dir.join("stages").display())
+        format!(
+            "failed to create project stage directory {}",
+            workspace_dir.join("stages").display()
+        )
     })?;
     if output_paths.is_sibling_zarr_bundle {
         initialize_zarr_group(

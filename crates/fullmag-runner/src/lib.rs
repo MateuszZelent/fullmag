@@ -61,6 +61,7 @@ pub(crate) mod fem;
 mod fem_baseline;
 mod fem_eigen;
 mod frequency_response;
+pub mod frames_index;
 pub mod hysteresis;
 pub mod interactive;
 mod interactive_runtime;

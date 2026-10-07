@@ -24,7 +24,9 @@ pub mod dataset_slice_adapter;
 mod durability;
 mod development_owner;
 pub mod development_restart_transport;
+pub mod execution_profiles;
 pub mod fms;
+pub mod host_resource_ledger;
 pub mod mesh_operation;
 pub mod materialized_dataset;
 pub mod reachability;
@@ -38,6 +40,7 @@ pub mod solution_tensor_field;
 pub mod solution_tensor_source;
 pub mod store;
 pub mod types;
+mod typed_documents;
 mod worker_inbox;
 mod writer;
 pub use worker_inbox::FmsWorkerInboxRecord;
@@ -61,6 +64,6 @@ pub use durability::{
 pub use fms::{
     inspect_fms, pack_fms, pack_fms_file, preflight_fms, preflight_fms_staged, unpack_fms, unpack_fms_staged, FmsPreflight, FmsStagedPreflight, PackOptions,
 };
-pub use store::{GcPlan, RunBacklogFull, SessionStore};
+pub use store::{CheckpointStillReferenced, GcPlan, RunBacklogFull, SessionStore};
 pub use types::*;
 pub use writer::{StoreWriterBusy, WriteTransaction};

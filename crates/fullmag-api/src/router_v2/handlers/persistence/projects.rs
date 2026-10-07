@@ -44,6 +44,9 @@ use crate::types::AppState;
 
 const AUTHORING_SOURCE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
+#[path = "execution_profile_submission.rs"]
+mod execution_profile_submission;
+
 /// Removes only the known generated source file.  The helper owns its
 /// `scene-export-*.json` lifecycle; any unexpected file left in the private
 /// directory is intentionally retained for diagnosis instead of being
@@ -212,6 +215,15 @@ pub async fn submit_run(
         let store = fullmag_session::SessionStore::open(store_root).map_err(|error| {
             map_run_store_error(error, |error| ApiError::internal(error.to_string()))
         })?;
+        // A replay is governed by its accepted immutable inputs, not current
+        // preferences. Only a new submission resolves published versions.
+        if store
+            .find_run_intent(&intent.idempotency_key)
+            .map_err(|error| ApiError::internal(error.to_string()))?
+            .is_none()
+        {
+            execution_profile_submission::validate_published_profiles(&store, &study, &catalog)?;
+        }
         let result = crate::run_intent_persistence::commit_archived_run_intent_with_backlog_limit(
             &store,
             &intent,
@@ -890,24 +902,23 @@ fn authoring_update_blocking(
             dir: private_dir.clone(),
             path: generated_source_path.clone(),
         };
-        let rendered = crate::script::render_scene_document_via_python_helper_bounded(
+        let rendered = crate::script::try_render_scene_document_for_persistence(
             repo_root,
             &private_dir,
             &generated_source_path,
             &scene_document,
         )?;
-        if !rendered.written {
-            return Err(ApiError::internal(
-                "canonical SceneDocument render helper did not write source",
-            ));
+        if let Some(rendered) = rendered {
+            let generated_source = read_generated_source(&generated_source_path)?;
+            if rendered.bytes_written != generated_source.len() {
+                return Err(ApiError::internal(
+                    "canonical SceneDocument render helper byte count is inconsistent",
+                ));
+            }
+            Some(generated_source)
+        } else {
+            None
         }
-        let generated_source = read_generated_source(&generated_source_path)?;
-        if rendered.bytes_written != generated_source.len() {
-            return Err(ApiError::internal(
-                "canonical SceneDocument render helper byte count is inconsistent",
-            ));
-        }
-        Some(generated_source)
     } else {
         None
     };
@@ -1068,7 +1079,7 @@ fn read_generated_source(path: &FsPath) -> Result<Vec<u8>, ApiError> {
     Ok(bytes)
 }
 
-fn map_authoring_application_error(
+pub(super) fn map_authoring_application_error(
     error: ApplicationError<fullmag_application::FileRepositoryError>,
 ) -> ApiError {
     match error {
@@ -1112,7 +1123,7 @@ fn decode_archive(request: &ProjectArchiveRequest) -> Result<Vec<u8>, ApiError> 
     Ok(bytes)
 }
 
-fn encode_current(
+pub(super) fn encode_current(
     application: &ProjectApplication<FileProjectRepository>,
 ) -> Result<Vec<u8>, ApiError> {
     let document = application
@@ -1123,7 +1134,7 @@ fn encode_current(
         .map_err(|error| ApiError::bad_request(format!("project archive is not writable: {error}")))
 }
 
-fn resource_from_application(
+pub(super) fn resource_from_application(
     application: &ProjectApplication<FileProjectRepository>,
     view: fullmag_application::DocumentView,
     archive: Vec<u8>,

@@ -1,4 +1,4 @@
-import type { components } from "./generated/openapi-v2-types";
+import type { components, paths } from "./generated/openapi-v2-types";
 
 export type ResourceRevision = string | number;
 type JsonPrimitive = boolean | null | number | string;
@@ -212,7 +212,17 @@ export type GeometryRealizationResource =
 export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
 export type HealthResource = components["schemas"]["HealthResponse"];
-export type DevelopmentBackendResource = components["schemas"]["DevelopmentBackendResource"];
+export type DevelopmentBackendResource =
+  components["schemas"]["DevelopmentBackendResource"];
+export type DevelopmentBackendBuildRequest =
+  components["schemas"]["DevelopmentBackendBuildRequest"] & {
+    schema: "fullmag.development-backend-build-request.v1";
+  };
+export type DevelopmentBackendBuildRequestResource =
+  components["schemas"]["DevelopmentBackendBuildRequestResource"] & {
+    ready_build_id: string | null;
+    ready_source_sha256: string | null;
+  };
 export type DevelopmentRestartRequest =
   components["schemas"]["DevelopmentRestartRequest"];
 export type DevelopmentRestartResource =
@@ -556,6 +566,7 @@ export type StudyRuntimePatchRequest =
 export type StudyRuntimeResource =
   components["schemas"]["StudyRuntimeResource"];
 export type AuthoringTransactionRequest =
+  | { base_revision: number; kind: "assign_study_execution"; execution_profile: ExecutionProfile; execution_layers: ExecutionRequestLayer[] }
   | { base_revision?: number | null; kind: "replace_scene"; scene: JsonObject }
   | (BaseAuthoringTransaction & {
       kind: "merge_patch";
@@ -839,6 +850,14 @@ export type ProjectAuthoringUpdateRequest =
   components["schemas"]["ProjectAuthoringUpdateRequest"];
 export type ProjectDocumentResource =
   components["schemas"]["ProjectDocumentResource"];
+export type ProjectFromScriptRequest =
+  components["schemas"]["ProjectFromScriptRequest"];
+export type ProjectFromScriptResource =
+  components["schemas"]["ProjectFromScriptResource"];
+export type ProjectScriptImportResource =
+  components["schemas"]["ProjectScriptImportResource"];
+export type ScriptFidelityResource =
+  components["schemas"]["ScriptFidelityResource"];
 export type ProjectRunSubmitRequest =
   components["schemas"]["ProjectRunSubmitRequest"];
 export type ProjectRunSubmitResource =
@@ -1047,5 +1066,34 @@ export function isOptionalObjectInteractionKind(
 }
 
 export type OutputStorageDefaultsResource = components["schemas"]["OutputStorageDefaultsResource"];
+export type ExecutionProfileCatalogResource = components["schemas"]["ExecutionProfileCatalogResource"];
+export type ComputePreviewRequest = components["schemas"]["ComputePreviewRequest"];
+export type ExecutionRequestLayer = components["schemas"]["ExecutionLayerSchema"];
+export type ComputePreviewResource = components["schemas"]["ComputePreviewResource"];
+export type ExecutionProfileVersionResource = components["schemas"]["ExecutionProfileVersionResource"];
+export type ExecutionProfile = ExecutionProfileVersionResource["profile"];
+export type PublishExecutionProfileRequest = components["schemas"]["PublishExecutionProfileRequest"];
+export type PublishExecutionProfileResource = components["schemas"]["PublishExecutionProfileResource"];
+export type ExecutionProfileCatalogQuery = NonNullable<paths["/v2/platform/compute/profiles"]["get"]["parameters"]["query"]>;
 export type OutputStorageDefaultsRequest = components["schemas"]["OutputStorageDefaultsRequest"];
 export type OutputStorageSettings = components["schemas"]["OutputStorageSettingsSchema"];
+
+/**
+ * Request shapes of the workspace database routes. The answers are returned
+ * as `unknown` and validated by the start screen's parsers
+ * (modules/start/model/workspaceApiTypes.ts) until generated types replace both.
+ */
+export interface WorkspaceItemsQuery {
+  readonly kind?: "all" | "project" | "script" | "result";
+  readonly sort?: "last_used" | "name" | "modified" | "use_count";
+  readonly search?: string;
+  readonly limit?: number;
+  readonly includeMissing?: boolean;
+}
+
+export interface WorkspaceRootWire {
+  readonly path: string;
+  readonly kinds: readonly string[];
+  readonly recursive: boolean;
+  readonly enabled: boolean;
+}

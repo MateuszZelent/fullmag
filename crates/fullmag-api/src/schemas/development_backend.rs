@@ -10,6 +10,12 @@ pub struct DevelopmentBackendResource {
     pub state: DevelopmentBackendState,
     pub current_build: Option<DevelopmentBuildIdentity>,
     pub ready_build: Option<DevelopmentBuildIdentity>,
+    /// True when this pinned development API can accept an explicit build-only request.
+    #[serde(default)]
+    pub build_available: bool,
+    /// Owner request currently reflected by the native watcher status frame.
+    #[serde(default)]
+    pub build_request_id: Option<String>,
     pub workspace_identity: Option<DevelopmentBackendWorkspaceIdentity>,
     pub restart_available: bool,
     pub reason: DevelopmentBackendReason,

@@ -5,6 +5,7 @@ pub mod accepted_store;
 pub mod application_attach;
 pub mod application_service_status;
 pub mod development_cold_idle;
+pub mod host_allocation;
 pub mod local_resources;
 pub mod runtime_service_client;
 use fullmag_application::{
@@ -583,11 +584,14 @@ pub fn load_accepted_run_snapshot(
 pub mod python_runtime;
 
 mod claim;
-pub use claim::{commit_claimed_task_admission, load_current_task_claim};
+pub use claim::{
+    commit_claimed_task_admission, commit_claimed_task_admission_with_host, load_current_task_claim,
+};
 
 mod scheduler;
 pub use scheduler::{
-    accepted_run_has_scheduler_ready_task, schedule_next_ready_accepted_task, ScheduledAcceptedTask,
+    accepted_run_has_scheduler_ready_task, schedule_next_ready_accepted_task,
+    schedule_next_ready_accepted_task_with_host, ScheduledAcceptedTask,
 };
 
 mod solution_set;

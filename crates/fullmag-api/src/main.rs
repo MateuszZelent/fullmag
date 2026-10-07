@@ -72,6 +72,7 @@ mod router_v2;
 mod run_intent_persistence;
 mod schemas;
 mod script;
+mod script_check;
 mod session;
 mod session_persistence;
 mod types;
@@ -3715,6 +3716,84 @@ mod preparation_materialization_route_tests {
     }
 }
 
+#[cfg(test)]
+mod live_publisher_epoch_tests {
+    use super::*;
+
+    async fn publish(
+        state: &Arc<AppState>,
+        session_id: &str,
+        reject: bool,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        sync_current_live_frame_update(
+            state,
+            CurrentLiveSyncKind::Snapshot,
+            session_id,
+            false,
+            false,
+            false,
+            false,
+            None,
+            false,
+            false,
+            |_| {
+                if reject {
+                    Err(ApiError::conflict("fixture_rejected_frame"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn first_accepted_publisher_frame_allocates_epoch_once() {
+        let state = crate::router_v2::tests::test_app_state();
+        assert!(publish(&state, "publisher-session", false).await.is_ok());
+        assert_eq!(state.current_live_session_epoch.load(Ordering::Acquire), 1);
+        assert!(publish(&state, "publisher-session", false).await.is_ok());
+        assert_eq!(state.current_live_session_epoch.load(Ordering::Acquire), 1);
+        assert!(publish(&state, "foreign-session", false).await.is_err());
+        assert_eq!(state.current_live_session_epoch.load(Ordering::Acquire), 1);
+        assert_eq!(
+            state
+                .current_live_state
+                .read()
+                .await
+                .as_ref()
+                .unwrap()
+                .session
+                .session_id,
+            "publisher-session"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_first_frame_does_not_allocate_epoch_or_publish_session() {
+        let state = crate::router_v2::tests::test_app_state();
+        assert!(publish(&state, "publisher-session", true).await.is_err());
+        assert_eq!(state.current_live_session_epoch.load(Ordering::Acquire), 0);
+        assert!(state.current_live_state.read().await.is_none());
+        assert!(publish(&state, "publisher-session", false).await.is_ok());
+        assert_eq!(state.current_live_session_epoch.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn exhausted_epoch_does_not_wrap_or_publish_session() {
+        let state = crate::router_v2::tests::test_app_state();
+        state
+            .current_live_session_epoch
+            .store(u64::MAX, Ordering::Release);
+        assert!(publish(&state, "publisher-session", false).await.is_err());
+        assert_eq!(
+            state.current_live_session_epoch.load(Ordering::Acquire),
+            u64::MAX
+        );
+        assert!(state.current_live_state.read().await.is_none());
+    }
+}
+
 async fn sync_current_live_frame_update<F>(
     state: &Arc<AppState>,
     kind: CurrentLiveSyncKind,
@@ -3780,6 +3859,16 @@ where
                 None,
             ),
         }
+    };
+    // A legacy publisher may create the first session without going through
+    // the v2 Create command. Reserve its epoch now, but publish it only after
+    // the complete frame has been accepted under the transition lock.
+    let first_session_epoch = if previous_snapshot.is_none() {
+        Some(admission_epoch.checked_add(1).ok_or_else(|| {
+            ApiError::conflict("current_live_session_epoch_exhausted")
+        })?)
+    } else {
+        None
     };
     let previous_preview = next.preview.clone();
     let previous_revisions = match previous_snapshot.as_ref() {
@@ -3913,7 +4002,13 @@ where
     if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
         return Err(ApiError::conflict("current_live_session_transitioned"));
     }
-    *state.current_live_state.write().await = Some(next);
+    {
+        let mut current = state.current_live_state.write().await;
+        if let Some(epoch) = first_session_epoch {
+            state.current_live_session_epoch.store(epoch, Ordering::Release);
+        }
+        *current = Some(next);
+    }
     crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
 
     if let Some(sample) = scalar_sample {
@@ -4507,6 +4602,19 @@ pub(crate) async fn capture_current_live_request_context(
         session_epoch,
         request_scope_epoch,
     })
+}
+
+/// Like [`capture_current_live_request_context`], but an empty workspace
+/// yields `None` instead of a 404. Used by operations that legitimately start
+/// from no active workspace (for example importing a saved archive after a
+/// restart); there is no live session identity to fence against in that case.
+pub(crate) async fn capture_optional_current_live_request_context(
+    state: &Arc<AppState>,
+) -> Result<Option<CurrentLiveRequestContext>, ApiError> {
+    if state.current_live_state.read().await.is_none() {
+        return Ok(None);
+    }
+    capture_current_live_request_context(state).await.map(Some)
 }
 
 fn non_empty_identity(value: &str) -> Option<String> {

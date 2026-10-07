@@ -5,11 +5,13 @@ import { isApiInstanceId } from "../api/apiInstancePin";
 /** An owner may confirm a rejected capture only after its own cleanup succeeds. */
 export class DevelopmentRestartCaptureError extends Error {
   readonly cleanupConfirmed: boolean;
+  readonly reason: "capture_rejected" | "pending_changes";
 
-  constructor(cleanupConfirmed: boolean) {
+  constructor(cleanupConfirmed: boolean, reason: "capture_rejected" | "pending_changes" = "capture_rejected") {
     super(cleanupConfirmed ? "Workspace capture was rejected after confirmed cleanup." : "Workspace capture cleanup is unconfirmed.");
     this.name = "DevelopmentRestartCaptureError";
     this.cleanupConfirmed = cleanupConfirmed;
+    this.reason = reason;
   }
 }
 
@@ -109,9 +111,11 @@ export class DevelopmentRestartController {
           || (error instanceof DevelopmentRestartCaptureError && error.cleanupConfirmed);
         try { captured?.release(); } catch { cleanupConfirmed = false; }
         this.captureCleanup = cleanupConfirmed ? "confirmed" : "unconfirmed";
-        this.update("failed", cleanupConfirmed
-          ? "Workspace capture failed; no restart was submitted."
-          : "Workspace capture failed and guard cleanup is unconfirmed. Keep the workspace protected.");
+        this.update("failed", !cleanupConfirmed
+          ? "Workspace capture failed and guard cleanup is unconfirmed. Keep the workspace protected."
+          : error instanceof DevelopmentRestartCaptureError && error.reason === "pending_changes"
+            ? "Apply or revert pending Inspector changes before restarting. No restart was submitted."
+            : "Workspace capture failed; no restart was submitted.");
       }
     } finally {
       this.busy = false;

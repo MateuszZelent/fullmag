@@ -4,6 +4,7 @@ export const openApiV2PathLiterals = [
   "/v2/persistence/imports/inspections",
   "/v2/persistence/projects",
   "/v2/persistence/projects/authoring",
+  "/v2/persistence/projects/from-script",
   "/v2/persistence/projects/open",
   "/v2/persistence/projects/{project_id}/runs",
   "/v2/persistence/projects/{project_id}/runs/{run_id}",
@@ -21,7 +22,11 @@ export const openApiV2PathLiterals = [
   "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation",
   "/v2/platform/asyncapi.json",
   "/v2/platform/capabilities",
+  "/v2/platform/compute/preview",
+  "/v2/platform/compute/profiles",
   "/v2/platform/development-backend",
+  "/v2/platform/development-backend/build-requests",
+  "/v2/platform/development-backend/build-requests/{request_id}",
   "/v2/platform/development-restart-requests",
   "/v2/platform/development-restart-requests/{request_id}",
   "/v2/platform/docs/asyncapi",
@@ -275,7 +280,18 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/workspace/layout",
   "/v2/sessions/current/workspace/ribbon",
   "/v2/sessions/current/workspace/selection",
-  "/v2/sessions/current/workspace/tree/active-node"
+  "/v2/sessions/current/workspace/tree/active-node",
+  "/v2/workspace/items",
+  "/v2/workspace/items/{id}",
+  "/v2/workspace/items/{id}/archive",
+  "/v2/workspace/items/{id}/forget",
+  "/v2/workspace/items/{id}/frames",
+  "/v2/workspace/items/{id}/history",
+  "/v2/workspace/items/{id}/pin",
+  "/v2/workspace/items/{id}/thumbnail",
+  "/v2/workspace/roots",
+  "/v2/workspace/scan",
+  "/v2/workspace/settings/{key}"
 ] as const;
 
 export type OpenApiV2Path = (typeof openApiV2PathLiterals)[number];

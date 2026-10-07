@@ -93,6 +93,19 @@ impl ApiError {
         }
     }
 
+    pub fn with_status_and_code(
+        status: StatusCode,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            status,
+            code: Some(code.into()),
+            message: message.into(),
+            diagnostics: Vec::new(),
+        }
+    }
+
     pub fn unprocessable(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,

@@ -104,6 +104,7 @@ export interface StudyGlobalDraftValidation {
 
 export interface StudyExecutionDiscretizationContext {
   baseRevision?: number | null;
+  executionProfileBound?: boolean;
   requestedBackend?: string | null;
   requestedDiscretization?: string | null;
   sessionDiscretization?: string | null;
@@ -193,6 +194,7 @@ export function validateStudyGlobalDraft(
   capabilities?: {
     activeLane?: ActiveLaneCapabilitySnapshot | null;
     algorithmsAvailable?: readonly string[];
+    executionProfileBound?: boolean;
     magneticObjectCount?: number;
     magneticObjectIds?: readonly string[];
     requestedDiscretization?: string | null;
@@ -222,16 +224,16 @@ export function validateStudyGlobalDraft(
       }
     }
   }
-  if (!draft.requestedBackend.trim()) {
+  if (!capabilities?.executionProfileBound && !draft.requestedBackend.trim()) {
     issues.push({ message: "Backend is required.", severity: "error" });
   }
-  if (!draft.requestedDevice.trim()) {
+  if (!capabilities?.executionProfileBound && !draft.requestedDevice.trim()) {
     issues.push({ message: "Device is required.", severity: "error" });
   }
-  if (!draft.requestedPrecision.trim()) {
+  if (!capabilities?.executionProfileBound && !draft.requestedPrecision.trim()) {
     issues.push({ message: "Precision is required.", severity: "error" });
   }
-  if (!draft.requestedMode.trim()) {
+  if (!capabilities?.executionProfileBound && !draft.requestedMode.trim()) {
     issues.push({ message: "Execution mode is required.", severity: "error" });
   }
   if (draft.externalField.trim() && !optionalVector3(draft.externalField)) {
@@ -240,7 +242,7 @@ export function validateStudyGlobalDraft(
       severity: "error",
     });
   }
-  if (draft.requestedCpuThreads.trim()) {
+  if (!capabilities?.executionProfileBound && draft.requestedCpuThreads.trim()) {
     const threads = Number(draft.requestedCpuThreads.trim());
     if (!Number.isInteger(threads) || threads <= 0) {
       issues.push({
@@ -251,7 +253,9 @@ export function validateStudyGlobalDraft(
   }
   validateSolverDraft(issues, draft.solver, draft, capabilities);
   const explicitFdm = isExplicitFdmStudy({
-    requestedBackend: draft.requestedBackend,
+    requestedBackend: capabilities?.executionProfileBound
+      ? null
+      : draft.requestedBackend,
     requestedDiscretization: capabilities?.requestedDiscretization,
     sessionDiscretization: capabilities?.sessionDiscretization,
   });
@@ -294,7 +298,9 @@ export function buildStudyGlobalMergePatch(
   context: StudyExecutionDiscretizationContext = {},
 ): AuthoringTransactionRequest {
   const laneContext = {
-    requestedBackend: context.requestedBackend ?? draft.requestedBackend,
+    requestedBackend: context.executionProfileBound
+      ? null
+      : context.requestedBackend ?? draft.requestedBackend,
     requestedDiscretization: context.requestedDiscretization,
     sessionDiscretization: context.sessionDiscretization,
   } satisfies StudyExecutionDiscretizationContext;
@@ -307,11 +313,13 @@ export function buildStudyGlobalMergePatch(
     demag_enabled: draft.demagEnabled,
     demag_realization: explicitFdm ? null : normalizedDemagRealization,
     exchange_enabled: draft.exchangeEnabled,
-    requested_backend: requiredText(draft.requestedBackend, "auto"),
-    requested_device: requiredText(draft.requestedDevice, "auto"),
-    requested_mode: requiredText(draft.requestedMode, "strict"),
-    requested_precision: requiredText(draft.requestedPrecision, "double"),
   };
+  if (!context.executionProfileBound) {
+    study.requested_backend = requiredText(draft.requestedBackend, "auto");
+    study.requested_device = requiredText(draft.requestedDevice, "auto");
+    study.requested_mode = requiredText(draft.requestedMode, "strict");
+    study.requested_precision = requiredText(draft.requestedPrecision, "double");
+  }
   if (explicitFdm) {
     study.fdm = fdmDraftToScene(
       draft.fdm ?? createFdmDraft(null, normalizedDemagRealization),
@@ -321,8 +329,10 @@ export function buildStudyGlobalMergePatch(
   study.fem_demag_solver_policy = explicitFdm
     ? null
     : optionalJsonObject(draft.femDemagSolverPolicy);
-  const requestedCpuThreads = optionalPositiveInteger(draft.requestedCpuThreads);
-  study.requested_cpu_threads = requestedCpuThreads;
+  if (!context.executionProfileBound) {
+    const requestedCpuThreads = optionalPositiveInteger(draft.requestedCpuThreads);
+    study.requested_cpu_threads = requestedCpuThreads;
+  }
   study.solver = solverDraftToScene(draft.solver);
   return {
     kind: "merge_patch",
@@ -704,7 +714,10 @@ function validateSolverDraft(
     StudyGlobalDraft,
     "requestedBackend" | "requestedDevice" | "requestedPrecision"
   >,
-  capabilities?: { algorithmsAvailable?: readonly string[] },
+  capabilities?: {
+    algorithmsAvailable?: readonly string[];
+    executionProfileBound?: boolean;
+  },
 ): void {
   if (draft.timestepMode === "fixed") {
     validatePositiveText(issues, draft.fixDt, "Fixed dt");
@@ -746,7 +759,10 @@ function validateAdaptiveExecution(
     StudyGlobalDraft,
     "requestedBackend" | "requestedDevice" | "requestedPrecision"
   >,
-  capabilities?: { algorithmsAvailable?: readonly string[] },
+  capabilities?: {
+    algorithmsAvailable?: readonly string[];
+    executionProfileBound?: boolean;
+  },
 ): void {
   if (!matchesAdaptiveIntegrator(integrator)) {
     issues.push({ message: "Adaptive policy requires RK23 or RK45.", severity: "error" });
@@ -757,6 +773,7 @@ function validateAdaptiveExecution(
   ) {
     issues.push({ message: "LLG is not advertised by the active session.", severity: "error" });
   }
+  if (capabilities?.executionProfileBound) return;
   if (
     execution.requestedBackend.trim() &&
     execution.requestedBackend !== "fem" &&

@@ -111,17 +111,24 @@ def test_active_dependency_change_is_rejected_before_build(layout, monkeypatch):
     with pytest.raises(StorageError, match="save and close"):
         lease.assert_frozen_dependencies(layout, active)
     monkeypatch.setattr(lease, "fingerprint", lambda *args: {"sha256": "old"})
-    lease.assert_frozen_dependencies(layout, active)
+    assert lease.assert_frozen_dependencies(layout, active) == "old"
 
 
 def test_dev_starts_owned_watcher_after_sealing_and_requests_stop_on_exit(layout, monkeypatch):
     events = []
     class Child:
         pid = 12
-        def __init__(self, command, cwd, env):
+        def __init__(self, command, cwd, env, **stdio):
             self.is_watcher = "--stop-file" in command
             if self.is_watcher:
                 assert "FULLMAG_NATIVE_RUNTIME_ACTIVE" not in env
+                assert stdio["stdin"] == lease.subprocess.DEVNULL
+                assert stdio["stderr"] == lease.subprocess.STDOUT
+                log = stdio["stdout"]
+                assert Path(log.name).parent == Path(layout["runtime_root"]) / "logs"
+                assert Path(log.name).name.startswith("backend-watch-")
+                log.write(b"isolated backend consumer output\n")
+                log.flush()
                 events.append("watcher")
                 self.pid = 13
                 self.stop = Path(command[command.index("--stop-file") + 1])
@@ -148,6 +155,8 @@ def test_dev_starts_owned_watcher_after_sealing_and_requests_stop_on_exit(layout
     monkeypatch.setattr(lease, "validate_bundle", lambda *args: ({"source": {"backend_source_sha256": "a" * 64}}, {}))
     assert lease.run_sealed_runtime(layout, ["stub", "-Frontend", "dev", "-WebPort", "3197"], {}, "dev") == 0
     assert events == ["watcher", "ui exited", "stop requested", "watcher drained"]
+    receipt = json.loads((Path(layout["runtime_root"]) / "native-workspace-status.json").read_text())
+    assert Path(receipt["watcher_log"]).read_bytes() == b"isolated backend consumer output\n"
     stops = list(Path(layout["runtime_root"]).glob("native-watch-stop-*.json"))
     assert len(stops) == 1
     assert json.loads(stops[0].read_text())["schema"] == "fullmag.native-watch-stop.v1"
@@ -220,7 +229,7 @@ def test_nonzero_watcher_exit_keeps_runtime_unknown(layout, monkeypatch):
     class Child:
         pid = 12
 
-        def __init__(self, command, cwd, env):
+        def __init__(self, command, cwd, env, **stdio):
             self.is_watcher = "--stop-file" in command
             if self.is_watcher:
                 self.pid = 13
@@ -457,7 +466,7 @@ def test_controlled_exception_persists_unknown_owner_and_drains_watcher(layout, 
 
     class Child:
         pid = 12
-        def __init__(self, command, cwd, env):
+        def __init__(self, command, cwd, env, **stdio):
             self.is_watcher = "--stop-file" in command
             if self.is_watcher:
                 self.pid = 13

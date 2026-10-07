@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 
 from fullmag_storage import StorageError, atomic_json, build_lock, file_lock, now, process_alive, validate_path
-from windows.runtime_bundle import validate_bundle
+from windows.runtime_bundle import _check_path_chain, validate_bundle
 from windows.workspace_backend_identity import DEPENDENCY_INPUTS, fingerprint
 
 
@@ -218,6 +218,7 @@ def assert_frozen_dependencies(layout, active):
     captured = bundle["source"].get("dependency_source_sha256")
     if not captured or captured != fingerprint(layout["repo_root"], DEPENDENCY_INPUTS)["sha256"]:
         raise StorageError("Python/frontend dependencies changed; save and close the active workspace before rebuilding")
+    return captured
 
 
 def validate_ready(path, layout, nonce, child_pid, profile):
@@ -308,18 +309,31 @@ def run_sealed_runtime(layout, command, env, profile):
                     "FULLMAG_STORAGE_LOCK_TOKEN",
                     "FULLMAG_STORAGE_LOCK_KEY",
                     "FULLMAG_NATIVE_RUNTIME_ACTIVE",
+                    "FULLMAG_NATIVE_ACTIVE_DEPENDENCY_SHA256",
                     "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
                     "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
                     "FULLMAG_DEVELOPMENT_BACKEND_SOURCE",
                     "FULLMAG_DEVELOPMENT_BACKEND_VERSION",
                 ):
                     watch_env.pop(key, None)
-                watcher = subprocess.Popen([
-                    sys.executable, str(Path(__file__).with_name("watch_backend.py")),
-                    "--repo-root", layout["repo_root"], "--web-port", command[command.index("-WebPort") + 1],
-                    "--stop-file", str(stop_file), "--baseline-digest", bundle["source"]["backend_source_sha256"],
-                    "--generation-id", nonce,
-                ], cwd=layout["repo_root"], env=watch_env)
+                watcher_log = validate_path(
+                    Path(layout["runtime_root"]) / "logs" / f"backend-watch-{nonce}.log",
+                    layout["storage_root"], "backend request consumer log",
+                )
+                _check_path_chain(watcher_log, "backend request consumer log", allow_missing=True)
+                watcher_log.parent.mkdir(parents=True, exist_ok=True)
+                _check_path_chain(watcher_log, "backend request consumer log", allow_missing=True)
+                # A background consumer must not depend on the UI terminal
+                # draining its output or accepting input while a build runs.
+                with watcher_log.open("xb") as output:
+                    watcher = subprocess.Popen([
+                        sys.executable, str(Path(__file__).with_name("watch_backend.py")),
+                        "--repo-root", layout["repo_root"], "--web-port", command[command.index("-WebPort") + 1],
+                        "--stop-file", str(stop_file), "--baseline-digest", bundle["source"]["backend_source_sha256"],
+                        "--generation-id", nonce,
+                    ], cwd=layout["repo_root"], env=watch_env,
+                       stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
+                state["watcher_log"] = str(watcher_log)
                 state["watcher_pid"] = watcher.pid
                 state["watcher_waited"] = False
                 atomic_json(status, state)

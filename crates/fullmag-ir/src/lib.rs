@@ -21,6 +21,7 @@ pub mod output_storage;
 pub mod physics_object;
 pub mod plan;
 pub mod planar_monitor;
+pub mod project_output_policy;
 pub mod quantities;
 pub mod selection;
 pub mod spectral_validation;
@@ -45,6 +46,7 @@ pub use output_storage::*;
 pub use physics_object::*;
 pub use plan::*;
 pub use planar_monitor::*;
+pub use project_output_policy::configure_project_autosave_policy;
 pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };

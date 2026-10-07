@@ -200,7 +200,7 @@ function selectionCommand(
 }
 
 export const START_COMMANDS: readonly CommandContribution[] = [
-  navigationCommand("start.section.home", "Start: Home", "home", "Ctrl+1"),
+  navigationCommand("start.section.home", "Start: Overview", "home", "Ctrl+1"),
   navigationCommand("start.section.templates", "Start: Templates", "templates", "Ctrl+2"),
   navigationCommand("start.section.import", "Start: Import", "import", "Ctrl+3"),
   navigationCommand("start.section.learn", "Start: Learn", "learn", "Ctrl+4"),

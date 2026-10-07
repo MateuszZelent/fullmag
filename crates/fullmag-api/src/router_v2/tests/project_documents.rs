@@ -4079,3 +4079,361 @@ fn worker_test_magnetization_artifact(
     }))
     .unwrap()
 }
+
+// ─── script to project (`POST /v2/persistence/projects/from-script`) ────────
+
+fn from_script_test_app() -> (axum::Router, PathBuf) {
+    // The clock is too coarse on Windows to keep parallel tests apart.
+    let unique = format!("{}-{}", std::process::id(), crate::uuid_v4_hex());
+    let root = std::env::temp_dir().join(format!("fullmag-api-from-script-{unique}"));
+    let workspace = root.join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace dir");
+    let mut state = test_app_state();
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("test state should be uniquely owned");
+        state_mut.repo_root = crate::script::repo_root();
+        state_mut.current_workspace_root = workspace;
+    }
+    (build_v2_router().with_state(state), root)
+}
+
+async fn post_from_script(
+    app: &axum::Router,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/persistence/projects/from-script")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+fn open_archive_documents(
+    archive_base64: &str,
+) -> (
+    fullmag_application::ProjectEnvelope,
+    std::collections::BTreeMap<String, Vec<u8>>,
+) {
+    use base64::Engine as _;
+    use fullmag_application::*;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(archive_base64)
+        .expect("archive is base64");
+    let opened = FileProjectRepository::new()
+        .open(ProjectSource::Bytes {
+            display_name: "from-script.fms".into(),
+            bytes,
+        })
+        .expect("archive reopens");
+    let documents = opened
+        .envelope
+        .opaque_documents
+        .iter()
+        .map(|document| (document.path().to_string(), document.bytes().to_vec()))
+        .collect();
+    (opened.envelope, documents)
+}
+
+const FROM_SCRIPT_VALID: &str = r#"
+import fullmag as fm
+
+print("script output that must not break the helper answer")
+study = fm.study("from_script_demo")
+study.engine("fem")
+
+body = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.1
+body.m = fm.texture.uniform(1, 0, 0)
+
+study.run(1e-12)
+"#;
+
+#[tokio::test]
+async fn from_script_embeds_script_provenance_and_survives_open_and_authoring() {
+    let (app, root) = from_script_test_app();
+    let (status, json) = post_from_script(
+        &app,
+        serde_json::json!({
+            "source": {"name": "dir/from script demo.py", "text": FROM_SCRIPT_VALID},
+            "origin": "template:demo",
+            "consent": {"executed_by_user": true},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "from-script response: {json:?}");
+
+    let sha = format!("{:x}", Sha256::digest(FROM_SCRIPT_VALID.as_bytes()));
+    assert_eq!(json["name"], "from script demo");
+    assert_eq!(json["script_import"]["name"], "from script demo.py");
+    assert_eq!(json["script_import"]["sha256"], sha);
+    assert_eq!(json["script_import"]["origin"], "template:demo");
+    assert_eq!(json["script_import"]["script_path"], "project/source/script.py");
+    assert_eq!(json["script_import"]["fidelity"]["scene_exported"], true);
+    let round_trip = json["script_import"]["fidelity"]["round_trip"].as_str().unwrap();
+    assert!(
+        matches!(round_trip, "verified" | "failed" | "not_checked"),
+        "round_trip: {round_trip}"
+    );
+    assert!(
+        !json["script_import"]["fidelity"]["notes"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "fidelity must always explain itself: {json:?}"
+    );
+
+    let archive = json["archive_base64"].as_str().unwrap().to_string();
+    let (envelope, documents) = open_archive_documents(&archive);
+    assert_eq!(
+        documents["project/source/script.py"],
+        FROM_SCRIPT_VALID.as_bytes(),
+        "the original script is embedded byte for byte"
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&documents["project/source/script.json"]).unwrap();
+    assert_eq!(meta["sha256"], sha);
+    assert_eq!(meta["name"], "from script demo.py");
+    assert_eq!(meta["origin"], "template:demo");
+    assert_eq!(meta["fidelity"], json["script_import"]["fidelity"]);
+    let provenance = fullmag_workspace_inspect::provenance::parse_provenance(
+        &documents["project/provenance.json"],
+    )
+    .expect("provenance parses");
+    let history = provenance["history"].as_array().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["kind"], "import");
+    assert_eq!(
+        history[0]["summary"],
+        format!("Created from script from script demo.py ({})", &sha[..12])
+    );
+    // The scene is the exported SceneDocument, not a blank project.
+    assert!(envelope
+        .definition
+        .scene
+        .value()
+        .get("objects")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|objects| !objects.is_empty()));
+
+    // Open (definition only, nothing runs) returns the same documents.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/persistence/projects/open")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "display_name": "from-script.fms",
+                        "archive_base64": archive,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let reopened = body_json(response).await;
+    let (_, reopened_documents) =
+        open_archive_documents(reopened["archive_base64"].as_str().unwrap());
+    for path in [
+        "project/source/script.py",
+        "project/source/script.json",
+        "project/provenance.json",
+    ] {
+        assert_eq!(reopened_documents[path], documents[path], "{path} survives open");
+    }
+
+    // An authoring update replaces project/source.py, never the embedded script.
+    let scene = envelope.definition.scene.value().clone();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/persistence/projects/authoring")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "display_name": "from-script.fms",
+                        "archive_base64": reopened["archive_base64"],
+                        "expected_project_id": reopened["project_id"],
+                        "expected_revision": reopened["revision"],
+                        "scene_document": scene,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let authoring_status = response.status();
+    let authored = body_json(response).await;
+    assert_eq!(authoring_status, StatusCode::OK, "authoring: {authored:?}");
+    let (_, authored_documents) =
+        open_archive_documents(authored["archive_base64"].as_str().unwrap());
+    assert_eq!(
+        authored_documents["project/source/script.py"],
+        FROM_SCRIPT_VALID.as_bytes(),
+        "authoring never rewrites the embedded script"
+    );
+    assert_eq!(
+        authored_documents["project/provenance.json"],
+        documents["project/provenance.json"]
+    );
+
+    // Nothing is left behind in managed storage.
+    let leftovers = fs::read_dir(root.join("workspace"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".fullmag-script-import-")
+        })
+        .count();
+    assert_eq!(leftovers, 0);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn from_script_reports_export_failure_as_422_and_keeps_nothing() {
+    let (app, root) = from_script_test_app();
+    let (status, json) = post_from_script(
+        &app,
+        serde_json::json!({
+            "source": {
+                "name": "broken.py",
+                "text": "import fullmag as fm\nraise RuntimeError('boom-marker-4711')\n",
+            },
+            "consent": {"executed_by_user": true},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{json:?}");
+    assert_eq!(json["code"], "script_export_failed");
+    assert!(
+        json["message"].as_str().unwrap().contains("boom-marker-4711"),
+        "the helper's error is returned: {json:?}"
+    );
+    let leftovers = fs::read_dir(root.join("workspace")).unwrap().count();
+    assert_eq!(leftovers, 0, "a failed export keeps nothing");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn from_script_without_consent_is_refused_and_runs_nothing() {
+    let (app, root) = from_script_test_app();
+    let marker = root.join("executed.marker");
+    let text = format!(
+        "open({:?}, 'w').write('ran')\n",
+        marker.display().to_string()
+    );
+    for consent in [
+        serde_json::Value::Null,
+        serde_json::json!({"executed_by_user": false}),
+    ] {
+        let mut body = serde_json::json!({"source": {"name": "x.py", "text": text}});
+        if !consent.is_null() {
+            body["consent"] = consent;
+        }
+        let (status, json) = post_from_script(&app, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json:?}");
+        assert_eq!(json["code"], "consent_required");
+    }
+    assert!(!marker.exists(), "the script must not run without consent");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn from_script_rejects_oversized_text_and_unsupported_item_ids() {
+    let (app, root) = from_script_test_app();
+    let (status, json) = post_from_script(
+        &app,
+        serde_json::json!({
+            "source": {"name": "big.py", "text": "#".repeat(1024 * 1024 + 1)},
+            "consent": {"executed_by_user": true},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{json:?}");
+    assert_eq!(json["code"], "script_too_large");
+
+    let (status, json) = post_from_script(
+        &app,
+        serde_json::json!({
+            "script_item_id": "item-1",
+            "consent": {"executed_by_user": true},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["code"], "script_item_unsupported");
+
+    let (status, json) = post_from_script(
+        &app,
+        serde_json::json!({"consent": {"executed_by_user": true}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["code"], "source_required");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Survey fixture, not a gate: `FULLMAG_FROM_SCRIPT_SURVEY` lists script files
+/// separated by `;`. Each goes through the real endpoint and the verdict is
+/// printed (`--ignored --nocapture`).
+#[tokio::test]
+#[ignore = "survey over real example scripts; set FULLMAG_FROM_SCRIPT_SURVEY"]
+async fn from_script_survey_over_example_files() {
+    let list = std::env::var("FULLMAG_FROM_SCRIPT_SURVEY").expect("FULLMAG_FROM_SCRIPT_SURVEY");
+    let (app, root) = from_script_test_app();
+    for path in list.split(';').filter(|path| !path.trim().is_empty()) {
+        let text = fs::read_to_string(path).expect("script is readable UTF-8");
+        let name = Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let started = std::time::Instant::now();
+        let (status, json) = post_from_script(
+            &app,
+            serde_json::json!({
+                "source": {"name": name, "text": text},
+                "consent": {"executed_by_user": true},
+            }),
+        )
+        .await;
+        let seconds = started.elapsed().as_secs_f32();
+        if status == StatusCode::CREATED {
+            let fidelity = &json["script_import"]["fidelity"];
+            println!(
+                "SURVEY {name} | 201 | round_trip={} | {seconds:.1}s | notes={}",
+                fidelity["round_trip"],
+                fidelity["notes"]
+            );
+        } else {
+            println!(
+                "SURVEY {name} | {} | {} | {seconds:.1}s | {}",
+                status.as_u16(),
+                json["code"],
+                json["message"].as_str().unwrap_or_default().replace('\n', " ")
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(root);
+}

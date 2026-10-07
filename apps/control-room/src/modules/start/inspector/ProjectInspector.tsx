@@ -1,14 +1,18 @@
 import { BookOpen, Box, GraduationCap, Import, Info, LayoutGrid, Settings, type LucideIcon } from "lucide-react";
 
 import type { ScriptSaver } from "../model/scriptOpen";
+import type { ProjectCreator } from "../model/scriptProject";
 import type { StartSection } from "../model/startScreenState";
 import { STUDY_TEMPLATES } from "../model/templates";
 import type { ComputeProbeState, ContinueSession, RecentEntry, RecentIndexState } from "../model/types";
-import type { WorkspaceItem } from "../model/workspaceItems";
+import type { WorkspaceItemDetailState } from "../model/useWorkspaceItems";
+import type { ApiWorkspaceItem } from "../model/workspaceApiTypes";
+import type { WorkspaceItem, WorkspaceItemId } from "../model/workspaceItems";
 
 import { AboutInspector } from "./AboutInspector";
 import { ProjectDetails } from "./ProjectDetails";
-import { ScriptDetails, type ScriptDetailsProps } from "./ScriptDetails";
+import { ResultInspector, type ResultInspectorProps } from "./ResultInspector";
+import { ScriptInspector, type ScriptInspectorProps } from "./ScriptInspector";
 import { TemplateDetails } from "./TemplateDetails";
 
 interface InspectorHint {
@@ -21,7 +25,7 @@ const INSPECTOR_HINTS: Readonly<Record<StartSection, InspectorHint>> = {
   home: {
     icon: Box,
     title: "Nothing selected",
-    body: "Select a project or a script in the list to see its details, history and runs.",
+    body: "Select a project, a script or a result folder in the list to see its details, history and runs.",
   },
   templates: {
     icon: LayoutGrid,
@@ -55,6 +59,19 @@ const INSPECTOR_HINTS: Readonly<Record<StartSection, InspectorHint>> = {
   },
 };
 
+/** What the script inspector needs beyond the item and its detail. */
+export type ScriptInspectorActions = Omit<ScriptInspectorProps, "item" | "detail" | "desktopId"> & {
+  /** The desktop host's own id for a script, which running it needs. */
+  readonly desktopIdOf: (id: WorkspaceItemId) => number | null;
+};
+
+export type ResultInspectorActions = Omit<
+  ResultInspectorProps,
+  "item" | "detail" | "openDisabledReason"
+>;
+
+const IDLE: WorkspaceItemDetailState = { kind: "idle" };
+
 export interface ProjectInspectorProps {
   readonly section: StartSection;
   /** The selected recent project; only the Home section has one. */
@@ -64,13 +81,26 @@ export interface ProjectInspectorProps {
   readonly session?: ContinueSession;
   readonly openDisabledReason: string | null;
   readonly onOpen: (entry: RecentEntry) => Promise<string | null>;
+  /** Opens the project and shows its saved results; omitted, the viewer button is not offered. */
+  readonly onOpenResults?: (entry: RecentEntry) => Promise<string | null>;
+  /** Selects a result folder in the list (a row of the project's Runs tab). */
+  readonly onSelectResult?: (id: string) => void;
+  /** URL that downloads a result folder as a zip (the project's Runs tab). */
+  readonly archiveUrl?: (id: string) => string;
+  /** What the HTTP workspace API read from the selected item; idle without it. */
+  readonly detail?: WorkspaceItemDetailState;
   readonly onTogglePin: (projectId: string, pinned: boolean) => void;
   readonly onForget: (projectId: string) => void;
   /** The selected script; only the Home section has one. */
   readonly script?: WorkspaceItem | null;
-  readonly scriptActions?: Omit<ScriptDetailsProps, "item"> | null;
+  readonly scriptActions?: ScriptInspectorActions | null;
+  /** The selected result folder; only the Home section has one. */
+  readonly result?: ApiWorkspaceItem | null;
+  readonly resultActions?: ResultInspectorActions | null;
   /** Saves a template script as a new file; null where there is no desktop host. */
   readonly scriptSaver?: ScriptSaver | null;
+  /** Creates a project from a template script after consent. */
+  readonly projectCreator?: ProjectCreator | null;
   readonly index?: RecentIndexState;
 }
 
@@ -84,8 +114,12 @@ export function ProjectInspector({
   templateId,
   compute,
   scriptSaver = null,
+  projectCreator = null,
   script = null,
   scriptActions = null,
+  result = null,
+  resultActions = null,
+  detail = IDLE,
   index,
   ...actions
 }: ProjectInspectorProps) {
@@ -98,6 +132,7 @@ export function ProjectInspector({
       <TemplateDetails
         compute={compute}
         key={template.id}
+        projectCreator={projectCreator}
         scriptSaver={scriptSaver}
         template={template}
       />
@@ -105,11 +140,31 @@ export function ProjectInspector({
   }
   if (section === "home" && entry) {
     // Keyed so the tab and the copied flag reset when another project is chosen.
-    return <ProjectDetails entry={entry} key={entry.projectId} {...actions} />;
+    return <ProjectDetails detail={detail} entry={entry} key={entry.projectId} {...actions} />;
   }
   if (section === "home" && script && scriptActions) {
     // Keyed so the notice and the history reset when another script is chosen.
-    return <ScriptDetails item={script} key={script.id} {...scriptActions} />;
+    const { desktopIdOf, ...rest } = scriptActions;
+    return (
+      <ScriptInspector
+        desktopId={desktopIdOf(script.id)}
+        detail={detail}
+        item={script}
+        key={script.id}
+        {...rest}
+      />
+    );
+  }
+  if (section === "home" && result && resultActions) {
+    return (
+      <ResultInspector
+        detail={detail}
+        item={result}
+        key={result.id}
+        openDisabledReason={actions.openDisabledReason}
+        {...resultActions}
+      />
+    );
   }
   const hint = INSPECTOR_HINTS[section];
   const Icon = hint.icon;

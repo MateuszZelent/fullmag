@@ -200,6 +200,7 @@ pub(crate) fn note_ui_ready() {
 }
 
 pub(crate) fn note_ids(session_id: &str, run_id: &str) {
+    crate::run_manifest::note_ids(session_id, run_id);
     with_report(|report| {
         report.session_id = Some(session_id.to_string());
         report.run_id = Some(run_id.to_string());
@@ -209,11 +210,15 @@ pub(crate) fn note_ids(session_id: &str, run_id: &str) {
 
 pub(crate) fn note_runtime(selection: &SessionRuntimeSelection) {
     if let Ok(value) = serde_json::to_value(selection) {
+        crate::run_manifest::note_runtime(resolved_json(Some(&value)));
         with_report(|report| report.runtime = Some(value));
     }
 }
 
 pub(crate) fn note_results_dir(dir: &Path) {
+    // Every script run, managed or plain, leaves `fullmag-run.json` in its
+    // results folder; the receipt below is only for host-managed runs.
+    crate::run_manifest::note_results_dir(dir);
     with_report(|report| report.results_dir = Some(display_path(dir)));
 }
 
@@ -470,6 +475,7 @@ fn finalize(outcome: &Outcome) {
             eprintln!("[fullmag] could not write the run receipt: {error:#}");
         }
     }
+    crate::run_manifest::finish(outcome.status, outcome.exit_code(), outcome.error.as_deref());
 }
 
 fn stage_now() -> Stage {
@@ -520,12 +526,52 @@ pub(crate) fn run_script_entry(raw_args: Vec<OsString>) -> (Result<()>, Option<i
     let Some(cli) = managed else {
         // Usage history is best effort and never changes the run.
         let usage = crate::workspace_usage::begin_script_run(&raw_args);
+        let tracked = begin_plain_manifest(&raw_args);
         let result = crate::orchestrator::run_script_mode(raw_args);
+        if tracked {
+            finish_plain_manifest(&result);
+        }
         crate::workspace_usage::finish_script_run(usage, &result);
         return (result, None);
     };
     let (result, exit) = run_managed(&cli, raw_args);
     (result, Some(exit))
+}
+
+/// Start the run manifest of a plain `fullmag script.py` run. Returns false
+/// (and tracks nothing) when the arguments do not parse or the script is not a
+/// readable file; the run itself then reports the problem as it always did.
+fn begin_plain_manifest(raw_args: &[OsString]) -> bool {
+    let Ok(cli) = ScriptCli::try_parse_from(raw_args.iter()) else {
+        return false;
+    };
+    let Ok(script) = cli.script.canonicalize() else {
+        return false;
+    };
+    let sha256 = std::fs::read(&script).ok().map(|bytes| sha256_hex(&bytes));
+    crate::run_manifest::begin(crate::run_manifest::Begin {
+        script_path: display_path(&script),
+        script_sha256: sha256,
+        requested: requested_json(&cli),
+        launched_by: "cli".to_string(),
+    });
+    true
+}
+
+/// End the manifest of a plain run with the same status vocabulary as the
+/// receipt of a managed run; a forced GPU that resolved to a CPU is a failure
+/// here too, never a quietly successful run.
+fn finish_plain_manifest(result: &Result<()>) {
+    let error_text = result.as_ref().err().map(|error| format!("{error:#}"));
+    let runtime = crate::run_manifest::resolved_runtime();
+    let outcome = classify_outcome(
+        error_text.as_deref(),
+        None,
+        Stage::Running,
+        runtime.as_ref(),
+        None,
+    );
+    crate::run_manifest::finish(outcome.status, outcome.exit_code(), outcome.error.as_deref());
 }
 
 fn run_managed(cli: &ScriptCli, raw_args: Vec<OsString>) -> (Result<()>, i32) {
@@ -565,6 +611,7 @@ fn run_managed(cli: &ScriptCli, raw_args: Vec<OsString>) -> (Result<()>, i32) {
             Err(error)
         }
         Ok(()) => {
+            begin_managed_manifest(cli);
             if let Some(receipt) = &cli.receipt {
                 if let Some(dir) = receipt.parent() {
                     spawn_stop_watcher(dir.join(STOP_REQUEST_FILE));
@@ -613,6 +660,29 @@ fn run_managed(cli: &ScriptCli, raw_args: Vec<OsString>) -> (Result<()>, i32) {
         (other, _) => other,
     };
     (result, outcome.exit_code())
+}
+
+/// Start the run manifest of a host-managed run from the facts the prelude
+/// verified (path and digest of the exact bytes that will run).
+fn begin_managed_manifest(cli: &ScriptCli) {
+    let (path, sha256) = with_report(|report| {
+        (
+            report.script["path"].as_str().map(str::to_string),
+            report.script["sha256"].as_str().map(str::to_string),
+        )
+    })
+    .unwrap_or((None, None));
+    crate::run_manifest::begin(crate::run_manifest::Begin {
+        script_path: path.unwrap_or_else(|| display_path(&cli.script)),
+        script_sha256: sha256,
+        requested: requested_json(cli),
+        launched_by: match cli.launched_by {
+            Some(LaunchedByArg::Desktop) => "desktop",
+            Some(LaunchedByArg::Python) => "python",
+            Some(LaunchedByArg::Cli) | None => "cli",
+        }
+        .to_string(),
+    });
 }
 
 /// Checks that precede any execution. The error carries the exit kind.

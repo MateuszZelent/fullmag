@@ -12,6 +12,8 @@ import {
   invalidateAuthoringMutationDependents,
 } from "./authoringMutationInvalidation";
 import { publishCommittedSceneResource } from "../resources/geometryLifecycleResources";
+import { sceneDocumentPayload } from "./sceneDocumentPayload";
+export { sceneDocumentPayload } from "./sceneDocumentPayload";
 
 export interface AuthoringHistoryApi {
   /** Production clients scope cache writes; omitted by lightweight compatibility adapters. */
@@ -71,34 +73,6 @@ interface HistoryEntry {
   label: string;
 }
 
-const SCENE_DOCUMENT_FIELDS = [
-  "version",
-  "revision",
-  "scene",
-  "universe",
-  "objects",
-  "couplings",
-  "materials",
-  "magnetization_assets",
-  "field_drives",
-  "monitors",
-  "selections",
-  "magnetization_constraints",
-  "current_modules",
-  "current_transports",
-  "spin_transports",
-  "spin_torques",
-  "oersted_fields",
-  "antenna_port_modes",
-  "antenna_field_solve_stages",
-  "antenna_target_projections",
-  "solved_antenna_drives",
-  "antenna_spectrum_requests",
-  "study",
-  "outputs",
-  "editor",
-] as const;
-
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -117,22 +91,6 @@ function sceneRevision(scene: SceneResource): number | null {
   return typeof revision === "number" && Number.isFinite(revision)
     ? revision
     : null;
-}
-
-/**
- * Convert the resource envelope back to the SceneDocument accepted by the
- * replace_scene transaction. Resource-only revision metadata is intentionally
- * excluded; the API applies the supplied base revision atomically.
- */
-export function sceneDocumentPayload(scene: SceneResource): JsonObject {
-  const source = scene as unknown as Record<string, unknown>;
-  const payload: Record<string, unknown> = {};
-  for (const field of SCENE_DOCUMENT_FIELDS) {
-    if (source[field] !== undefined) {
-      payload[field] = cloneJson(source[field]);
-    }
-  }
-  return payload as JsonObject;
 }
 
 function errorMessage(error: unknown): string {

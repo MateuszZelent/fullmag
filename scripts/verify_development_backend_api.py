@@ -1,7 +1,8 @@
-"""Verify development observation and terminal drain in owned empty processes."""
+"""Verify native development API scopes, including active-run restart refusal."""
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import http.client
 import json
@@ -25,19 +26,140 @@ from windows.development_status import verified_build_identity
 from windows.workspace_backend_identity import fingerprint
 
 
+def _validate_active_run_refusal_scope(
+    owner_bundle: str | None,
+    *,
+    conflicting_scope: bool,
+    frozen_native_build_id: str | None,
+) -> None:
+    if owner_bundle is None:
+        return
+    if conflicting_scope or frozen_native_build_id is not None:
+        raise storage.StorageError("Active-run refusal is a separate frozen-native verification scope")
+    if not re.fullmatch(r"[0-9a-f]{32}", owner_bundle):
+        raise storage.StorageError("Active-run refusal owner must be a canonical bundle ID")
+
+
+def _validate_active_run_scenario(scenario: str, owner_bundle: str | None) -> None:
+    if scenario not in {"running", "paused"}:
+        raise storage.StorageError("Active-run refusal scenario must be running or paused")
+    if owner_bundle is None and scenario != "running":
+        raise storage.StorageError("Paused-run refusal requires its dedicated active-run owner bundle")
+
+
+def _validate_start_freeze_race_scope(enabled: bool, conflicting_scope: bool) -> None:
+    if enabled and conflicting_scope:
+        raise storage.StorageError("Start/freeze race is a separate owned native verification scope")
+
+
+def _can_reuse_active_binaries(source_bin: Path, stable_bin: Path, expected: dict) -> bool:
+    from windows.runtime_bundle import BINARY_NAMES, _check_path_chain, _require_directory, _require_regular_file
+
+    _check_path_chain(stable_bin, "stable fixture executable directory", allow_missing=True)
+    if not stable_bin.exists():
+        return False
+    _require_directory(stable_bin, "stable fixture executable directory")
+    if any(path.name not in BINARY_NAMES for path in stable_bin.iterdir()):
+        raise storage.StorageError("Stable fixture executable directory contains unknown entries")
+    reusable = True
+    for name in BINARY_NAMES:
+        source, destination = source_bin / name, stable_bin / name
+        _require_regular_file(source, "verified fixture executable", nonempty=True)
+        if hashlib.sha256(source.read_bytes()).hexdigest() != expected[name]:
+            raise storage.StorageError("Verified fixture executable changed before reuse")
+        _check_path_chain(destination, "stable fixture executable", allow_missing=True)
+        if not destination.exists():
+            reusable = False
+            continue
+        _require_regular_file(destination, "existing stable fixture executable", nonempty=True)
+        if hashlib.sha256(destination.read_bytes()).hexdigest() != expected[name]:
+            reusable = False
+    return reusable
+
+
 def run(repo_root: str, cross_build_bundle: str = "", project_document_only: bool = False,
         restart_transport_only: bool = False, observer_pause_only: bool = False,
-        restart_consumer_only: bool = False, consumer_readiness_only: bool = False) -> int:
+        restart_consumer_only: bool = False, consumer_readiness_only: bool = False,
+        consumer_pump_owner_bundle: str | None = None,
+        candidate_preparation_only: bool = False,
+        workspace_browser_owner_bundle: str | None = None,
+        frozen_native_build_id: str | None = None,
+        active_run_refusal_owner_bundle: str | None = None,
+        active_run_scenario: str = "running",
+        start_freeze_race_only: bool = False,
+        archive_frozen_bundle: bool = False) -> int:
+    if archive_frozen_bundle and (not project_document_only or frozen_native_build_id is None):
+        raise storage.StorageError("Native bundle archive requires the frozen project-document verification scope")
+    active_run_refusal = active_run_refusal_owner_bundle is not None
+    _validate_start_freeze_race_scope(
+        start_freeze_race_only,
+        bool(
+            cross_build_bundle or project_document_only or restart_transport_only
+            or observer_pause_only or restart_consumer_only or consumer_readiness_only
+            or consumer_pump_owner_bundle is not None or candidate_preparation_only
+            or workspace_browser_owner_bundle is not None or frozen_native_build_id is not None
+            or active_run_refusal
+        ),
+    )
+    _validate_active_run_scenario(active_run_scenario, active_run_refusal_owner_bundle)
+    _validate_active_run_refusal_scope(
+        active_run_refusal_owner_bundle,
+        conflicting_scope=bool(
+            cross_build_bundle or project_document_only or restart_transport_only
+            or observer_pause_only or restart_consumer_only or consumer_readiness_only
+            or consumer_pump_owner_bundle is not None or candidate_preparation_only
+            or workspace_browser_owner_bundle is not None
+        ),
+        frozen_native_build_id=frozen_native_build_id,
+    )
+    if frozen_native_build_id is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", frozen_native_build_id):
+            raise storage.StorageError("Frozen native build ID must be a lowercase SHA-256")
+        if (cross_build_bundle or restart_transport_only
+                or observer_pause_only or restart_consumer_only or consumer_readiness_only
+                or consumer_pump_owner_bundle is not None or candidate_preparation_only
+                or active_run_refusal
+                or workspace_browser_owner_bundle is not None):
+            raise storage.StorageError("Frozen native package verification allows only the default or project-document scope")
+    if workspace_browser_owner_bundle is not None:
+        if (cross_build_bundle or project_document_only or restart_transport_only
+                or observer_pause_only or restart_consumer_only or consumer_readiness_only
+                or consumer_pump_owner_bundle is not None or candidate_preparation_only
+                or active_run_refusal):
+            raise storage.StorageError("Browser workspace restart is a separate verification scope")
+        if not re.fullmatch(r"[0-9a-f]{32}", workspace_browser_owner_bundle):
+            raise storage.StorageError("Browser workspace owner must be a canonical bundle ID")
+    frozen_probe = (consumer_pump_owner_bundle is not None or active_run_refusal
+                    or candidate_preparation_only
+                    or workspace_browser_owner_bundle is not None or start_freeze_race_only)
+    frozen_source_binding = frozen_probe or frozen_native_build_id is not None
+    if candidate_preparation_only and (
+        cross_build_bundle or project_document_only or restart_transport_only
+        or observer_pause_only or restart_consumer_only or consumer_readiness_only
+        or consumer_pump_owner_bundle is not None or active_run_refusal
+    ):
+        raise storage.StorageError("Candidate preparation faults are a separate verification scope")
+    if consumer_pump_owner_bundle is not None and (
+        cross_build_bundle or project_document_only or restart_transport_only
+        or observer_pause_only or restart_consumer_only or consumer_readiness_only or active_run_refusal
+    ):
+        raise storage.StorageError("Consumer pump is a separate verification scope")
+    if consumer_pump_owner_bundle is not None and not re.fullmatch(
+        r"[0-9a-f]{32}", consumer_pump_owner_bundle
+    ):
+        raise storage.StorageError("Consumer pump owner must be a canonical bundle ID")
     if consumer_readiness_only and (cross_build_bundle or project_document_only or restart_transport_only
-                                   or observer_pause_only or restart_consumer_only):
+                                   or observer_pause_only or restart_consumer_only or active_run_refusal):
         raise storage.StorageError("Consumer readiness is a separate verification scope")
-    if restart_consumer_only and (cross_build_bundle or project_document_only or restart_transport_only or observer_pause_only):
+    if restart_consumer_only and (cross_build_bundle or project_document_only or restart_transport_only
+                                  or observer_pause_only or active_run_refusal):
         raise storage.StorageError("Restart consumer is a separate verification scope")
-    if observer_pause_only and (cross_build_bundle or project_document_only or restart_transport_only):
+    if observer_pause_only and (cross_build_bundle or project_document_only or restart_transport_only
+                                or active_run_refusal):
         raise storage.StorageError("Observer pause is a separate verification scope")
-    if restart_transport_only and (cross_build_bundle or project_document_only):
+    if restart_transport_only and (cross_build_bundle or project_document_only or active_run_refusal):
         raise storage.StorageError("Restart transport observation is a separate verification scope")
-    if project_document_only and cross_build_bundle:
+    if project_document_only and (cross_build_bundle or active_run_refusal):
         raise storage.StorageError("Project document observation does not use a cross-build candidate")
     if cross_build_bundle and not re.fullmatch(r"[0-9a-f]{32}", cross_build_bundle):
         raise storage.StorageError("Cross-build candidate must be a canonical bundle ID")
@@ -47,6 +169,7 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
     repo = Path(layout["repo_root"])
     native = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
     source_before = fingerprint(repo)["sha256"]
+    checkout_source_before = source_before
     verifier_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     owner_path = storage.validate_path(Path(layout["storage_root"]) / "index" / (layout["worktree_id"] + ".json"), layout["storage_root"], "owner registry")
     owner = json.loads(owner_path.read_text(encoding="utf-8"))
@@ -55,13 +178,35 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
     storage.initialize(layout)
     with storage.build_lock(layout):
         preflight_started = storage.now()
+        project_source_root = None
+        project_source_binding = None
         try:
             manifest_path = storage.validate_path(Path(native["build_root"]) / "windows-runtime/build-manifest.json", layout["storage_root"], "native build manifest")
-            verified = verified_build_identity(native["build_root"], native["runtime_root"], manifest_path, source_before)
+            verified = verified_build_identity(
+                native["build_root"], native["runtime_root"], manifest_path,
+                None if frozen_source_binding else source_before,
+                expected_manifest_sha256=frozen_native_build_id,
+            )
+            if frozen_source_binding:
+                source_before = verified["ready_source_sha256"]
             raw_manifest = manifest_path.read_bytes()
             if hashlib.sha256(raw_manifest).hexdigest() != verified["ready_build_id"]:
                 raise storage.StorageError("Native build manifest changed after verification")
             manifest = json.loads(raw_manifest)
+            if project_document_only and frozen_native_build_id is not None:
+                from windows.build_snapshot import verify_snapshot
+                snapshot_record = manifest["build_source_snapshot"]
+                frozen = verify_snapshot(snapshot_record["record_path"], native["build_root"])
+                if (frozen["source_root"] != snapshot_record.get("source_root")
+                        or frozen["inventory_sha256"] != snapshot_record.get("inventory_sha256")
+                        or frozen["backend_source_sha256"] != verified["ready_source_sha256"]):
+                    raise storage.StorageError("Project document helper source differs from the sealed native package")
+                project_source_root = Path(frozen["source_root"])
+                project_source_binding = {
+                    "source_root": str(project_source_root),
+                    "inventory_sha256": frozen["inventory_sha256"],
+                    "backend_source_sha256": frozen["backend_source_sha256"],
+                }
             source_api = storage.validate_path(manifest["api_binary"], native["build_root"], "verified native API")
         except Exception as error:
             # A refused package is terminal diagnostic evidence, never permission
@@ -70,7 +215,7 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                                                  layout["build_storage_root"], "refused native API checks")
             refused_root.mkdir(parents=True, exist_ok=False)
             refused_receipt = refused_root / "receipt.json"
-            storage.atomic_json(refused_receipt, {
+            refused_record = {
                 "schema": "fullmag.development-backend-api-checks.v1", "state": "blocked",
                 "head": storage.git(repo, "rev-parse", "HEAD"), "task_id": owner["task_id"],
                 "owner": owner["owner"], "source_sha256": source_before, "verifier_sha256": verifier_hash,
@@ -80,7 +225,11 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 "unit_tests": "not_compiled_not_run", "checks": [], "processes": [],
                 "scope": "package admission refusal; no native API or runtime verification",
                 "public_reason": "verified_native_package_unavailable",
-            })
+            }
+            if frozen_native_build_id is not None:
+                refused_record["frozen_native_build_id"] = frozen_native_build_id
+                refused_record["current_checkout_source_sha256_before"] = checkout_source_before
+            storage.atomic_json(refused_receipt, refused_record)
             raise storage.StorageError(f"Native package preflight refused; receipt: {refused_receipt}") from error
         run_root = storage.validate_path(Path(layout["build_root"]) / "checks" / uuid.uuid4().hex, layout["build_storage_root"], "native API checks")
         run_root.mkdir(parents=True, exist_ok=False)
@@ -99,6 +248,13 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                    "started_at": storage.now(), "checks": [], "processes": [],
                    "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten asset-backed authoring restore and live cold completion with HTTP mutation admission, interrupted store completion journals and repeated store cycles, empty-service terminal drain; no UI hydration, end-to-end compute reopening, solver or release qualification"}
         receipt["project_document_only"] = project_document_only
+        if project_source_binding is not None:
+            receipt["project_python_source_binding"] = project_source_binding
+        if frozen_native_build_id is not None:
+            receipt["frozen_native_build_id"] = frozen_native_build_id
+            receipt["frozen_native_source_sha256"] = verified["ready_source_sha256"]
+            receipt["current_checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
         if project_document_only:
             receipt["scope"] = "runtime-free project archive create/open identity and canonical bytes; no UI hydration, restart, solver or release qualification"
         if restart_transport_only:
@@ -109,49 +265,127 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             receipt["scope"] = "owned native API durable restart consumer, UI payload restoration, fresh API identity, stale-pin rejection and authoring editability; no solver or release qualification"
         if consumer_readiness_only:
             receipt["scope"] = "private owner-authenticated expiring readiness lease in owned native APIs with controlled watcher and candidate pins; no selector, cross-build, UI availability, hydration, solver or release qualification"
+        if consumer_pump_owner_bundle is not None:
+            receipt["consumer_pump_owner_bundle"] = consumer_pump_owner_bundle
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = "B native CLI consumer pump readiness against an independently verified A API bundle and real B ready candidate; no production launcher, public UI availability, hydration, solver or release qualification"
+        if active_run_refusal_owner_bundle is not None:
+            receipt["active_run_refusal_owner_bundle"] = active_run_refusal_owner_bundle
+            receipt["active_run_scenario"] = active_run_scenario
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = (
+                f"B native CLI production restart refusal while a real FDM CPU run stays {active_run_scenario} "
+                "on owned A; no UI hydration, solver correctness or release qualification"
+            )
+        if start_freeze_race_only:
+            receipt["start_freeze_race_only"] = True
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = "overlapping production API Solve and owner restart acquisition on an isolated valid FDM scene; no solver execution or user workspace"
+        if candidate_preparation_only:
+            receipt["candidate_preparation_only"] = True
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = "real candidate helper completion, transport failures, timeout and cancellation; no API, restart, UI, solver or release qualification"
+        if workspace_browser_owner_bundle is not None:
+            receipt["workspace_browser_owner_bundle"] = workspace_browser_owner_bundle
+            receipt["checkout_source_sha256_before"] = checkout_source_before
+            receipt["source_binding"] = "verified_frozen_native_package"
+            receipt["scope"] = "owned A-to-B native restart with real nonempty scene and browser dirty-document hydration; private eligibility only, no public capability, solver or release qualification"
         storage.atomic_json(receipt_path, receipt)
         code = 1
         try:
             from windows.runtime_bundle import BINARY_NAMES
-            archive = run_root / "service-binaries"
-            staging = run_root / "runtime-stage"
-            archive.mkdir()
-            staging.mkdir()
-            api.parent.mkdir(exist_ok=True)
-            _require_directory(api.parent, "stable fixture executable directory")
-            if any(path.name not in BINARY_NAMES for path in api.parent.iterdir()):
-                raise storage.StorageError("Stable fixture executable directory contains unknown entries")
-            for existing in api.parent.iterdir():
-                _require_regular_file(existing, "existing stable fixture executable", nonempty=True)
             source_bin = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
-            for name in BINARY_NAMES:
-                _require_regular_file(source_bin / name, "verified fixture executable", nonempty=True)
-                source = storage.validate_path(source_bin / name, native["build_root"], "verified fixture executable")
-                expected = manifest["executable_sha256"][name]
-                shutil.copyfile(source, archive / name)
-                if hashlib.sha256(source.read_bytes()).hexdigest() != expected or hashlib.sha256((archive / name).read_bytes()).hexdigest() != expected:
-                    raise storage.StorageError("Fixture executable changed while sealing its archive")
-                shutil.copyfile(archive / name, staging / name)
-                _check_path_chain(api.parent / name, "stable fixture executable", allow_missing=True)
-                destination = storage.validate_path(api.parent / name, layout["build_root"], "stable fixture executable")
-                # Windows refuses replacement of an active EXE. Never stop a
-                # process to make room; the route holds its managed build lock.
-                os.replace(staging / name, destination)
-                if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
-                    raise storage.StorageError("Stable fixture executable publication failed verification")
+            reuse_active_binaries = False
+            if active_run_refusal_owner_bundle is not None:
+                from windows.verify_consumer_pump import _check_active_candidate_capacity
+                reuse_active_binaries = _can_reuse_active_binaries(source_bin, api.parent, manifest["executable_sha256"])
+                archive_bytes = growth_bytes = 0
+                for name in BINARY_NAMES:
+                    source_size = _require_regular_file(source_bin / name, "verified fixture executable", nonempty=True).st_size
+                    archive_bytes += source_size
+                    destination = api.parent / name
+                    _check_path_chain(destination, "stable fixture executable", allow_missing=True)
+                    existing_size = (_require_regular_file(destination, "existing stable fixture executable", nonempty=True).st_size
+                                     if os.path.lexists(destination) else 0)
+                    growth_bytes += max(0, source_size - existing_size)
+                _check_active_candidate_capacity(
+                    Path(native["build_root"]), Path(native["storage_root"]),
+                    Path(native["runtime_root"]), Path(native["build_root"]) / "windows-runtime/build-manifest.json",
+                    verified["ready_build_id"], receipt,
+                    additional_copy_bytes=0 if reuse_active_binaries else archive_bytes + growth_bytes,
+                    receipt_key="active_run_startup_capacity",
+                )
+                receipt["active_run_binary_publication"] = {
+                    "mode": "reused_verified_stable_copy" if reuse_active_binaries else "copied_verified_archive",
+                    "executable_sha256": manifest["executable_sha256"],
+                }
+            if not reuse_active_binaries:
+                archive = run_root / "service-binaries"
+                staging = run_root / "runtime-stage"
+                archive.mkdir()
+                staging.mkdir()
+                api.parent.mkdir(exist_ok=True)
+                _require_directory(api.parent, "stable fixture executable directory")
+                if any(path.name not in BINARY_NAMES for path in api.parent.iterdir()):
+                    raise storage.StorageError("Stable fixture executable directory contains unknown entries")
+                for existing in api.parent.iterdir():
+                    _require_regular_file(existing, "existing stable fixture executable", nonempty=True)
+                source_bin = Path(manifest["cargo_target_dir"]) / manifest["target_triple"] / manifest["compiler_profile"]
+                for name in BINARY_NAMES:
+                    _require_regular_file(source_bin / name, "verified fixture executable", nonempty=True)
+                    source = storage.validate_path(source_bin / name, native["build_root"], "verified fixture executable")
+                    expected = manifest["executable_sha256"][name]
+                    shutil.copyfile(source, archive / name)
+                    if hashlib.sha256(source.read_bytes()).hexdigest() != expected or hashlib.sha256((archive / name).read_bytes()).hexdigest() != expected:
+                        raise storage.StorageError("Fixture executable changed while sealing its archive")
+                    shutil.copyfile(archive / name, staging / name)
+                    _check_path_chain(api.parent / name, "stable fixture executable", allow_missing=True)
+                    destination = storage.validate_path(api.parent / name, layout["build_root"], "stable fixture executable")
+                    # Windows refuses replacement of an active EXE. Never stop a
+                    # process to make room; the route holds its managed build lock.
+                    os.replace(staging / name, destination)
+                    if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
+                        raise storage.StorageError("Stable fixture executable publication failed verification")
             binary_hash = hashlib.sha256(api.read_bytes()).hexdigest()
             if binary_hash != manifest["api_binary_sha256"] or hashlib.sha256(source_api.read_bytes()).hexdigest() != binary_hash:
                 raise storage.StorageError("Native API changed while sealing its diagnostic copy")
-            if observer_pause_only:
+            if workspace_browser_owner_bundle is not None:
+                from windows.verify_workspace_browser import exercise as exercise_workspace_browser
+                exercise_workspace_browser(repo, run_root, manifest, receipt, api.parent,
+                                           workspace_browser_owner_bundle)
+            elif candidate_preparation_only:
+                from windows.verify_candidate_preparation import exercise as exercise_candidate_preparation
+                exercise_candidate_preparation(repo, run_root, manifest, receipt, api.parent)
+            elif observer_pause_only:
                 exercise_observer_pause(repo, receipt, api.parent)
             elif restart_consumer_only:
                 exercise_restart_consumer(repo, run_root, manifest, receipt, api.parent)
+            elif consumer_pump_owner_bundle is not None:
+                from windows.verify_consumer_pump import exercise as exercise_consumer_pump
+                exercise_consumer_pump(
+                    repo, run_root, manifest, receipt, api.parent, consumer_pump_owner_bundle
+                )
+            elif active_run_refusal_owner_bundle is not None:
+                from windows.verify_consumer_pump import exercise as exercise_consumer_pump
+                exercise_consumer_pump(
+                    repo, run_root, manifest, receipt, api.parent,
+                    active_run_refusal_owner_bundle,
+                    case=("active-run-paused" if active_run_scenario == "paused" else "active-run"),
+                )
+            elif start_freeze_race_only:
+                exercise(api, repo, run_root, receipt, start_freeze_race_only=True)
             else:
                 exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
+                         project_source_root=project_source_root,
                          restart_transport_only=restart_transport_only,
                          consumer_readiness_only=consumer_readiness_only)
             if (not project_document_only and not restart_transport_only and not observer_pause_only
-                    and not restart_consumer_only and not consumer_readiness_only):
+                    and not restart_consumer_only and not consumer_readiness_only
+                    and not frozen_probe):
                 exercise_service(repo, run_root, manifest, receipt, api.parent)
             # Use the canonical codegen branch rather than persisting the live
             # endpoint's process-specific accepted-store binding extension.
@@ -170,7 +404,20 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             storage.atomic_json(run_root / "openapi-v2.json", spec)
             receipt["openapi_sha256"] = hashlib.sha256((run_root / "openapi-v2.json").read_bytes()).hexdigest()
             receipt["checks"].append("canonical-codegen-identity")
-            after = fingerprint(repo)["sha256"]
+            if frozen_source_binding:
+                checkout_source_after = fingerprint(repo)["sha256"]
+                if frozen_native_build_id is not None:
+                    receipt["current_checkout_source_sha256_after"] = checkout_source_after
+                else:
+                    receipt["checkout_source_sha256_after"] = checkout_source_after
+                final_identity = verified_build_identity(
+                    native["build_root"], native["runtime_root"], manifest_path,
+                    None,
+                    expected_manifest_sha256=frozen_native_build_id or verified["ready_build_id"],
+                )
+                after = final_identity["ready_source_sha256"]
+            else:
+                after = fingerprint(repo)["sha256"]
             receipt["source_sha256_after"] = after
             if after != source_before:
                 raise storage.StorageError("Native sources changed during API verification")
@@ -178,6 +425,24 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 raise storage.StorageError("Native API verifier changed during verification")
             if not receipt["checks"] or not all(item["waited"] for item in receipt["processes"]):
                 raise storage.StorageError("Native API verification lacks terminal evidence")
+            if archive_frozen_bundle:
+                from windows.runtime_bundle import create_bundle, validate_bundle
+                required = sum((source_bin / name).stat().st_size for name in BINARY_NAMES)
+                if shutil.disk_usage(native["storage_root"]).free < required + 512 * 1024 * 1024:
+                    raise storage.StorageError("Insufficient storage for the verified native bundle archive")
+                bundle = create_bundle(native["build_root"], native["runtime_root"], manifest_path, "dev")
+                archived, hashes = validate_bundle(bundle["bundle_root"], native["runtime_root"], "dev")
+                if (archived["source"]["manifest_sha256"] != frozen_native_build_id
+                        or archived["source"]["backend_source_sha256"] != source_before):
+                    raise storage.StorageError("Native bundle archive does not match the verified package")
+                # Retain this immutable A bundle before a later build replaces
+                # the mutable target; this does not activate any workspace.
+                receipt["archived_native_bundle"] = {**bundle, "verified_files": hashes}
+                verified_build_identity(native["build_root"], native["runtime_root"], manifest_path,
+                                        None, expected_manifest_sha256=frozen_native_build_id)
+                if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != verifier_hash:
+                    raise storage.StorageError("Native API verifier changed while archiving the verified package")
+                receipt["checks"].append("frozen-native-bundle-archive")
             code = 0
         except Exception as error:
             receipt["reason"] = type(error).__name__
@@ -874,6 +1139,46 @@ def exercise_cli_owner(repo: Path, run_root: Path, manifest: dict, receipt: dict
         receipt["checks"].append("native-launcher-confirms-different-verified-api-build")
 
 
+def _wait_for_owned_service_ready(owner_path: Path, child, manifest: dict, *,
+                                  clock=time.monotonic, sleep=time.sleep) -> dict:
+    """Observe this fixture's publication within the existing startup deadline."""
+    deadline = clock() + 20
+    while clock() < deadline:
+        if child.poll() is not None:
+            raise storage.StorageError("Empty resident service exited before Ready")
+        try:
+            owner = json.loads(owner_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            sleep(0.1)
+            continue
+        except PermissionError as error:
+            if error.errno != errno.EACCES and getattr(error, "winerror", None) not in (5, 32, 33):
+                raise
+            sleep(0.1)
+            continue
+        if (not isinstance(owner, dict) or owner.get("schema_version") != "runtime_service_owner.v1"
+                or type(owner.get("pid")) is not int or owner["pid"] != child.pid):
+            raise storage.StorageError("Empty resident service published a foreign or invalid owner")
+        if owner.get("state") == "ready":
+            if (owner.get("build_commit") != manifest["git_commit"]
+                    or owner.get("build_snapshot") != manifest["source_snapshot_sha256"]):
+                raise storage.StorageError("Empty resident service Ready identity differs from the pinned build")
+            return owner
+        sleep(0.1)
+    raise storage.StorageError("Empty resident service did not publish Ready")
+
+
+def _wait_for_owned_service_exit(child, record: dict, primary_error: Exception | None) -> None:
+    try:
+        record["exit_code"] = child.wait(timeout=20)
+        record["waited"] = True
+    except subprocess.TimeoutExpired as error:
+        record["retained_reason"] = "owned service drain outcome remains unknown"
+        record["cleanup_error"] = type(error).__name__
+        if primary_error is None:
+            raise
+
+
 def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, binaries: Path) -> None:
     """Exercise only this verifier's initialized empty store and sealed binaries."""
     from windows.runtime_bundle import BINARY_NAMES
@@ -1063,6 +1368,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
         receipt["processes"].append(record)
         owner = None
         idle_drain_requested = False
+        primary_error = None
 
         def control(command, token, nonce):
             address, port = owner["control_address"].rsplit(":", 1)
@@ -1083,17 +1389,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
                 return json.loads(line)
 
         try:
-            deadline = time.monotonic() + 20
-            while True:
-                if child.poll() is not None:
-                    raise storage.StorageError("Empty resident service exited before Ready")
-                if owner_path.exists():
-                    owner = json.loads(owner_path.read_text(encoding="utf-8"))
-                    if owner["state"] == "ready":
-                        break
-                if time.monotonic() >= deadline:
-                    raise storage.StorageError("Empty resident service did not publish Ready")
-                time.sleep(0.1)
+            owner = _wait_for_owned_service_ready(owner_path, child, manifest)
             assert owner["pid"] == child.pid
             assert owner["build_commit"] == manifest["git_commit"]
             assert owner["build_snapshot"] == manifest["source_snapshot_sha256"]
@@ -1234,6 +1530,10 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
             receipt["checks"].append("confirmed-drain-follows-both-terminal-children")
             assert json.loads(owner_path.read_text(encoding="utf-8"))["state"] == "drained"
             receipt["checks"].append("terminal-owner-published-before-confirmation")
+        except Exception as error:
+            primary_error = error
+            record["primary_error"] = type(error).__name__
+            raise
         finally:
             # Never stop an unrelated owner or replace an unknown drain result.
             # Once an idle lifecycle request may have been sent, a lost CLI
@@ -1244,12 +1544,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
                     control("drain", owner["owner_token"], None)
                 except (OSError, ValueError, storage.StorageError):
                     pass
-            try:
-                record["exit_code"] = child.wait(timeout=20)
-                record["waited"] = True
-            except subprocess.TimeoutExpired:
-                record["retained_reason"] = "owned service drain outcome remains unknown"
-                raise
+            _wait_for_owned_service_exit(child, record, primary_error)
             record["log_sha256"] = hashlib.sha256(log_path.read_bytes()).hexdigest()
         if record["exit_code"] != 0:
             raise storage.StorageError("Empty resident service did not exit successfully")
@@ -1259,7 +1554,9 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
 
 
 def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_document_only: bool = False,
-             restart_transport_only: bool = False, consumer_readiness_only: bool = False) -> None:
+             project_source_root: Path | None = None,
+             restart_transport_only: bool = False, consumer_readiness_only: bool = False,
+             start_freeze_race_only: bool = False) -> None:
     generation, source, worktree = "1" * 32, "a" * 64, "fixture-worktree"
     fixture_storage = run_root / "fixture-storage"
     status = fixture_storage / "builds" / worktree / "windows-native-fdm-cpu-dev/backend-watch-status.json"
@@ -1294,8 +1591,10 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             port = reservation.getsockname()[1]
         env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME") if key in os.environ}
         native_layout = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
-        env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(run_root / (label + "-state")), FULLMAG_API_PORT=str(port), FULLMAG_DISABLE_STATIC_CONTROL_ROOM="1",
+        env.update(FULLMAG_REPO_ROOT=str(project_source_root or repo), FULLMAG_STATE_ROOT=str(run_root / (label + "-state")), FULLMAG_API_PORT=str(port), FULLMAG_DISABLE_STATIC_CONTROL_ROOM="1",
                    FULLMAG_PYTHON=str(Path(native_layout["build_root"]) / "python/fullmag/Scripts/python.exe"))
+        # Python helpers must not add bytecode to the sealed source inventory.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         env.update(config)
         log_path = run_root / (label + ".log")
         with log_path.open("w", encoding="utf-8") as log:
@@ -1530,6 +1829,47 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             "scene_document": material_scene}, timeout=30)
         assert complete_noop["revision"] == authored["revision"] and complete_noop["archive_base64"] == authored["archive_base64"]
         checks.append("project-authoring-complete-source-canonical-utf8-and-noop")
+        no_physics_scene = json.loads(json.dumps(material_scene))
+        no_physics_scene["study"].update(exchange_enabled=False, demag_enabled=False)
+        no_physics_scene["objects"][0]["physics_stack"] = []
+        _, _, no_physics = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": authored["archive_base64"], "expected_revision": authored["revision"],
+            "scene_document": no_physics_scene}, timeout=30)
+        no_physics_entries = entries(no_physics["archive_base64"])
+        assert no_physics["revision"] == authored["revision"] + 1 and no_physics["dirty"] is True
+        assert json.loads(no_physics_entries["project/scene_document.json"]) == no_physics_scene
+        assert json.loads(no_physics_entries["manifest/project.json"]).get("source") is None
+        assert "project/source.py" not in no_physics_entries
+        history_path = "project/source-history/" + hashlib.sha256(source.encode("utf-8")).hexdigest() + ".py"
+        assert no_physics_entries[history_path] == source.encode("utf-8")
+        assert no_physics_entries["project/assets/retained.bin"] == bytes(range(256))
+        assert no_physics_entries["project/notes/retained.txt"] == b"future project extension\n"
+        checks.append("project-authoring-no-physics-retains-scene-assets-and-source-history")
+        _, _, no_physics_repeat = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": no_physics["archive_base64"], "expected_revision": no_physics["revision"],
+            "scene_document": no_physics_scene}, timeout=30)
+        assert no_physics_repeat["revision"] == no_physics["revision"]
+        assert no_physics_repeat["archive_base64"] == no_physics["archive_base64"]
+        _, _, no_physics_open = get("/v2/persistence/projects/open", method="POST", payload={
+            "archive_base64": no_physics["archive_base64"], "display_name": "no-physics.fms"})
+        assert no_physics_open["project_id"] == authored["project_id"]
+        assert no_physics_open["archive_base64"] == no_physics["archive_base64"]
+        checks.append("project-authoring-no-physics-noop-and-reopen-preserve-archive")
+        _, _, physics_restored = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": no_physics["archive_base64"], "expected_revision": no_physics["revision"],
+            "scene_document": material_scene}, timeout=30)
+        physics_entries = entries(physics_restored["archive_base64"])
+        physics_source_path = json.loads(physics_entries["manifest/project.json"])["source"]
+        assert physics_entries[physics_source_path] == source.encode("utf-8")
+        assert physics_entries[history_path] == source.encode("utf-8")
+        checks.append("project-authoring-physics-restored-regenerates-exact-canonical-source")
+        receipt["project_no_physics_observation"] = {
+            "project_id": no_physics["project_id"], "revision": no_physics["revision"],
+            "archive_sha256": hashlib.sha256(base64.b64decode(no_physics["archive_base64"])).hexdigest(),
+            "source_history_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "physics_restored_revision": physics_restored["revision"],
+            "scope": "project persistence only; no runtime sync or solver execution",
+        }
         receipt["project_authoring_observation"] = {
             "project_id": authored["project_id"], "revision": authored["revision"],
             "incomplete_archive_sha256": hashlib.sha256(base64.b64decode(updated["archive_base64"])).hexdigest(),
@@ -1644,6 +1984,8 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
 
     if project_document_only:
         with_api("project-document", {}, project_document)
+        from windows.verify_scene_stage_authoring import exercise as exercise_scene_stages
+        with_api("scene-stage-authoring", {}, lambda get: exercise_scene_stages(get, checks, receipt, run_root))
         # Fault helpers live only in a verifier-owned source root. No user
         # package or interpreter is modified, and no authored script executes.
         for fault in ("deadline", "log-overflow"):
@@ -1736,8 +2078,9 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
                     "http_status": outcome["status"]})
             with_api("renderer-" + fault, {"FULLMAG_REPO_ROOT": str(helper_root)}, renderer_fault)
         return
-    with_api("disabled", {}, disabled)
-    with_api("partial", {"FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation}, lambda get: check("partial-configuration", get()[2], "unknown", "configuration_invalid"))
+    if not start_freeze_race_only:
+        with_api("disabled", {}, disabled)
+        with_api("partial", {"FULLMAG_DEVELOPMENT_BACKEND_GENERATION": generation}, lambda get: check("partial-configuration", get()[2], "unknown", "configuration_invalid"))
 
     # This tests the private prelisten consumer, not capsule authenticity or
     # the manager's complete restart. No previous process/session is stopped.
@@ -1761,7 +2104,7 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
 
     owner_token = "7" * 32
 
-    def private_acquisition(get, expected_scene=None):
+    def private_acquisition(get, expected_scene=None, *, start_race=False):
         owner_root = fixture_storage / "runtimes" / worktree
         deadline = time.monotonic() + 5
         while True:
@@ -1835,6 +2178,19 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
                 assert json.load(error)["code"] == "development_restart_in_progress"
             else:
                 raise AssertionError("Private acquisition did not freeze mutation admission")
+            try:
+                get("/v2/sessions/current/simulation/commands", method="POST", payload={
+                    "client_intent_id": str(uuid.uuid4()), "kind": "solve",
+                    "reason": "user_requested", "requested_at_unix_ms": int(time.time() * 1000),
+                    "target": {"kind": "study"},
+                })
+            except urllib.error.HTTPError as error:
+                assert error.code == 409, error.code
+                assert json.load(error)["code"] == "development_restart_in_progress"
+            else:
+                raise AssertionError("Solve/Start command was admitted while restart freeze was held")
+            if "private-freeze-rejects-simulation-start" not in checks:
+                checks.append("private-freeze-rejects-simulation-start")
 
         def rejected_body_transport():
             body = json.dumps({"name": "Rejected transport fixture", "backend": "fdm",
@@ -1879,6 +2235,157 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
                 finally:
                     connection.close()
                 checks.append("frozen-" + ("partial" if partial_body else "stalled") + "-body-is-bounded-and-closes-connection")
+
+        if start_race:
+            assert expected_scene is not None, "Start/freeze race requires the frozen valid FDM scene"
+            code, _, readiness = get("/v2/sessions/current/model/readiness")
+            assert code == 200 and readiness.get("ready_to_run") is True, readiness
+            checks.append("start-freeze-race-scene-ready")
+
+            # Prove this idle authored workspace is independently restartable
+            # before racing its first accepted Solve against mutation freeze.
+            with connect() as stream:
+                idle = exchange(stream, frame)
+                assert idle.get("schema") == "fullmag.development-authoring-acquisition.v1", idle
+                assert idle["workspace"].get("state") == "session", idle
+                assert idle["workspace"].get("scene_document") == canonical, idle
+                assert exchange(stream, {**frame, "command": "abort"}).get("schema") == "fullmag.development-api-abort.v1"
+            checks.append("start-freeze-race-idle-session-can-be-acquired")
+
+            # Prove the freeze-first ordering independently of which request
+            # wins the overlapping barrier below.
+            with connect() as stream:
+                frozen = exchange(stream, {**frame, "nonce": str(uuid.uuid4())})
+                assert frozen.get("schema") == "fullmag.development-authoring-acquisition.v1", frozen
+                confirmed = exchange(stream, {
+                    **frame, "nonce": frozen["nonce"], "command": "confirm",
+                })
+                assert confirmed.get("schema") == "fullmag.development-api-confirm.v1", confirmed
+                assert_mutation_frozen()
+                aborted = exchange(stream, {
+                    **frame, "nonce": frozen["nonce"], "command": "abort",
+                })
+                assert aborted.get("schema") == "fullmag.development-api-abort.v1", aborted
+            checks.append("private-freeze-before-start-rejects-simulation-command")
+
+            start_body = {
+                "client_intent_id": str(uuid.uuid4()),
+                "kind": "solve",
+                "reason": "user_requested",
+                "requested_at_unix_ms": int(time.time() * 1000),
+                "target": {"kind": "study"},
+            }
+            barrier = threading.Barrier(3)
+            race_results = {}
+
+            def submit_start():
+                barrier.wait(timeout=5)
+                try:
+                    code, _, body = get("/v2/sessions/current/simulation/commands",
+                        method="POST", payload=start_body, timeout=10)
+                    race_results["start"] = (code, body)
+                except urllib.error.HTTPError as error:
+                    race_results["start"] = (error.code, json.load(error))
+                except Exception as error:
+                    race_results["start_error"] = repr(error)
+
+            def race_acquire():
+                barrier.wait(timeout=5)
+                try:
+                    with connect() as stream:
+                        acquired = exchange(stream, {**frame, "nonce": str(uuid.uuid4())})
+                        if acquired.get("schema") == "fullmag.development-authoring-acquisition.v1":
+                            race_results["acquire"] = ("held", acquired)
+                            confirmed = exchange(stream, {**frame, "nonce": acquired["nonce"], "command": "confirm"})
+                            assert confirmed.get("schema") == "fullmag.development-api-confirm.v1", confirmed
+                            assert_mutation_frozen()
+                            aborted = exchange(stream, {**frame, "nonce": acquired["nonce"], "command": "abort"})
+                            assert aborted.get("schema") == "fullmag.development-api-abort.v1", aborted
+                        else:
+                            race_results["acquire"] = ("rejected", acquired)
+                except Exception as error:
+                    race_results["acquire_error"] = repr(error)
+
+            start_thread = threading.Thread(target=submit_start, daemon=True)
+            acquire_thread = threading.Thread(target=race_acquire, daemon=True)
+            start_thread.start()
+            acquire_thread.start()
+            barrier.wait(timeout=5)
+            start_thread.join(timeout=15)
+            acquire_thread.join(timeout=15)
+            assert not start_thread.is_alive() and not acquire_thread.is_alive(), race_results
+            assert "start_error" not in race_results and "acquire_error" not in race_results, race_results
+            start_status, start_result = race_results["start"]
+            acquire_status, acquire_result = race_results["acquire"]
+            accepted_start_detail = None
+            start_before_acquire_rejection = None
+            if start_status == 200:
+                assert start_result.get("accepted") is True and isinstance(start_result.get("command_id"), str), start_result
+                assert acquire_status == "rejected", (start_status, acquire_status, acquire_result)
+                assert acquire_result == {
+                    "schema": "fullmag.development-api-control.v1",
+                    "status": "rejected",
+                    "reason": "development_owner_request_rejected",
+                }, acquire_result
+                code, _, detail = get(
+                    "/v2/sessions/current/simulation/commands/" + start_result["command_id"]
+                )
+                assert code == 200 and detail["command_id"] == start_result["command_id"]
+                assert detail["kind"] == "solve" and detail["accepted_at_unix_ms"] is not None, detail
+                accepted_start_detail = detail
+                start_before_acquire_rejection = acquire_result
+                race_winner = "start-admitted-first; freeze-refused-queued-command"
+            else:
+                assert start_status == 409 and start_result.get("code") == "development_restart_in_progress", start_result
+                assert acquire_status == "held", (start_status, acquire_status, acquire_result)
+                start_first_body = {
+                    "client_intent_id": str(uuid.uuid4()),
+                    "kind": "solve",
+                    "reason": "user_requested",
+                    "requested_at_unix_ms": int(time.time() * 1000),
+                    "target": {"kind": "study"},
+                }
+                code, _, start_first = get(
+                    "/v2/sessions/current/simulation/commands",
+                    method="POST", payload=start_first_body,
+                )
+                assert code == 200 and start_first.get("accepted") is True, start_first
+                assert isinstance(start_first.get("command_id"), str), start_first
+                with connect() as stream:
+                    rejected = exchange(stream, {**frame, "nonce": str(uuid.uuid4())})
+                assert rejected == {
+                    "schema": "fullmag.development-api-control.v1",
+                    "status": "rejected",
+                    "reason": "development_owner_request_rejected",
+                }, rejected
+                code, _, detail = get(
+                    "/v2/sessions/current/simulation/commands/" + start_first["command_id"]
+                )
+                assert code == 200 and detail["command_id"] == start_first["command_id"]
+                assert detail["kind"] == "solve" and detail["accepted_at_unix_ms"] is not None, detail
+                accepted_start_detail = detail
+                start_before_acquire_rejection = rejected
+                race_winner = "freeze-closed-admission-first; start-rejected"
+            checks.append("private-start-before-freeze-preserves-accepted-command")
+            receipt["start_freeze_race"] = {
+                "winner": race_winner,
+                "linearization_orderings_proven": [
+                    "freeze-before-start-rejects-simulation-command",
+                    "start-before-freeze-preserves-accepted-command",
+                ],
+                "start_http_status": start_status,
+                "acquisition_outcome": acquire_status,
+                "start_command_id": start_result.get("command_id"),
+                "accepted_start_command": {
+                    "command_id": accepted_start_detail["command_id"],
+                    "kind": accepted_start_detail["kind"],
+                    "accepted_at_unix_ms": accepted_start_detail["accepted_at_unix_ms"],
+                },
+                "start_before_acquire_rejection": start_before_acquire_rejection,
+                "acquisition_api_instance_id": owner["api_instance_id"],
+            }
+            checks.append("private-start-freeze-race-is-linearizable")
+            return
 
         with connect() as stream:
             acquired = exchange(stream, frame)
@@ -1944,14 +2451,49 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
                 time.sleep(0.05)
         checks.append("private-acquisition-disconnect-reopens-admission")
 
-    for label, configuration in (
-        ("owner-nonmanaged", {"FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}),
-        ("owner-invalid-token", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": "invalid"}),
-    ):
-        with_api(label, configuration, None, reject_startup=True)
-    with_api("owner-empty", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}, private_acquisition)
-    with_api("owner-restored", {**restore_config, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token},
-             lambda get: private_acquisition(get, restored_scene), restore_input=json.dumps(restore_envelope).encode())
+    if not start_freeze_race_only:
+        for label, configuration in (
+            ("owner-nonmanaged", {"FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}),
+            ("owner-invalid-token", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": "invalid"}),
+        ):
+            with_api(label, configuration, None, reject_startup=True)
+        with_api("owner-empty", {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token}, private_acquisition)
+        with_api("owner-restored", {**restore_config, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token},
+                 lambda get: private_acquisition(get, restored_scene), restore_input=json.dumps(restore_envelope).encode())
+
+    start_race_scene = json.loads(json.dumps(restored_scene))
+    start_race_scene["objects"][0].update(
+        role="magnet", material_ref="start-race-material", magnetization_ref="start-race-m0",
+        physics_stack=[{"kind": "exchange", "enabled": True}],
+        geometry={
+            "geometry_kind": "Box",
+            "geometry_params": {"size": [1.0e-6, 1.0e-6, 1.0e-8]},
+        },
+    )
+    start_race_scene["materials"] = [{
+        "id": "start-race-material", "name": "Start race material",
+        "properties": {"Ms": 800000.0, "Aex": 1.3e-11, "alpha": 0.02},
+    }]
+    start_race_scene["magnetization_assets"] = [{
+        "id": "start-race-m0", "name": "Uniform", "kind": "uniform", "value": [1.0, 0.0, 0.0],
+    }]
+    start_race_scene["study"].update(
+        backend="fdm", requested_backend="fdm", requested_device="cpu",
+        requested_precision="double", requested_mode="strict",
+        fdm={"default_cell": [1.0e-7, 1.0e-7, 1.0e-8]},
+        stages=[{"kind": "relax", "entrypoint_kind": "flat_relax",
+                 "algorithm": "projected_gradient_bb", "max_steps": "1000"}],
+    )
+    start_race_envelope = {
+        **restore_envelope,
+        "old_session_id": "old-session-start-freeze-race",
+        "scene_document": start_race_scene,
+    }
+    with_api("owner-start-freeze-race", {**restore_config, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token},
+             lambda get: private_acquisition(get, start_race_scene, start_race=True),
+             restore_input=json.dumps(start_race_envelope).encode())
+    if start_freeze_race_only:
+        return
 
     def restored(get):
         code, _, current = get("/v2/sessions/current")
@@ -2055,11 +2597,24 @@ if __name__ == "__main__":
     parser.add_argument("--observer-pause-only", action="store_true")
     parser.add_argument("--restart-consumer-only", action="store_true")
     parser.add_argument("--consumer-readiness-only", action="store_true")
+    parser.add_argument("--consumer-pump-owner-bundle")
+    parser.add_argument("--active-run-refusal-owner-bundle")
+    parser.add_argument("--active-run-scenario", choices=("running", "paused"), default="running")
+    parser.add_argument("--start-freeze-race-only", action="store_true")
+    parser.add_argument("--candidate-preparation-only", action="store_true")
+    parser.add_argument("--workspace-browser-owner-bundle")
+    parser.add_argument("--frozen-native-build-id")
+    parser.add_argument("--archive-frozen-bundle", action="store_true")
     args = parser.parse_args()
     try:
         raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only,
                              args.restart_transport_only, args.observer_pause_only,
-                             args.restart_consumer_only, args.consumer_readiness_only))
+                             args.restart_consumer_only, args.consumer_readiness_only,
+                             args.consumer_pump_owner_bundle, args.candidate_preparation_only,
+                             args.workspace_browser_owner_bundle, args.frozen_native_build_id,
+                              args.active_run_refusal_owner_bundle, args.active_run_scenario,
+                              args.start_freeze_race_only,
+                              archive_frozen_bundle=args.archive_frozen_bundle))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

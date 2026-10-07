@@ -23,6 +23,9 @@ def _without_source_identity(problem_ir: dict[str, object]) -> dict[str, object]
     problem_meta = dict(comparable["problem_meta"])
     problem_meta.pop("script_source", None)
     problem_meta.pop("source_hash", None)
+    runtime_metadata = dict(problem_meta.get("runtime_metadata", {}))
+    runtime_metadata.pop("output_storage_source_stem", None)
+    problem_meta["runtime_metadata"] = runtime_metadata
     comparable["problem_meta"] = problem_meta
     return comparable
 

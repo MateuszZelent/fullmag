@@ -40,7 +40,11 @@ fn default_adaptive_tolerance_mode() -> String {
 pub struct ScriptBuilderSolverState {
     #[serde(default = "default_solver_integrator")]
     pub integrator: String,
-    #[serde(default = "default_solver_timestep")]
+    /// A payload that omits the field means "no fixed step was authored"; the
+    /// `Default` value below only seeds new empty scenes. Filling `1e-13` on
+    /// deserialization would combine a fixed step with adaptive controls and
+    /// invent a step the original script never had.
+    #[serde(default)]
     pub fixed_timestep: String,
     #[serde(default)]
     pub dt_initial: String,
@@ -54,6 +58,10 @@ pub struct ScriptBuilderSolverState {
     pub adaptive_timestep: Option<ScriptBuilderAdaptiveTimestepState>,
     #[serde(default)]
     pub demag_interval_s: String,
+    /// Gyromagnetic ratio in rad/(s*T) when the authored study sets one that
+    /// differs from the canonical default; empty means "use the default".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub gamma: String,
     #[serde(default = "default_solver_relax_algorithm")]
     pub relax_algorithm: String,
     #[serde(default = "default_solver_torque_tol")]
@@ -75,6 +83,7 @@ impl Default for ScriptBuilderSolverState {
             max_err: String::new(),
             adaptive_timestep: None,
             demag_interval_s: String::new(),
+            gamma: String::new(),
             relax_algorithm: default_solver_relax_algorithm(),
             torque_tolerance: default_solver_torque_tol(),
             energy_tolerance: default_solver_energy_tol(),
@@ -878,6 +887,10 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_storage: Option<fullmag_ir::OutputStorageIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_profile: Option<fullmag_ir::ExecutionProfileIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub execution_layers: Vec<fullmag_ir::ExecutionRequestLayerIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<ScriptBuilderInitialState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub geometries: Vec<ScriptBuilderGeometryEntry>,
@@ -909,6 +922,19 @@ pub struct ScriptBuilderState {
     pub antenna_spectrum_requests: Vec<fullmag_ir::AntennaSpectrumRequestIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ScriptBuilderExcitationAnalysisState>,
+}
+
+impl Default for ScriptBuilderState {
+    /// An empty builder: every field takes its serde default. Master's
+    /// `session_persistence` test calls this and no impl existed.
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({
+            "revision": 0,
+            "solver": {},
+            "mesh": {}
+        }))
+        .expect("an empty script builder state deserializes from serde defaults")
+    }
 }
 
 fn default_inherit_mesh_mode() -> String {
@@ -1005,6 +1031,37 @@ mod tests {
         assert_eq!(defaults.relax_algorithm, "llg_overdamped");
         assert_eq!(defaults.torque_tolerance, "1e-4");
         assert_eq!(defaults.max_relax_steps, "5000");
+    }
+
+    #[test]
+    fn solver_payload_without_fixed_timestep_does_not_gain_one() {
+        let adaptive: ScriptBuilderSolverState = serde_json::from_value(serde_json::json!({
+            "integrator": "rk45",
+            "dt_initial": "1e-15",
+            "dt_max": "1e-11",
+            "max_err": "1e-5"
+        }))
+        .unwrap();
+        assert_eq!(adaptive.fixed_timestep, "");
+        assert_eq!(adaptive.gamma, "");
+        let serialized = serde_json::to_value(&adaptive).unwrap();
+        assert!(serialized.get("gamma").is_none());
+        // A new empty scene still starts from the canonical fixed step.
+        assert_eq!(ScriptBuilderSolverState::default().fixed_timestep, "1e-13");
+    }
+
+    #[test]
+    fn solver_gamma_survives_a_serde_round_trip() {
+        let solver: ScriptBuilderSolverState = serde_json::from_value(serde_json::json!({
+            "integrator": "heun",
+            "fixed_timestep": "1e-15",
+            "gamma": "233728.481992"
+        }))
+        .unwrap();
+        let again: ScriptBuilderSolverState =
+            serde_json::from_value(serde_json::to_value(&solver).unwrap()).unwrap();
+        assert_eq!(again.gamma, "233728.481992");
+        assert_eq!(again.fixed_timestep, "1e-15");
     }
 
     #[test]

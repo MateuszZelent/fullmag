@@ -402,6 +402,22 @@ fn rewrite_script_via_python_helper_with_policy(
     })
 }
 
+pub(crate) fn render_scene_document_via_python_helper(
+    repo_root: &Path,
+    workspace_root: &Path,
+    output_path: &Path,
+    scene_document: &SceneDocument,
+) -> Result<ScriptSyncResponse, ApiError> {
+    render_scene_document_via_python_helper_with_policy(
+        repo_root,
+        workspace_root,
+        output_path,
+        scene_document,
+        PythonHelperOutputPolicy::Capture,
+        false,
+    )
+}
+
 /// Render an authoring document through the Python helper with bounded,
 /// file-backed process output.  The authoring endpoint owns the private
 /// workspace, so the helper cannot leave an unbounded `Command::output`
@@ -418,7 +434,35 @@ pub(crate) fn render_scene_document_via_python_helper_bounded(
         output_path,
         scene_document,
         PythonHelperOutputPolicy::Bounded { workspace_root },
+        false,
     )
+}
+
+/// Persistence may keep an authoring-valid scene with no enabled physics.
+/// Such a document has no executable source yet; runtime synchronization stays strict.
+pub(crate) fn try_render_scene_document_for_persistence(
+    repo_root: &Path,
+    workspace_root: &Path,
+    output_path: &Path,
+    scene_document: &SceneDocument,
+) -> Result<Option<ScriptSyncResponse>, ApiError> {
+    let response = render_scene_document_via_python_helper_with_policy(
+        repo_root,
+        workspace_root,
+        output_path,
+        scene_document,
+        PythonHelperOutputPolicy::Bounded { workspace_root },
+        true,
+    )?;
+    if response.written {
+        return Ok(Some(response));
+    }
+    if response.bytes_written != 0 || output_path.exists() {
+        return Err(ApiError::internal(
+            "incomplete authoring render unexpectedly produced executable source",
+        ));
+    }
+    Ok(None)
 }
 
 struct TemporaryFileGuard(PathBuf);
@@ -435,6 +479,7 @@ fn render_scene_document_via_python_helper_with_policy(
     output_path: &Path,
     scene_document: &SceneDocument,
     policy: PythonHelperOutputPolicy<'_>,
+    allow_incomplete: bool,
 ) -> Result<ScriptSyncResponse, ApiError> {
     std::fs::create_dir_all(workspace_root)
         .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {}", error)))?;
@@ -446,7 +491,7 @@ fn render_scene_document_via_python_helper_with_policy(
     std::fs::write(&scene_path, scene_body).map_err(|error| {
         ApiError::internal(format!("failed to persist SceneDocument: {}", error))
     })?;
-    let helper_args = vec![
+    let mut helper_args = vec![
         "-m".to_string(),
         "fullmag.runtime.helper".to_string(),
         "render-scene-document".to_string(),
@@ -455,6 +500,9 @@ fn render_scene_document_via_python_helper_with_policy(
         "--output".to_string(),
         output_path.display().to_string(),
     ];
+    if allow_incomplete {
+        helper_args.push("--allow-incomplete".to_string());
+    }
     let output = run_python_helper_with_policy(repo_root, &helper_args, policy);
     let output = output?;
     if !output.status.success() {
@@ -514,6 +562,123 @@ pub(crate) fn scene_document_to_problem_ir(
             "current live preparation materialization supports requested backend 'fdm' or 'auto'",
         ));
     }
+    let problem = scene_document_to_authored_problem_ir(
+        repo_root,
+        workspace_root,
+        scene_document,
+        requested_execution,
+    )?;
+    let problem =
+        fullmag_application::bind_declared_execution(&problem, vec![]).map_err(|error| {
+            ApiError::bad_request(format!(
+                "declared execution profile could not be bound: {error}"
+            ))
+        })?;
+    problem.validate().map_err(|errors| {
+        ApiError::internal(format!(
+            "canonical SceneDocument lowering produced invalid ProblemIR: {}",
+            errors.join("; ")
+        ))
+    })?;
+    Ok(problem)
+}
+
+/// Capture canonical authored IR without resolving its declared profile.
+/// Whole-Study callers must bind the published catalogue exactly once through
+/// the application materializer. This does not generate per-step inputs or
+/// evaluate host admission, and the caller owns the captured source/asset root.
+/// Validation/binding remain at the caller's existing materialization boundary.
+pub(crate) fn scene_document_to_authored_problem_ir(
+    repo_root: &Path,
+    workspace_root: &Path,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    capture_authored_scene(
+        repo_root,
+        workspace_root,
+        scene_document,
+        requested_execution,
+        SceneCaptureKind::ProblemIr,
+    )
+}
+
+/// Capture actual authored stage IR/actions through the same Python helper as
+/// script execution. This does not bind profiles or create execution readiness.
+pub(crate) fn scene_document_to_authored_script_config(
+    repo_root: &Path,
+    workspace_root: &Path,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
+    capture_authored_scene(
+        repo_root,
+        workspace_root,
+        scene_document,
+        requested_execution,
+        SceneCaptureKind::ExecutionConfig,
+    )
+}
+
+/// Project actual authored stages through the shared canonical producer.
+/// Pure output-policy configuration is sufficient here: writer availability,
+/// profile binding, state-port compilation and admission remain separate gates.
+pub(crate) fn scene_document_to_authored_stages(
+    repo_root: &Path,
+    workspace_root: &Path,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<Vec<fullmag_application::script_stage_contract::ResolvedScriptStage>, ApiError> {
+    let config = scene_document_to_authored_script_config(
+        repo_root,
+        workspace_root,
+        scene_document,
+        requested_execution,
+    )?;
+    fullmag_application::script_stage_materialization::materialize_script_stages_with_output_policy_bounded(
+        config,
+        fullmag_ir::configure_project_autosave_policy,
+        256,
+    )
+    .map_err(|error| {
+        ApiError::bad_request(format!(
+            "SceneDocument stage materialization failed: {error:#}"
+        ))
+    })
+}
+
+#[derive(Clone, Copy)]
+enum SceneCaptureKind {
+    ProblemIr,
+    ExecutionConfig,
+}
+
+impl SceneCaptureKind {
+    fn helper_command(self) -> &'static str {
+        match self {
+            Self::ProblemIr => "export-scene-ir",
+            Self::ExecutionConfig => "export-scene-config",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::ProblemIr => "ProblemIR",
+            Self::ExecutionConfig => "ScriptExecutionConfig",
+        }
+    }
+}
+
+fn capture_authored_scene<T: serde::de::DeserializeOwned>(
+    repo_root: &Path,
+    workspace_root: &Path,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    kind: SceneCaptureKind,
+) -> Result<T, ApiError> {
+    requested_execution
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     scene_document_problem_projection(scene_document)
         .map_err(|error| ApiError::bad_request(error.message))?;
     std::fs::create_dir_all(workspace_root)
@@ -535,7 +700,7 @@ pub(crate) fn scene_document_to_problem_ir(
     let helper_args = vec![
         "-m".to_string(),
         "fullmag.runtime.helper".to_string(),
-        "export-scene-ir".to_string(),
+        kind.helper_command().to_string(),
         "--scene-json".to_string(),
         scene_path.display().to_string(),
         "--backend".to_string(),
@@ -555,22 +720,18 @@ pub(crate) fn scene_document_to_problem_ir(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ApiError::bad_request(format!(
-            "SceneDocument could not be lowered to ProblemIR: {}",
+            "SceneDocument could not be lowered to {}: {}",
+            kind.label(),
             stderr.trim()
         )));
     }
 
-    let problem: fullmag_ir::ProblemIR =
-        serde_json::from_slice(&output.stdout).map_err(|error| {
-            ApiError::internal(format!("failed to decode generated ProblemIR: {error}"))
-        })?;
-    problem.validate().map_err(|errors| {
+    serde_json::from_slice(&output.stdout).map_err(|error| {
         ApiError::internal(format!(
-            "canonical SceneDocument lowering produced invalid ProblemIR: {}",
-            errors.join("; ")
+            "failed to decode generated {}: {error}",
+            kind.label()
         ))
-    })?;
-    Ok(problem)
+    })
 }
 
 pub(crate) fn scene_document_builder_projection(
@@ -632,6 +793,20 @@ enum PythonHelperOutputPolicy<'a> {
 
 pub(crate) fn run_python_helper(repo_root: &Path, args: &[String]) -> Result<Output, ApiError> {
     run_python_helper_with_policy(repo_root, args, PythonHelperOutputPolicy::Capture)
+}
+
+/// Run a helper command with file-backed bounded output and the 30 second
+/// deadline. `workspace_root` is a private directory that receives the logs.
+pub(crate) fn run_python_helper_bounded(
+    repo_root: &Path,
+    workspace_root: &Path,
+    args: &[String],
+) -> Result<Output, ApiError> {
+    run_python_helper_with_policy(
+        repo_root,
+        args,
+        PythonHelperOutputPolicy::Bounded { workspace_root },
+    )
 }
 
 fn run_python_helper_with_policy(

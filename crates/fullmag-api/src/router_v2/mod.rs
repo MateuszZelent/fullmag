@@ -26,6 +26,17 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v2/platform/health", get(handlers::platform::get_health))
         .route(
+            "/v2/platform/compute/preview",
+            post(handlers::platform::compute_preview::post_compute_preview)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/v2/platform/compute/profiles",
+            get(handlers::platform::compute_profiles::get_compute_profiles)
+                .post(handlers::platform::compute_profiles::post_compute_profile)
+                .layer(axum::extract::DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
             "/v2/platform/output-storage",
             get(handlers::platform::output_storage::get_output_storage_defaults)
                 .put(handlers::platform::output_storage::put_output_storage_defaults),
@@ -37,6 +48,15 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/platform/development-backend",
             get(handlers::platform::development_backend::get_development_backend),
+        )
+        .route(
+            "/v2/platform/development-backend/build-requests",
+            post(handlers::platform::development_backend_build_request::post_development_backend_build_request)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
+            "/v2/platform/development-backend/build-requests/:request_id",
+            get(handlers::platform::development_backend_build_request::get_development_backend_build_request),
         )
         .route(
             "/v2/platform/development-restart-requests",
@@ -828,6 +848,51 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .put(handlers::workspace::replace_workspace_active_node),
         )
         .route(
+            "/v2/workspace/items",
+            get(handlers::workspace_items::list_items).post(handlers::workspace_items::post_item),
+        )
+        .route(
+            "/v2/workspace/items/:id",
+            get(handlers::workspace_items::get_item),
+        )
+        .route(
+            "/v2/workspace/items/:id/thumbnail",
+            get(handlers::workspace_items::get_item_thumbnail),
+        )
+        .route(
+            "/v2/workspace/items/:id/archive",
+            get(handlers::workspace_items::get_item_archive),
+        )
+        .route(
+            "/v2/workspace/items/:id/pin",
+            post(handlers::workspace_items::pin_item),
+        )
+        .route(
+            "/v2/workspace/items/:id/forget",
+            post(handlers::workspace_items::forget_item),
+        )
+        .route(
+            "/v2/workspace/items/:id/history",
+            get(handlers::workspace_items::get_item_history),
+        )
+        .route(
+            "/v2/workspace/items/:id/frames",
+            get(handlers::workspace_items::get_item_frames),
+        )
+        .route(
+            "/v2/workspace/settings/:key",
+            get(handlers::workspace_items::get_setting)
+                .put(handlers::workspace_items::put_setting),
+        )
+        .route(
+            "/v2/workspace/roots",
+            get(handlers::workspace_items::get_roots).put(handlers::workspace_items::put_roots),
+        )
+        .route(
+            "/v2/workspace/scan",
+            post(handlers::workspace_items::post_scan),
+        )
+        .route(
             "/v2/sessions/current/analysis/eigenmodes/spectrum",
             get(handlers::analysis::get_spectrum),
         )
@@ -1054,7 +1119,8 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints/:checkpoint_id",
-            get(handlers::persistence::get_checkpoint),
+            get(handlers::persistence::get_checkpoint)
+                .delete(handlers::persistence::delete_checkpoint),
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints/:checkpoint_id/restore",
@@ -1099,6 +1165,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/authoring",
             post(handlers::persistence::projects::authoring_update),
+        )
+        .route(
+            "/v2/persistence/projects/from-script",
+            post(handlers::persistence::script_project::from_script),
         )
         .route(
             "/v2/persistence/projects/:project_id/runs",

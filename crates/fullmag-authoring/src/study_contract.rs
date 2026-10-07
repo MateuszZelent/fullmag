@@ -492,7 +492,7 @@ impl StudyPlan {
     ) -> Result<Self, StudyContractError> {
         let mut steps = Vec::new();
         for node in &document.nodes {
-            migrate_node(node, defaults, &mut steps)?;
+            migrate_node(node, defaults, &mut steps, true)?;
         }
         let plan = Self {
             schema_version: STUDY_PLAN_SCHEMA_VERSION.to_string(),
@@ -518,6 +518,7 @@ fn migrate_node(
     node: &StudyPipelineNode,
     defaults: &StudyPlanMigrationDefaults,
     steps: &mut Vec<StudyStep>,
+    ancestors_enabled: bool,
 ) -> Result<(), StudyContractError> {
     let (step_id, label, enabled, notes, source, kind, legacy_payload) = match node {
         StudyPipelineNode::Primitive(PrimitiveStageNode {
@@ -578,7 +579,7 @@ fn migrate_node(
             children,
         }) => {
             for child in children {
-                migrate_node(child, defaults, steps)?;
+                migrate_node(child, defaults, steps, ancestors_enabled && *enabled)?;
             }
             let child_step_ids = children.iter().map(node_id).collect::<Vec<_>>();
             (
@@ -602,7 +603,7 @@ fn migrate_node(
     steps.push(StudyStep {
         step_id: step_id.clone(),
         label: label.clone(),
-        enabled,
+        enabled: enabled && ancestors_enabled,
         notes,
         source,
         kind,
@@ -620,7 +621,9 @@ fn migrate_node(
     Ok(())
 }
 
-fn migrate_run_duration(payload: Option<&Value>) -> Result<Option<f64>, StudyContractError> {
+pub(crate) fn migrate_run_duration(
+    payload: Option<&Value>,
+) -> Result<Option<f64>, StudyContractError> {
     let Some(value) = payload
         .and_then(Value::as_object)
         .and_then(|payload| payload.get("until_seconds"))
@@ -951,6 +954,46 @@ mod tests {
         assert_eq!(restored, plan);
         assert!(restored.validate_for_execution().is_err());
         assert!(plan.canonical_sha256().is_ok());
+    }
+
+    #[test]
+    fn disabled_groups_disable_nested_steps_without_mutating_authoring() {
+        let pipeline: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [
+                {
+                    "node_kind": "group", "id": "disabled", "label": "Disabled", "enabled": false,
+                    "children": [
+                        {"node_kind": "primitive", "id": "child", "label": "Child", "stage_kind": "relax"},
+                        {
+                            "node_kind": "group", "id": "nested", "label": "Nested", "enabled": true,
+                            "children": [{"node_kind": "macro", "id": "sweep", "label": "Sweep", "macro_kind": "field_sweep_relax"}]
+                        }
+                    ]
+                },
+                {
+                    "node_kind": "group", "id": "enabled", "label": "Enabled",
+                    "children": [
+                        {"node_kind": "primitive", "id": "off", "label": "Off", "enabled": false, "stage_kind": "relax"},
+                        {"node_kind": "primitive", "id": "on", "label": "On", "stage_kind": "relax"}
+                    ]
+                }
+            ]
+        })).unwrap();
+        let captured = pipeline.clone();
+        let plan = StudyPlan::from_pipeline("group-enablement", 4, &pipeline, &defaults()).unwrap();
+        let enabled = plan
+            .steps
+            .iter()
+            .map(|step| (step.step_id.as_str(), step.enabled))
+            .collect::<BTreeMap<_, _>>();
+        for id in ["disabled", "child", "nested", "sweep", "off"] {
+            assert_eq!(enabled[id], false, "unexpected enabled step {id}");
+        }
+        assert!(enabled["enabled"]);
+        assert!(enabled["on"]);
+        assert_eq!(pipeline, captured);
+        plan.validate_for_execution().unwrap();
     }
 
     #[test]

@@ -70,11 +70,11 @@ pub async fn commit_session(
     let request = request.map_err(|error| {
         ApiError::bad_request(format!("invalid_session_import_request: {error}"))
     })?;
-    let context = crate::capture_current_live_request_context(&state).await?;
+    let context = crate::capture_optional_current_live_request_context(&state).await?;
     crate::session_persistence::import_session_commit_with_context(
         State(state),
         request,
-        Some(&context),
+        context.as_ref(),
     )
     .await
 }
@@ -139,6 +139,32 @@ pub async fn create_checkpoint(
     crate::session_persistence::create_checkpoint_with_context(
         State(state),
         Json(req),
+        Some(&context),
+    )
+    .await
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}",
+    params(
+        ("checkpoint_id" = String, Path, description = "Checkpoint id"),
+    ),
+    responses(
+        (status = 204, description = "Checkpoint deleted"),
+        (status = 404, description = "No active workspace or checkpoint not found"),
+        (status = 409, description = "Checkpoint is still referenced as a restore source or by the run manifest"),
+    ),
+    tag = "persistence"
+)]
+pub async fn delete_checkpoint(
+    State(state): State<Arc<AppState>>,
+    Path(checkpoint_id): Path<String>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::delete_checkpoint_with_context(
+        State(state),
+        checkpoint_id,
         Some(&context),
     )
     .await

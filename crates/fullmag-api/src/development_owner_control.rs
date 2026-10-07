@@ -2,9 +2,13 @@
 //! A disconnected or cancelled connection releases acquisition through RAII.
 
 use std::{
+    io::Write,
     net::Ipv4Addr,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -37,6 +41,33 @@ const MAX_CONSUMER_RESPONSE_BYTES: usize = 2048;
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 const ACQUISITION_TIMEOUT: Duration = Duration::from_secs(5);
 const HOLD_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_COMMIT_FAILURE_DIAGNOSTICS: usize = 8;
+
+static COMMIT_FAILURE_DIAGNOSTIC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Emit a bounded private diagnostic without changing the fixed control response.
+/// Only static stage labels are accepted so validation details and credentials
+/// cannot leak into the API log.
+fn record_commit_failure_stage(stage: &'static str) {
+    if std::env::var("FULLMAG_DEVELOPMENT_OWNER_PROBE").as_deref() != Ok("1") {
+        return;
+    }
+    let sequence = COMMIT_FAILURE_DIAGNOSTIC_COUNT.fetch_update(
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+        |count| (count < MAX_COMMIT_FAILURE_DIAGNOSTICS).then_some(count + 1),
+    );
+    let Ok(sequence) = sequence else {
+        return;
+    };
+    let stderr = std::io::stderr();
+    let mut stderr = stderr.lock();
+    let _ = writeln!(
+        stderr,
+        "fullmag.development-owner-commit-diagnostic.v1 sequence={} stage={stage}",
+        sequence + 1
+    );
+}
 
 pub(crate) struct PreparedOwnerControl {
     state: Arc<AppState>,
@@ -277,10 +308,12 @@ impl PreparedOwnerControl {
                 }
                 Command::CommitCold => {
                     if control.completion.is_some() {
+                        record_commit_failure_stage("commit_request_shape");
                         drop(acquisition);
                         return reject(stream).await;
                     }
                     let Some(handoff) = control.handoff else {
+                        record_commit_failure_stage("commit_request_shape");
                         drop(acquisition);
                         return reject(stream).await;
                     };
@@ -294,12 +327,16 @@ impl PreparedOwnerControl {
                             started + HOLD_TIMEOUT,
                         ) {
                             Ok(validated) => validated,
-                            Err(_) => {
+                            Err(error) => {
+                                record_commit_failure_stage(
+                                    crate::development_handoff_validation::cold_commit_failure_stage(&error),
+                                );
                                 drop(acquisition);
                                 return reject(stream).await;
                             }
                         };
                     if started.elapsed() >= HOLD_TIMEOUT {
+                        record_commit_failure_stage("hold_deadline");
                         drop(acquisition);
                         return reject(stream).await;
                     }
@@ -316,6 +353,7 @@ impl PreparedOwnerControl {
                         &validated.accepted_store_binding,
                     );
                     let Ok(record) = accepted else {
+                        record_commit_failure_stage("accept_handoff");
                         return reject(stream).await;
                     };
                     // Cancellation or a lost ACK must still signal shutdown once
