@@ -318,7 +318,7 @@ jobs:
 
       - name: Run modal progress elapsed clock regression
         run: |
-          g++ -std=c++17 -Ibackends/fem/include -Ibackends/fem/cpu backends/fem/tests/frequency_domain/modal_progress_elapsed_test.cpp -o "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
+          g++ -std=c++17 -Inative/include -Ibackends/fem/include -Ibackends/fem/cpu backends/fem/tests/frequency_domain/modal_progress_elapsed_test.cpp -o "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
           "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
 
       - name: Run DE Gamma Krylov trial contracts
