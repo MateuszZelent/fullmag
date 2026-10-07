@@ -42,12 +42,18 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
 
 bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
 {
+#if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         return gpu_demag_fem_bem_initialize(ctx, error);
     }
     if (!ctx.demag.enabled || ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
         return true;
     }
+#else
+    if (!ctx.demag.enabled) {
+        return true;
+    }
+#endif
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     if (!ctx.gpu_state.device.lifecycle.allocated ||
         ctx.gpu_state.device.demag_poisson.poisson_rhs == nullptr ||
@@ -115,10 +121,12 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
 
 void gpu_demag_poisson_destroy(Context &ctx)
 {
+#if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         gpu_demag_fem_bem_destroy(ctx);
         return;
     }
+#endif
 #if FULLMAG_HAS_MFEM_STACK
     auto *workspace = workspace_ptr(ctx);
     if (workspace == nullptr) {
@@ -142,9 +150,11 @@ void gpu_demag_poisson_destroy(Context &ctx)
 
 bool gpu_demag_poisson_ready(const Context &ctx)
 {
+#if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         return gpu_demag_fem_bem_ready(ctx);
     }
+#endif
 #if FULLMAG_HAS_MFEM_STACK
     auto *workspace = workspace_ptr(ctx);
     return workspace != nullptr && workspace->ready;
@@ -156,9 +166,11 @@ bool gpu_demag_poisson_ready(const Context &ctx)
 
 uint64_t gpu_demag_poisson_device_bytes(const Context &ctx)
 {
+#if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         return gpu_demag_fem_bem_device_bytes(ctx);
     }
+#endif
 #if FULLMAG_HAS_MFEM_STACK
     auto *workspace = workspace_ptr(ctx);
     return workspace != nullptr ? workspace->device_bytes : 0;
@@ -173,9 +185,11 @@ const char *gpu_demag_poisson_operator_mode(const Context &ctx)
     if (!ctx.demag.enabled) {
         return "none";
     }
+#if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         return gpu_demag_fem_bem_operator_mode(ctx);
     }
+#endif
     return gpu_demag_poisson_ready(ctx) ? "device_hypre_poisson" : "unsupported";
 }
 
