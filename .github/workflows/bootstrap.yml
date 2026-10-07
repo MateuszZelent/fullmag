@@ -40,6 +40,9 @@ jobs:
       - name: Run deterministic eigen worker input contracts
         run: cargo test -p fullmag-runner eigen_k_worker --no-fail-fast
 
+      - name: Run native modal cancellation completion contract
+        run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
+
       - name: Run adaptive eigen process pool contracts
         run: |
           cargo test -p fullmag-runner k_process_pool --no-fail-fast

@@ -183,3 +183,9 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 ## Ograniczenia dowodów
 
 Każdy ID oceniany wobec aktualnego kodu i konsumentów, również historyczne uwagi. Szczegółowe ledgery w lokalnym `pr-review-20261007` zawierają symbole, linie, scenariusze błędów oraz bramki regresji. Analiza źródeł, parser i test algebraiczny nie zastępują wykonania managed runtime, GUI ani walidacji naukowej. Zamknięcie #97 wymaga dokończenia rozpatrzenia pozostałych uwag i uzasadnionych poprawek.
+
+## Poprawka completion przy anulowaniu — 2026-10-07
+
+Uwagi 4061684290 i 5440044234: wspólny konstruktor native modal wiąże completion z rzeczywistym RunStatus, również dla nie-współdzielonej ścieżki Bloch/Floquet. Regresja sprawdza cancelled, brak converged i UserCancelled oraz przypadek completed. CI jawnie wybiera ten test w fullmag-runner. Review źródeł przeszło; test kompilowany wyłącznie w GitHub Actions, wynik tej poprawki oczekuje CI.
+
+Poprzedni commit f0594581b17e107446343c7a851016f193ee5009: bootstrap 37606427947 zakończony success (8 jobów); obejmuje regresję LU i budżetu workspace. To dowód kontraktów źródeł, nie kwalifikacji produkcyjnego FEM.

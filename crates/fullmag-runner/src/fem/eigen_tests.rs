@@ -8893,6 +8893,28 @@ fn cpu_full_2x2_frequency_window_uses_native_modal_artifact_path() {
     );
 }
 
+#[test]
+fn native_modal_run_result_completion_matches_status() {
+    let cancelled = native_modal_run_result(RunStatus::Cancelled, StepStats::default(), Vec::new());
+    assert_eq!(cancelled.status, RunStatus::Cancelled);
+    let completion = cancelled
+        .completion
+        .expect("cancelled results carry completion");
+    assert_eq!(completion.status, "cancelled");
+    assert!(!completion.converged);
+    assert_eq!(
+        completion.reason,
+        Some(fullmag_ir::StageStopReason::UserCancelled),
+    );
+
+    let completed = native_modal_run_result(RunStatus::Completed, StepStats::default(), Vec::new());
+    assert_eq!(completed.status, RunStatus::Completed);
+    let completion = completed
+        .completion
+        .expect("completed results carry completion");
+    assert_eq!(completion.status, "completed");
+}
+
 #[cfg(feature = "fem-gpu")]
 #[test]
 fn cpu_full_2x2_nonzero_floquet_window_uses_native_bloch_payload_artifact_path() {

@@ -81,6 +81,23 @@ pub(super) struct NativeModalMagneticPencilPayload {
     pub(super) gamma0_m_per_a_s: f64,
 }
 
+pub(super) fn native_modal_run_result(
+    status: RunStatus,
+    stats: StepStats,
+    final_magnetization: Vec<Vector3>,
+) -> RunResult {
+    RunResult {
+        status,
+        steps: vec![stats],
+        final_magnetization,
+        completion: Some(crate::relaxation::resolve_stage_completion(
+            status,
+            None,
+            crate::relaxation::RelaxationCompletionMetrics::default(),
+        )),
+    }
+}
+
 pub(super) fn execute_native_modal_window(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
@@ -893,16 +910,7 @@ pub(super) fn execute_native_modal_window(
     }
 
     let mut run = ExecutedRun {
-        result: RunResult {
-            status,
-            steps: vec![stats],
-            final_magnetization: equilibrium,
-            completion: Some(crate::relaxation::resolve_stage_completion(
-                status,
-                None,
-                crate::relaxation::RelaxationCompletionMetrics::default(),
-            )),
-        },
+        result: native_modal_run_result(status, stats, equilibrium),
         initial_magnetization,
         field_snapshots: Vec::new(),
         field_snapshot_count: 0,
@@ -1521,16 +1529,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex_with_pr
     };
 
     Ok(ExecutedRun {
-        result: RunResult {
-            status,
-            steps: vec![stats],
-            final_magnetization: equilibrium,
-            completion: Some(crate::relaxation::resolve_stage_completion(
-                RunStatus::Completed,
-                None,
-                crate::relaxation::RelaxationCompletionMetrics::default(),
-            )),
-        },
+        result: native_modal_run_result(status, stats, equilibrium),
         initial_magnetization,
         field_snapshots: Vec::new(),
         field_snapshot_count: 0,
