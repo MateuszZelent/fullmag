@@ -186,6 +186,85 @@ study.stages.add_run(stage_id='after',until=2e-12)
         self.assertEqual([item.id for item in rebuilt.stages[-1].problem.solved_antenna_drives], ["drive"])
         self.assert_full_inventory(rebuilt)
 
+    def test_mixed_scene_pipeline_preserves_inventory_and_activation_boundaries(self):
+        loaded = self.load(DECLARE + """
+study.save('m', every=2e-12)
+study.stages.add_run(stage_id='before',until=1e-12)
+study.stages.add_antenna_field_solve(id='solve',definition=definition)
+study.add_solved_antenna_drive(drive=drive,projection=projection)
+study.clear_outputs()
+study.save('H_ant', every='auto')
+study.stages.add_run(stage_id='after',until=2e-12)
+""")
+        draft = self.assert_full_inventory(loaded)
+        scene = build_scene_document_from_builder(draft)
+        for grouped in (False, True):
+            with self.subTest(grouped=grouped):
+                candidate = json.loads(json.dumps(scene))
+                # Canonical pipeline must be sufficient without the legacy list.
+                candidate['study']['stages'] = []
+                if grouped:
+                    nodes = candidate['study']['study_pipeline']['nodes']
+                    candidate['study']['study_pipeline']['nodes'] = [
+                        dict(id='group', node_kind='group', enabled=True, children=nodes)
+                    ]
+                rebuilt = self.reimport(render_scene_document_as_script(candidate))
+                self.assertEqual([stage.stage_id for stage in rebuilt.stages], ['before', 'solve', 'drive', 'after'])
+                self.assert_no_active_drives(rebuilt.stages[0].problem)
+                self.assert_no_active_drives(rebuilt.pipeline_base_problem())
+                self.assertEqual([item.id for item in rebuilt.stages[-1].problem.solved_antenna_drives], ['drive'])
+                rebuilt_draft = self.assert_full_inventory(rebuilt)
+                for collection in ('antenna_port_modes', *COLLECTIONS):
+                    self.assertEqual(rebuilt_draft[collection], draft[collection], collection)
+                self.assertEqual(
+                    [stage.problem.study.to_ir()['sampling'] for stage in (rebuilt.stages[0], rebuilt.stages[-1])],
+                    [stage.problem.study.to_ir()['sampling'] for stage in (loaded.stages[0], loaded.stages[-1])],
+                )
+
+    def test_disabled_antenna_actions_and_macros_preserve_intent_without_activation(self):
+        loaded = self.load(DECLARE + """
+study.stages.add_antenna_field_solve(id='solve',definition=definition)
+study.add_solved_antenna_drive(drive=drive,projection=projection)
+study.stages.add_run(stage_id='run',until=1e-12)
+""")
+        draft = self.assert_full_inventory(loaded)
+        scene = build_scene_document_from_builder(draft)
+        macro = dict(
+            id='relax-run', label='Relax then run', node_kind='macro',
+            macro_kind='relax_run', enabled=False,
+            config=dict(max_steps=7, torque_tolerance=1e-5, integrator='heun',
+                        fixed_timestep=1e-13, run_until_seconds=4e-12),
+        )
+        for grouped in (False, True):
+            with self.subTest(grouped=grouped):
+                candidate = json.loads(json.dumps(scene))
+                nodes = candidate['study']['study_pipeline']['nodes']
+                disabled_nodes = nodes[:2] + [json.loads(json.dumps(macro))]
+                if grouped:
+                    disabled_nodes[-1]['enabled'] = True
+                    nodes[:] = [dict(id='disabled', label='Disabled', node_kind='group', enabled=False, children=disabled_nodes), nodes[-1]]
+                else:
+                    for node in disabled_nodes:
+                        node['enabled'] = False
+                    nodes[:] = disabled_nodes + [nodes[-1]]
+                candidate['study']['stages'] = []
+                rebuilt = self.reimport(render_scene_document_as_script(candidate))
+                self.assertEqual([stage.stage_id for stage in rebuilt.stages], ['run'])
+                self.assert_no_active_drives(rebuilt.stages[0].problem)
+                self.assertEqual(rebuilt.stages[0].problem.antenna_field_solve_stages, ())
+                self.assert_no_active_drives(rebuilt.pipeline_base_problem())
+                root_ir = rebuilt.to_ir(requested_backend='fdm', execution_mode='strict', execution_precision='double', include_geometry_assets=False)
+                for collection in COLLECTIONS:
+                    self.assertEqual(root_ir[collection], [], collection)
+                rebuilt_draft = self.assert_full_inventory(rebuilt)
+                for collection in ('antenna_port_modes', *COLLECTIONS):
+                    self.assertEqual(rebuilt_draft[collection], draft[collection], collection)
+                self.assertEqual(rebuilt_draft['study_pipeline'], candidate['study']['study_pipeline'])
+        # An enabled macro must still use the shared Rust materializer.
+        scene['study']['study_pipeline']['nodes'].append({**macro, 'enabled': True})
+        with self.assertRaisesRegex(ValueError, 'macro_requires_shared_study_pipeline_materializer'):
+            render_scene_document_as_script(scene)
+
     def test_standalone_projection_definition_needs_no_fictitious_drive_action(self):
         loaded = self.load("study.declare_antenna_field_solve(definition=definition)\nstudy.declare_antenna_target_projection(projection=projection)\n")
         self.assertEqual(loaded.stages, ())

@@ -747,6 +747,10 @@ def _scene_pipeline_contains_macro(pipeline: object) -> bool:
     for node in nodes:
         if not isinstance(node, Mapping):
             continue
+        # Disabled nodes remain authoring provenance, not executable macros.
+        # Match the shared materializer's group and leaf activation boundary.
+        if node.get("enabled", True) is False:
+            continue
         if node.get("node_kind") == "macro":
             return True
         if node.get("node_kind") == "group" and _scene_pipeline_contains_macro(
