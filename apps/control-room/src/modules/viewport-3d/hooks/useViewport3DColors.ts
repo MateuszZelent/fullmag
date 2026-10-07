@@ -2,7 +2,10 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-import type { Viewport3DColors } from "../viewport3dTypes";
+import type {
+  Viewport3DColors,
+  Viewport3DHudColors,
+} from "../viewport3dTypes";
 
 const subscribeClientReady = () => () => {};
 const MAX_COLOR_READ_ATTEMPTS = 120;
@@ -48,6 +51,15 @@ export function readViewport3DColorsFromStyles(
       background,
       danger,
       field,
+      hud: readViewport3DHudColors(read, {
+        background,
+        mesh,
+        panel,
+        panelRaised,
+        textPrimary,
+        textSecondary,
+        wire,
+      }),
       mesh,
       panel,
       panelRaised,
@@ -58,6 +70,37 @@ export function readViewport3DColorsFromStyles(
     };
   }
   return null;
+}
+
+function readViewport3DHudColors(
+  read: (name: string) => string,
+  base: {
+    background: string;
+    mesh: string;
+    panel: string;
+    panelRaised: string;
+    textPrimary: string;
+    textSecondary: string;
+    wire: string;
+  },
+): Viewport3DHudColors {
+  const label = base.textPrimary || base.textSecondary || base.wire;
+  const tick = base.textSecondary || label;
+  return {
+    axisX: read("--fm-hud-axis-x") || read("--fm-chart-red") || label,
+    axisY: read("--fm-hud-axis-y") || read("--fm-chart-green") || label,
+    axisZ: read("--fm-hud-axis-z") || read("--fm-chart-blue") || label,
+    chip: read("--fm-hud-chip") || base.panel || base.background,
+    chipBorder: read("--fm-hud-chip-border") || base.wire,
+    cubeEdge: read("--fm-hud-cube-edge") || base.wire,
+    cubeFace:
+      read("--fm-hud-cube-face") || base.panelRaised || base.panel || base.mesh,
+    cubeShade: read("--fm-hud-cube-shade") || base.background,
+    grid: read("--fm-hud-grid") || tick,
+    halo: read("--fm-hud-halo") || base.background,
+    label: read("--fm-hud-label") || label,
+    tick: read("--fm-hud-tick") || tick,
+  };
 }
 
 export function resolveViewport3DColorElement(
@@ -160,6 +203,17 @@ function sameViewport3DColors(
     left.success === right.success &&
     left.textPrimary === right.textPrimary &&
     left.textSecondary === right.textSecondary &&
-    left.wire === right.wire
+    left.wire === right.wire &&
+    sameHudColors(left.hud, right.hud)
+  );
+}
+
+function sameHudColors(
+  left: Viewport3DHudColors | undefined,
+  right: Viewport3DHudColors | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return (Object.keys(right) as Array<keyof Viewport3DHudColors>).every(
+    (key) => left[key] === right[key],
   );
 }

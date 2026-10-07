@@ -164,6 +164,7 @@ describe("viewport3dStore", () => {
       cameraDialogOpen: false,
       cameraOrthographicScale: null,
       cameraProjection: "perspective",
+      dimensionFrameAnnotation: "ticks",
       dimensionFrameDensity: "auto",
       dimensionFrameMode: "floor",
       effectAmbientOcclusion: false,
@@ -193,6 +194,7 @@ describe("viewport3dStore", () => {
       cameraDialogOpen: false,
       cameraOrthographicScale: null,
       cameraProjection: "perspective",
+      dimensionFrameAnnotation: "ticks",
       dimensionFrameDensity: "auto",
       dimensionFrameMode: "floor",
       effectAmbientOcclusion: false,
@@ -217,10 +219,12 @@ describe("viewport3dStore", () => {
 
     viewport3dStore.setDimensionFrameMode("cage");
     viewport3dStore.setDimensionFrameDensity("fine");
+    viewport3dStore.setDimensionFrameAnnotation("both");
     viewport3dStore.setScaleLabelsVisible(false);
     viewport3dStore.setScaleUnitMode("nm");
 
     expect(viewport3dStore.getSnapshot().widgets).toMatchObject({
+      dimensionFrameAnnotation: "both",
       dimensionFrameDensity: "fine",
       dimensionFrameMode: "cage",
       scaleLabelsVisible: false,

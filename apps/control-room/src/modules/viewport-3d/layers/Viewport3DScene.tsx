@@ -85,6 +85,7 @@ import type {
 import type {
   Viewport3DCameraProjection,
   Viewport3DCameraState,
+  Viewport3DDimensionFrameAnnotation,
   Viewport3DDimensionFrameDensity,
   Viewport3DDimensionFrameMode,
   Viewport3DRotationMode,
@@ -186,6 +187,7 @@ interface Viewport3DSceneProps {
   crossSectionFrameClip: VisualizationStateResource["clip"] | null;
   crossSectionFrameRotationDegrees: number;
   planarMonitorFramePreview: PlanarMonitorFramePreview | null;
+  dimensionFrameAnnotation?: Viewport3DDimensionFrameAnnotation;
   dimensionFrameDensity: Viewport3DDimensionFrameDensity;
   dimensionFrameMode: Viewport3DDimensionFrameMode;
   fdmLaneActive: boolean;
@@ -927,6 +929,7 @@ function Viewport3DOverlayLayerStack({
   crossSectionFrameClip,
   crossSectionFrameRotationDegrees,
   planarMonitorFramePreview,
+  dimensionFrameAnnotation,
   dimensionFrameDensity,
   dimensionFrameMode,
   fdmAirboxPassPlan,
@@ -956,6 +959,7 @@ function Viewport3DOverlayLayerStack({
   | "crossSectionFrameClip"
   | "crossSectionFrameRotationDegrees"
   | "planarMonitorFramePreview"
+  | "dimensionFrameAnnotation"
   | "dimensionFrameDensity"
   | "dimensionFrameMode"
   | "fdmAirboxPassPlan"
@@ -1053,6 +1057,7 @@ function Viewport3DOverlayLayerStack({
       ) : null}
       {viewport3DDimensionFrameEnabledFromBrowserConfig() ? (
         <DimensionFrameLayer
+          annotation={dimensionFrameAnnotation}
           bounds={bounds}
           cameraProjection={cameraProjection}
           cameraState={cameraState}
@@ -1734,6 +1739,7 @@ export function Viewport3DScene({
   crossSectionFrameClip,
   crossSectionFrameRotationDegrees,
   planarMonitorFramePreview,
+  dimensionFrameAnnotation,
   dimensionFrameDensity,
   dimensionFrameMode,
   fdmLaneActive,
@@ -2028,6 +2034,7 @@ export function Viewport3DScene({
         crossSectionFrameClip={crossSectionFrameClip}
         crossSectionFrameRotationDegrees={crossSectionFrameRotationDegrees}
         planarMonitorFramePreview={planarMonitorFramePreview}
+        dimensionFrameAnnotation={dimensionFrameAnnotation}
         dimensionFrameDensity={dimensionFrameDensity}
         dimensionFrameMode={dimensionFrameMode}
         fdmAirboxPassPlan={fdmAirboxPassPlan}

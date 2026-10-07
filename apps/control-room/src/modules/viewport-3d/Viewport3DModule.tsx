@@ -1727,6 +1727,7 @@ export default function Viewport3DModule({
       colors={colors}
       cameraDialogOpen={commandState.widgets.cameraDialogOpen}
       cameraDialogState={commandState.camera}
+      dimensionFrameAnnotation={commandState.widgets.dimensionFrameAnnotation}
       dimensionFrameDensity={commandState.widgets.dimensionFrameDensity}
       dimensionFrameMode={commandState.widgets.dimensionFrameMode}
       effectAntialias={commandState.widgets.effectAntialias}

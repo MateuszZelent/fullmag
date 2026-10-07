@@ -4,13 +4,14 @@ import { Line } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, memo, type ReactNode } from "react";
 import {
-  BackSide,
   BufferAttribute,
   SphereGeometry,
   Vector3,
   type BufferGeometry,
   type Camera,
   type Group,
+  type Object3D,
+  type Sprite,
 } from "three";
 
 import { viewport3dStore } from "../viewport3dStore";
@@ -20,7 +21,7 @@ import type {
   Viewport3DCameraState,
   Viewport3DRotationMode,
 } from "../viewport3dStore";
-import type { Viewport3DColors } from "../viewport3dTypes";
+import type { Viewport3DColors, Viewport3DHudColors } from "../viewport3dTypes";
 import {
   freeCameraTargetForDirection,
   orbitCameraAroundTarget,
@@ -39,7 +40,8 @@ import {
   WIDGET_CAMERA_DISTANCE,
   WIDGET_RENDER_ORDER,
 } from "./orientationHudConstants";
-import { AxisLabelSprite } from "./AxisLabelSprite";
+import { resolveHudColors } from "./hudColors";
+import { HudTextSprite } from "./hudText";
 import {
   ViewCube3DBox,
   type ViewportCameraControlsHandle,
@@ -290,103 +292,324 @@ function ScreenAnchoredGroup({
   );
 }
 
+const HSL_SPHERE_RADIUS_PX = 40;
+const HSL_AXIS_REACH = 1.38;
+const HSL_TIP_LENGTH_PX = 7;
+const HSL_CHIP_GAP_PX = 19;
+/** Projected axis length (fraction of the radius) below which it is end-on. */
+const HSL_END_ON_THRESHOLD = 0.3;
+const HSL_SPHERE_ORDER = WIDGET_RENDER_ORDER;
+const HSL_EQUATOR_POINTS = buildHalfCirclePoints(48);
+// Chip slots for end-on axes, chosen so two end-on cases never collide.
+const HSL_END_ON_CHIP_SLOTS: Record<string, [number, number]> = {
+  x: [0.72, 0.72],
+  y: [-0.72, 0.72],
+  z: [0.72, -0.72],
+};
+
 function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
   const geometry = useMemo(() => buildHslSphereGeometry(), []);
+  const hud = useMemo(() => resolveHudColors(colors), [colors]);
+  const equatorRef = useRef<Group>(null);
+  const rimRef = useRef<Object3D>(null);
+  const forward = useMemo(() => new Vector3(), []);
+  const chipLayout = useMemo(() => new Map<string, HslChipSlot>(), []);
+  const chipAxes = useMemo(() => ({ right: new Vector3(), up: new Vector3() }), []);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
 
+  // Only the camera-facing half of the equator is drawn (the HUD ignores
+  // depth), so turn the half circle towards the viewer every frame.
+  useFrame(({ camera }) => {
+    // Children subscribe first, so every axis has reported its chip here.
+    placeHslChips(chipLayout, camera, chipAxes);
+    // Face the rim and the equator towards the camera position: the HUD sits
+    // off-axis in a perspective view, so the camera axis is slightly off.
+    rimRef.current?.lookAt(camera.position);
+    if (!equatorRef.current) return;
+    equatorRef.current.getWorldPosition(forward).sub(camera.position).normalize();
+    // Looking along z the equator is the silhouette, which the rim draws.
+    const inPlane = Math.hypot(forward.x, forward.y);
+    equatorRef.current.visible = inPlane > 0.15;
+    if (inPlane > 0.15) {
+      equatorRef.current.rotation.z = Math.atan2(-forward.y, -forward.x);
+    }
+  });
+
   return (
-    <group scale={[40, 40, 40]}>
-      {/* Soft glow halo — BackSide sphere slightly larger */}
-      <mesh renderOrder={WIDGET_RENDER_ORDER - 1}>
-        <sphereGeometry args={[1.09, 32, 18]} />
-        <meshBasicMaterial
-          color={colors.accentStrong ?? colors.accent}
-          depthTest={false}
-          depthWrite={false}
-          opacity={0.07}
-          side={BackSide}
-          toneMapped={false}
-          transparent
+    <group>
+      <group scale={[HSL_SPHERE_RADIUS_PX, HSL_SPHERE_RADIUS_PX, HSL_SPHERE_RADIUS_PX]}>
+        {/* Rim: a camera-facing ring around the silhouette. It never covers
+            the sphere, so the legend colours stay exact. */}
+        <mesh ref={rimRef} renderOrder={HSL_SPHERE_ORDER + 1}>
+          <ringGeometry args={[1, 1.035, 72]} />
+          <meshBasicMaterial
+            color={hud.label}
+            depthTest={false}
+            depthWrite={false}
+            opacity={0.5}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+        {/* Vertex-coloured HSL sphere. All parts are "transparent" so they
+            share one render list and renderOrder alone decides layering,
+            e.g. shafts of axes pointing away are drawn beneath the sphere. */}
+        <mesh geometry={geometry} renderOrder={HSL_SPHERE_ORDER}>
+          <meshBasicMaterial
+            depthTest={false}
+            depthWrite={false}
+            toneMapped={false}
+            transparent
+            vertexColors
+          />
+        </mesh>
+        {/* m_z = 0: the lightness-0.5 boundary between the hemispheres. */}
+        <group ref={equatorRef}>
+          <Line
+            color={hud.cubeShade}
+            depthTest={false}
+            lineWidth={1}
+            opacity={0.45}
+            points={HSL_EQUATOR_POINTS}
+            renderOrder={HSL_SPHERE_ORDER + 1}
+            transparent
+          />
+        </group>
+      </group>
+      {HSL_REFERENCE_AXES.map((axis) => (
+        <HslReferenceAxis
+          key={axis.id}
+          chipLayout={chipLayout}
+          color={rgbCss(axis.color)}
+          direction={axis.direction}
+          hud={hud}
+          id={axis.id}
         />
-      </mesh>
-      {/* Vertex-coloured HSL sphere */}
-      <mesh geometry={geometry} renderOrder={WIDGET_RENDER_ORDER}>
-        <meshBasicMaterial
-          depthTest={false}
-          depthWrite={false}
-          toneMapped={false}
-          vertexColors
-        />
-      </mesh>
-      <HslReferenceAxes colors={colors} />
-      {/* Wireframe overlay */}
-      <mesh renderOrder={WIDGET_RENDER_ORDER + 1}>
-        <sphereGeometry args={[1.015, 32, 18]} />
-        <meshBasicMaterial
-          color={colors.wire}
-          depthTest={false}
-          depthWrite={false}
-          opacity={0.18}
-          transparent
-          wireframe
-        />
-      </mesh>
+      ))}
     </group>
   );
 }
 
-function HslReferenceAxes({ colors }: { colors: Viewport3DColors }) {
+function HslReferenceAxis({
+  chipLayout,
+  color,
+  direction,
+  hud,
+  id,
+}: {
+  chipLayout: Map<string, HslChipSlot>;
+  color: string;
+  direction: readonly [number, number, number];
+  hud: Viewport3DHudColors;
+  id: string;
+}) {
+  const shaftRefs = useRef<Array<Object3D | null>>([]);
+  const tipRefs = useRef<Array<Object3D | null>>([]);
+  const chipRef = useRef<Sprite>(null);
+  const towardRef = useRef<Sprite>(null);
+  const awayRef = useRef<Sprite>(null);
+  const scratch = useMemo(
+    () => ({ forward: new Vector3(), right: new Vector3(), up: new Vector3() }),
+    [],
+  );
+  const end = scaleDirection(direction, HSL_SPHERE_RADIUS_PX * HSL_AXIS_REACH);
+  const tip = scaleDirection(
+    direction,
+    HSL_SPHERE_RADIUS_PX * HSL_AXIS_REACH + HSL_TIP_LENGTH_PX / 2,
+  );
+  const markerStyle = { font: "ui", fontPx: 13, halo: hud.halo } as const;
+
+  useFrame(({ camera }) => {
+    const { forward, right, up } = scratch;
+    forward.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    right.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    up.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    const along = direction[0] * forward.x + direction[1] * forward.y + direction[2] * forward.z;
+    const dx = direction[0] * right.x + direction[1] * right.y + direction[2] * right.z;
+    const dy = direction[0] * up.x + direction[1] * up.y + direction[2] * up.z;
+    const projected = Math.hypot(dx, dy);
+    const away = along > 0;
+    const endOn = projected < HSL_END_ON_THRESHOLD;
+
+    // Axes pointing away render beneath the sphere, which then hides the
+    // part of the shaft that is behind it.
+    const shaftOrder = away ? HSL_SPHERE_ORDER - 3 : HSL_SPHERE_ORDER + 2;
+    for (const shaft of shaftRefs.current) {
+      if (shaft) shaft.renderOrder = shaftOrder;
+    }
+    for (let index = 0; index < tipRefs.current.length; index += 1) {
+      const tipMesh = tipRefs.current[index];
+      if (tipMesh) tipMesh.renderOrder = shaftOrder + 1 + index;
+    }
+
+    if (towardRef.current) towardRef.current.visible = endOn && !away;
+    if (awayRef.current) awayRef.current.visible = endOn && away;
+    const chip = chipRef.current;
+    if (!chip) return;
+    const slot = HSL_END_ON_CHIP_SLOTS[id] ?? [0.72, 0.72];
+    let offsetRight = slot[0] * HSL_SPHERE_RADIUS_PX * 1.25;
+    let offsetUp = slot[1] * HSL_SPHERE_RADIUS_PX * 1.25;
+    if (!endOn) {
+      const distance =
+        projected * HSL_SPHERE_RADIUS_PX * HSL_AXIS_REACH +
+        HSL_TIP_LENGTH_PX +
+        HSL_CHIP_GAP_PX;
+      offsetRight = (dx / projected) * distance;
+      offsetUp = (dy / projected) * distance;
+    }
+    // The sphere resolves overlaps between chips after all axes report.
+    const slotState = chipLayout.get(id) ?? { priority: 0, sprite: chip, x: 0, y: 0 };
+    slotState.priority = endOn ? 0 : projected;
+    slotState.sprite = chip;
+    slotState.x = offsetRight;
+    slotState.y = offsetUp;
+    chipLayout.set(id, slotState);
+    (chip.material as { opacity: number }).opacity = away ? 0.8 : 1;
+  });
+
   return (
     <group>
-      {HSL_REFERENCE_AXES.map((axis) => {
-        const axisColor = rgbCss(axis.color);
-        const end = scaleDirection(axis.direction, 1.42);
-        const tip = scaleDirection(axis.direction, 1.52);
-        const label = scaleDirection(axis.direction, 1.78);
-
-        return (
-          <group key={axis.id}>
-            <Line
-              color={String(colors.wire)}
-              depthTest={false}
-              lineWidth={5}
-              opacity={0.55}
-              points={[[0, 0, 0], end]}
-              renderOrder={WIDGET_RENDER_ORDER + 2}
-              transparent
-            />
-            <Line
-              color={axisColor}
-              depthTest={false}
-              lineWidth={2.5}
-              points={[[0, 0, 0], end]}
-              renderOrder={WIDGET_RENDER_ORDER + 3}
-            />
-            <mesh
-              position={tip}
-              renderOrder={WIDGET_RENDER_ORDER + 4}
-              rotation={axisTipRotation(axis.id)}
-            >
-              <coneGeometry args={[0.06, 0.16, 16]} />
-              <meshBasicMaterial
-                color={axisColor}
-                depthTest={false}
-                depthWrite={false}
-                toneMapped={false}
-              />
-            </mesh>
-            <AxisLabelSprite
-              color={axisColor}
-              label={axis.label}
-              outlineColor={String(colors.wire)}
-              position={label}
-            />
-          </group>
-        );
-      })}
+      <Line
+        ref={(line: Object3D | null) => {
+          shaftRefs.current[0] = line;
+        }}
+        color={hud.halo}
+        depthTest={false}
+        lineWidth={4.5}
+        points={[[0, 0, 0], end]}
+        renderOrder={HSL_SPHERE_ORDER + 2}
+        transparent
+      />
+      <Line
+        ref={(line: Object3D | null) => {
+          shaftRefs.current[1] = line;
+        }}
+        color={hud.label}
+        depthTest={false}
+        lineWidth={1.8}
+        points={[[0, 0, 0], end]}
+        renderOrder={HSL_SPHERE_ORDER + 2}
+        transparent
+      />
+      {/* Tip in the true HSL colour, outlined so +z (white) shows on Latte. */}
+      <mesh
+        ref={(mesh) => {
+          tipRefs.current[0] = mesh;
+        }}
+        position={tip}
+        renderOrder={HSL_SPHERE_ORDER + 3}
+        rotation={axisTipRotation(id)}
+      >
+        <coneGeometry args={[4.6, HSL_TIP_LENGTH_PX + 2.4, 20]} />
+        <meshBasicMaterial
+          color={hud.label}
+          depthTest={false}
+          depthWrite={false}
+          toneMapped={false}
+          transparent
+        />
+      </mesh>
+      <mesh
+        ref={(mesh) => {
+          tipRefs.current[1] = mesh;
+        }}
+        position={tip}
+        renderOrder={HSL_SPHERE_ORDER + 4}
+        rotation={axisTipRotation(id)}
+      >
+        <coneGeometry args={[3.4, HSL_TIP_LENGTH_PX, 20]} />
+        <meshBasicMaterial
+          color={color}
+          depthTest={false}
+          depthWrite={false}
+          toneMapped={false}
+          transparent
+        />
+      </mesh>
+      <HudTextSprite
+        ref={chipRef}
+        position={[0, 0, 0]}
+        renderOrder={HSL_SPHERE_ORDER + 8}
+        runs={[
+          { color: hud.label, text: "+" },
+          { color: hud.label, italic: true, text: id },
+        ]}
+        style={{
+          chip: { border: hud.chipBorder, fill: hud.chip, swatch: color },
+          font: "ui",
+          fontPx: 11,
+          halo: hud.halo,
+        }}
+      />
+      <HudTextSprite
+        ref={towardRef}
+        position={[0, 0, 0]}
+        renderOrder={HSL_SPHERE_ORDER + 7}
+        runs={[{ color: hud.label, text: "⊙" }]}
+        style={markerStyle}
+      />
+      <HudTextSprite
+        ref={awayRef}
+        position={[0, 0, 0]}
+        renderOrder={HSL_SPHERE_ORDER + 7}
+        runs={[{ color: hud.label, text: "⊗" }]}
+        style={markerStyle}
+      />
     </group>
   );
+}
+
+interface HslChipSlot {
+  /** Larger keeps its place; end-on axes yield first. */
+  priority: number;
+  sprite: Sprite;
+  x: number;
+  y: number;
+}
+
+const HSL_CHIP_CLEARANCE_X = 38;
+const HSL_CHIP_CLEARANCE_Y = 20;
+
+/** Places the axis chips, nudging lower-priority chips off overlaps. */
+function placeHslChips(
+  layout: Map<string, HslChipSlot>,
+  camera: Camera,
+  axes: { right: Vector3; up: Vector3 },
+): void {
+  const slots = [...layout.values()].sort((a, b) => b.priority - a.priority);
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (let fixed = 0; fixed < slots.length; fixed += 1) {
+      for (let moving = fixed + 1; moving < slots.length; moving += 1) {
+        const anchor = slots[fixed];
+        const slot = slots[moving];
+        if (!anchor || !slot) continue;
+        const dx = slot.x - anchor.x;
+        const dy = slot.y - anchor.y;
+        if (Math.abs(dx) >= HSL_CHIP_CLEARANCE_X || Math.abs(dy) >= HSL_CHIP_CLEARANCE_Y) {
+          continue;
+        }
+        slot.y = anchor.y + (dy >= 0 ? 1 : -1) * HSL_CHIP_CLEARANCE_Y;
+      }
+    }
+  }
+  axes.right.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  axes.up.set(0, 1, 0).applyQuaternion(camera.quaternion);
+  for (const slot of slots) {
+    slot.sprite.position
+      .set(0, 0, 0)
+      .addScaledVector(axes.right, slot.x)
+      .addScaledVector(axes.up, slot.y);
+  }
+}
+
+function buildHalfCirclePoints(segments: number): Array<[number, number, number]> {
+  const points: Array<[number, number, number]> = [];
+  for (let index = 0; index <= segments; index += 1) {
+    const angle = -Math.PI / 2 + (Math.PI * index) / segments;
+    points.push([Math.cos(angle) * 1.002, Math.sin(angle) * 1.002, 0]);
+  }
+  return points;
 }
 
 function buildHslSphereGeometry(): BufferGeometry {
