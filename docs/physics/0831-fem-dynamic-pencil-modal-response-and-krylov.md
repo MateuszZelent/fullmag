@@ -239,6 +239,13 @@ omega = -i lambda
 frequency_hz = Re(omega_rad_s) / (2 pi)
 ```
 
+The default native mapper classifies a mode as zero-frequency only when its
+finite, phase-adjusted angular frequency is exactly zero. An explicitly
+supplied ModeKinematicsPolicy may instead apply an inclusive absolute
+tolerance in rad/s. This numerical classification does not certify a
+nullspace or a Goldstone mode; frequency-window and residual admission remain
+separate checks.
+
 If `omega = omega_r + i Gamma`, then `Gamma > 0` means decay because
 `exp(+i omega t)=exp(+i omega_r t-Gamma t)`. Artifacts therefore record the
 phasor convention, complex `lambda`, complex `omega_rad_s`, cyclic frequency,
@@ -1582,6 +1589,7 @@ managed physics evidence.
 
 | Claim | Lane | Repository path + stable symbol | Responsibility | Evidence status |
 |---|---|---|---|---|
+| Phase-aware mode kinematics | common FEM | `backends/fem/src/frequency_domain/mode_kinematics.cpp` + `map_eigenvalue` | Apply the declared phase convention with exact-zero default classification; retain caller-supplied absolute tolerance without asserting nullspace certification. | Focused source regression prepared; runtime and physical nullspace qualification pending |
 | Stage-first modal authoring | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Capture the modal stage specification without executing it. | source tested; runtime unvalidated |
 | Stage-first driven authoring | common | `packages/fullmag-py/src/fullmag/world.py` + `frequency_response_stage` | Capture frequency samples, drive and solver policy. | source tested; runtime unvalidated |
 | Modal Python validation/lowering | common | `packages/fullmag-py/src/fullmag/model/study.py` + `class Eigenmodes` | Validate modal inputs and serialize canonical study IR. | source tested |
@@ -2165,7 +2173,7 @@ Repository-owned related contracts:
 | Source path | Symbol | Responsibility |
 |---|---|---|
 | backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Withhold positive shifted KSP convergence until the current reconstructed solution satisfies the requested true residual criterion; preserve default negative outcomes and iteration budget with per-KSP reusable workspace. |
-
+| backends/fem/src/frequency_domain/mode_kinematics.cpp | map_eigenvalue | Phase-aware omega/frequency mapping with exact-zero default classification and explicit absolute-threshold support. |
 
 Stable repository-relative `path + symbol` is the primary source identity.
 The links below resolve the committed source baseline

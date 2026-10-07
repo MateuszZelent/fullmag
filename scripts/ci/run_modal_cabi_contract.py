@@ -21,9 +21,10 @@ def main() -> int:
         "-DFULLMAG_FEM_WITH_SLEPC=OFF",
     ]
     target = "fem_modal_eigen_contract"
+    targets = [target, "fem_mode_kinematics_contract", "fem_floquet_modal_solver_contract"]
     receipt = {
         "schema": "fullmag.ci.native_contract.v1", "source_sha": None, "requested_sha": os.environ.get("GITHUB_SHA"),
-        "target": target, "cmake_flags": flags,
+        "target": target, "targets": targets, "cmake_flags": flags,
         "scope": "dependency-free ABI contract; no production FEM or scientific qualification",
         "started_at": time.time(), "steps": [], "status": "failed",
     }
@@ -35,9 +36,9 @@ def main() -> int:
             raise RuntimeError("Checkout identity differs from the requested CI source")
         commands = [
             ["cmake", "-S", str(source / "native"), "-B", str(build), *flags],
-            ["cmake", "--build", str(build), "--target", target, "--parallel", "2"],
+            ["cmake", "--build", str(build), "--target", *targets, "--parallel", "2"],
             ["ctest", "--test-dir", str(build / "backends" / "fem"),
-             "-R", "^fem_modal_eigen_contract$", "--output-on-failure", "--no-tests=error"],
+             "-R", "^(fem_modal_eigen_contract|fem_mode_kinematics_contract|fem_floquet_modal_solver_contract)$", "--output-on-failure", "--no-tests=error"],
         ]
         for index, command in enumerate(commands):
             log = root / f"step-{index}.log"
@@ -50,6 +51,10 @@ def main() -> int:
                 return result.returncode
         executable = build / "backends" / "fem" / target
         receipt["executable_sha256"] = hashlib.sha256(executable.read_bytes()).hexdigest()
+        receipt["executable_sha256_by_target"] = {
+            name: hashlib.sha256((build / "backends" / "fem" / name).read_bytes()).hexdigest()
+            for name in targets
+        }
         receipt["status"] = "passed"
         return 0
     except Exception as error:

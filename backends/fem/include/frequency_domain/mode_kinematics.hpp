@@ -7,13 +7,10 @@
 namespace fullmag::fem::frequency_domain {
 
 constexpr double kGammaConsistencyRelativeTolerance = 1.0e-12;
-// Was 1.0e-9 rad/s: a numerical zero/Goldstone mode on a real mesh sits at
-// roughly 1e-2..1e2 rad/s, i.e. many orders of magnitude above that floor, so
-// the "exclude_zero_frequency" policy never actually excluded anything (audit
-// finding M16, docs/audits/2026-09-15-eigensolve-dispersion-correctness-audit.md).
-// Raised to sit safely above that numerical-zero noise floor and safely below
-// the smallest physical spin-wave frequency of interest (~1e9-1e10 rad/s).
-constexpr double kDefaultZeroFrequencyToleranceRadPerS = 1.0e5;
+// The default mapper marks only an exactly zero finite angular frequency as
+// zero. An explicit ModeKinematicsPolicy may request an absolute tolerance;
+// that numerical classification does not certify a nullspace or Goldstone mode.
+constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;
 
 struct DynamicPencilMetadata {
     double gamma_abs_rad_per_s_t = 0.0;

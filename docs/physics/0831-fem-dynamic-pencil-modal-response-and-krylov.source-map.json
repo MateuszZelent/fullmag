@@ -139,6 +139,9 @@
         "source-rotated-pencil",
         "source-cpu-schur",
         "source-gpu-petsc",
+        "source-mode-kinematics",
+        "source-mode-kinematics-policy",
+        "source-mode-kinematics-regression",
         "source-contract-regression"
       ]
     },
@@ -2509,6 +2512,24 @@
       "symbol": "floquet_shifted_true_convergence_test",
       "responsibility": "Withhold positive shifted KSP convergence until the current reconstructed solution satisfies the requested true residual criterion; preserve default negative outcomes and iteration budget with per-KSP reusable workspace.",
       "evidence_status": "Source reviewed; standalone real-PETSc CI and fresh managed production runtime pending."
+    },
+    {
+      "id": "source-mode-kinematics",
+      "path": "backends/fem/src/frequency_domain/mode_kinematics.cpp",
+      "symbol": "map_eigenvalue",
+      "responsibility": "Map eigenvalues using the declared phase convention; the default zero-frequency classification is exact zero, with caller-supplied absolute tolerance preserved."
+    },
+    {
+      "id": "source-mode-kinematics-policy",
+      "path": "backends/fem/include/frequency_domain/mode_kinematics.hpp",
+      "symbol": "kDefaultZeroFrequencyToleranceRadPerS",
+      "responsibility": "Set the default zero-frequency angular tolerance to 0 rad/s; nonzero nullspace or Goldstone classification requires independent certification."
+    },
+    {
+      "id": "source-mode-kinematics-regression",
+      "path": "backends/fem/tests/frequency_domain/mode_kinematics_test.cpp",
+      "symbol": "default_zero_frequency_classification_preserves_small_finite_branches",
+      "responsibility": "Regress signed 1 rad/s and 1 kHz modes, exact zero, both phase conventions and explicit tolerance boundaries; source test only."
     }
   ],
   "public_api": {

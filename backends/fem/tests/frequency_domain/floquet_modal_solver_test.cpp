@@ -406,10 +406,9 @@ void reports_opt_in_action_diagnostic_unavailable_before_setup()
 void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure = false)
 {
     constexpr std::size_t q_dimension = 514u;
-    // Keep the synthetic fixture above the shared numerical-zero policy
-    // (1e5 rad/s, approximately 15.9 kHz).  The production dispersion
-    // window is in the GHz range; using 1 kHz here made a valid positive mode
-    // look like a numerical zero and caused the contract to reject it.
+    // Keep the synthetic fixture well away from exact zero; the 1 MHz
+    // frequency makes shifted selection deterministic without encoding a
+    // default zero-frequency threshold into this numerical fixture.
     constexpr double expected_frequency_hz = 1.0e6;
     // Keep the shift off the exact synthetic eigenvalue.  STSINVERT factors
     // (A - sigma B), which is singular when sigma equals the fixture's mode;
