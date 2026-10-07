@@ -177,3 +177,46 @@ do istniejącego wykonawcy oraz zapewnić terminalny odbiór grid-only child
 przed restartem. Samo rozszerzenie whitelisty nie zamyka quiescence,
 bo scratch pause nadal wymaga child.is_none(). Nie omijać admission ani
 nie zaliczać braku widocznego PID jako wait.
+
+## Checkpoint po zamknięciu numeric prerequisite
+
+Numeric fix jest na lokalnym i remote master:
+`2102e64c040ddeecb5dba6b454154081769c1e42`. Frozen build D i receipt
+32/32 dotyczą tej poprawki, nie późniejszych zmian restartu.
+
+Przygotowano osobny **WIP source** acquisition w development_api_owner.rs:
+exact rejection parser i typowana odmowa przed handoff. Source tests dodane,
+**NOT RUN**; brak native/runtime kwalifikacji tego przyrostu.
+Nie zaliczać go na podstawie wcześniejszego builda D.
+
+Wariant retry pump został wycofany po niezależnym review. Rzeczywisty
+transport zachowuje immutable slot starego API i odrzuca inne request_id
+HTTP 409; samo dopuszczenie nowej próby w pump jest nieosiągalne.
+Ponadto wykorzystany readiness_candidate pozostawia memo tej samej identity
+i blokuje ponowne przygotowanie. Potrzebny jest kontrolowany następnik
+slotu po dokładnie potwierdzonej odmowie przed handoff, zachowanie historycznych
+request/result oraz poprawny cykl ponownej walidacji candidate. Ogólne Failed,
+Unknown i niepotwierdzona publikacja nie mogą uprawniać do następnej próby.
+Unit test samego predykatu retry nie dowodzi tych granic. Rozpoznanie
+acquisition rejection przeszło source review bez findings; retry pozostaje OPEN.
+
+Review grid-only custody wskazał wymagany kontrakt przed implementacją:
+
+- Lokalne przygotowanie przez istniejący manual remesh bez asynchronicznego
+  publishera. Bootstrap nie może utworzyć sztucznego run/live/stage ani
+  zastąpić authoring identity. Końcowy payload dopuszcza mesh_workspace
+  i opcjonalnie engine_log; pola wykonania i flagi wymiany pozostają puste.
+- Odbiornik pobiera wyłącznie przypięty Grid ID i kończy polling przed
+  opublikowaniem terminalnego wyniku. Obecny poller pobiera komendy z API
+  przed lokalnym odbiorem; samo zatrzymanie na końcu może zgubić późniejsze
+  Solve. Inne kolejkujące się komendy muszą pozostać w API.
+- Synchroniczny ACK publikacji oraz exact command ledger confirmation:
+  ID/kind/API/session scope, completion i timestamp. 404/unavailable
+  oznacza unknown. Następny child dopiero po normalnym wait i potwierdzeniu.
+- Prep failure i scene/session drift wymagają scoped failure/reconciliation;
+  nie publikować sztucznego failed run ani usuwać custody przez sam kill.
+
+Wstępny eksperyment whitelist/early exit został wycofany przed buildem:
+nie spełniał wszystkich powyższych granic. Scratch runtime, orchestrator
+i live publisher nie mają zmian z tego eksperymentu. Grid i końcowe Compute
+po restore nadal są **OPEN**, bez zmiany procentów P0–P8.
