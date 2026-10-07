@@ -858,8 +858,9 @@ function buildViewCubeFaceGradient(): CanvasTexture {
   const context = canvas.getContext("2d");
   if (context) {
     const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-    gradient.addColorStop(0, "#ffffff");
-    gradient.addColorStop(1, "#e3e3e3");
+    // A luminance mask multiplied into the themed face colour, not a colour.
+    gradient.addColorStop(0, luminanceStop(1));
+    gradient.addColorStop(1, luminanceStop(0.89));
     context.fillStyle = gradient;
     context.fillRect(0, 0, canvas.width, canvas.height);
   }
@@ -877,6 +878,11 @@ function buildViewCubeFaceGradient(): CanvasTexture {
 function viewDirectionTo(object: Object3D, camera: Camera, out: Vector3): Vector3 {
   object.getWorldPosition(out);
   return out.sub(camera.position).normalize();
+}
+
+function luminanceStop(factor: number): string {
+  const level = Math.round(Math.min(1, Math.max(0, factor)) * 255);
+  return `rgb(${level} ${level} ${level})`;
 }
 
 function setCanvasCursor(element: HTMLElement, cursor: string): void {
