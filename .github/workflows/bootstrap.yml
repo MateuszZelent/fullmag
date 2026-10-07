@@ -321,6 +321,11 @@ jobs:
           g++ -std=c++17 -Inative/include -Ibackends/fem/include -Ibackends/fem/cpu backends/fem/tests/frequency_domain/modal_progress_elapsed_test.cpp -o "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
           "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
 
+      - name: Run bounded waveguide dense algebra contracts
+        run: |
+          g++ -std=c++17 -UNDEBUG -Inative/include -Ibackends/fem/include backends/fem/tests/frequency_domain/floquet_waveguide_demag_k_test.cpp backends/fem/cpu/frequency_domain/floquet_waveguide_demag_k.cpp -o "$RUNNER_TEMP/fullmag-waveguide-dense-algebra-test"
+          "$RUNNER_TEMP/fullmag-waveguide-dense-algebra-test"
+
       - name: Run COMSOL scientific gate regression suite
         run: python -B scripts/test_validate_comsol_dispersion_scientific_gate.py -v
 

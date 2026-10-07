@@ -17,6 +17,59 @@ using Complex = std::complex<double>;
 
 constexpr std::uint64_t kMaxDenseWaveguideDofs = 4096;
 
+bool checked_add_u64(std::uint64_t left, std::uint64_t right, std::uint64_t &result) noexcept
+{
+    if (left > std::numeric_limits<std::uint64_t>::max() - right) {
+        return false;
+    }
+    result = left + right;
+    return true;
+}
+
+bool checked_multiply_u64(
+    std::uint64_t left,
+    std::uint64_t right,
+    std::uint64_t &result) noexcept
+{
+    if (right != 0 && left > std::numeric_limits<std::uint64_t>::max() / right) {
+        return false;
+    }
+    result = left * right;
+    return true;
+}
+
+bool calculate_workspace_bytes(
+    std::uint64_t reduced_phi,
+    std::uint64_t q,
+    std::uint64_t &out_bytes) noexcept
+{
+    out_bytes = 0;
+    if (reduced_phi == 0 || q == 0) {
+        return false;
+    }
+
+    std::uint64_t phi_squared = 0;
+    std::uint64_t poisson_and_lu_entries = 0;
+    std::uint64_t rhs_and_solution_entries = 0;
+    std::uint64_t schur_entries = 0;
+    std::uint64_t complex_entries = 0;
+    std::uint64_t complex_bytes = 0;
+    std::uint64_t pivot_bytes = 0;
+    if (!checked_multiply_u64(reduced_phi, reduced_phi, phi_squared) ||
+        !checked_multiply_u64(phi_squared, 2u, poisson_and_lu_entries) ||
+        !checked_multiply_u64(reduced_phi, 2u, rhs_and_solution_entries) ||
+        !checked_multiply_u64(q, q, schur_entries) ||
+        !checked_add_u64(poisson_and_lu_entries, rhs_and_solution_entries, complex_entries) ||
+        !checked_add_u64(complex_entries, schur_entries, complex_entries) ||
+        !checked_multiply_u64(complex_entries, sizeof(Complex), complex_bytes) ||
+        !checked_multiply_u64(reduced_phi, sizeof(std::size_t), pivot_bytes) ||
+        !checked_add_u64(complex_bytes, pivot_bytes, out_bytes)) {
+        out_bytes = 0;
+        return false;
+    }
+    return true;
+}
+
 void copy_error(FloquetWaveguideDemagKDiagnostics *diagnostics, const char *message) noexcept
 {
     if (diagnostics == nullptr) {
@@ -92,6 +145,7 @@ bool factorize(
             out.max_pivot_abs = std::max(out.max_pivot_abs, pivot_abs);
             out.pivots[column] = pivot;
             if (pivot != column) {
+                // Prior L entries must follow the same row permutation as U.
                 for (std::size_t entry = 0; entry < size; ++entry) {
                     std::swap(out.lu[column * size + entry], out.lu[pivot * size + entry]);
                 }
@@ -124,13 +178,20 @@ bool solve_factored(
         return false;
     }
     try {
+        // The stored lower triangle is the final L after every row permutation.
+        // Apply P to the RHS in full before solving L y = P b.
         out = rhs;
         for (std::size_t column = 0; column < size; ++column) {
             const std::size_t pivot = factorization.pivots[column];
+            if (pivot < column || pivot >= size) {
+                return false;
+            }
             if (pivot != column) {
                 std::swap(out[column], out[pivot]);
             }
-            for (std::size_t row = column + 1u; row < size; ++row) {
+        }
+        for (std::size_t row = 0; row < size; ++row) {
+            for (std::size_t column = 0; column < row; ++column) {
                 out[row] -= factorization.lu[row * size + column] * out[column];
             }
         }
@@ -194,8 +255,7 @@ FrequencyDomainStatus build_floquet_waveguide_demag_k_real_split(
         return FrequencyDomainStatus::validation_error;
     }
     if (problem.q_dof_count == 0 || problem.phi_dof_count == 0 ||
-        problem.q_dof_count > kMaxDenseWaveguideDofs ||
-        problem.phi_dof_count > kMaxDenseWaveguideDofs) {
+        problem.q_dof_count > kMaxDenseWaveguideDofs) {
         copy_error(out_diagnostics, "waveguide demag-k requires small positive q and phi dimensions");
         return FrequencyDomainStatus::validation_error;
     }
@@ -213,6 +273,30 @@ FrequencyDomainStatus build_floquet_waveguide_demag_k_real_split(
         copy_error(out_diagnostics, "waveguide demag-k real-split output shape mismatch");
         return FrequencyDomainStatus::validation_error;
     }
+    const std::uint64_t pinned_offset =
+        problem.gauge_policy == FloquetWaveguideDemagKGaugePolicy::pin_first_dof ? 1u : 0u;
+    if (pinned_offset != 0 && phi == 1u) {
+        copy_error(out_diagnostics, "waveguide demag-k pinning removes every potential degree of freedom");
+        return FrequencyDomainStatus::solve_error;
+    }
+    const std::uint64_t reduced_phi_count = phi - pinned_offset;
+    std::uint64_t required_workspace_bytes = 0;
+    if (!calculate_workspace_bytes(reduced_phi_count, q, required_workspace_bytes)) {
+        copy_error(out_diagnostics, "waveguide demag-k dense workspace size overflow");
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (required_workspace_bytes > problem.workspace_budget_bytes) {
+        copy_error(out_diagnostics, "waveguide demag-k dense workspace exceeds the configured budget");
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (q > kMaxDenseWaveguideDofs || phi > kMaxDenseWaveguideDofs) {
+        copy_error(out_diagnostics, "waveguide demag-k requires small positive q and phi dimensions");
+        return FrequencyDomainStatus::validation_error;
+    }
+
+    const std::size_t reduced_phi = static_cast<std::size_t>(reduced_phi_count);
+    const std::size_t q_size = static_cast<std::size_t>(q);
+    const std::size_t phi_size = static_cast<std::size_t>(phi);
     if (!valid_matrix(problem.k_perp_row_major, phi, phi) ||
         !valid_matrix(problem.mass_row_major, phi, phi) ||
         !valid_matrix(problem.a_qphi_perp_row_major, q, phi) ||
@@ -220,27 +304,6 @@ FrequencyDomainStatus build_floquet_waveguide_demag_k_real_split(
         !valid_matrix(problem.a_phiq_perp_row_major, phi, q) ||
         !valid_matrix(problem.a_phiq_axial_row_major, phi, q)) {
         copy_error(out_diagnostics, "waveguide demag-k input blocks must be finite and complete");
-        return FrequencyDomainStatus::validation_error;
-    }
-
-    const std::size_t pinned_offset =
-        problem.gauge_policy == FloquetWaveguideDemagKGaugePolicy::pin_first_dof ? 1u : 0u;
-    if (pinned_offset != 0 && phi == 1u) {
-        copy_error(out_diagnostics, "waveguide demag-k pinning removes every potential degree of freedom");
-        return FrequencyDomainStatus::solve_error;
-    }
-    const std::size_t reduced_phi = static_cast<std::size_t>(phi) - pinned_offset;
-    const std::size_t q_size = static_cast<std::size_t>(q);
-    const std::size_t phi_size = static_cast<std::size_t>(phi);
-    const long double matrix_entries =
-        static_cast<long double>(reduced_phi) * reduced_phi +
-        static_cast<long double>(q_size) * reduced_phi * 2.0L +
-        static_cast<long double>(reduced_phi) * q_size * 2.0L +
-        static_cast<long double>(q_size) * q_size * 2.0L;
-    if (!std::isfinite(static_cast<double>(matrix_entries)) ||
-        matrix_entries > static_cast<long double>(problem.workspace_budget_bytes) /
-            (sizeof(Complex) + sizeof(double))) {
-        copy_error(out_diagnostics, "waveguide demag-k dense workspace exceeds the configured budget");
         return FrequencyDomainStatus::validation_error;
     }
 
