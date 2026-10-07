@@ -33,7 +33,6 @@ from fullmag.meshing.asset_pipeline import (
     SharedDomainBuildReport,
     _build_shared_domain_build_report,
     _build_field_stack,
-    _build_scoped_lower_bound_fields,
     _build_interface_fields,
     _build_object_bulk_fields,
     _build_transition_fields,
