@@ -769,6 +769,30 @@ describe("study runtime command resource bundles", () => {
     ).toBe(true);
   });
 
+  it("revises identical frequency-domain bytes when artifact ownership changes", () => {
+    const base = {
+      schema_version: "frequency_domain_text_artifact.v1", status: "ready",
+      artifact_path: "eigen/dispersion.csv", resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      content_type: "text/csv; charset=utf-8", text: "sample_index,frequency_hz\n0,1e9\n",
+      missing_reason: null, session_id: "session-a", run_id: "run-a", stage_id: "stage-a",
+      mesh_generation_id: "mesh-a", artifact_set_id: "set-a", revision: "same-revision", content_digest: "same-digest",
+    };
+    const textRevision = frequencyDomainTextArtifactRevision(base);
+    const jsonRevision = frequencyDomainJsonArtifactRevision(base);
+    for (const key of ["session_id", "run_id", "stage_id", "mesh_generation_id", "artifact_set_id"] as const) {
+      expect(frequencyDomainTextArtifactRevision({ ...base, [key]: "other" })).not.toBe(textRevision);
+      expect(frequencyDomainJsonArtifactRevision({ ...base, [key]: "other" })).not.toBe(jsonRevision);
+    }
+    expect(frequencyDomainTextArtifactRevision({ ...base, revision: "new-revision" })).not.toBe(textRevision);
+    expect(frequencyDomainTextArtifactRevision({ ...base, content_digest: "new-digest" })).not.toBe(textRevision);
+    expect(frequencyDomainTextArtifactRevision({ ...base, session_id: "a|b", run_id: "c" })).not.toBe(
+      frequencyDomainTextArtifactRevision({ ...base, session_id: "a", run_id: "b|c" }),
+    );
+    expect(frequencyDomainJsonArtifactRevision({ ...base, session_id: "a:b", run_id: "c" })).not.toBe(
+      frequencyDomainJsonArtifactRevision({ ...base, session_id: "a", run_id: "b:c" }),
+    );
+  });
+
   it("changes frequency-domain text artifact revision when dispersion CSV contents change", () => {
     const baseArtifact = {
       artifact_path: "eigen/dispersion.csv",

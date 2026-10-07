@@ -11445,6 +11445,13 @@
           "artifact_path": {
             "type": "string"
           },
+          "artifact_set_id": {
+            "description": "Opaque identity of the canonical artifact directory shared by its files.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "content_digest": {
             "description": "SHA-256 digest of the immutable JSON artifact bytes.",
             "type": [
@@ -12747,8 +12754,27 @@
           "artifact_path": {
             "type": "string"
           },
+          "artifact_set_id": {
+            "description": "Opaque identity of the canonical artifact directory shared by its files.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "content_type": {
             "type": "string"
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "missing_reason": {
             "type": [
@@ -12769,8 +12795,32 @@
           "resource_key": {
             "type": "string"
           },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "schema_version": {
             "type": "string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "status": {
             "type": "string"

@@ -5,19 +5,25 @@ import { Activity, Download, Eye } from "lucide-react";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import { ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH } from "@/kernel/api/apiPaths";
+import type { FrequencyDomainJsonArtifactResource } from "@/kernel/api/apiTypes";
+import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import {
   useFrequencyDomainEigenBranchesResource,
   useFrequencyDomainEigenDispersionResource,
+  useFrequencyDomainManifestResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   buildEigenBranchDetailChartModel,
   buildEigenBranchPointModeSelectionRef,
   buildEigenBranchesModel,
   eigenModeFieldAvailable,
+  frequencyDomainManifestPayload,
+  frequencyDomainResultContextFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type {
   EigenBranch,
   EigenBranchPoint,
+  FrequencyDomainResultContext,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz, formatFrequencyRangeHz } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
@@ -33,6 +39,186 @@ export interface EigenBranchPointViewModel {
   modeIndex: number;
   pointId: string;
   sampleIndex: number;
+}
+
+export interface EigenBranchModePlotHandoff {
+  commandInput: Record<string, unknown>;
+  selectionRef: Extract<SelectionRef, { type: "frequency-domain" }> & {
+    frequencyHz: number;
+    representation: "complex-vector-xyz";
+  };
+}
+
+const EIGEN_MODE_FIELD_REPRESENTATION = "complex-vector-xyz" as const;
+const EIGEN_MODE_FIELD_VIEW = "phase_rotated_real" as const;
+
+export interface EigenBranchResultManifestOwner {
+  artifactSetId: string;
+  resultContext: FrequencyDomainResultContext;
+  runId: string;
+  sessionId: string;
+  stageId: string;
+}
+
+export function buildEigenBranchResultManifestOwner(
+  manifestResource: unknown,
+): EigenBranchResultManifestOwner | null {
+  const resultManifest = record(record(manifestResource)?.result_manifest);
+  const payload = record(frequencyDomainManifestPayload(manifestResource));
+  const sessionId = resultManifest?.session_id;
+  const artifactSetId = resultManifest?.artifact_set_id;
+  const runId = resultManifest?.run_id;
+  const stageId = resultManifest?.stage_id;
+  if (
+    resultManifest?.status !== "ready" ||
+    !payload ||
+    !isNonEmptyString(sessionId) ||
+    !isNonEmptyString(artifactSetId) ||
+    !isNonEmptyString(runId) ||
+    !isNonEmptyString(stageId)
+  ) {
+    return null;
+  }
+
+  return {
+    artifactSetId,
+    resultContext: frequencyDomainResultContextFromManifest({
+      ...payload,
+      // The owned resource envelope is authoritative over legacy payload placeholders.
+      run_id: runId,
+      stage_id: stageId,
+    }),
+    runId,
+    sessionId,
+    stageId,
+  };
+}
+
+export function buildEigenBranchModePlotHandoff(
+  branchId: string,
+  point: EigenBranchPoint,
+  resourceStatus: string,
+  artifact: FrequencyDomainJsonArtifactResource | null | undefined,
+  manifestStatus: string,
+  manifestOwner: EigenBranchResultManifestOwner | null,
+): EigenBranchModePlotHandoff | null {
+  const sessionId = artifact?.session_id;
+  const artifactSetId = artifact?.artifact_set_id;
+  const runId = artifact?.run_id;
+  const stageId = artifact?.stage_id;
+  const artifactRevision = artifact?.revision;
+  const artifactPath = artifact?.artifact_path;
+  const resourceRef = point.modeFieldResourceKey;
+  const manifestContext = manifestOwner?.resultContext;
+  const equilibriumId = manifestContext?.equilibriumId;
+  const kContextKind = manifestContext?.classification?.kContext.kind;
+  const studyProduct = manifestContext?.studyProduct;
+  const wavevectorKf = point.wavevectorKf;
+  if (
+    resourceStatus !== "ready" ||
+    artifact?.status !== "ready" ||
+    manifestStatus !== "ready" ||
+    !eigenModeFieldAvailable(point) ||
+    !isNonEmptyString(sessionId) ||
+    !isNonEmptyString(artifactSetId) ||
+    !isNonEmptyString(runId) ||
+    !isNonEmptyString(stageId) ||
+    !isNonEmptyString(artifactRevision) ||
+    !isNonEmptyString(artifactPath) ||
+    !manifestOwner ||
+    !manifestContext ||
+    manifestOwner.sessionId !== sessionId ||
+    manifestOwner.artifactSetId !== artifactSetId ||
+    manifestOwner.runId !== runId ||
+    manifestOwner.stageId !== stageId ||
+    manifestContext.runId !== runId ||
+    manifestContext.stageId !== stageId ||
+    studyProduct !== "modal_eigen" ||
+    !isNonEmptyString(equilibriumId) ||
+    !kContextKind ||
+    !isNonEmptyString(resourceRef) ||
+    !isNonEmptyString(point.modeId) ||
+    !isNonEmptyString(point.sampleId) ||
+    !isNonNegativeInteger(point.sampleIndex) ||
+    !isNonNegativeInteger(point.rawModeIndex) ||
+    !Number.isFinite(point.frequencyRealHz)
+  ) {
+    return null;
+  }
+  if (
+    (kContextKind === "fixed_k" ||
+      kContextKind === "k_path" ||
+      kContextKind === "k_grid") &&
+    !isFiniteVector3(wavevectorKf)
+  ) {
+    return null;
+  }
+  if (
+    kContextKind === "k_path" &&
+    (point.pathS == null || !Number.isFinite(point.pathS))
+  ) {
+    return null;
+  }
+  if (
+    kContextKind === "fixed_k" &&
+    wavevectorKf?.every((component) => component === 0)
+  ) {
+    return null;
+  }
+  if (
+    kContextKind === "gamma" &&
+    wavevectorKf?.some((component) => Math.abs(component) > 1e-12)
+  ) {
+    return null;
+  }
+
+  const selectionRef = buildEigenBranchPointModeSelectionRef(
+    branchId,
+    point,
+    {
+      analysisRunId: runId,
+      analysisStageId: stageId,
+      artifactPath,
+      artifactRevision,
+      equilibriumId,
+      kContextKind,
+      representation: EIGEN_MODE_FIELD_REPRESENTATION,
+      resourceRef,
+      studyProduct,
+    },
+  );
+  if (selectionRef.type !== "frequency-domain" || !selectionRef.fieldId) {
+    return null;
+  }
+
+  return {
+    commandInput: {
+      artifactRevision,
+      fieldId: selectionRef.fieldId,
+      frequencyHz: point.frequencyRealHz,
+      equilibriumId,
+      kContextKind,
+      kPathCoordinateRadPerM: point.pathS ?? undefined,
+      label: `sample ${point.sampleIndex}, mode ${point.rawModeIndex}`,
+      modeIndex: point.rawModeIndex,
+      phaseRad: 0,
+      representation: EIGEN_MODE_FIELD_REPRESENTATION,
+      resourceRef,
+      runId,
+      sampleIndex: point.sampleIndex,
+      source: "eigen-mode",
+      stageId,
+      studyProduct,
+      normalization: manifestContext.normalization ?? undefined,
+      view: EIGEN_MODE_FIELD_VIEW,
+      wavevectorKf,
+    },
+    selectionRef: {
+      ...selectionRef,
+      frequencyHz: point.frequencyRealHz,
+      representation: EIGEN_MODE_FIELD_REPRESENTATION,
+    },
+  };
 }
 
 export function buildEigenBranchPointViewModel(
@@ -78,7 +264,13 @@ export function EigenBranchInspectorPanel({
         title="Tracked Branch Samples"
         badge={summary.sampleTableBadge}
       >
-        <BranchSampleTable branch={summary.branch} />
+        <BranchSampleTable
+          artifact={summary.branchArtifact}
+          branch={summary.branch}
+          manifestOwner={summary.manifestOwner}
+          manifestStatus={summary.manifestStatus}
+          resourceStatus={summary.branchArtifactStatus}
+        />
       </InspectorGroup>
     </div>
   );
@@ -145,7 +337,19 @@ function BranchContinuityCharts({ branch }: { branch: EigenBranch | null }) {
   );
 }
 
-function BranchSampleTable({ branch }: { branch: EigenBranch | null }) {
+function BranchSampleTable({
+  artifact,
+  branch,
+  manifestOwner,
+  manifestStatus,
+  resourceStatus,
+}: {
+  artifact: FrequencyDomainJsonArtifactResource | null;
+  branch: EigenBranch | null;
+  manifestOwner: EigenBranchResultManifestOwner | null;
+  manifestStatus: string;
+  resourceStatus: string;
+}) {
   const kernel = useKernel();
 
   if (!branch || branch.points.length === 0) {
@@ -177,24 +381,27 @@ function BranchSampleTable({ branch }: { branch: EigenBranch | null }) {
       "inspector",
     );
   };
-  const plotMode = (point: EigenBranchPoint): void => {
-    if (!eigenModeFieldAvailable(point) || !point.modeFieldId) return;
+  const plotMode = (
+    point: EigenBranchPoint,
+    handoff: EigenBranchModePlotHandoff | null,
+  ): void => {
+    if (!handoff) return;
+    kernel.selection.set(
+      {
+        kind: handoff.selectionRef.kind,
+        label: `sample ${point.sampleIndex}, mode ${point.rawModeIndex}`,
+        nodeId: handoff.selectionRef.nodeId,
+        objectId: null,
+        ref: handoff.selectionRef,
+      },
+      "inspector",
+    );
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.eigen.branch",
       }),
-      {
-        fieldId: point.modeFieldId,
-        label: `sample ${point.sampleIndex}, mode ${point.rawModeIndex}`,
-        kPathCoordinateRadPerM: point.pathS,
-        modeIndex: point.rawModeIndex,
-        phaseRad: 0,
-        sampleIndex: point.sampleIndex,
-        source: "eigen-mode",
-        view: "phase_rotated_real",
-        wavevectorKf: point.wavevectorKf,
-      },
+      handoff.commandInput,
     );
   };
   const exportBranchCsv = (): void => {
@@ -225,6 +432,14 @@ function BranchSampleTable({ branch }: { branch: EigenBranch | null }) {
           {rows.map((point) => {
             const rowModel = buildEigenBranchPointViewModel(branch.branchId, point);
             const hasModeField = rowModel.fieldAvailable;
+            const handoff = buildEigenBranchModePlotHandoff(
+              branch.branchId,
+              point,
+              resourceStatus,
+              artifact,
+              manifestStatus,
+              manifestOwner,
+            );
             const rowKey = `${point.sampleIndex}:${point.rawModeIndex}`;
             return (
               <tr
@@ -254,16 +469,18 @@ function BranchSampleTable({ branch }: { branch: EigenBranch | null }) {
                   <Button
                     aria-label={`Plot sample ${point.sampleIndex} mode ${point.rawModeIndex} in 3D`}
                     className="fm-inspector-action-button"
-                    disabled={!hasModeField}
+                    disabled={!handoff}
                     size="sm"
                     title={
-                      hasModeField
-                        ? `Plot sample ${point.sampleIndex} mode ${point.rawModeIndex} in 3D`
-                        : "Mode field artifact is missing"
+                      !hasModeField
+                        ? "Mode field artifact is missing"
+                        : handoff
+                          ? `Plot sample ${point.sampleIndex} mode ${point.rawModeIndex} in 3D`
+                          : "Current mode field owner identity is unavailable"
                     }
                     type="button"
                     variant="primary"
-                    onClick={() => plotMode(point)}
+                    onClick={() => plotMode(point, handoff)}
                   >
                     <Activity aria-hidden="true" size={13} />
                     <span>Plot 3D</span>
@@ -331,8 +548,12 @@ function branchSamplesCsv(branch: EigenBranch): string {
 function useEigenBranchSummary(selection: InspectorPanelProps["selection"]) {
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   const branchId = ref?.branchId ?? branchIdFromNodeId(selection.nodeId);
+  const manifest = useFrequencyDomainManifestResource();
   const branches = useFrequencyDomainEigenBranchesResource();
   const dispersion = useFrequencyDomainEigenDispersionResource();
+  const manifestOwner = manifest.status === "ready"
+    ? buildEigenBranchResultManifestOwner(manifest.data)
+    : null;
   const branchesModel = buildEigenBranchesModel(branches.data, dispersion.data);
   const branch =
     branchesModel.branches.find((candidate) => candidate.branchId === branchId) ??
@@ -343,6 +564,10 @@ function useEigenBranchSummary(selection: InspectorPanelProps["selection"]) {
 
   return {
     badge: branch ? `${branch.points.length} point(s)` : branches.status,
+    branchArtifact: branches.data ?? null,
+    branchArtifactStatus: branches.status,
+    manifestOwner,
+    manifestStatus: manifest.status,
     branch,
     branchIdentity: branch
       ? `${branch.branchId}; ${branch.label ?? "unlabeled"}`
@@ -369,6 +594,26 @@ function useEigenBranchSummary(selection: InspectorPanelProps["selection"]) {
           )}-${Math.max(...sampleValues)}`
         : "not available",
   };
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function isNonNegativeInteger(value: number): boolean {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function isFiniteVector3(
+  value: readonly [number, number, number] | null | undefined,
+): value is readonly [number, number, number] {
+  return value !== undefined && value !== null && value.every(Number.isFinite);
 }
 
 function branchIdFromNodeId(nodeId: string | null): string | null {

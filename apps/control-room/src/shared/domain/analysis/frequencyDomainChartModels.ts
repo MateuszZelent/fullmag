@@ -299,13 +299,23 @@ function typedKSampling(value: unknown): FrequencyDomainResultEvidence["kSamplin
   return null;
 }
 
-export interface FrequencyDomainJsonArtifactLike {
+interface FrequencyDomainArtifactOwnershipLike {
+  artifact_set_id?: string | null;
+  content_digest?: string | null;
+  revision?: string | null;
+  session_id?: string | null;
+  run_id?: string | null;
+  stage_id?: string | null;
+  mesh_generation_id?: string | null;
+}
+
+export interface FrequencyDomainJsonArtifactLike extends FrequencyDomainArtifactOwnershipLike {
   artifact_path?: string | null;
   payload?: unknown;
   status: string;
 }
 
-export interface FrequencyDomainTextArtifactLike {
+export interface FrequencyDomainTextArtifactLike extends FrequencyDomainArtifactOwnershipLike {
   path_metadata?: FrequencyDomainKPathMetadataResource | null;
   status: string;
   text?: string | null;
@@ -455,6 +465,7 @@ export interface EigenBranch {
 }
 
 export interface EigenBranchesModel {
+  artifactOwnership?: FrequencyDomainArtifactOwnershipLike & { status: string };
   branches: EigenBranch[];
   diagnostics: string[];
   droppedBranchCount: number;
@@ -1040,14 +1051,20 @@ export function buildEigenDispersionChartModel(
   branchesModel?: EigenBranchesModel | null,
 ): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
   const parsed = parseDispersionCsv(resource?.text ?? "");
+  const diagnostics: string[] = [];
   const pointsWithPathMetadata = applyDispersionPathMetadata(
     parsed.points,
     resource?.path_metadata,
   );
+  const sharesBranchOwnership = resource != null && branchesModel != null &&
+    eigenArtifactsShareOwnership(branchesModel.artifactOwnership, resource);
   const points = applyBranchIdentityFromBranches(
     pointsWithPathMetadata,
-    branchesModel?.branches ?? [],
+    sharesBranchOwnership ? branchesModel.branches : [],
   );
+  if (branchesModel && !sharesBranchOwnership) {
+    diagnostics.push("branch labels omitted: artifact ownership is missing or mismatched");
+  }
   const branchIds = new Set(points.map((point) => point.branchId ?? "raw"));
   const frequencyScale = frequencyChartScale([
     ...points.map((point) => point.frequencyHz),
@@ -1130,7 +1147,7 @@ export function buildEigenDispersionChartModel(
   });
   return {
     dataSourceVersion: "unknown",
-    diagnostics: [],
+    diagnostics,
     droppedPointCount: parsed.droppedPointCount,
     points,
     series,
@@ -1268,6 +1285,24 @@ export function buildEigenBranchDetailChartModel(
   };
 }
 
+function eigenArtifactsShareOwnership(
+  branches: (FrequencyDomainArtifactOwnershipLike & { status: string }) | null | undefined,
+  dispersion: FrequencyDomainTextArtifactLike,
+): boolean {
+  if (branches?.status !== "ready" || dispersion.status !== "ready") return false;
+  for (const key of ["session_id", "run_id", "artifact_set_id"] as const) {
+    const branchValue = stringValue(branches[key]);
+    const dispersionValue = stringValue(dispersion[key]);
+    if (!branchValue || branchValue === "current" || branchValue !== dispersionValue) return false;
+  }
+  // The artifact set identifies a standalone run even when no stage or mesh
+  // generation was published. Optional identities must still agree.
+  for (const key of ["stage_id", "mesh_generation_id"] as const) {
+    if (stringValue(branches[key]) !== stringValue(dispersion[key])) return false;
+  }
+  return true;
+}
+
 export function buildEigenBranchesModel(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
   dispersionResource?: FrequencyDomainTextArtifactLike | null,
@@ -1278,7 +1313,7 @@ export function buildEigenBranchesModel(
   let droppedBranchCount = 0;
   let droppedPointCount = 0;
   const dispersionPointByIdentity = new Map<string, EigenDispersionPoint>();
-  if (dispersionResource) {
+  if (dispersionResource && eigenArtifactsShareOwnership(resource, dispersionResource)) {
     const dispersionPoints = applyDispersionPathMetadata(
       parseDispersionCsv(dispersionResource.text ?? "").points,
       dispersionResource.path_metadata,
@@ -1289,6 +1324,10 @@ export function buildEigenBranchesModel(
         point,
       );
     }
+  }
+
+  if (dispersionResource && !eigenArtifactsShareOwnership(resource, dispersionResource)) {
+    diagnostics.push("dispersion enrichment omitted: artifact ownership is missing or mismatched");
   }
 
   array(root?.branches ?? record(root?.payload)?.branches).forEach((entry) => {
@@ -1401,7 +1440,17 @@ export function buildEigenBranchesModel(
     diagnostics.push("branches.v2 artifact is ready but has no JSON payload");
   }
 
-  return { branches, diagnostics, droppedBranchCount, droppedPointCount };
+  return {
+    artifactOwnership: resource ? {
+      artifact_set_id: resource.artifact_set_id,
+      session_id: resource.session_id,
+      run_id: resource.run_id,
+      stage_id: resource.stage_id,
+      mesh_generation_id: resource.mesh_generation_id,
+      status: resource.status,
+    } : undefined,
+    branches, diagnostics, droppedBranchCount, droppedPointCount,
+  };
 }
 
 export function buildFrequencyResponseChartModel(

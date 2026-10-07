@@ -32,11 +32,20 @@ import {
   type FrequencyDomainTextArtifactLike,
 } from "./frequencyDomainChartModels";
 
+const artifactOwnership = {
+  artifact_set_id: "fixture-artifact-set",
+  session_id: "session-a",
+  run_id: "run-a",
+  stage_id: "stage-a",
+  mesh_generation_id: "mesh-a",
+};
+
 function jsonResource(
   payload: unknown,
   artifactPath?: string,
 ): FrequencyDomainJsonArtifactLike {
   return {
+    ...artifactOwnership,
     artifact_path: artifactPath,
     payload,
     status: "ready",
@@ -45,6 +54,7 @@ function jsonResource(
 
 function textResource(text: string): FrequencyDomainTextArtifactLike {
   return {
+    ...artifactOwnership,
     status: "ready",
     text,
   };
@@ -640,6 +650,7 @@ describe("frequencyDomainChartModels", () => {
 
   it("attaches interpolated path wavevectors to dispersion and branch selections", () => {
     const pathResource: FrequencyDomainTextArtifactLike = {
+      ...artifactOwnership,
       path_metadata: {
         sampling: {
           closed: false,
@@ -699,6 +710,60 @@ describe("frequencyDomainChartModels", () => {
       kPathCoordinateRadPerM: 5,
       wavevectorKf: [5e6, 1e7, -1.5e7],
     });
+  });
+
+  it("enriches branch handoff only from the same owned artifact set", () => {
+    const branches = jsonResource({ branches: [{ branch_id: "acoustic", points: [{
+      frequency_real_hz: 1.3e9, raw_mode_index: 2, sample_index: 1,
+    }] }] });
+    const dispersion: FrequencyDomainTextArtifactLike = {
+      ...textResource("sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz\n1,2,10000000,1.3e9"),
+      content_digest: "csv-digest",
+      path_metadata: { sampling: { kind: "path", closed: false,
+        points: [{ label: "G", k_vector: [0, 0, 0] }, { label: "X", k_vector: [1e7, 0, 0] }],
+        samples_per_segment: [1],
+      } },
+    };
+    const standalone = buildEigenBranchesModel(
+      { ...branches, stage_id: undefined, mesh_generation_id: undefined },
+      { ...dispersion, stage_id: undefined, mesh_generation_id: undefined },
+    );
+    expect(standalone.branches[0]!.points[0]!.wavevectorKf).toEqual([1e7, 0, 0]);
+    expect(standalone.diagnostics).toEqual([]);
+
+    const matched = buildEigenBranchesModel({ ...branches, content_digest: "json-digest" }, dispersion);
+    const point = matched.branches[0]!.points[0]!;
+    expect(point.pathS).toBe(1e7);
+    expect(point.wavevectorKf).toEqual([1e7, 0, 0]);
+    expect(buildEigenBranchPointModeSelectionRef("acoustic", point).wavevectorKf).toEqual([1e7, 0, 0]);
+
+    for (const key of ["session_id", "run_id", "stage_id", "artifact_set_id", "mesh_generation_id"] as const) {
+      const mismatched = buildEigenBranchesModel(branches, { ...dispersion, [key]: "foreign" });
+      expect(mismatched.branches[0]!.points[0]!.wavevectorKf).toBeUndefined();
+      expect(mismatched.branches[0]!.points[0]!.pathS).toBeUndefined();
+      expect(mismatched.diagnostics).toContain("dispersion enrichment omitted: artifact ownership is missing or mismatched");
+    }
+    const unowned = buildEigenBranchesModel(branches, { ...dispersion, artifact_set_id: undefined });
+    expect(unowned.branches[0]!.points[0]!.wavevectorKf).toBeUndefined();
+
+    const ownedPoint = jsonResource({ branches: [{ branch_id: "acoustic", points: [{
+      frequency_real_hz: 1.3e9, raw_mode_index: 2, sample_index: 1,
+      wavevector_kf: [-3e7, 0, 0], path_s_rad_per_m: 3e7,
+    }] }] });
+    const own = buildEigenBranchesModel(ownedPoint, { ...dispersion, run_id: "foreign-run" }).branches[0]!.points[0]!;
+    expect(own.wavevectorKf).toEqual([-3e7, 0, 0]);
+    expect(own.pathS).toBe(3e7);
+  });
+
+  it("does not label dispersion points with branches from another run", () => {
+    const branches = buildEigenBranchesModel(jsonResource({ branches: [{ branch_id: "acoustic", points: [{
+      frequency_real_hz: 1.3e9, raw_mode_index: 2, sample_index: 1,
+    }] }] }));
+    const dispersion = textResource("sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz\n1,2,10000000,1.3e9");
+    expect(buildEigenDispersionChartModel(dispersion, branches).points[0]!.branchId).toBe("acoustic");
+    const mismatched = buildEigenDispersionChartModel({ ...dispersion, run_id: "foreign-run" }, branches);
+    expect(mismatched.points[0]!.branchId).toBeNull();
+    expect(mismatched.diagnostics).toContain("branch labels omitted: artifact ownership is missing or mismatched");
   });
 
   it("uses branches.v2 identity when dispersion CSV has no branch ids", () => {

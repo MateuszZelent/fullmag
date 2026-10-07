@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    path::{Path as FsPath, PathBuf},
     sync::Arc,
 };
 
@@ -13,11 +14,10 @@ use sha2::{Digest, Sha256};
 use utoipa::{PartialSchema, ToSchema};
 
 use crate::artifacts::{
-    read_json_artifact_value, read_text_artifact_value, require_current_live_artifact_dir,
-    try_resolve_artifact_path,
+    read_json_artifact_value, require_current_live_artifact_dir, try_resolve_artifact_path,
 };
 use crate::error::ApiError;
-use crate::types::AppState;
+use crate::types::{AppState, SessionStateResponse};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FrequencyDomainAvailabilitySummaryResource {
@@ -142,6 +142,9 @@ pub struct FrequencyDomainJsonArtifactResource {
     /// SHA-256 digest of the immutable JSON artifact bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_digest: Option<String>,
+    /// Opaque identity of the canonical artifact directory shared by its files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_set_id: Option<String>,
     /// Actual session that owns the current immutable artifact directory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -798,6 +801,21 @@ pub struct FrequencyDomainTextArtifactResource {
     pub content_type: String,
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<String>,
+    /// Opaque identity of the canonical artifact directory shared by its files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_set_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path_metadata: Option<FrequencyDomainKPathMetadataResource>,
     pub missing_reason: Option<String>,
 }
@@ -1200,29 +1218,56 @@ pub async fn get_frequency_domain_eigen_field_sweep(
 pub async fn get_frequency_domain_eigen_dispersion(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<FrequencyDomainTextArtifactResource>, ApiError> {
-    let Json(mut resource) = text_artifact_resource(
-        &state,
-        "frequency_domain_eigen_dispersion.v1",
-        "eigen/dispersion.csv",
-        "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
-        "text/csv; charset=utf-8",
-    )
-    .await?;
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    if try_resolve_artifact_path(&artifact_dir, "eigen/dispersion/path.json")?.is_some() {
-        let path_metadata =
-            read_dispersion_path_metadata_resource(&artifact_dir, "eigen/dispersion/path.json")?;
-        if let Some(text) = resource.text.as_deref() {
-            validate_dispersion_path_metadata_against_csv(&path_metadata, text).map_err(
-                |error| {
-                    ApiError::internal(format!(
-                        "invalid eigen/dispersion/path.json against eigen/dispersion.csv: {error}"
-                    ))
-                },
-            )?;
-        }
-        resource.path_metadata = Some(path_metadata);
+    let mut captured =
+        capture_frequency_domain_artifact_set(&state, &["eigen/dispersion.csv"]).await?;
+    captured.bind_artifact_path("eigen/dispersion.csv");
+    let csv_snapshot = read_text_artifact_snapshot(&captured.artifact_dir, "eigen/dispersion.csv")?;
+    let path_metadata =
+        if try_resolve_artifact_path(&captured.artifact_dir, "eigen/dispersion/path.json")?
+            .is_some()
+        {
+            Some(read_dispersion_path_metadata_resource(
+                &captured.artifact_dir,
+                "eigen/dispersion/path.json",
+            )?)
+        } else {
+            None
+        };
+    if let (Some((text, _)), Some(path_metadata)) = (csv_snapshot.as_ref(), path_metadata.as_ref())
+    {
+        validate_dispersion_path_metadata_against_csv(path_metadata, text).map_err(|error| {
+            ApiError::internal(format!(
+                "invalid eigen/dispersion/path.json against eigen/dispersion.csv: {error}"
+            ))
+        })?;
     }
+    let (text, content_digest) = csv_snapshot
+        .map(|(text, digest)| (Some(text), Some(digest)))
+        .unwrap_or((None, None));
+    let ready = text.is_some();
+    let resource = FrequencyDomainTextArtifactResource {
+        schema_version: "frequency_domain_eigen_dispersion.v1".to_string(),
+        status: if ready { "ready" } else { "missing" }.to_string(),
+        artifact_path: "eigen/dispersion.csv".to_string(),
+        resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion".to_string(),
+        content_type: "text/csv; charset=utf-8".to_string(),
+        text,
+        revision: content_digest.clone(),
+        artifact_set_id: ready.then(|| captured.artifact_set_id.clone()).flatten(),
+        session_id: ready
+            .then(|| captured.identity.session_id.clone())
+            .flatten(),
+        run_id: ready.then(|| captured.identity.run_id.clone()).flatten(),
+        stage_id: ready.then(|| captured.identity.stage_id.clone()).flatten(),
+        mesh_generation_id: ready
+            .then(|| captured.identity.mesh_generation_id.clone())
+            .flatten(),
+        content_digest,
+        path_metadata,
+        missing_reason: (!ready)
+            .then(|| "artifact is not present in the active workspace".to_string()),
+    };
+    validate_current_frequency_domain_artifact_set(&state, &captured).await?;
     Ok(Json(resource))
 }
 
@@ -1653,20 +1698,23 @@ pub async fn get_frequency_domain_response_frequency_point(
     State(state): State<Arc<AppState>>,
     Path(frequency_index): Path<u32>,
 ) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
-    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    let mut captured = capture_frequency_domain_artifact_set(
+        &state,
+        &["response/magnetic_response_sweep.v2.json"],
+    )
+    .await?;
     let artifact_path =
-        response_frequency_point_artifact_path_from_sweep(&artifact_dir, frequency_index)?
+        response_frequency_point_artifact_path_from_sweep(&captured.artifact_dir, frequency_index)?
             .unwrap_or_else(|| {
                 format!(
                     "response/frequency_points/frequency_{:04}.json",
                     frequency_index
                 )
             });
+    captured.bind_artifact_path(&artifact_path);
     json_artifact_resource_first_existing_with_context(
         &state,
-        &request_context,
-        &artifact_dir,
+        captured,
         "frequency_domain_response_frequency_point.v1",
         &[artifact_path.as_str()],
         &format!(
@@ -1885,12 +1933,10 @@ async fn json_artifact_resource_first_existing(
     artifact_paths: &[&str],
     resource_key: &str,
 ) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(state).await?;
-    let artifact_dir = require_current_live_artifact_dir(state).await?;
+    let captured = capture_frequency_domain_artifact_set(state, artifact_paths).await?;
     json_artifact_resource_first_existing_with_context(
         state,
-        &request_context,
-        &artifact_dir,
+        captured,
         schema_version,
         artifact_paths,
         resource_key,
@@ -1900,17 +1946,16 @@ async fn json_artifact_resource_first_existing(
 
 async fn json_artifact_resource_first_existing_with_context(
     state: &Arc<AppState>,
-    request_context: &crate::types::CurrentLiveRequestContext,
-    artifact_dir: &std::path::Path,
+    mut captured: FrequencyDomainArtifactSetCapture,
     schema_version: &str,
     artifact_paths: &[&str],
     resource_key: &str,
 ) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
     for artifact_path in artifact_paths {
+        captured.bind_artifact_path(artifact_path);
         if let Some((payload_value, content_digest)) =
-            super::results::read_result_artifact_snapshot(artifact_dir, artifact_path)?
+            super::results::read_result_artifact_snapshot(&captured.artifact_dir, artifact_path)?
         {
-            let live_identity = frequency_domain_live_artifact_identity(state, artifact_path).await;
             let payload = decode_frequency_domain_artifact_payload(artifact_path, payload_value)?;
             let response = Json(FrequencyDomainJsonArtifactResource {
                 schema_version: schema_version.to_string(),
@@ -1920,39 +1965,39 @@ async fn json_artifact_resource_first_existing_with_context(
                 payload: Some(payload),
                 revision: Some(content_digest.clone()),
                 content_digest: Some(content_digest),
-                session_id: live_identity.session_id,
-                run_id: live_identity.run_id,
-                stage_id: live_identity.stage_id,
-                mesh_generation_id: live_identity.mesh_generation_id,
+                artifact_set_id: captured.artifact_set_id.clone(),
+                session_id: captured.identity.session_id.clone(),
+                run_id: captured.identity.run_id.clone(),
+                stage_id: captured.identity.stage_id.clone(),
+                mesh_generation_id: captured.identity.mesh_generation_id.clone(),
                 missing_reason: None,
             });
-            crate::validate_current_live_request_context(state, request_context).await?;
+            validate_current_frequency_domain_artifact_set(state, &captured).await?;
             return Ok(response);
         }
     }
+    let missing_path = artifact_paths.first().copied().unwrap_or_default();
+    captured.bind_artifact_path(missing_path);
     let response = Json(FrequencyDomainJsonArtifactResource {
         schema_version: schema_version.to_string(),
         status: "missing".to_string(),
-        artifact_path: artifact_paths
-            .first()
-            .copied()
-            .unwrap_or_default()
-            .to_string(),
+        artifact_path: missing_path.to_string(),
         resource_key: resource_key.to_string(),
         payload: None,
         revision: None,
         content_digest: None,
+        artifact_set_id: None,
         session_id: None,
         run_id: None,
         stage_id: None,
         mesh_generation_id: None,
         missing_reason: Some("artifact is not present in the active workspace".to_string()),
     });
-    crate::validate_current_live_request_context(state, request_context).await?;
+    validate_current_frequency_domain_artifact_set(state, &captured).await?;
     Ok(response)
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct FrequencyDomainLiveArtifactIdentity {
     session_id: Option<String>,
     run_id: Option<String>,
@@ -1960,23 +2005,74 @@ struct FrequencyDomainLiveArtifactIdentity {
     mesh_generation_id: Option<String>,
 }
 
-async fn frequency_domain_live_artifact_identity(
-    state: &Arc<AppState>,
-    artifact_path: &str,
-) -> FrequencyDomainLiveArtifactIdentity {
-    let current = state.current_live_state.read().await;
-    let Some(snapshot) = current.as_ref() else {
-        return FrequencyDomainLiveArtifactIdentity::default();
-    };
-    let expected_kind_fragment = if artifact_path.starts_with("eigen/") {
-        Some("eigen")
-    } else if artifact_path.starts_with("response/") {
-        Some("frequency")
-    } else {
-        None
-    };
-    let stage = snapshot.stage_execution.as_ref().and_then(|execution| {
-        execution
+#[derive(Debug, Clone)]
+struct FrequencyDomainCapturedStageIdentity {
+    stage_id: Option<String>,
+    kind: Option<String>,
+    mesh_generation_id: Option<String>,
+    artifact_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct FrequencyDomainCapturedLiveIdentity {
+    session_id: String,
+    run_id: Option<String>,
+    stages: Vec<FrequencyDomainCapturedStageIdentity>,
+    active_stage_index: Option<usize>,
+    latest_mesh_generation_id: Option<String>,
+    mesh_generation_id: Option<String>,
+}
+
+impl FrequencyDomainCapturedLiveIdentity {
+    fn from_snapshot(snapshot: &SessionStateResponse) -> Self {
+        let (stages, active_stage_index) = snapshot
+            .stage_execution
+            .as_ref()
+            .map(|execution| {
+                (
+                    execution
+                        .stages
+                        .iter()
+                        .map(|stage| FrequencyDomainCapturedStageIdentity {
+                            stage_id: stage.stage_id.clone(),
+                            kind: stage.kind.clone(),
+                            mesh_generation_id: stage.mesh_generation_id.clone(),
+                            artifact_refs: stage.artifact_refs.clone(),
+                        })
+                        .collect(),
+                    execution.active_stage_index,
+                )
+            })
+            .unwrap_or_default();
+        Self {
+            session_id: snapshot.session.session_id.clone(),
+            run_id: snapshot
+                .run
+                .as_ref()
+                .map(|run| run.run_id.clone())
+                .or_else(|| Some(snapshot.session.run_id.clone())),
+            stages,
+            active_stage_index,
+            latest_mesh_generation_id: snapshot
+                .live_state
+                .as_ref()
+                .and_then(|live| live.latest_step.fem_mesh_generation_id.clone()),
+            mesh_generation_id: snapshot
+                .fem_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.generation_id.clone()),
+        }
+    }
+
+    fn artifact_identity(&self, artifact_path: &str) -> FrequencyDomainLiveArtifactIdentity {
+        let expected_kind_fragment = if artifact_path.starts_with("eigen/") {
+            Some("eigen")
+        } else if artifact_path.starts_with("response/") {
+            Some("frequency")
+        } else {
+            None
+        };
+        let stage = self
             .stages
             .iter()
             .rev()
@@ -1987,7 +2083,7 @@ async fn frequency_domain_live_artifact_identity(
             })
             .or_else(|| {
                 expected_kind_fragment.and_then(|fragment| {
-                    execution.stages.iter().rev().find(|stage| {
+                    self.stages.iter().rev().find(|stage| {
                         stage
                             .kind
                             .as_deref()
@@ -1996,34 +2092,140 @@ async fn frequency_domain_live_artifact_identity(
                 })
             })
             .or_else(|| {
-                execution
-                    .active_stage_index
-                    .and_then(|index| execution.stages.get(index))
-            })
-    });
-    FrequencyDomainLiveArtifactIdentity {
-        session_id: Some(snapshot.session.session_id.clone()),
-        run_id: snapshot
-            .run
-            .as_ref()
-            .map(|run| run.run_id.clone())
-            .or_else(|| Some(snapshot.session.run_id.clone())),
-        stage_id: stage.and_then(|stage| stage.stage_id.clone()),
-        mesh_generation_id: stage
-            .and_then(|stage| stage.mesh_generation_id.clone())
-            .or_else(|| {
-                snapshot
-                    .live_state
-                    .as_ref()
-                    .and_then(|live| live.latest_step.fem_mesh_generation_id.clone())
-            })
-            .or_else(|| {
-                snapshot
-                    .fem_mesh
-                    .as_ref()
-                    .and_then(|mesh| mesh.generation_id.clone())
-            }),
+                self.active_stage_index
+                    .and_then(|index| self.stages.get(index))
+            });
+        FrequencyDomainLiveArtifactIdentity {
+            session_id: Some(self.session_id.clone()),
+            run_id: self.run_id.clone(),
+            stage_id: stage.and_then(|stage| stage.stage_id.clone()),
+            mesh_generation_id: stage
+                .and_then(|stage| stage.mesh_generation_id.clone())
+                .or_else(|| self.latest_mesh_generation_id.clone())
+                .or_else(|| self.mesh_generation_id.clone()),
+        }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FrequencyDomainArtifactSetCapture {
+    request_context: crate::types::CurrentLiveRequestContext,
+    artifact_dir: PathBuf,
+    artifact_set_id: Option<String>,
+    live_identity: FrequencyDomainCapturedLiveIdentity,
+    artifact_path: String,
+    identity: FrequencyDomainLiveArtifactIdentity,
+}
+
+impl FrequencyDomainArtifactSetCapture {
+    fn bind_artifact_path(&mut self, artifact_path: &str) {
+        self.artifact_path = artifact_path.to_string();
+        self.identity = self.live_identity.artifact_identity(artifact_path);
+    }
+}
+
+fn canonical_frequency_domain_artifact_root(
+    artifact_root: &FsPath,
+) -> Result<(PathBuf, Option<String>), ApiError> {
+    let canonical = match std::fs::canonicalize(artifact_root) {
+        Ok(canonical) => canonical,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((artifact_root.to_path_buf(), None));
+        }
+        Err(error) => {
+            return Err(ApiError::internal(format!(
+                "failed to resolve active frequency-domain artifact directory: {error}"
+            )));
+        }
+    };
+    let canonical_path = canonical.to_string_lossy();
+    let artifact_set_id = format!("sha256:{:x}", Sha256::digest(canonical_path.as_bytes()));
+    Ok((canonical, Some(artifact_set_id)))
+}
+
+async fn capture_frequency_domain_artifact_set(
+    state: &Arc<AppState>,
+    artifact_paths: &[&str],
+) -> Result<FrequencyDomainArtifactSetCapture, ApiError> {
+    let request_context = crate::capture_current_live_request_context(state).await?;
+    let session_epoch = state
+        .current_live_session_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(snapshot, &request_context, session_epoch)?;
+    let artifact_root = crate::session::current_artifact_dir(snapshot)
+        .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
+    let (artifact_dir, artifact_set_id) = canonical_frequency_domain_artifact_root(&artifact_root)?;
+    let live_identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot);
+    let artifact_path = artifact_paths.first().copied().unwrap_or_default();
+    let identity = live_identity.artifact_identity(artifact_path);
+    Ok(FrequencyDomainArtifactSetCapture {
+        request_context,
+        artifact_dir,
+        artifact_set_id,
+        live_identity,
+        artifact_path: artifact_path.to_string(),
+        identity,
+    })
+}
+
+async fn validate_current_frequency_domain_artifact_set(
+    state: &Arc<AppState>,
+    captured: &FrequencyDomainArtifactSetCapture,
+) -> Result<(), ApiError> {
+    let session_epoch = state
+        .current_live_session_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(snapshot, &captured.request_context, session_epoch)?;
+    let artifact_root = crate::session::current_artifact_dir(snapshot)
+        .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
+    let (artifact_dir, artifact_set_id) = canonical_frequency_domain_artifact_root(&artifact_root)?;
+    let live_identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot);
+    if artifact_dir != captured.artifact_dir
+        || artifact_set_id != captured.artifact_set_id
+        || live_identity.artifact_identity(&captured.artifact_path) != captured.identity
+    {
+        return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) async fn capture_frequency_domain_artifact_set_for_test(
+    state: &Arc<AppState>,
+    artifact_paths: &[&str],
+) -> Result<FrequencyDomainArtifactSetCapture, ApiError> {
+    capture_frequency_domain_artifact_set(state, artifact_paths).await
+}
+
+#[cfg(test)]
+pub(crate) async fn validate_frequency_domain_artifact_set_for_test(
+    state: &Arc<AppState>,
+    captured: &FrequencyDomainArtifactSetCapture,
+) -> Result<(), ApiError> {
+    validate_current_frequency_domain_artifact_set(state, captured).await
+}
+
+fn read_text_artifact_snapshot(
+    artifact_dir: &FsPath,
+    artifact_path: &str,
+) -> Result<Option<(String, String)>, ApiError> {
+    let Some(path) = try_resolve_artifact_path(artifact_dir, artifact_path)? else {
+        return Ok(None);
+    };
+    let bytes = std::fs::read(path)
+        .map_err(|error| ApiError::internal(format!("failed to read artifact: {error}")))?;
+    let content_digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let text = String::from_utf8(bytes)
+        .map_err(|error| ApiError::internal(format!("failed to read text artifact: {error}")))?;
+    Ok(Some((text, content_digest)))
 }
 
 pub(crate) fn decode_frequency_domain_artifact_payload(
@@ -3081,42 +3283,6 @@ fn parse_dispersion_csv_path_samples(
         samples.insert(sample_index, sample);
     }
     Ok(samples)
-}
-
-async fn text_artifact_resource(
-    state: &Arc<AppState>,
-    schema_version: &str,
-    artifact_path: &str,
-    resource_key: &str,
-    content_type: &str,
-) -> Result<Json<FrequencyDomainTextArtifactResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(state).await?;
-    let artifact_dir = require_current_live_artifact_dir(state).await?;
-    if try_resolve_artifact_path(&artifact_dir, artifact_path)?.is_some() {
-        let text = read_text_artifact_value(&artifact_dir, artifact_path)?;
-        crate::validate_current_live_request_context(state, &request_context).await?;
-        return Ok(Json(FrequencyDomainTextArtifactResource {
-            schema_version: schema_version.to_string(),
-            status: "ready".to_string(),
-            artifact_path: artifact_path.to_string(),
-            resource_key: resource_key.to_string(),
-            content_type: content_type.to_string(),
-            text: Some(text),
-            path_metadata: None,
-            missing_reason: None,
-        }));
-    }
-    crate::validate_current_live_request_context(state, &request_context).await?;
-    Ok(Json(FrequencyDomainTextArtifactResource {
-        schema_version: schema_version.to_string(),
-        status: "missing".to_string(),
-        artifact_path: artifact_path.to_string(),
-        resource_key: resource_key.to_string(),
-        content_type: content_type.to_string(),
-        text: None,
-        path_metadata: None,
-        missing_reason: Some("artifact is not present in the active workspace".to_string()),
-    }))
 }
 
 async fn field_resource(

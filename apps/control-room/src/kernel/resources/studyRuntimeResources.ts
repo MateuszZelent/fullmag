@@ -600,23 +600,32 @@ export function frequencyDomainTextArtifactRevision(
     checksum = Math.imul(31, checksum) + text.charCodeAt(index);
     checksum >>>= 0;
   }
-  return [
+  return JSON.stringify([
     data.schema_version,
     data.status,
     data.artifact_path,
     data.resource_key,
     data.content_type,
+    data.revision ?? "",
+    data.content_digest ?? "",
+    data.artifact_set_id ?? "",
+    data.session_id ?? "",
+    data.run_id ?? "",
+    data.stage_id ?? "",
+    data.mesh_generation_id ?? "",
     data.path_metadata == null ? "" : JSON.stringify(data.path_metadata),
     data.missing_reason ?? "",
     text.length,
     checksum.toString(16),
-  ].join("|");
+  ]);
 }
 
 export function frequencyDomainJsonArtifactRevision(
   data: Pick<
     FrequencyDomainJsonArtifactResource,
     | "artifact_path"
+    | "artifact_set_id"
+    | "session_id"
     | "content_digest"
     | "mesh_generation_id"
     | "missing_reason"
@@ -627,16 +636,18 @@ export function frequencyDomainJsonArtifactRevision(
   > | null,
 ): string | null {
   if (!data) return null;
-  return [
+  return JSON.stringify([
     data.status,
     data.artifact_path,
+    data.artifact_set_id ?? "",
+    data.session_id ?? "",
     data.revision ?? "",
     data.content_digest ?? "",
     data.run_id ?? "",
     data.stage_id ?? "",
     data.mesh_generation_id ?? "",
     data.missing_reason ?? "",
-  ].join(":");
+  ]);
 }
 
 export function frequencyDomainFieldRevision(

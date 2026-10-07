@@ -44133,6 +44133,20 @@ fn openapi_frequency_domain_text_artifact_schema_exposes_path_metadata() {
         text_props.contains("path_metadata"),
         "FrequencyDomainTextArtifactResource missing `path_metadata`"
     );
+    for property in [
+        "artifact_set_id",
+        "revision",
+        "content_digest",
+        "session_id",
+        "run_id",
+        "stage_id",
+        "mesh_generation_id",
+    ] {
+        assert!(
+            text_props.contains(property),
+            "FrequencyDomainTextArtifactResource missing `{property}`"
+        );
+    }
     let text_schema = schemas
         .get("FrequencyDomainTextArtifactResource")
         .expect("FrequencyDomainTextArtifactResource schema must be present");
@@ -44197,6 +44211,7 @@ fn openapi_frequency_domain_json_artifact_schema_is_typed_and_revisioned() {
         .expect("artifact resource properties must be present");
     assert!(properties.contains_key("revision"));
     assert!(properties.contains_key("content_digest"));
+    assert!(properties.contains_key("artifact_set_id"));
     for (schema_name, field) in [
         ("FrequencyDomainSpectrumSamplePayload", "sample_id"),
         ("FrequencyDomainSpectrumModePayload", "mode_id"),
@@ -44872,6 +44887,12 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         .expect("frequency-domain manifest fixture should serialize"),
     )
     .expect("frequency-domain manifest fixture should be written");
+    let canonical_artifact_root =
+        fs::canonicalize(&artifact_dir).expect("artifact root should have a canonical path");
+    let expected_artifact_set_id = format!(
+        "sha256:{:x}",
+        Sha256::digest(canonical_artifact_root.to_string_lossy().as_bytes())
+    );
 
     let response = app
         .clone()
@@ -45030,6 +45051,16 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/spectrum.v2.json");
+    let artifact_set_id = payload["artifact_set_id"]
+        .as_str()
+        .expect("spectrum should identify its shared artifact set")
+        .to_string();
+    let spectrum_digest = payload["content_digest"]
+        .as_str()
+        .expect("spectrum should expose its own content digest")
+        .to_string();
+    assert_eq!(artifact_set_id, expected_artifact_set_id);
+    assert_eq!(payload["revision"], payload["content_digest"]);
     assert_eq!(payload["session_id"], "test-session");
     assert_eq!(payload["run_id"], "test-run");
     assert_eq!(payload["stage_id"], "eigen-stage");
@@ -45065,6 +45096,13 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/branches.v2.json");
     assert_eq!(payload["payload"]["schema_version"], "eigen_branches.v2");
+    assert_eq!(payload["artifact_set_id"], artifact_set_id);
+    assert_eq!(payload["revision"], payload["content_digest"]);
+    let branches_digest = payload["content_digest"]
+        .as_str()
+        .expect("branches should expose their own content digest")
+        .to_string();
+    assert_ne!(branches_digest, spectrum_digest);
 
     let response = app
         .clone()
@@ -45083,6 +45121,17 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/dispersion.csv");
     assert_eq!(payload["content_type"], "text/csv; charset=utf-8");
+    assert_eq!(payload["artifact_set_id"], artifact_set_id);
+    assert_eq!(payload["revision"], payload["content_digest"]);
+    assert_ne!(payload["content_digest"], spectrum_digest);
+    assert_ne!(payload["content_digest"], branches_digest);
+    assert_eq!(payload["session_id"], "test-session");
+    assert_eq!(payload["run_id"], "test-run");
+    assert_eq!(payload["stage_id"], "eigen-stage");
+    assert_eq!(payload["mesh_generation_id"], "mesh-generation-eigen");
+    assert!(!payload
+        .to_string()
+        .contains(&artifact_dir.to_string_lossy().to_string()));
     assert_eq!(
         payload["path_metadata"]["sampling"]["points"][1]["label"],
         "X"
@@ -45390,6 +45439,171 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     );
     let body = body_bytes(response).await;
     assert_eq!(body.len(), 48 + 6 * std::mem::size_of::<f64>());
+}
+
+#[tokio::test]
+async fn frequency_domain_artifact_set_fence_rejects_run_or_root_switches() {
+    let state = test_app_state_with_live_session().await;
+    let root = std::env::temp_dir().join(format!(
+        "fullmag-frequency-domain-artifact-set-fence-{}",
+        uuid_v4_hex()
+    ));
+    let artifact_root_a = root.join("run-a");
+    let artifact_root_b = root.join("run-b");
+    fs::create_dir_all(&artifact_root_a).expect("run A artifact root should be created");
+    fs::create_dir_all(&artifact_root_b).expect("run B artifact root should be created");
+    set_running_stage_execution(&state, 1).await;
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("live session should exist");
+        snapshot.session.artifact_dir = artifact_root_a.to_string_lossy().into_owned();
+        let stage = &mut snapshot
+            .stage_execution
+            .as_mut()
+            .expect("stage execution should exist")
+            .stages[0];
+        stage.stage_id = Some("eigen-stage-a".to_string());
+        stage.kind = Some("flat_eigenmodes".to_string());
+        stage.mesh_generation_id = Some("mesh-generation-a".to_string());
+        stage.artifact_refs = vec!["eigen/branches.v2.json".to_string()];
+    }
+
+    let captured = super::handlers::analysis::frequency_domain::
+        capture_frequency_domain_artifact_set_for_test(
+            &state,
+            &["eigen/branches.v2.json"],
+        )
+        .await
+        .expect("run A artifact context should capture");
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        snapshot
+            .as_mut()
+            .expect("live session should exist")
+            .session
+            .artifact_dir = artifact_root_b.to_string_lossy().into_owned();
+    }
+    let root_error = super::handlers::analysis::frequency_domain::
+        validate_frequency_domain_artifact_set_for_test(&state, &captured)
+            .await
+            .expect_err("a changed artifact root must reject publication");
+    assert_eq!(root_error.status, StatusCode::CONFLICT);
+    assert_eq!(root_error.message, "frequency_domain_artifact_set_stale");
+
+    let captured = super::handlers::analysis::frequency_domain::
+        capture_frequency_domain_artifact_set_for_test(
+            &state,
+            &["eigen/branches.v2.json"],
+        )
+        .await
+        .expect("stage A artifact context should capture");
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let stage = &mut snapshot
+            .as_mut()
+            .expect("live session should exist")
+            .stage_execution
+            .as_mut()
+            .expect("stage execution should exist")
+            .stages[0];
+        stage.stage_id = Some("eigen-stage-b".to_string());
+    }
+    let stage_error = super::handlers::analysis::frequency_domain::
+        validate_frequency_domain_artifact_set_for_test(&state, &captured)
+            .await
+            .expect_err("a changed stage must reject publication");
+    assert_eq!(stage_error.status, StatusCode::CONFLICT);
+    assert_eq!(stage_error.message, "frequency_domain_artifact_set_stale");
+
+    let captured = super::handlers::analysis::frequency_domain::
+        capture_frequency_domain_artifact_set_for_test(
+            &state,
+            &["eigen/branches.v2.json"],
+        )
+        .await
+        .expect("run B artifact context should capture");
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        snapshot
+            .as_mut()
+            .expect("live session should exist")
+            .session
+            .run_id = "replacement-run".to_string();
+    }
+    let run_error = super::handlers::analysis::frequency_domain::
+        validate_frequency_domain_artifact_set_for_test(&state, &captured)
+            .await
+            .expect_err("a changed run must reject publication");
+    assert_eq!(run_error.status, StatusCode::CONFLICT);
+    assert_eq!(run_error.message, "request_context_stale");
+
+    fs::remove_dir_all(root).expect("temporary artifact roots should be removed");
+}
+
+#[tokio::test]
+async fn frequency_domain_artifact_set_fence_rejects_root_appearing_after_capture() {
+    let state = test_app_state_with_live_session().await;
+    let artifact_root = std::env::temp_dir().join(format!(
+        "fullmag-frequency-domain-artifact-set-appears-{}",
+        uuid_v4_hex()
+    ));
+    assert!(
+        !artifact_root.exists(),
+        "artifact root should be absent before capture"
+    );
+    set_running_stage_execution(&state, 1).await;
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        snapshot
+            .as_mut()
+            .expect("live session should exist")
+            .session
+            .artifact_dir = artifact_root.to_string_lossy().into_owned();
+    }
+
+    let captured = super::handlers::analysis::frequency_domain::
+        capture_frequency_domain_artifact_set_for_test(&state, &["eigen/branches.v2.json"])
+            .await
+            .expect("missing artifact root should still capture its live context");
+    fs::create_dir_all(&artifact_root).expect("artifact root should now appear");
+    let error = super::handlers::analysis::frequency_domain::
+        validate_frequency_domain_artifact_set_for_test(&state, &captured)
+            .await
+            .expect_err("a root appearing after capture must reject publication");
+
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "frequency_domain_artifact_set_stale");
+    fs::remove_dir_all(artifact_root).expect("temporary artifact root should be removed");
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_missing_resource_has_no_artifact_identity() {
+    let (app, _state, _artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["status"], "missing");
+    for field in [
+        "text",
+        "revision",
+        "content_digest",
+        "artifact_set_id",
+        "session_id",
+        "run_id",
+        "stage_id",
+        "mesh_generation_id",
+        "path_metadata",
+    ] {
+        assert!(payload[field].is_null(), "missing resource has {field}");
+    }
 }
 
 #[tokio::test]

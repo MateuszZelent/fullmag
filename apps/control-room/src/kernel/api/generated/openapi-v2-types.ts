@@ -7485,6 +7485,8 @@ export interface components {
         FrequencyDomainJsonArtifactPayload: components["schemas"]["FrequencyDomainManifestArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumV3ArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumArtifactPayload"] | components["schemas"]["FrequencyDomainBranchesArtifactPayload"] | components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"] | components["schemas"]["FrequencyDomainDiagnosticsArtifactPayload"] | components["schemas"]["FrequencyDomainModeArtifactPayload"] | components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"] | components["schemas"]["FrequencyDomainResponsePointPayload"] | components["schemas"]["FrequencyDomainFmrPeaksArtifactPayload"] | components["schemas"]["FrequencyDomainResonanceFitsArtifactPayload"] | components["schemas"]["FrequencyDomainKittelFitArtifactPayload"];
         FrequencyDomainJsonArtifactResource: {
             artifact_path: string;
+            /** @description Opaque identity of the canonical artifact directory shared by its files. */
+            artifact_set_id?: string | null;
             /** @description SHA-256 digest of the immutable JSON artifact bytes. */
             content_digest?: string | null;
             /** @description Runtime mesh generation bound to the publishing stage. */
@@ -7762,11 +7764,19 @@ export interface components {
         };
         FrequencyDomainTextArtifactResource: {
             artifact_path: string;
+            /** @description Opaque identity of the canonical artifact directory shared by its files. */
+            artifact_set_id?: string | null;
+            content_digest?: string | null;
             content_type: string;
+            mesh_generation_id?: string | null;
             missing_reason?: string | null;
             path_metadata?: null | components["schemas"]["FrequencyDomainKPathMetadataResource"];
             resource_key: string;
+            revision?: string | null;
+            run_id?: string | null;
             schema_version: string;
+            session_id?: string | null;
+            stage_id?: string | null;
             status: string;
             text?: string | null;
         };
