@@ -20,12 +20,15 @@ import {
   Vector3,
   type Intersection,
   type Group,
+  type MeshBasicMaterial,
   type Object3D,
+  type Sprite,
 } from "three";
 
-import type { Viewport3DColors } from "../viewport3dTypes";
+import type { Viewport3DColors, Viewport3DHudColors } from "../viewport3dTypes";
 import type { Direction3 } from "./cameraOrientation";
-import { AxisLabelSprite } from "./AxisLabelSprite";
+import { hudAxisColor, resolveHudColors, type HudAxisId } from "./hudColors";
+import { HudTextSprite, useHudTextTexture } from "./hudText";
 import {
   ORBIT_RING_RADIUS,
   ORBIT_RING_TUBE,
@@ -37,7 +40,6 @@ import {
 } from "./orientationHudConstants";
 import {
   buildViewCubeFaces,
-  getViewCubeAxisLabels,
   resolveViewCubeBoxHitDirection,
   resolveViewCubeTargetCell,
   type ViewCubeFaceModel,
@@ -61,6 +63,8 @@ export type ViewportCameraControlsHandle = {
 };
 
 const VIEW_CUBE_EDGE_LINES = buildViewCubeEdgeLines(VIEW_CUBE_HALF);
+const VIEW_CUBE_FACE_LABEL_PX = 17;
+const ORBIT_RING_CHEVRON_ANGLES = [Math.PI * 0.25, Math.PI * 1.25];
 const VIEW_CUBE_FACE_GRID_POINTS = buildViewCubeFaceGridPoints(
   VIEW_CUBE_HALF,
   VIEW_CUBE_EDGE_SIZE,
@@ -105,14 +109,35 @@ const VIEW_CUBE_FACE_PLACEMENTS: Record<
   },
 };
 
+// Faces are named by the axis they look along: physics users think in +x/-y,
+// and the default view otherwise greets them with "BACK".
 const VIEW_CUBE_FACE_LABELS: Record<ViewCubeFaceModel["id"], string> = {
-  right: "RIGHT",
-  left: "LEFT",
-  top: "TOP",
-  bottom: "BOTTOM",
-  front: "FRONT",
-  back: "BACK",
+  right: "+X",
+  left: "−X",
+  top: "+Z",
+  bottom: "−Z",
+  front: "+Y",
+  back: "−Y",
 };
+
+/**
+ * Fixed per-face shading towards the theme shade colour: the cube turns with
+ * the camera, so a world-fixed light keeps "top" brightest like CAD widgets.
+ */
+const VIEW_CUBE_FACE_SHADE: Record<ViewCubeFaceModel["id"], number> = {
+  top: 0,
+  right: 0.08,
+  left: 0.08,
+  front: 0.15,
+  back: 0.15,
+  bottom: 0.24,
+};
+
+const VIEW_CUBE_AXES: Array<{ axis: HudAxisId; direction: [number, number, number] }> = [
+  { axis: "x", direction: [1, 0, 0] },
+  { axis: "y", direction: [0, 1, 0] },
+  { axis: "z", direction: [0, 0, 1] },
+];
 
 export function ViewCube3DBox({
   colors,
@@ -132,29 +157,15 @@ export function ViewCube3DBox({
   const gl = useThree((state) => state.gl);
   const cubeGroupRef = useRef<Group>(null);
   const onSnapRef = useLatestRef(onSnap);
-  const axisLabels = getViewCubeAxisLabels();
   const faces = useMemo(() => buildViewCubeFaces(), []);
-  const faceTextures = useMemo(
-    () => ({
-      hovered: buildViewCubeFaceTexture(colors, true),
-      normal: buildViewCubeFaceTexture(colors, false),
-    }),
-    [colors],
-  );
+  const hud = useMemo(() => resolveHudColors(colors), [colors]);
+  const faceColors = useMemo(() => buildViewCubeFaceColors(hud), [hud]);
   const raycastState = useMemo(
     () => ({
       pointer: new Vector2(),
       raycaster: new Raycaster(),
     }),
     [],
-  );
-
-  useEffect(
-    () => () => {
-      faceTextures.normal.dispose();
-      faceTextures.hovered.dispose();
-    },
-    [faceTextures],
   );
 
   useEffect(() => {
@@ -219,7 +230,7 @@ export function ViewCube3DBox({
             ]}
           />
           <meshBasicMaterial
-            color={String(colors.panelRaised ?? colors.panel ?? colors.mesh)}
+            color={hud.cubeFace}
             depthTest={false}
             depthWrite={false}
             opacity={0.97}
@@ -232,23 +243,24 @@ export function ViewCube3DBox({
           return (
             <ViewCubeFacePanel
               key={face.id}
-              colors={colors}
+              accent={String(colors.accent)}
               face={face}
+              faceColor={faceColors[face.id]}
               faceHovered={faceHovered}
+              hud={hud}
               hoveredTargetId={hoveredTargetId}
               onHoverChange={setHoveredTargetId}
               onSnap={onSnap}
-              textures={faceTextures}
             />
           );
         })}
         {VIEW_CUBE_EDGE_LINES.map((edge) => (
           <Line
             key={viewCubeSegmentKey(edge.points)}
-            color={String(colors.wire)}
+            color={hud.cubeEdge}
             depthTest={false}
-            lineWidth={1.8}
-            opacity={0.55}
+            lineWidth={1.3}
+            opacity={0.95}
             points={edge.points}
             renderOrder={WIDGET_RENDER_ORDER + 2}
             transparent
@@ -263,30 +275,15 @@ export function ViewCube3DBox({
           onOrbitEnd={onOrbitEnd}
         />
       </group>
-      <AxisLabelSprite
-        color={String(colors.textPrimary ?? colors.textSecondary ?? colors.wire)}
-        label={trimPositiveAxisLabel(axisLabels.x)}
-        outlineColor={String(colors.background)}
-        position={[VIEW_CUBE_LABEL_DISTANCE, 0, 0]}
-        renderOrder={WIDGET_RENDER_ORDER + 4}
-        scale={[32, 20, 1]}
-      />
-      <AxisLabelSprite
-        color={String(colors.textPrimary ?? "rgb(228, 228, 231)")}
-        label={trimPositiveAxisLabel(axisLabels.y)}
-        outlineColor={String(colors.background)}
-        position={[0, VIEW_CUBE_LABEL_DISTANCE, 0]}
-        renderOrder={WIDGET_RENDER_ORDER + 4}
-        scale={[32, 20, 1]}
-      />
-      <AxisLabelSprite
-        color={String(colors.textPrimary ?? "rgb(228, 228, 231)")}
-        label={trimPositiveAxisLabel(axisLabels.z)}
-        outlineColor={String(colors.background)}
-        position={[0, 0, VIEW_CUBE_LABEL_DISTANCE]}
-        renderOrder={WIDGET_RENDER_ORDER + 4}
-        scale={[32, 20, 1]}
-      />
+      {VIEW_CUBE_AXES.map(({ axis, direction }) => (
+        <ViewCubeAxisMarker
+          key={axis}
+          color={hudAxisColor(hud, axis)}
+          direction={direction}
+          halo={hud.halo}
+          label={axis.toUpperCase()}
+        />
+      ))}
     </group>
   );
 }
@@ -394,8 +391,13 @@ function OrbitRing3D({
     };
   }, [detachWindowDragListeners, handleMove, handleUp, restoreOrbitControls]);
 
+  const ringColor = hovered
+    ? String(colors.accent)
+    : resolveHudColors(colors).cubeEdge;
+
   return (
     <group renderOrder={WIDGET_RENDER_ORDER + 1}>
+      {/* Wide, invisible hit target; the visible ring is drawn thinner below. */}
       <mesh
         renderOrder={WIDGET_RENDER_ORDER + 1}
         onPointerOver={(e) => {
@@ -423,31 +425,50 @@ function OrbitRing3D({
           attachWindowDragListeners();
         }}
       >
-        <torusGeometry args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE, 20, 80]} />
+        <torusGeometry args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE, 12, 80]} />
         <meshBasicMaterial
-          color={hovered ? String(colors.accent) : String(colors.wire)}
           depthTest={false}
           depthWrite={false}
-          opacity={hovered ? 0.92 : 0.42}
+          opacity={0}
           toneMapped={false}
           transparent
         />
       </mesh>
-      {hovered ? (
-        <mesh renderOrder={WIDGET_RENDER_ORDER}>
-          <torusGeometry
-            args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE + 2.5, 20, 80]}
-          />
+      <mesh renderOrder={WIDGET_RENDER_ORDER + 1}>
+        <torusGeometry
+          args={[ORBIT_RING_RADIUS, hovered ? 1.9 : 1.3, 12, 96]}
+        />
+        <meshBasicMaterial
+          color={ringColor}
+          depthTest={false}
+          depthWrite={false}
+          opacity={hovered ? 0.95 : 0.6}
+          toneMapped={false}
+          transparent
+        />
+      </mesh>
+      {ORBIT_RING_CHEVRON_ANGLES.map((angle) => (
+        <mesh
+          key={angle}
+          position={[
+            Math.cos(angle) * ORBIT_RING_RADIUS,
+            Math.sin(angle) * ORBIT_RING_RADIUS,
+            0,
+          ]}
+          renderOrder={WIDGET_RENDER_ORDER + 2}
+          rotation={[0, 0, angle]}
+        >
+          <coneGeometry args={[3.4, 7, 3]} />
           <meshBasicMaterial
-            color={String(colors.accentStrong ?? colors.accent)}
+            color={ringColor}
             depthTest={false}
             depthWrite={false}
-            opacity={0.22}
+            opacity={hovered ? 1 : 0.75}
             toneMapped={false}
             transparent
           />
         </mesh>
-      ) : null}
+      ))}
     </group>
   );
 }
@@ -511,21 +532,23 @@ function isDirection3(value: unknown): value is Direction3 {
 }
 
 function ViewCubeFacePanel({
-  colors,
+  accent,
   face,
+  faceColor,
   faceHovered,
   hoveredTargetId,
+  hud,
   onHoverChange,
   onSnap,
-  textures,
 }: {
-  colors: Viewport3DColors;
+  accent: string;
   face: ViewCubeFaceModel;
+  faceColor: string;
   faceHovered: boolean;
   hoveredTargetId: string | null;
+  hud: Viewport3DHudColors;
   onHoverChange: (id: string | null) => void;
   onSnap: (direction: Direction3) => void;
-  textures: { hovered: CanvasTexture; normal: CanvasTexture };
 }) {
   const placement = VIEW_CUBE_FACE_PLACEMENTS[face.id];
   const label = VIEW_CUBE_FACE_LABELS[face.id];
@@ -544,9 +567,9 @@ function ViewCubeFacePanel({
           targetKind,
           isHovered,
           faceHovered,
-          colors,
+          faceColor,
+          accent,
         );
-        const cellInset = targetKind === "face" ? 0.9 : 0.5;
         return (
           <mesh
             key={`${face.id}:${target.id}`}
@@ -565,23 +588,11 @@ function ViewCubeFacePanel({
             renderOrder={WIDGET_RENDER_ORDER + 3}
             userData={{ viewCubeTargetDirection: target.direction }}
           >
-            <planeGeometry
-              args={[
-                Math.max(cell.width - cellInset, 0.1),
-                Math.max(cell.height - cellInset, 0.1),
-              ]}
-            />
+            <planeGeometry args={[Math.max(cell.width, 0.1), Math.max(cell.height, 0.1)]} />
             <meshBasicMaterial
               color={cellMaterial.color}
               depthTest={false}
               depthWrite={false}
-              map={
-                targetKind === "face"
-                  ? isHovered
-                    ? textures.hovered
-                    : textures.normal
-                  : null
-              }
               opacity={cellMaterial.opacity}
               side={DoubleSide}
               toneMapped={false}
@@ -590,50 +601,54 @@ function ViewCubeFacePanel({
           </mesh>
         );
       })}
-      {VIEW_CUBE_FACE_GRID_POINTS.map((line) => (
-        <Line
-          key={viewCubeSegmentKey(line)}
-          color={String(colors.wire)}
-          depthTest={false}
-          lineWidth={1.0}
-          opacity={faceHovered ? 0.3 : 0.15}
-          points={line}
-          renderOrder={WIDGET_RENDER_ORDER + 4}
-          transparent
-        />
-      ))}
-      <AutoOrientText
-        color={String(colors.textPrimary ?? colors.wire)}
-        outlineColor={String(colors.background ?? colors.panel)}
-        label={label}
-      />
+      {faceHovered
+        ? VIEW_CUBE_FACE_GRID_POINTS.map((line) => (
+            <Line
+              key={viewCubeSegmentKey(line)}
+              color={accent}
+              depthTest={false}
+              lineWidth={1.0}
+              opacity={0.45}
+              points={line}
+              renderOrder={WIDGET_RENDER_ORDER + 4}
+              transparent
+            />
+          ))
+        : null}
+      <AutoOrientText color={hud.label} halo={faceColor} label={label} />
     </group>
   );
 }
 
+/**
+ * Face label that stays upright (snapped to 90 deg) and fades out as the face
+ * turns edge-on, where a squashed label only adds noise.
+ */
 function AutoOrientText({
   color,
+  halo,
   label,
-  outlineColor,
 }: {
   color: string;
+  halo: string;
   label: string;
-  outlineColor: string;
 }) {
   const ref = useRef<Group>(null);
+  const materialRef = useRef<MeshBasicMaterial>(null);
   const scratch = useMemo(
     () => ({
+      cameraForward: new Vector3(),
       cameraUp: new Vector3(),
+      faceNormal: new Vector3(),
       parentInverse: new Matrix4(),
     }),
     [],
   );
-  const texture = useMemo(
-    () => buildViewCubeLabelTexture(label, color, outlineColor),
-    [color, label, outlineColor],
+  const { heightPx, texture, widthPx } = useHudTextTexture(
+    [{ color, text: label, weight: 800 }],
+    { font: "ui", fontPx: VIEW_CUBE_FACE_LABEL_PX, halo, haloPx: 2 },
   );
-
-  useEffect(() => () => texture.dispose(), [texture]);
+  const labelTexture: CanvasTexture = texture;
 
   useFrame(({ camera }) => {
     if (!ref.current || !ref.current.parent) return;
@@ -646,16 +661,26 @@ function AutoOrientText({
     const rot = angle - Math.PI / 2;
     const snapped = Math.round(rot / (Math.PI / 2)) * (Math.PI / 2);
     ref.current.rotation.z = snapped;
+
+    if (materialRef.current) {
+      scratch.faceNormal
+        .set(0, 0, 1)
+        .transformDirection(ref.current.parent.matrixWorld);
+      scratch.cameraForward.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      const facing = -scratch.faceNormal.dot(scratch.cameraForward);
+      materialRef.current.opacity = Math.min(1, Math.max(0, (facing - 0.28) / 0.3));
+    }
   });
 
   return (
     <group position={[0, 0, 0.28]} ref={ref}>
       <mesh renderOrder={WIDGET_RENDER_ORDER + 5}>
-        <planeGeometry args={[43, 15]} />
+        <planeGeometry args={[widthPx, heightPx]} />
         <meshBasicMaterial
+          ref={materialRef}
           depthTest={false}
           depthWrite={false}
-          map={texture}
+          map={labelTexture}
           toneMapped={false}
           transparent
         />
@@ -664,130 +689,97 @@ function AutoOrientText({
   );
 }
 
+/** Axis identity outside the cube: a coloured stub from the + face and its letter. */
+function ViewCubeAxisMarker({
+  color,
+  direction,
+  halo,
+  label,
+}: {
+  color: string;
+  direction: [number, number, number];
+  halo: string;
+  label: string;
+}) {
+  const groupRef = useRef<Group>(null);
+  const stubRef = useRef<Object3D>(null);
+  const labelRef = useRef<Sprite>(null);
+  const scratch = useMemo(
+    () => ({ axis: new Vector3(), forward: new Vector3() }),
+    [],
+  );
+  const stubStart = scaleTuple(direction, VIEW_CUBE_HALF + 1);
+  const stubEnd = scaleTuple(direction, VIEW_CUBE_LABEL_DISTANCE - 9);
+
+  // An axis pointing away from the viewer would draw its stub across the
+  // cube (the HUD ignores depth), so hide the stub and dim the letter.
+  useFrame(({ camera }) => {
+    const group = groupRef.current;
+    if (!group) return;
+    scratch.axis.set(...direction).transformDirection(group.matrixWorld);
+    scratch.forward.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    const away = scratch.axis.dot(scratch.forward) > 0.05;
+    if (stubRef.current) stubRef.current.visible = !away;
+    const material = labelRef.current?.material as { opacity: number } | undefined;
+    if (material) material.opacity = away ? 0.45 : 1;
+  });
+
+  return (
+    <group ref={groupRef}>
+      <Line
+        ref={stubRef as never}
+        color={color}
+        depthTest={false}
+        lineWidth={2.4}
+        points={[stubStart, stubEnd]}
+        renderOrder={WIDGET_RENDER_ORDER + 4}
+      />
+      <HudTextSprite
+        ref={labelRef}
+        position={scaleTuple(direction, VIEW_CUBE_LABEL_DISTANCE)}
+        renderOrder={WIDGET_RENDER_ORDER + 6}
+        runs={[{ color, text: label, weight: 800 }]}
+        style={{ font: "ui", fontPx: 13, halo }}
+      />
+    </group>
+  );
+}
+
 function viewCubeCellMaterial(
   kind: ViewCubeTargetKind,
   hovered: boolean,
   faceHovered: boolean,
-  colors: Viewport3DColors,
+  faceColor: string,
+  accent: string,
 ): { color: string; opacity: number } {
-  if (kind === "face") {
-    return {
-      color: String(colors.textPrimary ?? "white"),
-      opacity: hovered ? 1 : faceHovered ? 0.97 : 0.88,
-    };
-  }
-
   if (hovered) {
-    return {
-      color: String(colors.accent),
-      opacity: kind === "edge" ? 0.85 : 0.95,
-    };
+    return { color: accent, opacity: kind === "face" ? 0.4 : 0.85 };
   }
+  return { color: faceColor, opacity: faceHovered ? 1 : 0.98 };
+}
 
+function buildViewCubeFaceColors(
+  hud: Viewport3DHudColors,
+): Record<ViewCubeFaceModel["id"], string> {
+  const base = new Color(hud.cubeFace);
+  const shade = new Color(hud.cubeShade);
+  const colorFor = (amount: number) =>
+    `#${base.clone().lerp(shade, amount).getHexString()}`;
   return {
-    color: String(colors.panelRaised ?? colors.panel ?? colors.mesh),
-    opacity: faceHovered ? 0.35 : 0.08,
+    back: colorFor(VIEW_CUBE_FACE_SHADE.back),
+    bottom: colorFor(VIEW_CUBE_FACE_SHADE.bottom),
+    front: colorFor(VIEW_CUBE_FACE_SHADE.front),
+    left: colorFor(VIEW_CUBE_FACE_SHADE.left),
+    right: colorFor(VIEW_CUBE_FACE_SHADE.right),
+    top: colorFor(VIEW_CUBE_FACE_SHADE.top),
   };
 }
 
-function buildViewCubeFaceTexture(
-  colors: Viewport3DColors,
-  hovered: boolean,
-): CanvasTexture {
-  const size = 256;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (ctx) {
-    const accentRgb = colorToRgba(colors.accent);
-    const accentStrongRgb = colorToRgba(colors.accentStrong ?? colors.accent);
-    ctx.clearRect(0, 0, size, size);
-
-    if (hovered) {
-      ctx.globalAlpha = 1.0;
-      const fireGrad = ctx.createRadialGradient(
-        size * 0.5,
-        size * 0.5,
-        0,
-        size * 0.5,
-        size * 0.5,
-        size * 0.72,
-      );
-      // Lighter accent at center → accent strong mid → darkened accent at edges
-      fireGrad.addColorStop(0.0, rgbaString(accentRgb.r, accentRgb.g, accentRgb.b, 0.55, 1.25));
-      fireGrad.addColorStop(0.45, rgbaString(accentStrongRgb.r, accentStrongRgb.g, accentStrongRgb.b, 0.45));
-      fireGrad.addColorStop(1.0, rgbaString(accentStrongRgb.r, accentStrongRgb.g, accentStrongRgb.b, 0.72, 0.5));
-      ctx.fillStyle = fireGrad;
-      ctx.fillRect(0, 0, size, size);
-
-      ctx.globalAlpha = 0.95;
-      ctx.strokeStyle = rgbaString(accentRgb.r, accentRgb.g, accentRgb.b, 0.95);
-      ctx.lineWidth = 10;
-      ctx.strokeRect(5, 5, size - 10, size - 10);
-
-      ctx.globalAlpha = 0.35;
-      ctx.strokeStyle = rgbaString(accentRgb.r, accentRgb.g, accentRgb.b, 0.9, 1.5);
-      ctx.lineWidth = 3;
-      ctx.strokeRect(12, 12, size - 24, size - 24);
-    } else {
-      ctx.globalAlpha = 1.0;
-      ctx.fillStyle = String(colors.panelRaised ?? colors.panel ?? colors.wire);
-      ctx.fillRect(0, 0, size, size);
-
-      const vignette = ctx.createRadialGradient(
-        size * 0.5,
-        size * 0.5,
-        size * 0.2,
-        size * 0.5,
-        size * 0.5,
-        size * 0.84,
-      );
-      vignette.addColorStop(0.0, "rgba(0, 0, 0, 0.0)");
-      vignette.addColorStop(0.7, "rgba(0, 0, 0, 0.16)");
-      vignette.addColorStop(1.0, "rgba(0, 0, 0, 0.38)");
-      ctx.fillStyle = vignette;
-      ctx.fillRect(0, 0, size, size);
-
-      ctx.globalAlpha = 0.38;
-      ctx.strokeStyle = String(colors.wire);
-      ctx.lineWidth = 4;
-      ctx.strokeRect(2, 2, size - 4, size - 4);
-    }
-  }
-
-  const texture = new CanvasTexture(canvas);
-  texture.needsUpdate = true;
-  texture.anisotropy = 4;
-  return texture;
-}
-
-function buildViewCubeLabelTexture(
-  label: string,
-  color: string,
-  outlineColor: string,
-): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 96;
-  const ctx = canvas.getContext("2d");
-  if (ctx) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = "800 42px Inter, Arial, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = 7;
-    ctx.strokeStyle = outlineColor;
-    ctx.fillStyle = color;
-    ctx.strokeText(label, canvas.width / 2, canvas.height / 2 + 2);
-    ctx.fillText(label, canvas.width / 2, canvas.height / 2 + 2);
-  }
-
-  const texture = new CanvasTexture(canvas);
-  texture.needsUpdate = true;
-  texture.anisotropy = 4;
-  return texture;
+function scaleTuple(
+  direction: [number, number, number],
+  scale: number,
+): [number, number, number] {
+  return [direction[0] * scale, direction[1] * scale, direction[2] * scale];
 }
 
 function buildViewCubeEdgeLines(
@@ -870,28 +862,4 @@ function viewCubeSegmentKey(
   line: [[number, number, number], [number, number, number]],
 ): string {
   return `${line[0].join(",")}:${line[1].join(",")}`;
-}
-
-function trimPositiveAxisLabel(label: string): string {
-  return label.startsWith("+") ? label.slice(1) : label;
-}
-
-/** Convert any Three.js ColorRepresentation to { r, g, b } in 0-255 range. */
-function colorToRgba(c: import("three").ColorRepresentation): { r: number; g: number; b: number } {
-  const col = new Color(c);
-  return { r: Math.round(col.r * 255), g: Math.round(col.g * 255), b: Math.round(col.b * 255) };
-}
-
-/**
- * Build an `rgba(…)` CSS string from 0-255 channel values.
- * Optional `brightness` multiplier (1 = identity) shifts channels for
- * lighter / darker variants without a separate color token.
- */
-function rgbaString(
-  r: number, g: number, b: number,
-  a: number,
-  brightness = 1,
-): string {
-  const clamp = (v: number) => Math.min(255, Math.max(0, Math.round(v)));
-  return `rgba(${clamp(r * brightness)}, ${clamp(g * brightness)}, ${clamp(b * brightness)}, ${a})`;
 }
