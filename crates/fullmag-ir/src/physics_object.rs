@@ -837,6 +837,26 @@ fn migrate_v0_3_problem_ir_to_v0_4_in_place(value: &mut Value) -> Result<(), Str
         ));
     }
 
+    if let Some(object_regions) = root.get_mut("object_regions") {
+        let object_regions = object_regions
+            .as_array_mut()
+            .ok_or_else(|| "/object_regions: expected an array".to_string())?;
+        for (index, object_region) in object_regions.iter_mut().enumerate() {
+            let object_region = object_region
+                .as_object_mut()
+                .ok_or_else(|| format!("/object_regions/{index}: expected an object"))?;
+            let owner_pointer = format!("/object_regions/{index}/owner_object");
+            let legacy_owner = required_string(
+                object_region.get("owner_object").unwrap_or(&Value::Null),
+                &owner_pointer,
+            )?;
+            let object_id = object_id_by_legacy_name.get(&legacy_owner).ok_or_else(|| {
+                format!("{owner_pointer}: unresolved legacy object '{legacy_owner}'")
+            })?;
+            object_region.insert("owner_object".to_string(), Value::String(object_id.clone()));
+        }
+    }
+
     let legacy_interfaces = root
         .remove("interfaces")
         .unwrap_or_else(|| Value::Array(Vec::new()));

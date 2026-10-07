@@ -186,6 +186,19 @@ fn legacy_eigen_problem_value(boundary_condition: Option<Value>) -> Value {
     value
 }
 
+fn legacy_object_region(region_id: &str, owner_object: &str) -> Value {
+    json!({
+        "region_id": region_id,
+        "owner_object": owner_object,
+        "name": region_id,
+        "shape": {
+            "kind": "box",
+            "size": [200e-9, 20e-9, 6e-9],
+            "center": [0.0, 0.0, 0.0]
+        }
+    })
+}
+
 fn contains_error(errors: &[String], needle: &str) -> bool {
     errors.iter().any(|error| error.contains(needle))
 }
@@ -755,6 +768,63 @@ fn migration_preserves_explicit_spectral_bc_and_records_its_presence() {
     assert_eq!(record["magnetostatic_bc_presence"], "explicit");
     assert_eq!(record["magnetostatic_bc_provenance"], "explicit");
     assert_eq!(record["magnetostatic_bc_value"], "floquet_airbox");
+}
+
+#[test]
+fn migration_maps_legacy_object_region_owner_to_generated_object_id() {
+    let mut value = legacy_eigen_problem_value(Some(json!("open")));
+    value["magnets"][0]["name"] = json!("film");
+    value["object_regions"] = json!([legacy_object_region("film-core", "film")]);
+
+    migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap();
+
+    assert_eq!(value["objects"][0]["object_id"], "obj_film");
+    assert_eq!(value["object_regions"][0]["owner_object"], "obj_film");
+    let migrated: ProblemIRV04 = serde_json::from_value(value).unwrap();
+    assert!(migrated.validate().is_ok(), "{:?}", migrated.validate());
+}
+
+#[test]
+fn migration_preserves_explicit_and_canonical_object_region_owner_ids() {
+    let mut value = legacy_eigen_problem_value(Some(json!("open")));
+    value["magnets"][0]["name"] = json!("film");
+    value["magnets"][0]["object_id"] = json!("film-explicit-id");
+    value["object_regions"] = json!([
+        legacy_object_region("film-name-owner", "film"),
+        legacy_object_region("film-canonical-owner", "film-explicit-id")
+    ]);
+
+    migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap();
+
+    assert_eq!(
+        value["object_regions"][0]["owner_object"],
+        "film-explicit-id"
+    );
+    assert_eq!(
+        value["object_regions"][1]["owner_object"],
+        "film-explicit-id"
+    );
+    let migrated: ProblemIRV04 = serde_json::from_value(value).unwrap();
+    assert!(migrated.validate().is_ok(), "{:?}", migrated.validate());
+}
+
+#[test]
+fn migration_rejects_unresolved_object_region_owner_atomically() {
+    let mut value = legacy_eigen_problem_value(Some(json!("open")));
+    value["magnets"][0]["name"] = json!("film");
+    value["object_regions"] = json!([
+        legacy_object_region("film-core", "film"),
+        legacy_object_region("missing-owner-region", "missing-film")
+    ]);
+    let original = value.clone();
+
+    let error = migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap_err();
+
+    assert!(
+        error.contains("/object_regions/1/owner_object: unresolved legacy object 'missing-film'"),
+        "{error}"
+    );
+    assert_eq!(value, original);
 }
 
 #[test]
