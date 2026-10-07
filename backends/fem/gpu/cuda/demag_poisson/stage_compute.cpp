@@ -163,6 +163,7 @@ bool compute_device_demag_for_device_stage_impl(
     if (!validate_gpu_demag_evaluation_request(request, reason)) {
         return false;
     }
+#if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         return compute_device_demag_fem_bem_for_device_stage(
             ctx,
@@ -172,6 +173,7 @@ bool compute_device_demag_for_device_stage_impl(
             request.evaluation_mode == GpuDemagEvaluationMode::FieldAndRecoveredEnergy,
             reason);
     }
+#endif
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     if (!ctx.demag.enabled) {
         return true;
@@ -626,9 +628,11 @@ bool recover_device_demag_full_domain_field_device(
     void *raw_stream,
     std::string &reason)
 {
+#if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         return recover_device_demag_fem_bem_field_device(ctx, raw_stream, reason);
     }
+#endif
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     auto *workspace = workspace_ptr(ctx);
     auto &gpu = ctx.gpu_state.device;

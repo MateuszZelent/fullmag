@@ -510,11 +510,15 @@ void destroy_gpu_workspace(GpuDemagFemBemWorkspace &workspace)
 
 bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
 {
-    if (!ctx.demag.enabled ||
-        ctx.poisson_demag.gpu_demag_mode !=
-            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+    if (!ctx.demag.enabled) {
         return true;
     }
+#if FULLMAG_HAS_MFEM_STACK
+    if (ctx.poisson_demag.gpu_demag_mode !=
+        FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return true;
+    }
+#endif
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     auto *cpu_workspace = demag_fem_bem_workspace(ctx);
     auto &gpu = ctx.gpu_state.device;
@@ -734,6 +738,7 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
 
 void gpu_demag_fem_bem_destroy(Context &ctx)
 {
+#if FULLMAG_HAS_MFEM_STACK
     auto *cpu_workspace = demag_fem_bem_workspace(ctx);
     if (cpu_workspace == nullptr) {
         return;
@@ -756,10 +761,14 @@ void gpu_demag_fem_bem_destroy(Context &ctx)
     cpu_workspace->gpu_workspace = nullptr;
     cpu_workspace->gpu_workspace_ready = false;
     cpu_workspace->gpu_workspace_device_bytes = 0;
+#else
+    (void)ctx;
+#endif
 }
 
 bool gpu_demag_fem_bem_ready(const Context &ctx)
 {
+#if FULLMAG_HAS_MFEM_STACK
     const auto *cpu_workspace = demag_fem_bem_workspace(const_cast<Context &>(ctx));
     if (cpu_workspace == nullptr || !cpu_workspace->gpu_workspace_ready) {
         return false;
@@ -767,16 +776,25 @@ bool gpu_demag_fem_bem_ready(const Context &ctx)
     const auto *workspace = static_cast<const GpuDemagFemBemWorkspace *>(
         cpu_workspace->gpu_workspace);
     return workspace != nullptr && workspace->ready;
+#else
+    (void)ctx;
+    return false;
+#endif
 }
 
 uint64_t gpu_demag_fem_bem_device_bytes(const Context &ctx)
 {
+#if FULLMAG_HAS_MFEM_STACK
     const auto *cpu_workspace = demag_fem_bem_workspace(const_cast<Context &>(ctx));
     if (cpu_workspace == nullptr || cpu_workspace->gpu_workspace == nullptr) {
         return 0;
     }
     return static_cast<const GpuDemagFemBemWorkspace *>(
         cpu_workspace->gpu_workspace)->device_bytes;
+#else
+    (void)ctx;
+    return 0;
+#endif
 }
 
 const char *gpu_demag_fem_bem_operator_mode(const Context &ctx)

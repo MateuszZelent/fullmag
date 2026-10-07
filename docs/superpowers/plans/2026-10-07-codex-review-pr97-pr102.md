@@ -356,3 +356,8 @@ Scalenie appsource StorageView.js oraz PoliciesView.js z wcześniej wdrożonym u
 Serde odrzuca nieznane pola przed rozwiązywaniem planu. Znana pusta polityka lub wszystkie pola null normalizują się do None, co wybiera native defaults i poprawne provenance z delegowaniem. Częściowe wartości są zachowane wraz z istniejącą walidacją finite/positive/signed bounds. Nie wdrożono sugestii odrzucania pustego obiektu: publiczny FemEigenSolverPolicy() od początku oznacza brak overrides, więc normalizacja naprawia provenance bez zmiany tego zachowania. Cały metadata null pozostaje błędnym typem.
 
 Regresje serde i rzeczywistego planera obejmują typo alone/alongside valid, absent/empty/all-null i partial roundtrip. Niezależny source review oraz diff PASS; pełne IR i nowy jawny filtr planner test są w GHA. Wykonanie pending. Kontrakt: [walidacja polityki](../../specs/fem-eigen-solver-policy-validation.md).
+
+
+## Dalsze naprawy konfiguracji bez providerów
+
+Run 37630198767 wykrył analogiczne niezabezpieczone odwołania do MFEM-owned state w stage_compute.cpp oraz fem_bem.cpp. Osłonięto dispatch i dostęp do workspace, zachowując gałęzie MFEM=ON i strict unavailable dla aktywnego demag bez providerów. Przejrzano pozostałe odwołania w obu plikach; nie wyłączono źródeł ani nie zastąpiono realizacji CPU/GPU. Niezależny source review i diff PASS; świeży ABI compile/run nadal wymagany.
