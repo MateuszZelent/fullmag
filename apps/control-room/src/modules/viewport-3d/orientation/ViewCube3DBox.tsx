@@ -210,8 +210,8 @@ export function ViewCube3DBox({
   }, [gl, hoveredTargetId]);
   useEffect(() => () => setCanvasCursor(gl.domElement, ""), [gl]);
 
-  // The HUD draws without depth, so faces turned away and the edges behind
-  // the cube are hidden explicitly; otherwise the cube reads as a wireframe.
+  // Cube chrome keeps explicit face/edge visibility; the separate depth-only
+  // body below occludes the compass without exposing the widget to scene depth.
   useFrame(({ camera: frameCamera }) => {
     const cube = cubeGroupRef.current;
     if (!cube) return;
@@ -357,7 +357,23 @@ export function ViewCube3DBox({
 
   return (
     <group>
-      <group ref={cubeGroupRef}>
+      <group ref={cubeGroupRef} renderOrder={WIDGET_RENDER_ORDER}>
+        {/* Start an isolated HUD depth layer after the scene has rendered.
+            The ring must test against the cube, not the simulation geometry.
+            Keep this in the transparent list before every visible HUD part. */}
+        <mesh
+          onBeforeRender={(renderer) => renderer.clearDepth()}
+          renderOrder={WIDGET_RENDER_ORDER - 1}
+          raycast={() => {}}
+        >
+          <boxGeometry args={[VIEW_CUBE_FACE_SIZE, VIEW_CUBE_FACE_SIZE, VIEW_CUBE_FACE_SIZE]} />
+          <meshBasicMaterial
+            colorWrite={false}
+            depthTest
+            depthWrite
+            transparent
+          />
+        </mesh>
         <mesh
           renderOrder={WIDGET_RENDER_ORDER}
           userData={{ viewCubeFallbackBox: true }}
@@ -591,7 +607,7 @@ function OrbitRing3D({
         />
         <meshBasicMaterial
           color={bandColor}
-          depthTest={false}
+          depthTest
           depthWrite={false}
           opacity={hovered ? 0.5 : 0.92}
           side={DoubleSide}
@@ -603,7 +619,8 @@ function OrbitRing3D({
         <Line
           key={index}
           color={edgeColor}
-          depthTest={false}
+          depthTest
+          depthWrite={false}
           lineWidth={1.2}
           opacity={0.95}
           points={points}
@@ -613,7 +630,8 @@ function OrbitRing3D({
       ))}
       <Line
         color={edgeColor}
-        depthTest={false}
+        depthTest
+        depthWrite={false}
         lineWidth={1}
         opacity={0.8}
         points={COMPASS_TICK_POINTS}
@@ -624,6 +642,7 @@ function OrbitRing3D({
       {COMPASS_HEADINGS.map((heading) => (
         <HudTextSprite
           key={heading.label}
+          depthTest
           opacity={heading.positive ? 1 : 0.8}
           position={[
             Math.cos(heading.angle) * ORBIT_RING_RADIUS,
@@ -655,7 +674,7 @@ function OrbitRing3D({
           <coneGeometry args={[3.2, 7, 3]} />
           <meshBasicMaterial
             color={hovered ? hud.chip : hud.label}
-            depthTest={false}
+            depthTest
             depthWrite={false}
             toneMapped={false}
             transparent
@@ -762,6 +781,7 @@ function ViewCubeFacePanel({
     <group
       ref={groupRef}
       position={placement.position}
+      renderOrder={WIDGET_RENDER_ORDER}
       rotation={placement.rotation}
     >
       {face.targets.map((target, index) => {
@@ -881,7 +901,7 @@ function AutoOrientText({
   });
 
   return (
-    <group position={[0, 0, 0.28]} ref={ref}>
+    <group position={[0, 0, 0.28]} ref={ref} renderOrder={WIDGET_RENDER_ORDER}>
       <mesh renderOrder={WIDGET_RENDER_ORDER + 5}>
         <planeGeometry args={[widthPx, heightPx]} />
         <meshBasicMaterial
