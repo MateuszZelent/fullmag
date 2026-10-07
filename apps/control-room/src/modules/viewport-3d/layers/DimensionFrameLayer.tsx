@@ -31,6 +31,7 @@ import {
   type DimensionFrameDensity,
   type DimensionFrameLabel,
   type DimensionFrameMode,
+  type DimensionFrameModel,
   type DimensionFrameUnitMode,
 } from "./dimensionFrameModel";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
@@ -67,6 +68,8 @@ type TickSpacingProbes = Partial<
 const DIMENSION_FRAME_RENDER_ORDER = 4;
 const TICK_LABEL_FONT_PX = 11;
 const TITLE_LABEL_FONT_PX = 12;
+/** Below this on-screen frame diagonal the labels would only pile up. */
+const MIN_LABELLED_FRAME_PX = 90;
 /** Minimum on-screen spacing between neighbouring tick numbers. */
 const TICK_LABEL_MIN_SPACING_PX = 34;
 /** Below this projected length the outward direction is seen end-on. */
@@ -173,6 +176,7 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
       {model.labels.length > 0 ? (
         <DimensionFrameLabels
           colors={layerColors}
+          extent={model.extent}
           labels={model.labels}
           opacity={frame.labelOpacity}
         />
@@ -309,6 +313,7 @@ export function dimensionFrameLabelRuns(
 
 interface LabelFrameState {
   forward: Vector3;
+  thinning: Record<DimensionFrameAxis, number>;
   probeA: Vector3;
   probeB: Vector3;
   right: Vector3;
@@ -323,10 +328,12 @@ interface LabelFrameState {
  */
 function DimensionFrameLabels({
   colors,
+  extent,
   labels,
   opacity,
 }: {
   colors: DimensionFrameLayerColors;
+  extent: DimensionFrameModel["extent"];
   labels: DimensionFrameLabel[];
   opacity: number;
 }) {
@@ -334,6 +341,7 @@ function DimensionFrameLabels({
   const frameState = useMemo<LabelFrameState>(
     () => ({
       forward: new Vector3(),
+      thinning: { x: 1, y: 1, z: 1 },
       probeA: new Vector3(),
       probeB: new Vector3(),
       right: new Vector3(),
@@ -354,13 +362,22 @@ function DimensionFrameLabels({
     right.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
     up.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
     forward.setFromMatrixColumn(camera.matrixWorld, 2).normalize().negate();
+    frameState.probeA.set(...extent[0]).project(camera);
+    frameState.probeB.set(...extent[1]).project(camera);
+    const framePx = Math.hypot(
+      ((frameState.probeA.x - frameState.probeB.x) * size.width) / 2,
+      ((frameState.probeA.y - frameState.probeB.y) * size.height) / 2,
+    );
+    const legible = framePx >= MIN_LABELLED_FRAME_PX;
     const thinning = resolveTickThinning(spacingProbes, camera, size, frameState);
 
     for (const label of labels) {
       const sprite = spritesRef.current.get(label.key);
       if (!sprite) continue;
+      sprite.visible = legible;
+      if (!legible) continue;
       if (label.kind === "tick" && label.tickIndex !== undefined) {
-        sprite.visible = label.tickIndex % (thinning[label.axis] ?? 1) === 0;
+        sprite.visible = label.tickIndex % thinning[label.axis] === 0;
         if (!sprite.visible) continue;
       }
       world.set(label.outward[0], label.outward[1], label.outward[2]);
@@ -485,14 +502,17 @@ export function tickThinningForSpacing(spacingPx: number): number {
   return 5;
 }
 
+const FRAME_AXES: readonly DimensionFrameAxis[] = ["x", "y", "z"];
+
 function resolveTickThinning(
   probes: TickSpacingProbes,
   camera: Camera,
   size: { height: number; width: number },
   state: LabelFrameState,
-): Partial<Record<DimensionFrameAxis, number>> {
-  const thinning: Partial<Record<DimensionFrameAxis, number>> = {};
-  for (const axis of ["x", "y", "z"] as const) {
+): Record<DimensionFrameAxis, number> {
+  const thinning = state.thinning;
+  for (const axis of FRAME_AXES) {
+    thinning[axis] = 1;
     const probe = probes[axis];
     if (!probe) continue;
     state.probeA.set(...probe[0].position).project(camera);

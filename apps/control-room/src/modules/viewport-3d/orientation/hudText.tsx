@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useMemo } from "react";
+import { forwardRef, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   CanvasTexture,
   LinearFilter,
@@ -90,7 +90,11 @@ export function buildHudTextTexture(
     if (style.chip) {
       const radius = heightPx / 2 - 0.5;
       context.beginPath();
-      context.roundRect(0.5, 0.5, widthPx - 1, heightPx - 1, radius);
+      if (typeof context.roundRect === "function") {
+        context.roundRect(0.5, 0.5, widthPx - 1, heightPx - 1, radius);
+      } else {
+        context.rect(0.5, 0.5, widthPx - 1, heightPx - 1);
+      }
       context.globalAlpha = 0.94;
       context.fillStyle = style.chip.fill;
       context.fill();
@@ -138,12 +142,33 @@ export function hudTextKey(runs: readonly HudTextRun[], style: HudTextStyle): st
   return JSON.stringify([runs, style]);
 }
 
+// Labels rasterised before Inter / JetBrains Mono finish loading would keep
+// the fallback face, so every font load bumps a version that re-keys them.
+let hudFontsVersion = 0;
+function subscribeHudFonts(onChange: () => void): () => void {
+  const fonts = typeof document === "undefined" ? undefined : document.fonts;
+  if (!fonts) return () => {};
+  const bump = () => {
+    hudFontsVersion += 1;
+    onChange();
+  };
+  fonts.addEventListener("loadingdone", bump);
+  void fonts.ready.then(bump).catch(() => undefined);
+  return () => fonts.removeEventListener("loadingdone", bump);
+}
+const readHudFontsVersion = () => hudFontsVersion;
+
 /** Texture memoised on content and disposed when the content changes. */
 export function useHudTextTexture(
   runs: readonly HudTextRun[],
   style: HudTextStyle,
 ): HudTextTexture {
-  const key = hudTextKey(runs, style);
+  const fontsVersion = useSyncExternalStore(
+    subscribeHudFonts,
+    readHudFontsVersion,
+    readHudFontsVersion,
+  );
+  const key = `${fontsVersion}:${hudTextKey(runs, style)}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const result = useMemo(() => buildHudTextTexture(runs, style), [key]);
   useEffect(() => () => result.texture.dispose(), [result]);

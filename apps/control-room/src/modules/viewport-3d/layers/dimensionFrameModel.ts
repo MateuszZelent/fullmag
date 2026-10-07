@@ -63,6 +63,8 @@ export interface DimensionFrameLabel {
 
 export interface DimensionFrameModel {
   annotation: DimensionFrameAnnotation;
+  /** Opposite bounds corners; the renderer hides labels on a tiny frame. */
+  extent: [[number, number, number], [number, number, number]];
   extentLines: Float32Array;
   labels: DimensionFrameLabel[];
   majorLines: Float32Array;
@@ -203,6 +205,7 @@ export function buildDimensionFrameModel({
 
   return {
     annotation,
+    extent: [resolvedBounds.min, resolvedBounds.max],
     extentLines: new Float32Array(annotations.extentLines),
     labels: annotations.labels,
     majorLines: new Float32Array(majorLines),
@@ -598,6 +601,10 @@ function emptyDimensionFrameModel(
 ): DimensionFrameModel {
   return {
     annotation,
+    extent: [
+      [0, 0, 0],
+      [0, 0, 0],
+    ],
     extentLines: EMPTY_LINES,
     labels: [],
     majorLines: EMPTY_LINES,

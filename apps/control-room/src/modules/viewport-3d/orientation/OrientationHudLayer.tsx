@@ -313,17 +313,27 @@ function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
   const equatorRef = useRef<Group>(null);
   const rimRef = useRef<Object3D>(null);
   const forward = useMemo(() => new Vector3(), []);
+  const chipLayout = useMemo(() => new Map<string, HslChipSlot>(), []);
+  const chipAxes = useMemo(() => ({ right: new Vector3(), up: new Vector3() }), []);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   // Only the camera-facing half of the equator is drawn (the HUD ignores
   // depth), so turn the half circle towards the viewer every frame.
   useFrame(({ camera }) => {
-    // The HUD anchor never rotates, so the camera quaternion faces the ring.
-    rimRef.current?.quaternion.copy(camera.quaternion);
+    // Children subscribe first, so every axis has reported its chip here.
+    placeHslChips(chipLayout, camera, chipAxes);
+    // Face the rim and the equator towards the camera position: the HUD sits
+    // off-axis in a perspective view, so the camera axis is slightly off.
+    rimRef.current?.lookAt(camera.position);
     if (!equatorRef.current) return;
-    forward.set(0, 0, -1).applyQuaternion(camera.quaternion);
-    equatorRef.current.rotation.z = Math.atan2(-forward.y, -forward.x);
+    equatorRef.current.getWorldPosition(forward).sub(camera.position).normalize();
+    // Looking along z the equator is the silhouette, which the rim draws.
+    const inPlane = Math.hypot(forward.x, forward.y);
+    equatorRef.current.visible = inPlane > 0.15;
+    if (inPlane > 0.15) {
+      equatorRef.current.rotation.z = Math.atan2(-forward.y, -forward.x);
+    }
   });
 
   return (
@@ -370,6 +380,7 @@ function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
       {HSL_REFERENCE_AXES.map((axis) => (
         <HslReferenceAxis
           key={axis.id}
+          chipLayout={chipLayout}
           color={rgbCss(axis.color)}
           direction={axis.direction}
           hud={hud}
@@ -381,11 +392,13 @@ function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
 }
 
 function HslReferenceAxis({
+  chipLayout,
   color,
   direction,
   hud,
   id,
 }: {
+  chipLayout: Map<string, HslChipSlot>;
   color: string;
   direction: readonly [number, number, number];
   hud: Viewport3DHudColors;
@@ -425,9 +438,10 @@ function HslReferenceAxis({
     for (const shaft of shaftRefs.current) {
       if (shaft) shaft.renderOrder = shaftOrder;
     }
-    tipRefs.current.forEach((tipMesh, index) => {
+    for (let index = 0; index < tipRefs.current.length; index += 1) {
+      const tipMesh = tipRefs.current[index];
       if (tipMesh) tipMesh.renderOrder = shaftOrder + 1 + index;
-    });
+    }
 
     if (towardRef.current) towardRef.current.visible = endOn && !away;
     if (awayRef.current) awayRef.current.visible = endOn && away;
@@ -444,10 +458,13 @@ function HslReferenceAxis({
       offsetRight = (dx / projected) * distance;
       offsetUp = (dy / projected) * distance;
     }
-    chip.position
-      .set(0, 0, 0)
-      .addScaledVector(right, offsetRight)
-      .addScaledVector(up, offsetUp);
+    // The sphere resolves overlaps between chips after all axes report.
+    const slotState = chipLayout.get(id) ?? { priority: 0, sprite: chip, x: 0, y: 0 };
+    slotState.priority = endOn ? 0 : projected;
+    slotState.sprite = chip;
+    slotState.x = offsetRight;
+    slotState.y = offsetUp;
+    chipLayout.set(id, slotState);
     (chip.material as { opacity: number }).opacity = away ? 0.8 : 1;
   });
 
@@ -541,6 +558,49 @@ function HslReferenceAxis({
       />
     </group>
   );
+}
+
+interface HslChipSlot {
+  /** Larger keeps its place; end-on axes yield first. */
+  priority: number;
+  sprite: Sprite;
+  x: number;
+  y: number;
+}
+
+const HSL_CHIP_CLEARANCE_X = 38;
+const HSL_CHIP_CLEARANCE_Y = 20;
+
+/** Places the axis chips, nudging lower-priority chips off overlaps. */
+function placeHslChips(
+  layout: Map<string, HslChipSlot>,
+  camera: Camera,
+  axes: { right: Vector3; up: Vector3 },
+): void {
+  const slots = [...layout.values()].sort((a, b) => b.priority - a.priority);
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (let fixed = 0; fixed < slots.length; fixed += 1) {
+      for (let moving = fixed + 1; moving < slots.length; moving += 1) {
+        const anchor = slots[fixed];
+        const slot = slots[moving];
+        if (!anchor || !slot) continue;
+        const dx = slot.x - anchor.x;
+        const dy = slot.y - anchor.y;
+        if (Math.abs(dx) >= HSL_CHIP_CLEARANCE_X || Math.abs(dy) >= HSL_CHIP_CLEARANCE_Y) {
+          continue;
+        }
+        slot.y = anchor.y + (dy >= 0 ? 1 : -1) * HSL_CHIP_CLEARANCE_Y;
+      }
+    }
+  }
+  axes.right.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  axes.up.set(0, 1, 0).applyQuaternion(camera.quaternion);
+  for (const slot of slots) {
+    slot.sprite.position
+      .set(0, 0, 0)
+      .addScaledVector(axes.right, slot.x)
+      .addScaledVector(axes.up, slot.y);
+  }
 }
 
 function buildHalfCirclePoints(segments: number): Array<[number, number, number]> {
