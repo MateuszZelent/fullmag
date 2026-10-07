@@ -93,6 +93,20 @@
   --fm-shadow-control-hover: 0 2px 5px rgb(0 0 0 / 46%), inset 0 1px 0 rgb(255 255 255 / 11%);
   --fm-shadow-control-pressed: inset 0 1px 3px rgb(0 0 0 / 55%);
   --fm-shadow-control-inset: inset 0 1px 3px rgb(0 0 0 / 34%);
+
+  /* Viewport HUD: axis identity, tick/label ink and the halo behind WebGL text. */
+  --fm-hud-axis-x: #f38ba8;
+  --fm-hud-axis-y: #a6e3a1;
+  --fm-hud-axis-z: #89b4fa;
+  --fm-hud-label: var(--fm-text-primary);
+  --fm-hud-tick: var(--fm-text-secondary);
+  --fm-hud-halo: var(--fm-bg-viewport);
+  --fm-hud-grid: #bac2de;
+  --fm-hud-chip: #1e1e2e;
+  --fm-hud-chip-border: #7f849c;
+  --fm-hud-cube-face: #313244;
+  --fm-hud-cube-edge: #7f849c;
+  --fm-hud-cube-shade: #000000;
 }
 
 /* ===== Catppuccin Latte (light) ===== */
@@ -189,6 +203,19 @@
   --fm-shadow-control-hover: 0 2px 5px rgb(76 79 105 / 18%), inset 0 1px 0 rgb(255 255 255 / 82%);
   --fm-shadow-control-pressed: inset 0 1px 3px rgb(76 79 105 / 20%);
   --fm-shadow-control-inset: inset 0 1px 3px rgb(76 79 105 / 13%);
+
+  --fm-hud-axis-x: #d20f39;
+  --fm-hud-axis-y: #40a02b;
+  --fm-hud-axis-z: #1e66f5;
+  --fm-hud-label: var(--fm-text-primary);
+  --fm-hud-tick: var(--fm-text-secondary);
+  --fm-hud-halo: var(--fm-bg-viewport);
+  --fm-hud-grid: #5c5f77;
+  --fm-hud-chip: #eff1f5;
+  --fm-hud-chip-border: #8c8fa1;
+  --fm-hud-cube-face: #eff1f5;
+  --fm-hud-cube-edge: #8c8fa1;
+  --fm-hud-cube-shade: #4c4f69;
 }
 
 .fm-inspector-alert {

@@ -13,6 +13,29 @@ export interface Viewport3DColors {
   textPrimary?: ColorRepresentation;
   textSecondary?: ColorRepresentation;
   wire: ColorRepresentation;
+  /** Theme-resolved HUD palette; absent only for hand-built colour sets. */
+  hud?: Viewport3DHudColors;
+}
+
+/**
+ * CSS colour strings for the orientation HUD and the dimension frame. Every
+ * entry is opaque; layers apply their own opacity so the same token reads in
+ * both themes.
+ */
+export interface Viewport3DHudColors {
+  axisX: string;
+  axisY: string;
+  axisZ: string;
+  chip: string;
+  chipBorder: string;
+  cubeEdge: string;
+  cubeFace: string;
+  cubeShade: string;
+  grid: string;
+  /** Text outline: the viewport background, so labels never get a grey rim. */
+  halo: string;
+  label: string;
+  tick: string;
 }
 
 export const VIEWPORT_3D_FRAMELOOP = "demand" as const;
