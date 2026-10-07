@@ -501,10 +501,10 @@ class AntennaSpectrumSamplingPlane:
         v = _normalized_vector3(axis_v, "antenna_spectrum.sampling_plane.axis_v")
         if abs(sum(a * b for a, b in zip(u, v, strict=True))) > 1e-12:
             raise ValueError("antenna spectrum sampling axes must be orthogonal")
-        if not isinstance(sample_count_u, int) or sample_count_u < 2:
-            raise ValueError("sample_count_u must be an integer >= 2")
-        if not isinstance(sample_count_v, int) or sample_count_v < 2:
-            raise ValueError("sample_count_v must be an integer >= 2")
+        if not isinstance(sample_count_u, int) or not 2 <= sample_count_u <= 2**32 - 1:
+            raise ValueError("sample_count_u must be an integer in [2, 2**32 - 1]")
+        if not isinstance(sample_count_v, int) or not 2 <= sample_count_v <= 2**32 - 1:
+            raise ValueError("sample_count_v must be an integer in [2, 2**32 - 1]")
         interpolation = require_non_empty(interpolation, "interpolation").lower()
         outside_policy = require_non_empty(outside_policy, "outside_policy").lower()
         if interpolation not in ANTENNA_SPECTRUM_INTERPOLATIONS:

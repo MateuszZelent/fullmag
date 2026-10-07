@@ -6049,6 +6049,13 @@ Ich przygotowanie zależności i Cargo pozostaje zarządzane przez środowisko T
 
 ## T15. Zbudować spójne UI i naprawić utratę parametrów/draftu
 
+### Checkpoint 2026-10-08 — kontrakt próbkowania widma Python
+
+[Checkpoint zakresu i eksportu FFT](2026-10-08-antenna-spectrum-sampling-checkpoint.md):
+naprawiono akceptację liczności powyżej kanonicznego u32; RED/GREEN 3/3 testy
+i 16 kombinacji round-trip żądania. Authoring/export etapów: 23/23 PASS.
+Nie jest to kwalifikacja numeryczna FFT ani UI; pełny T15 pozostaje otwarty.
+
 ### Checkpoint 2026-10-05 — czytnik dokładnej rewizji T06
 
 Naprawiono `tests/antenna/verify_field_convergence.py::read_solution` i
