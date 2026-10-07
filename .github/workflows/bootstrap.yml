@@ -44,6 +44,9 @@ jobs:
       - name: Run native modal cancellation completion contract
         run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
 
+      - name: Run native modal artifact provenance contract
+        run: cargo test -p fullmag-runner native_modal_artifact_limitations_follow_executed_operator_payload --lib
+
       - name: Run sample-scoped eigen artifact contracts
         run: cargo test -p fullmag-runner output_publication_tests --lib
 

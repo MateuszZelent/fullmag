@@ -595,6 +595,16 @@ pub(super) fn native_modal_artifacts(
     };
     let shift_invert_backend =
         spectral_transform == "shift_invert" || resolved_solver_family == "shift_invert";
+    // The Floquet adapter ID is shared by sparse execution and bounded dense
+    // compatibility routes, so classify storage from the executed ABI payload.
+    let operator_payload_is_dense = match solver_diagnostics
+        .get("mfem_operator_payload")
+        .and_then(|value| value.as_str())
+    {
+        Some("dense_gyrotropic_matrix") => Some(true),
+        Some("sparse_csr" | "floquet_shared_domain_sparse_matshell") => Some(false),
+        _ => None,
+    };
     let gpu_k0_backend = pa_e2_gpu_periodic_airbox_k0
         || (execution_lane == "production_gpu" && solver_kind == NATIVE_GPU_K0_KITTEL_SOLVER_KIND);
     let gpu_shared_domain_backend = pa_e2_gpu_periodic_airbox_k0;
@@ -674,10 +684,14 @@ pub(super) fn native_modal_artifacts(
                 "nonzero_k_floquet_gpu_modal_not_implemented",
             ]
         } else if shift_invert_backend {
-            vec![
-                "dense_operator_payload",
-                "window_count_certification_pending",
-            ]
+            if operator_payload_is_dense == Some(true) {
+                vec![
+                    "dense_operator_payload",
+                    "window_count_certification_pending",
+                ]
+            } else {
+                vec!["window_count_certification_pending"]
+            }
         } else {
             vec![
                 "dense_operator_payload",

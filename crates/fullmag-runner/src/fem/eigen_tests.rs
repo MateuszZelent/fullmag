@@ -8894,6 +8894,103 @@ fn cpu_full_2x2_frequency_window_uses_native_modal_artifact_path() {
 }
 
 #[test]
+fn native_modal_artifact_limitations_follow_executed_operator_payload() {
+    let plan = minimal_native_modal_plan();
+    let equilibrium = plan.equilibrium_magnetization.clone();
+    let reduction = ReductionMap {
+        active_nodes: Vec::new(),
+        node_map: Vec::new(),
+        node_phases: Vec::new(),
+        complex_reduction: false,
+    };
+    let build_summary = |solver_diagnostics: serde_json::Value| {
+        let artifacts = super::eigen_native_artifacts::native_modal_artifacts(
+            &plan,
+            &[OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+            &equilibrium,
+            &reduction,
+            &[],
+            &[],
+            None,
+            solver_diagnostics,
+            0,
+            None,
+            None,
+            None,
+            None,
+            0,
+            None,
+        )
+        .expect("minimal modal inputs should publish a summary");
+        let summary = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+            .expect("native modal artifacts should include an eigen summary");
+        serde_json::from_slice::<serde_json::Value>(&summary.bytes)
+            .expect("eigen summary should be JSON")
+    };
+    let has_limitation = |summary: &serde_json::Value, limitation: &str| {
+        summary["solver_limitations"]
+            .as_array()
+            .is_some_and(|limitations| {
+                limitations
+                    .iter()
+                    .any(|value| value.as_str() == Some(limitation))
+            })
+    };
+
+    let sparse = build_summary(serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "mfem_operator_payload": "floquet_shared_domain_sparse_matshell",
+        "spectral_transform": "shift_invert",
+    }));
+    assert!(!has_limitation(&sparse, "dense_operator_payload"));
+    assert!(has_limitation(
+        &sparse,
+        "window_count_certification_pending"
+    ));
+    assert_eq!(
+        sparse["solver_diagnostics"]["solver_adapter"],
+        "floquet_airbox_cpu_schur_slepc"
+    );
+
+    let sparse_csr = build_summary(serde_json::json!({
+        "solver_adapter": "generic_cpu_slepc",
+        "mfem_operator_payload": "sparse_csr",
+        "spectral_transform": "shift_invert",
+    }));
+    assert!(!has_limitation(&sparse_csr, "dense_operator_payload"));
+
+    let dense = build_summary(serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "mfem_operator_payload": "dense_gyrotropic_matrix",
+        "spectral_transform": "shift_invert",
+    }));
+    assert!(has_limitation(&dense, "dense_operator_payload"));
+
+    let unknown = build_summary(serde_json::json!({
+        "solver_adapter": "future_modal_adapter",
+        "mfem_operator_payload": "future_operator_payload",
+        "spectral_transform": "shift_invert",
+    }));
+    assert!(!has_limitation(&unknown, "dense_operator_payload"));
+    assert!(has_limitation(
+        &unknown,
+        "window_count_certification_pending"
+    ));
+    assert_eq!(
+        unknown["solver_diagnostics"]["solver_adapter"],
+        "future_modal_adapter"
+    );
+    assert_eq!(
+        unknown["solver_diagnostics"]["mfem_operator_payload"],
+        "future_operator_payload"
+    );
+}
+
+#[test]
 fn native_modal_run_result_completion_matches_status() {
     let cancelled = native_modal_run_result(RunStatus::Cancelled, StepStats::default(), Vec::new());
     assert_eq!(cancelled.status, RunStatus::Cancelled);
