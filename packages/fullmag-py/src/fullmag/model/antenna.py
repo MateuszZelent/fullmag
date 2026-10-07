@@ -201,7 +201,7 @@ class AntennaStageOutputRef:
 
 @dataclass(frozen=True, slots=True)
 class AntennaWaveformBandwidthDeclaration:
-    """Authored physical upper band for a sampled/piecewise drive [Hz]."""
+    """Authored physical upper band for a pulse or piecewise drive [Hz]."""
 
     f_max_hz: float
 
@@ -247,6 +247,12 @@ class SolvedAntennaDrive:
         ):
             raise TypeError(
                 "bandwidth_declaration must be an AntennaWaveformBandwidthDeclaration"
+            )
+        if self.bandwidth_declaration is not None and self.waveform.to_ir().get("kind") not in {
+            "pulse", "piecewise_linear"
+        }:
+            raise ValueError(
+                "bandwidth_declaration is only valid for pulse or piecewise_linear waveforms"
             )
         origin = require_non_empty(self.time_origin, "solved_antenna_drive.time_origin").lower()
         if origin not in FIELD_TIME_ORIGINS:

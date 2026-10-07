@@ -3120,6 +3120,13 @@ dekodowania. To nie jest peak RAM ani twardy limit. Istniejące
 `ram.reservation_bytes` pozostaje minimum rezerwacji, bez zmiany semantyki.
 Regresje Rust dodano, lecz nie wykonano; pełny T11 pozostaje otwarty.
 
+Uzupełnienie 2026-10-08: [checkpoint deklaracji pasma Python](2026-10-08-antenna-python-bandwidth-checkpoint.md)
+potwierdza brak heurystyki czasu impulsu w klasyfikatorze i naprawę wcześniejszej
+akceptacji niepoprawnego override pasma dla sygnałów analitycznych w Python.
+Nowe regresje: RED/GREEN 4/4; authoring/export etapów: 23/23. Nie jest to
+kwalifikacja klasyfikatora Rust ani wykonania solvera; checkbox pełnej bramki
+pozostaje otwarty.
+
 - [ ] Wyliczać przed solve liczbę elementów źródła, targetów, par i rozmiar buforów. Użyć checked multiplication; overflow jest błędem, nie ogromnym zaakceptowanym zadaniem.
 - [ ] Zastąpić stałą miliona par jawnie wersjonowaną polityką wykonania. Zachować limit domyślny dopóki benchmark nie uzasadni innego; błąd preflight pokazuje oba rozmiary i koszt.
 - [ ] Blokować targety dla ograniczenia pamięci i granic anulowania. Licznik globalny obejmuje wszystkie bloki, porty i retries; nie resetować budżetu dla każdego bloku, aby obchodzić limit.
