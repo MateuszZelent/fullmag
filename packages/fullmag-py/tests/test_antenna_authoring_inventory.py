@@ -15,6 +15,7 @@ from fullmag.model.domain_frame import build_domain_frame
 from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.script_builder import export_builder_draft, render_loaded_problem_as_script, render_scene_document_as_script
 from fullmag.runtime.scene_document import build_scene_document_from_builder
+from fullmag.runtime.scene_document_ir import scene_document_to_execution_config
 from fullmag.runtime.helper import main as helper_main
 from fullmag.model._incomplete import IncompletePhysicsError
 
@@ -264,6 +265,48 @@ study.stages.add_run(stage_id='run',until=1e-12)
         scene['study']['study_pipeline']['nodes'].append({**macro, 'enabled': True})
         with self.assertRaisesRegex(ValueError, 'macro_requires_shared_study_pipeline_materializer'):
             render_scene_document_as_script(scene)
+
+    def test_execution_config_carries_typed_inventory_without_active_root_fields(self):
+        for active in (False, True):
+            with self.subTest(active=active):
+                actions = """
+study.stages.add_run(stage_id='before',until=1e-12)
+study.stages.add_antenna_field_solve(id='solve',definition=definition)
+study.add_solved_antenna_drive(drive=drive,projection=projection)
+study.stages.add_run(stage_id='after',until=2e-12)
+""" if active else ""
+                loaded = self.load(DECLARE + actions)
+                draft = self.assert_full_inventory(loaded)
+                scene = build_scene_document_from_builder(draft)
+                before = json.loads(json.dumps(scene))
+                config = scene_document_to_execution_config(
+                    scene, requested_backend='fdm', requested_device='cpu',
+                    requested_precision='double', requested_mode='strict', source_root=self.root,
+                )
+                self.assertEqual(scene, before)
+                self.assertEqual(config['antenna_inventory'], {key: draft[key] for key in COLLECTIONS})
+                for collection in COLLECTIONS:
+                    self.assertEqual(config['ir'][collection], [], collection)
+                self.assertEqual(config['stages'], [])
+                self.assertEqual(config['study_pipeline'], scene['study']['study_pipeline'])
+                response = io.StringIO()
+                with contextlib.redirect_stdout(response):
+                    status = helper_main(['export-run-config', '--script', str(loaded.source_path), '--skip-geometry-assets'])
+                self.assertEqual(status, 0)
+                script_config = json.loads(response.getvalue())
+                self.assertEqual(script_config['antenna_inventory'], config['antenna_inventory'])
+                for collection in COLLECTIONS:
+                    self.assertEqual(script_config['ir'][collection], [], collection)
+
+    def test_execution_config_without_declarations_keeps_legacy_wire_shape(self):
+        loaded = self.load("study.stages.add_run(stage_id='run',until=1e-12)\n")
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        config = scene_document_to_execution_config(
+            scene, requested_backend='fdm', requested_device='cpu',
+            requested_precision='double', requested_mode='strict', source_root=self.root,
+        )
+        self.assertNotIn('antenna_inventory', config)
+        self.assertEqual(set(config), {'ir', 'shared_geometry_assets', 'default_until_seconds', 'study_pipeline', 'stages'})
 
     def test_standalone_projection_definition_needs_no_fictitious_drive_action(self):
         loaded = self.load("study.declare_antenna_field_solve(definition=definition)\nstudy.declare_antenna_target_projection(projection=projection)\n")

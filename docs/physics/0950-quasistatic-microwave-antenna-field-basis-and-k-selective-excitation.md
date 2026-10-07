@@ -2750,6 +2750,44 @@ migracji. Powyższe dotyczy authoringu wspólnie dla FDM CPU/GPU i FEM CPU/GPU;
 odbiór pola/LLG wymaga oddzielnych dowodów każdej realizacji. Żadnej bramki
 wykonania nie zastępuje zgodność JSON ani zielony test konstruktora.
 
+(antenna-execution-config-inventory)=
+#### Typowany transport deklaracji do materializera
+
+Execution config posiada opcjonalne pole `antenna_inventory`, oddzielone od
+aktywnego `ir`. Brak pola oznacza pusty owner i zachowuje historyczny kontrakt.
+Python serializuje go z `AntennaAuthoringInventory` tylko dla niepustych
+deklaracji; Rust odbiera jako `ScriptAntennaAuthoringInventory`. Nie jest to
+blob w `runtime_metadata` ani dodatkowa lista etapów.
+
+| Pole ownera | Typ | Default | SI unit | Walidacja i znaczenie | Destination |
+|---|---|---|---|---|---|
+| `antenna_field_solve_stages` | lista `AntennaFieldSolveStageIR` | `[]` | $1$ | unikalne ID; definicje dostępne przy jawnej akcji solve, nie implicit solve | `ScriptExecutionConfig.antenna_inventory` |
+| `antenna_target_projections` | lista `AntennaTargetProjectionRefIR` | `[]` | $1$ | unikalne ID; zgodność jawnego payloadu z deklaracją | `ScriptExecutionConfig.antenna_inventory` |
+| `solved_antenna_drives` | lista `SolvedAntennaDriveIR` | `[]` | $1$ | unikalne ID; deklaracja nie trafia do RHS bez aktywacji | `ScriptExecutionConfig.antenna_inventory` |
+| `antenna_spectrum_requests` | lista `AntennaSpectrumRequestIR` | `[]` | $1$ | unikalne ID; deklaracja nie uruchamia analizy | `ScriptExecutionConfig.antenna_inventory` |
+
+Jednostka $1$ dotyczy kolekcji jako kontraktu transportowego; jednostki ich
+parametrów fizycznych pozostają określone w tabelach odpowiednich typów powyżej.
+Nie zmieniają się równania pola ani interpretacja FDM CPU/GPU i FEM CPU/GPU.
+Nieznane pola ownera i powtarzające się ID są odrzucane. Przy włączonej akcji
+solve materializer wybiera wyłącznie wskazaną definicję, sprawdza konflikt ze
+stanem aktywnym i planuje na tymczasowym stanie. Dopiero udane planowanie
+publikuje stan etapu. Wyłączony liść lub grupa nie importują definicji.
+Drive/projekcja/spectrum zachowują dotychczasowy typowany payload akcji;
+jeżeli istnieje deklaracja tego samego ID, payload musi być identyczny.
+
+Źródła kontraktu: `packages/fullmag-py/src/fullmag/model/antenna_inventory.py`
++ `AntennaAuthoringInventory.to_ir`,
+`packages/fullmag-py/src/fullmag/runtime/run_config_export.py` +
+`export_run_config`, `crates/fullmag-application/src/script_stage_contract.rs`
++ `ScriptAntennaAuthoringInventory`, oraz
+`crates/fullmag-application/src/script_stage_materialization.rs` +
+`materialize_script_stages_with_stage_limit` i `walk_study_pipeline_nodes`.
+Regresja `test_execution_config_carries_typed_inventory_without_active_root_fields`
+w `packages/fullmag-py/tests/test_antenna_authoring_inventory.py` sprawdza
+rzeczywisty eksport sceny bez solvera. Odbiór wykonania Rust/managed runtime
+pozostaje **NOT VERIFIED** do odrębnego uruchomienia właściwych bramek.
+
 Źródła obecnej granicy: `packages/fullmag-py/src/fullmag/world.py` +
 `CapturedStage`, `capture_workspace_problem`, `_build_problem`;
 `packages/fullmag-py/src/fullmag/runtime/loader.py` + `class LoadedProblem`;

@@ -24,6 +24,13 @@ class AntennaAuthoringInventory:
     solved_antenna_drives: tuple[SolvedAntennaDrive, ...] = ()
     antenna_spectrum_requests: tuple[AntennaSpectrumRequest, ...] = ()
 
+    def to_ir(self) -> dict[str, list[dict[str, object]]]:
+        """Serialize declarations separately from active ProblemIR collections."""
+        return {
+            collection: [item.to_ir() for item in getattr(self, collection)]
+            for collection in self.__dataclass_fields__
+        }
+
     def declare(self, collection: str, value: object) -> AntennaAuthoringInventory:
         expected = {
             "antenna_field_solve_stages": AntennaFieldSolveStage,

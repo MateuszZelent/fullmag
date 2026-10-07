@@ -105,13 +105,17 @@ def export_run_config(
         if stage.default_until_seconds is not None:
             stage_start_time_s += stage.default_until_seconds
 
-    return {
+    config = {
         "ir": ir,
         "shared_geometry_assets": shared_geometry_assets,
         "default_until_seconds": loaded.default_until_seconds,
         "study_pipeline": study_pipeline,
         "stages": stages,
     }
+    inventory = loaded.antenna_inventory.to_ir()
+    if any(inventory.values()):
+        config["antenna_inventory"] = inventory
+    return config
 
 
 def _compact_stage_ir(

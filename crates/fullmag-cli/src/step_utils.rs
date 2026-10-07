@@ -2082,6 +2082,7 @@ mod tests {
             ("port_mode_ids".to_string(), json!(["drive"])),
         ]);
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: problem,
             shared_geometry_assets: None,
             default_until_seconds: None,
@@ -3098,6 +3099,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_does_not_synthesize_solver_for_empty_pipeline() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3113,6 +3115,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_does_not_synthesize_solver_for_disabled_pipeline() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3149,6 +3152,7 @@ mod tests {
             }]
         })).expect("group document");
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3161,6 +3165,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_retains_legacy_solver_without_pipeline() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3176,6 +3181,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_uses_study_pipeline_when_explicit_stages_are_absent() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3245,6 +3251,7 @@ mod tests {
     #[test]
     fn stage_local_table_autosave_is_owned_by_relaxation_only() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3311,6 +3318,7 @@ mod tests {
     fn stage_local_autosave_materializes_without_leaking_to_following_stage() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
+            antenna_inventory: Default::default(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
             study_pipeline: Some(StudyPipelineDocument {
@@ -3418,6 +3426,7 @@ mod tests {
         ] {
             let config = ScriptExecutionConfig {
                 ir: sample_problem_ir(),
+                antenna_inventory: Default::default(),
                 shared_geometry_assets: None,
                 default_until_seconds: Some(5e-12),
                 study_pipeline: Some(StudyPipelineDocument {
@@ -3438,6 +3447,7 @@ mod tests {
     fn materialized_compatible_solver_stages_are_marked_continue_in_place() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
+            antenna_inventory: Default::default(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
             study_pipeline: Some(StudyPipelineDocument {
@@ -3609,6 +3619,7 @@ mod tests {
         };
 
         let stages = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: base.clone(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -3726,6 +3737,7 @@ mod tests {
         };
 
         let stages = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: base,
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -3774,6 +3786,7 @@ mod tests {
     #[test]
     fn materialized_hysteresis_points_continue_same_branch_state() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3823,6 +3836,7 @@ mod tests {
     #[test]
     fn materialize_pipeline_relax_without_time_budget_is_unbounded() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir_with_adaptive_relax_dt(3e-16),
             shared_geometry_assets: None,
             default_until_seconds: None,
@@ -3964,6 +3978,7 @@ mod tests {
     #[test]
     fn materialize_pipeline_relax_without_time_budget_ignores_dt_seed_fallback() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir_with_adaptive_relax_dt_limits(3e-16, 3e-16),
             shared_geometry_assets: None,
             default_until_seconds: None,
@@ -4252,6 +4267,7 @@ mod tests {
             action: None,
         };
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -4296,6 +4312,7 @@ mod tests {
             .expect("stage autosave"),
         );
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -4333,6 +4350,7 @@ mod tests {
             }),
         };
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -4394,6 +4412,7 @@ mod tests {
         }]))
         .expect("transport fixture should deserialize");
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: ir.clone(),
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -4511,6 +4530,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_contextual_set_field_and_set_current_nodes() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -4615,6 +4635,7 @@ mod tests {
         }]))
         .expect("transport fixture should deserialize");
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -4713,6 +4734,7 @@ mod tests {
             }]
         }));
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -4758,6 +4780,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_adds_field_drive_only_after_explicit_action() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
@@ -4871,6 +4894,7 @@ mod tests {
             })
         };
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1.0e-12),
@@ -4957,6 +4981,7 @@ mod tests {
     fn materialize_script_stages_rejects_unknown_or_repeated_field_drive_removal() {
         for drive_id in ["missing", ""] {
             let config = ScriptExecutionConfig {
+                antenna_inventory: Default::default(),
                 ir: sample_problem_ir(),
                 shared_geometry_assets: None,
                 default_until_seconds: Some(1.0e-12),
@@ -4984,6 +5009,7 @@ mod tests {
 
         let drive = sample_regional_field_drive("pulse");
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1.0e-12),
@@ -5021,6 +5047,7 @@ mod tests {
         let mut ir = sample_problem_ir();
         ir.field_drives.push(sample_regional_field_drive("pulse"));
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: ir.clone(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1.0e-12),
@@ -5048,6 +5075,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_applies_visible_autosave_and_fft_actions_in_order() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
@@ -5212,6 +5240,7 @@ mod tests {
             })
         };
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
@@ -5288,6 +5317,7 @@ mod tests {
     #[test]
     fn materialize_pipeline_auto_sampling_fails_after_sinc_drive_removal() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1.0e-9),
@@ -5370,6 +5400,7 @@ mod tests {
             .expect("drive"),
         );
         let stages = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: ir.clone(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-9),
@@ -5399,6 +5430,7 @@ mod tests {
             },
         }];
         let error = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir,
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-9),
@@ -5412,6 +5444,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_rejects_hidden_configuration_inside_plain_run() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
@@ -5440,6 +5473,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_synthetic_state_actions() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -5518,6 +5552,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_change_device_action() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -5595,6 +5630,7 @@ mod tests {
         base.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
         set_runtime_selection_device(&mut base, "gpu");
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: base,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -5672,6 +5708,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_relax_run_macro() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -5716,6 +5753,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_field_sweep_relax_macro() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-12),
@@ -5762,6 +5800,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_hysteresis_loop_macro() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -5820,6 +5859,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_field_sweep_relax_snapshot_macro() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -5861,6 +5901,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_hysteresis_loop_save_point_state() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -5910,6 +5951,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_parameter_sweep_b_ext() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -5955,6 +5997,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_parameter_sweep_current_density_with_snapshots() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -6538,6 +6581,7 @@ mod tests {
             ];
         }
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -6672,6 +6716,7 @@ mod tests {
             mode_tracking: None,
         };
         let stages = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: base,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
