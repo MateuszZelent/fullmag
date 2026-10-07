@@ -1073,6 +1073,7 @@ def _render_scene_document_bootstrap(
     )
 
     handles: list[str] = []
+    snapshot_handles: dict[str, str] = {}
     for index, raw_object in enumerate(objects):
         if not isinstance(raw_object, Mapping):
             raise ValueError(f"SceneDocument geometry {index} must be an object.")
@@ -1103,6 +1104,7 @@ def _render_scene_document_bootstrap(
             f"object_id={_python_literal(object_id)})"
         )
         handles.append(handle)
+        snapshot_handles[name] = handle
         material = raw_object.get("material")
         physics_stack = raw_object.get("physics_stack")
         explicit_dmi_kinds = (
@@ -1222,7 +1224,7 @@ def _render_scene_document_bootstrap(
         for index, stage in enumerate(_enabled_scene_stages(authored_stages)):
             if not isinstance(stage, Mapping):
                 raise ValueError(f"SceneDocument stages[{index}] must be an object")
-            lines.extend(_render_scene_stage_bootstrap(stage, index=index, solver=solver))
+            lines.extend(_render_scene_stage_bootstrap(stage, index=index, solver=solver, magnet_vars=snapshot_handles))
     elif include_legacy_relax_stages:
         for stage in raw_stages:
             if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
@@ -1446,6 +1448,7 @@ def _render_scene_stage_bootstrap(
     *,
     index: int,
     solver: object,
+    magnet_vars: dict[str, str],
 ) -> list[str]:
     """Capture SceneDocument stage intent through the public DSL for final rendering."""
     kind = str(stage.get("kind") or "relax").strip().lower()
@@ -1520,6 +1523,7 @@ def _render_scene_stage_bootstrap(
                 "gamma",
                 "g",
                 "autosave",
+                "sampling",
             },
         )
         until_seconds = _finite_number(stage.get("until_seconds"))
@@ -1534,6 +1538,7 @@ def _render_scene_stage_bootstrap(
         run_call += _render_scene_stage_autosave_suffix(stage.get("autosave"))
         return [
             *solver_lines,
+            *_render_scene_sampling_outputs(stage.get("sampling"), magnet_vars),
             run_call,
         ]
 
@@ -7175,10 +7180,48 @@ def _render_solver(
     return ["# Solver", _render_solver_call(dynamics, solver_override, surface=surface)]
 
 
+def _render_scene_sampling_outputs(value: object, magnet_vars: dict[str, str]) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, Mapping):
+        raise ValueError("SceneDocument run sampling must be an object")
+    _reject_unrendered_scene_nested_fields(value, context="run_sampling", rendered_fields={"outputs"})
+    raw_outputs = value.get("outputs", [])
+    if not isinstance(raw_outputs, list):
+        raise ValueError("SceneDocument run sampling outputs must be a list")
+    outputs: list[object] = []
+    for raw in raw_outputs:
+        if not isinstance(raw, Mapping):
+            raise ValueError("SceneDocument run sampling outputs must contain objects")
+        kind = raw.get("kind")
+        fields = {"kind", "name", "every_seconds", "sample_period_policy", "resolved_sample_period_s", "requested_policy"}
+        if kind == "snapshot":
+            fields = {"kind", "field", "component", "layer", "every_seconds"}
+        _reject_unrendered_scene_nested_fields(raw, context="run_sampling_output", rendered_fields=fields)
+        every = _requested_sampling_period_from_ir(raw, "every_seconds")
+        if every is None:
+            raise ValueError("SceneDocument run sampling output requires cadence")
+        if kind in {"field", "field_auto", "field_resolved_auto"}:
+            outputs.append(SaveField(field=raw.get("name"), every=every))
+        elif kind in {"scalar", "scalar_auto", "scalar_resolved_auto"}:
+            outputs.append(SaveScalar(scalar=raw.get("name"), every=every))
+        elif kind == "snapshot":
+            layer = raw.get("layer")
+            if layer is not None and layer not in magnet_vars:
+                raise ValueError("SceneDocument run snapshot references an unknown layer")
+            outputs.append(Snapshot(field=raw.get("field"), component=raw.get("component"), every=every, layer=layer))
+        else:
+            raise ValueError(f"SceneDocument run sampling output kind {kind!r} is unsupported")
+    return ["study.clear_outputs()", *_render_output_specs(outputs, magnet_vars, surface="study")]
+
+
 def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: str) -> list[str]:
     if problem.study is None:
         return []
-    outputs = _study_outputs(problem.study)
+    return _render_output_specs(_study_outputs(problem.study), magnet_vars, surface=surface)
+
+
+def _render_output_specs(outputs: Sequence[object], magnet_vars: dict[str, str], *, surface: str) -> list[str]:
     if not outputs:
         return []
     lines = ["# Outputs"]
@@ -7904,6 +7947,10 @@ def _render_stages(
             raise ValueError(
                 "canonical rewrite requires DEFAULT_UNTIL for time-evolution scripts"
             )
+        # Reproduce non-action sampling changes between Runs without inserting
+        # configuration stages into the authored pipeline.
+        lines.append(f"{_surface_call(surface, 'clear_outputs')}()")
+        lines.extend(_render_outputs(stage.problem, _magnet_variable_names(stage.problem, overrides=overrides), surface=surface))
         if is_study_surface:
             run_parts: list[str] = []
             if stage.stage_id is not None:

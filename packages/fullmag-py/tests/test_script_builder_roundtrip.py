@@ -1457,11 +1457,12 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
         )
         """
         with TemporaryDirectory() as tmp_dir:
-            loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir), drop_sampling=True)
+            loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir))
         self.assertIn("study.cell(", source)
         self.assertNotIn("cell_size=(2e-09, 2e-09, 1e-09)", source)
         before = loaded.problem.to_ir(include_geometry_assets=False)
         after = rendered.problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(before["study"]["sampling"], after["study"]["sampling"])
         self.assertEqual(
             after["backend_policy"]["discretization_hints"],
             before["backend_policy"]["discretization_hints"],
@@ -1526,9 +1527,74 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
             scene = json.loads(
                 json.dumps(build_scene_document_from_builder(export_builder_draft(loaded)))
             )
-        scene["study"]["stages"][0]["kind"] = "teleport"
-        with self.assertRaisesRegex(ValueError, "stage kind 'teleport' cannot be captured"):
-            render_scene_document_as_script(scene)
+        for canonical in (False, True):
+            with self.subTest(canonical=canonical):
+                invalid = json.loads(json.dumps(scene))
+                if canonical:
+                    invalid["study"]["study_pipeline"]["nodes"][0]["stage_kind"] = "teleport"
+                else:
+                    invalid["study"]["study_pipeline"] = None
+                    invalid["study"]["stages"][0]["kind"] = "teleport"
+                with self.assertRaisesRegex(ValueError, "stage kind 'teleport' cannot be captured"):
+                    render_scene_document_as_script(invalid)
+
+    def test_run_sampling_changes_preserve_outputs_without_extra_stages(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += """
+study.save('m', every=2e-12)
+study.save('E_total', every=3e-12)
+study.snapshot(f, 'mz', every=4e-12)
+study.stages.add_run(stage_id='first', until=1e-11)
+study.clear_outputs()
+study.save('H_ant', every='auto')
+study.stages.add_run(stage_id='second', until=2e-11)
+study.clear_outputs()
+study.stages.add_run(stage_id='third', until=1e-11)
+"""
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir))
+        self.assertEqual([stage.stage_id for stage in rendered.stages], ['first', 'second', 'third'])
+        self.assertEqual(
+            [stage.problem.study.to_ir()['sampling'] for stage in loaded.stages],
+            [stage.problem.study.to_ir()['sampling'] for stage in rendered.stages],
+        )
+        self.assertIn('every="auto"', source)
+
+    def test_canonical_grouped_run_sampling_rejects_unknown_fields(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += "study.save('m', every=2e-12)\nstudy.stages.add_run(stage_id='run', until=1e-11)\n"
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir))
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            node = scene['study']['study_pipeline']['nodes'][0]
+            scene['study']['study_pipeline']['nodes'] = [dict(id='group', node_kind='group', enabled=True, children=[node])]
+            scene['study']['stages'] = []
+            source = render_scene_document_as_script(scene)
+            rendered = _load_text(source, Path(tmp_dir), 'group.py')
+            self.assertEqual(loaded.stages[0].problem.study.to_ir()['sampling'], rendered.stages[0].problem.study.to_ir()['sampling'])
+            node['payload']['sampling']['unsupported'] = 1
+            with self.assertRaisesRegex(ValueError, 'run_sampling_unrendered_fields: unsupported'):
+                render_scene_document_as_script(scene)
+
+    def test_canonical_run_resolved_sampling_preserves_requested_auto(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += "study.stages.add_run(stage_id='run', until=1e-11)\n"
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir))
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            node = scene['study']['study_pipeline']['nodes'][0]
+            node['payload']['sampling'] = {'outputs': [
+                dict(kind=kind, name=name, every_seconds=7.6923e-11, requested_policy=dict(kind='auto_sinc_cutoff', nyquist_guard_factor=1.3))
+                for kind, name in [('field_resolved_auto', 'm'), ('scalar_resolved_auto', 'mx')]
+            ]}
+            source = render_scene_document_as_script(scene)
+            rendered = _load_text(source, Path(tmp_dir), 'resolved.py')
+        self.assertEqual([output['kind'] for output in rendered.stages[0].problem.study.to_ir()['sampling']['outputs']], ['field_auto', 'scalar_auto'])
+        self.assertIn('study.save("m", every="auto")', source)
+        self.assertIn('study.save("mx", every="auto")', source)
 
 
 if __name__ == "__main__":
