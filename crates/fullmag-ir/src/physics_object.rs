@@ -288,6 +288,7 @@ struct ProblemIRV04Wire {
     regions: Vec<RegionIR>,
     #[serde(default)]
     object_regions: Vec<ObjectRegionIR>,
+    #[serde(deserialize_with = "crate::v04_material_wire::deserialize_materials")]
     materials: Vec<MaterialIR>,
     #[serde(default)]
     material_parameter_fields: Vec<MaterialParameterAssignmentIR>,

@@ -1,6 +1,6 @@
 use fullmag_ir::waveguide_mesh::{WaveguideCrossSectionMeshIR, WaveguideCrossSectionRegionIR};
 use fullmag_ir::{
-    migrate_v0_3_problem_ir_to_v0_4, GeometryEntryIR, ObjectRegionIR, PhysicsObjectIR,
+    migrate_v0_3_problem_ir_to_v0_4, GeometryEntryIR, MaterialIR, ObjectRegionIR, PhysicsObjectIR,
     PhysicsObjectTypeIR, ProblemIR, ProblemIRV04, RegionFrameIR, RegionIR,
     RegionRealizationPolicyIR, RegionShapeIR, SpatialRepresentationIR, StudyIRV04,
 };
@@ -870,4 +870,160 @@ fn standalone_full3d_decoders_never_discard_extra_spatial_intent() {
     }
     let representation: SpatialRepresentationIR = serde_json::from_value(full_3d()).unwrap();
     assert_eq!(serde_json::to_value(representation).unwrap(), full_3d());
+}
+
+fn complete_material_v04_value() -> Value {
+    let mut material =
+        serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap()["materials"][0].clone();
+
+    material["name"] = json!("strict-material");
+    material["saturation_magnetisation"] = json!(8.0e5);
+    material["exchange_stiffness"] = json!(1.3e-11);
+    material["damping"] = json!(0.02);
+    material["uniaxial_anisotropy"] = json!(4.1e5);
+    material["uniaxial_anisotropy_k2"] = json!(-2.3e3);
+    material["anisotropy_axis"] = json!([0.0, 0.6, 0.8]);
+    material["cubic_anisotropy_kc1"] = json!(1.1e3);
+    material["cubic_anisotropy_kc2"] = json!(-2.2e3);
+    material["cubic_anisotropy_kc3"] = json!(3.3e3);
+    material["cubic_anisotropy_axis1"] = json!([1.0, 0.0, 0.0]);
+    material["cubic_anisotropy_axis2"] = json!([0.0, 1.0, 0.0]);
+    material["ms_field"] = json!([8.0e5, 7.9e5]);
+    material["a_field"] = json!([1.3e-11, 1.2e-11]);
+    material["alpha_field"] = json!([0.02, 0.03]);
+    material["ku_field"] = json!([4.1e5, 4.0e5]);
+    material["ku2_field"] = json!([-2.3e3, -2.2e3]);
+    material["kc1_field"] = json!([1.1e3, 1.0e3]);
+    material["kc2_field"] = json!([-2.2e3, -2.1e3]);
+    material["kc3_field"] = json!([3.3e3, 3.2e3]);
+    material["interfacial_dmi"] = json!(0.001);
+    material["bulk_dmi"] = json!(0.002);
+    material["dind_field"] = json!([0.003, 0.004]);
+    material["dbulk_field"] = json!([0.005, 0.006]);
+    material
+}
+
+#[test]
+fn v04_material_unknown_physics_fields_are_rejected_without_changing_legacy_decoding() {
+    let mut v04 = serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap();
+    let mut material = complete_material_v04_value();
+    material["future_dmi_model"] = json!({ "coefficient": 0.25 });
+    v04["materials"][0] = material.clone();
+
+    let error = serde_json::from_value::<ProblemIRV04>(v04)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("/materials/0"), "{error}");
+    assert!(error.contains("future_dmi_model"), "{error}");
+
+    let mut legacy_material = material;
+    legacy_material
+        .as_object_mut()
+        .unwrap()
+        .remove("future_dmi_model");
+    let mut legacy_problem = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    legacy_problem["materials"][0] = legacy_material.clone();
+    legacy_problem["materials"][0]["future_dmi_model"] = json!({ "coefficient": 0.25 });
+    let decoded_problem: ProblemIR = serde_json::from_value(legacy_problem).unwrap();
+    assert_eq!(decoded_problem.materials[0].name, "strict-material");
+    assert_eq!(
+        serde_json::to_value(&decoded_problem.materials[0]).unwrap(),
+        legacy_material
+    );
+
+    let mut legacy_material_with_unknown = legacy_material.clone();
+    legacy_material_with_unknown["future_dmi_model"] = json!({ "coefficient": 0.25 });
+    let decoded_material: MaterialIR =
+        serde_json::from_value(legacy_material_with_unknown).unwrap();
+    assert_eq!(
+        serde_json::to_value(decoded_material).unwrap(),
+        legacy_material
+    );
+}
+
+#[test]
+fn v04_material_unknown_field_error_reports_the_material_array_index() {
+    let mut problem = serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap();
+    let mut second_material = complete_material_v04_value();
+    second_material["name"] = json!("strict-material-second");
+    second_material["future_dmi_model"] = json!({ "coefficient": 0.25 });
+    problem["materials"]
+        .as_array_mut()
+        .unwrap()
+        .push(second_material);
+
+    let error = serde_json::from_value::<ProblemIRV04>(problem)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("/materials/1"), "{error}");
+    assert!(error.contains("future_dmi_model"), "{error}");
+}
+
+#[test]
+fn v04_material_known_scalar_option_and_node_fields_round_trip_exactly() {
+    let mut problem = serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap();
+    let material = complete_material_v04_value();
+    problem["materials"][0] = material.clone();
+
+    let decoded: ProblemIRV04 = serde_json::from_value(problem).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+
+    assert_eq!(encoded["materials"][0], material);
+}
+
+#[test]
+fn v04_material_nullable_and_missing_optional_fields_keep_their_defaults() {
+    let mut problem = serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap();
+    let mut material = complete_material_v04_value();
+    material["uniaxial_anisotropy"] = Value::Null;
+    material["anisotropy_axis"] = Value::Null;
+
+    let missing_optionals = [
+        "uniaxial_anisotropy_k2",
+        "cubic_anisotropy_kc1",
+        "cubic_anisotropy_kc2",
+        "cubic_anisotropy_kc3",
+        "cubic_anisotropy_axis1",
+        "cubic_anisotropy_axis2",
+        "ms_field",
+        "a_field",
+        "alpha_field",
+        "ku_field",
+        "ku2_field",
+        "kc1_field",
+        "kc2_field",
+        "kc3_field",
+        "interfacial_dmi",
+        "bulk_dmi",
+        "dind_field",
+        "dbulk_field",
+    ];
+    for field in missing_optionals {
+        material.as_object_mut().unwrap().remove(field);
+    }
+    problem["materials"][0] = material;
+
+    let decoded: ProblemIRV04 = serde_json::from_value(problem).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    let material = &encoded["materials"][0];
+
+    assert_eq!(material["uniaxial_anisotropy"], Value::Null);
+    assert_eq!(material["anisotropy_axis"], Value::Null);
+    for field in missing_optionals {
+        assert!(material.get(field).is_none(), "unexpected {field}");
+    }
+}
+
+#[test]
+fn migration_rejects_unknown_material_intent_without_mutating_input() {
+    let mut value = legacy_eigen_problem_value(Some(json!("open")));
+    value["materials"][0]["future_dmi_model"] = json!({ "coefficient": 0.25 });
+    let original = value.clone();
+
+    let error = migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap_err();
+
+    assert!(error.contains("/materials/0"), "{error}");
+    assert!(error.contains("future_dmi_model"), "{error}");
+    assert_eq!(value, original);
 }

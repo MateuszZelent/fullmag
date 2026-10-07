@@ -3,35 +3,38 @@
 
 **Cały cel S00–S12 pozostaje aktywny.** Poniższa tabela opisuje aktualny
 stan; dalsze checkpointy zachowują historię i nie zastępują bieżących dowodów.
-Zweryfikowany source checkpoint: f8b616509077e84d91ce8c49ad2d8aa715e85628.
-Bootstrap CI37424976665 zakończone8/8jobs PASS, obejmuje cały pakiet IR oraz
-retention engine/service/API/CLI/Hub. Naprawiono strict compute resources,
-cooperative preview cancel i niezależny od uptime fixture harmonogramu.
-Nowa analogiczna luka przy bezpośrednim odczycie SpatialRepresentationIR Full3d
-jest poprawiona źródłowo: prywatny empty-struct decoder nie zgubi dodatkowego
-intentu. Review/parser PASS; nowa regresja trzech granic odczytu wymaga świeżego CI.
+Zweryfikowany source checkpoint:62a3a6bbfc0ab96f5dc78e8b4dc9525123b033a5.
+Bootstrap CI37583935792:8/8jobs PASS po merge master c6b8 i poprawce strict
+standalone SpatialRepresentationIR.32 V04 tests oraz runner retention regressions
+wchodzą w tę bramkę. Kolejny przyrost source: strict V04 material decoder,
+pełny remote mirror24 pól wspólnego MaterialIR oraz5 przygotowanych regresji.
+Nie zmienia legacy deserializacji, fizyki ani dostępności2.5D; nowe CI pending.
 
 | Zakres | Potwierdzone | Pozostaje |
 |---|---|---|
-| Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | Świeże CI po poprawce bezpośredniego parsera SpatialRepresentationIR oraz managed runtime dla NCV4; source CI nie jest walidacją eigensolve |
+| Źródła/CI | Python, Control Room, browser fixture, generated API, Windows, FDM i API hygiene PASS;31 V04 tests PASS | Świeże CI dla strict V04 materiałów oraz terminalny build236/runtime dla NCV4; source CI nie jest walidacją eigensolve |
 | Γ/signed15 | Zachowane pełne diagnostics nieudanego runtime234; kontrolowana recepta okna8.5–16GHz i jawny proof actual EPS dimensions | Nowy attested build, pełny window certificate Γ, potem15 punktów i sprawdzony wykres |
 | Adaptive k pool | Poprawka exit telemetry, deterministyczny plan digest i kontrakty CI | Rzeczywisty świeży przebieg, pomiary CPU/RAM i serial/adaptive parity |
 | Regionalne meshing | Zachowane regional fields; poprawiona jawna konfiguracja minimum, actual density fixture PASS bez zmiany threshold5nm | Pełna scoped kompozycja lower bounds i runtime consumer regionalnych minima pozostają oddzielnymi lukami |
-| S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,31 nowych regresji CI PASS; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
+| S09/2.5D | Frame, UV/world geometry, contours, registry i jawne Dirichlet bindings mają CI evidence | Geometry identity ma source review i waveguide CI PASS. Typed StudyIRV04/model bindings zaimplementowane i reviewed,32 regresje CI PASS; world equivalence, pełne physics/invariance/equilibrium bindings, typed routing i owner MFEM |
 | Nauka | Wstępne benchmarki i analityczne oracles nie domykają kwalifikacji | DE/BV, zbieżności siatki/airboxu/liczby modów, identyczny COMSOL A1 i GPU |
 | GUI/integracja | Frontend/browser fixture CI PASS; PR97 otwarty | Rzeczywisty workspace z modelem/wynikami, pełne review/science gates, merge i bezpieczne cleanup worktree |
 
-Build235 d6482966a2404d6d933a6708cdf3466d anulowano przed wykonaniem: exact070d277a8
-nie zawiera NCV4. Dane i kapsuła zachowane; obserwator zakończył się terminalnie.
-Następny runtime wymaga jawnego przypięcia do najnowszego zweryfikowanego SHA; recepta przygotowana, nowy job
-niezgłoszony podczas wcześniejszej blokady storage. Po odciążeniu dysku zapisano
-trzy commity i wykonano CI. Na2026-10-07 runner zdrowy, worker alive,
-accepting_jobs=true, brak aktywnych jobów; storage ponownie spadł do około4.7GB
-poniżej8GiB. Nie uruchomiono nowej kapsuły/builda. Wąski read-only preview
-plan-9eb148b0b26c4b27944ee4eba61b0f58 obejmuje wyłącznie execution jobów233/234,
-ostatni odczyt1/2, applied=false. Nie usuwamy danych ani nie uruchamiamy
-równoległego globalnego inventory. Poprzedni pełny build zużył około27GB;
-sam próg8GiB nie gwarantuje pojemności całego buildu.
+Build235 d6482966a2404d6d933a6708cdf3466d anulowano przed wykonaniem; dane zachowane.
+Zatwierdzony cleanup plan-9eb148b0b26c4b27944ee4eba61b0f58 zakończył się
+succeeded/applied=true: usunięto tylko execution jobów233/234,1288484419B
+logicznych. Potwierdzono zachowanie artifacts/receipt.json/worker.log/pełnych
+logów kontenerów. Zmiana wolnego miejsca nie jest utożsamiana z tym zakresem.
+Runner zdrowy/accepting; nowy build236 3355bd40acaf4f59b63afb538577248e
+przyjęty dokładnie raz po świeżych guardach i aktualnie running. Source commit62a3,
+digest d912feb0287423ba6a7adc832de6af14d192281cf9235c87c11c0d5f77e534ac,
+profil fem-cpu-slepc-runtime-v2 bez kompilacji testów. Kontener
+7643eefb3c789b0bb7fc1ac317696be313b9e5c08e1ecb847b19fc29f87e60a4 potwierdzony
+running. Logi native-build wykazują postęp kompilacji bibliotek projektu/CLI;
+observer89998 obserwuje ten sam job. Po sukcesie wymagane receipt/hashes,
+świeży managed OpenAPI, controlled Gamma8.5–16GHz z NCV4 i niezmienionym
+modelem/parametrami, full50 window certificate; dopiero potem signed15.
+Nie mamy jeszcze nowych punktów solvera ani kwalifikacji runtime/science/GUI.
 Upload dwóch synthetic failure artifacts nadal nieaktywny po odmowie auto-review;
 aktualny density test już przechodzi, więc jest to opcjonalna diagnostyka przyszłych
 błędów. Zwolnienie miejsca potwierdzono, ale sam próg8GiB nie gwarantuje miejsca

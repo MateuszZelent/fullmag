@@ -375,3 +375,19 @@ Odczyt całego `ProblemIRV04` zachowuje wcześniejsze pointer-qualified errors.
 Regresja `standalone_full3d_decoders_never_discard_extra_spatial_intent` obejmuje
 wszystkie trzy granice dekodowania. To walidacja kształtu danych, nie admission,
 certyfikat invariance ani dowód wykonania MFEM. Wykonanie regresji wymaga CI.
+
+## Ścisłe definicje materiałów V04 — 2026-10-07
+
+`crates/fullmag-ir/src/v04_material_wire.rs::deserialize_materials` stosuje
+pełny prywatny remote schema `MaterialIRV04Def` dla wspólnego `MaterialIR`.
+V04 odrzuca nieznane pola materiału z błędem `/materials/<index>`;
+nie może zgubić przyszłego współczynnika fizycznego przed budową bindings.
+Wszystkie24 obecne pola, ich typy, domyślne opcje i reprezentacja serializowana
+pozostają zgodne ze wspólnym modelem. Konstrukcja remote typu wymusza zgodność
+z polami źródłowego structu podczas kompilacji. Publiczny legacy deserializer
+MaterialIR/ProblemIR nie jest zmieniony; to ograniczenie opt-in wire V04.
+Migrator zatwierdza kandydata dopiero po takim odczycie, więc nieznany materiał
+powoduje błąd bez mutacji wejścia. Regresje pełnego round-trip, null/defaults,
+legacy, indeksu1 i migracji pozostają do wykonania w CI. To nie nadaje sampled
+polom brakującego topology binding, nie wystawia structural_2d ani nie
+certyfikuje equilibrium czy providera MFEM2D.

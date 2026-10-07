@@ -27,6 +27,7 @@ pub mod spectral_validation;
 pub mod spin_transport;
 pub mod study;
 pub mod study_v04;
+mod v04_material_wire;
 pub mod waveguide_frame;
 pub mod waveguide_mesh;
 pub mod waveguide_mesh_contours;
