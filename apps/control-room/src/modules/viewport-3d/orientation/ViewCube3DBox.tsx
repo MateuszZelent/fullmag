@@ -733,6 +733,7 @@ function ViewCubeAxisMarker({
         lineWidth={2.4}
         points={[stubStart, stubEnd]}
         renderOrder={WIDGET_RENDER_ORDER + 4}
+        transparent
       />
       <HudTextSprite
         ref={labelRef}

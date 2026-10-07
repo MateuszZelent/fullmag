@@ -4,7 +4,6 @@ import { Line } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, memo, type ReactNode } from "react";
 import {
-  BackSide,
   BufferAttribute,
   SphereGeometry,
   Vector3,
@@ -312,6 +311,7 @@ function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
   const geometry = useMemo(() => buildHslSphereGeometry(), []);
   const hud = useMemo(() => resolveHudColors(colors), [colors]);
   const equatorRef = useRef<Group>(null);
+  const rimRef = useRef<Object3D>(null);
   const forward = useMemo(() => new Vector3(), []);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
@@ -319,6 +319,8 @@ function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
   // Only the camera-facing half of the equator is drawn (the HUD ignores
   // depth), so turn the half circle towards the viewer every frame.
   useFrame(({ camera }) => {
+    // The HUD anchor never rotates, so the camera quaternion faces the ring.
+    rimRef.current?.quaternion.copy(camera.quaternion);
     if (!equatorRef.current) return;
     forward.set(0, 0, -1).applyQuaternion(camera.quaternion);
     equatorRef.current.rotation.z = Math.atan2(-forward.y, -forward.x);
@@ -327,25 +329,28 @@ function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
   return (
     <group>
       <group scale={[HSL_SPHERE_RADIUS_PX, HSL_SPHERE_RADIUS_PX, HSL_SPHERE_RADIUS_PX]}>
-        {/* Rim: a slightly larger back-face sphere shows only as an outline. */}
-        <mesh renderOrder={HSL_SPHERE_ORDER - 1}>
-          <sphereGeometry args={[1.035, 48, 24]} />
+        {/* Rim: a camera-facing ring around the silhouette. It never covers
+            the sphere, so the legend colours stay exact. */}
+        <mesh ref={rimRef} renderOrder={HSL_SPHERE_ORDER + 1}>
+          <ringGeometry args={[1, 1.035, 72]} />
           <meshBasicMaterial
             color={hud.label}
             depthTest={false}
             depthWrite={false}
-            opacity={0.45}
-            side={BackSide}
+            opacity={0.5}
             toneMapped={false}
             transparent
           />
         </mesh>
-        {/* Vertex-coloured HSL sphere */}
+        {/* Vertex-coloured HSL sphere. All parts are "transparent" so they
+            share one render list and renderOrder alone decides layering,
+            e.g. shafts of axes pointing away are drawn beneath the sphere. */}
         <mesh geometry={geometry} renderOrder={HSL_SPHERE_ORDER}>
           <meshBasicMaterial
             depthTest={false}
             depthWrite={false}
             toneMapped={false}
+            transparent
             vertexColors
           />
         </mesh>
@@ -457,6 +462,7 @@ function HslReferenceAxis({
         lineWidth={4.5}
         points={[[0, 0, 0], end]}
         renderOrder={HSL_SPHERE_ORDER + 2}
+        transparent
       />
       <Line
         ref={(line: Object3D | null) => {
@@ -467,6 +473,7 @@ function HslReferenceAxis({
         lineWidth={1.8}
         points={[[0, 0, 0], end]}
         renderOrder={HSL_SPHERE_ORDER + 2}
+        transparent
       />
       {/* Tip in the true HSL colour, outlined so +z (white) shows on Latte. */}
       <mesh
@@ -483,6 +490,7 @@ function HslReferenceAxis({
           depthTest={false}
           depthWrite={false}
           toneMapped={false}
+          transparent
         />
       </mesh>
       <mesh
@@ -499,6 +507,7 @@ function HslReferenceAxis({
           depthTest={false}
           depthWrite={false}
           toneMapped={false}
+          transparent
         />
       </mesh>
       <HudTextSprite
