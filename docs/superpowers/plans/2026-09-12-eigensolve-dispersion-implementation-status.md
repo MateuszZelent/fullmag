@@ -116,7 +116,8 @@ resolve_runtime_artifact_root i wymagają dokładnej zgodności ponownie
 rozwiązanego bindingu z result.runtime_output_binding; istniejące identity,
 artifact hashes i row/parity gates zachowane. Nested workspace fixtures oraz
 missing/tampered/stale regressions mają source review PASS; świeże focused
-CI37611133357/37611123869 uruchomione, wykonanie jeszcze NOT VERIFIED.
+CI37611133357/37611123869 zakończone SUCCESS dla dokładnego859ea38d;
+regresje consumers PASS. To nie jest science qualification.
 
 CI37609656076 wykryło błędny duplikat importu helpera w test_meshing;
 commitc483362639c80a3399ace236022e71f5c9c94375 usuwa tylko ten import i jest
@@ -131,8 +132,21 @@ Postsolve Γ z parametrów metadata:finite Dirichlet n=0
 (relative−8.49146e-14). Openfilm n=0/N32 daje9309813711.433355Hz,
 delta−10.564014MHz/−0.1134718%. Różne BC wyjaśniają tę różnicę dlaΓ;
 nie jest to dowód dla nonzero-k. Evidence JSON:
-runtime236-gamma-ksp12-analytic-comparison.json. Signed15 nadal liczy tym samym
-kontenerem8250b6637cad/toolhandle82638, bez terminalnych artefaktów.
+runtime236-gamma-ksp12-analytic-comparison.json. Signed15 zakończony terminalnie
+failed/exit1 przyk=[0,15e6,0]. Drugie podokno (shift12.25GHz) osiągnęło
+KSP10000 iterations/reason−3; true relative residual0.7186812992148675.
+Monitor recursive residual8.93699e-14 nie jest dowodem rzeczywistej zbieżności.
+Pełne diagnostics:runtime236-signed15-k15-failure-diagnostics.json.
+
+Kontrolowany pojedynczy+15 zmieniał tylko GMRES restart8→30, pozostałe
+model/siatka/okno/EPS1e-9/KSP1e-12 bez zmian. PreflightPASS;
+outputda4c39efdfc048898d90ccda15c71fe6,driverhandle74116 terminalexit1.
+Nativeexit0 i kandydat12.035727542666449GHz,residual7.73163571442957e-13;
+postsolve słusznie odmówił akceptacji:32/60 inner solves naruszały zadane
+trueKSPcriterion,maxrelative3.633466546860508e-10 vs1e-12.
+Nie promujemy tego kandydata do zaakceptowanego punktu lub pełnego wykresu.
+Diagnostyka rozbieżności KSP convergence/true residual trwa; nie zmieniono
+progu fizycznego1e-8 ani bramki true residual. Kontenery obu prób nie są aktywne.
 <!-- current-eigensolve-status-end -->
 
 <!-- master1bdb-integration-20261006 -->
