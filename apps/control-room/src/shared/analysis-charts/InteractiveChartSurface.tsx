@@ -205,7 +205,7 @@ export function chartSeriesRenderModel(
       return {
         colorIndex: colorIndexBySeriesId.get(item.id) ?? visibleIndex,
         id: item.id,
-        kind: "line" as const,
+        kind: item.kind ?? "line",
         label: item.label || item.quantity,
         points: item.points,
         unit: item.unit,
@@ -228,16 +228,27 @@ export function chartSeriesRenderModel(
   };
 }
 
-function chartPointFromEChartsClick(
+export function chartPointFromEChartsClick(
   event: unknown,
   chartSeries: readonly ChartSeries[],
 ): { pointIndex: number; seriesId: string } | null {
   const record = event && typeof event === "object" ? event : null;
   if (!record) return null;
   const seriesIndex = "seriesIndex" in record ? Number(record.seriesIndex) : NaN;
-  const pointIndex = "dataIndex" in record ? Number(record.dataIndex) : NaN;
-  if (!Number.isInteger(seriesIndex) || !Number.isInteger(pointIndex) || seriesIndex < 0 || pointIndex < 0) return null;
+  if (!Number.isInteger(seriesIndex) || seriesIndex < 0) return null;
   const series = chartSeries[seriesIndex];
+  if (!series) return null;
+
+  if ("data" in record) {
+    if (!Array.isArray(record.data)) return null;
+    const sourceRowIndex = record.data[2];
+    if (typeof sourceRowIndex !== "number" || !Number.isInteger(sourceRowIndex)) return null;
+    const pointIndex = series.points.findIndex((point) => point.rowIndex === sourceRowIndex);
+    return pointIndex >= 0 ? { pointIndex, seriesId: series.id } : null;
+  }
+
+  const pointIndex = "dataIndex" in record ? Number(record.dataIndex) : NaN;
+  if (!Number.isInteger(pointIndex) || pointIndex < 0) return null;
   return series?.points[pointIndex]
     ? { pointIndex, seriesId: series.id }
     : null;

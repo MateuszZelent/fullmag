@@ -91,6 +91,22 @@ describe("chart renderer owner", () => {
     ]);
   });
 
+  it("renders requested scatter series with symbols and without a connecting line", () => {
+    const option = chartRenderModelToEChartsOption({
+      ...model,
+      series: [{ ...model.series[0]!, kind: "scatter" }],
+    });
+
+    expect(option.series).toEqual([
+      expect.objectContaining({
+        data: [[1, 0.25, 7]],
+        showSymbol: true,
+        symbol: "circle",
+        type: "scatter",
+      }),
+    ]);
+  });
+
   it("pins a series color to its stable model slot when earlier series are hidden", () => {
     const option = chartRenderModelToEChartsOption(
       {

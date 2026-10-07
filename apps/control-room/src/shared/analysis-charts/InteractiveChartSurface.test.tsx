@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { InteractiveChartSurface, chartSeriesRenderModel } from "./InteractiveChartSurface";
+import {
+  InteractiveChartSurface,
+  chartPointFromEChartsClick,
+  chartSeriesRenderModel,
+} from "./InteractiveChartSurface";
 
 const series = [{
   id: "analysis:mx",
@@ -44,6 +48,51 @@ describe("InteractiveChartSurface", () => {
       statusMessage: "Loading live samples",
       xAxis: { label: "time [s]", unit: "s" },
     });
+  });
+
+  it("maps a click after an inserted gap to the source point identity", () => {
+    const dispersionSeries = [{
+      ...series[0]!,
+      points: [
+        { itemId: "sample-0000/mode-0000", rowIndex: 0, sampleId: "k-path-sample-0000", x: 0, y: 1 },
+        { itemId: "sample-0002/mode-0001", rowIndex: 2, sampleId: "k-path-sample-0002", x: 2, y: 3 },
+      ],
+    }];
+    const sourceRows = [
+      { sampleId: "k-path-sample-0000", modeId: "sample-0000/mode-0000" },
+      { sampleId: "k-path-sample-0001", modeId: "sample-0001/mode-0000" },
+      { sampleId: "k-path-sample-0002", modeId: "sample-0002/mode-0001" },
+    ];
+
+    const click = chartPointFromEChartsClick({
+      data: [2, 3, 2],
+      dataIndex: 2,
+      seriesIndex: 0,
+    }, dispersionSeries);
+
+    expect(click).toEqual({ pointIndex: 1, seriesId: "analysis:mx" });
+    const selectedPoint = dispersionSeries[0]!.points[click!.pointIndex]!;
+    expect(sourceRows[selectedPoint.rowIndex]).toEqual({
+      sampleId: "k-path-sample-0002",
+      modeId: "sample-0002/mode-0001",
+    });
+    expect(chartPointFromEChartsClick({ dataIndex: 0, seriesIndex: 0 }, series)).toEqual({
+      pointIndex: 0,
+      seriesId: "analysis:mx",
+    });
+  });
+
+  it("preserves requested scatter and defaults unspecified series to line", () => {
+    const scatterSeries = [{ ...series[0]!, kind: "scatter" as const }];
+    const surface = {
+      ariaLabel: "Dispersion modes",
+      chartId: "dispersion:modes",
+      presentationCopy: { empty: "No modes", error: "Mode data unavailable", loading: "Loading modes" },
+      provenance: { dataRevision: 1, decimation: "none", descriptorId: "dispersion:modes", query: "k-path", resourceKey: "eigen/dispersion" },
+    };
+
+    expect(chartSeriesRenderModel(scatterSeries, scatterSeries, surface).series[0]?.kind).toBe("scatter");
+    expect(chartSeriesRenderModel(series, series, surface).series[0]?.kind).toBe("line");
   });
 
   it("keeps a visible series in its all-series color slot when an earlier series is hidden", () => {

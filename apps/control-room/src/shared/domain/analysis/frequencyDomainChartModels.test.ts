@@ -1591,7 +1591,7 @@ describe("frequencyDomainChartModels", () => {
     expect(route.supportingCharts).toContain("response-field-overlay");
   });
 
-  it("requires the manifest calculation mode to match a requested modal route", () => {
+  it("accepts only the compatible modal-spectrum calculation mode family", () => {
     const freeModesManifest = {
       artifacts: { spectrum_v2_path: "eigen/spectrum.v2.json" },
       requested_execution: { calculation_mode: "free_modes" },
@@ -1609,10 +1609,29 @@ describe("frequencyDomainChartModels", () => {
         mode: "fmr_modal",
         primaryChart: "modal-spectrum",
       }),
+    ).toBe(true);
+    expect(routeFrequencyDomainCalculationMode(freeModesManifest).mode).toBe("free_modes");
+
+    const fmrModalManifest = {
+      ...freeModesManifest,
+      requested_execution: { calculation_mode: "fmr_modal" },
+    };
+    expect(
+      frequencyDomainManifestSupportsChartRoute(fmrModalManifest, {
+        mode: "free_modes",
+        primaryChart: "modal-spectrum",
+      }),
+    ).toBe(true);
+    expect(routeFrequencyDomainCalculationMode(fmrModalManifest).mode).toBe("fmr_modal");
+    expect(
+      frequencyDomainManifestSupportsChartRoute(freeModesManifest, {
+        mode: "fmr_response",
+        primaryChart: "modal-spectrum",
+      }),
     ).toBe(false);
   });
 
-  it("requires the manifest calculation mode to match a requested response route", () => {
+  it("accepts only the compatible response-sweep calculation mode family", () => {
     const responseManifest = {
       artifacts: { response_sweep_v2_path: "response/sweep.v2.json" },
       requested_execution: { calculation_mode: "frequency_response" },
@@ -1628,6 +1647,25 @@ describe("frequencyDomainChartModels", () => {
     expect(
       frequencyDomainManifestSupportsChartRoute(responseManifest, {
         mode: "fmr_response",
+        primaryChart: "response-sweep",
+      }),
+    ).toBe(true);
+    expect(routeFrequencyDomainCalculationMode(responseManifest).mode).toBe("frequency_response");
+
+    const fmrResponseManifest = {
+      ...responseManifest,
+      requested_execution: { calculation_mode: "fmr_response" },
+    };
+    expect(
+      frequencyDomainManifestSupportsChartRoute(fmrResponseManifest, {
+        mode: "frequency_response",
+        primaryChart: "response-sweep",
+      }),
+    ).toBe(true);
+    expect(routeFrequencyDomainCalculationMode(fmrResponseManifest).mode).toBe("fmr_response");
+    expect(
+      frequencyDomainManifestSupportsChartRoute(responseManifest, {
+        mode: "fmr_modal",
         primaryChart: "response-sweep",
       }),
     ).toBe(false);

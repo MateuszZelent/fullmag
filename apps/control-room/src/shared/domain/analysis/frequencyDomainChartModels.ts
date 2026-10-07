@@ -755,8 +755,12 @@ export function frequencyDomainManifestSupportsChartRoute(
 ): boolean {
   const publishedRoute = routeFrequencyDomainCalculationMode(manifestPayload);
   if (requestedRoute.primaryChart !== "comparison") {
-    return requestedRoute.mode === publishedRoute.mode &&
-      requestedRoute.primaryChart === publishedRoute.primaryChart;
+    return requestedRoute.primaryChart === publishedRoute.primaryChart &&
+      calculationModesShareChartFamily(
+        requestedRoute.mode,
+        publishedRoute.mode,
+        requestedRoute.primaryChart,
+      );
   }
 
   const manifest = record(manifestPayload);
@@ -774,6 +778,27 @@ export function frequencyDomainManifestSupportsChartRoute(
     hasDrivenArtifact &&
     context.contractGaps.length === 0
   );
+}
+
+function calculationModesShareChartFamily(
+  requestedMode: FrequencyDomainCalculationMode,
+  publishedMode: FrequencyDomainCalculationMode,
+  primaryChart: FrequencyDomainChartRoute["primaryChart"],
+): boolean {
+  if (requestedMode === publishedMode) return true;
+  if (primaryChart === "modal-spectrum") {
+    return (
+      (requestedMode === "free_modes" || requestedMode === "fmr_modal") &&
+      (publishedMode === "free_modes" || publishedMode === "fmr_modal")
+    );
+  }
+  if (primaryChart === "response-sweep") {
+    return (
+      (requestedMode === "frequency_response" || requestedMode === "fmr_response") &&
+      (publishedMode === "frequency_response" || publishedMode === "fmr_response")
+    );
+  }
+  return false;
 }
 
 export function responseFieldResourcesFromManifest(
