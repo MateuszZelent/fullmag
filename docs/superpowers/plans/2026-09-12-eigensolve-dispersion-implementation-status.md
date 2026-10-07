@@ -175,8 +175,15 @@ siatkowanie jednego airbox-sourceface przed exactbodytags. Odrzucono fallback
 free-tet bez warstw oraz słabszą gwarancję samych geometrycznych partitions.
 Nowa trasa GEO musi zachować dokładneN+1 bodyzplanes/allnodes/no tetcross,
 kompozycję pól poexactvolume binding i density12nm. Review wykryło staleproof
-replay kolejnej próby; invalidation+serializationregression ma source review PASS. ActualGmshCI
-pending; żadnej deklaracji ukończonego regional/swept scope.
+replay kolejnej próby; invalidation+serializationregression ma source review PASS. ActualGmshCI37619201034 zakończył się FAILURE: 309 testów, jeden błąd,
+jeden pominięty. Fixture żądał dwóch warstw, a free3D wygenerował 41
+przedziałów Z; kontrola poprawnie odrzuciła tę siatkę. Następny krok to
+triangulacja zachowująca węzły zadanych płaszczyzn, z kontrolą wszystkich
+faset i bez cichego dodawania punktów. Regional/swept scope nie jest ukończony.
+
+Aktualny odczyt runnera: 2 237 157 376 B wolnych; worker zdrowy, kolejka
+przyjmuje zadania, brak aktywnych jobów. Nie zgłoszono kolejnego buildu
+poniżej progu 8 GiB. Zachowana kapsuła #237 pozostaje wejściem do retry.
 <!-- current-eigensolve-status-end -->
 
 <!-- master1bdb-integration-20261006 -->
