@@ -1844,10 +1844,17 @@ void modal_v18_is_fail_closed_and_v19_descriptor_validation_is_preserved()
         offsetof(FullmagFemModalSharedDomainPayload, linearization_descriptor));
     request.shared_domain_payload = &v17_prefix_payload;
     result = fullmag_fem_modal_eigen_solve(&request);
+#if FULLMAG_HAS_MFEM_STACK
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
           "complete v17 modal payload reaches the v17 solver boundary without reading v18 fields");
     check(contains(result.diagnostics_json, "shared_domain_assembly_failed"),
           "complete v17 modal payload reports the sentinel shared-domain assembly failure");
+#else
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "complete v17 modal payload reaches the provider boundary without reading v18 fields");
+    check(contains(result.diagnostics_json, "shared_domain_requires_mfem_stack"),
+          "complete v17 modal payload reports the unavailable provider without assembly");
+#endif
     fullmag_fem_frequency_domain_result_destroy(&result);
     FullmagFemModalSharedDomainPayload v16_prefix_payload = payload;
     v16_prefix_payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION;
