@@ -288,3 +288,8 @@ Caller fix znalazł się w commit2a7e7d0ef0f1ecd5b465621952eb0aeeff045424 podcza
 ## Walidacja wektora Floqueta — uwaga 4060116253
 
 Przygotowana poprawka sprawdza jawny wektor przed tiny dispatch: dokładnie 3 skończone składowe. Zachowuje niejawne Gamma i dotychczasowe pierwszeństwo raw/fixed ABI. Niezależny source review PASS; kompilacja i wykonanie jeszcze NOT VERIFIED. Dodano odrębny job GitHub Actions dla rzeczywistego fem_modal_eigen_contract bez MFEM/SLEPc/CUDA, z powiązaniem SHA źródeł, flag, logów i terminalnego receipt. Job nie zastępuje kwalifikacji produkcyjnego FEM.
+
+
+## Pierwsze wykonanie nowego kontraktu ABI
+
+Run 37625114591 dla 6ac65fd0710537a7e537867bccdfc69decae21dd wykrył błąd kompilacji no-provider: steady_transport_c_api.cpp używa std::snprintf także bez MFEM, lecz cstdio było pod warunkiem MFEM. Przeniesiono include poza warunek, zachowując kod obu realizacji. Python workflow contract wykrył starszą wersję nowego upload-artifact; dostosowano ją do wymaganej v7. Nie omijano żadnego testu ani nie wyłączono transportu. Ponowne wykonanie ABI nadal wymagane; wynik pierwotny FAILURE zachowany z receipt.

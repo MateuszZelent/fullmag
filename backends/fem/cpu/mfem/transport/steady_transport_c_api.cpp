@@ -8,6 +8,8 @@
 
 #include "fullmag_fem.h"
 
+#include <cstdio>
+
 #if FULLMAG_HAS_MFEM_STACK
 #include "cpu/mfem/transport/steady_transport.hpp"
 #include "cpu/mfem/transport/conservative_current_view.hpp"
@@ -20,7 +22,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <map>
