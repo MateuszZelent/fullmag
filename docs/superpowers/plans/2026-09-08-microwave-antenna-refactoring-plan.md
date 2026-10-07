@@ -3200,6 +3200,14 @@ Powyższy oracle uzupełnić testem rzeczywistego plannera: input 1000×10000 pr
 
 ## T12. Związać lifecycle, cache i anulowanie z wykonaniem
 
+### Checkpoint 2026-10-08 — jednoznaczny manifest i kontrolowany cold-load
+
+Aktualny przyrost obejmuje odmowę duplikatów JSON, manifest-derived read limits,
+kontrolę rozmiaru przed alokacją i otwarcie przez zweryfikowany uchwyt systemowy.
+Nie kwalifikuje runtime ani fizyki. Zakres, niewykonane regresje Rust i otwarty
+globalny budżet RAM opisują [checkpoint JSON](2026-10-08-antenna-manifest-duplicate-keys-checkpoint.md)
+oraz [checkpoint cold-load](2026-10-08-antenna-bounded-cold-load-checkpoint.md).
+
 ### Checkpoint 2026-10-05 — terminalny build, dwie próby RAM i poprawka eksportu
 
 **Commit fragmentu:** `35ae2d130563faae2c78331a04aa6d625b5407bd`

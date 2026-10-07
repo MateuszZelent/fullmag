@@ -5,9 +5,9 @@ use serde_json::{json, Value};
 
 pub const EVIDENCE_SCHEMA: &str = "fem_direct_oersted_evidence.v1";
 const MAGIC: &[u8; 16] = b"FM-OEF1-Q3-V1\0\0\0";
-const HEADER_BYTES: usize = 288;
-const RECORD_BYTES: usize = 96;
-const MAX_TARGETS: u64 = 1_000_000;
+pub(crate) const HEADER_BYTES: usize = 288;
+pub(crate) const RECORD_BYTES: usize = 96;
+pub(crate) const MAX_TARGETS: u64 = 1_000_000;
 pub(crate) const MAX_LEAVES: u64 = 1_000_000;
 pub(crate) const MAX_WORK: u64 = 100_000_000;
 

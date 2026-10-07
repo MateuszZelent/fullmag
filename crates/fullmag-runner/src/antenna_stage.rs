@@ -11,11 +11,80 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const SOLUTION_MANIFEST_NAME: &str = "manifest.v1.json";
+
+fn read_error(reason: impl std::fmt::Display) -> RunError {
+    RunError { message: format!("antenna solution bounded read refused: {reason}") }
+}
+
+fn read_path_exists(path: &Path) -> Result<bool, RunError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(read_error(error)),
+    }
+}
+
+fn is_link_metadata(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 { return true; }
+    }
+    metadata.file_type().is_symlink()
+}
+
+// The operator's root may be an alias; no descendant may redirect a read.
+fn inspect_read_path(root: &Path, path: &Path) -> Result<fs::Metadata, RunError> {
+    let relative = path.strip_prefix(root).map_err(read_error)?;
+    let mut current = root.to_path_buf();
+    let mut result = fs::symlink_metadata(root).map_err(read_error)?;
+    for component in relative.components() {
+        if !matches!(component, Component::Normal(_)) { return Err(read_error("unsafe component")); }
+        if !result.is_dir() { return Err(read_error("non-directory ancestor")); }
+        current.push(component);
+        result = fs::symlink_metadata(&current).map_err(read_error)?;
+        if is_link_metadata(&result) { return Err(read_error("link or reparse-point descendant")); }
+    }
+    if fs::canonicalize(path).map_err(read_error)? != path {
+        return Err(read_error("noncanonical descendant"));
+    }
+    Ok(result)
+}
+
+fn read_solution_file(root: &Path, path: &Path, maximum: usize,
+                      exact: Option<usize>) -> Result<Vec<u8>, RunError> {
+    let metadata = inspect_read_path(root, path)?;
+    if !metadata.is_file() || metadata.len() > maximum as u64
+        || exact.is_some_and(|length| metadata.len() != length as u64)
+    { return Err(read_error("file type or declared length mismatch")); }
+    let length = usize::try_from(metadata.len()).map_err(read_error)?;
+    let mut file = crate::project_storage::open_verified_artifact(
+        root, path.strip_prefix(root).map_err(read_error)?,
+    ).map_err(read_error)?;
+    let opened = file.metadata().map_err(read_error)?;
+    if !opened.is_file() || is_link_metadata(&opened) || opened.len() != metadata.len() {
+        return Err(read_error("file changed before read"));
+    }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(length).map_err(read_error)?;
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let available = (length - bytes.len()).min(chunk.len() - 1) + 1;
+        let count = file.read(&mut chunk[..available]).map_err(read_error)?;
+        if count == 0 { break; }
+        if count > length - bytes.len() { return Err(read_error("file grew during read")); }
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+    if bytes.len() != length || file.metadata().map_err(read_error)?.len() != length as u64
+        || inspect_read_path(root, path)?.len() != length as u64
+    { return Err(read_error("file changed during read")); }
+    Ok(bytes)
+}
 
 /// A published reference plus the dependencies required by the current model.
 /// Content integrity and model currency are separate checks.
@@ -395,11 +464,14 @@ pub fn inspect_cached_antenna_field_solution(
     let asset_id = antenna_field_solution_asset_id(&signatures);
     validate_storage_id("antenna solution_id", &plan.solution_id)?;
     validate_storage_id("antenna asset_id", &asset_id)?;
+    if !read_path_exists(output_root)? { return Ok(AntennaFieldSolutionCacheState::Missing); }
+    let canonical_root = fs::canonicalize(output_root).map_err(read_error)?;
+    let output_root = canonical_root.as_path();
     let revision_dir = output_root
         .join(solution_prefix(&plan.solution_id))
         .join(&asset_id);
     let legacy_dir = output_root.join(solution_prefix(&plan.solution_id));
-    let manifest_path = if revision_dir.join(SOLUTION_MANIFEST_NAME).exists() {
+    let manifest_path = if read_path_exists(&revision_dir)? {
         revision_dir.join(SOLUTION_MANIFEST_NAME)
     } else if legacy_dir.join(SOLUTION_MANIFEST_NAME).exists() {
         legacy_dir.join(SOLUTION_MANIFEST_NAME)
@@ -431,12 +503,8 @@ pub fn inspect_cached_antenna_field_solution(
         };
         manifest_path
     };
-    let manifest_bytes = fs::read(&manifest_path).map_err(|error| RunError {
-        message: format!(
-            "read cached antenna field-solution manifest '{}': {error}",
-            manifest_path.display()
-        ),
-    })?;
+    let manifest_bytes = read_solution_file(output_root, &manifest_path,
+        crate::antenna_field_solution::ANTENNA_FIELD_MANIFEST_MAX_BYTES, None)?;
     crate::antenna_field_solution::verify_antenna_field_solution_manifest(&manifest_bytes)?;
     let value: serde_json::Value =
         serde_json::from_slice(&manifest_bytes).map_err(|error| RunError {
@@ -549,7 +617,7 @@ fn validate_storage_id(label: &str, value: &str) -> Result<(), RunError> {
     let mut components = Path::new(value).components();
     let one_normal =
         matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
-    if value.trim().is_empty() || !one_normal || value.contains('/') || value.contains('\\') {
+    if value.trim().is_empty() || !one_normal || value.contains('/') || value.contains('\\') || value.contains(':') {
         return Err(RunError {
             message: format!("{label} must be one safe path component"),
         });
@@ -803,7 +871,10 @@ fn publish_antenna_field_solution_atomically_with_hook(
     // content-addressed revision below it instead of mutating the old asset.
     let legacy_manifest = legacy_dir.join(SOLUTION_MANIFEST_NAME);
     if legacy_manifest.exists() {
-        let legacy_matches_reference = fs::read(&legacy_manifest)
+        let canonical_root = fs::canonicalize(output_root).map_err(read_error)?;
+        let canonical_manifest = canonical_root.join(&logical_prefix).join(SOLUTION_MANIFEST_NAME);
+        let legacy_matches_reference = read_solution_file(&canonical_root, &canonical_manifest,
+            crate::antenna_field_solution::ANTENNA_FIELD_MANIFEST_MAX_BYTES, None)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
             .is_some_and(|value| {
@@ -897,12 +968,15 @@ fn publish_antenna_field_solution_atomically_with_hook(
 }
 
 fn collect_solution_files(
+    root: &Path,
     directory: &Path,
     relative: &Path,
     prefix: &Path,
     output: &mut Vec<AuxiliaryArtifact>,
     skip_revision_siblings: bool,
+    lengths: &BTreeMap<String, usize>,
 ) -> Result<(), RunError> {
+    if !inspect_read_path(root, directory)?.is_dir() { return Err(read_error("expected directory")); }
     for entry in fs::read_dir(directory).map_err(|error| RunError {
         message: format!(
             "read antenna solution directory '{}': {error}",
@@ -916,6 +990,8 @@ fn collect_solution_files(
             message: format!("inspect antenna solution entry: {error}"),
         })?;
         let child_relative = relative.join(entry.file_name());
+        let metadata = fs::symlink_metadata(entry.path()).map_err(read_error)?;
+        if is_link_metadata(&metadata) { return Err(read_error("link or reparse-point entry")); }
         if file_type.is_dir() {
             // A revisioned asset may live below a legacy flat solution
             // directory. Those sibling revisions are separate immutable
@@ -923,14 +999,19 @@ fn collect_solution_files(
             if skip_revision_siblings && entry.path().join(SOLUTION_MANIFEST_NAME).is_file() {
                 continue;
             }
-            collect_solution_files(&entry.path(), &child_relative, prefix, output, false)?;
+            let child_prefix = format!("{}/", prefix.join(&child_relative).to_string_lossy().replace('\\', "/"));
+            if !lengths.keys().any(|path| path.starts_with(&child_prefix)) {
+                return Err(read_error("unreferenced directory"));
+            }
+            collect_solution_files(root, &entry.path(), &child_relative, prefix, output, false, lengths)?;
         } else if file_type.is_file() {
             let full_relative = prefix.join(&child_relative);
+            if child_relative == Path::new(SOLUTION_MANIFEST_NAME) { continue; }
+            let logical = full_relative.to_string_lossy().replace('\\', "/");
+            let length = *lengths.get(&logical).ok_or_else(|| read_error("unreferenced payload"))?;
             output.push(AuxiliaryArtifact {
-                relative_path: full_relative.to_string_lossy().replace('\\', "/"),
-                bytes: fs::read(entry.path()).map_err(|error| RunError {
-                    message: format!("read antenna solution artifact: {error}"),
-                })?,
+                relative_path: logical,
+                bytes: read_solution_file(root, &entry.path(), length, Some(length))?,
             });
         } else {
             return Err(RunError {
@@ -984,20 +1065,18 @@ fn load_published_antenna_field_solution_checked(
     validate_storage_id("antenna asset_id", &reference.asset_id)?;
     let prefix = solution_prefix(&reference.output_id);
     validate_relative_path(&prefix, &prefix.display().to_string())?;
-    let revision_directory = output_root.join(&prefix).join(&reference.asset_id);
-    let legacy_directory = output_root.join(&prefix);
-    let directory = if revision_directory.join(SOLUTION_MANIFEST_NAME).exists() {
+    let root = fs::canonicalize(output_root).map_err(read_error)?;
+    let revision_directory = root.join(&prefix).join(&reference.asset_id);
+    let legacy_directory = root.join(&prefix);
+    let directory = if read_path_exists(&revision_directory)? {
         revision_directory
     } else {
-        legacy_directory
+        legacy_directory.clone()
     };
     let manifest_path = directory.join(SOLUTION_MANIFEST_NAME);
-    let manifest_bytes = fs::read(&manifest_path).map_err(|error| RunError {
-        message: format!(
-            "read antenna field-solution manifest '{}': {error}",
-            manifest_path.display()
-        ),
-    })?;
+    let manifest_bytes = read_solution_file(&root, &manifest_path,
+        crate::antenna_field_solution::ANTENNA_FIELD_MANIFEST_MAX_BYTES, None)?;
+    let lengths = crate::antenna_field_solution::antenna_field_solution_payload_lengths(&manifest_bytes)?;
     let value: serde_json::Value =
         serde_json::from_slice(&manifest_bytes).map_err(|error| RunError {
             message: format!("parse published antenna field-solution manifest: {error}"),
@@ -1008,6 +1087,9 @@ fn load_published_antenna_field_solution_checked(
         return Err(RunError {
             message: "published antenna field-solution asset_id does not match the reference".into(),
         });
+    }
+    if value.get("solution_id").and_then(serde_json::Value::as_str) != Some(reference.output_id.as_str()) {
+        return Err(read_error("solution identity differs from selected namespace"));
     }
     if value
         .get("content_digest")
@@ -1051,14 +1133,8 @@ fn load_published_antenna_field_solution_checked(
         )?;
     }
     let mut payloads = Vec::new();
-    collect_solution_files(&directory, Path::new(""), &prefix, &mut payloads, true)?;
-    payloads.retain(|artifact| {
-        artifact.relative_path
-            != prefix
-                .join(SOLUTION_MANIFEST_NAME)
-                .to_string_lossy()
-                .replace('\\', "/")
-    });
+    collect_solution_files(&root, &directory, Path::new(""), &prefix, &mut payloads,
+        directory == legacy_directory, &lengths)?;
     crate::verify_antenna_field_solution_asset(&manifest_bytes, &payloads)?;
     Ok(AntennaFieldSolutionAsset {
         manifest_bytes,
@@ -1350,6 +1426,93 @@ mod tests {
         assert_eq!(state.transitions[1].from, AntennaFieldStageStatus::Queued);
         assert_eq!(state.transitions[1].to, AntennaFieldStageStatus::Meshing);
         assert_eq!(state.transitions[1].diagnostic.as_deref(), Some("mesh cache miss"));
+    }
+
+    #[test]
+    fn bounded_reads_check_file_length_before_allocation() {
+        let root = std::env::temp_dir().join(format!("fullmag-antenna-read-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let path = root.join("payload.bin");
+        fs::write(&path, b"abc").unwrap();
+        assert_eq!(read_solution_file(&root, &path, 3, Some(3)).unwrap(), b"abc");
+        assert!(read_solution_file(&root, &path, 2, None).unwrap_err().message.contains("declared length"));
+        assert!(read_solution_file(&root, &path, 4, Some(4)).is_err());
+        let manifest = root.join("large-manifest.json");
+        fs::File::create(&manifest).unwrap().set_len(
+            crate::antenna_field_solution::ANTENNA_FIELD_MANIFEST_MAX_BYTES as u64 + 1).unwrap();
+        assert!(read_solution_file(&root, &manifest,
+            crate::antenna_field_solution::ANTENNA_FIELD_MANIFEST_MAX_BYTES, None).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cold_load_refuses_extras_and_incorrect_declared_lengths() {
+        let root = std::env::temp_dir().join(format!("fullmag-antenna-read-extra-{}", uuid::Uuid::new_v4().simple()));
+        let published = publish_antenna_field_solution_atomically(&root, &field_solve_result("solution", 2.0)).unwrap();
+        let revision = published.manifest_path.parent().unwrap();
+        let extra = revision.join("unreferenced.bin");
+        fs::write(&extra, b"not a scientific payload").unwrap();
+        assert!(load_published_antenna_field_solution(&root, &published.reference).unwrap_err().message.contains("unreferenced payload"));
+        fs::remove_file(extra).unwrap();
+        let field = revision.join("common/H_per_A.f64le");
+        fs::OpenOptions::new().write(true).open(field).unwrap().set_len(25).unwrap();
+        assert!(load_published_antenna_field_solution(&root, &published.reference).unwrap_err().message.contains("declared length"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn existing_incomplete_revision_never_falls_back_to_valid_legacy() {
+        let root = std::env::temp_dir().join(format!("fullmag-antenna-no-fallback-{}", uuid::Uuid::new_v4().simple()));
+        let published = publish_antenna_field_solution_atomically(&root, &field_solve_result("solution", 2.0)).unwrap();
+        let revision = published.manifest_path.parent().unwrap();
+        let legacy = revision.parent().unwrap();
+        for entry in fs::read_dir(revision).unwrap() {
+            let entry = entry.unwrap();
+            fs::rename(entry.path(), legacy.join(entry.file_name())).unwrap();
+        }
+        assert!(load_published_antenna_field_solution(&root, &published.reference).is_err());
+        fs::remove_dir(revision).unwrap();
+        load_published_antenna_field_solution(&root, &published.reference).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_alias_is_allowed_but_descendant_links_are_refused() {
+        use std::os::unix::fs::symlink;
+        let base = std::env::temp_dir().join(format!("fullmag-antenna-links-{}", uuid::Uuid::new_v4().simple()));
+        let root = base.join("root");
+        let published = publish_antenna_field_solution_atomically(&root, &field_solve_result("solution", 2.0)).unwrap();
+        let alias = base.join("alias");
+        symlink(&root, &alias).unwrap();
+        load_published_antenna_field_solution(&alias, &published.reference).unwrap();
+        let path = published.manifest_path.parent().unwrap().join("common/H_per_A.f64le");
+        let target = base.join("outside.bin");
+        fs::rename(&path, &target).unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(load_published_antenna_field_solution(&root, &published.reference).unwrap_err().message.contains("link"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cold_load_refuses_junction_descendants_without_symlink_privilege() {
+        let base = std::env::temp_dir().join(format!("fullmag-antenna-junction-{}", uuid::Uuid::new_v4().simple()));
+        let root = base.join("root");
+        let published = publish_antenna_field_solution_atomically(&root, &field_solve_result("solution", 2.0)).unwrap();
+        let port = published.manifest_path.parent().unwrap().join("common");
+        let outside = base.join("outside");
+        fs::rename(&port, &outside).unwrap();
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"]).arg(&port).arg(&outside).status().unwrap();
+        assert!(status.success(), "junction fixture creation failed: {status:?}");
+        let refused = load_published_antenna_field_solution(&root, &published.reference);
+        // Remove the junction entry before recursively cleaning only this fixture.
+        fs::remove_dir(&port).unwrap();
+        assert!(outside.is_dir());
+        assert!(refused.unwrap_err().message.contains("reparse"));
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

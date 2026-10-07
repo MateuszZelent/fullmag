@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const ANTENNA_FIELD_SOLUTION_SCHEMA: &str = "antenna_field_solution.v1";
+pub(crate) const ANTENNA_FIELD_MANIFEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -264,6 +265,9 @@ fn signatures_are_valid(signatures: &AntennaFieldSolutionSignatures) -> bool {
 fn parse_verified_manifest(
     manifest_bytes: &[u8],
 ) -> Result<(String, StoredSolutionManifest), RunError> {
+    if manifest_bytes.len() > ANTENNA_FIELD_MANIFEST_MAX_BYTES {
+        return Err(RunError { message: "antenna field solution manifest exceeds size bound".into() });
+    }
     crate::antenna_external_lead_solution::reject_unqualified_external_lead_source(manifest_bytes)?;
     let crate::artifact_json::UnambiguousJson(mut canonical_value) =
         serde_json::from_slice(manifest_bytes).map_err(|error| RunError {
@@ -308,6 +312,81 @@ pub(crate) fn verify_antenna_field_solution_manifest(
     manifest_bytes: &[u8],
 ) -> Result<(), RunError> {
     parse_verified_manifest(manifest_bytes).map(|_| ())
+}
+
+/// Exact read limits from an unambiguous, content-addressed manifest.
+/// This checks metadata before I/O; numerical acceptance still requires the payload verifier.
+pub(crate) fn antenna_field_solution_payload_lengths(
+    manifest_bytes: &[u8],
+) -> Result<BTreeMap<String, usize>, RunError> {
+    let (_, manifest) = parse_verified_manifest(manifest_bytes)?;
+    let mut lengths = BTreeMap::new();
+    let prefix = format!("antenna/field_solutions/{}/", manifest.solution_id);
+    let invalid = || RunError { message: "invalid antenna payload read metadata".into() };
+    let mut insert = |path: &str, length: usize| -> Result<(), RunError> {
+        if length == 0 || !path.starts_with(&prefix) || path.len() == prefix.len()
+            || path.contains(['\\', ':'])
+            || path.split('/').any(|part| matches!(part, "" | "." | ".."))
+            || lengths.insert(path.to_owned(), length).is_some()
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    };
+    let mut binary = |reference: &StoredBinaryFieldRef, scalar: &str, layout: &str, unit: &str,
+                      width: usize| -> Result<(), RunError> {
+        if reference.scalar_type != scalar || reference.layout != layout || reference.unit != unit
+            || reference.value_count == 0
+        { return Err(invalid()); }
+        insert(&reference.path, reference.value_count.checked_mul(width).ok_or_else(invalid)?)
+    };
+    let conductor_values = manifest.conductor_positions.value_count;
+    let sample_values = manifest.sample_positions.value_count;
+    if conductor_values == 0 || conductor_values % 3 != 0 || sample_values == 0
+        || sample_values % 3 != 0 || manifest.bases.is_empty()
+    { return Err(invalid()); }
+    binary(&manifest.conductor_positions, "float64_le", "node_xyz_interleaved", "m", 8)?;
+    binary(&manifest.sample_positions, "float64_le", "sample_xyz_interleaved", "m", 8)?;
+    if let Some(topology) = &manifest.sample_topology {
+        if topology.value_count % 4 != 0 { return Err(invalid()); }
+        binary(topology, "uint32_le", "tet4_connectivity", "1", 4)?;
+    }
+    let mut ports = BTreeSet::new();
+    for basis in &manifest.bases {
+        match basis.oersted_operator_version.as_deref() {
+            Some(version) if version == fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION => {
+                if basis.quadrature_evidence.is_none() { return Err(invalid()); }
+            }
+            Some(version) if version == fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION => {
+                if basis.quadrature_evidence.is_some()
+                    || basis.quadrature_diagnostics.get("operator_version").and_then(|v| v.as_str()) != Some(version)
+                { return Err(invalid()); }
+            }
+            _ => return Err(invalid()),
+        }
+        if basis.port_mode_id.trim().is_empty() || !ports.insert(&basis.port_mode_id)
+            || basis.electric_potential_per_ampere.value_count != conductor_values / 3
+            || basis.current_density_per_ampere.value_count != conductor_values
+            || basis.magnetic_field_per_ampere.value_count != sample_values
+        { return Err(invalid()); }
+        binary(&basis.electric_potential_per_ampere, "float64_le", "node_scalar", "V/A", 8)?;
+        binary(&basis.current_density_per_ampere, "float64_le", "sample_xyz_interleaved", "A/m^2/A", 8)?;
+        binary(&basis.magnetic_field_per_ampere, "float64_le", "sample_xyz_interleaved", "A/m/A", 8)?;
+    }
+    // Release the metadata closure's mutable borrow before inserting binary evidence.
+    drop(binary);
+    for basis in &manifest.bases {
+        if let Some(evidence) = &basis.quadrature_evidence {
+            if evidence.schema_version != EVIDENCE_SCHEMA || evidence.target_count == 0
+                || evidence.target_count as u64 > direct_quadrature::MAX_TARGETS
+                || evidence.target_count != sample_values / 3
+                || direct_quadrature::RECORD_BYTES.checked_mul(evidence.target_count)
+                    .and_then(|n| direct_quadrature::HEADER_BYTES.checked_add(n)) != Some(evidence.byte_length)
+            { return Err(invalid()); }
+            insert(&evidence.path, evidence.byte_length)?;
+        }
+    }
+    Ok(lengths)
 }
 
 fn verify_binary_ref(
@@ -434,6 +513,7 @@ fn verify_field_solution_payloads(
     payloads: &[AuxiliaryArtifact],
     require_exact_payload_set: bool,
 ) -> Result<(), RunError> {
+    antenna_field_solution_payload_lengths(manifest_bytes)?;
     let (_, manifest) = parse_verified_manifest(manifest_bytes)?;
     let mut expected_paths = BTreeSet::from([
         manifest.conductor_positions.path.as_str(),
@@ -2340,6 +2420,61 @@ mod tests {
                 1, &fixture.sample_positions_xyz_m, None,
             ).is_err(), "{field}");
         }
+    }
+
+    #[test]
+    fn payload_read_plan_refuses_unsafe_alias_and_overflow_metadata() {
+        let artifacts = build_antenna_field_solution_artifacts(&input(2.0)).unwrap();
+        let original: serde_json::Value = serde_json::from_slice(&artifacts.last().unwrap().bytes).unwrap();
+        for mutation in 0..7 {
+            let mut value = original.clone();
+            match mutation {
+                0 => value["sample_positions"]["path"] = value["conductor_positions"]["path"].clone(),
+                1 => value["sample_positions"]["path"] = serde_json::json!("antenna/field_solutions/other/positions.bin"),
+                2 => value["sample_positions"]["path"] = serde_json::json!("antenna/field_solutions/solution_1/../positions.bin"),
+                3 => value["sample_positions"]["path"] = serde_json::json!("antenna/field_solutions/solution_1/positions.bin:stream"),
+                4 => value["bases"][0]["magnetic_field_per_ampere"]["unit"] = serde_json::json!("T"),
+                5 => value["conductor_positions"]["value_count"] = serde_json::json!(usize::MAX),
+                _ => value["bases"][0]["magnetic_field_per_ampere"]["value_count"] = serde_json::json!(6),
+            }
+            value.as_object_mut().unwrap().remove("content_digest");
+            value["content_digest"] = serde_json::json!(format!("sha256:{}", sha256(&serde_json::to_vec(&value).unwrap())));
+            assert!(antenna_field_solution_payload_lengths(&serde_json::to_vec(&value).unwrap()).is_err(), "{mutation}");
+        }
+    }
+
+    #[test]
+    fn direct_read_plan_applies_evidence_bounds_before_payload_io() {
+        let fixture = direct_evidence_fixture();
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let original: serde_json::Value = serde_json::from_slice(&artifacts.last().unwrap().bytes).unwrap();
+        antenna_field_solution_payload_lengths(&artifacts.last().unwrap().bytes).unwrap();
+        for mutation in 0..4 {
+            let mut value = original.clone();
+            match mutation {
+                0 => { value["bases"][0].as_object_mut().unwrap().remove("quadrature_evidence"); }
+                1 => value["bases"][0]["quadrature_evidence"]["target_count"] = serde_json::json!(direct_quadrature::MAX_TARGETS + 1),
+                2 => value["bases"][0]["quadrature_evidence"]["byte_length"] = serde_json::json!(usize::MAX),
+                _ => value["bases"][0]["quadrature_evidence"]["schema_version"] = serde_json::json!("fem_direct_oersted_evidence.v2"),
+            }
+            value.as_object_mut().unwrap().remove("content_digest");
+            value["content_digest"] = serde_json::json!(format!("sha256:{}", sha256(&serde_json::to_vec(&value).unwrap())));
+            assert!(antenna_field_solution_payload_lengths(&serde_json::to_vec(&value).unwrap()).is_err(), "{mutation}");
+        }
+    }
+
+    #[test]
+    fn read_plan_preserves_vector_potential_carrier_support_above_direct_limit() {
+        let artifacts = build_antenna_field_solution_artifacts(&input(2.0)).unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&artifacts.last().unwrap().bytes).unwrap();
+        let count = (direct_quadrature::MAX_TARGETS as usize + 1) * 3;
+        value["sample_positions"]["value_count"] = serde_json::json!(count);
+        value["bases"][0]["magnetic_field_per_ampere"]["value_count"] = serde_json::json!(count);
+        value.as_object_mut().unwrap().remove("content_digest");
+        value["content_digest"] = serde_json::json!(format!("sha256:{}", sha256(&serde_json::to_vec(&value).unwrap())));
+        let lengths = antenna_field_solution_payload_lengths(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(lengths[value["sample_positions"]["path"].as_str().unwrap()], count * 8);
+        // Metadata support only: no payload allocation, solve or numerical qualification.
     }
 
     #[test]
