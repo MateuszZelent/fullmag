@@ -7308,7 +7308,7 @@ def _render_antenna_layout_expr(
         numeric = _finite_number(value)
         if numeric is None:
             raise ValueError(f"{kind} geometry requires finite {key}")
-        return _py_number(numeric)
+        return _py_float_roundtrip(numeric)
 
     def number_from(mapping: Mapping[str, object], key: str, *aliases: str) -> str:
         value = mapping.get(key)
@@ -7318,7 +7318,7 @@ def _render_antenna_layout_expr(
         numeric = _finite_number(value)
         if numeric is None:
             raise ValueError(f"{kind} station requires finite {key}")
-        return _py_number(numeric)
+        return _py_float_roundtrip(numeric)
 
     raw_stations = params.get("stations")
     if not isinstance(raw_stations, list) or len(raw_stations) < 2:
@@ -7358,8 +7358,8 @@ def _render_antenna_layout_expr(
         if rotation_tuple != identity_rotation or any(component != 0.0 for component in translation_tuple):
             kwargs.append(
                 "transform=fm.RigidTransform("
-                f"rotation_matrix={_py_literal(rotation_tuple)}, "
-                f"translation_m={_py_literal(translation_tuple)})"
+                f"rotation_matrix={_python_literal(rotation_tuple)}, "
+                f"translation_m={_python_literal(translation_tuple)})"
             )
     if constructor == "fm.MicrostripAntennaLayout":
         kwargs.extend([
