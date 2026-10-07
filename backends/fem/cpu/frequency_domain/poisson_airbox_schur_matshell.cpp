@@ -1268,14 +1268,18 @@ struct ProductionSplitContext {
 
 struct ProductionCpuSolveControl {
     PoissonAirboxEigenBlockProblem callback_problem{};
+    std::chrono::steady_clock::time_point callback_started_at{};
     bool armed = false;
     bool cancellation_observed = false;
     bool cancel_poll_enabled = true;
     bool progress_enabled = true;
 
-    void arm(const PoissonAirboxEigenBlockProblem &problem) noexcept
+    void arm(
+        const PoissonAirboxEigenBlockProblem &problem,
+        std::chrono::steady_clock::time_point started_at) noexcept
     {
         callback_problem = problem;
+        callback_started_at = started_at;
         armed = true;
         cancellation_observed = false;
         cancel_poll_enabled = true;
@@ -1285,6 +1289,7 @@ struct ProductionCpuSolveControl {
     void disarm() noexcept
     {
         callback_problem = PoissonAirboxEigenBlockProblem{};
+        callback_started_at = {};
         armed = false;
         cancellation_observed = false;
         cancel_poll_enabled = true;
@@ -1364,8 +1369,13 @@ PetscErrorCode production_modal_ksp_convergence_test(
                 ksp_type,
                 static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
                 static_cast<double>(residual_norm)};
-            poisson_airbox_modal_emit_progress(
+            const auto progress_problem = poisson_airbox_modal_progress_with_elapsed(
                 problem,
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - solve_control->callback_started_at)
+                    .count());
+            poisson_airbox_modal_emit_progress(
+                progress_problem,
                 phase,
                 "production_cpu",
                 static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
@@ -3761,6 +3771,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     const PoissonAirboxEigenBlockProblem &problem,
     PoissonAirboxModalEigenResult *out_result) noexcept
 {
+    const auto callback_started_at = std::chrono::steady_clock::now();
     if (out_result == nullptr) {
         return FrequencyDomainStatus::validation_error;
     }
@@ -4175,9 +4186,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 for (;;) {
                     shifted_problem.requested_mode_count =
                         subwindow_requested_mode_count;
+                    const auto attempt_started_at = std::chrono::steady_clock::now();
                     shifted_problem.progress_subwindow_elapsed_seconds =
-                        std::chrono::duration<double>(
-                            std::chrono::steady_clock::now() - subwindow_started_at)
+                        std::chrono::duration<double>(attempt_started_at - subwindow_started_at)
+                            .count();
+                    shifted_problem.progress_window_elapsed_seconds =
+                        std::chrono::duration<double>(attempt_started_at - window_started_at)
                             .count();
                     shifted_result_storage =
                         std::make_unique<PoissonAirboxModalEigenResult>();
@@ -5759,7 +5773,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         borrowed_window_operator
             ? active_cpu_window_operator_context
             : owned_operator_context_owner.get();
-    operator_context->solve_control.arm(problem);
+    operator_context->solve_control.arm(problem, callback_started_at);
     ProductionCpuSolveControlScope solve_control_scope{
         &operator_context->solve_control};
     if (!configure_production_cpu_operator_context(

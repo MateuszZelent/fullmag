@@ -56,6 +56,16 @@ nieaktywny. Przygotowany cooperative cancel execution preview ma źródłowe
 review i kompletne regresje obu race boundaries; AST11files/YAML PASS,
 wykonanie w CI potwierdzone; aktualizacja koordynatora do tego przyrostu
 nadal NOT VERIFIED.
+
+Poprawka telemetry czasu podokna: runtime236 ujawnił stałe `subwindow_s=0`
+i snapshot `window_s` przez aktywne iteracje KSP. Nowy przyrost przechowuje
+prywatny clock anchor `steady_clock` od wejścia do shifted solve; callback
+KSP/cancel emituje aktualną kopię progress snapshot, a retry odświeża oba
+bazowe czasy. Publiczny ABI v6, operator i solver controls nie zmieniają się.
+Review source PASS; YAML/wiring/diff checks PASS. Regresja standalone C++
+helper/emitter jest podpięta do GitHub Actions; lokalnie jej nie kompilowano
+ani nie wykonywano. Test i świeży managed runtime poprawki: NOT VERIFIED.
+Obecny aktywny runtime236 pozostaje immutable62a3, nie zawiera tej poprawki.
 <!-- current-eigensolve-status-end -->
 
 <!-- master1bdb-integration-20261006 -->

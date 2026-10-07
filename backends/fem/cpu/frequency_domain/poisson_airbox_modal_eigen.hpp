@@ -218,6 +218,21 @@ inline bool poisson_airbox_modal_cancel_requested(
         problem.cancel_requested(problem.cancel_user_data) != 0;
 }
 
+// Advance only the progress snapshot; solver input and ABI layout stay unchanged.
+inline PoissonAirboxEigenBlockProblem poisson_airbox_modal_progress_with_elapsed(
+    const PoissonAirboxEigenBlockProblem &problem,
+    double elapsed_since_snapshot_seconds) noexcept
+{
+    PoissonAirboxEigenBlockProblem progress = problem;
+    if (problem.progress_total_subwindows != 0 &&
+        std::isfinite(elapsed_since_snapshot_seconds) &&
+        elapsed_since_snapshot_seconds >= 0.0) {
+        progress.progress_subwindow_elapsed_seconds += elapsed_since_snapshot_seconds;
+        progress.progress_window_elapsed_seconds += elapsed_since_snapshot_seconds;
+    }
+    return progress;
+}
+
 inline void poisson_airbox_modal_emit_progress(
     const PoissonAirboxEigenBlockProblem &problem,
     const char *solver_phase,

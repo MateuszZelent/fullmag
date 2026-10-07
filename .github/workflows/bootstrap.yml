@@ -316,6 +316,11 @@ jobs:
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
 
+      - name: Run modal progress elapsed clock regression
+        run: |
+          g++ -std=c++17 -Ibackends/fem/include -Ibackends/fem/cpu backends/fem/tests/frequency_domain/modal_progress_elapsed_test.cpp -o "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
+          "$RUNNER_TEMP/fullmag-modal-progress-clock-test"
+
       - name: Run DE Gamma Krylov trial contracts
         run: python scripts/test_de_gamma_krylov_trial.py -v
 
