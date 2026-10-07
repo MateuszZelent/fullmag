@@ -83,6 +83,57 @@ class AntennaLayoutExportTests(unittest.TestCase):
                     type(geometry).__name__, params, name=geometry.geometry_name,
                     source_root=Path.cwd()))
 
+    def custom_layouts(self):
+        for geometry in self.layouts():
+            ir = geometry.to_ir()
+            ids = ("return", "signal") if isinstance(geometry, fm.MicrostripAntennaLayout) else (
+                "rf_signal", "left ground", "right_ground")
+            for conductor, part_id in zip(ir["conductors"], ids):
+                conductor["id"] = part_id
+            yield type(geometry).from_ir(ir)
+
+    def test_loaded_custom_conductor_ids_are_preserved(self):
+        for geometry in self.custom_layouts():
+            with self.subTest(kind=type(geometry).__name__):
+                self.assert_layout_roundtrip(geometry, _render_geometry_expr(
+                    geometry, magnet_name="source", source_root=Path.cwd()))
+
+    def test_override_conductor_ids_follow_kind_not_list_order(self):
+        for geometry in self.custom_layouts():
+            with self.subTest(kind=type(geometry).__name__):
+                params = geometry.to_ir()
+                params["conductors"] = list(reversed(params["conductors"]))
+                self.assert_layout_roundtrip(geometry, _render_geometry_expr_from_override(
+                    type(geometry).__name__, params, name=geometry.geometry_name,
+                    source_root=Path.cwd()))
+
+    def test_explicit_scene_part_ids_remain_supported(self):
+        for geometry in self.custom_layouts():
+            with self.subTest(kind=type(geometry).__name__):
+                params = geometry.to_ir()
+                keys = {"signal": "signal_part_id", "return": "return_part_id",
+                        "ground_left": "left_ground_part_id",
+                        "ground_right": "right_ground_part_id"}
+                for conductor in params.pop("conductors"):
+                    params[keys[conductor["kind"]]] = conductor["id"]
+                self.assert_layout_roundtrip(geometry, _render_geometry_expr_from_override(
+                    type(geometry).__name__, params, name=geometry.geometry_name,
+                    source_root=Path.cwd()))
+
+    def test_explicit_scene_ids_take_precedence_over_canonical_fallback(self):
+        for geometry in self.custom_layouts():
+            with self.subTest(kind=type(geometry).__name__):
+                params = geometry.to_ir()
+                keys = {"signal": "signal_part_id", "return": "return_part_id",
+                        "ground_left": "left_ground_part_id",
+                        "ground_right": "right_ground_part_id"}
+                for conductor in params["conductors"]:
+                    params[keys[conductor["kind"]]] = conductor["id"]
+                    conductor["id"] = conductor["kind"]
+                self.assert_layout_roundtrip(geometry, _render_geometry_expr_from_override(
+                    type(geometry).__name__, params, name=geometry.geometry_name,
+                    source_root=Path.cwd()))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

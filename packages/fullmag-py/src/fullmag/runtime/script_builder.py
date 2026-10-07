@@ -7361,22 +7361,27 @@ def _render_antenna_layout_expr(
                 f"rotation_matrix={_python_literal(rotation_tuple)}, "
                 f"translation_m={_python_literal(translation_tuple)})"
             )
+    conductor_ids = {
+        entry.get("kind"): entry.get("id")
+        for entry in params.get("conductors", [])
+        if isinstance(entry, Mapping)
+    }
     if constructor == "fm.MicrostripAntennaLayout":
         kwargs.extend([
             f"return_width_m={number('return_width_m', 'return_width')}",
             f"return_offset_m={number('return_offset_m', 'return_gap_m')}",
         ])
-        for key, param in (("signal_part_id", "signal_part_id"), ("return_part_id", "return_part_id")):
-            value = params.get(key)
-            if isinstance(value, str) and value and value not in {"signal", "return"}:
-                kwargs.append(f"{param}={_py_repr(value)}")
+        for key, default in (("signal_part_id", "signal"), ("return_part_id", "return")):
+            value = params.get(key, conductor_ids.get(default))
+            if isinstance(value, str) and value and value != default:
+                kwargs.append(f"{key}={_py_repr(value)}")
     else:
         for key, default in (
             ("signal_part_id", "signal"),
             ("left_ground_part_id", "ground_left"),
             ("right_ground_part_id", "ground_right"),
         ):
-            value = params.get(key)
+            value = params.get(key, conductor_ids.get(default))
             if isinstance(value, str) and value and value != default:
                 kwargs.append(f"{key}={_py_repr(value)}")
     return f"{constructor}({', '.join(kwargs)})"
