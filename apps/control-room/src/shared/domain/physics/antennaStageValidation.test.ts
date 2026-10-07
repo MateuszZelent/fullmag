@@ -9,10 +9,18 @@ const stage = {
   source_object_id: "antenna-1",
   current_transport_id: "current-1",
   port_mode_ids: ["port-1"],
+  target_refs: [{ kind: "global" }],
   outputs: [{ id: "basis-1", quantity: "H_ant_basis" }],
 } as NonNullable<SceneResource["antenna_field_solve_stages"]>[number];
 
 describe("antenna field-solve authoring validation", () => {
+  it("rejects an empty target list without inventing a target", () => {
+    const empty = { ...stage, target_refs: [] };
+    expect(antennaStageValidationMessages(empty, null)).toEqual([
+      "field solve requires at least one explicitly authored target",
+    ]);
+    expect(empty.target_refs).toEqual([]);
+  });
   it("reports absent transport and port collections in a loaded scene", () => {
     expect(antennaStageValidationMessages(stage, {} as SceneResource)).toEqual([
       "missing current transport 'current-1'",

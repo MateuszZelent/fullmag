@@ -1256,7 +1256,7 @@ function defaultMicrostripFieldSolveStage(objectId: string): JsonObject {
     port_mode_ids: [`${objectId}:port:common`],
     solver_policy: "fem_cpu_double_reference",
     source_object_id: objectId,
-    target_refs: [],
+    target_refs: [{ kind: "global" }],
   };
 }
 

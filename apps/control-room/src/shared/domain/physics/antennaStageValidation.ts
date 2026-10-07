@@ -19,6 +19,9 @@ export function antennaStageValidationMessages(
   scene: SceneResource | null,
 ): string[] {
   const messages: string[] = [];
+  if (!stage.target_refs?.length) {
+    messages.push("field solve requires at least one explicitly authored target");
+  }
   if (scene) {
     const transport = (scene.current_transports ?? []).find(
       (candidate) => candidate.name === stage.current_transport_id,

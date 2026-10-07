@@ -934,6 +934,7 @@ describe("geometry lifecycle command contributions", () => {
           outputs: [{ id: "antenna-9ix:field-solution", quantity: "H_ant_basis" }],
           port_mode_ids: ["antenna-9ix:port:common"],
           source_object_id: "antenna-9ix",
+          target_refs: [{ kind: "global" }],
         }],
         antenna_port_modes: [{
           schema_version: "antenna_port_mode.v2",
