@@ -77,31 +77,6 @@ bool valid_modal_request_enums(const ModalEigenRequest &request) noexcept
     return valid_execution_target && valid_scalar_representation && valid_result_representation;
 }
 
-// The legacy Poisson-airbox modal path is assembled with real, k=0 blocks.
-// Keep the routing predicate local to this boundary so a nonzero-k Floquet
-// request cannot accidentally enter that path before the production
-// nonzero-k capability gate runs.
-bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexcept
-{
-    const double *k_vector = request.operator_request.k_vector_rad_m;
-    int k_vector_len = request.operator_request.k_vector_len;
-    if ((k_vector == nullptr || k_vector_len <= 0) && request.has_floquet_k_vector) {
-        k_vector = request.floquet_k_vector_rad_per_m;
-        k_vector_len = 3;
-    }
-    if (request.operator_request.spin_wave_bc_kind == nullptr ||
-        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0 ||
-        k_vector == nullptr || k_vector_len <= 0) {
-        return false;
-    }
-    for (int index = 0; index < k_vector_len; ++index) {
-        if (std::abs(k_vector[index]) > 0.0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool modal_request_floquet_k_vector(
     const ModalEigenRequest &request,
     std::array<double, 3> &out_k) noexcept
@@ -122,6 +97,49 @@ bool modal_request_floquet_k_vector(
         out_k[static_cast<std::size_t>(index)] = k_vector[index];
     }
     return true;
+}
+
+bool modal_request_has_explicit_floquet_k_vector(
+    const ModalEigenRequest &request) noexcept
+{
+    return request.has_floquet_k_vector ||
+        request.operator_request.k_vector_rad_m != nullptr ||
+        request.operator_request.k_vector_len != 0;
+}
+
+bool modal_request_floquet_k_vector_is_valid_if_declared(
+    const ModalEigenRequest &request) noexcept
+{
+    if (request.operator_request.spin_wave_bc_kind == nullptr ||
+        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0 ||
+        !modal_request_has_explicit_floquet_k_vector(request)) {
+        // Older callers may omit the vector for Floquet Gamma.  Preserve that
+        // implicit-k=0 representation and validate only declared vectors.
+        return true;
+    }
+    std::array<double, 3> k_vector{};
+    return modal_request_floquet_k_vector(request, k_vector);
+}
+
+// The legacy Poisson-airbox modal path is assembled with real, k=0 blocks.
+// Route only an explicit, finite, three-component nonzero Floquet vector to
+// the nonzero-k capability checks.
+bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexcept
+{
+    if (request.operator_request.spin_wave_bc_kind == nullptr ||
+        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0) {
+        return false;
+    }
+    std::array<double, 3> k_vector{};
+    if (!modal_request_floquet_k_vector(request, k_vector)) {
+        return false;
+    }
+    for (double component : k_vector) {
+        if (std::abs(component) > 0.0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string escape_json_string(const char *value)
@@ -2016,6 +2034,14 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             "native FEM modal_eigen write_partial_artifacts requires output_directory",
             "missing_output_directory",
             request.operator_request.operator_diagnostics_json);
+    }
+    if (!modal_request_floquet_k_vector_is_valid_if_declared(request)) {
+        FrequencyDomainContractResult result = validation_error_result(
+            "modal_eigen",
+            "native FEM modal_eigen Floquet wavevector must contain exactly three finite components when supplied",
+            "invalid_floquet_wavevector",
+            request.operator_request.operator_diagnostics_json);
+        return result;
     }
     if (request.tiny_validation_enabled != 0) {
         FrequencyDomainContractResult result = solve_tiny_validation_modal_problem(request);

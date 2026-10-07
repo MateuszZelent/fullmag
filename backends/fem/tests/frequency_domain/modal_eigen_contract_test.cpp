@@ -3226,6 +3226,148 @@ void modal_diagnostics_preserve_explicit_k_vector()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+    const auto tiny_floquet_request = [&]() {
+        FullmagFemModalEigenRequest request = base_request();
+        request.operator_request.spin_wave_bc_kind = "floquet";
+        request.tiny_validation_enabled = 1;
+        request.tiny_validation_tangent_dof_count = 2;
+        request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
+        request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+        return request;
+    };
+    const auto expect_invalid_wavevector = [](FullmagFemModalEigenRequest request) {
+        FullmagFemFrequencyDomainResult result =
+            fullmag_fem_modal_eigen_solve(&request);
+        check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+              "an invalid declared Floquet wavevector must fail validation");
+        check(contains(result.diagnostics_json, "invalid_floquet_wavevector"),
+              "invalid Floquet wavevector diagnostics must expose a stable reason");
+        check(!contains(result.diagnostics_json, "tiny_validation_solver"),
+              "invalid Floquet wavevector must be rejected before tiny validation");
+        fullmag_fem_frequency_domain_result_destroy(&result);
+    };
+
+    const double nonfinite_components[] = {
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+    };
+    for (double component : nonfinite_components) {
+        FullmagFemModalEigenRequest request = tiny_floquet_request();
+        request.has_floquet_k_vector = 1;
+        request.floquet_k_vector_rad_per_m[0] = component;
+        expect_invalid_wavevector(request);
+    }
+
+    const double short_wavevector[] = {0.0, 0.0};
+    const double raw_zero_wavevector[] = {0.0, 0.0, 0.0};
+    const double long_wavevector[] = {0.0, 0.0, 0.0, 0.0};
+    FullmagFemModalEigenRequest invalid_length = tiny_floquet_request();
+    invalid_length.operator_request.k_vector_rad_m = short_wavevector;
+    invalid_length.operator_request.k_vector_len = 2;
+    expect_invalid_wavevector(invalid_length);
+
+    const int invalid_raw_lengths[] = {0, -1, 4};
+    for (int invalid_raw_length : invalid_raw_lengths) {
+        FullmagFemModalEigenRequest invalid_raw_length_request = tiny_floquet_request();
+        invalid_raw_length_request.operator_request.k_vector_rad_m =
+            invalid_raw_length == 4 ? long_wavevector : raw_zero_wavevector;
+        invalid_raw_length_request.operator_request.k_vector_len = invalid_raw_length;
+        expect_invalid_wavevector(invalid_raw_length_request);
+    }
+
+    FullmagFemModalEigenRequest null_raw_pointer_with_length = tiny_floquet_request();
+    null_raw_pointer_with_length.operator_request.k_vector_rad_m = nullptr;
+    null_raw_pointer_with_length.operator_request.k_vector_len = 3;
+    expect_invalid_wavevector(null_raw_pointer_with_length);
+
+    for (double component : nonfinite_components) {
+        const double raw_nonfinite_wavevector[] = {component, 0.0, 0.0};
+        FullmagFemModalEigenRequest request = tiny_floquet_request();
+        request.operator_request.k_vector_rad_m = raw_nonfinite_wavevector;
+        request.operator_request.k_vector_len = 3;
+        expect_invalid_wavevector(request);
+    }
+
+    // A valid raw vector takes precedence over a malformed fixed-array fallback.
+    FullmagFemModalEigenRequest raw_vector_wins = tiny_floquet_request();
+    raw_vector_wins.operator_request.k_vector_rad_m = raw_zero_wavevector;
+    raw_vector_wins.operator_request.k_vector_len = 3;
+    raw_vector_wins.has_floquet_k_vector = 1;
+    raw_vector_wins.floquet_k_vector_rad_per_m[0] =
+        std::numeric_limits<double>::quiet_NaN();
+    FullmagFemFrequencyDomainResult raw_vector_wins_result =
+        fullmag_fem_modal_eigen_solve(&raw_vector_wins);
+    check(raw_vector_wins_result.status == FULLMAG_FEM_FD_OK,
+          "a finite raw vector must take precedence over a nonfinite fixed-array fallback");
+    check(contains(raw_vector_wins_result.diagnostics_json,
+                   "\"tiny_validation_solver\":true"),
+          "a valid raw Gamma vector must preserve tiny-validation dispatch");
+    fullmag_fem_frequency_domain_result_destroy(&raw_vector_wins_result);
+
+    // A positive but invalid raw length must not be hidden by a valid fallback.
+    FullmagFemModalEigenRequest raw_invalid_length_with_fallback = tiny_floquet_request();
+    raw_invalid_length_with_fallback.operator_request.k_vector_rad_m = short_wavevector;
+    raw_invalid_length_with_fallback.operator_request.k_vector_len = 2;
+    raw_invalid_length_with_fallback.has_floquet_k_vector = 1;
+    expect_invalid_wavevector(raw_invalid_length_with_fallback);
+
+    // An empty raw pointer/length pair can still select the explicit fallback.
+    FullmagFemModalEigenRequest raw_empty_with_fallback = tiny_floquet_request();
+    raw_empty_with_fallback.operator_request.k_vector_rad_m = raw_zero_wavevector;
+    raw_empty_with_fallback.operator_request.k_vector_len = 0;
+    raw_empty_with_fallback.has_floquet_k_vector = 1;
+    FullmagFemFrequencyDomainResult raw_empty_with_fallback_result =
+        fullmag_fem_modal_eigen_solve(&raw_empty_with_fallback);
+    check(raw_empty_with_fallback_result.status == FULLMAG_FEM_FD_OK,
+          "a nonnull zero-length raw vector must preserve the fixed-array fallback");
+    check(contains(raw_empty_with_fallback_result.diagnostics_json,
+                   "\"tiny_validation_solver\":true"),
+          "the fixed-array fallback must preserve tiny-validation dispatch");
+    fullmag_fem_frequency_domain_result_destroy(&raw_empty_with_fallback_result);
+
+    // A null raw pointer also selects the fixed-array fallback when it is declared.
+    FullmagFemModalEigenRequest null_raw_with_fallback = tiny_floquet_request();
+    null_raw_with_fallback.operator_request.k_vector_rad_m = nullptr;
+    null_raw_with_fallback.operator_request.k_vector_len = 3;
+    null_raw_with_fallback.has_floquet_k_vector = 1;
+    FullmagFemFrequencyDomainResult null_raw_with_fallback_result =
+        fullmag_fem_modal_eigen_solve(&null_raw_with_fallback);
+    check(null_raw_with_fallback_result.status == FULLMAG_FEM_FD_OK,
+          "a declared fixed array must remain available when the raw pointer is null");
+    check(contains(null_raw_with_fallback_result.diagnostics_json,
+                   "\"tiny_validation_solver\":true"),
+          "the null-pointer fixed-array fallback must preserve tiny-validation dispatch");
+    fullmag_fem_frequency_domain_result_destroy(&null_raw_with_fallback_result);
+
+    // A missing explicit vector remains the legacy implicit-Gamma request.
+    FullmagFemModalEigenRequest implicit_gamma = tiny_floquet_request();
+    FullmagFemFrequencyDomainResult implicit_gamma_result =
+        fullmag_fem_modal_eigen_solve(&implicit_gamma);
+    check(implicit_gamma_result.status == FULLMAG_FEM_FD_OK,
+          "Floquet Gamma without an explicit vector must preserve implicit-Gamma compatibility");
+    check(contains(implicit_gamma_result.diagnostics_json,
+                   "\"tiny_validation_solver\":true"),
+          "implicit Floquet Gamma must retain the existing tiny-validation dispatch");
+    fullmag_fem_frequency_domain_result_destroy(&implicit_gamma_result);
+
+    // The ABI's fixed-array presence flag is another explicit k-vector source.
+    FullmagFemModalEigenRequest explicit_gamma = tiny_floquet_request();
+    explicit_gamma.has_floquet_k_vector = 1;
+    FullmagFemFrequencyDomainResult explicit_gamma_result =
+        fullmag_fem_modal_eigen_solve(&explicit_gamma);
+    check(explicit_gamma_result.status == FULLMAG_FEM_FD_OK,
+          "a finite explicit Gamma vector must remain valid");
+    check(contains(explicit_gamma_result.diagnostics_json,
+                   "\"tiny_validation_solver\":true"),
+          "finite explicit Gamma must preserve the existing tiny-validation dispatch");
+    fullmag_fem_frequency_domain_result_destroy(&explicit_gamma_result);
+}
+
 void modal_nonzero_k_floquet_payload_rejects_until_production_operator_exists()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
@@ -4149,6 +4291,7 @@ int main()
     modal_without_validation_problem_stays_unavailable();
     modal_sparse_validation_error_preserves_explicit_k_vector();
     modal_diagnostics_preserve_explicit_k_vector();
+    modal_floquet_wavevector_validation_precedes_tiny_dispatch();
     modal_nonzero_k_floquet_payload_rejects_until_production_operator_exists();
     modal_nonzero_k_floquet_never_enters_k0_poisson_path();
     modal_nonzero_k_floquet_legacy_poisson_block_never_enters_k0_solver();
