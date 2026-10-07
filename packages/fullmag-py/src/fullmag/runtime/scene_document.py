@@ -1461,11 +1461,14 @@ def _validate_dmi_scope_exclusivity(
 def _validate_rotated_dmi_exchange_requirement(
     rotated_interfacial_dmi: object,
     exchange_enabled: object,
+    *,
+    pbc: object = None,
 ) -> None:
-    """Reject a nonzero open-boundary rotated DMI term without study Exchange.
+    """Require Exchange for nonzero rotated DMI when a magnetic axis is open.
 
-    PBC is carried as an independent study field. This DMI guard does not infer
-    periodic axes; the planner remains responsible for periodic-boundary legality.
+    An explicitly fully periodic 3D problem has no open magnetic boundary, so
+    the coupled natural-boundary condition does not require study Exchange.
+    The planner remains responsible for validating overall PBC legality.
     """
     d = _number_or_none(rotated_interfacial_dmi)
     if d is None or d == 0.0:
@@ -1475,10 +1478,15 @@ def _validate_rotated_dmi_exchange_requirement(
         and exchange_enabled.strip().lower() == "false"
     )
     if disabled:
-        raise ValueError(
-            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange "
-            "for the coupled natural boundary condition"
+        pbc_config = _scene_pbc_from_ir(pbc)
+        has_open_magnetic_boundary = (
+            pbc_config is None or not all(pbc_config.axes)
         )
+        if has_open_magnetic_boundary:
+            raise ValueError(
+                "RotatedInterfacialDmi with open magnetic boundaries requires Exchange "
+                "for the coupled natural boundary condition"
+            )
 
 
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
@@ -1586,6 +1594,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     _validate_rotated_dmi_exchange_requirement(
         builder.get("rotated_interfacial_dmi"),
         builder.get("exchange_enabled", True),
+        pbc=builder.get("pbc"),
     )
 
     raw_current_modules = builder.get("current_modules") or []
@@ -1726,6 +1735,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         raw_study.get("exchange_enabled", True)
         if isinstance(raw_study, Mapping)
         else True,
+        pbc=raw_study.get("pbc") if isinstance(raw_study, Mapping) else None,
     )
     magnetization_assets = {
         str(asset.get("id", "")): dict(asset)

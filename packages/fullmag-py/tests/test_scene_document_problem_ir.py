@@ -9,6 +9,7 @@ from fullmag.model.canonical import canonical_json_bytes
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.scene_document import (
+    build_builder_from_scene_document,
     build_scene_document_from_builder,
 )
 from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
@@ -40,6 +41,68 @@ def _assert_output_storage_source_stem_contract(
     reference_runtime = reference_ir["problem_meta"]["runtime_metadata"]
     assert "output_storage_source_stem" not in scene_runtime
     assert reference_runtime["output_storage_source_stem"] == reference_stem
+
+
+def test_rotated_dmi_without_exchange_round_trips_for_fully_periodic_3d() -> None:
+    pbc = {
+        "axes": ["periodic", "periodic", "periodic"],
+        "demag": "truncated_images",
+        "image_counts": [1, 1, 1],
+    }
+    builder = {
+        "geometries": [],
+        "exchange_enabled": False,
+        "rotated_interfacial_dmi": 3.0e-3,
+        "pbc": pbc,
+    }
+
+    scene = build_scene_document_from_builder(builder)
+    assert scene["study"]["exchange_enabled"] is False
+    assert scene["study"]["rotated_interfacial_dmi"] == 3.0e-3
+    assert scene["study"]["pbc"] == pbc
+
+    rebuilt = build_builder_from_scene_document(scene)
+    assert rebuilt["exchange_enabled"] is False
+    assert rebuilt["rotated_interfacial_dmi"] == 3.0e-3
+    assert rebuilt["pbc"] == pbc
+
+
+@pytest.mark.parametrize(
+    ("pbc", "include_pbc"),
+    [
+        pytest.param(None, False, id="open-default"),
+        pytest.param(
+            {"axes": ["periodic", "periodic", "open"], "demag": "open"},
+            True,
+            id="partial-periodic",
+        ),
+    ],
+)
+def test_rotated_dmi_without_exchange_still_requires_exchange_on_open_axis(
+    pbc: dict[str, object] | None,
+    include_pbc: bool,
+) -> None:
+    builder: dict[str, object] = {
+        "geometries": [],
+        "exchange_enabled": False,
+        "rotated_interfacial_dmi": 3.0e-3,
+    }
+    if include_pbc:
+        builder["pbc"] = pbc
+
+    message = "open magnetic boundaries requires Exchange"
+    with pytest.raises(ValueError, match=message):
+        build_scene_document_from_builder(builder)
+
+    scene = build_scene_document_from_builder({"geometries": []})
+    scene["study"]["exchange_enabled"] = False
+    scene["study"]["rotated_interfacial_dmi"] = 3.0e-3
+    if include_pbc:
+        scene["study"]["pbc"] = pbc
+    else:
+        scene["study"].pop("pbc", None)
+    with pytest.raises(ValueError, match=message):
+        build_builder_from_scene_document(scene)
 
 
 def test_scene_document_lowers_to_canonical_ir_with_runtime_and_scene_semantics(
