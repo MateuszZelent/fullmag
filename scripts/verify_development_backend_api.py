@@ -1786,6 +1786,47 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             "scene_document": material_scene}, timeout=30)
         assert complete_noop["revision"] == authored["revision"] and complete_noop["archive_base64"] == authored["archive_base64"]
         checks.append("project-authoring-complete-source-canonical-utf8-and-noop")
+        no_physics_scene = json.loads(json.dumps(material_scene))
+        no_physics_scene["study"].update(exchange_enabled=False, demag_enabled=False)
+        no_physics_scene["objects"][0]["physics_stack"] = []
+        _, _, no_physics = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": authored["archive_base64"], "expected_revision": authored["revision"],
+            "scene_document": no_physics_scene}, timeout=30)
+        no_physics_entries = entries(no_physics["archive_base64"])
+        assert no_physics["revision"] == authored["revision"] + 1 and no_physics["dirty"] is True
+        assert json.loads(no_physics_entries["project/scene_document.json"]) == no_physics_scene
+        assert json.loads(no_physics_entries["manifest/project.json"]).get("source") is None
+        assert "project/source.py" not in no_physics_entries
+        history_path = "project/source-history/" + hashlib.sha256(source.encode("utf-8")).hexdigest() + ".py"
+        assert no_physics_entries[history_path] == source.encode("utf-8")
+        assert no_physics_entries["project/assets/retained.bin"] == bytes(range(256))
+        assert no_physics_entries["project/notes/retained.txt"] == b"future project extension\n"
+        checks.append("project-authoring-no-physics-retains-scene-assets-and-source-history")
+        _, _, no_physics_repeat = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": no_physics["archive_base64"], "expected_revision": no_physics["revision"],
+            "scene_document": no_physics_scene}, timeout=30)
+        assert no_physics_repeat["revision"] == no_physics["revision"]
+        assert no_physics_repeat["archive_base64"] == no_physics["archive_base64"]
+        _, _, no_physics_open = get("/v2/persistence/projects/open", method="POST", payload={
+            "archive_base64": no_physics["archive_base64"], "display_name": "no-physics.fms"})
+        assert no_physics_open["project_id"] == authored["project_id"]
+        assert no_physics_open["archive_base64"] == no_physics["archive_base64"]
+        checks.append("project-authoring-no-physics-noop-and-reopen-preserve-archive")
+        _, _, physics_restored = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": no_physics["archive_base64"], "expected_revision": no_physics["revision"],
+            "scene_document": material_scene}, timeout=30)
+        physics_entries = entries(physics_restored["archive_base64"])
+        physics_source_path = json.loads(physics_entries["manifest/project.json"])["source"]
+        assert physics_entries[physics_source_path] == source.encode("utf-8")
+        assert physics_entries[history_path] == source.encode("utf-8")
+        checks.append("project-authoring-physics-restored-regenerates-exact-canonical-source")
+        receipt["project_no_physics_observation"] = {
+            "project_id": no_physics["project_id"], "revision": no_physics["revision"],
+            "archive_sha256": hashlib.sha256(base64.b64decode(no_physics["archive_base64"])).hexdigest(),
+            "source_history_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "physics_restored_revision": physics_restored["revision"],
+            "scope": "project persistence only; no runtime sync or solver execution",
+        }
         receipt["project_authoring_observation"] = {
             "project_id": authored["project_id"], "revision": authored["revision"],
             "incomplete_archive_sha256": hashlib.sha256(base64.b64decode(updated["archive_base64"])).hexdigest(),

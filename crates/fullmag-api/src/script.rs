@@ -403,6 +403,7 @@ pub(crate) fn render_scene_document_via_python_helper(
         output_path,
         scene_document,
         PythonHelperOutputPolicy::Capture,
+        false,
     )
 }
 
@@ -422,7 +423,35 @@ pub(crate) fn render_scene_document_via_python_helper_bounded(
         output_path,
         scene_document,
         PythonHelperOutputPolicy::Bounded { workspace_root },
+        false,
     )
+}
+
+/// Persistence may keep an authoring-valid scene with no enabled physics.
+/// Such a document has no executable source yet; runtime synchronization stays strict.
+pub(crate) fn try_render_scene_document_for_persistence(
+    repo_root: &Path,
+    workspace_root: &Path,
+    output_path: &Path,
+    scene_document: &SceneDocument,
+) -> Result<Option<ScriptSyncResponse>, ApiError> {
+    let response = render_scene_document_via_python_helper_with_policy(
+        repo_root,
+        workspace_root,
+        output_path,
+        scene_document,
+        PythonHelperOutputPolicy::Bounded { workspace_root },
+        true,
+    )?;
+    if response.written {
+        return Ok(Some(response));
+    }
+    if response.bytes_written != 0 || output_path.exists() {
+        return Err(ApiError::internal(
+            "incomplete authoring render unexpectedly produced executable source",
+        ));
+    }
+    Ok(None)
 }
 
 struct TemporaryFileGuard(PathBuf);
@@ -439,6 +468,7 @@ fn render_scene_document_via_python_helper_with_policy(
     output_path: &Path,
     scene_document: &SceneDocument,
     policy: PythonHelperOutputPolicy<'_>,
+    allow_incomplete: bool,
 ) -> Result<ScriptSyncResponse, ApiError> {
     std::fs::create_dir_all(workspace_root)
         .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {}", error)))?;
@@ -450,7 +480,7 @@ fn render_scene_document_via_python_helper_with_policy(
     std::fs::write(&scene_path, scene_body).map_err(|error| {
         ApiError::internal(format!("failed to persist SceneDocument: {}", error))
     })?;
-    let helper_args = vec![
+    let mut helper_args = vec![
         "-m".to_string(),
         "fullmag.runtime.helper".to_string(),
         "render-scene-document".to_string(),
@@ -459,6 +489,9 @@ fn render_scene_document_via_python_helper_with_policy(
         "--output".to_string(),
         output_path.display().to_string(),
     ];
+    if allow_incomplete {
+        helper_args.push("--allow-incomplete".to_string());
+    }
     let output = run_python_helper_with_policy(repo_root, &helper_args, policy);
     let output = output?;
     if !output.status.success() {

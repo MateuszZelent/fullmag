@@ -11,6 +11,7 @@ from typing import Sequence
 from fullmag._progress import emit_progress
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 from fullmag.model.canonical import canonical_json_sha256
+from fullmag.model._incomplete import IncompletePhysicsError
 from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
@@ -182,6 +183,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     render_scene.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
     render_scene.add_argument("--output", required=True, help="Atomic output path for the Python script.")
+    render_scene.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="Report authoring-only scenes with incomplete physics without writing a script.",
+    )
 
     export_scene_ir = subparsers.add_parser(
         "export-scene-ir",
@@ -371,8 +377,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "render-scene-document":
         scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
         emit_progress("Rendering canonical Python from SceneDocument")
-        source = render_scene_document_as_script(scene_document)
         output_path = Path(args.output)
+        try:
+            source = render_scene_document_as_script(scene_document)
+        except IncompletePhysicsError:
+            if not args.allow_incomplete:
+                raise
+            print(
+                json.dumps(
+                    {
+                        "script_path": str(output_path.resolve()),
+                        "source_kind": "scene_document",
+                        "entrypoint_kind": "flat_workspace",
+                        "written": False,
+                        "bytes_written": 0,
+                    }
+                )
+            )
+            emit_progress("SceneDocument physics is incomplete; no script written")
+            return 0
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = output_path.with_name(
             f".{output_path.name}.{os.getpid()}.tmp"

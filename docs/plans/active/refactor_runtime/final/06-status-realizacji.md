@@ -1,5 +1,22 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53BD, 07.10.2026: [zapis projektu bez fizyki](p8/53bd-incomplete-physics-project-persistence.md)
+**CLOSED** dla zapisu i odtworzenia projektu z materiałem i magnetyzacją,
+lecz bez oddziaływań/anizotropii. Runtime i zwykły renderer pozostają ścisłe.
+Review bez findings. Finalne managed regresje 140/140, bez skipów:
+`0f5be07d23d84aea8f5a4527c680508d`. Produkcyjny native build completed,
+exit 0, manifest `4546a80021efcc6c9b8a1b5e1a8725a3a9b538f2222832ef70bc0f277087ecee`.
+Managed API `261180dbb23242f4a906d267bafdc7a2`: 28 kontroli PASS,
+exit 0; zachowanie sceny, assetów, historii, noop/reopen i odtworzenia źródła.
+Deadline i log overflow nadal są odrzucane. Finalny real browser
+`782a66b4710b494d820f07ee2978b06d`: completed, exit 0, 7/7 PASS,
+13/13 procesów oraz frontend odebrane. Projekt revision 2, dirty=true
+oraz scena revision 6 zachowane dokładnie po B → C; API, sesja i scope świeże.
+Canvas visible, contextLost=false, drawing buffer 519 × 297; noEmit/lint PASS.
+Historyczne nieudane próby pozostają opisane w raporcie, nie są liczone jako PASS.
+Workspace 3197 nie był restartowany. Compute po restore, publiczny restart
+oraz pełny plan pozostają otwarte; procentów P0–P8 nie zwiększono.
+
 Checkpoint P8-53BC, 06.10.2026: [real active-run restart refusal](p8/53bc-real-active-run-restart-refusal.md)
 **CLOSED** dla odmowy podczas `running` i `paused` oraz wyścigu Start/freeze.
 Potwierdzają to trzy managed receipts z finalnego builda
