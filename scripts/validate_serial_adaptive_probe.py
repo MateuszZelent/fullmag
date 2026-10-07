@@ -25,6 +25,10 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from managed_runtime_artifact_root import (
+    RuntimeArtifactRootError,
+    resolve_runtime_artifact_root,
+)
 from de_pilot_receipts import validate_de_pilot_receipts
 from validate_de_smoke_rows import (
     DENSE_CERTIFICATION_TOLERANCE,
@@ -552,9 +556,24 @@ def _read_probe_rows(case_dir: Path) -> dict[tuple[int, int], dict[str, Any]]:
 
 
 def _validate_case(receipt: Mapping[str, Any], mode: str) -> dict[str, Any]:
-    case_dir = Path(receipt["root"]) / PILOT
-    if not case_dir.is_dir():
-        raise EvidenceUnavailable(f"{mode} probe case directory is missing: {case_dir}")
+    output_root = Path(receipt["root"])
+    model_sha256 = _digest(receipt["probe"]["model_sha256"], f"{mode}.model_sha256")
+    try:
+        case_dir, resolved_binding = resolve_runtime_artifact_root(
+            output_root, PILOT, model_sha256
+        )
+    except RuntimeArtifactRootError as error:
+        if isinstance(error.__cause__, FileNotFoundError):
+            raise EvidenceUnavailable(
+                f"{mode} managed runtime artifacts are incomplete: {error}"
+            ) from error
+        raise ValidationError(f"{mode} managed runtime artifacts failed revalidation: {error}") from error
+    result = receipt.get("result")
+    recorded_binding = result.get("runtime_output_binding") if isinstance(result, Mapping) else None
+    if not isinstance(recorded_binding, Mapping):
+        raise EvidenceUnavailable(f"{mode} run-result is missing runtime_output_binding")
+    if dict(recorded_binding) != resolved_binding:
+        raise ValidationError(f"{mode} runtime_output_binding differs from resolved artifacts")
     metadata_path = case_dir / "metadata.json"
     diagnostics_path = case_dir / "eigen/diagnostics/solver.v1.json"
     try:

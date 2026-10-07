@@ -20,6 +20,7 @@ from typing import Any, Mapping
 
 from de_pilot_receipts import validate_de_pilot_receipts
 from finite_dirichlet_thin_film_oracle import n0_reference_frequencies
+from managed_runtime_artifact_root import resolve_runtime_artifact_root
 from thin_film_thickness_oracle import MU0, solve_thickness_modes
 from validate_de_smoke_rows import SAMPLING, validate_rows
 
@@ -157,7 +158,22 @@ def _validate_campaign_policy(
     return {**expected}
 
 
-def _validate_artifact_hashes(batch: Path, case: Path, result: Mapping[str, Any]) -> dict[str, str]:
+def _resolve_runtime_case(
+    batch: Path, request: Mapping[str, Any], result: Mapping[str, Any]
+) -> tuple[Path, dict[str, Any]]:
+    model_sha = request.get("model_sha256")
+    if not isinstance(model_sha, str):
+        raise ValueError("signed-fifteen request has no model_sha256 for runtime artifact binding")
+    case, binding = resolve_runtime_artifact_root(batch, PILOT, model_sha)
+    recorded_binding = result.get("runtime_output_binding")
+    if not isinstance(recorded_binding, Mapping):
+        raise ValueError("run-result runtime_output_binding is missing or invalid")
+    if dict(recorded_binding) != binding:
+        raise ValueError("run-result runtime_output_binding differs from current terminal runtime evidence")
+    return case, binding
+
+
+def _validate_artifact_hashes(case: Path, result: Mapping[str, Any]) -> dict[str, str]:
     artifacts = _required_mapping(result.get("artifacts"), "run-result artifacts")
     hashes = _required_mapping(artifacts.get("required_artifact_hashes"), "required_artifact_hashes")
     if "metadata.json" not in hashes or "eigen/dispersion.csv" not in hashes:
@@ -295,12 +311,12 @@ def load_campaign(batch: Path) -> dict[str, Any]:
     request = _read_json(batch / "run-request.json", "run-request")
     result = _read_json(batch / "run-result.json", "run-result")
     _validate_receipt_identity(batch, request, result)
-    case = batch / PILOT
+    case, runtime_binding = _resolve_runtime_case(batch, request, result)
     if not case.is_dir() or case.is_symlink():
-        raise ValueError("signed-fifteen campaign case directory is missing")
+        raise ValueError("signed-fifteen runtime artifact directory is missing")
     metadata_path = case / "metadata.json"
     metadata = _read_json(metadata_path, "signed-fifteen metadata")
-    artifact_hashes = _validate_artifact_hashes(batch, case, result)
+    artifact_hashes = _validate_artifact_hashes(case, result)
     parameters, frequency_window, model = _validate_model_metadata(request, metadata)
     policy = _validate_campaign_policy(request, result, metadata)
     diagnostics_path = case / "eigen" / "diagnostics" / "solver.v1.json"
@@ -312,6 +328,7 @@ def load_campaign(batch: Path) -> dict[str, Any]:
     return {
         "batch": batch,
         "case": case,
+        "runtime_output_binding": runtime_binding,
         "request": request,
         "result": result,
         "metadata": metadata,
@@ -380,6 +397,7 @@ def _source_hashes() -> dict[str, str]:
     paths = [
         Path(__file__),
         Path(__file__).with_name("de_pilot_receipts.py"),
+        Path(__file__).with_name("managed_runtime_artifact_root.py"),
         Path(__file__).with_name("validate_de_smoke_rows.py"),
         Path(__file__).with_name("finite_dirichlet_thin_film_oracle.py"),
         Path(__file__).with_name("thin_film_thickness_oracle.py"),
@@ -461,6 +479,7 @@ def write_plot(campaign: Mapping[str, Any], output: Path) -> dict[str, str]:
             "job": campaign["request"]["job"],
             "source": campaign["request"]["source"],
         },
+        "runtime_output_binding": campaign["runtime_output_binding"],
         "input_sha256": campaign["input_sha256"],
         "artifact_sha256": campaign["artifact_sha256"],
         "analytic_reference_models": {

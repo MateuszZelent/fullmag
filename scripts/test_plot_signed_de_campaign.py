@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import managed_runtime_artifact_root as runtime_artifacts
 import plot_signed_de_campaign as plotting
 
 
@@ -23,9 +24,40 @@ CAMPAIGN = {
 }
 
 
+RUN_ID = "run-session-17"
+SESSION_ID = "session-17"
+
+
+def _artifact_dir(batch: Path) -> Path:
+    return batch / f"{plotting.PILOT}-{RUN_ID}-0" / "artifacts"
+
+
+def _write_runtime_evidence(batch: Path, workspace: Path, run_id: str, session_id: str) -> None:
+    container_workspace = runtime_artifacts.CONTAINER_ROOT + "/" + workspace.name
+    summary = {
+        "status": "completed", "backend": "fem", "mode": "strict", "precision": "double",
+        "workspace_dir": container_workspace, "artifact_dir": container_workspace + "/artifacts",
+        "run_id": run_id, "session_id": session_id,
+    }
+    log_path = batch / plotting.PILOT / "runtime.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("[solver] progress\n" + json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    manifest = {
+        "schema": "fullmag.run_manifest.v1", "status": "completed", "exit_code": 0,
+        "source": {"sha256": MODEL_SHA}, "run_id": run_id, "session_id": session_id,
+        "outputs": [{"path": "artifacts/metadata.json", "kind": "metadata"}],
+    }
+    storage = {
+        "schema": "fullmag.output_storage.resolved.v1", "state": "succeeded",
+        "resolved": {"output_dir": container_workspace, "run_id": run_id},
+    }
+    (workspace / "fullmag-run.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (workspace / "output-storage.json").write_text(json.dumps(storage), encoding="utf-8")
+
+
 def _write_batch(tmp_path: Path) -> Path:
     batch = tmp_path / "batch"
-    case = batch / plotting.PILOT
+    case = _artifact_dir(batch)
     (case / "eigen" / "diagnostics").mkdir(parents=True)
     (case / "eigen" / "metadata").mkdir(parents=True)
     (case / "frequency_domain").mkdir(parents=True)
@@ -44,10 +76,16 @@ def _write_batch(tmp_path: Path) -> Path:
         "saturation_magnetization_a_per_m": 800000.0,
         "gamma0_m_per_a_s": 221100.0,
     }
-    metadata = {"problem_meta": {"runtime_metadata": {
-        "de_smoke": model,
-        "runtime_selection": {"parallel_execution": {"mode": "adaptive", **plotting.EXPECTED_POLICY}},
-    }}}
+    metadata = {
+        "source_hash": MODEL_SHA,
+        "problem_meta": {"runtime_metadata": {
+            "producer_run_id": RUN_ID,
+            "de_smoke": model,
+            "runtime_selection": {
+                "parallel_execution": {"mode": "adaptive", **plotting.EXPECTED_POLICY},
+            },
+        }},
+    }
     metadata_path = case / "metadata.json"
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     rows = [
@@ -64,8 +102,10 @@ def _write_batch(tmp_path: Path) -> Path:
         for row in rows:
             stream.write(",".join(str(value) for value in row.values()) + "\n")
     artifacts = {
-        "eigen/spectrum.v2.json": "{}", "eigen/branches.v2.json": "{}",
-        "eigen/diagnostics/solver.v1.json": "{}", "eigen/metadata/eigen_summary.json": "{}",
+        "eigen/spectrum.v2.json": "{}",
+        "eigen/branches.v2.json": "{}",
+        "eigen/diagnostics/solver.v1.json": "{}",
+        "eigen/metadata/eigen_summary.json": "{}",
         "frequency_domain/manifest.v1.json": "{}",
     }
     for relative, content in artifacts.items():
@@ -75,9 +115,13 @@ def _write_batch(tmp_path: Path) -> Path:
     hashes = {}
     for path in [metadata_path, csv_path, *(case / key for key in artifacts)]:
         relative = path.relative_to(case).as_posix()
-        hashes[relative] = {"size": path.stat().st_size,
-                            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        hashes[relative] = {
+            "size": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
 
+    workspace = case.parent
+    _write_runtime_evidence(batch, workspace, RUN_ID, SESSION_ID)
     request = {
         "schema": "fullmag.de-smoke.request.v1", "status": "prepared",
         "operation": plotting.PILOT + "-numerical-pilot", "cases": [plotting.PILOT],
@@ -85,12 +129,14 @@ def _write_batch(tmp_path: Path) -> Path:
         "job": JOB, "source": SOURCE, "model_sha256": MODEL_SHA,
         "model_source": MODEL_SOURCE, "parallel_campaign": CAMPAIGN,
     }
+    _, runtime_binding = plotting.resolve_runtime_artifact_root(batch.resolve(), plotting.PILOT, MODEL_SHA)
     result = {
         "schema": "fullmag.de-smoke.result.v1", "pilot": plotting.PILOT,
         "status": "completed_unqualified", "return_code": 0, "job": JOB,
         "source": SOURCE, "model_sha256": MODEL_SHA, "model_source": MODEL_SOURCE,
         "parallel_campaign": CAMPAIGN,
-        "artifacts": {"case": "c1", "required_artifact_hashes": hashes},
+        "runtime_output_binding": runtime_binding,
+        "artifacts": {"case": plotting.PILOT, "required_artifact_hashes": hashes},
     }
     (batch / "run-request.json").write_text(json.dumps(request), encoding="utf-8")
     (batch / "run-result.json").write_text(json.dumps(result), encoding="utf-8")
@@ -111,7 +157,47 @@ def test_load_campaign_binds_receipt_hashes_and_actual_rows(tmp_path, monkeypatc
     assert [row["ky_rad_per_m"] for row in campaign["rows"]] == [k * 1e6 for k in K_VALUES]
     assert calls and calls[0][0][1] == "signed-fifteen"
     assert campaign["parallel_campaign"]["mode"] == "adaptive"
+    assert campaign["case"] == _artifact_dir(batch)
+    assert campaign["runtime_output_binding"]["run_id"] == RUN_ID
     assert campaign["artifact_sha256"]["eigen/dispersion.csv"]
+
+
+def test_load_campaign_rejects_missing_runtime_output_binding(tmp_path, monkeypatch):
+    batch = _write_batch(tmp_path)
+    result_path = batch / "run-result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result.pop("runtime_output_binding")
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    monkeypatch.setattr(plotting, "validate_rows", lambda *args, **kwargs: {"status": "pass"})
+    with pytest.raises(ValueError, match="runtime_output_binding is missing"):
+        plotting.load_campaign(batch)
+
+
+def test_load_campaign_rejects_tampered_runtime_output_binding(tmp_path, monkeypatch):
+    batch = _write_batch(tmp_path)
+    result_path = batch / "run-result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result["runtime_output_binding"]["metadata_sha256"] = "f" * 64
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    monkeypatch.setattr(plotting, "validate_rows", lambda *args, **kwargs: {"status": "pass"})
+    with pytest.raises(ValueError, match="runtime_output_binding differs"):
+        plotting.load_campaign(batch)
+
+
+def test_load_campaign_rejects_stale_runtime_output_binding(tmp_path, monkeypatch):
+    batch = _write_batch(tmp_path)
+    old_workspace = _artifact_dir(batch).parent
+    run_id, session_id = "run-session-18", "session-18"
+    current_workspace = batch / f"{plotting.PILOT}-{run_id}-0"
+    old_workspace.rename(current_workspace)
+    metadata_path = current_workspace / "artifacts" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["problem_meta"]["runtime_metadata"]["producer_run_id"] = run_id
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    _write_runtime_evidence(batch, current_workspace, run_id, session_id)
+    monkeypatch.setattr(plotting, "validate_rows", lambda *args, **kwargs: {"status": "pass"})
+    with pytest.raises(ValueError, match="runtime_output_binding differs"):
+        plotting.load_campaign(batch)
 
 
 def test_load_campaign_rejects_failed_receipt_before_plot_output(tmp_path, monkeypatch):
@@ -128,7 +214,7 @@ def test_load_campaign_rejects_failed_receipt_before_plot_output(tmp_path, monke
 
 def test_load_campaign_rejects_artifact_tamper(tmp_path, monkeypatch):
     batch = _write_batch(tmp_path)
-    csv_path = batch / plotting.PILOT / "eigen" / "dispersion.csv"
+    csv_path = _artifact_dir(batch) / "eigen" / "dispersion.csv"
     csv_path.write_text(csv_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     monkeypatch.setattr(plotting, "validate_rows", lambda *args, **kwargs: {"status": "pass"})
     with pytest.raises(ValueError, match="artifact hash or size mismatch"):
@@ -172,6 +258,8 @@ def test_write_plot_uses_actual_points_and_refuses_overwrite(tmp_path, monkeypat
     assert report["actual_point_count"] == 15
     assert report["mirrored_samples"] is False
     assert report["interpolated_numeric_samples"] is False
+    assert report["runtime_output_binding"] == campaign["runtime_output_binding"]
+    assert report["source_sha256"]["managed_runtime_artifact_root.py"]
     assert report["references"][0]["k_rad_per_m"] == -25e6
     assert Path(files["png"]).is_file() and Path(files["pdf"]).is_file()
     with pytest.raises(ValueError, match="overwrite"):

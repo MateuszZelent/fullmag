@@ -1,0 +1,42 @@
+name: dispersion-artifact-consumers
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/*signed_de_campaign*.py'
+      - 'scripts/*serial_adaptive_probe*.py'
+      - 'scripts/*managed_runtime_artifact_root*.py'
+      - '.github/workflows/dispersion-artifact-consumers.yml'
+  push:
+    branches: [master, 'codex/**']
+    paths:
+      - 'scripts/*signed_de_campaign*.py'
+      - 'scripts/*serial_adaptive_probe*.py'
+      - 'scripts/*managed_runtime_artifact_root*.py'
+      - '.github/workflows/dispersion-artifact-consumers.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  artifact-consumer-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install diagnostic dependencies
+        run: |
+          python -m pip install 'pytest>=9,<10' 'matplotlib>=3.8,<4'
+          python -m pip install -e packages/fullmag-py
+      - name: Validate artifact root, plot and parity consumers
+        env:
+          PYTHONPATH: scripts
+          MPLBACKEND: Agg
+        run: >-
+          python -B -m pytest -q
+          scripts/test_managed_runtime_artifact_root.py
+          scripts/test_plot_signed_de_campaign.py
+          scripts/test_validate_serial_adaptive_probe.py

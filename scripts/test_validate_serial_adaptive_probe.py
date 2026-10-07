@@ -23,6 +23,10 @@ from test_de_smoke_parallel_probe import (  # noqa: E402
     _write_native_probe_artifacts,
 )
 from test_validate_parallel_execution_report import _adaptive_report  # noqa: E402
+from managed_runtime_artifact_root import (  # noqa: E402
+    CONTAINER_ROOT,
+    resolve_runtime_artifact_root,
+)
 from validate_serial_adaptive_probe import (  # noqa: E402
     EvidenceUnavailable,
     MANIFEST_RELATIVE_PATH,
@@ -119,6 +123,58 @@ def _write_manifest(case: Path, *, mesh: str = "c" * 64) -> None:
         "equilibrium_artifact_sha256": "sha256:" + "a76db36f38ab8b3398fb6dcc061e236f08ae1b16dc6b888c1a073aca851cc850",
         "linearization_state_sha256": "sha256:" + "1" * 64,
     }), encoding="utf-8")
+
+
+def _nest_managed_case(root: Path, *, mode: str, model_hash: str, job_id: str) -> Path:
+    run_id = f"{mode}-{job_id[:8]}"
+    session_id = f"{mode}-session"
+    case_dir = root / PILOT
+    workspace = root / f"{PILOT}-{run_id}-0"
+    artifact_dir = workspace / "artifacts"
+    workspace.mkdir(parents=True)
+    case_dir.rename(artifact_dir)
+
+    metadata_path = artifact_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["source_hash"] = model_hash
+    metadata["problem_meta"]["runtime_metadata"]["producer_run_id"] = run_id
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    container_workspace = f"{CONTAINER_ROOT}/{workspace.name}"
+    (workspace / "fullmag-run.json").write_text(json.dumps({
+        "schema": "fullmag.run_manifest.v1",
+        "status": "completed",
+        "exit_code": 0,
+        "source": {"sha256": model_hash},
+        "run_id": run_id,
+        "session_id": session_id,
+        "outputs": [{"path": "artifacts/metadata.json", "kind": "metadata"}],
+    }), encoding="utf-8")
+    (workspace / "output-storage.json").write_text(json.dumps({
+        "schema": "fullmag.output_storage.resolved.v1",
+        "state": "succeeded",
+        "resolved": {"output_dir": container_workspace, "run_id": run_id},
+    }), encoding="utf-8")
+    summary = {
+        "status": "completed",
+        "backend": "fem",
+        "mode": "strict",
+        "precision": "double",
+        "workspace_dir": container_workspace,
+        "artifact_dir": container_workspace + "/artifacts",
+        "run_id": run_id,
+        "session_id": session_id,
+    }
+    (root / PILOT).mkdir()
+    (root / PILOT / "runtime.log").write_text(
+        "[solver] progress\n" + json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+    )
+    return artifact_dir
+
+
+def _artifact_dir(root: Path) -> Path:
+    result = json.loads((root / "run-result.json").read_text(encoding="utf-8"))
+    return Path(result["runtime_output_binding"]["artifact_dir"])
 
 
 def _request_and_result(
@@ -223,6 +279,9 @@ def _request_and_result(
         "parallel_probe": probe,
         "model_source": model_source,
     }
+    _, result["runtime_output_binding"] = resolve_runtime_artifact_root(
+        root, PILOT, model_hash
+    )
     root.mkdir(parents=True, exist_ok=True)
     (root / "run-request.json").write_text(json.dumps(request), encoding="utf-8")
     (root / "run-result.json").write_text(json.dumps(result), encoding="utf-8")
@@ -253,6 +312,12 @@ def _make_batches(tmp: Path, *, adaptive_frequency_hz: float = 11.2e9):
     report_bytes = (json.dumps(report, separators=(",", ":")) + "\n").encode("utf-8")
     (adaptive_case / REPORT_RELATIVE_PATH).parent.mkdir(parents=True, exist_ok=True)
     (adaptive_case / REPORT_RELATIVE_PATH).write_bytes(report_bytes)
+    _nest_managed_case(
+        serial_root, mode="serial", model_hash=source_hash, job_id="s" * 32
+    )
+    _nest_managed_case(
+        adaptive_root, mode="adaptive", model_hash=source_hash, job_id="a" * 32
+    )
     _request_and_result(
         serial_root,
         mode="serial",
@@ -278,8 +343,34 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             self.assertEqual(result["qualification"], "NOT VERIFIED")
             self.assertEqual(result["numeric_parity"]["status"], "pass")
             self.assertEqual(result["concurrency"]["status"], "observed_from_active_count")
+            serial_binding = json.loads((serial / "run-result.json").read_text(encoding="utf-8"))["runtime_output_binding"]
+            self.assertEqual(Path(serial_binding["artifact_dir"]), _artifact_dir(serial))
+            self.assertNotEqual(Path(serial_binding["artifact_dir"]), serial / PILOT)
             self.assertFalse(result["structural_report"]["serial_process_pool_report"]["present"])
             self.assertEqual(result["science"]["status"], "NOT VERIFIED")
+
+    def test_missing_runtime_output_binding_is_not_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            result_path = adaptive / "run-result.json"
+            result_receipt = json.loads(result_path.read_text(encoding="utf-8"))
+            result_receipt.pop("runtime_output_binding")
+            result_path.write_text(json.dumps(result_receipt), encoding="utf-8")
+
+            result = validate_serial_adaptive_probe(serial, adaptive)
+            self.assertEqual(result["status"], "not_verified")
+            self.assertIn("missing runtime_output_binding", result["structural_report"]["reason"])
+
+    def test_tampered_runtime_output_binding_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            result_path = adaptive / "run-result.json"
+            result_receipt = json.loads(result_path.read_text(encoding="utf-8"))
+            result_receipt["runtime_output_binding"]["metadata_sha256"] = "0" * 64
+            result_path.write_text(json.dumps(result_receipt), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValidationError, "runtime_output_binding differs"):
+                validate_serial_adaptive_probe(serial, adaptive)
 
     def test_missing_content_identity_is_unavailable_without_raw_hash_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -310,7 +401,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
     def test_native_manifest_raw_hash_substitution_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
-            path = adaptive / PILOT / MANIFEST_RELATIVE_PATH
+            path = _artifact_dir(adaptive) / MANIFEST_RELATIVE_PATH
             value = json.loads(path.read_text())
             value["equilibrium_artifact_sha256"] = "sha256:ce9d630b90234933cce60304b5564f543304d587680d08e5793e114be1f655d1"
             path.write_text(json.dumps(value))
@@ -320,7 +411,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
     def test_second_sample_native_state_mutation_fails_parity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
-            path = adaptive / PILOT / "eigen/spectrum.v3.json"
+            path = _artifact_dir(adaptive) / "eigen/spectrum.v3.json"
             value = json.loads(path.read_text())
             value["samples"][1]["modes"][0]["linearization_state_sha256"] = "sha256:" + "f" * 64
             path.write_text(json.dumps(value))
@@ -330,7 +421,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
     def test_missing_native_state_is_not_verified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
-            path = adaptive / PILOT / "eigen/spectrum.v3.json"
+            path = _artifact_dir(adaptive) / "eigen/spectrum.v3.json"
             value = json.loads(path.read_text())
             value["samples"][1]["modes"][0].pop("linearization_state_sha256")
             path.write_text(json.dumps(value))
@@ -341,7 +432,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
     def test_native_report_raw_hash_substitution_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
-            path = adaptive / PILOT / REPORT_RELATIVE_PATH
+            path = _artifact_dir(adaptive) / REPORT_RELATIVE_PATH
             value = json.loads(path.read_text())
             value["inputs"][0]["equilibrium_artifact_sha256"] = "sha256:ce9d630b90234933cce60304b5564f543304d587680d08e5793e114be1f655d1"
             path.write_text(json.dumps(value))
@@ -370,7 +461,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
     def test_missing_adaptive_report_is_explicitly_not_verified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
-            report_path = adaptive / PILOT / REPORT_RELATIVE_PATH
+            report_path = _artifact_dir(adaptive) / REPORT_RELATIVE_PATH
             report_path.unlink()
             result_path = adaptive / "run-result.json"
             result = json.loads(result_path.read_text(encoding="utf-8"))
@@ -399,7 +490,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
     def test_mesh_identity_mismatch_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
-            manifest_path = adaptive / PILOT / MANIFEST_RELATIVE_PATH
+            manifest_path = _artifact_dir(adaptive) / MANIFEST_RELATIVE_PATH
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["mesh_identity"] = "sha256:" + "a" * 64
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -409,7 +500,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
     def test_physical_residual_above_one_e_minus_eight_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
-            spectrum_path = adaptive / PILOT / "eigen/spectrum.v3.json"
+            spectrum_path = _artifact_dir(adaptive) / "eigen/spectrum.v3.json"
             spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
             for sample in spectrum["samples"]:
                 mode = sample["modes"][0]
@@ -422,7 +513,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
     def test_phase_mismatch_in_second_sample_fails_parity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
-            path = adaptive / PILOT / "eigen/spectrum.v3.json"
+            path = _artifact_dir(adaptive) / "eigen/spectrum.v3.json"
             spectrum = json.loads(path.read_text(encoding="utf-8"))
             spectrum["samples"][1]["modes"][0]["phase_constraint_sha256"] = "sha256:" + "f" * 64
             path.write_text(json.dumps(spectrum), encoding="utf-8")
@@ -432,7 +523,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
     def test_report_hash_is_bound_to_completed_adaptive_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
-            report_path = adaptive / PILOT / REPORT_RELATIVE_PATH
+            report_path = _artifact_dir(adaptive) / REPORT_RELATIVE_PATH
             report_path.write_bytes(report_path.read_bytes() + b"\n")
             with self.assertRaisesRegex(ValidationError, "report hash"):
                 validate_serial_adaptive_probe(serial, adaptive)
