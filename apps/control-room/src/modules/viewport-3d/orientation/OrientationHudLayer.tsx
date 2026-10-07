@@ -24,6 +24,7 @@ import type {
 import type { Viewport3DColors, Viewport3DHudColors } from "../viewport3dTypes";
 import {
   freeCameraTargetForDirection,
+  dragViewCubeCamera,
   orbitCameraAroundTarget,
   rotateFreeCameraTarget,
   resolveViewCubeCurrentCameraState,
@@ -190,6 +191,17 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       .finally(() => onCameraInteractionEnd?.());
   }, [onCameraChange, onCameraInteractionEnd]);
 
+  const dragCube = useCallback((deltaX: number, deltaY: number) => {
+    const nextCamera = dragViewCubeCamera(
+      getCurrentCamera(), deltaX, deltaY, ORBIT_SENSITIVITY, rotationMode,
+    );
+    if (!pendingOrbitCameraRef.current) onCameraInteractionStart?.();
+    pendingOrbitCameraRef.current = nextCamera;
+    applyLiveCamera(nextCamera);
+    tracker.recordDirtyFrame("orientation-hud-orbit");
+    invalidate();
+  }, [applyLiveCamera, getCurrentCamera, invalidate, onCameraInteractionStart, rotationMode, tracker]);
+
   useEffect(
     () => () => {
       if (pendingOrbitCameraRef.current) {
@@ -215,6 +227,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
           <ViewCube3DBox
             colors={colors}
             controls={controls}
+            onDrag={dragCube}
             onOrbit={onOrbit}
             onOrbitEnd={commitOrbit}
             onSnap={snapToDirection}
