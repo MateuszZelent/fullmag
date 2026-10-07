@@ -1,6 +1,7 @@
 """Interpreted exact translation export checks; no solver or filesystem writes."""
 from pathlib import Path
 import math
+from itertools import permutations
 import unittest
 
 import fullmag as fm
@@ -97,6 +98,39 @@ class AntennaLayoutExportTests(unittest.TestCase):
             with self.subTest(kind=type(geometry).__name__):
                 self.assert_layout_roundtrip(geometry, _render_geometry_expr(
                     geometry, magnet_name="source", source_root=Path.cwd()))
+
+    def test_ir_conductor_identity_is_independent_of_list_order(self):
+        for geometry in self.custom_layouts():
+            for conductors in permutations(geometry.to_ir()["conductors"]):
+                with self.subTest(kind=type(geometry).__name__, conductors=conductors):
+                    ir = geometry.to_ir()
+                    ir["conductors"] = list(conductors)
+                    restored = type(geometry).from_ir(ir)
+                    self.assertEqual(restored.to_ir(), geometry.to_ir())
+                    self.assertEqual(restored._sections(), geometry._sections())
+
+    def test_kindless_legacy_conductor_order_remains_supported(self):
+        for geometry in self.custom_layouts():
+            with self.subTest(kind=type(geometry).__name__):
+                ir = geometry.to_ir()
+                ir["conductors"] = [{"id": part["id"]} for part in ir["conductors"]]
+                self.assertEqual(type(geometry).from_ir(ir).to_ir(), geometry.to_ir())
+
+    def test_invalid_typed_conductors_do_not_fall_back_to_positional_ids(self):
+        for geometry in self.custom_layouts():
+            for mutation in ("duplicate", "unknown", "missing", "mixed"):
+                with self.subTest(kind=type(geometry).__name__, mutation=mutation):
+                    ir = geometry.to_ir()
+                    if mutation == "duplicate":
+                        ir["conductors"][1]["kind"] = "signal"
+                    elif mutation == "unknown":
+                        ir["conductors"][1]["kind"] = "other"
+                    elif mutation == "missing":
+                        ir["conductors"].pop()
+                    else:
+                        ir["conductors"][1].pop("kind")
+                    with self.assertRaisesRegex(ValueError, "expected kind"):
+                        type(geometry).from_ir(ir)
 
     def test_override_conductor_ids_follow_kind_not_list_order(self):
         for geometry in self.custom_layouts():

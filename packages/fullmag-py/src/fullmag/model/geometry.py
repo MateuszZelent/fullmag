@@ -454,6 +454,18 @@ class _AntennaLayoutGeometry(_GeometryOps):
         )
 
 
+def _antenna_conductor_ids(
+    conductors: Sequence[Mapping[str, object]], kinds: tuple[str, ...],
+) -> tuple[str, ...]:
+    if any("kind" in part for part in conductors):
+        by_kind = {part.get("kind"): str(part["id"]) for part in conductors}
+        if len(conductors) != len(kinds) or set(by_kind) != set(kinds):
+            raise ValueError("Antenna conductors must declare each expected kind exactly once")
+        return tuple(by_kind[kind] for kind in kinds)
+    ids = tuple(str(part["id"]) for part in conductors)
+    return ids if len(ids) == len(kinds) else kinds
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class MicrostripAntennaLayout(_AntennaLayoutGeometry):
     """3-D microstrip signal plus explicit parallel return conductor.
@@ -594,12 +606,9 @@ class MicrostripAntennaLayout(_AntennaLayoutGeometry):
         if value.get("kind") != "microstrip":
             raise ValueError("microstrip layout kind is required")
         stations = tuple(MicrostripWidthStation(**station) for station in value["stations"])
-        conductors = value.get("conductors", ())
-        ids = tuple(str(item["id"]) for item in conductors)
-        if len(ids) == 2:
-            signal_id, return_id = ids
-        else:
-            signal_id, return_id = "signal", "return"
+        signal_id, return_id = _antenna_conductor_ids(
+            value.get("conductors", ()), ("signal", "return"),
+        )
         return cls(
             name=value["name"],
             length_m=value.get("length_m", value.get("length")),
@@ -745,12 +754,9 @@ class CPWAntennaLayout(_AntennaLayoutGeometry):
         if value.get("kind") != "cpw":
             raise ValueError("CPW layout kind is required")
         stations = tuple(CPWWidthStation(**station) for station in value["stations"])
-        conductors = value.get("conductors", ())
-        ids = tuple(str(item["id"]) for item in conductors)
-        if len(ids) == 3:
-            signal_id, left_id, right_id = ids
-        else:
-            signal_id, left_id, right_id = "signal", "ground_left", "ground_right"
+        signal_id, left_id, right_id = _antenna_conductor_ids(
+            value.get("conductors", ()), ("signal", "ground_left", "ground_right"),
+        )
         return cls(
             name=value["name"],
             length_m=value.get("length_m", value.get("length")),
