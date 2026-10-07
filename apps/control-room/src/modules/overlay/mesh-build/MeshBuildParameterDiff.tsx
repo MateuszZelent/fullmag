@@ -33,40 +33,48 @@ const PARAM_LABELS: Record<string, string> = {
   boundary_layer_count: "Boundary layer count",
   through_thickness_elements: "Element layers / node planes",
   size_preset: "Size preset",
+  size_factor: "Size factor",
   airbox_hmax: "Max element size (Hmax)",
   airbox_hmin: "Min element size (Hmin)",
 };
 
+const LENGTH_PARAMETERS = new Set([
+  "maximum_element_size", "minimum_element_size", "hmax", "hmin",
+  "airbox_hmax", "airbox_hmin", "bulk_hmax", "bulk_hmin",
+  "adaptive_h_max", "adaptive_h_min",
+  "interface_maximum_element_size", "interface_hmax", "interface_thickness",
+  "edge_maximum_element_size", "edge_hmax", "edge_thickness", "edge_transition_distance",
+  "corner_maximum_element_size", "corner_hmax", "corner_extent", "corner_transition_distance",
+  "transition_distance", "boundary_layer_thickness", "thickness",
+  "near_element_size", "far_element_size",
+]);
+
 function formatPolicyValue(path: string, value: string): string {
-  if (value === "unset" || value === "null" || value === "MISSING" || !value) return "unset";
-  const num = parseFloat(value);
-  if (!isNaN(num)) {
-    if (path === "through_thickness_elements" && Number.isInteger(num) && num > 0) {
+  const trimmed = value.trim();
+  if (trimmed === "unset" || trimmed === "null" || trimmed === "MISSING" || !trimmed) return "unset";
+  const parameter = path.split(".").at(-1);
+  const num = Number(trimmed);
+  if (Number.isFinite(num)) {
+    if (parameter === "through_thickness_elements" && Number.isInteger(num) && num > 0) {
       return `${num} ${num === 1 ? "layer" : "layers"} / ${num + 1} node planes`;
     }
-    const isLength =
-      path.includes("size") ||
-      path.includes("distance") ||
-      path.includes("hmax") ||
-      path.includes("hmin") ||
-      path.includes("thickness") ||
-      path.includes("extent");
-    if (isLength) {
+    if (parameter && LENGTH_PARAMETERS.has(parameter)) {
       return formatLength(num);
     }
-    const isGrowth = path.includes("growth_rate") || path.includes("stretching");
+    const isGrowth = parameter === "growth_rate" || parameter === "maximum_element_growth_rate" ||
+      parameter === "resolved_growth_rate" || parameter === "boundary_layer_stretching";
     if (isGrowth) {
       return `${num.toFixed(2)}x`;
     }
-    if (path.includes("algorithm")) {
-      if (path.includes("2d")) {
+    if (parameter === "algorithm_2d" || parameter === "algorithm_3d") {
+      if (parameter === "algorithm_2d") {
         if (num === 6) return "Frontal-Delaunay (6)";
         if (num === 1) return "MeshAdapt (1)";
         if (num === 2) return "Automatic (2)";
         if (num === 5) return "Delaunay (5)";
         if (num === 8) return "Frontal-Delaunay for Quads (8)";
       }
-      if (path.includes("3d")) {
+      if (parameter === "algorithm_3d") {
         if (num === 1) return "Delaunay (1)";
         if (num === 4) return "Frontal (4)";
         if (num === 7) return "MMG3D (7)";
@@ -115,7 +123,7 @@ export function MeshBuildParameterDiff({ rows }: MeshBuildParameterDiffProps) {
                 className="fm-mesh-build-confirm__cell fm-mesh-build-confirm__cell--label font-bold"
                 data-path={row.path}
               >
-                {PARAM_LABELS[row.path] ?? row.label}
+                {PARAM_LABELS[row.path.split(".").at(-1) ?? row.path] ?? row.label}
               </td>
               <td className="fm-mesh-build-confirm__cell fm-mesh-build-confirm__cell--current">
                 {formatPolicyValue(row.path, row.currentValue)}
