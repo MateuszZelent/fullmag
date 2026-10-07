@@ -1,5 +1,26 @@
 # Status realizacji całego planu refaktoryzacji
 
+Checkpoint P8-53BE, 07.10.2026: [Compute po restore](p8/53be-compute-after-workspace-restore.md)
+**IN PROGRESS**. Real browser `bb551f895a854177939cd55e9fc1f54f`
+odtworzył błąd zapisu Run: numeric until_seconds trafiał do tekstowego
+builder stage DTO. Próba terminalna failed, 8/8 własnych procesów odebrane;
+nie wykonano replacement ani Compute. Rozdzielono stage SceneDocument od
+buildera, zachowując legacy drafts/extra i fail-closed eksport. Read-only
+review bez findings, Rust regression source NOT RUN. Nowa regresja HTTP
+sprawdza rzeczywistą transakcję/odczyt sceny. Produkcyjny native build exit 0,
+manifest `7d87e9c8bdeaf1ad95c9aa8884db6758e4e657f4bb852e90c5995b54a44dd74e`.
+Finalna managed regresja `0bdb5b739e864f8786433c83aa17ef28`:
+32 kontrole PASS, completed, exit 0, wszystkie 6 procesów odebrane,
+sealed źródła i pakiet zweryfikowane ponownie na końcu.
+**CLOSED** dla numeric stage authoring; Compute po restore pozostaje otwarte.
+Wcześniejsza próba 32 kontroli failed przez wygenerowany Python bytecode;
+naprawiono zapis cache bez osłabienia inventory checks.
+Pierwszy build odmówił podczas snapshotu przy zmianie
+źródeł; kontrola integralności nie została wyłączona. Osobno otwarte są
+poprawne raportowanie acquisition refusal, jawne retry po potwierdzonej
+odmowie i terminalny solver po restore. Publiczny restart pozostaje wyłączony,
+workspace 3197 nie był restartowany, procentów P0–P8 nie zwiększono.
+
 Checkpoint P8-53BD, 07.10.2026: [zapis projektu bez fizyki](p8/53bd-incomplete-physics-project-persistence.md)
 **CLOSED** dla zapisu i odtworzenia projektu z materiałem i magnetyzacją,
 lecz bez oddziaływań/anizotropii. Runtime i zwykły renderer pozostają ścisłe.

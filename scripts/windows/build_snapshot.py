@@ -476,7 +476,9 @@ def create_snapshot(repo_root, build_root):
     for expected in entries:
         copied = _copy_file(_checked_child(repo, expected["path"]), _checked_child(source, expected["path"]))
         if expected["path"] in protected_paths and (copied["sha256"] != expected["sha256"] or copied["size"] != expected["size"]):
-            raise SourceChangedSnapshot("Origin changed while copying a source file")
+            raise SourceChangedSnapshot(
+                f"Origin changed while copying source input: {expected['path']}"
+            )
         copied_entries.append({**copied, "path": expected["path"]})
     confirm_origin()
     # Browser HMR/docs may keep moving during capture. Record their ACTUAL

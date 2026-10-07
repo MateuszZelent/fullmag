@@ -112,12 +112,12 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
     if frozen_native_build_id is not None:
         if not re.fullmatch(r"[0-9a-f]{64}", frozen_native_build_id):
             raise storage.StorageError("Frozen native build ID must be a lowercase SHA-256")
-        if (cross_build_bundle or project_document_only or restart_transport_only
+        if (cross_build_bundle or restart_transport_only
                 or observer_pause_only or restart_consumer_only or consumer_readiness_only
                 or consumer_pump_owner_bundle is not None or candidate_preparation_only
                 or active_run_refusal
                 or workspace_browser_owner_bundle is not None):
-            raise storage.StorageError("Frozen native package verification is a separate default-gate scope")
+            raise storage.StorageError("Frozen native package verification allows only the default or project-document scope")
     if workspace_browser_owner_bundle is not None:
         if (cross_build_bundle or project_document_only or restart_transport_only
                 or observer_pause_only or restart_consumer_only or consumer_readiness_only
@@ -175,6 +175,8 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
     storage.initialize(layout)
     with storage.build_lock(layout):
         preflight_started = storage.now()
+        project_source_root = None
+        project_source_binding = None
         try:
             manifest_path = storage.validate_path(Path(native["build_root"]) / "windows-runtime/build-manifest.json", layout["storage_root"], "native build manifest")
             verified = verified_build_identity(
@@ -188,6 +190,20 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             if hashlib.sha256(raw_manifest).hexdigest() != verified["ready_build_id"]:
                 raise storage.StorageError("Native build manifest changed after verification")
             manifest = json.loads(raw_manifest)
+            if project_document_only and frozen_native_build_id is not None:
+                from windows.build_snapshot import verify_snapshot
+                snapshot_record = manifest["build_source_snapshot"]
+                frozen = verify_snapshot(snapshot_record["record_path"], native["build_root"])
+                if (frozen["source_root"] != snapshot_record.get("source_root")
+                        or frozen["inventory_sha256"] != snapshot_record.get("inventory_sha256")
+                        or frozen["backend_source_sha256"] != verified["ready_source_sha256"]):
+                    raise storage.StorageError("Project document helper source differs from the sealed native package")
+                project_source_root = Path(frozen["source_root"])
+                project_source_binding = {
+                    "source_root": str(project_source_root),
+                    "inventory_sha256": frozen["inventory_sha256"],
+                    "backend_source_sha256": frozen["backend_source_sha256"],
+                }
             source_api = storage.validate_path(manifest["api_binary"], native["build_root"], "verified native API")
         except Exception as error:
             # A refused package is terminal diagnostic evidence, never permission
@@ -229,6 +245,8 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                    "started_at": storage.now(), "checks": [], "processes": [],
                    "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten asset-backed authoring restore and live cold completion with HTTP mutation admission, interrupted store completion journals and repeated store cycles, empty-service terminal drain; no UI hydration, end-to-end compute reopening, solver or release qualification"}
         receipt["project_document_only"] = project_document_only
+        if project_source_binding is not None:
+            receipt["project_python_source_binding"] = project_source_binding
         if frozen_native_build_id is not None:
             receipt["frozen_native_build_id"] = frozen_native_build_id
             receipt["frozen_native_source_sha256"] = verified["ready_source_sha256"]
@@ -359,6 +377,7 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 exercise(api, repo, run_root, receipt, start_freeze_race_only=True)
             else:
                 exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
+                         project_source_root=project_source_root,
                          restart_transport_only=restart_transport_only,
                          consumer_readiness_only=consumer_readiness_only)
             if (not project_document_only and not restart_transport_only and not observer_pause_only
@@ -1514,6 +1533,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
 
 
 def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_document_only: bool = False,
+             project_source_root: Path | None = None,
              restart_transport_only: bool = False, consumer_readiness_only: bool = False,
              start_freeze_race_only: bool = False) -> None:
     generation, source, worktree = "1" * 32, "a" * 64, "fixture-worktree"
@@ -1550,8 +1570,10 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             port = reservation.getsockname()[1]
         env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME") if key in os.environ}
         native_layout = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
-        env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(run_root / (label + "-state")), FULLMAG_API_PORT=str(port), FULLMAG_DISABLE_STATIC_CONTROL_ROOM="1",
+        env.update(FULLMAG_REPO_ROOT=str(project_source_root or repo), FULLMAG_STATE_ROOT=str(run_root / (label + "-state")), FULLMAG_API_PORT=str(port), FULLMAG_DISABLE_STATIC_CONTROL_ROOM="1",
                    FULLMAG_PYTHON=str(Path(native_layout["build_root"]) / "python/fullmag/Scripts/python.exe"))
+        # Python helpers must not add bytecode to the sealed source inventory.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         env.update(config)
         log_path = run_root / (label + ".log")
         with log_path.open("w", encoding="utf-8") as log:
@@ -1941,6 +1963,8 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
 
     if project_document_only:
         with_api("project-document", {}, project_document)
+        from windows.verify_scene_stage_authoring import exercise as exercise_scene_stages
+        with_api("scene-stage-authoring", {}, lambda get: exercise_scene_stages(get, checks, receipt, run_root))
         # Fault helpers live only in a verifier-owned source root. No user
         # package or interpreter is modified, and no authored script executes.
         for fault in ("deadline", "log-overflow"):
