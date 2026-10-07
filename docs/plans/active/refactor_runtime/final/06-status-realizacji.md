@@ -12,7 +12,7 @@ przed odmową, w jej chwili i po niej, po terminalnym resume wzrósł do 16. W t
 wyścigu Start-first zachowało przyjętą komendę i uniemożliwiło późniejszy acquire;
 freeze-first odrzucił Start kodem 409 `development_restart_in_progress`. Każdy
 własny proces ma terminalny wait. Natywny build `backend-dev` PASS, manifest
-`bcb74639170776eb8939552b771dafc95154e3e7fc787cd3b21525df92ef963d`; szczegóły
+`44a976d76203ce65d8cdb36a447ec62cd09c32c0b757bb181d76827ee896d549`; szczegóły
 i ograniczenia: [raport P8-53BC](p8/53bc-real-active-run-restart-refusal.md).
 Zamknięcie dotyczy tego wiersza runtime; publiczny restart, pozostałe scenariusze
 CAE, wymagane lane'y i release qualification pozostają otwarte. Procentów P0–P8

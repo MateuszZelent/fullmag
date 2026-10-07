@@ -1,5 +1,16 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+[P8-53BC](53bc-real-active-run-restart-refusal.md), 06.10.2026:
+bramka odmowy restartu podczas rzeczywistego FDM CPU solve **CLOSED**.
+Trzy managed receipts z manifestu
+`44a976d76203ce65d8cdb36a447ec62cd09c32c0b757bb181d76827ee896d549`
+potwierdzają `running`, `paused` i wyścig Start/freeze. Odmowa zachowuje
+API/session/run i epoch; running kontynuuje kroki, paused pozostaje na
+kroku 15 i po jawnym wznowieniu osiąga krok 16. Wszystkie własne procesy
+mają terminalny wait. Publiczny restart, powtórny restart, Compute po
+odtworzeniu i pozostałe wymagane bramki pozostają otwarte. Poniższe
+checkpointy opisują wcześniejsze stany i nie cofają zamknięcia P8-53BC.
+
 [P8-53AZ](53az-native-browser-inspector-draft-guard.md): rzeczywisty szkic
 Inspectora zablokował restart bez utraty danych i bez replacement. Po jawnym
 Revert odtworzenie modelu i dirty document **PASS**, receipt
