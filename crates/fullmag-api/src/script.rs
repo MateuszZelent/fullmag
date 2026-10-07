@@ -1196,6 +1196,85 @@ mod tests {
     }
 
     #[test]
+    fn scene_pbc_overrides_roundtrip_via_python_helper() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().expect("create PBC round-trip workspace");
+        let source_path = workspace.path().join("periodic_source.py");
+        let source = r#"import fullmag as fm
+
+study = fm.study("periodic_roundtrip")
+study.engine("fdm")
+film = study.geometry(fm.Box(80e-9, 60e-9, 20e-9), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.01
+study.pbc(x=True, y=True, demag="truncated_images", images=(2, 3, 0))
+"#;
+        std::fs::write(&source_path, source).expect("write periodic source");
+        let original = load_scene_document_state(&root, workspace.path(), &source_path)
+            .expect("export periodic source through Python");
+        let original_policy = original
+            .study
+            .pbc
+            .clone()
+            .flatten()
+            .expect("fixture exports explicit periodic policy");
+        assert_eq!(original_policy.image_counts, Some([2, 3, 0]));
+        let changed_policy = fullmag_ir::FdmPeriodicityIR {
+            axes: [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+                fullmag_ir::AxisBoundary::Periodic,
+            ],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([5, 0, 7]),
+        };
+
+        for case in ["missing", "null", "value"] {
+            let mut encoded = serde_json::to_value(&original).expect("serialize original scene");
+            let study = encoded["study"].as_object_mut().expect("scene study is an object");
+            let expected = match case {
+                "missing" => {
+                    study.remove("pbc");
+                    Some(original_policy.clone())
+                }
+                "null" => {
+                    study.insert("pbc".to_string(), Value::Null);
+                    None
+                }
+                "value" => {
+                    study.insert(
+                        "pbc".to_string(),
+                        serde_json::to_value(&changed_policy).expect("serialize changed policy"),
+                    );
+                    Some(changed_policy.clone())
+                }
+                _ => unreachable!(),
+            };
+            let scene: SceneDocument = serde_json::from_value(encoded).expect("decode scene case");
+            let overrides = scene_document_overrides(&scene).expect("project Rust overrides");
+            assert_eq!(overrides.get("pbc").is_none(), case == "missing");
+            let export_copy = workspace.path().join(format!("export_{case}.py"));
+            rewrite_script_via_python_helper(
+                &root,
+                workspace.path(),
+                &source_path,
+                Some(&overrides),
+                Some(&export_copy),
+            )
+            .expect("rewrite managed copy through Python with Rust overrides");
+            let restored = load_scene_document_state(&root, workspace.path(), &export_copy)
+                .expect("export rewritten copy through Python");
+            assert_eq!(restored.study.pbc, Some(expected), "PBC case {case}");
+            assert_eq!(
+                std::fs::read(&source_path).expect("read original source"),
+                source.as_bytes(),
+                "source remains unchanged for PBC case {case}",
+            );
+        }
+    }
+
+    #[test]
     fn load_scene_document_state_preserves_script_object_regions() {
         let root = repo_root();
         let script_path =

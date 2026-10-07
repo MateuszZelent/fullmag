@@ -57,6 +57,12 @@ jobs:
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
 
+      - name: Run scene PBC Rust-Python synchronization regression
+        env:
+          FULLMAG_REPO_ROOT: ${{ github.workspace }}
+          RUST_MIN_STACK: 8388608
+        run: cargo test -p fullmag-api --bin fullmag-api scene_pbc_overrides_roundtrip_via_python_helper
+
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
 
