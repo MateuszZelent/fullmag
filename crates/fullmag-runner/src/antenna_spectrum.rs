@@ -1126,6 +1126,14 @@ pub fn antenna_source_spectrum_auxiliary_artifacts(
     Ok(artifacts)
 }
 
+/// Parse spectrum JSON without last-key-wins ambiguity, including legacy v1.
+/// Digest and scientific semantics must still be verified by the caller.
+pub fn parse_antenna_source_spectrum_manifest_json(bytes: &[u8]) -> Result<serde_json::Value, RunError> {
+    serde_json::from_slice::<crate::artifact_json::UnambiguousJson>(bytes)
+        .map(|value| value.0)
+        .map_err(|cause| error(format!("parse antenna source-spectrum manifest: {cause}")))
+}
+
 pub fn verify_antenna_source_spectrum_auxiliary_artifacts(
     artifacts: &[AuxiliaryArtifact],
 ) -> Result<(), RunError> {
@@ -1136,8 +1144,7 @@ pub fn verify_antenna_source_spectrum_auxiliary_artifacts(
     if manifests.len() != 1 || artifacts.len() != 5 {
         return Err(error("antenna source-spectrum requires one manifest and four payloads"));
     }
-    let mut canonical: serde_json::Value = serde_json::from_slice(&manifests[0].bytes)
-        .map_err(|cause| error(format!("parse antenna source-spectrum manifest: {cause}")))?;
+    let mut canonical = parse_antenna_source_spectrum_manifest_json(&manifests[0].bytes)?;
     let published_digest = canonical
         .as_object_mut()
         .and_then(|object| object.remove("content_digest"))
@@ -1319,8 +1326,7 @@ pub fn reusable_antenna_source_spectrum_output(
     }
     let manifest_bytes = std::fs::read(output_dir.join("spectrum.v2.json"))
         .map_err(|cause| error(format!("read cached antenna spectrum manifest: {cause}")))?;
-    let mut canonical: serde_json::Value = serde_json::from_slice(&manifest_bytes)
-        .map_err(|cause| error(format!("parse cached antenna spectrum manifest: {cause}")))?;
+    let mut canonical = parse_antenna_source_spectrum_manifest_json(&manifest_bytes)?;
     let published_digest = canonical
         .as_object_mut()
         .and_then(|object| object.remove("content_digest"))
@@ -2754,6 +2760,48 @@ mod tests {
         let error = verify_antenna_source_spectrum_auxiliary_artifacts(&tampered_manifest)
             .unwrap_err();
         assert!(error.message.contains("content_digest mismatch"));
+    }
+
+    #[test]
+    fn spectrum_readers_refuse_duplicate_keys_even_with_valid_last_value_digest() {
+        let request = request("x");
+        let samples = solution_samples_for(&request);
+        let artifact = compute_antenna_source_spectrum_artifact(&request, &samples, None).unwrap();
+        let artifacts = antenna_source_spectrum_auxiliary_artifacts(&artifact).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&artifacts.last().unwrap().bytes).unwrap();
+        let original = serde_json::to_string(&value).unwrap();
+        verify_antenna_source_spectrum_auxiliary_artifacts(&artifacts).unwrap();
+        let output_dir = std::env::temp_dir().join(format!("fullmag-spectrum-duplicate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&output_dir).unwrap();
+        for payload in &artifacts {
+            std::fs::write(output_dir.join(Path::new(&payload.relative_path).file_name().unwrap()), &payload.bytes).unwrap();
+        }
+        for (needle, replacement) in [
+            ("\"output_id\":\"spectrum\"", "\"output_id\":\"other\",\"output_id\":\"spectrum\""),
+            ("\"component\":\"x\"", "\"component\":\"z\",\"component\":\"x\""),
+            ("\"unit\":\"rad/m\"", "\"unit\":\"m\",\"un\\u0069t\":\"rad/m\""),
+        ] {
+            let ambiguous = original.replacen(needle, replacement, 1);
+            assert_ne!(ambiguous, original);
+            // The old Value parser collapses the duplicate back to the exact
+            // valid document: digest checks alone cannot distinguish it.
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&ambiguous).unwrap(), value);
+            let mut tampered = artifacts.clone();
+            tampered.last_mut().unwrap().bytes = ambiguous.as_bytes().to_vec();
+            assert!(parse_antenna_source_spectrum_manifest_json(ambiguous.as_bytes()).unwrap_err().message.contains("duplicate JSON key"));
+            assert!(verify_antenna_source_spectrum_auxiliary_artifacts(&tampered).unwrap_err().message.contains("duplicate JSON key"));
+            std::fs::write(output_dir.join("spectrum.v2.json"), ambiguous.as_bytes()).unwrap();
+            assert!(reusable_antenna_source_spectrum_output(
+                &output_dir, &request, &samples.solution_id, &samples.source_object_id,
+                &samples.port_mode_id, &samples.content_digest, None,
+            ).unwrap_err().message.contains("duplicate JSON key"));
+        }
+        std::fs::write(output_dir.join("spectrum.v2.json"), original.as_bytes()).unwrap();
+        assert!(reusable_antenna_source_spectrum_output(
+            &output_dir, &request, &samples.solution_id, &samples.source_object_id,
+            &samples.port_mode_id, &samples.content_digest, None,
+        ).unwrap());
+        std::fs::remove_dir_all(output_dir).unwrap();
     }
 
     #[test]

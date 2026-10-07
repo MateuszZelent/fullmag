@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 use crate::artifacts::{
-    read_json_artifact_value, sanitize_artifact_relative_path,
+    read_text_artifact_value, sanitize_artifact_relative_path,
     try_resolve_artifact_path,
 };
 use crate::error::ApiError;
@@ -888,7 +888,7 @@ pub async fn get_antenna_source_spectrum(
         } else {
             v1_path
         };
-    let value = read_json_artifact_value(&artifact_dir, &relative_path)?;
+    let value = read_source_spectrum_manifest_value(&artifact_dir, &relative_path)?;
     let parsed = parse_source_spectrum_artifact(&value, &output_id, &relative_path)?;
     validate_source_spectrum_realization(&parsed.sampling.realization)?;
     validate_source_spectrum_payloads(&artifact_dir, &output_id, parsed.payloads.as_ref(), None)?;
@@ -956,6 +956,12 @@ struct ParsedSourceSpectrumArtifact {
     sampling: fullmag_runner::AntennaSpectrumSamplingMetadata,
     payload_format: String,
     payloads: Option<AntennaSpectrumPayloads>,
+}
+
+fn read_source_spectrum_manifest_value(artifact_dir: &FsPath, path: &str) -> Result<Value, ApiError> {
+    let content = read_text_artifact_value(artifact_dir, path)?;
+    fullmag_runner::parse_antenna_source_spectrum_manifest_json(content.as_bytes())
+        .map_err(|error| ApiError::internal(format!("invalid {path} artifact: {}", error.message)))
 }
 
 fn parse_source_spectrum_artifact(
@@ -1105,7 +1111,7 @@ pub async fn get_antenna_source_spectrum_payload(
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let artifact_dir = require_antenna_artifact_dir(&state, &request_context).await?;
     let manifest_path = format!("antenna/source_spectra/{output_id}/spectrum.v2.json");
-    let value = read_json_artifact_value(&artifact_dir, &manifest_path)?;
+    let value = read_source_spectrum_manifest_value(&artifact_dir, &manifest_path)?;
     validate_antenna_manifest_digest(&value, "source spectrum")?;
     let manifest: AntennaSourceSpectrumManifest =
         serde_json::from_value(value).map_err(|error| {

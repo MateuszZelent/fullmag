@@ -41,6 +41,7 @@ pub use antenna_field_solution::{
 };
 pub use antenna_spectrum::{
     antenna_source_spectrum_auxiliary_artifact, antenna_source_spectrum_auxiliary_artifacts,
+    parse_antenna_source_spectrum_manifest_json,
     verify_antenna_source_spectrum_auxiliary_artifacts,
     validate_antenna_source_spectrum_manifest_semantics,
     reusable_antenna_source_spectrum_output,

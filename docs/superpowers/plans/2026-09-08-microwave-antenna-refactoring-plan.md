@@ -1,5 +1,10 @@
 # Plan implementacji refaktoryzacji modułu anten mikrofalowych
 
+Uzupełnienie 2026-10-08: [checkpoint JSON widma](2026-10-08-antenna-spectrum-json-checkpoint.md)
+wiąże verifier, cache oraz API metadata/payload widma ze wspólnym parserem
+odrzucającym duplikaty. Produkcyjny typecheck API przeszedł; regresja Rust,
+endpointy, legacy v1 i kwalifikacja numeryczna FFT pozostają niewykonane.
+
 **Aktualny punkt wznowienia — 2026-10-08 (produkcyjny typecheck źródeł):**
 `just check-cli-source` dla czystego HEAD
 `fbae293cca60562d71a404b954e7444138f45a45` zakończył się `passed`, exit 0.
