@@ -7,7 +7,9 @@ import type {
 export type DimensionFrameMode = "off" | "floor" | "cage";
 export type DimensionFrameDensity = "auto" | "coarse" | "fine";
 export type DimensionFrameUnitMode = "auto" | "nm" | "um" | "mm" | "m";
-type DimensionFrameAxis = "x" | "y" | "z";
+/** Which annotations sit on the frame edges: tick scales, overall extents, or both. */
+export type DimensionFrameAnnotation = "ticks" | "extents" | "both";
+export type DimensionFrameAxis = "x" | "y" | "z";
 type DimensionFramePlaneId =
   | "xy-min"
   | "x-min"
@@ -16,6 +18,7 @@ type DimensionFramePlaneId =
   | "y-max";
 
 export interface DimensionFrameOptions {
+  annotation?: DimensionFrameAnnotation;
   bounds: Viewport3DBounds | null;
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
@@ -39,22 +42,36 @@ export interface DimensionFrameUnit {
   label: string;
 }
 
+/**
+ * A screen-space label pinned to a world point. The renderer projects
+ * `outward` every frame to choose the text anchor and pushes the label
+ * `pixelOffset` px away from the frame, so labels keep a constant size and
+ * never sit on top of their tick.
+ */
 export interface DimensionFrameLabel {
-  colorRole: "axis" | "tick" | "unit";
+  axis: DimensionFrameAxis;
   key: string;
+  kind: "extent" | "tick" | "title";
+  outward: [number, number, number];
+  pixelOffset: number;
   position: [number, number, number];
   text: string;
+  /** Major-step index from the frame centre; the renderer thins by it. */
+  tickIndex?: number;
+  unitLabel?: string;
 }
 
 export interface DimensionFrameModel {
-  axisLabels: DimensionFrameLabel[];
-  labelScaleWorld: number;
+  annotation: DimensionFrameAnnotation;
+  extentLines: Float32Array;
+  labels: DimensionFrameLabel[];
   majorLines: Float32Array;
+  majorTickLines: Float32Array;
   minorLines: Float32Array;
+  minorTickLines: Float32Array;
   mode: DimensionFrameMode;
   planes: DimensionFramePlane[];
   signature: string;
-  tickLabels: DimensionFrameLabel[];
   unit: DimensionFrameUnit;
 }
 
@@ -73,6 +90,19 @@ const AXIS_INDEX: Record<DimensionFrameAxis, 0 | 1 | 2> = {
 const EMPTY_LINES = new Float32Array();
 const FALLBACK_SIZE = 1e-6;
 const LABEL_CAP = 36;
+/** Tick mark lengths relative to the largest bounds span. */
+const MAJOR_TICK_FRACTION = 0.024;
+const MINOR_TICK_FRACTION = 0.012;
+/** Offset of the extent dimension line from its edge, per annotation mode. */
+const EXTENT_OFFSET_FRACTION: Record<DimensionFrameAnnotation, number> = {
+  both: 0.2,
+  extents: 0.07,
+  ticks: 0,
+};
+/** Screen gaps in CSS px between the frame and its labels. */
+const TICK_LABEL_GAP_PX = 5;
+const TITLE_LABEL_GAP_PX = 40;
+const EXTENT_LABEL_GAP_PX = 6;
 const MAJOR_SEGMENT_CAP = 96;
 const MINOR_SEGMENT_CAP = 240;
 const MINOR_SUBDIVISIONS: Record<DimensionFrameDensity, number> = {
@@ -120,8 +150,8 @@ export function resolveDimensionFrameStep(
 }
 
 export function buildDimensionFrameModel({
+  annotation = "ticks",
   bounds,
-  cameraProjection,
   cameraState,
   density,
   labelsVisible,
@@ -132,7 +162,7 @@ export function buildDimensionFrameModel({
   const maxSpan = Math.max(...resolvedBounds.size, 1e-18);
   const unit = resolveDimensionFrameUnit(maxSpan, unitMode);
   if (mode === "off") {
-    return emptyDimensionFrameModel(mode, unit);
+    return emptyDimensionFrameModel(mode, unit, annotation);
   }
 
   const step = resolveDimensionFrameStep(maxSpan, density);
@@ -159,33 +189,40 @@ export function buildDimensionFrameModel({
     });
   }
 
-  const labelScaleWorld =
-    maxSpan * (cameraProjection === "orthographic" ? 0.034 : 0.042);
-  const tickLabels = labelsVisible
-    ? buildTickLabels(resolvedBounds, step, unit, mode)
-    : [];
-  const axisLabels = labelsVisible
-    ? buildAxisLabels(resolvedBounds, unit, labelScaleWorld, mode)
-    : [];
+  const annotations = labelsVisible
+    ? buildEdgeAnnotations({
+        annotation,
+        bounds: resolvedBounds,
+        cameraState,
+        maxSpan,
+        minorStep,
+        step,
+        unit,
+      })
+    : EMPTY_ANNOTATIONS;
 
   return {
-    axisLabels,
-    labelScaleWorld: Math.max(labelScaleWorld, 1e-12),
+    annotation,
+    extentLines: new Float32Array(annotations.extentLines),
+    labels: annotations.labels,
     majorLines: new Float32Array(majorLines),
+    majorTickLines: new Float32Array(annotations.majorTickLines),
     minorLines: new Float32Array(minorLines),
+    minorTickLines: new Float32Array(annotations.minorTickLines),
     mode,
     planes,
     signature: [
       mode,
       density,
       unit.id,
+      annotation,
       labelsVisible ? "labels" : "nolabels",
       step,
       ...resolvedBounds.center,
       ...resolvedBounds.size,
       ...planes.map((plane) => plane.id),
+      ...annotations.edgeIds,
     ].join(":"),
-    tickLabels,
     unit,
   };
 }
@@ -288,112 +325,283 @@ function appendPlaneLines({
   }
 }
 
-function buildTickLabels(
-  bounds: ResolvedBounds,
-  step: number,
-  unit: DimensionFrameUnit,
-  mode: DimensionFrameMode,
-): DimensionFrameLabel[] {
-  const labels: DimensionFrameLabel[] = [];
-  const offset = Math.max(Math.max(...bounds.size) * 0.055, 1e-12);
-  for (const x of centeredTicksBetween({
-    max: bounds.max[0],
-    min: bounds.min[0],
-    origin: bounds.center[0],
-    step,
-  })) {
-    labels.push({
-      colorRole: "tick",
-      key: `tick:x:${x}`,
-      position: [x, bounds.min[1] - offset, bounds.min[2]],
-      text: formatDimensionFrameTickValue(x - bounds.center[0], unit),
-    });
-    if (labels.length >= LABEL_CAP) return labels;
-  }
-  for (const y of centeredTicksBetween({
-    max: bounds.max[1],
-    min: bounds.min[1],
-    origin: bounds.center[1],
-    step,
-  })) {
-    labels.push({
-      colorRole: "tick",
-      key: `tick:y:${y}`,
-      position: [bounds.min[0] - offset, y, bounds.min[2]],
-      text: formatDimensionFrameTickValue(y - bounds.center[1], unit),
-    });
-    if (labels.length >= LABEL_CAP) return labels;
-  }
-  if (mode === "cage") {
-    for (const z of centeredTicksBetween({
-      max: bounds.max[2],
-      min: bounds.min[2],
-      origin: bounds.center[2],
-      step,
-    })) {
-      labels.push({
-        colorRole: "tick",
-        key: `tick:z:${z}`,
-        position: [bounds.min[0] - offset, bounds.min[1] - offset, z],
-        text: formatDimensionFrameTickValue(z - bounds.center[2], unit),
-      });
-      if (labels.length >= LABEL_CAP) return labels;
-    }
-  }
-  return labels;
+interface DimensionFrameEdge {
+  axis: DimensionFrameAxis;
+  /** Point on the edge at coordinate `value` along `axis`. */
+  at: (value: number) => [number, number, number];
+  id: string;
+  outward: [number, number, number];
 }
 
-function buildAxisLabels(
-  bounds: ResolvedBounds,
-  unit: DimensionFrameUnit,
-  labelScaleWorld: number,
-  mode: DimensionFrameMode,
-): DimensionFrameLabel[] {
-  const offset = Math.max(labelScaleWorld * 2.2, Math.max(...bounds.size) * 0.07);
-  const labels: DimensionFrameLabel[] = [
+interface EdgeAnnotations {
+  edgeIds: string[];
+  extentLines: number[];
+  labels: DimensionFrameLabel[];
+  majorTickLines: number[];
+  minorTickLines: number[];
+}
+
+const EMPTY_ANNOTATIONS: EdgeAnnotations = {
+  edgeIds: [],
+  extentLines: [],
+  labels: [],
+  majorTickLines: [],
+  minorTickLines: [],
+};
+
+const AXIS_UNIT: Record<DimensionFrameAxis, [number, number, number]> = {
+  x: [1, 0, 0],
+  y: [0, 1, 0],
+  z: [0, 0, 1],
+};
+
+/**
+ * Annotated edges follow the camera: x and y use the floor edges nearest the
+ * viewer, z uses the vertical edge on the left of the silhouette. A fixed
+ * `bounds.min` edge put the scale behind the object for half of all views.
+ */
+export function resolveDimensionFrameEdges(
+  bounds: Pick<ResolvedBounds, "max" | "min">,
+  cameraState: Viewport3DCameraState,
+): DimensionFrameEdge[] {
+  const toCamera = subtract(cameraState.position, cameraState.target);
+  const xEdgeY = toCamera[1] >= 0 ? bounds.max[1] : bounds.min[1];
+  const yEdgeX = toCamera[0] >= 0 ? bounds.max[0] : bounds.min[0];
+  const floorZ = bounds.min[2];
+  const right = screenRight(cameraState);
+  const corners: Array<[number, number]> = [
+    [bounds.min[0], bounds.min[1]],
+    [bounds.max[0], bounds.min[1]],
+    [bounds.max[0], bounds.max[1]],
+    [bounds.min[0], bounds.max[1]],
+  ];
+  const [zx, zy] = corners.reduce((best, corner) =>
+    corner[0] * right[0] + corner[1] * right[1] <
+    best[0] * right[0] + best[1] * right[1] - 1e-24
+      ? corner
+      : best,
+  );
+  const xSign = xEdgeY === bounds.max[1] ? 1 : -1;
+  const ySign = yEdgeX === bounds.max[0] ? 1 : -1;
+  const zxSign = zx === bounds.max[0] ? 1 : -1;
+  const zySign = zy === bounds.max[1] ? 1 : -1;
+  return [
     {
-      colorRole: "axis",
-      key: "axis:x",
-      position: [bounds.max[0] + offset, bounds.min[1] - offset, bounds.min[2]],
-      text: "x",
+      axis: "x",
+      at: (value) => [value, xEdgeY, floorZ],
+      id: `x@${xSign > 0 ? "ymax" : "ymin"}`,
+      outward: [0, xSign, 0],
     },
     {
-      colorRole: "axis",
-      key: "axis:y",
-      position: [bounds.min[0] - offset, bounds.max[1] + offset, bounds.min[2]],
-      text: "y",
+      axis: "y",
+      at: (value) => [yEdgeX, value, floorZ],
+      id: `y@${ySign > 0 ? "xmax" : "xmin"}`,
+      outward: [ySign, 0, 0],
     },
     {
-      colorRole: "unit",
-      key: `unit:${unit.id}`,
-      position: [bounds.center[0], bounds.min[1] - offset * 2, bounds.min[2]],
-      text: unit.label,
+      axis: "z",
+      at: (value) => [zx, zy, value],
+      id: `z@${zxSign > 0 ? "xmax" : "xmin"}${zySign > 0 ? "ymax" : "ymin"}`,
+      outward: [zxSign * Math.SQRT1_2, zySign * Math.SQRT1_2, 0],
     },
   ];
-  if (mode === "cage") {
-    labels.push({
-      colorRole: "axis",
-      key: "axis:z",
-      position: [bounds.min[0] - offset, bounds.min[1] - offset, bounds.max[2] + offset],
-      text: "z",
-    });
+}
+
+function buildEdgeAnnotations({
+  annotation,
+  bounds,
+  cameraState,
+  maxSpan,
+  minorStep,
+  step,
+  unit,
+}: {
+  annotation: DimensionFrameAnnotation;
+  bounds: ResolvedBounds;
+  cameraState: Viewport3DCameraState;
+  maxSpan: number;
+  minorStep: number;
+  step: number;
+  unit: DimensionFrameUnit;
+}): EdgeAnnotations {
+  const result: EdgeAnnotations = {
+    edgeIds: [],
+    extentLines: [],
+    labels: [],
+    majorTickLines: [],
+    minorTickLines: [],
+  };
+  const showTicks = annotation !== "extents";
+  const showExtents = annotation !== "ticks";
+  const majorLength = maxSpan * MAJOR_TICK_FRACTION;
+  const minorLength = maxSpan * MINOR_TICK_FRACTION;
+  let tickLabelCount = 0;
+
+  for (const edge of resolveDimensionFrameEdges(bounds, cameraState)) {
+    const index = AXIS_INDEX[edge.axis];
+    const min = bounds.min[index];
+    const max = bounds.max[index];
+    const center = bounds.center[index];
+    result.edgeIds.push(edge.id);
+
+    if (showTicks) {
+      for (const value of centeredTicksBetween({
+        max,
+        min,
+        origin: center,
+        step: minorStep,
+      })) {
+        const major = isOnMajorStep(value - center, step);
+        const start = edge.at(value);
+        const end = offsetPoint(start, edge.outward, major ? majorLength : minorLength);
+        if (
+          (major ? result.majorTickLines : result.minorTickLines).length / 6 <
+          (major ? MAJOR_SEGMENT_CAP : MINOR_SEGMENT_CAP)
+        ) {
+          pushSegment(major ? result.majorTickLines : result.minorTickLines, start, end);
+        }
+        if (major && tickLabelCount < LABEL_CAP) {
+          const tickIndex = Math.round((value - center) / step);
+          tickLabelCount += 1;
+          result.labels.push({
+            axis: edge.axis,
+            key: `tick:${edge.axis}:${tickIndex}`,
+            kind: "tick",
+            outward: edge.outward,
+            pixelOffset: TICK_LABEL_GAP_PX,
+            position: end,
+            text: formatDimensionFrameTickValue(value - center, unit),
+            tickIndex,
+          });
+        }
+      }
+      result.labels.push({
+        axis: edge.axis,
+        key: `title:${edge.axis}`,
+        kind: "title",
+        outward: edge.outward,
+        pixelOffset: TITLE_LABEL_GAP_PX,
+        position: offsetPoint(edge.at(center), edge.outward, majorLength),
+        text: edge.axis,
+        unitLabel: unit.label,
+      });
+    }
+
+    if (showExtents) {
+      appendExtent(result, edge, { annotation, center, max, maxSpan, min, unit });
+    }
   }
-  return labels;
+  return result;
+}
+
+function appendExtent(
+  result: EdgeAnnotations,
+  edge: DimensionFrameEdge,
+  {
+    annotation,
+    center,
+    max,
+    maxSpan,
+    min,
+    unit,
+  }: {
+    annotation: DimensionFrameAnnotation;
+    center: number;
+    max: number;
+    maxSpan: number;
+    min: number;
+    unit: DimensionFrameUnit;
+  },
+): void {
+  const offset = maxSpan * EXTENT_OFFSET_FRACTION[annotation];
+  const overshoot = maxSpan * 0.012;
+  const gap = maxSpan * 0.008;
+  const arrowLength = Math.min(maxSpan * 0.03, (max - min) / 4);
+  const arrowWidth = arrowLength * 0.35;
+  const start = edge.at(min);
+  const end = edge.at(max);
+  const lineStart = offsetPoint(start, edge.outward, offset);
+  const lineEnd = offsetPoint(end, edge.outward, offset);
+  const along = AXIS_UNIT[edge.axis];
+
+  // Witness lines, the dimension line, then an open arrowhead at each end.
+  pushSegment(
+    result.extentLines,
+    offsetPoint(start, edge.outward, gap),
+    offsetPoint(start, edge.outward, offset + overshoot),
+  );
+  pushSegment(
+    result.extentLines,
+    offsetPoint(end, edge.outward, gap),
+    offsetPoint(end, edge.outward, offset + overshoot),
+  );
+  pushSegment(result.extentLines, lineStart, lineEnd);
+  for (const [tip, direction] of [
+    [lineStart, 1],
+    [lineEnd, -1],
+  ] as const) {
+    const base = offsetPoint(tip, along, arrowLength * direction);
+    pushSegment(result.extentLines, tip, offsetPoint(base, edge.outward, arrowWidth));
+    pushSegment(result.extentLines, tip, offsetPoint(base, edge.outward, -arrowWidth));
+  }
+  result.labels.push({
+    axis: edge.axis,
+    key: `extent:${edge.axis}`,
+    kind: "extent",
+    outward: edge.outward,
+    pixelOffset: EXTENT_LABEL_GAP_PX,
+    position: offsetPoint(edge.at(center), edge.outward, offset),
+    text: formatDimensionFrameTickValue(max - min, unit),
+    unitLabel: unit.label,
+  });
+}
+
+function offsetPoint(
+  point: readonly [number, number, number],
+  direction: readonly [number, number, number],
+  distance: number,
+): [number, number, number] {
+  return [
+    point[0] + direction[0] * distance,
+    point[1] + direction[1] * distance,
+    point[2] + direction[2] * distance,
+  ];
+}
+
+function subtract(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): [number, number, number] {
+  return [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
+}
+
+/** Camera right vector restricted to the floor plane (x, y). */
+function screenRight(cameraState: Viewport3DCameraState): [number, number] {
+  const forward = subtract(cameraState.target, cameraState.position);
+  const up = cameraState.up;
+  const rightX = forward[1] * up[2] - forward[2] * up[1];
+  const rightY = forward[2] * up[0] - forward[0] * up[2];
+  const length = Math.hypot(rightX, rightY);
+  if (length < 1e-12) return [1, 0];
+  return [rightX / length, rightY / length];
 }
 
 function emptyDimensionFrameModel(
   mode: DimensionFrameMode,
   unit: DimensionFrameUnit,
+  annotation: DimensionFrameAnnotation,
 ): DimensionFrameModel {
   return {
-    axisLabels: [],
-    labelScaleWorld: 1e-9,
+    annotation,
+    extentLines: EMPTY_LINES,
+    labels: [],
     majorLines: EMPTY_LINES,
+    majorTickLines: EMPTY_LINES,
     minorLines: EMPTY_LINES,
+    minorTickLines: EMPTY_LINES,
     mode,
     planes: [],
-    signature: `${mode}:${unit.id}`,
-    tickLabels: [],
+    signature: `${mode}:${unit.id}:${annotation}`,
     unit,
   };
 }
@@ -508,7 +716,7 @@ function pushSegment(
 
 function unitForId(id: Exclude<DimensionFrameUnitMode, "auto">): DimensionFrameUnit {
   if (id === "nm") return { factor: 1e9, id, label: "nm" };
-  if (id === "um") return { factor: 1e6, id, label: "um" };
+  if (id === "um") return { factor: 1e6, id, label: "\u00b5m" };
   if (id === "mm") return { factor: 1e3, id, label: "mm" };
   return { factor: 1, id: "m", label: "m" };
 }
