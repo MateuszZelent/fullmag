@@ -739,3 +739,25 @@ znacznikiem PASS. Pokrywa quoted/escaped text, token boundaries, exact/spare
 capacity, missing terminator, malformed quote i null pointer. Unit GHA oraz
 kompilacja/provider GPU nadal wymagane; nie wykonano lokalnych testów/buildów.
 Do dokumentu nie przypisuje się nieistniejącej naukowej kwalifikacji.
+### FD-LOCAL004 — błędny dowód materializacji dynamic_demag
+
+Run37770932283, SHAeb2693f7a2270dc9251501e2f6f5c319dd222775, native job113290040434:
+pure bounded JSON sanitizer contract PASS, a następnie CABI gated-operator FAIL.
+Rzeczywisty diagnostic: include_demag=0, brak dense demag payloadu, label dynamic_demag;
+nie wykonano oczekiwanego term gate, tylko przejście do slepc_not_available.
+
+Źródło production_cpu_modal_eigen.cpp + dynamic_demag_k_payload_is_consistent zwraca
+true przy nieobecnym opcjonalnym payloadzie — to poprawna semantyka walidacji
+opcjonalności, lecz nie dowód materializacji. modal_request_gated_operator_term
+sprawdza teraz deklarację i spójność oddzielnie. Zachowano owned shared-domain
+Floquet operator, który nie korzysta z dense demag matrix. Nie zmieniono globalnego
+validatora, fizycznych macierzy, tolerancji ani gated-term assertions.
+
+Source review PASS. Istniejący negative CABI pokrywa label bez materializacji;
+MFEM/SLEPc shared-domain positive/provider pozostaje NOT VERIFIED i wymaga
+rzeczywistego operatora, nie fikcyjnego pointera. Poprawka jest policy-only dla
+istniejącej realizacji opisanej w 0828-fem-frequency-domain-floquet-demag.md.
+
+Sanitizer ma rzeczywisty dowód pure-helper compile/run. Oba callsites GPU mają
+source review status propagation; kompilacja z providerem GPU i kwalifikacja
+fizyczna nadal NOT VERIFIED. Nie utożsamia się znaczników PASS z zielonym całym CI.

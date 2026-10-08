@@ -599,10 +599,12 @@ const char *modal_request_gated_operator_term(
         return nullptr;
     }
     if (std::strstr(diagnostics, "\"dynamic_demag\"") != nullptr) {
-        // A complete, finite k-dependent payload is the native provider's
-        // proof that this term is materialized.  Keep the historical gate for
-        // labelled-but-missing Rust/full2x2 terms.
-        if (!dynamic_demag_k_payload_is_consistent(request)) {
+        // An owned shared-domain operator or an explicit complete, finite
+        // dense k-dependent payload proves materialization. Optional-payload
+        // consistency alone also accepts absence and is not such a proof.
+        if (request.floquet_shared_domain_operator == nullptr &&
+            (!dynamic_demag_k_payload_is_declared(request) ||
+             !dynamic_demag_k_payload_is_consistent(request))) {
             return "dynamic_demag";
         }
     }
