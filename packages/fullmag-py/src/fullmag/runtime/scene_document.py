@@ -2259,11 +2259,13 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     if stage.get("eigen_solver_rtol") not in (None, "")
                     else stage.get("eigen_solver_residual_tolerance")
                 ),
-                "eigen_solver_max_outer_iterations": _int_or_none(
-                    stage.get("eigen_solver_max_outer_iterations")
+                "eigen_solver_max_outer_iterations": _positive_integer_or_none(
+                    stage.get("eigen_solver_max_outer_iterations"),
+                    "SceneDocument.study.stages.eigen_solver_max_outer_iterations",
                 ),
-                "eigen_solver_max_linear_iterations": _int_or_none(
-                    stage.get("eigen_solver_max_linear_iterations")
+                "eigen_solver_max_linear_iterations": _positive_integer_or_none(
+                    stage.get("eigen_solver_max_linear_iterations"),
+                    "SceneDocument.study.stages.eigen_solver_max_linear_iterations",
                 ),
             }
             for stage in (builder.get("stages") or [])
@@ -2359,6 +2361,20 @@ def _number_or_none(value: Any) -> float | str | None:
 
 def _number_or_auto(value: Any) -> float | str | None:
     return _number_or_none(value)
+
+
+def _positive_integer_or_none(value: object, context: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            value = int(stripped)
+        except ValueError as error:
+            raise ValueError(f"{context} must be a positive integer") from error
+    return _positive_integer(value, context)
 
 
 def _int_or_none(value: Any) -> int | None:

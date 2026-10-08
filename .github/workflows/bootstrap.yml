@@ -447,6 +447,11 @@ jobs:
       - name: Run output storage authoring and lowering contracts
         run: python scripts/check_output_storage_contract.py
 
+      - name: Run complete SceneDocument authoring roundtrip regressions
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py
+
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
 
@@ -506,11 +511,6 @@ jobs:
       - name: Repository consistency checks
         run: python scripts/check_repo_consistency.py
 
-      - name: Run rotated DMI scene authoring regressions
-        run: >-
-          python -m pytest -q
-          packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py
-          -k dmi
 
   windows-volatile-storage-contracts:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc') }}

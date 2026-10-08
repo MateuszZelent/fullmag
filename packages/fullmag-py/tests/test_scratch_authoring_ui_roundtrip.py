@@ -10,6 +10,7 @@ from fullmag import load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_scene_document_from_builder,
     build_builder_from_scene_document,
+    builder_overrides_from_scene_document,
 )
 from fullmag.runtime.script_builder import export_builder_draft
 
@@ -257,10 +258,66 @@ def test_scene_document_renders_eigenmodes_stage_with_nonzero_k_and_floquet_bc()
 
     draft = export_builder_draft(loaded)
     assert draft["stages"][1]["eigen_solver_rtol"] == "1e-08"
+    assert draft["stages"][1]["eigen_solver_max_outer_iterations"] == "123"
+    assert draft["stages"][1]["eigen_solver_max_linear_iterations"] == "456"
     rerendered = render_scene_document_as_script(build_scene_document_from_builder(draft))
     assert "study.stages.add_eigenmodes(" in rerendered
     assert 'magnetostatic_bc="floquet_airbox"' in rerendered
     assert "solver_max_outer_iterations=123" in rerendered
+    assert "solver_max_linear_iterations=456" in rerendered
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "eigen_solver_max_outer_iterations",
+        "eigen_solver_max_linear_iterations",
+    ),
+)
+@pytest.mark.parametrize(
+    "invalid_value",
+    (
+        True,
+        False,
+        1.0,
+        1.5,
+        0,
+        -1,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "1.5",
+        "0",
+        "-1",
+        "nan",
+        "inf",
+    ),
+)
+def test_scene_document_rejects_invalid_eigen_solver_iteration_policy(
+    field_name: str, invalid_value: object
+) -> None:
+    builder = _builder(backend="fem")
+    builder["stages"].append({"kind": "eigenmodes", field_name: invalid_value})
+    scene = build_scene_document_from_builder(builder)
+
+    with pytest.raises(ValueError, match=field_name):
+        builder_overrides_from_scene_document(scene)
+
+
+def test_scene_document_preserves_unset_eigen_solver_iteration_defaults() -> None:
+    builder = _builder(backend="fem")
+    builder["stages"].append(
+        {
+            "kind": "eigenmodes",
+            "eigen_solver_max_outer_iterations": None,
+            "eigen_solver_max_linear_iterations": "",
+        }
+    )
+    scene = build_scene_document_from_builder(builder)
+
+    stage = builder_overrides_from_scene_document(scene)["stages"][1]
+    assert stage["eigen_solver_max_outer_iterations"] is None
+    assert stage["eigen_solver_max_linear_iterations"] is None
 
 
 def test_scene_document_rejects_unsupported_stage_instead_of_dropping_it() -> None:
