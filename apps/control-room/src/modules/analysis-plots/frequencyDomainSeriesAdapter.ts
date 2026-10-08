@@ -19,9 +19,11 @@ export function frequencyDomainChartSeriesForAnalysisPlots<TPoint>(
   }));
 }
 
-function boundedFrequencyPoints<TPoint extends { rowIndex: number; y: number }>(
+function boundedFrequencyPoints<
+  TPoint extends { breakBefore?: boolean; rowIndex: number; y: number },
+>(
   points: readonly TPoint[],
-): readonly TPoint[] {
+): readonly (TPoint | (TPoint & { breakBefore: true }))[] {
   if (points.length <= MAX_FREQUENCY_DOMAIN_RENDER_POINTS) return points;
 
   const interiorBudget = MAX_FREQUENCY_DOMAIN_RENDER_POINTS - 2;
@@ -57,10 +59,20 @@ function boundedFrequencyPoints<TPoint extends { rowIndex: number; y: number }>(
     }
   }
 
-  return [...selectedIndices]
+  const boundedIndices = [...selectedIndices]
     .sort((left, right) => left - right)
-    .slice(0, MAX_FREQUENCY_DOMAIN_RENDER_POINTS)
-    .map((index) => points[index]!);
+    .slice(0, MAX_FREQUENCY_DOMAIN_RENDER_POINTS);
+  let sourceIndex = 1;
+  return boundedIndices.map((index) => {
+    const point = points[index]!;
+    let breakBefore = point.breakBefore === true;
+    while (sourceIndex <= index) {
+      breakBefore = breakBefore || points[sourceIndex]!.breakBefore === true;
+      sourceIndex += 1;
+    }
+    if (!breakBefore || point.breakBefore === true) return point;
+    return { ...point, breakBefore: true as const };
+  });
 }
 
 export function frequencyDomainPrimarySeries(
