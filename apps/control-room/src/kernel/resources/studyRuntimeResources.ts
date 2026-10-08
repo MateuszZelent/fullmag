@@ -888,10 +888,21 @@ export function stageExecutionMatchesSessionIdentity(
   );
 }
 
+function stageExecutionIdentityRefreshRevision(
+  identity: StageExecutionSessionIdentity,
+): string {
+  // This is a local cache invalidation token, separate from payload revision.
+  return `stage-execution-identity:${JSON.stringify([
+    identity.sessionId,
+    identity.sessionEpoch,
+    identity.runId,
+  ])}`;
+}
+
 export function useStageExecutionResource({
   enabled = true,
 }: RuntimeResourceOptions = {}): ResourceResult<StageExecutionResource | null> {
-  const { api } = useKernel();
+  const { api, resources } = useKernel();
   const { resourceKey, sessionIdentity: resourceSessionIdentity } = useSessionScopedResourceKey(
     SIMULATION_STAGES_EXECUTION_PATH,
   );
@@ -915,15 +926,11 @@ export function useStageExecutionResource({
   const stageExecutionResource = useResource<StageExecutionResource | null>({
     enabled: enabled && resourceSessionIdentity !== null && sessionIdentity !== null,
     load,
-    // The identity effect below owns the first request so it can force a load
-    // for a mismatched cached payload without racing useResource's auto-load.
-    pauseLoad: requestedIdentityRef.current === null,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
   const {
     data: stageExecutionData,
-    refetch: refetchStageExecution,
     status: stageExecutionStatus,
   } = stageExecutionResource;
 
@@ -947,14 +954,35 @@ export function useStageExecutionResource({
         sessionIdentity,
       )
     ) {
+      const firstIdentity = requestedIdentityRef.current === null;
       requestedIdentityRef.current = sessionIdentity;
-      refetchStageExecution();
+      // Let useResource's normal, deduplicated loader satisfy the first
+      // unsettled identity. A settled cache can belong to another run, so
+      // advance the shared resource revision when it needs refreshing.
+      if (firstIdentity && stageExecutionStatus === "loading") return;
+      resources.invalidate(
+        resourceKey,
+        stageExecutionIdentityRefreshRevision(sessionIdentity),
+      );
+      return;
+    }
+
+    if (
+      stageExecutionStatus === "ready" &&
+      stageExecutionData !== null &&
+      !stageExecutionMatchesSessionIdentity(stageExecutionData, sessionIdentity)
+    ) {
+      resources.invalidate(
+        resourceKey,
+        stageExecutionIdentityRefreshRevision(sessionIdentity),
+      );
     }
   }, [
     sessionIdentity,
     stageExecutionData,
-    refetchStageExecution,
     stageExecutionStatus,
+    resourceKey,
+    resources,
   ]);
 
   const stageExecutionStatusCanRetainData =

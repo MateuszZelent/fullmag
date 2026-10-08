@@ -193,6 +193,116 @@ describe("production runtime command resource provider", () => {
     }
   });
 
+  it("coalesces stage execution loads across concurrent consumers and run changes", async () => {
+    const nextRunStatus = deferred<ReturnType<typeof statusAt>>();
+    const runAExecution = deferred<StageExecutionResource>();
+    const runBExecution = deferred<StageExecutionResource>();
+    const statusLoad = vi.fn()
+      .mockResolvedValueOnce(statusAt(1, { run_id: "run-a" }))
+      .mockImplementationOnce(() => nextRunStatus.promise);
+    const requestSignals: AbortSignal[] = [];
+    const stageExecutionLoad = vi.fn(
+      ({ signal }: { signal: AbortSignal }) => {
+        requestSignals.push(signal);
+        return requestSignals.length === 1
+          ? runAExecution.promise
+          : runBExecution.promise;
+      },
+    );
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: {
+        sessions: {
+          ...sessionsApi,
+          current: { status: statusLoad },
+        },
+        simulation: {
+          stages: { execution: stageExecutionLoad },
+        },
+      },
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({
+        config: { enabled: false },
+      }),
+      resources,
+    } as unknown as KernelApi;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    let firstStageExecution: ReturnType<typeof useStageExecutionResource> | null =
+      null;
+    let secondStageExecution: ReturnType<typeof useStageExecutionResource> | null =
+      null;
+    let refetchStatus: () => void = () => undefined;
+
+    function Harness() {
+      refetchStatus = useSessionStatusSelector(
+        (status) => status.refetch,
+      );
+      firstStageExecution = useStageExecutionResource();
+      secondStageExecution = useStageExecutionResource();
+      const firstRunId = firstStageExecution?.data?.run_id ?? "no first run";
+      const secondRunId =
+        secondStageExecution?.data?.run_id ?? "no second run";
+      return <div>{firstRunId}|{secondRunId}</div>;
+    }
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Harness />
+          </KernelContext.Provider>,
+        );
+      });
+      await vi.waitFor(() => {
+        expect(stageExecutionLoad).toHaveBeenCalledTimes(1);
+        expect(requestSignals).toHaveLength(1);
+        expect(requestSignals[0]?.aborted).toBe(false);
+      });
+
+      await act(async () => {
+        runAExecution.resolve(stageExecutionAt("run-a", 1));
+        await runAExecution.promise;
+      });
+      await vi.waitFor(() => {
+        expect(container.textContent).toBe("run-a|run-a");
+      });
+
+      await act(async () => {
+        refetchStatus();
+        await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(2));
+        nextRunStatus.resolve(statusAt(2, { run_id: "run-b" }));
+        await nextRunStatus.promise;
+      });
+      await vi.waitFor(() => {
+        expect(stageExecutionLoad).toHaveBeenCalledTimes(2);
+        expect(firstStageExecution?.data).toBeNull();
+        expect(secondStageExecution?.data).toBeNull();
+        expect(container.textContent).toBe("no first run|no second run");
+      });
+      expect(requestSignals).toHaveLength(2);
+      expect(requestSignals[0]?.aborted).toBe(false);
+      expect(requestSignals[1]?.aborted).toBe(false);
+
+      await act(async () => {
+        runBExecution.resolve(stageExecutionAt("run-b", 2));
+        await runBExecution.promise;
+      });
+      await vi.waitFor(() => {
+        expect(firstStageExecution?.data?.run_id).toBe("run-b");
+        expect(secondStageExecution?.data?.run_id).toBe("run-b");
+        expect(container.textContent).toBe("run-b|run-b");
+      });
+      expect(stageExecutionLoad).toHaveBeenCalledTimes(2);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("retains same-run stage execution through status refresh failure and clears it on run change", async () => {
     const statusFailure = new Error("status refresh temporarily failed");
     const nextRunStatus = deferred<ReturnType<typeof statusAt>>();
