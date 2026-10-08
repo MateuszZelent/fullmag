@@ -1,5 +1,10 @@
 # Plan implementacji refaktoryzacji modułu anten mikrofalowych
 
+Uzupełnienie 2026-10-08: [checkpoint inwentarza eksportu sceny](2026-10-08-antenna-scene-export-inventory-checkpoint.md)
+naprawia pomijanie anten w Rust override dla istniejącego skryptu. Solver
+projection pozostaje magnetic-only. Python round-trip i production API
+source-check PASS; wykonanie adaptera Rust/endpointu oraz UI nadal nieweryfikowane.
+
 Uzupełnienie 2026-10-08: [checkpoint JSON widma](2026-10-08-antenna-spectrum-json-checkpoint.md)
 wiąże verifier, cache oraz API metadata/payload widma ze wspólnym parserem
 odrzucającym duplikaty. Produkcyjny typecheck API przeszedł; regresja Rust,

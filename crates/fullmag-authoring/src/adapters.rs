@@ -411,6 +411,45 @@ pub fn scene_document_to_script_builder_overrides(
 ) -> Result<Value, SceneDocumentValidationError> {
     validate_stage_builder_numeric_values(scene)?;
     let builder = scene_document_to_script_builder(scene)?;
+    // The solver projection is magnetic-only; script export owns the complete
+    // authored inventory, including conductors without magnetic assignments.
+    let mut geometries = builder
+        .geometries
+        .iter()
+        .zip(crate::scene_solve_objects(scene))
+        .map(|(geometry, object)| {
+            let mut value = geometry_override_value(geometry);
+            value["object_id"] = Value::String(object.id.clone());
+            value["role"] = Value::String(object.role.clone());
+            value
+        })
+        .collect::<Vec<_>>();
+    for object in scene.objects.iter().filter(|object| object.role != "magnet") {
+        if !is_identity_quaternion(object.transform.rotation_quat)
+            || !is_identity_scale(object.transform.scale)
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "owner_transform_rotation_scale_unsupported: object '{}' uses rotation or scale that is not represented by the canonical owner-frame lowering",
+                object.id
+            )));
+        }
+        let mut geometry_params = object.geometry.geometry_params.clone();
+        strip_translation_fields(&mut geometry_params);
+        if !is_zero_vec3(object.transform.translation) {
+            insert_translation(&mut geometry_params, object.transform.translation);
+        }
+        geometries.push(serde_json::json!({
+            "name": builder_geometry_name_for_object(object),
+            "object_id": object.id,
+            "role": object.role,
+            "geometry_kind": object.geometry.geometry_kind,
+            "geometry_params": geometry_params,
+            "bounds_min": object.geometry.bounds_min,
+            "bounds_max": object.geometry.bounds_max,
+            "mesh": object.object_mesh.as_ref().or(object.mesh_override.as_ref())
+                .map(geometry_mesh_override_value),
+        }));
+    }
     let mut overrides = serde_json::json!({
         "runtime_selection": {
             "backend": scene.study.requested_backend,
@@ -552,11 +591,7 @@ pub fn scene_document_to_script_builder_overrides(
             "dataset": initial_state.dataset,
             "sample_index": initial_state.sample_index,
         })).unwrap_or(Value::Null),
-        "geometries": builder
-            .geometries
-            .iter()
-            .map(geometry_override_value)
-            .collect::<Vec<_>>(),
+        "geometries": geometries,
         "couplings": scene
             .couplings
             .iter()
@@ -3682,6 +3717,45 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(projected_names, vec![hidden_magnet_name.as_str()]);
+        let exported = projection.rewrite_overrides["geometries"].as_array().unwrap();
+        assert_eq!(exported.len(), 2);
+        assert_eq!(exported[0]["object_id"], scene.objects[0].id);
+        assert_eq!(exported[1]["object_id"], "carrier");
+        assert_eq!(exported[1]["role"], "carrier");
+        assert!(exported[1].get("material").is_none());
+        assert!(exported[1].get("magnetization").is_none());
+        assert!(exported[1].get("physics_stack").is_none());
+    }
+
+    #[test]
+    fn antenna_export_preserves_owner_identity_and_translation_without_magnetism() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        let mut antenna = scene.objects[0].clone();
+        antenna.id = "immutable-conductor-owner".to_string();
+        antenna.name = "Renamed antenna".to_string();
+        antenna.role = "antenna".to_string();
+        antenna.material_ref.clear();
+        antenna.magnetization_ref = None;
+        antenna.physics_stack.clear();
+        antenna.regions.clear();
+        antenna.allocated_region_ids.clear();
+        antenna.material_parameter_fields.clear();
+        antenna.absorbing_boundary = None;
+        antenna.transform.translation = [0.0, 0.0, 50e-9];
+        scene.objects.insert(0, antenna);
+
+        let overrides = scene_document_to_script_builder_overrides(&scene).expect("export");
+        let exported = &overrides["geometries"][1];
+        assert_eq!(exported["object_id"], "immutable-conductor-owner");
+        assert_eq!(exported["name"], "Renamed antenna");
+        assert_eq!(exported["role"], "antenna");
+        assert_eq!(exported["geometry_params"]["translation"], serde_json::json!([0.0, 0.0, 50e-9]));
+        assert!(exported.get("material").is_none());
+        assert!(exported.get("magnetization").is_none());
+
+        scene.objects[0].transform.scale = [2.0, 1.0, 1.0];
+        let error = scene_document_to_script_builder_overrides(&scene).expect_err("unsupported scale");
+        assert!(error.message.contains("owner_transform_rotation_scale_unsupported"));
     }
 
     #[test]

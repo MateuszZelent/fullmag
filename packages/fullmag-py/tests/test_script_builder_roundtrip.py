@@ -11,10 +11,12 @@ import fullmag as fm
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
     build_scene_document_from_builder,
+    builder_overrides_from_scene_document,
 )
 from fullmag.runtime.script_builder import (
     _requested_sampling_period_from_ir,
     export_builder_draft,
+    render_loaded_problem_as_script,
     render_scene_document_as_script,
     rewrite_loaded_problem_script,
 )
@@ -1201,6 +1203,60 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 rewrite_loaded_problem_script(loaded, write=True, output_path=copy_path)
             self.assertEqual(source_path.read_bytes(), before)
+
+
+class AuxiliaryScriptOverrideRoundTripTests(unittest.TestCase):
+    def test_layout_overrides_preserve_renamed_owner_without_magnetic_assignments(self) -> None:
+        layouts = (
+            "fm.CPWAntennaLayout(name='layout', length=2e-6, thickness=10e-9, "
+            "conductivity=58e6, stations=("
+            "fm.CPWWidthStation.symmetric(s=0, signal_width=200e-9, gap=50e-9, ground_width=300e-9), "
+            "fm.CPWWidthStation(s=0.5, signal_width_m=80e-9, left_gap_m=40e-9, right_gap_m=60e-9, "
+            "left_ground_width_m=200e-9, right_ground_width_m=400e-9), "
+            "fm.CPWWidthStation.symmetric(s=1, signal_width=200e-9, gap=50e-9, ground_width=300e-9)), "
+            "signal_part_id='trace', left_ground_part_id='left', right_ground_part_id='right', "
+            "transform=fm.RigidTransform(translation=(1e-6, 0, 0)))",
+            "fm.MicrostripAntennaLayout(name='layout', length=2e-6, thickness=10e-9, "
+            "conductivity=58e6, return_width=500e-9, return_offset_m=30e-9, stations=("
+            "fm.MicrostripWidthStation(s=0, signal_width=200e-9), "
+            "fm.MicrostripWidthStation(s=0.5, signal_width=80e-9), "
+            "fm.MicrostripWidthStation(s=1, signal_width=200e-9)), "
+            "signal_part_id='trace', return_part_id='plane', "
+            "transform=fm.RigidTransform(translation=(1e-6, 0, 0)))",
+        )
+        for layout in layouts:
+            with self.subTest(layout=layout), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                loaded = _load_text(
+                    "import fullmag as fm\nstudy = fm.study('auxiliary-export')\n"
+                    "study.engine('fem')\n"
+                    "film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name='film', object_id='film-id')\n"
+                    "film.Ms = 800e3\nfilm.Aex = 13e-12\nfilm.alpha = 0.01\n"
+                    f"study.antenna_object({layout}, name='antenna', object_id='immutable-owner')\n"
+                    "study.stages.add_run(stage_id='run', until=1e-12)\n",
+                    root,
+                )
+                scene = build_scene_document_from_builder(export_builder_draft(loaded))
+                antenna = next(obj for obj in scene["objects"] if obj["id"] == "immutable-owner")
+                antenna["name"] = "Renamed antenna"
+                antenna["transform"]["translation"] = [0.0, 0.0, 50e-9]
+                overrides = builder_overrides_from_scene_document(scene)
+                expected = next(g for g in overrides["geometries"] if g["object_id"] == "immutable-owner")
+                self.assertNotIn("material", expected)
+                self.assertNotIn("magnetization", expected)
+                source = render_loaded_problem_as_script(loaded, overrides=overrides)
+                reloaded = _load_text(source, root, "exported.py")
+                rebuilt = build_builder_from_scene_document(
+                    build_scene_document_from_builder(export_builder_draft(reloaded))
+                )
+                actual = next(g for g in rebuilt["geometries"] if g["object_id"] == "immutable-owner")
+                for key in ("object_id", "name", "role", "geometry_kind", "geometry_params"):
+                    self.assertEqual(actual[key], expected[key], key)
+                self.assertNotIn("material", actual)
+                self.assertNotIn("magnetization", actual)
+                self.assertNotIn("physics_stack", actual)
+                self.assertEqual(len(reloaded.problem.magnets), 1)
+                self.assertEqual(rebuilt["geometries"][0]["object_id"], "film-id")
 
 
 _SCENE_BODY = """
