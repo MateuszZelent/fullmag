@@ -887,3 +887,18 @@ model:object:film:visualization. Potwierdzony source defect: pointerdown SVG
 nie przechodził HTMLElement guard, a click handler był tylko na Chevron SVG,
 nie całym branch hitbox. Poprawka event routing jest przygotowywana; pozytywny
 matched-B overlay/vector/WebGL nadal NOT VERIFIED.
+
+### Lokalna poprawka GUI — hitbox gałęzi i SVG
+
+ExplorerTreeView pointerdown rozpoznaje Element, więc również SVGElement.
+Click handler na całym non-leaf branch hitbox zatrzymuje propagację i rozwija
+węzeł; leaf selection i obsługa klawiatury pozostają bez zmian. Test DOM renderuje
+rzeczywisty komponent, rozróżnia SVG od HTMLElement, klika ikonę i pusty hitbox,
+sprawdza widoczność dziecka oraz brak selekcji rodzica. Source/diff review PASS.
+Vitest node discovery i pełny frontend gate obejmują nowy test; lokalnych testów
+ani browsera nie wykonano. Matched-B overlay/vector/WebGL wymagają nowego GHA.
+Nie uznaje się source fix za dowód zamknięcia błędu przeglądarkowego.
+
+Provenance consumers37779797737 job113319716629 SUCCESS na64bced443:
+5 targeted verifier testsPASS, 85artifact/mesher tests37subtestsPASS. Actual Rust
+producer regresje w bootstrap37779798714 nadal oczekują wykonania.
