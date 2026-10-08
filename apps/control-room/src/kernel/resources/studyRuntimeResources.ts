@@ -902,6 +902,8 @@ export function useStageExecutionResource({
       isEqual: stageExecutionSessionIdentityEquals,
     },
   );
+  const requestedIdentityRef =
+    useRef<StageExecutionSessionIdentity | null>(null);
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation.stages
@@ -913,6 +915,9 @@ export function useStageExecutionResource({
   const stageExecutionResource = useResource<StageExecutionResource | null>({
     enabled: enabled && resourceSessionIdentity !== null && sessionIdentity !== null,
     load,
+    // The identity effect below owns the first request so it can force a load
+    // for a mismatched cached payload without racing useResource's auto-load.
+    pauseLoad: requestedIdentityRef.current === null,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
@@ -921,8 +926,6 @@ export function useStageExecutionResource({
     refetch: refetchStageExecution,
     status: stageExecutionStatus,
   } = stageExecutionResource;
-  const requestedIdentityRef =
-    useRef<StageExecutionSessionIdentity | null>(null);
 
   useEffect(() => {
     if (!sessionIdentity) return;
