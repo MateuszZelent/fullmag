@@ -676,6 +676,13 @@
       "symbol": "validate_rows",
       "responsibility": "Check absolute CSV residual finiteness only; no relative or scientific qualification.",
       "evidence_status": "source contract; runtime NOT VERIFIED"
+    },
+    {
+      "id": "native-pair-set-admission",
+      "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
+      "symbol": "native_floquet_pair_sets_match",
+      "responsibility": "Require exact nonempty requested/node/boundary Floquet pair-ID sets before dynamic-demag native admission.",
+      "evidence_status": "source_visible_runtime_not_verified"
     }
   ],
   "public_api": {

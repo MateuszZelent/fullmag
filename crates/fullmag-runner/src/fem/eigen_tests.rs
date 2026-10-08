@@ -6125,6 +6125,44 @@ fn native_nonzero_floquet_diagnostics_bind_floquet_boundary_without_k0_claim() {
 }
 
 #[test]
+fn floquet_dynamic_demag_provider_requires_exact_requested_pair_set() {
+    let base = bounded_floquet_dynamic_demag_execution_plan();
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&base));
+    for requested in [vec![], vec!["x_faces", "x_faces"], vec!["x_faces", "unknown_faces"]] {
+        let mut plan = base.clone();
+        let SpinWaveBoundaryConditionIR::Config(config) = &mut plan.spin_wave_bc else {
+            panic!("fixture must have explicit Floquet configuration");
+        };
+        config.boundary_pair_id = None;
+        config.pair_ids = requested.into_iter().map(str::to_owned).collect();
+        assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
+    }
+    let mut two_axes = eight_magnetic_node_periodic_airbox_modal_plan();
+    two_axes.target = base.target.clone();
+    two_axes.k_sampling = base.k_sampling.clone();
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut two_axes.spin_wave_bc else {
+        panic!("two-axis fixture must have explicit configuration");
+    };
+    config.kind = SpinWaveBoundaryKindIR::Floquet;
+    config.boundary_pair_id = None;
+    config.pair_ids = vec!["x_faces".to_owned(), "y_faces".to_owned()];
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&two_axes));
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut two_axes.spin_wave_bc else {
+        unreachable!();
+    };
+    config.pair_ids.reverse();
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&two_axes));
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut two_axes.spin_wave_bc else {
+        unreachable!();
+    };
+    config.pair_ids = vec!["x_faces".to_owned()];
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&two_axes));
+    let mut incomplete_nodes = base.clone();
+    incomplete_nodes.mesh.periodic_node_pairs.retain(|pair| pair.pair_id != "x_faces");
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&incomplete_nodes));
+}
+
+#[test]
 fn planned_floquet_boundary_label_survives_invalid_execution_capability() {
     let mut plan = bounded_floquet_dynamic_demag_execution_plan();
     plan.mesh.periodic_boundary_pairs.clear();

@@ -658,6 +658,7 @@ visibility into runtime or physical qualification.
 | Periodic cell topology | common | packages/fullmag-py/src/fullmag/world.py + class StudyBuilder | Declare lateral axes and synchronize default FEM pair IDs before domain-mesh creation. | Python source tests; runtime unvalidated | source visible; runtime unvalidated |
 | Response validation and IR | common | packages/fullmag-py/src/fullmag/model/study.py + class FrequencyResponse | Normalize frequencies, k sampling, BC and provenance fields. | Python/Rust round-trip tests | source visible |
 | Phase convention | common | crates/fullmag-ir/src/eigen_contract.rs + PhaseConventionIR | Own the canonical phase spelling. | IR tests | source visible |
+| Native pair-set admission | FEM CPU | crates/fullmag-runner/src/fem/eigen_capability.rs + native_floquet_pair_sets_match | native-pair-set-admission: exact requested/node/boundary ID sets | provider predicate regression, CI pending | source visible; runtime NOT VERIFIED |
 | K-path expansion | common | crates/fullmag-runner/src/eigen/path.rs + expand_k_sampling | Expand single points and paths. | runner tests | source visible; runtime unvalidated |
 | Floquet seam validation | FEM response | backends/fem/src/frequency_domain/driven_response_solver.cpp + validate_driven_response_floquet_phase_constraints | Validate phase cycles and tangent-frame transport. | focused source tests | source visible; demag-k bridge source-visible, managed/physics unvalidated |
 | K0/shared-domain Poisson | FEM CPU | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp + assemble_poisson_airbox_shared_domain | Preserve existing K0/provider owner. | existing FEM source tests | source visible; nonzero-k unvalidated |
@@ -856,3 +857,17 @@ spełnić kryterium. Pozostają niezależne wymagania zgodności częstotliwośc
 siatki, airboxu i operatora. Dobór 99% jest konwencją tego benchmarku; jego
 przydatność dla uzyskanych modów trzeba sprawdzić w kampanii, bez rozluźniania
 progu po obejrzeniu niezgodnego wyniku.
+
+
+### Zgodność zestawu par na wejściu native CPU
+
+Dla shared-domain dynamic-demag Floquet żądane identyfikatory BC muszą
+stanowić dokładnie ten sam niepusty zestaw co identyfikatory periodycznych
+par węzłów i par brzegowych siatki. Duplicates w żądaniu, pusty zestaw, subset
+lub dodatkowe ID blokują ten provider przed assembly; kolejność ID nie ma
+znaczenia. Guard `native_floquet_pair_sets_match` nie zastępuje certyfikacji
+bijekcji, translacji, fazy ani geometrii. Nie implementuje nowej semantyki
+wybiórczych par i nie zmienia phase convention. Dotyczy native FEM CPU;
+FEM GPU nie uzyskuje dzięki temu fallbacku ani kwalifikacji. FDM nie dotyczy.
+Publiczne Python/ProblemIR zachowują pair_ids. Wykonanie nowych regresji
+runnera i managed/numerical qualification pozostaje NOT VERIFIED.

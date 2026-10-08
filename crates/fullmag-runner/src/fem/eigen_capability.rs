@@ -9,6 +9,7 @@ use super::eigen_reduction::{is_gamma_k_sampling, k_sampling_contains_nonzero};
 use super::eigen_shared_domain::native_shared_domain_magnetic_assembly_available;
 use super::eigen_shared_domain_geometry::{pa_e4b_airbox_size_m, periodic_domain_pair_stats};
 use fullmag_ir::{EigenDampingPolicyIR, FemEigenPlanIR, SpinWaveBoundaryKindIR};
+use std::collections::BTreeSet;
 
 pub(super) fn native_gpu_shared_domain_modal_supported(plan: &FemEigenPlanIR) -> bool {
     plan.precision == fullmag_ir::ExecutionPrecision::Double
@@ -83,6 +84,7 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
             .demag_realization
             .is_some_and(|realization| realization.is_poisson())
         || !native_shared_domain_mesh_metadata_valid(plan)
+        || !native_floquet_pair_sets_match(plan)
     {
         return false;
     }
@@ -108,6 +110,19 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
         }
         None => false,
     }
+}
+
+fn native_floquet_pair_sets_match(plan: &FemEigenPlanIR) -> bool {
+    let requested = plan.spin_wave_bc.boundary_pair_ids();
+    let requested_set = requested.iter().copied().collect::<BTreeSet<_>>();
+    let node_set = plan.mesh.periodic_node_pairs.iter()
+        .map(|pair| pair.pair_id.as_str()).collect::<BTreeSet<_>>();
+    let boundary_set = plan.mesh.periodic_boundary_pairs.iter()
+        .map(|pair| pair.pair_id.as_str()).collect::<BTreeSet<_>>();
+    !requested_set.is_empty()
+        && requested_set.len() == requested.len()
+        && requested_set == node_set
+        && requested_set == boundary_set
 }
 
 /// The native Floquet Schur operator supports two spectral selection modes:
