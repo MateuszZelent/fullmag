@@ -3436,6 +3436,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
 
     const bool shared_domain_floquet =
         request.floquet_shared_domain_operator != nullptr;
+    const bool native_floquet_sparse = shared_domain_floquet;
     SLEPcTangentMassActionContext tangent_mass_context{};
     if (!shared_domain_floquet &&
         !create_slepc_tangent_mass_action_context(
