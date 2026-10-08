@@ -333,6 +333,10 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/verify_saved_fem_archive_roundtrip.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_pinned_dataset_browser.py"*)
+    inspector_routing_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3261 --scenario inspector-routing$'
+    if [[ "${recipe}" =~ ${inspector_routing_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3261 --scenario inspector-routing
+    fi
     cpw_viewport_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3260 --scenario antenna-cpw-viewport$'
     if [[ "${recipe}" =~ ${cpw_viewport_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3260 --scenario antenna-cpw-viewport

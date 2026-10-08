@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
@@ -66,7 +66,12 @@ if (!playwright?.chromium) {
 }
 
 await mkdir(outputDir, { recursive: true });
-const browser = await playwright.chromium.launch({ headless: true });
+const browser = await playwright.chromium.launch({
+  headless: true,
+  ...(process.env.CONTROL_ROOM_INSPECTOR_BROWSER_CHANNEL
+    ? { channel: process.env.CONTROL_ROOM_INSPECTOR_BROWSER_CHANNEL }
+    : {}),
+});
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
 const consoleErrors = [];
 const notFoundResponses = [];
@@ -901,6 +906,7 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     }
     return {
       opacity: getComputedStyle(element).opacity,
+      measuredAt: performance.now(),
       scrollTop: scroller?.scrollTop ?? 0,
     };
   }, identity);
@@ -983,9 +989,18 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
       renderCount: performance
         .getEntriesByType("measure")
         .filter((entry) => entry.name.startsWith("fullmag.react.render.InspectorModule")).length,
+      renderMeasures: performance
+        .getEntriesByType("measure")
+        .filter((entry) => entry.name.startsWith("fullmag.react.render.InspectorModule"))
+        .slice(-32)
+        .map((entry) => ({ name: entry.name, startTime: entry.startTime, duration: entry.duration })),
+      measuredAt: performance.now(),
       scrollTop: scroller?.scrollTop ?? 0,
     };
   });
+  await writeFile(resolve(outputDir, "magnetic-texture-mutation-evidence.json"),
+    JSON.stringify({ baseline, duringMutation, evidence,
+      requests: fixture.requests.slice(requestStart, requestStart + 32) }, null, 2));
   assert(evidence.opacity === baseline.opacity && evidence.opacityAnimations === 0,
     "Magnetic Texture mutation changed Inspector opacity after ACK.");
   assert(Math.abs(evidence.scrollTop - baseline.scrollTop) <= 1,
@@ -2347,7 +2362,8 @@ function inspectorPhysicsGuardLane() {
       capability_profile_version: "inspector-smoke",
       effective_request: "session.runtime_resolution",
       engine_id: "fem_cpu_reference",
-      kind: "fixture",
+      // Simulate the planner-owned API resource; this is not a scientific solve.
+      kind: "planner",
     },
   };
 }

@@ -81,3 +81,16 @@ for (const state of ["supported", "deferred", "semantic_only", "unsupported", "s
   console.log(`PASS mesh operation ${state}`);
 }
 console.log(`${checks} interpreted production checks passed`);
+
+const inspectorSmoke = readFileSync(resolve(root, "scripts/smoke-inspector.mjs"), "utf8");
+const inspectorLaneStart = inspectorSmoke.indexOf("function inspectorPhysicsGuardLane(");
+const inspectorLaneEnd = inspectorSmoke.indexOf("\n}\n", inspectorLaneStart) + 2;
+assert.ok(inspectorLaneStart >= 0 && inspectorLaneEnd > inspectorLaneStart);
+vm.runInContext(inspectorSmoke.slice(inspectorLaneStart, inspectorLaneEnd), context);
+const inspectorLane = context.inspectorPhysicsGuardLane();
+assert.equal(capability.namespace.resolveActiveLaneDiscretization(inspectorLane), "fem");
+assert.equal(capability.namespace.resolveActiveLaneOperation(
+  inspectorLane, "interaction.rotated_interfacial_dmi",
+).enabled, true);
+assert.equal(inspectorLane.qualification.status, "not_asserted");
+console.log("PASS Inspector fixture resolves the FEM catalog without asserting scientific qualification");

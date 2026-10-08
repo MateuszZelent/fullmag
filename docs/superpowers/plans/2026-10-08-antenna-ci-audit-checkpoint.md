@@ -149,3 +149,103 @@ Weryfikacja bez buildu, unit-test runnera i solvera:
 
 To postęp T01 i bramek T18, nie odbiór całego planu. Pozostałe blokady
 frontendu, publikacji naukowej i browser smoke nadal wymagają naprawy.
+
+## Trzeci przyrost — kontrakt active lane w browser smoke
+
+Punkt wyjścia: `be06fe48cd53ed01b192194133d99d4e65badb44`.
+
+Przyczyna timeoutu `Rotated interfacial DMI` nie była nieobecnością funkcji
+w produkcyjnym menu. `inspectorPhysicsGuardLane` w kontrolowanym HTTP
+zwracało `source.kind = "fixture"`, natomiast produkcyjny
+`resolveActiveLaneDiscretization` wymaga `"planner"`. Resolver poprawnie
+zwracał `unknown`; ribbon nie udostępniał katalogu FEM.
+
+- Fixture symuluje teraz prawidłowy snapshot planera (`kind: "planner"`).
+  Zachowano profil `inspector-smoke`, status nauki `not_asserted` oraz
+  wszystkie kontrole konfliktu global/object przed mutacją.
+  Nie poluzowano produkcyjnego resolvera ani nie dodano fallbacku z carrier.
+- `check-ribbon-active-lane.mjs` interpretuje rzeczywistą funkcję fixture
+  i produkcyjny resolver. Nowa regresja przed poprawką odtworzyła odmowę
+  `unknown !== fem`; po poprawce PASS dla FEM, dostępności rotated DMI oraz
+  zachowanego `qualification.status = not_asserted`.
+  Dotychczasowe 13 kontroli, w tym fail-closed nieznanej ścieżki, nadal PASS.
+- Dodano `just verify-inspector-routing-browser`, stały port 3261,
+  dokładny whitelist shell boundary oraz scenariusz istniejącego managed
+  runnera. Wykonuje cały istniejący `smoke-inspector.mjs` na `/workspace`,
+  nie jego skrócony zamiennik ani działającą sesję użytkownika.
+- Raport/channel scenariusza ustawiane są także dla trasy workspace bez
+  dodatkowej fixture page. Windows używa jawnego kanału Chrome; bez tej
+  konfiguracji skrypt zachowuje dotychczasowy Playwright Chromium.
+- Niezależne review pięciu plików: brak Required/Blocker; mechanizm
+  immutable snapshot, blokady, digestów oraz cleanupu własnego procesu
+  zachowano.
+- Składnia zmienionego runnera Python i `git diff --check`: PASS.
+
+Pełny browser smoke i ESLint uruchomiono sekwencyjnie. Wyniki końcowe będą
+dopisane po zakończeniu polecenia; review i kontrola resolvera nie zastępują
+realnego przeklikania Inspectora. Nie kompilowano testów jednostkowych,
+nie restartowano workspace 3197 i nie uruchamiano solvera.
+
+Pierwszy pełny smoke (`bc92bcc054294f6db5cafd5683be6f69`) zakończył się
+FAIL przed testem konfliktów fizyki: render count tekstury wyniósł 4 przy
+budżecie 3. Źródła przed/po były identyczne, a zakończenie własnego serwera
+potwierdzone. Nie jest to dowód przejścia poprawki menu.
+
+Hipotezę obejmowania stabilizacji panelu przez pomiar sprawdzono, przenosząc
+istniejące oczekiwanie 1100 ms przed baseline. Druga próba
+`aa958927acd74b709a5a0e90fe25dd06` również odmówiła przy czterech renderach.
+Hipoteza nie wyjaśniła błędu; dodatkową zmianę granicy pomiaru wycofano.
+Nie zwiększono `renderCount <= 3`, timeoutów ani request budget i nie
+usunięto żadnej kontroli. Oba uruchomienia potwierdziły cleanup własnego
+serwera. Pełny smoke pozostaje **FAIL**, a poprawka menu ma na razie dowód
+interpretowanej regresji, nie odbiór przeglądarkowy.
+
+Po powtórzeniu błędu sprawdzono oficjalne możliwości diagnostyki React:
+
+1. [Profiler](https://react.dev/reference/react/Profiler): rozdzielić commit
+   według `phase`/`commitTime`; to wybrany następny krok, zanim kod zostanie
+   zmieniony. Sam render count nie wskazuje właściciela nadmiarowej aktualizacji.
+2. [Batching](https://react.dev/learn/queueing-a-series-of-state-updates):
+   sprawdzić granice asynchronicznych aktualizacji pending/ACK/sync, nie
+   wprowadzać wymuszonego flush ani scalać niepowiązanych transakcji na ślepo.
+3. [useSyncExternalStore](https://react.dev/reference/react/useSyncExternalStore):
+   sprawdzić stabilność snapshotów oraz właścicieli subskrypcji zasobów.
+4. [StrictMode](https://react.dev/reference/react/StrictMode): zweryfikować
+   rzeczywisty tryb środowiska; nie przełączać go w celu zaliczenia testu.
+
+Pełny ESLint z polecenia sekwencyjnego nie został uruchomiony, ponieważ
+browser gate zakończył się niepowodzeniem. Nie wolno przedstawiać go jako
+PASS dla tego przyrostu. Zmiany pozostają WIP do dalszej diagnozy i kontroli;
+nie stanowią podstawy do merge ani zamknięcia T01/T18.
+
+## Aktualizacja PR na żądanie użytkownika
+
+Ponowny `git fetch origin master` potwierdził bazę
+`2a3c6becb9c7e111ae1497ec0cd9ac9576acba95`; liczba commitów
+`HEAD..origin/master` wynosi 0. Nie był potrzebny kolejny merge mastera.
+Zmiany są przekazywane do istniejącego roboczego PR #147, nie bezpośrednio
+do mastera. Worktree pozostaje zachowany do naprawy bramek.
+
+Trzecia próba pełnego smoke, receipt `52071de32b11480cbb1cb39c9c79d7dc`,
+zakończyła się FAIL. Digest przed/po:
+`f5e32adfaf6f17a866e0180893e651c970b9c01fe8ade9353d6c0fc100b01f65`;
+cleanup własnego serwera potwierdzony. Nowy ograniczony artefakt
+`browser/magnetic-texture-mutation-evidence.json` zachowuje oś czasu i żądania.
+Zarejestrowano dwie próbki `update` i dwie `nested-update`, 13 żądań,
+w tym jeden transaction POST i jeden sync POST. To próbki profilera
+ograniczonego do 1000 ms na nazwę/fazę, nie pełna liczba commitów React.
+Zachowano tożsamość panelu, fokus, scroll i opacity; błąd wydajności nadal
+wymaga poprawki. Nie zwiększono budżetów i nie wyłączono kontroli.
+
+Niezależna analiza wskazuje na niepublikowany do resource store
+`committed_scene` z ACK oraz następujące po nim odświeżenia scene/regions
+i script sync jako kierunek dalszej diagnozy. Nie wdrożono tej hipotezy
+bez osobnej weryfikacji. Fixture i narzędzia diagnostyczne w PR nie oznaczają
+naprawy tego błędu ani ukończenia modułu anten.
+
+Kontrole przy publikacji: 13 interpretowanych kontroli produkcyjnych oraz
+nowa kontrola fixture active lane PASS; składnia Node/Python i scoped
+`git diff --check` PASS. Pełny ESLint zakończony PASS/exit 0, receipt
+`4dd6288928fd47d9903e32e9a23c2de7`. Nie kompilowano testów jednostkowych.
+Zmiany diagnostyczne są gotowe do publikacji w roboczym PR, ale pełna
+kwalifikacja Inspectora i całego modułu pozostaje niezaliczona.

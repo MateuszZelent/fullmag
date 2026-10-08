@@ -24,6 +24,7 @@ from verify_control_room_sources import fingerprint, timestamp
 PROFILE = "windows-control-room-browser-fixture"
 BROWSER_CHANNEL = "chrome" if os.name == "nt" else None
 SCENARIOS = {
+    "inspector-routing": ("smoke-inspector.mjs", "fullmag_inspector_routing_browser_fixture_v1", None, "CONTROL_ROOM_INSPECTOR"),
     "antenna-cpw-viewport": ("smoke-antenna-cpw-viewport.mjs", "fullmag_antenna_cpw_viewport_browser_fixture_v1", "antenna-cpw-viewport", "FULLMAG_ANTENNA_CPW_VIEWPORT"),
     "pinned-dataset": ("smoke-pinned-materialized-dataset.mjs", "fullmag_pinned_dataset_browser_fixture_v1", None, "FULLMAG_PINNED_DATASET"),
     "project-document-handoff": ("smoke-project-document-handoff.mjs", "fullmag_project_document_browser_fixture_v1", "project-document-handoff", "FULLMAG_PROJECT_DOCUMENT"),
@@ -83,6 +84,8 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
         raise storage.StorageError("Execution profiles browser fixture uses fixed port 3255")
     if scenario == "study-execution-profile" and port != 3256:
         raise storage.StorageError("Study execution profile browser fixture uses fixed port 3256")
+    if scenario == "inspector-routing" and port != 3261:
+        raise storage.StorageError("Inspector routing browser fixture uses fixed port 3261")
     smoke_name, receipt_schema, fixture_route, report_prefix = SCENARIOS[scenario]
     layout = storage.resolve_layout(repo, PROFILE)
     storage.initialize(layout)
@@ -182,13 +185,13 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
                    "FULLMAG_FRONTEND_SOURCE_RUN_ROOT": str(run_root)}
             if BROWSER_CHANNEL:
                 env["FULLMAG_PINNED_DATASET_BROWSER_CHANNEL"] = BROWSER_CHANNEL
+            env[report_prefix + "_REPORT_DIR"] = str(run_root / "browser")
+            if BROWSER_CHANNEL:
+                env[report_prefix + "_BROWSER_CHANNEL"] = BROWSER_CHANNEL
             if fixture_route:
                 env["CONTROL_ROOM_URL"] = f"http://127.0.0.1:{port}/{fixture_route}"
                 if scenario in {"development-kernel-host", "development-restart-action", "execution-profiles", "study-execution-profile"}:
                     env["CONTROL_ROOM_URL"] += "?fullmag_api_instance=11111111-1111-4111-8111-111111111111"
-                env[report_prefix + "_REPORT_DIR"] = str(run_root / "browser")
-                if BROWSER_CHANNEL:
-                    env[report_prefix + "_BROWSER_CHANNEL"] = BROWSER_CHANNEL
             receipt["source_view"] = str(fixture_app)
             receipt["dependency_root"] = str(real_dependencies)
             with (run_root / "next.log").open("w", encoding="utf-8") as next_log:
@@ -255,6 +258,7 @@ if __name__ == "__main__":
     port = args.port if args.port is not None else {
         "execution-profiles": 3255,
         "study-execution-profile": 3256,
+        "inspector-routing": 3261,
     }.get(args.scenario, 3250)
     if not 1 <= port <= 65535:
         parser.error("port must be between 1 and 65535")

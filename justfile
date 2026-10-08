@@ -488,6 +488,10 @@ verify-control-room-development-backend-build-action:
 verify-pinned-dataset-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}"
 
+# Full Inspector CI smoke against controlled HTTP in an isolated workspace.
+verify-inspector-routing-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3261 --scenario inspector-routing
+
 # Production project controller in an isolated Next browser fixture; no unit builds.
 verify-project-document-handoff-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3251 --scenario project-document-handoff
