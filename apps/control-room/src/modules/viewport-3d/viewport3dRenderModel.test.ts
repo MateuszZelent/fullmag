@@ -1702,10 +1702,10 @@ describe("viewport3dRenderModel", () => {
       [airboxTarget],
     );
     expect(
-      topologyModel?.magneticParts[0]?.fullNodeSelection.nodeIndices,
+      topologyModel?.magneticParts[0]?.fullNodeSelection.node_indices,
     ).toEqual([0, 1, 2, 3]);
     expect(
-      topologyModel?.magneticParts[1]?.fullNodeSelection.nodeIndices,
+      topologyModel?.magneticParts[1]?.fullNodeSelection.node_indices,
     ).toEqual([4, 5, 6, 7]);
     expect(
       topologyModel?.airboxParts[0]?.fullNodeSelection.nodeIndices,
