@@ -386,3 +386,23 @@ Ponowny `git fetch origin master` potwierdził HEAD mastera
 Nie było nowych commitów mastera do scalenia. Publikacja obejmuje aktualny
 branch zadania w istniejącym PR #147 do `master`, bez merge i bez usuwania
 worktree. Lokalny odbiór Inspectora nie zastępuje wymaganych kontroli całego PR.
+
+## T18 — jednoznaczny właściciel walidacji prądu
+
+GitHub job `113144873569`, run `37726218209`, dla HEAD
+`bf25abacdcd1856c1889f49c6a31194a52dcea7d` zakończył się failure w kroku
+`Require source maps for changed scientific pages`, przed Sphinx. To błąd
+publikacji dokumentacji, nie dowód błędu kompilacji aplikacji.
+
+Log wskazuje brak `0920-regional-time-domain-field-drive.source-map.json`
+oraz niejednoznaczne `validation_errors` w `spin_transport.rs`: są tam dwie
+metody różnych właścicieli. W mapie 0980 i jej indeksie zastąpiono samą
+nazwę metody jednoznacznym typem `StructuredCurrentClosureIR`; opis nadal
+wskazuje dokładnie `StructuredCurrentClosureIR::validation_errors` i odróżnia
+ją od `ConservativeCurrentSourceIR::validation_errors`. Nie zmieniono kodu,
+walidatora, równań, progów ani statusów kwalifikacji.
+
+Focused validator całej noty 0980: exit 0. Interpretowany zestaw walidatora:
+33/33 PASS, exit 0, bez kompilowania testów jednostkowych. Scoped whitespace
+PASS. Brak mapy 0920 pozostaje wymaganym otwartym krokiem; pełny gate zmienionych
+stron i publiczny build nadal nie mają odbioru. Nie jest to zamknięcie T18.

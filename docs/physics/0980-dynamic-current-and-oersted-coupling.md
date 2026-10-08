@@ -2473,7 +2473,7 @@ evidence that the approximation is accurate.
 | `crates/fullmag-fdm-sys/src/lib.rs` | `cpu_oersted_append_only_layout_matches_native_manifest` | exact Rust FFI mirror and every-field C `offsetof` comparison |
 | `crates/fullmag-runner/src/fdm/cpu/native_transport.rs` | `solve_native_m1_snapshot` | resolved closed_geometry certificate, accepted raw face-current binding and fail-closed identity checks without midpoint fallback |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class StructuredCurrentClosure` | public closed_geometry-only source-cut contract and canonical lowering |
-| `crates/fullmag-ir/src/spin_transport.rs` | `validation_errors` | typed closure/source-cut identity, plane and drive validation in ProblemIR |
+| `crates/fullmag-ir/src/spin_transport.rs` | `StructuredCurrentClosureIR` | właściciel typed closed_geometry; metoda `StructuredCurrentClosureIR::validation_errors` sprawdza tożsamości closure/source-cut, płaszczyznę i drive w ProblemIR; nie jest to metoda `ConservativeCurrentSourceIR::validation_errors` |
 | `crates/fullmag-plan/src/spin_transport.rs` | `materialize_structured_current_closure` | exact structured-grid plane, component coverage and return-path preflight |
 | `crates/fullmag-authoring/src/validation.rs` | `validate_scene_structured_current_closure` | SceneDocument closure validation and paired source-cut operator contract |
 | `crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs` | `public_closed_loop_source_cut_publishes_nonzero_oersted_artifact` | positive public nonzero current, H_oe and closure-provenance E2E |

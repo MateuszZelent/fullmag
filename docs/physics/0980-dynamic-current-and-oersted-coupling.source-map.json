@@ -372,8 +372,8 @@
     {
       "id": "ir-structured-current-closure",
       "path": "crates/fullmag-ir/src/spin_transport.rs",
-      "symbol": "validation_errors",
-      "responsibility": "Own typed closed_geometry validation, unique source/circuit/drive identities, finite cut planes and nonzero impressed-potential jumps in ProblemIR."
+      "symbol": "StructuredCurrentClosureIR",
+      "responsibility": "Own the typed closed_geometry contract; its validation_errors method checks unique source/circuit/drive identities, finite cut planes and nonzero impressed-potential jumps in ProblemIR. The owner distinguishes this method from ConservativeCurrentSourceIR::validation_errors."
     },
     {
       "id": "planner-structured-current-closure",
