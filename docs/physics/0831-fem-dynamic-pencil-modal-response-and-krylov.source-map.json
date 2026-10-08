@@ -1478,7 +1478,7 @@
       "id": "source-floquet-window-cross-subwindow-dedup-followup",
       "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
       "symbol": "solve_sparse_production_modal_window_payload",
-      "responsibility": "Outer native Floquet subwindow merge still uses generic overlap dedup without sparse tangent-mass action; follow-up required"
+      "responsibility": "Native Floquet subwindow merge uses the owned positive CSR mass finalizer before the final window cap; production-entry regression pending"
     },
     {
       "id": "source-tracking-consistent-pair",

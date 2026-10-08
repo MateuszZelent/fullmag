@@ -1039,3 +1039,21 @@ ale test szukał hardcoded1. Poprawiono tylko test: expected=liczba jedynek mask
 dokładny global count i dokładny count w tet4 entry (bez dopasowania prefiksu).
 Mixed fixture z jednym aktywnym prism pozostaje zachowana. Source review PASS;
 cały provider target wymaga ponownego wykonania na nowym SHA.
+
+### Native frequency-window merge — poprawka źródeł, provider pending
+
+Agregator production_cpu_modal_eigen.cpp przekazuje całą pulę certyfikowanych
+kandydatów do owned CSR mass finalizera z lokalnym limitem równym puli, a potem
+zachowuje dotychczasowe ascending-frequency/window cap. Strict failure staje się
+hard failure bez utraty wcześniejszego subwindow reason. Native branch nie ma
+dense mass ani identity fallback; diagnostyka wskazuje positive tangent mass
+oraz provided_complex_csr. Generic adapter i bounded NEV refill pozostają otwarte.
+Dopisano guarded MFEM+SLEPc regresję publicznego ABI window entry na istniejącym
+shared-domain fixture: metric provenance, exact cap, descriptor certificate i
+window_complete:false. Source review PASS; wykonanie provider nadal oczekiwane.
+
+Review GUI zatrzymało commit na dwóch realnych błędach nowego patcha:
+nieistniejącym snapshot.binaryResourceKey oraz raw nodal complex arrays użytych
+dla face-expanded/averaged projections. Poprawka zachowa canonical resource key
+i projekcje surface_faces/thickness_average_z wraz z matching Re/Im mapping.
+Nie opublikowano patcha GUI z tymi blockerami.

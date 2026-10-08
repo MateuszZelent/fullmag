@@ -4199,6 +4199,38 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
           "nearest result does not claim a complete window");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
+    // Reuse the exact imported native operator through the public production
+    // entry. The broad window spans overlapping subwindows; its outer merge
+    // must use the owned positive mass instead of the former Euclidean path.
+    FullmagFemModalEigenRequest window_request = request;
+    window_request.target_kind = "frequency_window";
+    window_request.frequency_min_hz = 0.05;
+    window_request.frequency_max_hz = 0.30;
+    window_request.requested_mode_count = 1;
+    window_request.completeness_policy = 0;
+    FullmagFemFrequencyDomainResult window_result =
+        fullmag_fem_modal_eigen_solve(&window_request);
+    check(window_result.status == FULLMAG_FEM_FD_OK,
+          "native Floquet production frequency window accepts a certified mode");
+    check(contains(window_result.diagnostics_json,
+                   "\"deduplication_inner_product\":\"floquet_positive_tangent_mass\""),
+          "native window merge reports its physical reduced tangent mass");
+    check(contains(window_result.diagnostics_json,
+                   "\"deduplication_mass_matrix\":\"provided_complex_csr\""),
+          "native window merge keeps the owned complex CSR metric");
+    check(!contains(window_result.diagnostics_json, "identity_fallback"),
+          "native window cannot revert to Euclidean identity deduplication");
+    check(contains(window_result.result_json, "\"accepted_mode_count\":1,") ||
+              contains(window_result.result_json, "\"accepted_mode_count\":1}"),
+          "native window applies the exact user publication cap after merging");
+    check(contains(window_result.result_json,
+                   "\"floquet_descriptor_certified\":true"),
+          "native window keeps original descriptor certification after merging");
+    check(contains(window_result.result_json, "\"window_complete\":false"),
+          "native merge does not promote selected modes to a certified full window");
+    fullmag_fem_frequency_domain_result_destroy(&window_result);
+    std::printf("PASS: native_floquet_production_window_positive_mass_merge\n");
+
     request.residual_tolerance = 0.0;
     FullmagFemFrequencyDomainResult default_tolerance_result =
         fullmag_fem_modal_eigen_solve(&request);

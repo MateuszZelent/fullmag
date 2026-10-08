@@ -3072,25 +3072,52 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         }
     }
 
-    // The native shared-domain owner keeps the mass metric on the backend
-    // side.  Materialising its CSR mass here would reintroduce the dense
-    // Rust/CPU allocation that this path is designed to avoid.  Native modes
-    // therefore use the bounded identity fallback for deduplication until a
-    // sparse mass inner-product hook is available.
     std::vector<double> sparse_mass_matrix_row_major;
     const double *deduplication_mass_matrix = nullptr;
-    if (request.floquet_shared_domain_operator == nullptr) {
+    std::vector<SLEPcModalAcceptedMode> accepted_modes;
+    if (request.floquet_shared_domain_operator != nullptr) {
+        // All subwindow candidates refer to the same owned phase-reduced
+        // tangent space. Reuse its physical mass without a dense allocation.
+        std::vector<detail::CertifiedFloquetModalCandidate> merge_candidates;
+        merge_candidates.reserve(candidate_modes.size());
+        for (SLEPcModalAcceptedMode &mode : candidate_modes) {
+            detail::CertifiedFloquetModalCandidate candidate{};
+            candidate.mode = std::move(mode);
+            candidate.target_distance = 0.0;
+            merge_candidates.push_back(std::move(candidate));
+        }
+        const std::size_t merge_candidate_count = merge_candidates.size();
+        detail::FloquetModalCandidateFinalization merged =
+            detail::finalize_certified_floquet_candidates(
+                std::move(merge_candidates),
+                request.floquet_shared_domain_operator->q_complex_dof_count,
+                request.floquet_shared_domain_operator->positive_tangent_mass,
+                merge_candidate_count);
+        if (!merged.success) {
+            // Never turn a failed metric into an empty/exhausted success,
+            // and retain an earlier hard subwindow failure if one occurred.
+            if (!subwindow_hard_failure) {
+                subwindow_hard_failure = true;
+                subwindow_failure_reason = merged.failure_reason;
+            }
+        } else {
+            accepted_modes.reserve(merged.accepted_candidates.size());
+            for (detail::CertifiedFloquetModalCandidate &candidate :
+                 merged.accepted_candidates) {
+                accepted_modes.push_back(std::move(candidate.mode));
+            }
+        }
+    } else {
         sparse_mass_matrix_row_major =
             csr_matrix_view_to_dense_row_major(request.mfem_sparse_mass_csr);
         deduplication_mass_matrix = sparse_mass_matrix_row_major.empty()
             ? nullptr
             : sparse_mass_matrix_row_major.data();
-    }
-    std::vector<SLEPcModalAcceptedMode> accepted_modes =
-        deduplicate_slepc_modes_by_overlap(
+        accepted_modes = deduplicate_slepc_modes_by_overlap(
             candidate_modes,
             static_cast<std::size_t>(sparse_modal_tangent_dof_count(request)),
             deduplication_mass_matrix);
+    }
     std::sort(
         accepted_modes.begin(),
         accepted_modes.end(),
@@ -3168,7 +3195,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             ? subwindow_failure_reason : "subwindow_solver_failed";
         result.status = FrequencyDomainStatus::solve_error;
         result.error_message =
-            "native FEM modal_eigen production CPU sparse CSR multi-shift solve stopped after a hard subwindow failure: " +
+            "native FEM modal_eigen production CPU sparse CSR multi-shift solve stopped after a hard subwindow or candidate merge failure: " +
             std::string(failure_reason);
         result.diagnostics_json =
             "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
@@ -3270,11 +3297,13 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     result.status = FrequencyDomainStatus::ok;
     result.error_message.clear();
     const char *deduplication_inner_product =
-        deduplication_mass_matrix != nullptr ? "mfem_sparse_tangent_mass" :
-                                               "identity_tangent_dof";
+        native_floquet_sparse ? "floquet_positive_tangent_mass" :
+        (deduplication_mass_matrix != nullptr ? "mfem_sparse_tangent_mass" :
+                                               "identity_tangent_dof");
     const char *deduplication_mass_matrix_status =
-        deduplication_mass_matrix != nullptr ? "provided_sparse_csr" :
-                                               "identity_fallback";
+        native_floquet_sparse ? "provided_complex_csr" :
+        (deduplication_mass_matrix != nullptr ? "provided_sparse_csr" :
+                                               "identity_fallback");
     result.diagnostics_json =
         "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
         "\"study_product\":\"modal_eigen\","
