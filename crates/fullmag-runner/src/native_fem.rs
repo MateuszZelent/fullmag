@@ -2021,6 +2021,7 @@ fn make_test_plan() -> fullmag_ir::FemPlanIR {
         time_stage: Default::default(),
         current_modules: vec![],
         spin_transport_plans: vec![],
+        charge_transport_plans: vec![],
         gyromagnetic_ratio: 2.211e5,
         precision: ExecutionPrecision::Double,
         exchange_bc: ExchangeBoundaryCondition::Neumann,

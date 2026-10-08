@@ -108,3 +108,42 @@ dotyczące komendy koloru; nie zgłasza naprawy pozostałych.
 CI należy ponownie sprawdzić dla nowego HEAD. Zielone lokalne kontrole tego
 przyrostu nie oznaczają zielonego CI całego pakietu. Nadal brakuje kwalifikacji
 pełnego current → reusable field → LLG/FFT oraz wszystkich czterech realizacji.
+
+## Drugi przyrost — fixture FEM i semantyczny eksport CSG
+
+Punkt wyjścia: `c423b4c310f27c20e7cd37e7e1049f1cb0143cad`.
+
+- `crates/fullmag-runner/src/native_fem.rs::make_test_plan`: dodano
+  `charge_transport_plans: vec![]` do istniejącego konstruktora objętego
+  `#[cfg(test)]`. Odpowiada to `FemPlanIR::default()` w
+  `crates/fullmag-ir/src/plan.rs`. Fixture nie zadawał modułu charge;
+  nie dodano go ani nie zmieniono kodu produkcyjnego solvera.
+- `packages/fullmag-py/tests/test_api.py`,
+  `test_builder_draft_exports_structured_csg_geometry`: zastąpiono
+  dopasowanie tekstu translacji sprawdzeniem AST. Wymagana jest dokładnie
+  jedna translacja z dokładnym wektorem `(15e-9, 0.0, 0.0)`.
+  Pozostałe asercje geometrii Box/Difference/Cylinder zachowano.
+  Równoważny zapis zer całkowitych i zmiennoprzecinkowych jest akceptowany;
+  błędny wektor, brak lub dodatkowa translacja nadal powodują odmowę.
+  Produkcyjny `_py_float_roundtrip` i renderer nie zostały zmienione.
+
+Weryfikacja bez buildu, unit-test runnera i solvera:
+
+- Python `-B`, kontrola produkcyjnego `_render_geometry_expr` na tej samej
+  geometrii CSG: wartości translacji PASS; rzeczywisty literal zawiera
+  `(1.5e-08, 0.0, 0.0)`.
+- Niezależny wektor o długiej mantysie: dokładny round-trip trzech wartości
+  IEEE-754 sprawdzony przez `float.hex()`, PASS.
+- `ast.parse` zmienionego pliku Python: PASS.
+- `git diff --check` dla przyrostu: PASS.
+- Niezależne review dwóch plików: brak Required/Blocker.
+- Próba dodatkowego parsera Rust nie została wykonana: środowisko
+  `contract-python` nie ma modułu `tree_sitter` (`ModuleNotFoundError`).
+  Nie instalowano zależności ani nie zastępowano tego kompilacją.
+  Składnia/typowanie i testy Rust pozostają **NOT VERIFIED** w tym przyroście.
+- Nie uruchomiono całego testu z `load_problem_from_script`, suite Python
+  ani Rust/Vitest. Kontrole in-memory nie są dowodem całego round-trip
+  sceny ani rozwiązania naukowego. Nowe CI musi potwierdzić obie korekty.
+
+To postęp T01 i bramek T18, nie odbiór całego planu. Pozostałe blokady
+frontendu, publikacji naukowej i browser smoke nadal wymagają naprawy.
