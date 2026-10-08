@@ -1437,11 +1437,7 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
   await expandInspectorNode(page, resultRootId);
   await expandInspectorNode(page, dispersionRootId);
   await expandInspectorNode(page, modalStageId);
-  await selectResultInspectorNode(page, inspector, `${modalStageId}:branches`, {
-    owner: "frequency-domain-results-dispersion-modal-branches",
-    heading: "Mode Branches",
-    label: "Modal mode branches",
-  });
+  await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
   await runADispersionRequest;
   assert(
     fixture.modalDispersionRace.runARequestCount > 0,
@@ -1661,11 +1657,20 @@ async function selectInspectorResultBranch(
   await expandInspectorNode(page, resultRootId);
   await expandInspectorNode(page, dispersionRootId);
   await expandInspectorNode(page, modalStageId);
-  await selectResultInspectorNode(page, inspector, `${modalStageId}:branches`, {
-    owner: "frequency-domain-results-dispersion-modal-branches",
-    heading: "Mode Branches",
-    label: "Modal mode branches",
-  });
+  const branchesId = `${modalStageId}:branches`;
+  await expandInspectorNode(page, branchesId);
+  const branchId = `${branchesId}:branch:branch-0`;
+  await ensureModelNodeVisible(page, branchId);
+  await page.locator(`[data-node-id="${branchId}"]`).click();
+  await page.waitForFunction(
+    (id) => document.querySelector(`[data-node-id="${id}"]`)?.getAttribute("aria-selected") === "true",
+    branchId,
+    { timeout: 60_000 },
+  );
+  await inspector.locator(
+    '[data-inspector-owner="frequency-domain.eigen-branch"][data-inspector-surface="eigen-branch-detail"]',
+  ).waitFor({ state: "visible", timeout: 60_000 });
+  await inspector.getByRole("heading", { exact: true, level: 3, name: "Eigen Branch Detail" }).waitFor();
 }
 
 async function exportBranchSampleCsv(page, inspector, sampleIndex, rawModeIndex) {

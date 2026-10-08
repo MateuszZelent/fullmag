@@ -524,3 +524,35 @@ niezgodność sample_id z eksportem CSV. Hash fixture jest zgodnym identyfikator
 Kontrole źródeł wykonano sekwencyjnie po odmowie współdzielonej blokady.
 Lokalny zakaz kompilacji testów pozostaje zachowany. Zielone źródła nie
 zastępują runtime, browser/WebGL ani kwalifikacji naukowej. Cel jest aktywny.
+
+## Checkpoint CI 37756983914 — wymagane dalsze naprawy
+
+Run dla 9a7c61635c00adf44e0b9672834659425cf05bef zakończył się FAILURE.
+Control Room contracts, API hygiene, generated API determinism, FDM relaxation
+oraz Windows volatile storage przeszły. Nie oznacza to przejścia całej bramki.
+
+Rust job 113243853060 zatrzymał się podczas kompilacji testów: brak importu
+FieldVectorIndexing w module tests pliku fields.rs. Commit
+d27420c07c0baa2ad46b0b442b4c35b0e4901547 dodaje wyłącznie ten import i ograniczoną
+diagnostykę C ABI. Native job 113243853149 przechodzi mode-kinematics i Floquet
+modal solver, lecz CABI odrzuca raw_vector_wins. Nowa diagnostyka wypisze status,
+błąd i ograniczony JSON przed niezmienioną asercją. Przyczyna produkcyjna nadal
+nie została potwierdzona; nie zmieniono solvera na podstawie przypuszczenia.
+
+Browser job 113243853066: timeout przy Plot sample 1 mode 2 in 3D. Przegląd
+potwierdził wybór aggregate branches zamiast child branch-0. Korekta fixture
+wybiera pojedynczą gałąź i wymaga jej ownera, powierzchni oraz nagłówka. Kontrole
+odrzucania obcego run, liczby żądań i rzeczywistego uniformu WebGL pozostają.
+Wykonanie poprawionej bramki jest nadal wymagane. Python nadal wykazuje znany
+błąd dokładnych warstw siatki; nie pominięto tej regresji.
+
+Hook React Doctor dla 9a7c616 zgłosił 19 ostrzeżeń, score 64/100, przy skanowaniu
+bez rozpoznania frameworka. Pełny React Doctor nie jest potwierdzony. Przejrzano
+wszystkie wskazane miejsca: kontrolowane URL celowo odrzucają wadliwą konfigurację,
+pętle API odczytują zakresy/chunki, a sekwencje fixture sprawdzają zależne kroki UI.
+Kilka odczytów pól i diagnostyki błędu mogłoby działać równolegle, lecz są to
+sugestie wydajności testu, bez dowodu błędu produktu. Nie dodano suppressions ani
+instalacji nowego narzędzia. Testy wykonywane są wyłącznie w GitHub Actions.
+
+PR #97 pozostaje OPEN; nie wykonano merge. Cel nadal aktywny, z niezamkniętymi
+uwagami i bramkami runtime/provider/nauki opisanymi wyżej.
