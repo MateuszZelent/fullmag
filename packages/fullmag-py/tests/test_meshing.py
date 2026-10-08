@@ -5641,6 +5641,36 @@ class MeshScaffoldTests(unittest.TestCase):
         )
         self.assertEqual(mesh.periodic_mesh_certificate, certificate)
         self.assertEqual(mesh.to_ir("mirrored")["periodic_mesh_certificate"], certificate)
+
+        from fullmag.meshing._gmsh_occ import _scale_periodic_boundary_pairs
+        from fullmag.meshing._gmsh_swept import _recertify_scaled_periodic_mesh
+
+        si_pairs = _scale_periodic_boundary_pairs(pairs, scale=1.0e6)
+        si_mesh = MeshData.from_legacy_tet4(
+            nodes=nodes / 1.0e6,
+            elements=elements,
+            element_markers=np.ones(elements.shape[0], dtype=np.int32),
+            boundary_faces=faces,
+            boundary_markers=markers,
+            periodic_boundary_pairs=si_pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_mesh_certificate=certificate,
+        )
+        _recertify_scaled_periodic_mesh(si_mesh)
+        expected_si_certificate = certify_extracted_periodic_mesh(
+            nodes / 1.0e6, faces, markers, si_pairs, node_pairs,
+        )
+        self.assertEqual(si_mesh.periodic_mesh_certificate, expected_si_certificate)
+        self.assertNotEqual(
+            si_mesh.periodic_mesh_certificate["topology_fingerprint"],
+            certificate["topology_fingerprint"],
+        )
+        self.assertEqual(mesh.periodic_mesh_certificate, certificate)
+        si_mesh.periodic_boundary_pairs[0]["translation"] = [2.0e-6, 0.0, 0.0]
+        with self.assertRaisesRegex(ValueError, "translation residual"):
+            _recertify_scaled_periodic_mesh(si_mesh)
+        self.assertIsNone(si_mesh.periodic_mesh_certificate)
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             json_path = Path(tmp_dir) / "mirrored.json"
             npz_path = Path(tmp_dir) / "mirrored.npz"

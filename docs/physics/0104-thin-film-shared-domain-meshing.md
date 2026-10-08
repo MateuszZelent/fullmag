@@ -320,3 +320,17 @@ Konwersja dotyczy dwóch tras ring; cylinder obliczający jakość już z węzł
 nie podlega ponownej konwersji. Bramki: raport syntetyczny bez mutacji wejścia,
 zgodność ring z objętościami końcowych węzłów SI oraz kontrola cylinder.
 Zmiana jest korektą jednostek metadanych, nie warstw, fizyki ani progów jakości.
+
+
+### Certyfikat periodyczny końcowej reprezentacji SI
+
+Fingerprint certyfikatu v6 obejmuje bajty współrzędnych, facetów i markerów.
+Po konwersji ring z mikrometrów do metrów nie wolno zachować certyfikatu
+sprzed skalowania. `_recertify_scaled_periodic_mesh` ponownie sprawdza
+bijekcję węzłów i ścian, przeciwne normalne oraz domknięcie narożników na
+końcowym MeshData, używając przeskalowanych translacji i tolerancji SI.
+Błąd certyfikacji zatrzymuje publikację; sama podmiana fingerprintu nie wystarcza.
+Dotyczy obu tras ring, wspólnych dla FEM CPU/GPU; FDM nie dotyczy.
+Nie zmienia geometrii ani tolerancji. Regresja syntetyczna porównuje certyfikat
+z niezależnym przeliczeniem na SI i wymaga odrzucenia błędnej translacji.
+Aktualny status wykonania tej regresji i integracji Gmsh: NOT VERIFIED.

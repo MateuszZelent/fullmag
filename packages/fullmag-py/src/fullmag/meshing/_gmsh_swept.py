@@ -57,7 +57,11 @@ from ._gmsh_infra import (
     _configure_gmsh_threads,
     _GmshProgressLogger,
 )
-from ._gmsh_extraction import _extract_mesh_data, _extract_quality_metrics
+from ._gmsh_extraction import (
+    _extract_mesh_data,
+    _extract_quality_metrics,
+    certify_extracted_periodic_mesh,
+)
 from ._gmsh_fields import (
     _add_surface_threshold_field,
     _apply_mesh_options,
@@ -195,6 +199,20 @@ def _quality_volumes_in_si(
             [volume * volume_factor for volume in quality.element_volume]
             if quality.element_volume is not None else None
         ),
+    )
+
+
+def _recertify_scaled_periodic_mesh(mesh: MeshData) -> None:
+    """Bind periodic evidence to final SI coordinates, validating all relations."""
+    mesh.periodic_mesh_certificate = None
+    if not mesh.periodic_boundary_pairs:
+        return
+    mesh.periodic_mesh_certificate = certify_extracted_periodic_mesh(
+        mesh.nodes,
+        mesh.boundary_faces,
+        mesh.boundary_markers,
+        mesh.periodic_boundary_pairs,
+        mesh.periodic_node_pairs,
     )
 
 
@@ -2442,7 +2460,7 @@ def _generate_coincident_ring_airbox_mesh(
                 scale=SCALE,
             ),
             periodic_node_pairs=raw_mesh.periodic_node_pairs,
-            periodic_mesh_certificate=raw_mesh.periodic_mesh_certificate,
+            periodic_mesh_certificate=None,
             quality=_quality_volumes_in_si(raw_mesh.quality, SCALE),
             per_domain_quality=(
                 {marker: _quality_volumes_in_si(quality, SCALE)
@@ -2450,6 +2468,7 @@ def _generate_coincident_ring_airbox_mesh(
                 if raw_mesh.per_domain_quality is not None else None
             ),
         )
+        _recertify_scaled_periodic_mesh(result)
         if scoped_layer_partitioning:
             scoped_descriptors = [
                 config
@@ -2839,7 +2858,7 @@ def generate_swept_box_cylinder_ring_mesh(
                 scale=SCALE,
             ),
             periodic_node_pairs=raw_mesh.periodic_node_pairs,
-            periodic_mesh_certificate=raw_mesh.periodic_mesh_certificate,
+            periodic_mesh_certificate=None,
             quality=_quality_volumes_in_si(raw_mesh.quality, SCALE),
             per_domain_quality=(
                 {marker: _quality_volumes_in_si(quality, SCALE)
@@ -2847,6 +2866,7 @@ def generate_swept_box_cylinder_ring_mesh(
                 if raw_mesh.per_domain_quality is not None else None
             ),
         )
+        _recertify_scaled_periodic_mesh(result)
         result.validate_strict(require_positive_orientation=True)
         emit_progress(
             "Gmsh swept ring realization: "

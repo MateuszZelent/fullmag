@@ -173,6 +173,13 @@
       "symbol": "test_scaled_quality_preserves_dimensionless_metrics_and_input",
       "responsibility": "Check dimensional conversion without mutating source or dimensionless quality.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "periodic-si-recertification",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_recertify_scaled_periodic_mesh",
+      "responsibility": "Revalidate final SI periodic relations and rebuild their coordinate-bound certificate.",
+      "evidence_status": "planned_contract_runtime_not_verified"
     }
   ],
   "public_api": {
