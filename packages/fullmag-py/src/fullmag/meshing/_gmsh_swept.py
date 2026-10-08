@@ -1985,6 +1985,10 @@ def generate_swept_tetrahedral_box_airbox_mesh(
     options: MeshOptions,
 ) -> MeshData:
     """Realize a fixed-layer Tet4 Box, partitioning scoped fields by exact z layers."""
+    if airbox is not None and int(airbox.boundary_marker) == 10:
+        raise ValueError(
+            "shared-domain interface and outer boundary markers must be distinct"
+        )
     _clear_scoped_layer_plane_proofs(options)
     if order != 1 or distribution != DISTRIBUTION_FIXED or recombine:
         raise ValueError("layered tetrahedral Box requires P1 fixed non-recombined layers")

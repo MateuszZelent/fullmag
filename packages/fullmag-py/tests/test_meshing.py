@@ -12600,6 +12600,72 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, size_field)
         self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, lower_field)
 
+    def test_layered_box_marker_collision_precedes_gmsh_and_proof_cleanup(self) -> None:
+        proof = object()
+        size_field = {
+            "kind": "ComponentVolumeConstant",
+            _SCOPED_LAYER_PLANE_PROOF_KEY: proof,
+        }
+        lower_field = {
+            "kind": "ComponentRegionLowerBound",
+            _SCOPED_LAYER_PLANE_PROOF_KEY: proof,
+        }
+        options = MeshOptions(
+            size_fields=[size_field],
+            lower_bound_fields=[lower_field],
+        )
+        with patch(
+            "fullmag.meshing._gmsh_swept._import_gmsh",
+            side_effect=AssertionError("Gmsh import must not run"),
+        ) as import_gmsh:
+            with self.assertRaisesRegex(
+                ValueError,
+                "shared-domain interface and outer boundary markers must be distinct",
+            ):
+                generate_swept_tetrahedral_box_airbox_mesh(
+                    fm.Box(4.0e-6, 2.0e-6, 0.2e-6),
+                    0.8e-6,
+                    1,
+                    order=1,
+                    distribution="fixed",
+                    recombine=False,
+                    airbox=AirboxOptions(boundary_marker=10),
+                    options=options,
+                )
+
+        import_gmsh.assert_not_called()
+        self.assertIs(size_field[_SCOPED_LAYER_PLANE_PROOF_KEY], proof)
+        self.assertIs(lower_field[_SCOPED_LAYER_PLANE_PROOF_KEY], proof)
+
+    def test_layered_box_accepts_distinct_outer_boundary_marker(self) -> None:
+        mesh = object()
+        airbox = AirboxOptions(
+            size=(4.0e-6, 2.0e-6, 4.0e-6),
+            center=(0.0, 0.0, 0.0),
+            boundary_marker=99,
+        )
+        with patch(
+            "fullmag.meshing._gmsh_swept._generate_coincident_ring_airbox_mesh",
+            return_value=mesh,
+        ) as generate_partitioned, patch(
+            "fullmag.meshing._gmsh_swept._import_gmsh",
+            side_effect=AssertionError("Gmsh import must not run"),
+        ) as import_gmsh:
+            result = generate_swept_tetrahedral_box_airbox_mesh(
+                fm.Box(4.0e-6, 2.0e-6, 0.2e-6),
+                0.8e-6,
+                1,
+                order=1,
+                distribution="fixed",
+                recombine=False,
+                airbox=airbox,
+                options=MeshOptions(),
+            )
+
+        self.assertIs(result, mesh)
+        generate_partitioned.assert_called_once()
+        import_gmsh.assert_not_called()
+
     def test_edge_midpoint_density_sample_preserves_coarse_in_region_edge(self) -> None:
         nodes = np.asarray(
             [
