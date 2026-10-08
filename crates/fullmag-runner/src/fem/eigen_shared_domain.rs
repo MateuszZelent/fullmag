@@ -1039,7 +1039,7 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
         &external_field_h_ext0_xyz,
     )?);
     let (uniaxial_axis_xyz, uniaxial_anisotropy_field_a_per_m) = if let Some((ku, normalized)) =
-        super::equilibrium_identity::constant_uniaxial_descriptor(&plan.material)?
+        super::equilibrium_identity::constant_uniaxial_descriptor(&plan.material)?.filter(|(ku, _)| *ku != 0.0)
     {
         if !ms_values.is_empty() {
             return Err(RunError {
@@ -1369,20 +1369,29 @@ pub(super) fn validate_shared_domain_modal_scope(
             });
         }
     }
-    let unsupported_local_term = plan.material.uniaxial_anisotropy.is_some()
-        || plan.material.uniaxial_anisotropy_k2.is_some()
-        || plan.material.anisotropy_axis.is_some()
-        || plan.material.cubic_anisotropy_kc1.is_some()
-        || plan.material.cubic_anisotropy_kc2.is_some()
-        || plan.material.cubic_anisotropy_kc3.is_some()
-        || plan.material.cubic_anisotropy_axis1.is_some()
-        || plan.material.cubic_anisotropy_axis2.is_some()
+    let unsupported_anisotropy = [
+        plan.material.uniaxial_anisotropy,
+        plan.material.uniaxial_anisotropy_k2,
+        plan.material.cubic_anisotropy_kc1,
+        plan.material.cubic_anisotropy_kc2,
+        plan.material.cubic_anisotropy_kc3,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value != 0.0)
+        || [
+            &plan.material.ku_field,
+            &plan.material.ku2_field,
+            &plan.material.kc1_field,
+            &plan.material.kc2_field,
+            &plan.material.kc3_field,
+        ]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|value| *value != 0.0);
+    let unsupported_local_term = unsupported_anisotropy
         || plan.material.a_field.is_some()
-        || plan.material.ku_field.is_some()
-        || plan.material.ku2_field.is_some()
-        || plan.material.kc1_field.is_some()
-        || plan.material.kc2_field.is_some()
-        || plan.material.kc3_field.is_some()
         || plan.material.dind_field.is_some()
         || plan.material.dbulk_field.is_some()
         || plan.interfacial_dmi.is_some()

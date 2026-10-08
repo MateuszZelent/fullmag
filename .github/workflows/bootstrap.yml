@@ -91,7 +91,12 @@ jobs:
           cargo test -p fullmag-plan eigen_output_validation_tests --lib
 
       - name: Run modal solver policy planning contracts
-        run: cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
+        run: |
+          cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
+          cargo test -p fullmag-plan fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path --lib
+          cargo test -p fullmag-runner shared_domain_modal_scope_rejects_uncertified_local_tangent_terms --lib
+          cargo test -p fullmag-runner material_identity_tests --lib
+          cargo test -p fullmag-runner shared_domain_payload_omits_zero_anisotropy_after_certified_linearization --lib
 
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib

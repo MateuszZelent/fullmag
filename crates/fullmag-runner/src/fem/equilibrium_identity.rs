@@ -53,13 +53,17 @@ pub(super) fn constant_uniaxial_descriptor(
     material: &fullmag_ir::MaterialIR,
 ) -> Result<Option<(f64, [f64; 3])>, RunError> {
     let Some(ku) = material.uniaxial_anisotropy else {
-        if material.anisotropy_axis.is_some() {
-            return Err(unsupported_source_identity(
-                "uniaxial axis supplied without Ku",
-            ));
-        }
         return Ok(None);
     };
+    // A zero coefficient has no field and does not require uniform Ms.
+    // Retain the historical V2 descriptor for already legal uniform-Ms zero
+    // inputs so their published material-signature bytes remain unchanged.
+    if ku == 0.0
+        && (material.ms_field.is_some()
+            || material.anisotropy_axis.is_some_and(|axis| axis.iter().all(|value| *value == 0.0)))
+    {
+        return Ok(None);
+    }
     if !ku.is_finite() || !material.saturation_magnetisation.is_finite()
         || material.saturation_magnetisation <= 0.0 || material.ms_field.is_some()
     {
@@ -341,17 +345,26 @@ fn validate_supported_material(
     source: &str,
 ) -> Result<(), RunError> {
     constant_uniaxial_descriptor(material)?;
-    if material.uniaxial_anisotropy_k2.is_some()
-        || material.cubic_anisotropy_kc1.is_some()
-        || material.cubic_anisotropy_kc2.is_some()
-        || material.cubic_anisotropy_kc3.is_some()
-        || material.cubic_anisotropy_axis1.is_some()
-        || material.cubic_anisotropy_axis2.is_some()
-        || material.ku_field.is_some()
-        || material.ku2_field.is_some()
-        || material.kc1_field.is_some()
-        || material.kc2_field.is_some()
-        || material.kc3_field.is_some()
+    if [
+        material.uniaxial_anisotropy_k2,
+        material.cubic_anisotropy_kc1,
+        material.cubic_anisotropy_kc2,
+        material.cubic_anisotropy_kc3,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value != 0.0)
+        || [
+            &material.ku_field,
+            &material.ku2_field,
+            &material.kc1_field,
+            &material.kc2_field,
+            &material.kc3_field,
+        ]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|value| *value != 0.0)
         || material.interfacial_dmi.is_some()
         || material.bulk_dmi.is_some()
         || material.dind_field.is_some()
@@ -618,9 +631,31 @@ mod material_identity_tests {
         validate_supported_relax_source(&baseline).unwrap();
         let mut ku = baseline.clone();
         ku.material.uniaxial_anisotropy = Some(0.0);
+        ku.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        ku.material.uniaxial_anisotropy_k2 = Some(0.0);
+        ku.material.cubic_anisotropy_kc1 = Some(0.0);
+        ku.material.cubic_anisotropy_kc2 = Some(0.0);
+        ku.material.cubic_anisotropy_kc3 = Some(0.0);
+        ku.material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+        ku.material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+        ku.material.ku_field = Some(vec![0.0]);
+        ku.material.ku2_field = Some(vec![0.0]);
+        ku.material.kc1_field = Some(vec![0.0]);
+        ku.material.kc2_field = Some(vec![0.0]);
+        ku.material.kc3_field = Some(vec![0.0]);
         validate_supported_relax_source(&ku).unwrap();
         ku.material.ms_field = Some(vec![800_000.0]);
-        assert!(validate_supported_relax_source(&ku).is_err());
+        assert_eq!(constant_uniaxial_descriptor(&ku.material).unwrap(), None);
+        validate_supported_relax_source(&ku)
+            .expect("zero Ku and zero higher-order fields do not require uniform Ms");
+        let mut absent_ku_with_same_ms = ku.material.clone();
+        absent_ku_with_same_ms.uniaxial_anisotropy = None;
+        absent_ku_with_same_ms.anisotropy_axis = None;
+        assert_eq!(
+            equilibrium_material_signature(&ku.material).unwrap(),
+            equilibrium_material_signature(&absent_ku_with_same_ms).unwrap(),
+            "zero Ku with nodal Ms must use the same V1 material identity as absent Ku"
+        );
         for mutation in 0..5 {
             let mut plan = baseline.clone();
             match mutation {
@@ -632,6 +667,53 @@ mod material_identity_tests {
             }
             assert!(validate_supported_relax_source(&plan).is_err());
         }
+        for mutation in 0..8 {
+            let mut plan = baseline.clone();
+            match mutation {
+                0 => plan.material.uniaxial_anisotropy_k2 = Some(1.0e-40),
+                1 => plan.material.cubic_anisotropy_kc1 = Some(1.0e-40),
+                2 => plan.material.cubic_anisotropy_kc2 = Some(1.0e-40),
+                3 => plan.material.cubic_anisotropy_kc3 = Some(1.0e-40),
+                4 => plan.material.ku_field = Some(vec![1.0e-40]),
+                5 => plan.material.ku2_field = Some(vec![1.0e-40]),
+                6 => plan.material.kc1_field = Some(vec![1.0e-40]),
+                _ => plan.material.kc2_field = Some(vec![1.0e-40]),
+            }
+            assert!(
+                validate_supported_relax_source(&plan).is_err(),
+                "nonzero higher-order or nodal anisotropy contribution {mutation} must remain unsupported"
+            );
+        }
+        let mut nonzero_kc3_field = baseline;
+        nonzero_kc3_field.material.kc3_field = Some(vec![1.0e-40]);
+        assert!(validate_supported_relax_source(&nonzero_kc3_field).is_err());
+    }
+
+    #[test]
+    fn zero_ku_with_zero_axis_is_absent_from_material_identity() {
+        let mut material = fullmag_ir::MaterialIR {
+            saturation_magnetisation: 800_000.0,
+            exchange_stiffness: 1.3e-11,
+            uniaxial_anisotropy: Some(0.0),
+            anisotropy_axis: Some([0.0; 3]),
+            ..Default::default()
+        };
+        assert_eq!(constant_uniaxial_descriptor(&material).unwrap(), None);
+
+        let zero_ku = equilibrium_material_signature(&material).unwrap();
+        material.uniaxial_anisotropy = None;
+        material.anisotropy_axis = None;
+        assert_eq!(
+            zero_ku,
+            equilibrium_material_signature(&material).unwrap(),
+            "an undefined axis cannot add a material identity when Ku is exactly zero"
+        );
+
+        let mut plan = fullmag_ir::FemPlanIR::default();
+        plan.material.uniaxial_anisotropy = Some(0.0);
+        plan.material.anisotropy_axis = Some([0.0; 3]);
+        validate_supported_relax_source(&plan)
+            .expect("an all-zero Ku descriptor has no physical axis requirement");
     }
 
     #[test]
@@ -684,6 +766,12 @@ mod material_identity_tests {
             ..Default::default()
         };
         let original = equilibrium_material_signature_and_preimage(&material).unwrap();
+        assert_eq!(
+            original.0,
+            "sha256:5aff2c9f1fa917b8f55646cdb181e93feb1d2d8052d265d7256da089944e0f1b",
+            "uniform-Ms Ku=0 must retain the historical V2 material identity"
+        );
+        assert!(constant_uniaxial_descriptor(&material).unwrap().is_some());
         material.uniaxial_anisotropy = Some(0.0);
         material.anisotropy_axis = Some([-4.0, -6.0, -0.0]);
         assert_eq!(original, equilibrium_material_signature_and_preimage(&material).unwrap());

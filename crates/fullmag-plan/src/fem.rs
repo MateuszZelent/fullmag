@@ -1667,19 +1667,30 @@ fn first_unsupported_floquet_airbox_local_interaction(
     bulk_dmi: Option<f64>,
     spin_wave_bc: &fullmag_ir::SpinWaveBoundaryConditionIR,
 ) -> Option<&'static str> {
-    if material.uniaxial_anisotropy.is_some()
-        || material.uniaxial_anisotropy_k2.is_some()
-        || material.anisotropy_axis.is_some()
-        || material.cubic_anisotropy_kc1.is_some()
-        || material.cubic_anisotropy_kc2.is_some()
-        || material.cubic_anisotropy_kc3.is_some()
-        || material.cubic_anisotropy_axis1.is_some()
-        || material.cubic_anisotropy_axis2.is_some()
-        || material.ku_field.is_some()
-        || material.ku2_field.is_some()
-        || material.kc1_field.is_some()
-        || material.kc2_field.is_some()
-        || material.kc3_field.is_some()
+    // Axis metadata and exactly zero coefficients do not activate anisotropy.
+    // Keep every nonzero coefficient unsupported; no numerical floor belongs
+    // in this capability boundary.
+    if [
+        material.uniaxial_anisotropy,
+        material.uniaxial_anisotropy_k2,
+        material.cubic_anisotropy_kc1,
+        material.cubic_anisotropy_kc2,
+        material.cubic_anisotropy_kc3,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value != 0.0)
+        || [
+            &material.ku_field,
+            &material.ku2_field,
+            &material.kc1_field,
+            &material.kc2_field,
+            &material.kc3_field,
+        ]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|value| *value != 0.0)
     {
         return Some("anisotropy");
     }

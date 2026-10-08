@@ -13129,6 +13129,48 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
 
+    let mut inactive_anisotropy = ir.clone();
+    let inactive_material = &mut inactive_anisotropy.materials[0];
+    inactive_material.uniaxial_anisotropy = Some(0.0);
+    inactive_material.uniaxial_anisotropy_k2 = Some(-0.0);
+    inactive_material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    inactive_material.cubic_anisotropy_kc1 = Some(0.0);
+    inactive_material.cubic_anisotropy_kc2 = Some(0.0);
+    inactive_material.cubic_anisotropy_kc3 = Some(0.0);
+    inactive_material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+    inactive_material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+    for field in [
+        &mut inactive_material.ku_field,
+        &mut inactive_material.ku2_field,
+        &mut inactive_material.kc1_field,
+        &mut inactive_material.kc2_field,
+        &mut inactive_material.kc3_field,
+    ] {
+        *field = Some(vec![0.0; 8]);
+    }
+    let inactive_plan = plan(&inactive_anisotropy)
+        .expect("zero coefficients and axis metadata must keep the Floquet airbox lane legal");
+    let inactive_resolution = inactive_plan.provenance.fem_eigen_execution_resolution
+        .expect("inactive anisotropy retains execution provenance");
+    assert_eq!(inactive_resolution.resolved_engine,
+        fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc);
+    assert!(!inactive_resolution.fallback_used);
+
+    let mut tiny_active_anisotropy = inactive_anisotropy.clone();
+    tiny_active_anisotropy.materials[0].uniaxial_anisotropy = Some(1.0e-40);
+    let tiny_error = plan(&tiny_active_anisotropy)
+        .expect_err("even a tiny nonzero anisotropy must remain unsupported");
+    assert!(tiny_error.reasons.iter().any(|reason|
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("anisotropy")));
+    tiny_active_anisotropy.materials[0].uniaxial_anisotropy = Some(0.0);
+    tiny_active_anisotropy.materials[0].kc3_field.as_mut().unwrap()[7] = -1.0e-40;
+    let tiny_field_error = plan(&tiny_active_anisotropy)
+        .expect_err("even one nonzero nodal anisotropy must remain unsupported");
+    assert!(tiny_field_error.reasons.iter().any(|reason|
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("anisotropy")));
+
     let mut unsupported_anisotropy = ir.clone();
     unsupported_anisotropy.materials[0].uniaxial_anisotropy = Some(1.0e5);
     unsupported_anisotropy.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);

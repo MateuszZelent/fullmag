@@ -421,6 +421,11 @@ fn exact_producer_fixture(with_declared_ku: bool) -> ExactProducerFixture {
         modal_plan.material.uniaxial_anisotropy = Some(0.0);
         modal_plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
     }
+    exact_producer_fixture_for_plan(modal_plan)
+}
+
+fn exact_producer_fixture_for_plan(modal_plan: FemEigenPlanIR) -> ExactProducerFixture {
+    let with_declared_ku = modal_plan.material.uniaxial_anisotropy.is_some();
     let source_plan = relax_source_plan_from_eigen(&modal_plan);
     let source_mesh = crate::types::FemMeshPayload::from(&source_plan);
     let equilibrium_magnetization = modal_plan.equilibrium_magnetization.clone();
@@ -5009,6 +5014,42 @@ fn add_minimal_shared_domain_periodic_airbox(plan: &mut FemEigenPlanIR) {
     });
 }
 
+fn eight_magnetic_node_periodic_airbox_modal_plan() -> FemEigenPlanIR {
+    let mut plan = minimal_native_modal_plan();
+    plan.mesh = modal_v6_xy_shared_domain_mesh();
+    plan.mesh_parts = modal_v6_xy_mesh_parts();
+    plan.mesh_name = plan.mesh.mesh_name.clone();
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.spin_wave_bc = SpinWaveBoundaryConditionIR::Config(
+        fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: SpinWaveBoundaryKindIR::Periodic,
+            boundary_pair_id: None,
+            pair_ids: vec!["x_faces".to_string(), "y_faces".to_string()],
+            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+            surface_anisotropy_ks: None,
+            surface_anisotropy_axis: None,
+        },
+    );
+    plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+        factor: 2.0,
+        grading: 1.2,
+        boundary_marker: 99,
+        bc_kind: Some("robin".to_string()),
+        robin_beta_mode: Some("dipole".to_string()),
+        robin_beta_factor: Some(2.0),
+        shape: Some("bbox".to_string()),
+        factor_source: Some("test".to_string()),
+        boundary_marker_source: Some("test".to_string()),
+    });
+    plan
+}
+
 #[test]
 fn modal_participation_context_aggregates_same_object_parts_by_markers() {
     let mut plan = minimal_native_modal_plan();
@@ -6993,9 +7034,57 @@ fn shared_domain_modal_scope_rejects_nonperiodic_equilibrium_across_a_magnetic_p
 #[test]
 fn shared_domain_modal_scope_rejects_uncertified_local_tangent_terms() {
     let mut plan = minimal_native_modal_plan();
-    plan.material.uniaxial_anisotropy = Some(1.0e3);
     let topology = MeshTopology::from_ir(&plan.mesh).expect("minimal FEM mesh is valid");
     let observables = scope_observables(plan.mesh.nodes.len(), 0.0);
+
+    let mut axes_with_zero_anisotropy = plan.clone();
+    axes_with_zero_anisotropy.material.uniaxial_anisotropy = Some(0.0);
+    axes_with_zero_anisotropy.material.uniaxial_anisotropy_k2 = Some(0.0);
+    axes_with_zero_anisotropy.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_kc1 = Some(0.0);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_kc2 = Some(0.0);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_kc3 = Some(0.0);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+    axes_with_zero_anisotropy.material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+    let zero_field = vec![0.0; plan.mesh.nodes.len()];
+    axes_with_zero_anisotropy.material.ku_field = Some(zero_field.clone());
+    axes_with_zero_anisotropy.material.ku2_field = Some(zero_field.clone());
+    axes_with_zero_anisotropy.material.kc1_field = Some(zero_field.clone());
+    axes_with_zero_anisotropy.material.kc2_field = Some(zero_field.clone());
+    axes_with_zero_anisotropy.material.kc3_field = Some(zero_field);
+    validate_shared_domain_modal_scope(
+        &axes_with_zero_anisotropy,
+        &topology,
+        &plan.equilibrium_magnetization,
+        &observables,
+    )
+    .expect("anisotropy axes with exactly zero coefficients must remain in scope");
+
+    let mut tiny_scalar_anisotropy = plan.clone();
+    tiny_scalar_anisotropy.material.uniaxial_anisotropy = Some(1.0e-40);
+    let error = validate_shared_domain_modal_scope(
+        &tiny_scalar_anisotropy,
+        &topology,
+        &plan.equilibrium_magnetization,
+        &observables,
+    )
+    .expect_err("every nonzero scalar anisotropy coefficient must be rejected");
+    assert!(error.message.contains("anisotropy and DMI tangent terms"));
+
+    let mut tiny_nodal_anisotropy = plan.clone();
+    let mut ku_field = vec![0.0; plan.mesh.nodes.len()];
+    ku_field[0] = 1.0e-40;
+    tiny_nodal_anisotropy.material.ku_field = Some(ku_field);
+    let error = validate_shared_domain_modal_scope(
+        &tiny_nodal_anisotropy,
+        &topology,
+        &plan.equilibrium_magnetization,
+        &observables,
+    )
+    .expect_err("every nonzero nodal anisotropy coefficient must be rejected");
+    assert!(error.message.contains("anisotropy and DMI tangent terms"));
+
+    plan.material.uniaxial_anisotropy = Some(1.0e3);
     let error = validate_shared_domain_modal_scope(
         &plan,
         &topology,
@@ -7087,6 +7176,145 @@ fn native_gpu_k0_modal_selection_rejects_nonzero_k_without_kittel_oracle() {
     });
 
     assert!(!native_gpu_k0_kittel_modal_supported(&plan));
+}
+
+#[test]
+fn shared_domain_payload_omits_zero_anisotropy_after_certified_linearization() {
+    let mut axes_only = eight_magnetic_node_periodic_airbox_modal_plan();
+    axes_only.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+
+    let mut zero_ku_with_nodal_ms = eight_magnetic_node_periodic_airbox_modal_plan();
+    zero_ku_with_nodal_ms.material.uniaxial_anisotropy = Some(0.0);
+    zero_ku_with_nodal_ms.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    zero_ku_with_nodal_ms.material.uniaxial_anisotropy_k2 = Some(0.0);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_kc1 = Some(0.0);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_kc2 = Some(0.0);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_kc3 = Some(0.0);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+    zero_ku_with_nodal_ms.material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+    let zero_field = vec![0.0; zero_ku_with_nodal_ms.mesh.nodes.len()];
+    zero_ku_with_nodal_ms.material.ku_field = Some(zero_field.clone());
+    zero_ku_with_nodal_ms.material.ku2_field = Some(zero_field.clone());
+    zero_ku_with_nodal_ms.material.kc1_field = Some(zero_field.clone());
+    zero_ku_with_nodal_ms.material.kc2_field = Some(zero_field.clone());
+    zero_ku_with_nodal_ms.material.kc3_field = Some(zero_field);
+    zero_ku_with_nodal_ms.material.ms_field =
+        Some(vec![800_000.0; zero_ku_with_nodal_ms.mesh.nodes.len()]);
+
+    let mut uniform_zero_ku = eight_magnetic_node_periodic_airbox_modal_plan();
+    uniform_zero_ku.material.uniaxial_anisotropy = Some(0.0);
+    uniform_zero_ku.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+
+    let mut uniform_zero_ku_with_zero_axis = eight_magnetic_node_periodic_airbox_modal_plan();
+    uniform_zero_ku_with_zero_axis.material.uniaxial_anisotropy = Some(0.0);
+    uniform_zero_ku_with_zero_axis.material.anisotropy_axis = Some([0.0; 3]);
+
+    for (case, plan) in [
+        ("axis without Ku", axes_only),
+        ("zero Ku with nodal Ms", zero_ku_with_nodal_ms),
+        ("uniform-Ms zero Ku with axis", uniform_zero_ku),
+        (
+            "uniform-Ms zero Ku with zero axis",
+            uniform_zero_ku_with_zero_axis,
+        ),
+    ] {
+        let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic airbox mesh is valid");
+        assert_eq!(
+            topology
+                .magnetic_node_volumes
+                .iter()
+                .filter(|volume| **volume > 0.0)
+                .count(),
+            8,
+            "the shared fixture contains eight magnetic nodes"
+        );
+        assert_eq!(
+            topology.n_nodes, 16,
+            "the fixture includes eight airbox nodes"
+        );
+
+        let descriptor =
+            crate::fem::equilibrium_identity::constant_uniaxial_descriptor(&plan.material)
+                .expect("zero or absent Ku must remain valid in identity materialization");
+        assert_eq!(
+            descriptor.is_some(),
+            case == "uniform-Ms zero Ku with axis",
+            "only explicit zero Ku with uniform Ms and a valid axis keeps the historical descriptor"
+        );
+
+        let fixture = exact_producer_fixture_for_plan(plan.clone());
+        let handoff = verified_exact_handoff_from_fixture(
+            &fixture,
+            fixture.producer_provenance.clone(),
+            fixture.exact_artifacts.clone(),
+        )
+        .expect("the standard exact producer helper must create a verified handoff");
+        let material = MaterialParameters::new(
+            plan.material.saturation_magnetisation,
+            plan.material.exchange_stiffness,
+            plan.material.damping,
+        )
+        .expect("fixture material is valid");
+        let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, TimeIntegrator::RK23)
+            .expect("fixture dynamics are valid");
+        let problem = FemLlgProblem::with_terms(
+            topology.clone(),
+            material,
+            dynamics,
+            EffectiveFieldTerms {
+                exchange: plan.enable_exchange,
+                ..EffectiveFieldTerms::default()
+            },
+        );
+        let state = problem
+            .new_state(handoff.equilibrium_magnetization.clone())
+            .expect("certified equilibrium has the expected shape");
+        let observables = problem
+            .observe(&state)
+            .expect("fixture equilibrium observables must be available");
+        let linearization = build_shared_domain_linearization_state(
+            &plan,
+            &topology,
+            &problem,
+            None,
+            Some(&handoff),
+            &handoff.equilibrium_magnetization,
+            &observables,
+        )
+        .expect("the accepted handoff must produce a shared-domain linearization state");
+        let payload = build_native_shared_domain_modal_problem(
+            &plan,
+            &topology,
+            &handoff.equilibrium_magnetization,
+            &observables,
+            Some(&linearization),
+            0,
+        )
+        .expect("zero anisotropy must be admitted by the native payload builder");
+
+        assert!(payload.uniaxial_axis_xyz.is_empty(), "{case}");
+        assert!(
+            payload.uniaxial_anisotropy_field_a_per_m.is_empty(),
+            "{case}"
+        );
+        assert!(payload.anisotropy_term_digest.is_none(), "{case}");
+        assert_eq!(
+            payload.term_presence_mask & MODAL_LINEARIZATION_TERM_ANISOTROPY,
+            0,
+            "zero anisotropy must not advertise an active native tangent term ({case})"
+        );
+
+        if case == "uniform-Ms zero Ku with axis" {
+            let expected_signature =
+                crate::fem::equilibrium_identity::equilibrium_material_signature(&plan.material)
+                    .expect("historical Ku=0 V2 signature");
+            assert_eq!(
+                linearization.equilibrium_artifact["material_signature"].as_str(),
+                Some(expected_signature.as_str()),
+                "the uniform-Ms zero-Ku consumer must keep the historical V2 identity"
+            );
+        }
+    }
 }
 
 #[test]
