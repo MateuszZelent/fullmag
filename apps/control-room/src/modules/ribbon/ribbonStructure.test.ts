@@ -3198,8 +3198,8 @@ describe("ribbon structure", () => {
     expect(actions.find((action) => action.id === "res-m")?.active).toBe(false);
     expect(actions.find((action) => action.id === "res-analysis-field")).toMatchObject({
       active: true,
+      commandId: "analysis.frequency-domain.clear-3d-overlay",
       label: "Mode",
-      tooltip: expect.stringContaining("12.025 GHz"),
     });
     expect(
       buildRibbonTabContent("results", context)

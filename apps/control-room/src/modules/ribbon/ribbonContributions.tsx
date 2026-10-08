@@ -921,7 +921,9 @@ function buildResultsQuantityGroup(
           label: "Mode",
           active: true,
           iconColor: "text-sky-300",
-          tooltip: `${analysisField.label} — choose another quantity to leave the mode view`,
+          // Toggle semantics: pressing the active mode returns to the model quantity.
+          commandId: "analysis.frequency-domain.clear-3d-overlay",
+          tooltip: `${analysisField.label} — click or choose another quantity to leave the mode view`,
         },
       ]
     : [];
