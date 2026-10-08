@@ -541,6 +541,11 @@ async function applyGlobalQuantityFromCommand(
   }
 
   await patchVisualizationState(context, patch, { flush: true });
+  // A mode field is the viewport quantity while it is shown (ADR 0054);
+  // choosing another quantity leaves the mode visualization.
+  if (context.analysisFieldOverlay?.getSnapshot()) {
+    context.analysisFieldOverlay.clear();
+  }
   return { status: "completed" };
 }
 

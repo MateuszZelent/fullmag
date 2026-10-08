@@ -50,6 +50,7 @@ import {
 } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
+import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import {
   EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   useObjectVisualizationController,
@@ -358,11 +359,23 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     ],
   );
 
+  const activeOverlay = useAnalysisFieldOverlay(kernel.analysisFieldOverlay);
+  const activeAnalysisFieldId = activeOverlay?.fieldId ?? null;
+  const activeAnalysisFieldLabel = activeOverlay?.label ?? null;
+  const activeAnalysisField = useMemo(
+    () =>
+      activeAnalysisFieldId
+        ? { fieldId: activeAnalysisFieldId, label: activeAnalysisFieldLabel ?? activeAnalysisFieldId }
+        : null,
+    [activeAnalysisFieldId, activeAnalysisFieldLabel],
+  );
+
   const tabContent = useMemo(
     () => {
       void commandVersion;
       void objectMoveToolState;
       return buildRibbonTabContent(activeTab, {
+        activeAnalysisField,
         api: kernel.api,
         commandContext,
         commands: kernel.commands,
@@ -384,6 +397,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       });
     },
     [
+      activeAnalysisField,
       activeTab,
       commandContext,
       commandVersion,

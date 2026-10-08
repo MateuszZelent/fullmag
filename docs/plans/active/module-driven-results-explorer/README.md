@@ -201,6 +201,15 @@ ribbonu, rozszerzenie testu kontraktu projektu.
 
 ### Etap 5 — mod jako wielkość głównego viewportu i podział wykres + pole
 
+Stan: **część 5a wdrożona w źródłach.** Gdy mod jest pokazywany, grupa
+Quantity w ribbonie nie oznacza już `M` jako aktywnej, tylko pokazuje aktywną
+pozycję „Mode” z opisem modu. Wybór innej wielkości (`m`, `H_eff`, …) opuszcza
+wizualizację modu. HUD viewportu pokazuje „Mode · …” zamiast surowego
+identyfikatora pola. Smoke przeglądarkowy viewportu: **NOT VERIFIED** (brak
+zbudowanego workspace w tym worktree). Pozostaje: jeden właściciel
+`active_quantity_id` (nakładka jako resolver wielkości), colorbar/field-meta
+dla `analysis:*`, tryb podziału w `ViewportTabHost`.
+
 - `active_quantity_id` niesie identyfikator pola modu; kontroler nakładki
   staje się resolverem wielkości; mod w grupie Quantity ribbonu i w HUD;
   colorbar i field-meta dla `analysis:*`. Bez nowego renderera.

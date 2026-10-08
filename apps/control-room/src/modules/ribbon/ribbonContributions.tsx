@@ -49,6 +49,7 @@ import {
   Trash2,
   Triangle,
   Upload,
+  Waves,
   Zap,
 } from "lucide-react";
 import { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
@@ -759,6 +760,8 @@ type RibbonSessionStatus = {
 };
 
 export interface RibbonBuildContext {
+  /** Mode or response field currently shown as the viewport quantity, if any. */
+  activeAnalysisField?: { fieldId: string; label: string } | null;
   api?: { visualization: RibbonVisualizationApi };
   commandContext?: CommandContext;
   fieldCatalog?: FieldCatalogResource | null;
@@ -907,14 +910,30 @@ function buildResultsQuantityGroup(
     ["res-energy", "eden_total"],
   ]);
 
+  // While a mode field is shown it is the active quantity, so no model
+  // quantity is marked active and the mode appears as its own entry.
+  const analysisField = context.activeAnalysisField ?? null;
+  const modeActions: RibbonTabContent["groups"][number]["actions"] = analysisField
+    ? [
+        {
+          id: "res-analysis-field",
+          icon: icon(Waves),
+          label: "Mode",
+          active: true,
+          iconColor: "text-sky-300",
+          tooltip: `${analysisField.label} — choose another quantity to leave the mode view`,
+        },
+      ]
+    : [];
+
   return {
     ...group,
-    actions: group.actions.map((action) => {
+    actions: [...group.actions.map((action) => {
       const quantityId = resultQuantityIds.get(action.id);
       if (!quantityId) return action;
       return {
         ...action,
-        active: sameQuantityId(activeQuantityId, quantityId),
+        active: !analysisField && sameQuantityId(activeQuantityId, quantityId),
         commandId: action.menu
           ? action.commandId
           : RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
@@ -933,7 +952,7 @@ function buildResultsQuantityGroup(
             : node,
         ),
       };
-    }),
+    }), ...modeActions],
   };
 }
 

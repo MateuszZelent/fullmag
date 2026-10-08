@@ -52,6 +52,7 @@ import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { LayoutController } from "@/kernel/layout/LayoutController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
+import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
@@ -3181,6 +3182,58 @@ describe("ribbon structure", () => {
         [VISUALIZATION_STATE_PATH, 42],
       ]),
     );
+  });
+
+  it("shows an active mode field as the viewport quantity instead of m", () => {
+    const { context } = createVisualizationRibbonContext({
+      active_quantity_id: "m",
+      quantity: { active_quantity_id: "m" },
+      revision: 7,
+    });
+    const actions = buildRibbonTabContent("results", {
+      ...context,
+      activeAnalysisField: { fieldId: "analysis:eigen:sample-0006:mode-0001", label: "kᵧ +15 rad/µm · 12.025 GHz" },
+    })?.groups.find((group) => group.id === "quantity")?.actions ?? [];
+
+    expect(actions.find((action) => action.id === "res-m")?.active).toBe(false);
+    expect(actions.find((action) => action.id === "res-analysis-field")).toMatchObject({
+      active: true,
+      label: "Mode",
+      tooltip: expect.stringContaining("12.025 GHz"),
+    });
+    expect(
+      buildRibbonTabContent("results", context)
+        ?.groups.find((group) => group.id === "quantity")
+        ?.actions.some((action) => action.id === "res-analysis-field"),
+    ).toBe(false);
+  });
+
+  it("leaves the mode visualization when another quantity is chosen", async () => {
+    const { context } = createVisualizationRibbonContext({
+      active_quantity_id: "m",
+      quantity: { active_quantity_id: "m" },
+      revision: 7,
+    });
+    const analysisFieldOverlay = new AnalysisFieldOverlayController();
+    analysisFieldOverlay.set({
+      fieldId: "analysis:eigen:sample-0006:mode-0001",
+      label: "Mode 1",
+      query: { view: "phase_rotated_real" },
+      source: "eigen-mode",
+    } as never);
+    const mAction = buildRibbonTabContent("results", context)
+      ?.groups.find((group) => group.id === "quantity")
+      ?.actions.find((action) => action.id === "res-heff");
+    if (!mAction?.commandId) throw new Error("Expected H_eff Results shortcut");
+
+    await createRibbonCommandRegistry().execute(mAction.commandId, {
+      ...context.commandContext,
+      analysisFieldOverlay,
+      input: mAction.commandInput,
+      source: "ribbon",
+    } as CommandContext);
+
+    expect(analysisFieldOverlay.getSnapshot()).toBeNull();
   });
 
   it("patches canonical visualization state from Results quantity shortcuts", async () => {

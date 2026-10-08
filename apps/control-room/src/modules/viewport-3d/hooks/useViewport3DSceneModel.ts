@@ -7162,6 +7162,9 @@ export function useViewport3DSceneModel({
     sceneRevision: savedSelectionActive ? null : primitiveModel.sceneRevision,
     sceneStatus: savedSelectionActive ? "idle" : scene.status,
     quantityId: effectiveViewportQuantityId,
+    quantityLabel: !savedSelectionActive && analysisOverlay
+      ? `Mode · ${analysisOverlay.label}`
+      : effectiveViewportQuantityId,
     regionOverlays: savedSelectionActive ? [] : regionOverlays,
     resourceFrameKey,
     savedViewportActive: savedSelectionActive,
