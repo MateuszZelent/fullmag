@@ -1600,6 +1600,29 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
       });
       return;
     }
+    const visualizationFixture = url.pathname === "/v2/sessions/current/visualization/state"
+      ? analysisVisualizationStateFixture()
+      : url.pathname === "/v2/sessions/current/visualization/mode-compositions/active"
+        ? analysisModeCompositionFixture(Boolean(frequencyDomainFixture))
+        : url.pathname === "/v2/sessions/current/model/universe"
+          ? {
+            scene_revision: 0,
+            mesh_dirty: false,
+            object_bounds_min: null,
+            object_bounds_max: null,
+            study_universe_mesh: null,
+            universe: null,
+          }
+          : null;
+    if (visualizationFixture !== null) {
+      await route.fulfill({
+        body: JSON.stringify(visualizationFixture),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
     if (frequencyDomainFixture && await fulfillFrequencyDomainFixtureResource(
       route,
       url.pathname,
@@ -1987,6 +2010,189 @@ function analysisStatusFixture({
       workspace_root: "/tmp/fullmag-analysis-plots-fixture",
     },
     solver: { state: "idle" },
+  };
+}
+
+function analysisModeCompositionFixture(frequencyDomainPublished) {
+  return {
+    artifact_revision: "",
+    composition_id: "active",
+    layers: [],
+    lifecycle: {
+      artifact_revision: frequencyDomainPublished ? 17 : 0,
+      mesh_revision: 0,
+      run_id: null,
+      session_id: FIXTURE_SESSION_ID,
+    },
+    phase_clock: { master_rate_hz: 1, synchronized: true },
+    revision: 0,
+    run_id: "",
+    schema_version: "mode-composition.v1",
+    stage_id: "",
+  };
+}
+function analysisVisualizationStateFixture() {
+  return {
+    active_quantity_id: "m",
+    auto_contrast: true,
+    camera: {
+      fov_degrees: 45,
+      orthographic_scale: null,
+      position: [0, 0, 1],
+      projection: "perspective",
+      target: [0, 0, 0],
+      up: [0, 1, 0],
+    },
+    clip: {
+      enabled: false,
+      axis: "x",
+      flipped: false,
+      position_percent: 50,
+    },
+    colormap: "viridis",
+    contrast_max: null,
+    contrast_min: null,
+    diagnostics: {
+      degraded_reasons: [],
+      warnings: [],
+    },
+    domains: {
+      active_scope: {
+        object_id: null,
+        part_id: null,
+        scope: "full",
+      },
+      topology_mode: "auto",
+      volume_edges_budget: 100_000,
+    },
+    fdm: {
+      x_chosen_size: 0,
+      y_chosen_size: 0,
+    },
+    fem: {},
+    field_component: "magnitude",
+    layers: {
+      airbox: {
+        render_mode: "wireframe",
+        show_airbox: false,
+        show_airbox_vectors: false,
+      },
+      bounds: {
+        visible: false,
+      },
+      points: {
+        visible: false,
+      },
+      primitives: {
+        visible: true,
+      },
+      quantity: {
+        visible: true,
+      },
+      surface: {
+        opacity: 1,
+        visible: true,
+      },
+      vectors: {
+        density: 50,
+        domain: "auto",
+        visible: false,
+      },
+      wireframe: {
+        visible: false,
+      },
+    },
+    max_points: 16_384,
+    overrides: [],
+    quantity: {
+      active_quantity_id: "m",
+      auto_contrast: true,
+      colormap: "viridis",
+      component: "magnitude",
+      contrast_max: null,
+      contrast_min: null,
+      field_component: "magnitude",
+    },
+    revision: 0,
+    sampling: {
+      max_bytes: null,
+      max_glyphs: 16_384,
+      max_points: 16_384,
+      profile: "balanced",
+      progressive: true,
+    },
+    schema_version: 5,
+    slice: {
+      axis: "z",
+      auto_contrast: true,
+      colormap: "viridis",
+      component: "magnitude",
+      layer_index: 0,
+      mode: "single",
+      position_percent: 50,
+      projection_include_air_as_zero: false,
+      projection_reduction: "mean_occupied",
+      projection_resolution: 128,
+      projection_samples: 32,
+      quantity_id: "m",
+      render_mode: "heatmap",
+      show_airbox: false,
+      show_magnetic_texture: true,
+      show_mesh: false,
+      show_primitives: true,
+      show_quantity: true,
+      show_vectors: false,
+      thickness_percent: null,
+    },
+    slice_layer: 0,
+    slice_mode: "single",
+    targets: {
+      airbox: {
+        label: "Airbox",
+        scope: "airbox",
+        scope_id: "airbox",
+        settings: {
+          active_quantity_id: "m",
+          bounds_visible: false,
+          geometry_scope: "full",
+          opacity: 0.28,
+          points_visible: false,
+          render_mode: "wireframe",
+          surface_color_source: "solid",
+          surface_visible: false,
+          vector_alpha: 1,
+          vector_color_mode: "orientation",
+          vector_mono_color: "#00c2ff",
+          vector_thickness: 1,
+          vectors_visible: false,
+          visible: true,
+          wireframe_color: "#94a3b8",
+          wireframe_opacity: 1,
+          wireframe_visible: true,
+        },
+        source: "airbox",
+      },
+      objects: [],
+      parts: [],
+    },
+    trim: {
+      x: { enabled: false, max_percent: 100, min_percent: 0 },
+      y: { enabled: false, max_percent: 100, min_percent: 0 },
+      z: { enabled: false, max_percent: 100, min_percent: 0 },
+    },
+    vector_density: 50,
+    vector_glyphs: false,
+    vector_style: {
+      alpha: 1,
+      color_mode: "orientation",
+      ferromagnet_visibility: "hide",
+      length_scale: 1,
+      mono_color: "#00c2ff",
+      thickness: 1,
+    },
+    view_mode: "3d",
+    x_chosen_size: 0,
+    y_chosen_size: 0,
   };
 }
 

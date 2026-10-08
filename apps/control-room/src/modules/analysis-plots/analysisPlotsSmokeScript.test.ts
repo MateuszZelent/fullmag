@@ -65,6 +65,14 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain(
       `url.pathname === "${SESSION_STATUS_PATH}"`,
     );
+    expect(smokeScript).toContain('url.pathname === "/v2/sessions/current/visualization/state"');
+    expect(smokeScript).toContain('url.pathname === "/v2/sessions/current/visualization/mode-compositions/active"');
+    expect(smokeScript).toContain('url.pathname === "/v2/sessions/current/model/universe"');
+    expect(smokeScript).toContain("function analysisVisualizationStateFixture()");
+    expect(smokeScript).toContain("function analysisModeCompositionFixture(frequencyDomainPublished)");
+    expect(smokeScript).toContain('schema_version: "mode-composition.v1"');
+    expect(smokeScript).toContain("schema_version: 5");
+    expect(smokeScript).toContain("scene_revision: 0");
     expect(smokeScript).toContain("assertNoVisibleResourceErrors");
     expect(smokeScript).toContain('.fm-notifications__toast[data-kind="error"]');
     expect(smokeScript).toContain('.fm-toast[data-variant="error"]');
