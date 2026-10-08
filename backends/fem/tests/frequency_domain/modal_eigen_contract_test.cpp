@@ -3381,13 +3381,13 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
             sizeof(raw_vector_wins.tiny_validation_mass_matrix_row_major),
             const_cast<void *>(static_cast<const void *>(
                 raw_vector_wins.tiny_validation_mass_matrix_row_major)),
-            const_cast<void *>(static_cast<const void *>(gyrotropic_mass_matrix_row_major)),
+            const_cast<void *>(static_cast<const void *>(gyrotropic_mass_row_major)),
             raw_vector_wins.tiny_validation_mass_matrix_row_major ==
-                gyrotropic_mass_matrix_row_major,
-            gyrotropic_mass_matrix_row_major[0],
-            gyrotropic_mass_matrix_row_major[1],
-            gyrotropic_mass_matrix_row_major[2],
-            gyrotropic_mass_matrix_row_major[3]);
+                gyrotropic_mass_row_major,
+            gyrotropic_mass_row_major[0],
+            gyrotropic_mass_row_major[1],
+            gyrotropic_mass_row_major[2],
+            gyrotropic_mass_row_major[3]);
     }
     report_unexpected_success_status("raw_vector_wins", raw_vector_wins_result);
     check(raw_vector_wins_result.status == FULLMAG_FEM_FD_OK,
