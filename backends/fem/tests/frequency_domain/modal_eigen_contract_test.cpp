@@ -1512,13 +1512,18 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
     FloquetContourSharedDomainFixture fixture{};
     fixture.initialize();
+    fixture.descriptor.term_presence_mask =
+        FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
+    fixture.descriptor.field_term_digest =
+        fixture.descriptor.linearization_state_digest;
 
     constexpr double stiffness[] = {1.0, 0.0, 0.0, 1.0};
     constexpr double gyrotropic[] = {0.0, -1.0, 1.0, 0.0};
     // Keep a positive synthetic total A_qq in the minimal payload so the
     // shared-domain sparse Floquet pencil has a spectrum. The descriptor
-    // declares no Ku/anisotropy term; the production owner separately
-    // assembles geometric tangent mass from this mesh and its periodic classes.
+    // advertises its supplied collinear static field but no Ku/anisotropy
+    // term; the production owner separately assembles geometric tangent mass
+    // from this mesh and its periodic classes.
     CsrOwned magnetic_stiffness{};
     magnetic_stiffness.rows = 10u;
     magnetic_stiffness.columns = 10u;
