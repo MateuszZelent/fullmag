@@ -872,3 +872,37 @@ CI dla `476869809346ad455072e8a07b3205c13c7a1768` potwierdza FAILURE
 Pozostałe odebrane kontrole, w tym build i browser-fixture-smoke, są
 zielone (deploy SKIP). Nie stanowi to kwalifikacji pełnego modułu.
 Nowy push wymaga ponownego odbioru CI; PR nie jest gotowy do merge.
+
+## T01/T14 — storage fixture inspekcji anteny w CI
+
+Baza `a8ac8c297aac97df10a26b4e576d3ce64df9e3ba`. Nowe CI potwierdzono
+jako działające: Control Room 113173972040 i Rust 113173972310
+`in_progress`. Nie uruchamiano duplikatu ani nie uznano timeoutu za awarię.
+Odczyt pełnej sekcji błędów poprzedniego joba Rust 113171387248 wykazał
+981 PASS, 10 FAIL, 3 ignored. Siedem testów `antenna_inspection` kończy się
+na wymaganiu resolverowego `FULLMAG_PROJECT_STORAGE_ROOT`, przed żądaniem
+HTTP. Pozostałe trzy błędy dotyczą development_restore, metadata/ETag
+field solution i semantycznego importu projektu; nie przypisujemy im
+automatycznie tej samej przyczyny.
+
+W `bootstrap.yml` job Rust uruchamia teraz istniejący
+`scripts/fullmag_storage.py resolve --profile ci-rust-contracts --create`
+przed testami i eksportuje wyłącznie rozwiązaną lokalizację storage przez
+`GITHUB_ENV`. Nie dodano fallbacku do fixture ani nie zmieniono solvera,
+endpointów, testów Rust, istniejących target/cache lub zależności.
+Odmowa resolvera propaguje się przez `check=True` przed eksportem.
+
+Weryfikacja: YAML parsowany istniejącym js-yaml, kolejność kroków i AST
+Python PASS; rzeczywisty kod kroku z izolowanymi mockami eksportu/odmowy
+PASS. Trwała regresja w `test_bootstrap_workflow_contract.py`: stary YAML
+RED (brak kroku), nowy GREEN (1/1). Ponieważ lokalny Python nie ma PyYAML,
+przekazano do tej jednej regresji dokument sparsowany przez js-yaml przez
+adapter `yaml.safe_load`; nie wykonano pełnego zestawu z PyYAML.
+Lokalny resolver bez `--create` potwierdził kanoniczne storage na D;
+wyłącznie w subprocess diagnostycznym pominięto odziedziczony, niezgodny
+`CARGO_TARGET_DIR=D:\fullmag-fullmag-target`. Nie zmieniono konfiguracji
+hosta i nie wykonano lokalnej kompilacji testów Rust. Whitespace PASS.
+
+Następny krok: odebrać CI nowego HEAD i siedem rzeczywistych regresji API;
+diagnozować trzy pozostałe błędy osobno. Pełne current→field→basis→LLG/FFT,
+WebGL, kierunkowy kontrakt Gamma oraz T00–T18 pozostają otwarte.
