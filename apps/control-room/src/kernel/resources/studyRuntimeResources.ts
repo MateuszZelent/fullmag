@@ -919,8 +919,21 @@ export function useStageExecutionResource({
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation.stages
         .execution({ sessionScopeKey, signal })
-        .catch(ignoreMissingResource<StageExecutionResource>),
-    [api],
+        .catch(ignoreMissingResource<StageExecutionResource>)
+        .then((data) => {
+          if (data !== null && sessionIdentity !== null &&
+              !stageExecutionMatchesSessionIdentity(data, sessionIdentity)) {
+            // A successful GET can race the server's run transition. Do not
+            // settle this external revision with another run's snapshot;
+            // the shared runtime applies its bounded materialization retry.
+            throw Object.assign(
+              new Error("Stage execution has not reached the current run identity"),
+              { code: "not_ready" },
+            );
+          }
+          return data;
+        }),
+    [api, sessionIdentity],
   );
 
   const stageExecutionResource = useResource<StageExecutionResource | null>({

@@ -193,9 +193,10 @@ describe("production runtime command resource provider", () => {
     }
   });
 
-  it("coalesces stage execution loads across concurrent consumers and run changes", async () => {
+  it("coalesces stage execution loads across consumers and retries an old-run response after run change", async () => {
     const nextRunStatus = deferred<ReturnType<typeof statusAt>>();
     const runAExecution = deferred<StageExecutionResource>();
+    const staleRunExecution = deferred<StageExecutionResource>();
     const runBExecution = deferred<StageExecutionResource>();
     const statusLoad = vi.fn()
       .mockResolvedValueOnce(statusAt(1, { run_id: "run-a" }))
@@ -206,7 +207,9 @@ describe("production runtime command resource provider", () => {
         requestSignals.push(signal);
         return requestSignals.length === 1
           ? runAExecution.promise
-          : runBExecution.promise;
+          : requestSignals.length === 2
+            ? staleRunExecution.promise
+            : runBExecution.promise;
       },
     );
     const bus = new EventBus<KernelEventMap>();
@@ -288,6 +291,18 @@ describe("production runtime command resource provider", () => {
       expect(requestSignals[1]?.aborted).toBe(false);
 
       await act(async () => {
+        staleRunExecution.resolve(stageExecutionAt("run-a", 1));
+        await staleRunExecution.promise;
+      });
+      await vi.waitFor(() => {
+        expect(stageExecutionLoad).toHaveBeenCalledTimes(3);
+        expect(firstStageExecution?.data).toBeNull();
+        expect(secondStageExecution?.data).toBeNull();
+      }, { timeout: 3_000 });
+      expect(requestSignals).toHaveLength(3);
+      expect(requestSignals[2]?.aborted).toBe(false);
+
+      await act(async () => {
         runBExecution.resolve(stageExecutionAt("run-b", 2));
         await runBExecution.promise;
       });
@@ -296,7 +311,7 @@ describe("production runtime command resource provider", () => {
         expect(secondStageExecution?.data?.run_id).toBe("run-b");
         expect(container.textContent).toBe("run-b|run-b");
       });
-      expect(stageExecutionLoad).toHaveBeenCalledTimes(2);
+      expect(stageExecutionLoad).toHaveBeenCalledTimes(3);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
