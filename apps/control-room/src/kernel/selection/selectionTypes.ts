@@ -29,6 +29,7 @@ type ObjectSelectionKind =
   | "object.antenna.projection"
   | "object.antenna.drive"
   | "object.antenna.spectrum"
+  | "object.antenna.visualization"
   | "object.material"
   | "object.physics"
   | "object.regions"

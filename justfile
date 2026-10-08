@@ -510,6 +510,9 @@ verify-study-execution-profile-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3256 --scenario study-execution-profile
 
 # Production antenna Inspector and resource hooks in an isolated browser fixture.
+verify-antenna-visualization-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3262 --scenario antenna-visualization
+
 verify-antenna-external-lead-inspection-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3252 --scenario antenna-external-lead-inspection
 

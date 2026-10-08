@@ -10,6 +10,7 @@ import {
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
 import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
+import { AntennaVisualizationPanel } from "./panels/antenna/AntennaVisualizationPanel";
 import {
   AntennaConductorPanel,
   AntennaPortPanel,
@@ -983,6 +984,12 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Visualization",
     selectionKinds: ["object.visualization"],
     component: ObjectVisualizationPanel,
+  },
+  {
+    id: "antenna-visualization",
+    title: "Antenna Visualization",
+    selectionKinds: ["object.antenna.visualization"],
+    component: AntennaVisualizationPanel,
   },
   {
     id: "mesh-part-visualization",

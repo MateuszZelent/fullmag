@@ -50,6 +50,7 @@ export type ExplorerNodeKind =
   | "object.antenna.projection"
   | "object.antenna.drive"
   | "object.antenna.spectrum"
+  | "object.antenna.visualization"
   | "object.material"
   | "object.physics"
   | "object.physics.scope"

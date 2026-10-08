@@ -14,6 +14,13 @@ export function fieldBasisSamplingDomain(solution: AntennaFieldSolutionResource)
 
 type Basis = AntennaFieldSolutionResource["bases"][number];
 
+export type AntennaBasisQuantity = "electric_potential_per_ampere" | "current_density_per_ampere" | "magnetic_field_per_ampere";
+export const ANTENNA_BASIS_QUANTITIES = {
+  electric_potential_per_ampere: { label: "Electric potential V/I", unit: "V/A", components: 1, layout: "node_scalar" },
+  current_density_per_ampere: { label: "Current density J/I", unit: "A/m^2/A", components: 3, layout: "sample_xyz_interleaved" },
+  magnetic_field_per_ampere: { label: "Oersted field H/I", unit: "A/m/A", components: 3, layout: "sample_xyz_interleaved" },
+} as const;
+
 export function selectedFieldBasisPort(
   solution: AntennaFieldSolutionResource,
   preferredPort: string,
@@ -31,22 +38,25 @@ export interface AntennaFieldSample {
 export function fieldBasisPreviewCount(
   solution: AntennaFieldSolutionResource,
   basis: Basis,
+  quantity: AntennaBasisQuantity = "magnetic_field_per_ampere",
 ): number {
-  const positions = solution.sample_positions;
-  const field = basis.magnetic_field_per_ampere;
+  const magnetic = quantity === "magnetic_field_per_ampere";
+  const positions = magnetic ? solution.sample_positions : solution.conductor_positions;
+  const field = basis[quantity];
+  const spec = ANTENNA_BASIS_QUANTITIES[quantity];
   if (
     positions.scalar_type !== "float64_le" ||
     field.scalar_type !== "float64_le" ||
-    positions.layout !== "sample_xyz_interleaved" ||
-    field.layout !== "sample_xyz_interleaved" ||
+    positions.layout !== (magnetic ? "sample_xyz_interleaved" : "node_xyz_interleaved") ||
+    field.layout !== spec.layout ||
     positions.unit !== "m" ||
-    field.unit !== "A/m/A" ||
-    positions.value_count !== field.value_count ||
+    field.unit !== spec.unit ||
+    positions.value_count / 3 * spec.components !== field.value_count ||
     !Number.isSafeInteger(positions.value_count) ||
     positions.value_count < 0 ||
     positions.value_count % 3 !== 0
   ) {
-    throw new Error("antenna position and H-per-ampere carriers are incompatible");
+    throw new Error("antenna position and selected per-ampere carriers are incompatible");
   }
   return Math.min(MAX_FIELD_BASIS_PREVIEW_SAMPLES, positions.value_count / 3);
 }
@@ -79,5 +89,18 @@ export function decodeFieldBasisPreview(
       throw new Error(`antenna field preview sample ${index} contains a non-finite value`);
     }
     return { positionM, fieldApmPerA };
+  });
+}
+
+export function decodeAntennaBasisPreview(positions: ArrayBuffer, values: ArrayBuffer, count: number, quantity: AntennaBasisQuantity) {
+  const components = ANTENNA_BASIS_QUANTITIES[quantity].components;
+  if (values.byteLength !== count * components * 8) throw new Error("Antenna payload byte range does not match selected samples");
+  // Reuse coordinate/finite checks without constructing a fake vector carrier for scalar V.
+  const coordinates = decodeFieldBasisPreview(positions, positions, count);
+  const view = new DataView(values);
+  return coordinates.map((sample, index) => {
+    const value = Array.from({ length: components }, (_, component) => view.getFloat64((index * components + component) * 8, true));
+    if (value.some((item) => !Number.isFinite(item))) throw new Error(`Antenna sample ${index} contains a non-finite value`);
+    return { positionM: sample.positionM, value };
   });
 }

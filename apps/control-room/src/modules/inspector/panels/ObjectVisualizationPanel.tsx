@@ -73,6 +73,7 @@ import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { AntennaVisualizationView, isAntennaVisualizationObject } from "./antenna/AntennaVisualizationPanel";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import {
   ScientificInspectorContext,
@@ -250,6 +251,7 @@ import {
 
 function useObjectVisualizationPanelState(
   selection: InspectorPanelProps["selection"],
+  sceneOverride?: ReturnType<typeof useSceneResource>,
 ) {
   const selectionTarget = resolveVisualizationTargetFromSelection(selection);
   const kernel = useKernel();
@@ -296,7 +298,8 @@ function useObjectVisualizationPanelState(
   const [patchChildRegions, setPatchChildRegions] = useState(false);
   const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
     useState<string | null>(null);
-  const scene = useSceneResource({ enabled: femResourcesEnabled });
+  const ownScene = useSceneResource({ enabled: femResourcesEnabled && !sceneOverride });
+  const scene = sceneOverride ?? ownScene;
   const fdmDomain = useDomainMetaResource({ enabled: fdmResourcesEnabled });
   const fdmMembership = useFdmRegionMembershipResource({
     enabled: fdmResourcesEnabled,
@@ -1127,8 +1130,9 @@ const OBJECT_VISUALIZATION_OWNER: VisualizationInspectorOwner = {
 export function VisualizationTargetInspectorPanel({
   owner,
   selection,
-}: InspectorPanelProps & { owner: VisualizationInspectorOwner }) {
-  const panel = useObjectVisualizationPanelState(selection);
+  sceneOverride,
+}: InspectorPanelProps & { owner: VisualizationInspectorOwner; sceneOverride?: ReturnType<typeof useSceneResource> }) {
+  const panel = useObjectVisualizationPanelState(selection, sceneOverride);
   const {
     carrierIdentity,
     displaySettings,
@@ -1280,10 +1284,15 @@ export function VisualizationTargetInspectorPanel({
 }
 
 export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
+  const scene = useSceneResource();
+  const objectId = selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId;
+  if (isAntennaVisualizationObject(scene.data, objectId)) return <AntennaVisualizationView selection={selection} scene={scene} />;
+  if (!scene.data) return <div className="fm-inspector-panel"><p role="status">Resolving visualization owner…</p></div>;
   return (
     <VisualizationTargetInspectorPanel
       owner={OBJECT_VISUALIZATION_OWNER}
       selection={selection}
+      sceneOverride={scene}
     />
   );
 }
