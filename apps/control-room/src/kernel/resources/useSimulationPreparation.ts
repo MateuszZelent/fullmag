@@ -20,19 +20,12 @@ function resolvePreparationRevision(data: SimulationPreparationResource | null) 
   return data?.revision ?? null;
 }
 
-function ignoreUnavailablePreparation<T>(
-  error: unknown,
-  requiredRevision: number | null,
-): T | null {
-  if (
-    (requiredRevision === null || requiredRevision <= 0) &&
+function isUnavailablePreparationError(error: unknown): boolean {
+  return (
     error instanceof ControlRoomApiError &&
     error.status === 404 &&
     error.message.toLowerCase().includes("simulation preparation unavailable")
-  ) {
-    return null;
-  }
-  throw error;
+  );
 }
 
 export function useSimulationPreparation({
@@ -51,23 +44,27 @@ export function useSimulationPreparation({
     { enabled: sessionIdentity !== null },
   );
   const effectiveEnabled = enabled && sessionIdentity !== null && preparationAvailable;
+  const missingPreparationIsOptional =
+    requiredRevision === null || requiredRevision <= 0;
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
-      api.simulation
-        .preparation({ sessionScopeKey, signal })
-        .catch((error) =>
-          ignoreUnavailablePreparation<SimulationPreparationResource>(
-            error,
-            requiredRevision,
-          ),
-        ),
-    [api, requiredRevision],
+      api.simulation.preparation({ sessionScopeKey, signal }),
+    [api],
+  );
+  const notifyOnError = useCallback(
+    (error: unknown) =>
+      !(
+        missingPreparationIsOptional &&
+        isUnavailablePreparationError(error)
+      ),
+    [missingPreparationIsOptional],
   );
 
   const preparation = useResource<SimulationPreparationResource | null>({
     enabled: effectiveEnabled,
     load,
     minRefetchIntervalMs: statusRefreshIntervalMs(),
+    notifyOnError,
     resolveRevision: resolvePreparationRevision,
     resourceKey,
   });
@@ -118,6 +115,13 @@ export function useSimulationPreparation({
     requiredRevision,
   ]);
 
+  if (
+    missingPreparationIsOptional &&
+    preparation.status === "error" &&
+    isUnavailablePreparationError(preparation.error)
+  ) {
+    return { ...preparation, data: null, error: null, status: "ready" as const };
+  }
   return preparation;
 }
 

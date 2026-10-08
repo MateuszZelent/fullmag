@@ -277,6 +277,120 @@ describe("useSimulationPreparation", () => {
     }
   });
 
+  it.each(["optional", "required"] as const)(
+    "preserves required failure for a shared missing request started by the %s consumer",
+    async (firstConsumer) => {
+      const pending = deferred<SimulationPreparationResource>();
+      const load = vi.fn(() => pending.promise);
+      const { bus, kernel, resources } = makeKernel(load, statusFixture(8));
+      const failures: KernelEventMap["resource:load-failed"][] = [];
+      const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
+        failures.push(event);
+      });
+      const optionalObservations: PreparationResult[] = [];
+      const requiredObservations: PreparationResult[] = [];
+      const dom = installTestDom();
+      const root = createRoot(
+        dom.document.createElement("div") as unknown as Element,
+      );
+      resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 8);
+
+      const optionalProbe = <Probe observations={optionalObservations} />;
+      const requiredProbe = (
+        <Probe observations={requiredObservations} requiredRevision={8} />
+      );
+      const firstProbe =
+        firstConsumer === "optional" ? optionalProbe : requiredProbe;
+      const secondProbe =
+        firstConsumer === "optional" ? requiredProbe : optionalProbe;
+
+      try {
+        await act(async () => {
+          root.render(
+            <KernelContext.Provider value={kernel}>
+              <>{firstProbe}</>
+            </KernelContext.Provider>,
+          );
+        });
+        await waitFor(
+          () => load.mock.calls.length === 1,
+          "first consumer did not start the shared preparation request",
+        );
+
+        await act(async () => {
+          root.render(
+            <KernelContext.Provider value={kernel}>
+              <>
+                {firstProbe}
+                {secondProbe}
+              </>
+            </KernelContext.Provider>,
+          );
+        });
+        await waitFor(
+          () =>
+            optionalObservations.some(
+              (observation) => observation.status === "loading",
+            ) &&
+            requiredObservations.some(
+              (observation) => observation.status === "loading",
+            ),
+          "both consumers did not observe the pending shared request",
+        );
+
+        await act(async () => {
+          pending.reject(
+            new ControlRoomApiError("simulation preparation unavailable", 404),
+          );
+          await pending.promise.catch(() => undefined);
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        });
+        await waitFor(
+          () =>
+            optionalObservations.some(
+              (observation) => observation.status === "ready",
+            ) &&
+            requiredObservations.some(
+              (observation) => observation.status === "error",
+            ),
+          "shared missing preparation did not produce consumer-specific states",
+        );
+
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(load).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionScopeKey: PREPARATION_SESSION_SCOPE_KEY,
+          }),
+        );
+        expect(resultSnapshot(optionalObservations.at(-1)!)).toMatchObject({
+          data: null,
+          error: null,
+          revision: 8,
+          status: "ready",
+        });
+        expect(resultSnapshot(requiredObservations.at(-1)!)).toMatchObject({
+          data: null,
+          error: expect.objectContaining({
+            message: "simulation preparation unavailable",
+          }),
+          revision: 8,
+          status: "error",
+        });
+        expect(failures).toEqual([
+          expect.objectContaining({
+            resourceKey: SCOPED_PREPARATION_RESOURCE_KEY,
+            revision: 8,
+            status: 404,
+          }),
+        ]);
+      } finally {
+        unsubscribeFailure();
+        await act(async () => root.unmount());
+        dom.restore();
+      }
+    },
+  );
+
   it("keeps a session-scope 404 visible when no preparation revision is published", async () => {
     const load = vi.fn(() =>
       Promise.reject(
