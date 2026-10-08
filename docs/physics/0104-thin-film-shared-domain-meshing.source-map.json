@@ -159,6 +159,20 @@
       "symbol": "_configure_mesh_size_fields",
       "responsibility": "Existing upper/lower aggregator; scoped lower producer and ownership binding remediation is in progress.",
       "evidence_status": "planned_contract_runtime_not_verified"
+    },
+    {
+      "id": "quality-si-conversion",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_quality_volumes_in_si",
+      "responsibility": "Convert ring quality volume channels from scaled Gmsh coordinates to cubic metres.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "quality-si-regression",
+      "path": "packages/fullmag-py/tests/test_gmsh_quality_units.py",
+      "symbol": "test_scaled_quality_preserves_dimensionless_metrics_and_input",
+      "responsibility": "Check dimensional conversion without mutating source or dimensionless quality.",
+      "evidence_status": "implemented"
     }
   ],
   "public_api": {

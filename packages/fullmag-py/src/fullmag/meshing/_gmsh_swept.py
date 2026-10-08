@@ -178,6 +178,26 @@ def _fresh_scoped_layer_plane_attempt_options(options: MeshOptions) -> MeshOptio
     )
 
 
+def _quality_volumes_in_si(
+    quality: MeshQualityReport | None, coordinate_scale: float
+) -> MeshQualityReport | None:
+    """Convert dimensional volumes when Gmsh coordinates are scaled from SI."""
+    if quality is None:
+        return None
+    volume_factor = coordinate_scale ** -3
+    return _dc_replace(
+        quality,
+        volume_min=quality.volume_min * volume_factor,
+        volume_max=quality.volume_max * volume_factor,
+        volume_mean=quality.volume_mean * volume_factor,
+        volume_std=quality.volume_std * volume_factor,
+        element_volume=(
+            [volume * volume_factor for volume in quality.element_volume]
+            if quality.element_volume is not None else None
+        ),
+    )
+
+
 THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED = (
     "thin_film_scoped_fields_require_exact_cell_geometric_airbox"
 )
@@ -2431,8 +2451,12 @@ def _generate_coincident_ring_airbox_mesh(
             ),
             periodic_node_pairs=raw_mesh.periodic_node_pairs,
             periodic_mesh_certificate=raw_mesh.periodic_mesh_certificate,
-            quality=raw_mesh.quality,
-            per_domain_quality=raw_mesh.per_domain_quality,
+            quality=_quality_volumes_in_si(raw_mesh.quality, SCALE),
+            per_domain_quality=(
+                {marker: _quality_volumes_in_si(quality, SCALE)
+                 for marker, quality in raw_mesh.per_domain_quality.items()}
+                if raw_mesh.per_domain_quality is not None else None
+            ),
         )
         if scoped_layer_partitioning:
             scoped_descriptors = [
@@ -2824,8 +2848,12 @@ def generate_swept_box_cylinder_ring_mesh(
             ),
             periodic_node_pairs=raw_mesh.periodic_node_pairs,
             periodic_mesh_certificate=raw_mesh.periodic_mesh_certificate,
-            quality=raw_mesh.quality,
-            per_domain_quality=raw_mesh.per_domain_quality,
+            quality=_quality_volumes_in_si(raw_mesh.quality, SCALE),
+            per_domain_quality=(
+                {marker: _quality_volumes_in_si(quality, SCALE)
+                 for marker, quality in raw_mesh.per_domain_quality.items()}
+                if raw_mesh.per_domain_quality is not None else None
+            ),
         )
         result.validate_strict(require_positive_orientation=True)
         emit_progress(

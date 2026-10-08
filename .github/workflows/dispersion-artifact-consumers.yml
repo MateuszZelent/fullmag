@@ -27,10 +27,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
+      - name: Install Gmsh system dependency
+        run: sudo apt-get update && sudo apt-get install -y libglu1-mesa
       - name: Install diagnostic dependencies
         run: |
           python -m pip install 'pytest>=9,<10' 'matplotlib>=3.8,<4'
-          python -m pip install -e packages/fullmag-py
+          python -m pip install -e "packages/fullmag-py[meshing]"
       - name: Validate artifact root, plot and parity consumers
         env:
           PYTHONPATH: scripts
@@ -42,3 +44,4 @@ jobs:
           scripts/test_validate_serial_adaptive_probe.py
           scripts/test_comsol_modal_field_certificate.py
           scripts/test_run_comsol_dispersion_benchmark.py
+          packages/fullmag-py/tests/test_gmsh_quality_units.py

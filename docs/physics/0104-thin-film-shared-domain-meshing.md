@@ -293,3 +293,15 @@ incydencję dwóch komórek, a każdy facet exterior/periodic jedną. Jednowła�
 ściany komórek muszą dokładnie pokrywać exterior/periodic facets; brak takiej
 równości oznacza szczelinę lub błędną klasyfikację. Status managed runtime i Rust v6: NOT VERIFIED;
 nie wolno utożsamiać lekkiej kontroli Gmsh z wynikiem eigensolve.
+
+### Konwersja objętości raportu ring do SI
+
+Trasy ring używają współrzędnych Gmsh powiększonych przez S=10^6 względem
+metrów. Przy publikacji węzłów x_SI=x_Gmsh/S raportowane objętości wymagają
+V_SI=V_Gmsh/S^3 (m³). Dotyczy to minimum, maksimum, średniej, odchylenia
+standardowego oraz element_volume, globalnie i per-domain. SICN, gamma,
+histogramy, quality_source, tagi i kolejność elementów nie zmieniają się.
+Konwersja dotyczy dwóch tras ring; cylinder obliczający jakość już z węzłów SI
+nie podlega ponownej konwersji. Bramki: raport syntetyczny bez mutacji wejścia,
+zgodność ring z objętościami końcowych węzłów SI oraz kontrola cylinder.
+Zmiana jest korektą jednostek metadanych, nie warstw, fizyki ani progów jakości.

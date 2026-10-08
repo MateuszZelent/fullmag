@@ -851,3 +851,16 @@ Doprecyzowanie browser37775325905: trace wyklucza tylko wektor o oczekiwanym ID,
 nie wszystkie field requests. Wewnętrzny timeout60s może dotyczyć wyboru Inspector
 node przed wait30s na uniform. Metadata fixture spełnia aktualny predicate;
 resource race nie jest udowodniony. Dalsza diagnostyka zachowa stack i phase marker.
+
+### Review4060116295 — SI jakości dwóch ring routes
+
+Konwersja volume_min/max/mean/std i element_volume przez S^-3 jest wspólna
+(global/per-domain), kopiuje raport i nie zmienia znaków, SICN/gamma, markerów
+ani kolejności. Cylinder liczy już jakość na nodes SI i nie jest skalowany.
+Source review PASS. Nowe testy porównują rzeczywiste obie ring routes z
+abs(det)/6 na końcowych nodes SI, z atol=0, oraz cylinder przeciw podwójnemu
+skalowaniu; helper ma kontrolę niemutowania wejścia. Gmsh execution w GHA
+pozostaje oczekiwane. Exact-layer scoped bug jest odrębny i nie jest naprawiony.
+
+Deadline Docker: artifact-consumers37777723528 job113312698784 SUCCESS na
+eab985d7a. To regresja kontraktu subprocess timeout, nie test zawieszonego demona.
