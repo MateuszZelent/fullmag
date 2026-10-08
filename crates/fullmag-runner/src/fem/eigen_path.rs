@@ -1424,7 +1424,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                 } => (precomputed, Some(report)),
                 ProcessPoolPreparation::Interrupted(interrupted) => {
                     let accepted_magnetization = source_relax_handoff
-                        .map(|handoff| handoff.equilibrium_magnetization().to_vec())
+                        .map(|handoff| handoff.equilibrium_magnetization.clone())
                         .unwrap_or_else(|| plan.equilibrium_magnetization.clone());
                     return Ok(interrupted_eigen_path_run(
                         plan,
@@ -1469,7 +1469,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                     .clone()
                     .or_else(|| {
                         source_relax_handoff
-                            .map(|handoff| handoff.equilibrium_magnetization().to_vec())
+                            .map(|handoff| handoff.equilibrium_magnetization.clone())
                     })
                     .unwrap_or_else(|| plan.equilibrium_magnetization.clone());
                 return Ok(interrupted_eigen_path_run(

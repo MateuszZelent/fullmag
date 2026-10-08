@@ -374,7 +374,10 @@ pub(super) fn prepare_process_pool_samples(
                 "single sample completed by verified Relax→Eigen bootstrap".into(),
             ),
         };
-        return Ok((precomputed, report));
+        return Ok(ProcessPoolPreparation::Ready {
+            precomputed,
+            report,
+        });
     }
     let requests = worker_samples
         .iter()
