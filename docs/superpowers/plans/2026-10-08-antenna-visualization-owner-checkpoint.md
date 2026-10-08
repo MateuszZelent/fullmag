@@ -84,6 +84,10 @@ wysłane do rzeczywistego backendu i nie stanowią kwalifikacji naukowej.
 
 ## Granica ukończenia i dalsza praca
 
+Commit implementacji i regresji: `25812b952d4de4c30d93a2fbcf86c10ff5fb99d4`,
+branch `codex/microwave-antenna-latest-20260909`, worktree
+`D:/git/fullmag/worktrees/microwave-antenna-latest-20260909`.
+
 Poprawka dotyczy właściciela panelu oraz uczciwego odczytu quantities anteny.
 Podgląd ośmiu próbek **nie jest pełną mapą 3D ani mapą 2D**. Pełne malowanie
 V/J na siatce przewodnika, H na właściwym carrierze i source-scoped H na
