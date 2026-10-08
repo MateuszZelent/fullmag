@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 40, `implemented_pending_browser`: 8, `implemented_pending_ci`: 6, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 85. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 42, `implemented_pending_browser`: 8, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 84. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -31,7 +31,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4060116330](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116330) / #97 | `scripts/run_comsol_dispersion_benchmark.py` | implemented | docker image inspect jest wywołane bez timeout i funkcja przechwytuje tylko OSError; zawieszony Docker może trzymać build_lock bez końca. |
 | [4060116342](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116342) / #97 | `crates/fullmag-runner/src/eigen/tracking.rs` | implemented | Publikowane confidence jest równym scalar overlap; assignment score, fallback i subspace transport zachowane. Regresja rzeczywistego trackera do JSON/CSV. |
 | [4060116349](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116349) / #97 | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | valid_unfixed | Kod 1e-4, opublikowane równanie 1e-9. |
-| [4060116354](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116354) / #97 | `tests/standard_problems/mumag/comsol_nonzero_k_dispersion/materialize_real_asset.py` | implemented_pending_ci | Odrzucony benchmark mesh daje overall summary/receipt failed i exit1. Udana serializacja zachowuje materialization_statuspassed, artefakty i rejection reasons; progów nie zmieniono. |
+| [4060116354](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116354) / #97 | `tests/standard_problems/mumag/comsol_nonzero_k_dispersion/materialize_real_asset.py` | implemented | Odrzucony benchmark mesh daje overall summary/receipt failed i exit1. Udana serializacja zachowuje materialization_statuspassed, artefakty i rejection reasons; progów nie zmieniono. |
 | [4060116361](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116361) / #97 | `backends/fem/CMakeLists.txt` | implemented | Komentarz nad kodem deklaruje odrzucenie stubu, lecz faktyczne wyszukiwanie go dopuszcza. P1 oryginału niepoparte katastrofą produkcyjną; P2 dla build/runtime contracts. |
 | [4060116372](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116372) / #97 | `apps/runner-console/src/views/StorageView.js` | already_fixed | Backend ma per-hub _resources_scan_lock i cache publication po skanie. Równoległe HTTP requests/retries współdzielą jeden pełny scan, więc zgłoszone mnożenie rekursywnych skanów jest naprawione. Krótki UI timeout to odrębne #4061898648. |
 | [4060116379](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116379) / #97 | `scripts/local_runner/build_entrypoint.py` | duplicate | Ten sam hard-coded release timeline dla runtime_only/contract receipts co #4106577193. Powtórzenie 4106577193. |
@@ -60,9 +60,9 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4061343721](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343721) / #97 | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | valid_unfixed | Dla q=2 oryginalne K/G mają 4 wpisy i n=2, demag ma 16. Adapter n nie zmienia się. |
 | [4061343735](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343735) / #97 | `backends/fem/cpu/frequency_domain/floquet_airbox_operator.cpp` | already_fixed | Obecny C_q transportuje lokalną bazę i sprawdza ortonormalność, a mismatched m odrzuca. |
 | [4061343743](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343743) / #97 | `scripts/local_runner/container_main.py` | duplicate | Powtarza allow_profiles health mismatch z #4060116248; obecny HEAD zwraca skonfigurowaną allow-listę. Powtórzenie 4060116248. |
-| [4061684269](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684269) / #97 | `scripts/compare_de_100nm_pilot.py` | implemented_pending_ci | Comparator wiąże dokładne bajty dispersion.csv z contained path, size i SHA256 run-result. Te same bajty trafiają do walidatora naukowego, parsera i hasha raportu; companion artifacts i fizyka nie są kwalifikowane tą poprawką. |
+| [4061684269](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684269) / #97 | `scripts/compare_de_100nm_pilot.py` | implemented | Comparator wiąże dokładne bajty dispersion.csv z contained path, size i SHA256 run-result. Te same bajty trafiają do walidatora naukowego, parsera i hasha raportu; companion artifacts i fizyka nie są kwalifikowane tą poprawką. |
 | [4061684277](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684277) / #97 | `scripts/run_de_100nm_pilot.py` | already_fixed | subprocess.run ma host watchdog, TimeoutExpired jest obsługiwany, a finally uruchamia cleanup po timeout/niezerowym wyniku. |
-| [4061684283](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684283) / #97 | `crates/fullmag-runner/src/fem/eigen_path.rs` | valid_unfixed | Po native return nie sprawdza executed.result.status przed checkpoint/parsing; outer result zawsze Completed. |
+| [4061684283](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684283) / #97 | `crates/fullmag-runner/src/fem/eigen_path.rs` | implemented_pending_ci | Serial i adaptivebootstrap checkpointują raw bytes przedCompleted admission. Cancelled/Paused wracają typedterminal z ostatnią zaakceptowaną równowagą i fullprovenance, Failed pozostajeErr, brakkolejnejpróbki/promocji. OptionalNone-root zachowuje safe nonaccepted rawdiagnosticclosure. |
 | [4061684290](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684290) / #97 | `crates/fullmag-runner/src/fem/eigen_native_window.rs` | implemented | Result.status=status może Cancelled, completion bierze literal Completed. |
 | [4061684295](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684295) / #97 | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | valid_unfixed | Gdy bazowe study nie ma outputów, renderer bierze pierwszy stage z outputami i emituje save przed wszystkimi stage'ami. Brak wywołań _render_outputs wewnątrz _render_stages oznacza, że późniejsze outputy znikają, a wcześniejsze stają się retroaktywnie aktywne. |
 | [4061684299](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684299) / #97 | `crates/fullmag-session/src/reachability.rs` | valid_unfixed | Walidator wiąże session/run i trzy dokumenty, nie persisted.artifacts. Nowy inspect_live_snapshot skanuje CAS/ref keys, nie zwykłe artifact paths. |
@@ -1451,3 +1451,42 @@ utratę diagnostics przy legalnym checkpoint_rootNone; trwa bezpieczne zachowani
 raw closure w nieakceptowanym namespace z istniejącą walidacją portable paths.
 Nie uznano WIP za naprawiony kontrakt ani nie publikujemy cancelled spectrum jako
 zaakceptowanego wyniku. PR97 nadal OPEN, całość celu niezakończona.
+
+GHA `37830494397`, job `113494275851`, potwierdza: porównanie CSV 14/14
+(test wykresu i raportu nie został pominięty), walidator 61/61 oraz oba warianty
+terminalnego statusu materializatora 2/2 PASS. Regresja zapisu pustego ROI także
+przeszła. Późniejszy, niezależny błąd rzeczywistej siatki Gmsh nie unieważnia tych
+dowodów kontraktowych. Uwagi 4061684269 i 4060116354 mają status `implemented`;
+nie oznacza to kwalifikacji numerycznej solvera.
+
+Commit `1b6edf6d0` jest na remote. Naprawia statusy ścieżki wielopunktowej
+oraz bootstrapu Relax→Eigen, zachowując surową diagnostykę również bez katalogu
+checkpointów i bez ukończonego widma. Błąd zapisu nie jest maskowany anulowaniem.
+Review trzech plików i kontrole rustfmt/diff przeszły. Cztery jawne regresje
+podpięto do GHA `37831903599` na SHA `175662faabcb893eaadf219920c4a0596fd5d520`.
+Uwaga 4061684283 oczekuje CI; działanie runtime nie jest jeszcze potwierdzone.
+Commit `175662faa` poprawia tylko maskę FIELD i digest w fixture provenance.
+Ta poprawka przeszła review źródłowe; provider nie został jeszcze ponowiony.
+
+Reviewer zatwierdził rozdzielenie centrum widma i przesunięcia w teście refillu:
+przesunięcie BASE−10 kHz zachowuje bliski cluster, metrykę masy, kolejność modów,
+pasmo BASE±1 Hz oraz wszystkie bramki residual/KSP. Izoluje test deduplikacji
+i rozszerzania puli. Nie naprawia ani nie kwalifikuje ścieżki produkcyjnej
+z przesunięciem 1 mHz od wartości własnej: błąd GMRES pozostaje jawnie otwarty.
+PR #97 pozostaje OPEN; pełny cel i zamknięcie PR nie są zakończone.
+
+### Ponowienie po konkretnych błędach — 2026-10-08
+
+GHA37831903599/job113499112355 ujawnił trzy unikalne błędy kompilacji:
+stary tuple return w eigen_k_pool377 i dwa odczyty pola handoff jako metody.
+Commit `84dece49c` poprawia je; sprawdzono wszystkie udane return branches funkcji.
+Nie uznano wcześniejszego source approval za dowód kompilacji ani regresji.
+Commit `dd2aa4f10` izoluje test refill/dedup od near-pole KSP; problem produkcyjny
+pozostaje otwarty. Commit `1dfce5dfc` dostarcza brakujący readiness GET z
+ready_to_run=false; source guard korzysta z canonical apiPaths, notification
+assertions pozostają aktywne. Source review, Node/diff i ograniczony rustfmt PASS;
+React Doctor nadal68/100 z tymi samymi siedmioma ostrzeżeniami, bez suppressions.
+
+GHA `37832748542` (bootstrap) i `37832753999` (provider) zlecono na pełnym SHA
+`1dfce5dfc2854cf11aa96bdf27fa9dd5dc1c6190`. Oczekują named regression evidence.
+Nie zaliczono jeszcze typedterminal runtime ani native refill/provider gates.
