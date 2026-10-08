@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 29, `implemented_pending_browser`: 8, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 97. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 30, `implemented_pending_browser`: 8, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 96. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -42,7 +42,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4060687842](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060687842) / #97 | `crates/fullmag-runner/src/fem/eigen_path.rs` | valid_unfixed | overlap_values filtruje published_mode_ids z union spectrum i field; tracking IDs są pomijane. |
 | [4060687853](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060687853) / #97 | `crates/fullmag-runner/src/dispatch.rs` | already_fixed | Final state pochodzi z ostatniej zaakceptowanej magnetyzacji albo handoffu; pierwotny brak poprawiono. initial_magnetization nadal opisuje stan wejściowy planu, co samo nie dowodzi zgłoszonego błędu końcowego stanu. |
 | [4060687861](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060687861) / #97 | `apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts` | already_fixed | Wszyscy trzej aktualni producenci zapisują wymagane ID; obecny parser je zachowuje. |
-| [4060687869](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060687869) / #97 | `scripts/comsol_modal_field_certificate.py` | valid_unfixed | Dowolny metadata_path jest odczytywany bez containment względem case_dir; _file_record zapisuje path absolutny, gdy relative_to(case_dir) nie działa. |
+| [4060687869](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060687869) / #97 | `scripts/comsol_modal_field_certificate.py` | implemented | Dowolny metadata_path jest odczytywany bez containment względem case_dir; _file_record zapisuje path absolutny, gdy relative_to(case_dir) nie działa. |
 | [4060687877](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060687877) / #97 | `scripts/validate_comsol_dispersion_scientific_gate.py` | implemented | numeric bundle files bound to declared run root |
 | [4060687890](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060687890) / #97 | `scripts/validate_comsol_dispersion_scientific_gate.py` | implemented | complete case set independent of ordering |
 | [4061061284](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061284) / #97 | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | already_fixed | Bieżące oba admission helpers akceptują certified_shared_domain przy wskaźniku operatora. Nie zmieniać markerów na ślepo. |
@@ -795,3 +795,13 @@ lokalnego wyniku. Parametry fizyczne, tolerancje i konwencja Floqueta bez zmian.
 Regresje obejmują plik zewnętrzny, ../ oraz poprawny jawny plik w case_dir.
 Suite dodano do workflow dispersion-artifact-consumers. Diff/source review PASS;
 wykonanie wyłącznie GHA pozostaje wymagane. Nie oznaczono kwalifikacji naukowej.
+
+Dowód bieżący: bootstrap37774275871 / 9c276141208e11f70ec713fefcaf1740077b6270,
+job113301125883 native-modal-cabi-contract SUCCESS. Zakres: dependency-free
+native CABI, nie MFEM/SLEPc/GPU execution ani kwalifikacja fizyki.
+Certyfikat: a2f2fd5e666abefc8517e04067a126acccb62d43 na remote;
+workflow37774715764 dispersion-artifact-consumers rozpoczęty, wynik oczekiwany.
+
+Certyfikat: workflow37774715764 / job113302569874 SUCCESS. Log potwierdza
+wykonanie test_comsol_modal_field_certificate.py razem z trzema suite consumers:
+54 passed, 22 subtests passed. Review4060687869: implemented w tym zakresie.
