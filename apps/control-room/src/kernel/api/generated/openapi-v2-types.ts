@@ -7403,6 +7403,8 @@ export interface components {
             /** Format: double */
             frequency_hz: number;
             mode_artifact_path?: string | null;
+            /** @description Explicit availability; absent values use legacy reference checks. */
+            mode_field_available?: boolean | null;
             mode_field_id?: string | null;
             mode_field_resource_key?: string | null;
             mode_id: string;
@@ -7722,6 +7724,8 @@ export interface components {
             component_participation: components["schemas"]["FrequencyDomainModalParticipationPayload"];
             /** Format: double */
             frequency_hz: number;
+            /** @description Explicit availability; absent values use legacy reference checks. */
+            mode_field_available?: boolean | null;
             mode_field_id?: string | null;
             mode_field_resource_key?: string | null;
             mode_id: string;

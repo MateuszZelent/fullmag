@@ -333,6 +333,9 @@ pub struct FrequencyDomainSpectrumV3ModePayload {
     pub mode_field_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_field_resource_key: Option<String>,
+    /// Explicit availability; absent values use legacy reference checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode_field_available: Option<bool>,
     /// Missing solver evidence remains unavailable, never an inferred zero.
     pub residual_relative_l2: Option<f64>,
     pub component_participation: FrequencyDomainModalParticipationPayload,
@@ -529,6 +532,9 @@ pub struct FrequencyDomainFieldSweepModePayload {
     pub mode_field_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_field_resource_key: Option<String>,
+    /// Explicit availability; absent values use legacy reference checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode_field_available: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub residual_relative_l2: Option<f64>,
     pub source_revision: String,
@@ -4044,6 +4050,13 @@ mod spectrum_residual_tests {
                 }]
             }]
         })
+    }
+
+    #[test]
+    fn spectrum_v3_rejects_non_boolean_mode_field_availability() {
+        let mut input = spectrum();
+        input["samples"][0]["modes"][0]["mode_field_available"] = serde_json::json!("false");
+        assert!(decode_frequency_domain_artifact_payload("eigen/spectrum.v3.json", input).is_err());
     }
 
     #[test]

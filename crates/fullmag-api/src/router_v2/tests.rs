@@ -44277,6 +44277,45 @@ fn openapi_frequency_domain_json_artifact_schema_is_typed_and_revisioned() {
 }
 
 #[test]
+fn openapi_mode_field_availability_is_optional_boolean() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+    for schema_name in [
+        "FrequencyDomainSpectrumV3ModePayload",
+        "FrequencyDomainFieldSweepModePayload",
+    ] {
+        let schema = schemas
+            .get(schema_name)
+            .expect("mode schema must be present");
+        let availability = schema
+            .get("properties")
+            .and_then(|properties| properties.get("mode_field_available"))
+            .expect("mode schema must expose typed availability");
+        assert_eq!(
+            availability.get("type"),
+            Some(&serde_json::json!(["boolean", "null"])),
+            "{schema_name}.mode_field_available must be a nullable boolean"
+        );
+        let is_required = schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .is_some_and(|required| {
+                required
+                    .iter()
+                    .any(|field| field.as_str() == Some("mode_field_available"))
+            });
+        assert!(
+            !is_required,
+            "{schema_name}.mode_field_available must remain optional"
+        );
+    }
+}
+
+#[test]
 fn openapi_frequency_domain_fmr_and_field_sweep_resources_are_registered() {
     let value = crate::openapi_v2::openapi_json();
     let paths = value
@@ -44346,6 +44385,7 @@ fn openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract() {
                 "mode_artifact_path",
                 "mode_field_id",
                 "mode_field_resource_key",
+                "mode_field_available",
                 "source_revision",
                 "status",
             ][..],

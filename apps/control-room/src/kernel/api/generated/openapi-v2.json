@@ -11013,6 +11013,13 @@
                   "null"
                 ]
               },
+              "mode_field_available": {
+                "description": "Explicit availability; absent values use legacy reference checks.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "mode_field_id": {
                 "type": [
                   "string",
@@ -12588,6 +12595,13 @@
               "frequency_hz": {
                 "format": "double",
                 "type": "number"
+              },
+              "mode_field_available": {
+                "description": "Explicit availability; absent values use legacy reference checks.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
               },
               "mode_field_id": {
                 "type": [

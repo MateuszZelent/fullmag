@@ -1554,7 +1554,7 @@ fn field_sweep_item(
             mode.mode_artifact_path.as_deref().filter(|path| !path.trim().is_empty())?;
             modal_field_vector_resource_key(mode.mode_field_id.as_deref())
         });
-    let field_ready = mode.extra.0.get("mode_field_available").and_then(Value::as_bool) != Some(false)
+    let field_ready = mode.mode_field_available != Some(false)
         && mode.field_status.as_deref() == Some("ready")
         && mode
             .mode_field_id
@@ -2755,7 +2755,7 @@ fn spectrum_v3_item(
     let field_resource_key = mode.mode_field_resource_key.as_ref()
         .filter(|key| !key.trim().is_empty()).cloned()
         .or_else(|| modal_field_vector_resource_key(mode.mode_field_id.as_deref()));
-    let field_ready = mode.extra.0.get("mode_field_available").and_then(Value::as_bool) != Some(false)
+    let field_ready = mode.mode_field_available != Some(false)
         && mode.mode_field_id.as_deref().is_some_and(|id| !id.trim().is_empty())
         && field_resource_key.is_some();
     let item_id = mode.mode_id.clone();
@@ -4455,10 +4455,18 @@ mod tests {
                 source_revision: "revision-1".to_string(),
                 field_status: Some("ready".to_string()),
                 status: "ready".to_string(),
+                mode_field_available: Some(true),
                 extra: FrequencyDomainArtifactExtras(BTreeMap::new()),
             }
         };
         let durable_payload = serde_json::to_value(&durable_mode).unwrap();
+        assert_eq!(durable_payload["mode_field_available"], true);
+        let mut invalid_availability = durable_payload.clone();
+        invalid_availability["mode_field_available"] = serde_json::json!("false");
+        assert!(
+            serde_json::from_value::<FrequencyDomainFieldSweepModePayload>(invalid_availability)
+                .is_err()
+        );
         let durable_item = field_sweep_item(
             "run/1",
             "dataset/1",
@@ -4479,8 +4487,15 @@ mod tests {
         );
 
         let mut unavailable_mode = durable_mode.clone();
-        unavailable_mode.extra.0.insert("mode_field_available".to_string(), Value::Bool(false));
-        let unavailable_item = field_sweep_item("run/1", "dataset/1", "sample/1", "revision-1", unavailable_mode, mesh_ref.clone());
+        unavailable_mode.mode_field_available = Some(false);
+        let unavailable_item = field_sweep_item(
+            "run/1",
+            "dataset/1",
+            "sample/1",
+            "revision-1",
+            unavailable_mode,
+            mesh_ref.clone(),
+        );
         assert!(unavailable_item.field_ref.is_none());
         assert_eq!(unavailable_item.status.completeness, "spectrum_only");
 
@@ -4503,6 +4518,7 @@ mod tests {
                 source_revision: "revision-1".to_string(),
                 field_status: Some("ready".to_string()),
                 status: "ready".to_string(),
+                mode_field_available: None,
                 extra: FrequencyDomainArtifactExtras(BTreeMap::new()),
             },
             mesh_ref,
@@ -4541,6 +4557,7 @@ mod tests {
                 source_revision: "revision-1".to_string(),
                 field_status: Some("ready".to_string()),
                 status: "ready".to_string(),
+                mode_field_available: None,
                 extra: FrequencyDomainArtifactExtras(BTreeMap::new()),
             },
             None,
@@ -4583,15 +4600,36 @@ mod tests {
                 "unavailable": {"reason_code": "not_computed", "detail": "fixture"}
             }
         })).unwrap();
+        let mut mode = mode;
+        mode.mode_field_available = Some(true);
         let before = serde_json::to_value(&mode).unwrap();
+        assert_eq!(before["mode_field_available"], true);
+        let mut invalid_availability = before.clone();
+        invalid_availability["mode_field_available"] = serde_json::json!("false");
+        assert!(
+            serde_json::from_value::<FrequencyDomainSpectrumV3ModePayload>(invalid_availability)
+                .is_err()
+        );
         let item = spectrum_v3_item("run", "dataset", "sample", "revision", mode.clone(), None);
         assert_eq!(item.field_ref.as_ref().unwrap().field_id, "analysis:eigen:field/α");
         assert_eq!(item.field_ref.as_ref().unwrap().resource_key,
             "/v2/sessions/current/data/fields/analysis%3Aeigen%3Afield%2F%CE%B1/samples/vector?phase_rad=0&view=phase_rotated_real");
         assert_eq!(serde_json::to_value(&mode).unwrap(), before);
+        let mut legacy_mode = mode.clone();
+        legacy_mode.mode_field_available = None;
+        let legacy_item =
+            spectrum_v3_item("run", "dataset", "sample", "revision", legacy_mode, None);
+        assert!(legacy_item.field_ref.is_some());
         let mut unavailable_mode = mode.clone();
-        unavailable_mode.extra.0.insert("mode_field_available".to_string(), Value::Bool(false));
-        let unavailable_item = spectrum_v3_item("run", "dataset", "sample", "revision", unavailable_mode, None);
+        unavailable_mode.mode_field_available = Some(false);
+        let unavailable_item = spectrum_v3_item(
+            "run",
+            "dataset",
+            "sample",
+            "revision",
+            unavailable_mode,
+            None,
+        );
         assert!(unavailable_item.field_ref.is_none());
         assert_eq!(unavailable_item.status.completeness, "spectrum_only");
     }

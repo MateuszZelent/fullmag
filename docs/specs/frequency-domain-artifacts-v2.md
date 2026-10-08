@@ -846,6 +846,15 @@ JSON use the same boolean and encode an unavailable resource key as `null`.
 Legacy artifacts without this boolean infer availability from a published
 resource key, never from an ID alone.
 
+JSON API deklaruje `mode_field_available` jako opcjonalny, nullable boolean
+w `FrequencyDomainSpectrumV3ModePayload` i `FrequencyDomainFieldSweepModePayload`.
+Wartość tekstowa `"false"` jest błędnym typem i powoduje odrzucenie artefaktu;
+nie może zostać potraktowana jak brak pola. Jawne `false` blokuje `field_ref`,
+także przy pozostałych metadanych wskazujących gotowość. Brak lub `null` zachowuje
+historyczne warunki zgodności adaptera. Sam ten fallback nie jest dowodem
+istnienia binarnego payloadu ani kwalifikacji fizycznej. Nie należy mylić
+tekstowej kolumny CSV z typem pola w JSON.
+
 For `KSamplingIR::Path`, public sample count and `path_s_rad_per_m` must follow
 the same path expansion rule used by the runner. Open paths and closed paths
 both publish `sum(samples_per_segment) + 1` samples when
