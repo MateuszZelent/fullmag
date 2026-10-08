@@ -94,16 +94,60 @@ lecz stan queue wymaga domknięcia przez własną kontenerową ścieżkę recove
 
 ## Granice i następny krok
 
+### Końcowa aktualizacja: commit edytora i fixed RAM PASS
+
+Przyrost edytora został zapisany i wypchnięty do PR #147 jako
+`b1d809b6c1c3b485d7a0d373b838fc1829e1bc0a`. Changed-scientific-docs gate
+dla bazowego `37b929503ecf95dd99de121f86236b61063b9899` → tego commita: exit 0.
+
+Powyższa obserwacja brakującego journalu jest historyczna: koordynator następnie
+opublikował terminalny `succeeded/0`, `phase=terminal` dla joba 38. Po tym
+zmienionym stanie ponowiono zatwierdzoną receptę RAM, nie build. Pełny validator
+trusted documents, artefaktów i kapsuły przepuścił launch. Nowy run:
+`storage/builds/microwave-antenna-latest-2026090-78aaec16ccf52671/managed-antenna-ram-cpu/runs/4d02475f939946fdbed403bbb2243186`.
+Kontener i eksport zachowano; observer: izolacja i startup identity PASS,
+solver exit 0, `solver_succeeded_comparison_pending`.
+
+`scripts/compare_managed_antenna_ram.py::compare`: **PASS**, exit 0:
+
+- 16 próbek potencjału: maksymalny błąd $1.1102230246251565\cdot10^{-16}\,\mathrm V$;
+- cztery próbki pola: maksymalny błąd wektorowy
+  $6.760249178929324\cdot10^{-9}\,\mathrm{A/m}$;
+- 108 faces / 36 elementów RT0: maksymalny błąd momentu
+  $2.220446049250313\cdot10^{-16}\,\mathrm A$, suma fluxu każdego elementu zero;
+- exact bundle→observable association PASS, operator
+  `fem_oersted_direct_tetra_quadrature.v3`, 43632 kernel evaluations i 648 ledger
+  leaf visits; nie zweryfikowano niezależnie historii adaptacji ani wag DOF.
+
+Manifest content digest:
+`sha256:3de8ad2e896ad8c438a9966db18b23247db7f83025fdb688411668cfff534cfa`;
+bundle SHA-256:
+`78633e7d1d285f911cbc9247c28178ce5661481bd2bd4a1ac6fdbc8cfd501f16`;
+stage record SHA-256:
+`ee023c22d2f219d518fb0b22060209142234563e10fc13dcf70223a95dd16bdf`.
+Rekonstrukcja wejść z przypiętego skryptu i DSL wykonanej kapsuły ma digest
+`a7f2c4f5326cfe5fca253ba99e4e7d47f8b6162d765211abecf68aecaffabb74`.
+Nie zmieniono progów porównania ani producerowego estymatora.
+Pierwsze wywołanie komparatora odmówiło odziedziczonego `CARGO_TARGET_DIR` poza
+zatwierdzonym profilem. Usunięto override tylko z procesu i przywrócono go
+po wykonaniu; nie zmieniono konfiguracji hosta ani wyniku solvera.
+
+To fixed modeled domain / outside-source inspection przy 1 A, **nie regularna
+publikacja reusable basis**. Komparator jawnie zachowuje
+`physics_qualified=false`, `durable_session_storage_qualified=false` i
+`reuse_LLG_FFT_qualified=false`. Build 38 nie obejmuje późniejszego edytora CPW.
+
 | Realizacja | Nowy dowód |
 |---|---|
 | FDM CPU | Wspólny model UI; brak nowej kwalifikacji antenowego solve |
 | FDM GPU | Wspólny model UI; brak runtime/device proof |
-| FEM CPU | Authoring CPW i fixture; brak nowego V/RT0/H solve |
+| FEM CPU | Authoring CPW i fixture; osobny fixed RAM V/RT0/H PASS z wcześniejszej kapsuły, bez kwalifikacji CPW |
 | FEM GPU | Wspólny authoring; brak runtime/device proof |
 
 Pozostały CPW creator z sześcioma terminalami i jawnym portem, conductor details,
 placement above/below, rzeczywisty viewport bez box fallback i jego WebGL smoke,
 backendowy round-trip oraz naukowe current→field→basis→LLG/FFT. Niniejszy przyrost
-nie zamyka T04/T15/T18 ani całego T00–T18. Dalej: commit/push tego
-przyrostu; następnie połączenie CPW z viewportem i kreatorem oraz terminalna
-walidacja joba 38 przed ponowieniem zatwierdzonej recepty RAM.
+nie zamyka T04/T15/T18 ani całego T00–T18. Dalej: połączenie CPW z viewportem
+i kreatorem oraz domknięcie regularnej publikacji/current-source/reuse i
+pełnych bramek naukowych. Commit edytora oraz terminalny fixed RAM są już
+potwierdzone powyżej; nie uruchamiać ich ponownie bez nowej zmiany lub potrzeby.
