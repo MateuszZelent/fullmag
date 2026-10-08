@@ -195,7 +195,8 @@ describe("FrequencyDomainCharts", () => {
       unit: "1",
     });
     expect(renderModel.yAxes[0]).toEqual({
-      label: "Eigen frequency [Hz]",
+      dataRange: [2.95e9, 4.05e9],
+      label: "Frequency [Hz]",
       unit: "Hz",
     });
     expect(renderModel.series[0]?.points).toEqual([

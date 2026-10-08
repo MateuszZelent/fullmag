@@ -347,3 +347,10 @@ Scope nie obejmuje unit tests. Root przejrzał diff, przypadki singleton/signed,
 exact-unit guard, dziedziczenie jednostek i zachowanie analitycznych symboli;
 nie stwierdził blokującego problemu. Scopowany diff/whitespace PASS.
 Regresje ostatniego fragmentu prezentacji pozostają do wykonania wyłącznie CI.
+
+CI `37836121865` dla commita `2c4c419b77d3b0a4b2817091b53ce22ca0e28ff8`:
+frontend types/contracts/lint/Doctor PASS; pojedynczy stary assert konsumenta
+`FrequencyDomainCharts.test.tsx` nadal oczekiwał osi Eigen frequency bez
+nowego range. Uaktualniono oczekiwanie Frequency/Hz i range 2.95–4.05e9;
+pozostawiono asercję niezmienionych danych SI 3e9/4e9. To korekta testu,
+bez zmiany produkcji; browser/source dowody zachowują ważność.
