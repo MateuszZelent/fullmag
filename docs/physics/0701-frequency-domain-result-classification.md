@@ -85,7 +85,7 @@ z jawną definicją iloczynu, normalizacją, jednostką i provenance w artefakci
 (assumptions-and-validity)=
 ## 4. Założenia, kontekst $\mathbf{k}$ i granice nazw
 
-Klasyfikacja zakłada ważny stan równowagi, spójną konwencję fazora i typed manifest zachowujący `run_id`, `stage_id`, `equilibrium_identity`, `study_product`, kontekst brzegowy oraz revision. Nie dowodzi ona poprawności numerycznej wyniku; prezentuje wyłącznie dowód opublikowany przez runtime.
+Klasyfikacja zakłada ważny stan równowagi, spójną konwencję fazora i typed manifest zachowujący `run_id`, `stage_id`, tożsamość równowagi wspólną lub kompletną mapę tożsamości poszczególnych próbek, `study_product`, kontekst brzegowy oraz revision. Nie dowodzi ona poprawności numerycznej wyniku; prezentuje wyłącznie dowód opublikowany przez runtime.
 
 Kontekst wektora falowego jest rozłączny:
 
@@ -159,7 +159,7 @@ revisioned API resource
   -> dedicated Inspector / Analysis / Viewport
 ```
 
-Brak `equilibrium_identity` albo `boundary_context` tworzy jawny contract gap i nie publikuje semantycznego wyniku. Brak zasobu produktu nie jest zastępowany placeholderem. Zmiana display unit, etykiety albo revision payloadu nie zmienia immutable run/stage identity węzła.
+Brak zarówno wspólnej tożsamości równowagi, jak i kompletnej mapy tożsamości próbek, albo brak `boundary_context` tworzy jawny contract gap i nie publikuje semantycznego wyniku. Mapa `native_provenance_by_sample` używa jawnego `sample_index`; wybór punktu zachowuje tożsamość tej próbki aż do metadanych pola modu. Różny hash artefaktu nie dowodzi odmiennego fizycznego stanu magnetyzacji. Porównania modalne–wymuszone wymagają rzeczywiście wspólnej tożsamości, a nie dwóch brakujących wartości ani identyfikatora pierwszej próbki. Brak zasobu produktu nie jest zastępowany placeholderem. Zmiana display unit, etykiety albo revision payloadu nie zmienia immutable run/stage identity węzła.
 
 W terminologii round-trip **requested intent** zachowuje żądany produkt i warunki, a **resolved execution** zachowuje faktycznie wybrany lane. **Validation errors** zatrzymują materializację wyniku przy brakującym dowodzie. **Unsupported combinations** pozostają jawnie niedostępne i nie otrzymują nazwy sugerującej wykonanie.
 
@@ -196,7 +196,7 @@ Walidacja tej noty obejmuje source-map validator, testy walidatora dokumentacji,
 (limitations)=
 ## 11. Ograniczenia i praca odroczona
 
-- Backend musi opublikować stabilne `equilibrium_identity`, `boundary_context`, drive i observable; UI nie może ich zgadywać.
+- Backend musi opublikować wspólną tożsamość równowagi albo kompletną mapę tożsamości próbek, `boundary_context`, drive i observable; UI nie może ich zgadywać.
 - Bieżący adapter `physicsFirstResultsSnapshotFromResources` przenosi observable, lecz nie przenosi jeszcze drive evidence; dlatego zasób runtime nie może obecnie zakwalifikować driven FMR wyłącznie przez ten adapter.
 - Obecny adapter ścieżki $\mathbf{k}$ czyta jawne `path_metadata`; single-$\mathbf{k}$ i grid wymagają równoważnego typed payloadu, zanim mogą być produkcyjnie materializowane z zasobów.
 - Jednostka `susceptibility` oraz normalizacja $C_n$ muszą pochodzić z artefaktu; klasyfikator nie narzuca jednej konwencji wymiarowej.
@@ -222,3 +222,5 @@ Walidacja tej noty obejmuje source-map validator, testy walidatora dokumentacji,
 | typed evidence i klasyfikacja | `apps/control-room/src/shared/domain/analysis/frequencyDomainResultClassification.ts` — `classifyFrequencyDomainResult` | wspólna semantyka | `frequencyDomainResultClassification.test.ts` — komplet kontekstów i kwalifikacji |
 | deterministyczne drzewo wyników | `apps/control-room/src/modules/explorer/builders/resultsExplorerNodes.ts` — `buildPhysicsFirstResultsTree` | Control Room | `resultsExplorerNodes.test.ts` — `describe("physics-first Results builder")` |
 | semantyczne modele Inspectorów | `apps/control-room/src/modules/inspector/panels/physics-first/physicsFirstResultInspectorModel.ts` — `physicsFirstResultInspectorModel` | Control Room | `physicsFirstResultInspectorModel.test.ts` — komplet 28 rodzajów physics-first |
+
+| kontekst i pochodzenie modalnego sweepa | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` — `build_eigen_path_frequency_domain_manifest` | FEM CPU / publikacja | `eigen_tests.rs` — `eigen_path_manifest_typed_context_preserves_floquet_and_per_sample_identity`; wykonanie regresji wyłącznie CI |

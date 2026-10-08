@@ -111,6 +111,12 @@
       "path": "apps/control-room/src/modules/inspector/panels/physics-first/physicsFirstResultInspectorModel.ts",
       "symbol": "physicsFirstResultInspectorModel",
       "responsibility": "Resolve exact semantic titles, physical labels and method labels for every physics-first result kind."
+    },
+    {
+      "id": "modal-sweep-manifest",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs",
+      "symbol": "build_eigen_path_frequency_domain_manifest",
+      "responsibility": "Publish typed boundary and k sampling plus exact per-sample native provenance; retain a global identity only with agreement across every sample."
     }
   ],
   "public_api": {

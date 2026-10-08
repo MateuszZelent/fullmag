@@ -3129,7 +3129,7 @@ pub(super) fn write_eigen_v2_bundle(
     Ok(())
 }
 
-fn modal_boundary_context(plan: &FemEigenPlanIR) -> &'static str {
+pub(super) fn modal_boundary_context(plan: &FemEigenPlanIR) -> &'static str {
     match plan.spin_wave_bc.kind() {
         SpinWaveBoundaryKindIR::Periodic | SpinWaveBoundaryKindIR::Floquet => "floquet_periodic",
         SpinWaveBoundaryKindIR::Free
@@ -3138,7 +3138,7 @@ fn modal_boundary_context(plan: &FemEigenPlanIR) -> &'static str {
     }
 }
 
-fn modal_k_sampling_manifest(k_sampling: Option<&KSamplingIR>) -> serde_json::Value {
+pub(super) fn modal_k_sampling_manifest(k_sampling: Option<&KSamplingIR>) -> serde_json::Value {
     match k_sampling {
         Some(KSamplingIR::Single { k_vector }) => serde_json::json!({
             "kind": "single",

@@ -9680,3 +9680,394 @@ fn complex_modal_norm_interval_rejects_rectangular_metric_atomically() {
         &mut q, &metric, EigenNormalizationIR::UnitL2).is_err());
     assert_eq!(q, before);
 }
+
+fn ui_seven_path_manifest_plan(
+    boundary_kind: SpinWaveBoundaryKindIR,
+) -> FemEigenPlanIR {
+    let points = [
+        ("DE--2.5e+07", [0.0, -25.0e6, 0.0]),
+        ("DE--1.5e+07", [0.0, -15.0e6, 0.0]),
+        ("DE--5e+06", [0.0, -5.0e6, 0.0]),
+        ("Gamma", [0.0, 0.0, 0.0]),
+        ("DE-5e+06", [0.0, 5.0e6, 0.0]),
+        ("DE-1.5e+07", [0.0, 15.0e6, 0.0]),
+        ("DE-2.5e+07", [0.0, 25.0e6, 0.0]),
+    ];
+    let mut plan = minimal_native_modal_plan();
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: points
+            .iter()
+            .map(|(label, k_vector)| KPointIR {
+                label: Some((*label).to_string()),
+                k_vector: *k_vector,
+            })
+            .collect(),
+        samples_per_segment: vec![1; 6],
+        closed: false,
+    });
+    plan.spin_wave_bc = SpinWaveBoundaryConditionIR::Legacy(boundary_kind);
+    plan
+}
+
+fn ui_seven_path_manifest_result() -> crate::eigen::PathSolveResult {
+    let k_vectors = [
+        [0.0, -25.0e6, 0.0],
+        [0.0, -15.0e6, 0.0],
+        [0.0, -5.0e6, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 5.0e6, 0.0],
+        [0.0, 15.0e6, 0.0],
+        [0.0, 25.0e6, 0.0],
+    ];
+    let sample_labels = [
+        "DE--2.5e+07",
+        "DE--1.5e+07",
+        "DE--5e+06",
+        "Gamma",
+        "DE-5e+06",
+        "DE-1.5e+07",
+        "DE-2.5e+07",
+    ];
+    let equilibrium_hashes = [
+        "sha256:11ddb8dab0ce2c64c0bf8fc7d5161498e5fc6a7d1827c9893f3ebd439e7c6370",
+        "sha256:11ddb8dab0ce2c64c0bf8fc7d5161498e5fc6a7d1827c9893f3ebd439e7c6370",
+        "sha256:11ddb8dab0ce2c64c0bf8fc7d5161498e5fc6a7d1827c9893f3ebd439e7c6370",
+        "sha256:d635bc32c7b854cdf060f45cd62220ff1b46d719fbd414da43af0fde5ba9420a",
+        "sha256:11ddb8dab0ce2c64c0bf8fc7d5161498e5fc6a7d1827c9893f3ebd439e7c6370",
+        "sha256:11ddb8dab0ce2c64c0bf8fc7d5161498e5fc6a7d1827c9893f3ebd439e7c6370",
+        "sha256:11ddb8dab0ce2c64c0bf8fc7d5161498e5fc6a7d1827c9893f3ebd439e7c6370",
+    ];
+    let operator_hashes = [
+        "sha256:c004745cf6dce3b94b65c3b4b03d2bdb1a6522f1968ac743f95e35fe32df3cb5",
+        "sha256:ce08b0c3bf408e5f2866dd97b16c692bee70a4042c382f29da167fdd9fa5f9e9",
+        "sha256:f0fb3cd3bfced08b4e92f8d466701cbef74f468f0abe1b392e29fa9c2573fee2",
+        "sha256:e76f14580246624dc336977e74b4343f16eb5bcd2b8e56c55847991c162b329b",
+        "sha256:ae1627ce7c47e0bf6bf6ad544f4cb5a89aed8e27119a066f09996ef74e3f9834",
+        "sha256:88155bc5f62c7257036cd37683354f4a7af80c50a4ca90be670d3a45d8ad95a5",
+        "sha256:6590603942a7e6c934fc68e67bdf95f568017557b86991b78ac255ac90ac4608",
+    ];
+    let phase_hashes = [
+        "sha256:b2f7d73396113274bce7dc75e31337052e424532dac8af6b6a217b3c6ce71085",
+        "sha256:a8af217c552ca2d75785df8bf3fd32929fe70da985d248349d171b5cf0006cee",
+        "sha256:ea35cd115e0bb43dd5c0b34d4efefd62d11de5a6b216a4896d64d1c39a00d220",
+        "sha256:abfb5cd1a6a467dba7c0502b98e187d44ff50761aa62d7c62b2bbcda00fa86cf",
+        "sha256:5ff9f78ee3696b170d6cf6637a06206a20f9c90485a289198b1a129015e12ff6",
+        "sha256:1bffe8aa2cea448f21ba279a3f2776640bf26eb7b8f685fe78d2c31ffe5e2b0f",
+        "sha256:232b2f379bd497db2a29e3c314b9d9723ea22b2e51b439afe5381df781e50d49",
+    ];
+    let gamma_linearization =
+        "sha256:f3d8a0302424d8e631290921607f61d13599303f565e4f9f03163d351f00fa1f";
+    let regular_linearization =
+        "sha256:f9bf79fe9a18c9df2d59bc017fdfc5f4038e2f46fe89b5d1ada45a1968049163";
+    let periodic_mesh_hash =
+        "sha256:075559d22e30c840a5f32319f39e28917ef44d81abbc92010c6073a0909e6041";
+    let source_mesh_hash =
+        "sha256:eb2053e9a096432ac300bd5fd3cac2cd22031bb12cc61628e3011ee565008b7f";
+    let samples = (0..7)
+        .map(|sample_index| {
+            let mut diagnostics = serde_json::json!({
+                "physics_contract_version": "micromagnetics_frequency_domain_v5",
+                "phasor_convention": "exp_plus_i_omega_t",
+                "validation_state": "unvalidated",
+                "validated_scope": "sample_execution",
+                "assembly_kind": "floquet_airbox_cpu_schur_slepc",
+                "operator_input_signature_sha256": operator_hashes[sample_index],
+                "phase_constraint_sha256": phase_hashes[sample_index],
+                "equilibrium_artifact_sha256": equilibrium_hashes[sample_index],
+                "linearization_state_sha256": if sample_index == 3 { gamma_linearization } else { regular_linearization },
+                "periodic_mesh_certificate_sha256": periodic_mesh_hash,
+                "source_mesh_topology_sha256": source_mesh_hash,
+                "resolved_execution": {
+                    "device": "cpu",
+                    "engine": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+                    "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+                },
+                "requested_execution": {
+                    "solver_method": "targeted_spectrum",
+                    "preconditioner": "none",
+                    "k_sampling": {
+                        "kind": "single",
+                        "vector_rad_per_m": k_vectors[sample_index],
+                    },
+                },
+            });
+            if sample_index == 3 {
+                diagnostics["boundary_gauge"] = serde_json::json!({
+                    "eta_row_present": false,
+                    "gauge_policy": "none",
+                    "gauge_reason": "coercive_outer_boundary",
+                    "magnetostatic_bc": "periodic_airbox_k0",
+                    "outer_boundary_kind": "poisson_dirichlet",
+                    "robin_beta": 0.0,
+                    "robin_beta_unit": "1/m",
+                });
+            }
+            crate::eigen::SingleKSolveResult {
+                sample: crate::eigen::KSampleDescriptor {
+                    sample_index,
+                    label: Some(sample_labels[sample_index].to_string()),
+                    segment_index: sample_index.checked_sub(1),
+                    path_s: sample_index as f64,
+                    t_in_segment: 0.0,
+                    k_vector: k_vectors[sample_index],
+                },
+                modes: Vec::new(),
+                relaxation_steps: 0,
+                solver_model: crate::eigen::EigenSolverModel::ProductionCpuShiftInvert,
+                solver_notes: Vec::new(),
+                solver_diagnostics: Some(serde_json::json!({
+                    "phasor_convention": "not_applicable_real_reference",
+                    "resolved_execution": {"engine": "path_level_envelope"},
+                    "sample_solver_diagnostics": [
+                        {
+                            "sample_index": sample_index + 10,
+                            "diagnostics": {
+                                "resolved_execution": {"device": "must_not_be_selected"},
+                                "operator_input_signature_sha256": "sha256:wrong-sample",
+                            },
+                        },
+                        {"sample_index": sample_index, "diagnostics": diagnostics},
+                    ],
+                })),
+            }
+        })
+        .collect();
+    crate::eigen::PathSolveResult {
+        gamma0_rad_s_per_a_m: 2.211e5,
+        samples,
+        branches: Vec::new(),
+        solver_model: crate::eigen::EigenSolverModel::ProductionCpuShiftInvert,
+        notes: Vec::new(),
+        include_demag: true,
+        dispersion_validation: None,
+        k0_kittel_validation: None,
+        solver_policy: None,
+        dispersion_analytic_reference: None,
+        k0_kittel_periodic_airbox_demag: None,
+    }
+}
+
+fn ui_seven_single_record_phase_result() -> crate::eigen::PathSolveResult {
+    let mut result = ui_seven_path_manifest_result();
+    for sample in &mut result.samples {
+        let sample_index = sample.sample.sample_index;
+        let nested_diagnostics = sample
+            .solver_diagnostics
+            .as_ref()
+            .expect("native diagnostics")
+            ["sample_solver_diagnostics"][1]["diagnostics"]
+            .clone();
+        sample.solver_diagnostics = Some(serde_json::json!({
+            "phasor_convention": "not_applicable_real_reference",
+            "equilibrium_artifact_sha256": "sha256:11ddb8dab0ce2c64c0bf8fc7d5161498e5fc6a7d1827c9893f3ebd439e7c6370",
+            "linearization_state_sha256": "sha256:f9bf79fe9a18c9df2d59bc017fdfc5f4038e2f46fe89b5d1ada45a1968049163",
+            "resolved_execution": {"engine": "path_level_envelope"},
+            "sample_solver_diagnostics": [{
+                "sample_index": sample_index,
+                "diagnostics": nested_diagnostics,
+            }],
+        }));
+    }
+    result
+}
+
+#[test]
+fn eigen_path_manifest_typed_context_preserves_floquet_and_per_sample_identity() {
+    let mut plan = ui_seven_path_manifest_plan(SpinWaveBoundaryKindIR::Floquet);
+    let result = ui_seven_path_manifest_result();
+    let manifest = crate::fem::test_support::build_eigen_path_frequency_domain_manifest(
+        crate::dispatch::FemEngine::CpuNative,
+        &result,
+        &[],
+        &plan,
+    );
+
+    assert_eq!(manifest["study_product"], "modal_eigen");
+    assert_eq!(manifest["boundary_context"], "floquet_periodic");
+    assert_eq!(
+        manifest["requested_execution"]["boundary_context"],
+        "floquet_periodic"
+    );
+    assert_eq!(manifest["k_sampling"]["kind"], "path");
+    assert_eq!(manifest["k_sampling"]["sample_count"], 7);
+    assert_eq!(
+        manifest["requested_execution"]["k_sampling"],
+        manifest["k_sampling"]
+    );
+    assert_eq!(manifest["physics"]["normalization"], "unit_l2");
+    assert_eq!(
+        manifest["physics"]["phase_convention"],
+        "exp_plus_i_omega_t"
+    );
+    assert_eq!(manifest["physics"]["periodic_or_floquet"], "bloch_or_path_sampling");
+    assert_eq!(
+        manifest["mesh_identity"],
+        crate::artifacts::solver_mesh_signature(&plan.mesh)
+    );
+    assert!(manifest.get("geometry_identity").is_none());
+    assert!(manifest.get("equilibrium_artifact_sha256").is_none());
+    assert!(manifest.get("equilibrium_identity").is_none());
+    assert!(manifest.get("operator_input_signature_sha256").is_none());
+    assert!(manifest.get("phase_constraint_sha256").is_none());
+    assert!(manifest.get("linearization_state_sha256").is_none());
+    assert_eq!(
+        manifest["periodic_mesh_certificate_sha256"],
+        "sha256:075559d22e30c840a5f32319f39e28917ef44d81abbc92010c6073a0909e6041"
+    );
+    let by_sample = manifest["native_provenance_by_sample"]
+        .as_object()
+        .expect("per-sample native provenance map");
+    assert_eq!(by_sample.len(), 7);
+    assert_eq!(
+        by_sample["0"]["equilibrium_artifact_sha256"],
+        "sha256:11ddb8dab0ce2c64c0bf8fc7d5161498e5fc6a7d1827c9893f3ebd439e7c6370"
+    );
+    assert_eq!(
+        by_sample["3"]["equilibrium_artifact_sha256"],
+        "sha256:d635bc32c7b854cdf060f45cd62220ff1b46d719fbd414da43af0fde5ba9420a"
+    );
+    assert_eq!(
+        by_sample["3"]["operator_input_signature_sha256"],
+        "sha256:e76f14580246624dc336977e74b4343f16eb5bcd2b8e56c55847991c162b329b"
+    );
+    assert_eq!(
+        by_sample["3"]["phasor_convention"],
+        "exp_plus_i_omega_t"
+    );
+    assert_eq!(
+        by_sample["3"]["boundary_gauge"]["magnetostatic_bc"],
+        "periodic_airbox_k0"
+    );
+
+    plan.spin_wave_bc = SpinWaveBoundaryConditionIR::Legacy(SpinWaveBoundaryKindIR::Free);
+    let mut finite_open_result = ui_seven_path_manifest_result();
+    for sample in &mut finite_open_result.samples {
+        sample.solver_diagnostics = None;
+    }
+    let finite_open_manifest =
+        crate::fem::test_support::build_eigen_path_frequency_domain_manifest(
+            crate::dispatch::FemEngine::CpuNative,
+            &finite_open_result,
+            &[],
+            &plan,
+        );
+    assert_eq!(finite_open_manifest["boundary_context"], "finite_open");
+    assert_eq!(
+        finite_open_manifest["requested_execution"]["boundary_context"],
+        "finite_open"
+    );
+    assert_eq!(finite_open_manifest["k_sampling"]["kind"], "path");
+    assert_eq!(finite_open_manifest["k_sampling"]["sample_count"], 7);
+    assert_eq!(finite_open_manifest["physics"]["periodic_or_floquet"], "none");
+}
+
+#[test]
+fn eigen_path_manifest_phase_convention_requires_sample_consensus() {
+    let plan = ui_seven_path_manifest_plan(SpinWaveBoundaryKindIR::Floquet);
+    let result = ui_seven_single_record_phase_result();
+    let manifest = crate::fem::test_support::build_eigen_path_frequency_domain_manifest(
+        crate::dispatch::FemEngine::CpuNative,
+        &result,
+        &[],
+        &plan,
+    );
+    assert_eq!(
+        manifest["physics"]["phase_convention"],
+        "exp_plus_i_omega_t"
+    );
+    assert_eq!(
+        manifest["native_provenance_by_sample"]["3"]["phasor_convention"],
+        "exp_plus_i_omega_t"
+    );
+    assert!(manifest.get("equilibrium_artifact_sha256").is_none());
+    assert!(manifest.get("linearization_state_sha256").is_none());
+
+    let mut mixed_result = result.clone();
+    mixed_result.samples[3].solver_diagnostics.as_mut().unwrap()
+        ["sample_solver_diagnostics"][0]["diagnostics"]["phasor_convention"] =
+        serde_json::json!("exp_i_omega_t");
+    let mixed_manifest = crate::fem::test_support::build_eigen_path_frequency_domain_manifest(
+        crate::dispatch::FemEngine::CpuNative,
+        &mixed_result,
+        &[],
+        &plan,
+    );
+    assert!(mixed_manifest["physics"].get("phase_convention").is_none());
+    assert_eq!(
+        mixed_manifest["native_provenance_by_sample"]["3"]["phasor_convention"],
+        "exp_i_omega_t"
+    );
+
+    let mut missing_result = result.clone();
+    missing_result.samples[3].solver_diagnostics.as_mut().unwrap()
+        ["sample_solver_diagnostics"][0]["diagnostics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("phasor_convention");
+    let missing_manifest = crate::fem::test_support::build_eigen_path_frequency_domain_manifest(
+        crate::dispatch::FemEngine::CpuNative,
+        &missing_result,
+        &[],
+        &plan,
+    );
+    assert!(missing_manifest["physics"].get("phase_convention").is_none());
+    assert!(missing_manifest["native_provenance_by_sample"]["3"]
+        .get("phasor_convention")
+        .is_none());
+
+    let mut explicit_reference_marker_result = result.clone();
+    for sample in &mut explicit_reference_marker_result.samples {
+        sample.solver_diagnostics.as_mut().unwrap()
+            ["sample_solver_diagnostics"][0]["diagnostics"]["phasor_convention"] =
+            serde_json::json!("not_applicable_real_reference");
+    }
+    let explicit_reference_manifest =
+        crate::fem::test_support::build_eigen_path_frequency_domain_manifest(
+            crate::dispatch::FemEngine::CpuNative,
+            &explicit_reference_marker_result,
+            &[],
+            &plan,
+        );
+    assert_eq!(
+        explicit_reference_manifest["physics"]["phase_convention"],
+        "exp_minus_i_omega_t"
+    );
+
+    for solver_model in [
+        crate::eigen::EigenSolverModel::ReferenceScalarTangent,
+        crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent,
+    ] {
+        let mut reference_result = ui_seven_path_manifest_result();
+        reference_result.solver_model = solver_model;
+        for sample in &mut reference_result.samples {
+            sample.solver_model = solver_model;
+            sample.solver_diagnostics = None;
+        }
+        let reference_manifest =
+            crate::fem::test_support::build_eigen_path_frequency_domain_manifest(
+                crate::dispatch::FemEngine::CpuNative,
+                &reference_result,
+                &[],
+                &plan,
+            );
+        assert_eq!(
+            reference_manifest["physics"]["phase_convention"],
+            "exp_minus_i_omega_t"
+        );
+    }
+
+    let mut production_missing_result = ui_seven_path_manifest_result();
+    for sample in &mut production_missing_result.samples {
+        sample.solver_diagnostics = None;
+    }
+    let production_missing_manifest =
+        crate::fem::test_support::build_eigen_path_frequency_domain_manifest(
+            crate::dispatch::FemEngine::CpuNative,
+            &production_missing_result,
+            &[],
+            &plan,
+        );
+    assert!(production_missing_manifest["physics"]
+        .get("phase_convention")
+        .is_none());
+}

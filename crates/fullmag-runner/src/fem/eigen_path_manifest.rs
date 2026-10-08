@@ -148,6 +148,18 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
     // label from the orchestrator.  Reconstruction used to hide the actual
     // PETSc/SLEPc adapter and all residency/fallback fields.
     let native_diagnostics = eigen_path_native_modal_diagnostics(result);
+    let native_diagnostics = native_diagnostics.as_ref();
+    let native_provenance_by_sample = eigen_path_native_provenance_by_sample(result);
+    let boundary_context = crate::fem::eigen_output::modal_boundary_context(plan);
+    let mut k_sampling = crate::fem::eigen_output::modal_k_sampling_manifest(
+        plan.k_sampling.as_ref(),
+    );
+    if k_sampling["kind"] == "path" && !result.samples.is_empty() {
+        k_sampling["sample_count"] = serde_json::json!(result.samples.len());
+    }
+    let mesh_identity = crate::artifacts::solver_mesh_signature(&plan.mesh);
+    let normalization = crate::fem::eigen_output::normalization_label(plan.normalization);
+    let phase_convention = eigen_path_phase_convention(result);
     let requested_solver_method =
         eigen_path_nested_string(native_diagnostics, "requested_execution", "solver_method")
             .unwrap_or_else(|| {
@@ -277,6 +289,10 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         "schema_version": "frequency_domain_manifest.v1",
         "analysis_family": "magnetic_frequency_domain",
         "study_product": "modal_eigen",
+        "boundary_context": boundary_context,
+        "k_sampling": k_sampling.clone(),
+        "mesh_identity": mesh_identity,
+        "native_provenance_by_sample": native_provenance_by_sample,
         "revision": format!(
             "eigen:{}:{}:{}",
             result.solver_model.as_str(),
@@ -301,8 +317,8 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "include_demag": plan.operator.include_demag,
             "damping_policy": format!("{:?}", plan.damping_policy).to_lowercase(),
             "equilibrium_source": format!("{:?}", plan.equilibrium).to_lowercase(),
-            // A multi-sample k=0 bias-field sweep is not a Bloch/Floquet path.
-            "k_sampling": if calculation_mode == "dispersion_modal" { "path" } else { "single" },
+            "boundary_context": boundary_context,
+            "k_sampling": k_sampling,
             "outputs": requested_outputs,
             "solver_method": requested_solver_method,
             "preconditioner": requested_preconditioner,
@@ -327,12 +343,12 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "analysis_family": "magnetic_frequency_domain",
             "llg_gamma0_si": null,
             "llg_alpha": null,
-            "phase_convention": if production_periodic_airbox_k0 { "exp_plus_i_omega_t" } else if production_shift_invert || production_gpu_k0_kittel { "exp_i_omega_t" } else { "exp_minus_i_omega_t" },
+            "phase_convention": phase_convention.clone(),
             "frequency_units": "Hz",
             "field_units": "dimensionless_delta_m",
-            "normalization": format!("{:?}", plan.normalization).to_lowercase(),
+            "normalization": normalization,
             "spin_wave_bc": format!("{:?}", plan.spin_wave_bc.kind()).to_lowercase(),
-            "periodic_or_floquet": if calculation_mode == "dispersion_modal" { "bloch_or_path_sampling" } else { "none" },
+            "periodic_or_floquet": if boundary_context == "floquet_periodic" { "bloch_or_path_sampling" } else { "none" },
             "equilibrium_residual_summary": null,
             "response_map_axes": [],
         },
@@ -603,6 +619,14 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             if let Some(value) = value {
                 manifest_object.insert(key.to_string(), value);
             }
+        }
+    }
+    if phase_convention.is_none() {
+        if let Some(physics) = manifest
+            .get_mut("physics")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            physics.remove("phase_convention");
         }
     }
     if !production_shift_invert {
@@ -982,27 +1006,207 @@ pub(super) fn eigen_path_created_at_label() -> String {
 
 pub(super) fn eigen_path_native_modal_diagnostics(
     result: &crate::eigen::PathSolveResult,
+) -> Option<Value> {
+    let sample_diagnostics = result
+        .samples
+        .iter()
+        .map(eigen_path_sample_native_modal_diagnostics)
+        .collect::<Option<Vec<_>>>()?;
+    common_native_diagnostic_value(&sample_diagnostics, None)
+}
+
+fn eigen_path_sample_native_modal_diagnostics(
+    sample: &crate::eigen::SingleKSolveResult,
 ) -> Option<&Value> {
-    for sample in &result.samples {
-        let Some(root) = sample.solver_diagnostics.as_ref() else {
+    let diagnostics = eigen_path_sample_diagnostic_record(sample)?;
+    if diagnostics.get("resolved_execution").is_some()
+        || diagnostics.get("solver_adapter").is_some()
+        || diagnostics.get("assembly_kind").is_some()
+    {
+        Some(diagnostics)
+    } else {
+        None
+    }
+}
+
+fn eigen_path_sample_diagnostic_record(
+    sample: &crate::eigen::SingleKSolveResult,
+) -> Option<&Value> {
+    let root = sample.solver_diagnostics.as_ref()?;
+    let Some(sample_records) = root.get("sample_solver_diagnostics") else {
+        return Some(root);
+    };
+    let entries = sample_records.as_array()?;
+    let mut matches = entries.iter().filter(|entry| {
+        entry.get("sample_index").and_then(Value::as_u64)
+            == Some(sample.sample.sample_index as u64)
+    });
+    let selected = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    selected
+        .get("diagnostics")
+        .filter(|value| value.is_object())
+}
+
+const REFERENCE_PHASE_CONVENTION: &str = "exp_minus_i_omega_t";
+
+fn eigen_path_phase_convention(result: &crate::eigen::PathSolveResult) -> Option<String> {
+    if result.samples.is_empty() {
+        return eigen_path_has_reference_phase_fallback(result)
+            .then(|| REFERENCE_PHASE_CONVENTION.to_string());
+    }
+
+    let conventions = result
+        .samples
+        .iter()
+        .map(eigen_path_sample_phasor_convention)
+        .collect::<Vec<_>>();
+    if conventions.iter().all(Option::is_none) {
+        let no_native_sample_diagnostics = result
+            .samples
+            .iter()
+            .all(|sample| eigen_path_sample_native_modal_diagnostics(sample).is_none());
+        return (no_native_sample_diagnostics && eigen_path_has_reference_phase_fallback(result))
+            .then(|| REFERENCE_PHASE_CONVENTION.to_string());
+    }
+
+    if conventions
+        .iter()
+        .all(|convention| *convention == Some("not_applicable_real_reference"))
+    {
+        return Some(REFERENCE_PHASE_CONVENTION.to_string());
+    }
+
+    if !result
+        .samples
+        .iter()
+        .all(|sample| eigen_path_sample_native_modal_diagnostics(sample).is_some())
+    {
+        return None;
+    }
+
+    let first = conventions.first().copied().flatten()?;
+    if !matches!(
+        first,
+        "exp_plus_i_omega_t" | "exp_i_omega_t" | "exp_minus_i_omega_t"
+    ) || !conventions
+        .iter()
+        .all(|convention| *convention == Some(first))
+    {
+        return None;
+    }
+    Some(first.to_string())
+}
+
+fn eigen_path_has_reference_phase_fallback(result: &crate::eigen::PathSolveResult) -> bool {
+    matches!(
+        result.solver_model,
+        crate::eigen::EigenSolverModel::ReferenceScalarTangent
+            | crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent
+    )
+}
+
+fn eigen_path_sample_phasor_convention(
+    sample: &crate::eigen::SingleKSolveResult,
+) -> Option<&str> {
+    eigen_path_sample_diagnostic_record(sample)?
+        .get("phasor_convention")
+        .and_then(Value::as_str)
+}
+
+fn common_native_diagnostic_value(values: &[&Value], field: Option<&str>) -> Option<Value> {
+    let (first, rest) = values.split_first()?;
+    if rest.iter().all(|value| *value == *first) {
+        let mut value = (*first).clone();
+        if let Some(object) = value.as_object_mut() {
+            object.remove("phasor_convention");
+        }
+        return Some(value);
+    }
+    if matches!(field, Some("k_sampling" | "boundary_gauge" | "spectral")) {
+        return None;
+    }
+
+    let objects = values
+        .iter()
+        .map(|value| value.as_object())
+        .collect::<Option<Vec<_>>>()?;
+    let mut common = serde_json::Map::new();
+    for (key, _) in objects[0] {
+        if key == "phasor_convention" {
+            continue;
+        }
+        let Some(child_values) = objects
+            .iter()
+            .map(|object| object.get(key))
+            .collect::<Option<Vec<_>>>()
+        else {
             continue;
         };
-        if let Some(diagnostics) = root
-            .get("sample_solver_diagnostics")
-            .and_then(Value::as_array)
-            .and_then(|entries| entries.first())
-            .and_then(|entry| entry.get("diagnostics"))
-        {
-            return Some(diagnostics);
-        }
-        if root.get("resolved_execution").is_some()
-            || root.get("solver_adapter").is_some()
-            || root.get("assembly_kind").is_some()
-        {
-            return Some(root);
+        if let Some(value) = common_native_diagnostic_value(&child_values, Some(key)) {
+            common.insert(key.clone(), value);
         }
     }
-    None
+    Some(Value::Object(common))
+}
+
+fn eigen_path_native_provenance_by_sample(
+    result: &crate::eigen::PathSolveResult,
+) -> Value {
+    const NATIVE_FIELDS: &[&str] = &[
+        "physics_contract_version",
+        "operator_dictionary_version",
+        "implementation_state",
+        "validation_state",
+        "validated_scope",
+        "assembly_kind",
+        "operator_input_signature_sha256",
+        "phase_constraint_sha256",
+        "equilibrium_artifact_sha256",
+        "linearization_state_sha256",
+        "linearization_identity_sha256",
+        "periodic_mesh_certificate_sha256",
+        "source_mesh_topology_sha256",
+    ];
+
+    let mut by_sample = serde_json::Map::new();
+    for sample in &result.samples {
+        let Some(diagnostics) = eigen_path_sample_diagnostic_record(sample) else {
+            continue;
+        };
+        let validation_state = diagnostics
+            .get("validation_state")
+            .and_then(Value::as_str);
+        let mut provenance = serde_json::Map::new();
+        for field in NATIVE_FIELDS {
+            if *field == "validated_scope" && validation_state == Some("unvalidated") {
+                continue;
+            }
+            if let Some(value) = diagnostics.get(*field).filter(|value| !value.is_null()) {
+                provenance.insert((*field).to_string(), value.clone());
+            }
+        }
+        for field in ["boundary_gauge", "spectral"] {
+            if let Some(value) = eigen_path_known_object(Some(diagnostics), field) {
+                provenance.insert(field.to_string(), value);
+            }
+        }
+        if let Some(phasor_convention) = eigen_path_sample_phasor_convention(sample) {
+            provenance.insert(
+                "phasor_convention".to_string(),
+                Value::String(phasor_convention.to_string()),
+            );
+        }
+        if !provenance.is_empty() {
+            by_sample.insert(
+                sample.sample.sample_index.to_string(),
+                Value::Object(provenance),
+            );
+        }
+    }
+    Value::Object(by_sample)
 }
 
 pub(super) fn eigen_path_diag_string(diagnostics: Option<&Value>, key: &str) -> Option<String> {

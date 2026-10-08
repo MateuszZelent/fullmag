@@ -49,6 +49,29 @@ widoku wyliczają transport bez zmiany persisted payloadu. Niemigrowane native
 writers, copy-on-write starych artefaktów oraz historyczne pinned API pozostają
 odrębną pracą; nie jest to dowód pełnego cutoveru ani runtime qualification.
 
+### Kontekst modalnego sweepa i pochodzenie poszczególnych próbek
+
+Legacy manifest `frequency_domain_manifest.v1` dla ścieżki k publikuje
+`boundary_context` z typowanego warunku brzegowego planu, obiekt `k_sampling`
+z planu i faktycznej liczby próbek oraz `mesh_identity` z sygnatury siatki solvera.
+Normalizacja używa tego samego kanonicznego słownika co writer pojedynczego k.
+To rozszerzenie legacy manifestu nie zmienia schematów artefaktów A1S.
+
+Opcjonalny obiekt `native_provenance_by_sample` ma klucze będące kanonicznym
+zapisem dziesiętnym jawnego `sample_index`. Wartości zachowują niezmienione
+identyfikatory równowagi, liniaryzacji, operatora, więzów fazowych i certyfikaty
+publikowane przez natywną próbkę. Konwencja fazora pochodzi z rzeczywistych
+diagnostyk próbki, a nie z nazwy algorytmu. Pole globalne pozostaje wyłącznie wtedy, gdy
+jest obecne i zgodne we wszystkich próbkach. Pierwsza próbka nie reprezentuje
+całego sweepa; nie tworzy się zastępczego globalnego identyfikatora równowagi.
+
+UI może wyświetlić krzywą z kompletną mapą tożsamości próbek. Kliknięcie punktu
+rozwiązuje tożsamość według jego jawnego indeksu i porównuje ją z metadanymi
+wybranego pola. Porównanie modalne–wymuszone nadal wymaga rzeczywiście wspólnej
+tożsamości równowagi. Różne hashe artefaktów nie dowodzą różnicy fizycznego
+stanu magnetyzacji; mogą obejmować różny kontekst liniaryzacji lub więzów.
+Brakujące, sprzeczne albo niekompletne dowody pozostają błędem kontraktu.
+
 ## A1S — typed server-side analysis artifacts (schema freeze)
 
 Poniższy kontrakt jest właścicielem serwerowych danych używanych przez późniejszą
