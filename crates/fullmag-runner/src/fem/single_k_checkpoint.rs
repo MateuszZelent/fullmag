@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::types::AuxiliaryArtifact;
+use crate::types::{AuxiliaryArtifact, ExecutionProvenance, RunStatus};
 
 const CHECKPOINT_SCHEMA_V1: &str = "fullmag.single_k_checkpoint.internal.v1";
 const SPECTRUM_ARTIFACT: &str = "eigen/spectrum.json";
@@ -88,6 +88,10 @@ struct ArtifactRecord {
 struct CheckpointManifestV1 {
     schema: &'static str,
     result_disposition: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_status: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_provenance: Option<ExecutionProvenance>,
     requires_postsolve: bool,
     sample_index: usize,
     requested_global_k_rad_per_m: [f64; 3],
@@ -122,9 +126,114 @@ pub fn write_raw_single_k_checkpoint(
     point_plan: &FemEigenPlanIR,
     artifacts: &[AuxiliaryArtifact],
 ) -> Result<PathBuf, SingleKCheckpointError> {
+    write_single_k_checkpoint_inner(
+        process_root,
+        sample_index,
+        requested_global_k_rad_per_m,
+        point_plan,
+        artifacts,
+        None,
+    )
+}
+
+/// Persist returned bytes and explicit terminal identity for a cancelled or
+/// paused native sample. Interrupted results may not have produced a spectrum.
+pub(super) fn write_interrupted_single_k_checkpoint(
+    process_root: &Path,
+    sample_index: usize,
+    requested_global_k_rad_per_m: [f64; 3],
+    point_plan: &FemEigenPlanIR,
+    artifacts: &[AuxiliaryArtifact],
+    status: RunStatus,
+    provenance: &ExecutionProvenance,
+) -> Result<PathBuf, SingleKCheckpointError> {
+    let status = interrupted_status_label(status).ok_or(SingleKCheckpointError::InvalidInput(
+        "interrupted checkpoint requires cancelled or paused status",
+    ))?;
+    write_single_k_checkpoint_inner(
+        process_root,
+        sample_index,
+        requested_global_k_rad_per_m,
+        point_plan,
+        artifacts,
+        Some((status, provenance.clone())),
+    )
+}
+
+/// Return a safe, sample-scoped copy of interrupted raw bytes for runs that do
+/// not have a disk checkpoint root. These paths remain under diagnostics and
+/// can never replace canonical eigen outputs.
+pub(super) fn interrupted_single_k_diagnostic_artifacts(
+    sample_index: usize,
+    requested_global_k_rad_per_m: [f64; 3],
+    point_plan: &FemEigenPlanIR,
+    artifacts: &[AuxiliaryArtifact],
+    status: RunStatus,
+    provenance: &ExecutionProvenance,
+) -> Result<Vec<AuxiliaryArtifact>, SingleKCheckpointError> {
+    let status = interrupted_status_label(status).ok_or(SingleKCheckpointError::InvalidInput(
+        "interrupted diagnostics require cancelled or paused status",
+    ))?;
     validate_global_k(requested_global_k_rad_per_m)?;
     validate_point_plan_k(point_plan, requested_global_k_rad_per_m)?;
-    if artifacts.is_empty() {
+    let prepared_artifacts = prepare_artifacts(artifacts, false)?;
+    let point_plan_bytes = serde_json::to_vec(point_plan)
+        .map_err(|error| SingleKCheckpointError::Serialize(error.to_string()))?;
+    let sample_root = format!("eigen/diagnostics/raw_single_k/sample_{sample_index:04}");
+
+    let mut result = Vec::with_capacity(prepared_artifacts.len() + 2);
+    result.push(AuxiliaryArtifact {
+        relative_path: format!("{sample_root}/point-plan.json"),
+        bytes: point_plan_bytes.clone(),
+    });
+    let mut records = Vec::with_capacity(prepared_artifacts.len());
+    for artifact in prepared_artifacts {
+        result.push(AuxiliaryArtifact {
+            relative_path: format!("{sample_root}/{}", artifact.record.relative_path),
+            bytes: artifact.source.bytes.clone(),
+        });
+        records.push(artifact.record);
+    }
+
+    let manifest = CheckpointManifestV1 {
+        schema: CHECKPOINT_SCHEMA_V1,
+        result_disposition: "raw_native_interrupted_nonaccepted",
+        run_status: Some(status),
+        execution_provenance: Some(provenance.clone()),
+        requires_postsolve: true,
+        sample_index,
+        requested_global_k_rad_per_m,
+        point_plan: PointPlanRecord {
+            relative_path: "point-plan.json",
+            size_bytes: checked_size(point_plan_bytes.len())?,
+            sha256: sha256(&point_plan_bytes),
+        },
+        artifacts: records,
+        campaign_complete: false,
+        branch_tracking_complete: false,
+        scientific_qualification: "NOT VERIFIED",
+    };
+    let mut manifest_bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| SingleKCheckpointError::Serialize(error.to_string()))?;
+    manifest_bytes.push(b'\n');
+    result.push(AuxiliaryArtifact {
+        relative_path: format!("{sample_root}/manifest.json"),
+        bytes: manifest_bytes,
+    });
+    Ok(result)
+}
+
+fn write_single_k_checkpoint_inner(
+    process_root: &Path,
+    sample_index: usize,
+    requested_global_k_rad_per_m: [f64; 3],
+    point_plan: &FemEigenPlanIR,
+    artifacts: &[AuxiliaryArtifact],
+    interruption: Option<(&'static str, ExecutionProvenance)>,
+) -> Result<PathBuf, SingleKCheckpointError> {
+    validate_global_k(requested_global_k_rad_per_m)?;
+    validate_point_plan_k(point_plan, requested_global_k_rad_per_m)?;
+    if artifacts.is_empty() && interruption.is_none() {
         return Err(SingleKCheckpointError::InvalidInput(
             "artifact slice is empty",
         ));
@@ -132,7 +241,7 @@ pub fn write_raw_single_k_checkpoint(
 
     let point_plan_bytes = serde_json::to_vec(point_plan)
         .map_err(|error| SingleKCheckpointError::Serialize(error.to_string()))?;
-    let prepared_artifacts = prepare_artifacts(artifacts)?;
+    let prepared_artifacts = prepare_artifacts(artifacts, interruption.is_none())?;
     let process_root = validate_managed_process_root(process_root)?;
 
     // Existing canonical output directories are accepted only as ordinary
@@ -189,7 +298,13 @@ pub fn write_raw_single_k_checkpoint(
 
     let manifest = CheckpointManifestV1 {
         schema: CHECKPOINT_SCHEMA_V1,
-        result_disposition: "raw_native_returned",
+        result_disposition: if interruption.is_some() {
+            "raw_native_interrupted_nonaccepted"
+        } else {
+            "raw_native_returned"
+        },
+        run_status: interruption.as_ref().map(|(status, _)| *status),
+        execution_provenance: interruption.map(|(_, provenance)| provenance),
         requires_postsolve: true,
         sample_index,
         requested_global_k_rad_per_m,
@@ -255,6 +370,7 @@ fn validate_point_plan_k(
 
 fn prepare_artifacts<'a>(
     artifacts: &'a [AuxiliaryArtifact],
+    require_spectrum: bool,
 ) -> Result<Vec<PreparedArtifact<'a>>, SingleKCheckpointError> {
     let mut prepared = Vec::with_capacity(artifacts.len());
     let mut spelling_by_folded_prefix = BTreeMap::<String, String>::new();
@@ -306,7 +422,7 @@ fn prepare_artifacts<'a>(
         });
     }
 
-    if !has_spectrum {
+    if require_spectrum && !has_spectrum {
         return Err(SingleKCheckpointError::InvalidInput(
             "artifact slice is missing exact eigen/spectrum.json",
         ));
@@ -317,6 +433,14 @@ fn prepare_artifacts<'a>(
         ));
     }
     Ok(prepared)
+}
+
+fn interrupted_status_label(status: RunStatus) -> Option<&'static str> {
+    match status {
+        RunStatus::Cancelled => Some("cancelled"),
+        RunStatus::Paused => Some("paused"),
+        RunStatus::Completed | RunStatus::Failed => None,
+    }
 }
 
 fn validate_artifact_path(path: &str) -> Result<Vec<&str>, SingleKCheckpointError> {

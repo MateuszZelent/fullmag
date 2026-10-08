@@ -106,6 +106,12 @@ jobs:
           cargo test -p fullmag-runner eigen::tracking::tests --lib --no-fail-fast
           cargo test -p fullmag-runner tracked_pair_overlap_is_published_as_confidence_in_json_and_csv --lib
 
+      - name: Run eigen path terminal sample admission contracts
+        run: |
+          cargo test -p fullmag-runner noncompleted_single_k_status_preserves_raw_bytes_and_stops_admission --lib
+          cargo test -p fullmag-runner completed_single_k_status_admits_and_publishes_every_path_sample --lib
+          cargo test -p fullmag-runner interrupted_status_keeps_available_raw_diagnostics_with_or_without_checkpoint_root --lib
+          cargo test -p fullmag-runner interrupted_checkpoint_write_failure_is_not_returned_as_cancelled --lib
       - name: Run adaptive eigen process pool contracts
         run: |
           cargo test -p fullmag-runner k_process_pool --no-fail-fast

@@ -11,10 +11,12 @@ use crate::eigen::output_selection::{select_eigen_outputs, SampleModeId};
 use crate::eigen::{KSampleDescriptor, SingleKModeResult, SingleKSolveResult};
 use crate::fem::eigen_capability::native_cpu_modal_window_enabled;
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
-use crate::fem::eigen_k_pool::{prepare_process_pool_samples, PrecomputedSingleK};
+use crate::fem::eigen_k_pool::{
+    prepare_process_pool_samples, PrecomputedSingleK, ProcessPoolPreparation,
+};
 use crate::fem::eigen_reduction::{build_reduction_map, ReductionMap};
 use crate::fem_eigen;
-use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError};
+use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError, RunStatus, StepStats};
 use fullmag_engine::fem::MeshTopology;
 
 #[path = "eigen_path_artifacts.rs"]
@@ -27,6 +29,127 @@ use eigen_path_artifacts::*;
 pub(super) use eigen_path_guards::eigen_path_single_k_point_plan;
 use eigen_path_guards::*;
 use eigen_path_manifest::*;
+
+pub(super) struct InterruptedSingleK {
+    pub(super) status: RunStatus,
+    pub(super) steps: Vec<StepStats>,
+    pub(super) provenance: crate::ExecutionProvenance,
+    pub(super) diagnostic_artifacts: Vec<AuxiliaryArtifact>,
+}
+
+pub(super) enum SingleKCheckpointAdmission {
+    Completed,
+    Interrupted(InterruptedSingleK),
+}
+
+pub(super) fn checkpoint_and_admit_single_k(
+    checkpoint_root: Option<&Path>,
+    sample: &KSampleDescriptor,
+    point_plan: &FemEigenPlanIR,
+    run: &ExecutedRun,
+) -> Result<SingleKCheckpointAdmission, RunError> {
+    let diagnostic_artifacts = match (checkpoint_root, run.result.status) {
+        (Some(root), RunStatus::Cancelled | RunStatus::Paused) => {
+            let _checkpoint_manifest =
+                super::single_k_checkpoint::write_interrupted_single_k_checkpoint(
+                    root,
+                    sample.sample_index,
+                    sample.k_vector,
+                    point_plan,
+                    &run.auxiliary_artifacts,
+                    run.result.status,
+                    &run.provenance,
+                )
+                .map_err(|error| RunError {
+                    message: format!(
+                        "failed to preserve raw FEM sample {}: {error}",
+                        sample.sample_index
+                    ),
+                })?;
+            Vec::new()
+        }
+        (Some(root), RunStatus::Completed | RunStatus::Failed) => {
+            let _checkpoint_manifest = super::single_k_checkpoint::write_raw_single_k_checkpoint(
+                root,
+                sample.sample_index,
+                sample.k_vector,
+                point_plan,
+                &run.auxiliary_artifacts,
+            )
+            .map_err(|error| RunError {
+                message: format!(
+                    "failed to preserve raw FEM sample {}: {error}",
+                    sample.sample_index
+                ),
+            })?;
+            Vec::new()
+        }
+        (None, RunStatus::Cancelled | RunStatus::Paused) => {
+            super::single_k_checkpoint::interrupted_single_k_diagnostic_artifacts(
+                sample.sample_index,
+                sample.k_vector,
+                point_plan,
+                &run.auxiliary_artifacts,
+                run.result.status,
+                &run.provenance,
+            )
+            .map_err(|error| RunError {
+                message: format!(
+                    "failed to preserve raw FEM diagnostics for sample {}: {error}",
+                    sample.sample_index
+                ),
+            })?
+        }
+        (None, RunStatus::Completed | RunStatus::Failed) => Vec::new(),
+    };
+
+    match run.result.status {
+        RunStatus::Completed => Ok(SingleKCheckpointAdmission::Completed),
+        RunStatus::Cancelled | RunStatus::Paused => Ok(SingleKCheckpointAdmission::Interrupted(
+            InterruptedSingleK {
+                status: run.result.status,
+                steps: run.result.steps.clone(),
+                provenance: run.provenance.clone(),
+                diagnostic_artifacts,
+            },
+        )),
+        RunStatus::Failed => Err(RunError {
+            message: format!(
+                "FEM eigen sample {} returned failed status",
+                sample.sample_index
+            ),
+        }),
+    }
+}
+
+fn interrupted_eigen_path_run(
+    plan: &FemEigenPlanIR,
+    interrupted: InterruptedSingleK,
+    accepted_magnetization: Vec<[f64; 3]>,
+) -> ExecutedRun {
+    debug_assert!(matches!(
+        interrupted.status,
+        RunStatus::Cancelled | RunStatus::Paused
+    ));
+    let status = interrupted.status;
+    ExecutedRun {
+        result: crate::types::RunResult {
+            status,
+            steps: interrupted.steps,
+            final_magnetization: accepted_magnetization,
+            completion: Some(crate::relaxation::resolve_stage_completion(
+                status,
+                None,
+                crate::relaxation::RelaxationCompletionMetrics::default(),
+            )),
+        },
+        initial_magnetization: plan.equilibrium_magnetization.clone(),
+        field_snapshots: Vec::new(),
+        field_snapshot_count: 0,
+        auxiliary_artifacts: interrupted.diagnostic_artifacts,
+        provenance: interrupted.provenance,
+    }
+}
 
 fn eigen_path_sample_id_prefix(plan: &FemEigenPlanIR) -> &'static str {
     if bias_field_sweep_requested(plan) {
@@ -783,6 +906,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
             RefCell<Option<std::sync::Arc<crate::eigen::types::ConsistentP1TrackingMetric>>>,
         source_relax_handoff: Option<fem_eigen::AcceptedFemRelaxStageHandoff>,
         producer_identity: Option<fem_eigen::FemRelaxationProducerStageIdentity>,
+        interrupted_single_k: RefCell<Option<InterruptedSingleK>>,
         previous_accepted_magnetization: RefCell<Option<Vec<[f64; 3]>>>,
         periodic_airbox_k0_metrics:
             RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
@@ -1007,22 +1131,25 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                     }
                 }
             };
-            // Preserve the native bytes before parsing can fail or a later k
-            // aborts the campaign. This is diagnostic, never sample acceptance.
-            if let Some(root) = self.checkpoint_root.as_deref() {
-                let _checkpoint_manifest = super::single_k_checkpoint::write_raw_single_k_checkpoint(
-                    root,
-                    sample.sample_index,
-                    sample.k_vector,
-                    &point_plan,
-                    &executed.auxiliary_artifacts,
-                )
-                .map_err(|error| RunError {
-                    message: format!(
-                        "failed to preserve raw FEM sample {}: {error}",
-                        sample.sample_index
-                    ),
-                })?;
+            // Preserve raw bytes first; only a completed native run may be
+            // parsed or become the next sample's accepted equilibrium.
+            match checkpoint_and_admit_single_k(
+                self.checkpoint_root.as_deref(),
+                sample,
+                &point_plan,
+                &executed,
+            )? {
+                SingleKCheckpointAdmission::Completed => {}
+                SingleKCheckpointAdmission::Interrupted(interrupted) => {
+                    let status = interrupted.status;
+                    *self.interrupted_single_k.borrow_mut() = Some(interrupted);
+                    return Err(RunError {
+                        message: format!(
+                            "FEM eigen path sample {} ended with status {status:?}",
+                            sample.sample_index
+                        ),
+                    });
+                }
             }
             {
                 let final_magnetization = &executed.result.final_magnetization;
@@ -1280,7 +1407,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         })?;
     let (precomputed, parallel_report) =
         if parallel_policy.mode == ParallelExecutionModeIR::Adaptive {
-            let (precomputed, report) = prepare_process_pool_samples(
+            match prepare_process_pool_samples(
                 execution,
                 plan,
                 &tracking_outputs,
@@ -1290,8 +1417,22 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                 source_relax_handoff,
                 producer_identity,
                 &mut progress,
-            )?;
-            (precomputed, Some(report))
+            )? {
+                ProcessPoolPreparation::Ready {
+                    precomputed,
+                    report,
+                } => (precomputed, Some(report)),
+                ProcessPoolPreparation::Interrupted(interrupted) => {
+                    let accepted_magnetization = source_relax_handoff
+                        .map(|handoff| handoff.equilibrium_magnetization().to_vec())
+                        .unwrap_or_else(|| plan.equilibrium_magnetization.clone());
+                    return Ok(interrupted_eigen_path_run(
+                        plan,
+                        interrupted,
+                        accepted_magnetization,
+                    ));
+                }
+            }
         } else {
             (HashMap::new(), None)
         };
@@ -1305,19 +1446,41 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         tracking_metric: RefCell::new(None),
         source_relax_handoff: source_relax_handoff.cloned(),
         producer_identity: producer_identity.cloned(),
+        interrupted_single_k: RefCell::new(None),
         previous_accepted_magnetization: RefCell::new(None),
         periodic_airbox_k0_metrics: RefCell::new(None),
         precomputed: RefCell::new(precomputed),
         parallel_report,
     };
-    let mut path_result = run_path_or_single(
+    let mut path_result = match run_path_or_single(
         &adapter,
         plan,
         &tracking_outputs,
         None, // we collect artifacts manually below
         None,
         plan.mode_tracking.as_ref(),
-    )?;
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            if let Some(interrupted) = adapter.interrupted_single_k.borrow_mut().take() {
+                let accepted_magnetization = adapter
+                    .previous_accepted_magnetization
+                    .borrow()
+                    .clone()
+                    .or_else(|| {
+                        source_relax_handoff
+                            .map(|handoff| handoff.equilibrium_magnetization().to_vec())
+                    })
+                    .unwrap_or_else(|| plan.equilibrium_magnetization.clone());
+                return Ok(interrupted_eigen_path_run(
+                    plan,
+                    interrupted,
+                    accepted_magnetization,
+                ));
+            }
+            return Err(error);
+        }
+    };
     // Guard before any spectrum or mode JSON can serialize nonfinite gamma to null.
     eigen_path_publication_gamma0(plan, &path_result)?;
     let last_accepted_magnetization = adapter.previous_accepted_magnetization.into_inner();
@@ -1894,4 +2057,495 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
             ..Default::default()
         },
     })
+}
+
+#[cfg(test)]
+mod checkpoint_admission_tests {
+    use super::*;
+    use crate::eigen::{run_path_or_single, EigenSolverModel, SingleKSolver};
+    use crate::types::{ExecutionProvenance, RunResult};
+    use std::cell::{Cell, RefCell};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const RAW_BYTES: &[u8] = b"native raw single-k bytes\0keep exact";
+
+    static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let id = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "fullmag-eigen-path-admission-{}-{id}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("create test-owned temporary directory");
+            Self(fs::canonicalize(&path).expect("canonicalize test directory"))
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn three_sample_plan() -> FemEigenPlanIR {
+        let mut plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        plan.k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR::gamma(),
+                fullmag_ir::KPointIR {
+                    label: Some("X".into()),
+                    k_vector: [1.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("M".into()),
+                    k_vector: [1.0, 1.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1, 1],
+            closed: false,
+        });
+        plan
+    }
+
+    fn test_resolution() -> fullmag_ir::FemEigenExecutionResolutionIR {
+        fullmag_ir::FemEigenExecutionResolutionIR {
+            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+            requested_precision: fullmag_ir::ExecutionPrecision::Double,
+            resolved_precision: fullmag_ir::ExecutionPrecision::Double,
+            requested_engine: fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+            resolved_engine: fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+            fallback_used: false,
+            fallback_reason: None,
+            selection_reason: "test.single_k_checkpoint_admission".into(),
+        }
+    }
+
+    struct CheckpointAdmissionSolver {
+        checkpoint_root: PathBuf,
+        interrupt_at: Option<(usize, RunStatus)>,
+        calls: Cell<usize>,
+        parse_count: Cell<usize>,
+        promotion_count: Cell<usize>,
+        publication_count: Cell<usize>,
+        interrupted: RefCell<Option<InterruptedSingleK>>,
+        last_accepted_magnetization: RefCell<Option<Vec<[f64; 3]>>>,
+        resolution: fullmag_ir::FemEigenExecutionResolutionIR,
+    }
+
+    impl CheckpointAdmissionSolver {
+        fn new(checkpoint_root: &Path, interrupt_at: Option<(usize, RunStatus)>) -> Self {
+            Self {
+                checkpoint_root: checkpoint_root.to_path_buf(),
+                interrupt_at,
+                calls: Cell::new(0),
+                parse_count: Cell::new(0),
+                promotion_count: Cell::new(0),
+                publication_count: Cell::new(0),
+                interrupted: RefCell::new(None),
+                last_accepted_magnetization: RefCell::new(None),
+                resolution: test_resolution(),
+            }
+        }
+
+        fn raw_checkpoint(&self, sample_index: usize) -> PathBuf {
+            self.checkpoint_root
+                .join("eigen")
+                .join("sample-checkpoints")
+                .join(format!("sample-{sample_index:04}"))
+                .join("artifacts")
+                .join("eigen")
+                .join("spectrum.json")
+        }
+    }
+
+    impl SingleKSolver for CheckpointAdmissionSolver {
+        fn solve_single_k(
+            &self,
+            plan: &FemEigenPlanIR,
+            _outputs: &[OutputIR],
+            sample: &KSampleDescriptor,
+        ) -> Result<SingleKSolveResult, RunError> {
+            self.calls.set(self.calls.get() + 1);
+            let status = self
+                .interrupt_at
+                .filter(|(sample_index, _)| *sample_index == sample.sample_index)
+                .map(|(_, status)| status)
+                .unwrap_or(RunStatus::Completed);
+            let point_plan = eigen_path_single_k_point_plan(plan, sample, false, None)?;
+            let returned_magnetization = if status == RunStatus::Completed {
+                vec![[0.0, 1.0, 0.0]; plan.mesh.nodes.len()]
+            } else {
+                vec![[9.0, 8.0, 7.0]; plan.mesh.nodes.len()]
+            };
+            let run = ExecutedRun {
+                result: RunResult {
+                    status,
+                    steps: Vec::new(),
+                    final_magnetization: returned_magnetization,
+                    completion: Some(crate::relaxation::resolve_stage_completion(
+                        status,
+                        None,
+                        crate::relaxation::RelaxationCompletionMetrics::default(),
+                    )),
+                },
+                initial_magnetization: plan.equilibrium_magnetization.clone(),
+                field_snapshots: Vec::new(),
+                field_snapshot_count: 0,
+                auxiliary_artifacts: vec![AuxiliaryArtifact {
+                    relative_path: "eigen/spectrum.json".into(),
+                    bytes: RAW_BYTES.to_vec(),
+                }],
+                provenance: ExecutionProvenance {
+                    execution_engine: "fem_eigen_cpu_baseline".into(),
+                    precision: "double".into(),
+                    fem_eigen_execution_resolution: Some(self.resolution.clone()),
+                    ..Default::default()
+                },
+            };
+
+            match checkpoint_and_admit_single_k(
+                Some(&self.checkpoint_root),
+                sample,
+                &point_plan,
+                &run,
+            )? {
+                SingleKCheckpointAdmission::Completed => {
+                    self.parse_count.set(self.parse_count.get() + 1);
+                    self.promotion_count.set(self.promotion_count.get() + 1);
+                    self.publication_count.set(self.publication_count.get() + 1);
+                    *self.last_accepted_magnetization.borrow_mut() =
+                        Some(run.result.final_magnetization.clone());
+                    Ok(SingleKSolveResult {
+                        sample: sample.clone(),
+                        modes: Vec::new(),
+                        relaxation_steps: 0,
+                        solver_model: EigenSolverModel::ReferenceScalarTangent,
+                        solver_notes: Vec::new(),
+                        solver_diagnostics: None,
+                    })
+                }
+                SingleKCheckpointAdmission::Interrupted(interrupted) => {
+                    *self.interrupted.borrow_mut() = Some(interrupted);
+                    Err(RunError {
+                        message: "test solver stopped after a typed terminal status".into(),
+                    })
+                }
+            }
+        }
+    }
+
+    fn expected_terminal_status_label(status: RunStatus) -> &'static str {
+        match status {
+            RunStatus::Cancelled => "cancelled",
+            RunStatus::Paused => "paused",
+            RunStatus::Completed | RunStatus::Failed => {
+                panic!("expected an interrupted terminal status")
+            }
+        }
+    }
+
+    #[test]
+    fn noncompleted_single_k_status_preserves_raw_bytes_and_stops_admission() {
+        for status in [RunStatus::Cancelled, RunStatus::Paused, RunStatus::Failed] {
+            let checkpoint_root = TestDirectory::new();
+            let plan = three_sample_plan();
+            let solver = CheckpointAdmissionSolver::new(checkpoint_root.path(), Some((1, status)));
+
+            let error = run_path_or_single(&solver, &plan, &[], None, None, None)
+                .expect_err("a noncompleted sample must stop the k path");
+
+            assert_eq!(solver.calls.get(), 2, "the following k sample must not run");
+            assert_eq!(solver.parse_count.get(), 1);
+            assert_eq!(solver.promotion_count.get(), 1);
+            assert_eq!(solver.publication_count.get(), 1);
+            assert_eq!(
+                fs::read(solver.raw_checkpoint(0)).expect("completed raw checkpoint"),
+                RAW_BYTES
+            );
+            assert_eq!(
+                fs::read(solver.raw_checkpoint(1)).expect("noncompleted raw checkpoint"),
+                RAW_BYTES
+            );
+            assert!(!solver.raw_checkpoint(2).exists());
+
+            match status {
+                RunStatus::Cancelled | RunStatus::Paused => {
+                    let interrupted = solver
+                        .interrupted
+                        .borrow_mut()
+                        .take()
+                        .expect("typed interruption is retained separately from RunError");
+                    assert_eq!(interrupted.status, status);
+                    let accepted = solver
+                        .last_accepted_magnetization
+                        .borrow()
+                        .clone()
+                        .expect("first sample was accepted");
+                    let terminal = interrupted_eigen_path_run(&plan, interrupted, accepted.clone());
+                    assert_eq!(terminal.result.status, status);
+                    assert_eq!(
+                        terminal.result.completion.as_ref().unwrap().status,
+                        expected_terminal_status_label(status)
+                    );
+                    assert_eq!(
+                        terminal.initial_magnetization,
+                        plan.equilibrium_magnetization
+                    );
+                    assert_eq!(terminal.result.final_magnetization, accepted);
+                    assert!(terminal.auxiliary_artifacts.is_empty());
+                    assert_eq!(
+                        terminal.provenance.execution_engine,
+                        "fem_eigen_cpu_baseline"
+                    );
+                    assert_eq!(
+                        terminal.provenance.fem_eigen_execution_resolution,
+                        Some(solver.resolution.clone())
+                    );
+                }
+                RunStatus::Failed => {
+                    assert!(solver.interrupted.borrow().is_none());
+                    assert!(error.message.contains("returned failed status"));
+                }
+                RunStatus::Completed => unreachable!("completed is not part of this test"),
+            }
+        }
+    }
+
+    #[test]
+    fn completed_single_k_status_admits_and_publishes_every_path_sample() {
+        let checkpoint_root = TestDirectory::new();
+        let plan = three_sample_plan();
+        let solver = CheckpointAdmissionSolver::new(checkpoint_root.path(), None);
+
+        let result = run_path_or_single(&solver, &plan, &[], None, None, None)
+            .expect("completed samples should aggregate normally");
+
+        assert_eq!(result.samples.len(), 3);
+        assert_eq!(solver.calls.get(), 3);
+        assert_eq!(solver.parse_count.get(), 3);
+        assert_eq!(solver.promotion_count.get(), 3);
+        assert_eq!(solver.publication_count.get(), 3);
+        assert!(solver.interrupted.borrow().is_none());
+        for sample_index in 0..3 {
+            assert_eq!(
+                fs::read(solver.raw_checkpoint(sample_index)).expect("raw checkpoint"),
+                RAW_BYTES
+            );
+        }
+    }
+
+    #[test]
+    fn interrupted_status_keeps_available_raw_diagnostics_with_or_without_checkpoint_root() {
+        const RAW_DIAGNOSTIC: &[u8] = b"partial residual and stop diagnostic bytes\0";
+
+        for status in [RunStatus::Cancelled, RunStatus::Paused] {
+            let plan = three_sample_plan();
+            let sample = crate::eigen::expand_k_sampling(plan.k_sampling.as_ref())
+                .expect("valid test path")
+                .remove(0);
+            let point_plan = eigen_path_single_k_point_plan(&plan, &sample, false, None)
+                .expect("valid point plan");
+            let run = ExecutedRun {
+                result: RunResult {
+                    status,
+                    steps: Vec::new(),
+                    final_magnetization: vec![[9.0, 8.0, 7.0]; plan.mesh.nodes.len()],
+                    completion: Some(crate::relaxation::resolve_stage_completion(
+                        status,
+                        None,
+                        crate::relaxation::RelaxationCompletionMetrics::default(),
+                    )),
+                },
+                initial_magnetization: plan.equilibrium_magnetization.clone(),
+                field_snapshots: Vec::new(),
+                field_snapshot_count: 0,
+                auxiliary_artifacts: vec![AuxiliaryArtifact {
+                    relative_path: "eigen/diagnostics/solver.v1.json".into(),
+                    bytes: RAW_DIAGNOSTIC.to_vec(),
+                }],
+                provenance: ExecutionProvenance {
+                    execution_engine: "fem_eigen_cpu_baseline".into(),
+                    precision: "double".into(),
+                    fem_eigen_execution_resolution: Some(test_resolution()),
+                    ..Default::default()
+                },
+            };
+
+            let no_root = match checkpoint_and_admit_single_k(None, &sample, &point_plan, &run)
+                .expect("in-memory diagnostic preservation")
+            {
+                SingleKCheckpointAdmission::Interrupted(interrupted) => interrupted,
+                SingleKCheckpointAdmission::Completed => {
+                    panic!("an interrupted status must not be admitted")
+                }
+            };
+            assert_eq!(no_root.status, status);
+            let no_root_run =
+                interrupted_eigen_path_run(&plan, no_root, plan.equilibrium_magnetization.clone());
+            let raw_relative_path =
+                "eigen/diagnostics/raw_single_k/sample_0000/artifacts/eigen/diagnostics/solver.v1.json";
+            assert_eq!(
+                no_root_run
+                    .auxiliary_artifacts
+                    .iter()
+                    .find(|artifact| artifact.relative_path == raw_relative_path)
+                    .expect("namespaced raw diagnostics")
+                    .bytes,
+                RAW_DIAGNOSTIC
+            );
+            assert!(no_root_run
+                .auxiliary_artifacts
+                .iter()
+                .all(|artifact| artifact
+                    .relative_path
+                    .starts_with("eigen/diagnostics/raw_single_k/sample_0000/")));
+            assert_eq!(
+                no_root_run
+                    .auxiliary_artifacts
+                    .iter()
+                    .find(|artifact| {
+                        artifact.relative_path
+                            == "eigen/diagnostics/raw_single_k/sample_0000/point-plan.json"
+                    })
+                    .expect("namespaced raw point plan")
+                    .bytes,
+                serde_json::to_vec(&point_plan).expect("serialized point plan")
+            );
+            assert!(!no_root_run
+                .auxiliary_artifacts
+                .iter()
+                .any(|artifact| artifact.relative_path == "eigen/spectrum.json"));
+            assert!(!no_root_run.auxiliary_artifacts.iter().any(|artifact| {
+                artifact.relative_path.starts_with("eigen/modes/")
+                    || artifact.relative_path.starts_with("equilibrium/")
+            }));
+            let no_root_manifest = no_root_run
+                .auxiliary_artifacts
+                .iter()
+                .find(|artifact| {
+                    artifact.relative_path
+                        == "eigen/diagnostics/raw_single_k/sample_0000/manifest.json"
+                })
+                .expect("sample/status diagnostic manifest");
+            let no_root_manifest: serde_json::Value =
+                serde_json::from_slice(&no_root_manifest.bytes).expect("manifest JSON");
+            assert_eq!(
+                no_root_manifest["result_disposition"],
+                "raw_native_interrupted_nonaccepted"
+            );
+            assert_eq!(
+                no_root_manifest["run_status"],
+                expected_terminal_status_label(status)
+            );
+            assert_eq!(no_root_manifest["sample_index"], 0);
+            assert_eq!(
+                no_root_manifest["requested_global_k_rad_per_m"],
+                serde_json::json!([0.0, 0.0, 0.0])
+            );
+            assert_eq!(
+                no_root_manifest["execution_provenance"]["fem_eigen_execution_resolution"]
+                    ["selection_reason"],
+                "test.single_k_checkpoint_admission"
+            );
+            let mut unsafe_run = run.clone();
+            unsafe_run.auxiliary_artifacts[0].relative_path = "../outside.json".into();
+            assert!(
+                checkpoint_and_admit_single_k(None, &sample, &point_plan, &unsafe_run).is_err()
+            );
+
+            let checkpoint_root = TestDirectory::new();
+            let with_root = match checkpoint_and_admit_single_k(
+                Some(checkpoint_root.path()),
+                &sample,
+                &point_plan,
+                &run,
+            )
+            .expect("disk diagnostic checkpoint without a spectrum")
+            {
+                SingleKCheckpointAdmission::Interrupted(interrupted) => interrupted,
+                SingleKCheckpointAdmission::Completed => {
+                    panic!("an interrupted status must not be admitted")
+                }
+            };
+            assert!(with_root.diagnostic_artifacts.is_empty());
+            let sample_root = checkpoint_root
+                .path()
+                .join("eigen/sample-checkpoints/sample-0000");
+            assert_eq!(
+                fs::read(sample_root.join("artifacts/eigen/diagnostics/solver.v1.json"))
+                    .expect("disk raw diagnostic"),
+                RAW_DIAGNOSTIC
+            );
+            assert_eq!(
+                fs::read(sample_root.join("point-plan.json")).expect("disk point plan"),
+                serde_json::to_vec(&point_plan).expect("serialized point plan")
+            );
+            assert!(!sample_root.join("artifacts/eigen/spectrum.json").exists());
+            let checkpoint_manifest: serde_json::Value = serde_json::from_slice(
+                &fs::read(sample_root.join("manifest.json")).expect("checkpoint manifest"),
+            )
+            .expect("checkpoint manifest JSON");
+            assert_eq!(
+                checkpoint_manifest["result_disposition"],
+                "raw_native_interrupted_nonaccepted"
+            );
+            assert_eq!(
+                checkpoint_manifest["run_status"],
+                expected_terminal_status_label(status)
+            );
+            assert_eq!(checkpoint_manifest["sample_index"], 0);
+            assert_eq!(
+                checkpoint_manifest["execution_provenance"]["fem_eigen_execution_resolution"]
+                    ["selection_reason"],
+                "test.single_k_checkpoint_admission"
+            );
+        }
+    }
+
+    #[test]
+    fn interrupted_checkpoint_write_failure_is_not_returned_as_cancelled() {
+        let plan = three_sample_plan();
+        let sample = crate::eigen::expand_k_sampling(plan.k_sampling.as_ref())
+            .expect("valid test path")
+            .remove(0);
+        let point_plan =
+            eigen_path_single_k_point_plan(&plan, &sample, false, None).expect("valid point plan");
+        let run = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Cancelled,
+                steps: Vec::new(),
+                final_magnetization: vec![[9.0, 8.0, 7.0]; plan.mesh.nodes.len()],
+                completion: None,
+            },
+            initial_magnetization: plan.equilibrium_magnetization.clone(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: vec![AuxiliaryArtifact {
+                relative_path: "eigen/diagnostics/solver.v1.json".into(),
+                bytes: b"diagnostic".to_vec(),
+            }],
+            provenance: ExecutionProvenance::default(),
+        };
+        let checkpoint_root = TestDirectory::new();
+        let blocked_sample_root = checkpoint_root
+            .path()
+            .join("eigen/sample-checkpoints/sample-0000");
+        fs::create_dir_all(&blocked_sample_root).expect("create conflicting checkpoint path");
+
+        let admission =
+            checkpoint_and_admit_single_k(Some(checkpoint_root.path()), &sample, &point_plan, &run);
+
+        assert!(admission.is_err());
+    }
 }

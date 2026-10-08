@@ -22,6 +22,14 @@ pub(super) struct PrecomputedSingleK {
     pub(super) final_magnetization: Vec<[f64; 3]>,
 }
 
+pub(super) enum ProcessPoolPreparation {
+    Ready {
+        precomputed: HashMap<usize, PrecomputedSingleK>,
+        report: crate::eigen::k_process_pool::ProcessPoolReportV1,
+    },
+    Interrupted(super::eigen_path::InterruptedSingleK),
+}
+
 fn parallel_admission_progress(
     event: &crate::eigen::k_process_pool::ProcessAdmissionEventV1,
     policy: &ParallelExecutionPolicyIR,
@@ -203,13 +211,7 @@ pub(super) fn prepare_process_pool_samples(
     source_relax_handoff: Option<&fem_eigen::AcceptedFemRelaxStageHandoff>,
     producer_identity: Option<&fem_eigen::FemRelaxationProducerStageIdentity>,
     progress: &mut Option<&mut fem_eigen::FemEigenProgressCallback<'_>>,
-) -> Result<
-    (
-        HashMap<usize, PrecomputedSingleK>,
-        crate::eigen::k_process_pool::ProcessPoolReportV1,
-    ),
-    RunError,
-> {
+) -> Result<ProcessPoolPreparation, RunError> {
     if parallel_policy.mode != ParallelExecutionModeIR::Adaptive {
         return Err(RunError {
             message: "process pool preparation requires parallel_execution.mode=adaptive".into(),
@@ -298,16 +300,17 @@ pub(super) fn prepare_process_pool_samples(
         )?;
         // A pool failure must not discard the serial bootstrap's raw bytes.
         // Workers already persist their own raw response/artifact closure.
-        let _checkpoint_manifest = super::single_k_checkpoint::write_raw_single_k_checkpoint(
-            checkpoint_root,
-            bootstrap_sample.sample_index,
-            bootstrap_sample.k_vector,
+        match super::eigen_path::checkpoint_and_admit_single_k(
+            Some(checkpoint_root),
+            bootstrap_sample,
             &bootstrap_point_plan,
-            &bootstrap_run.auxiliary_artifacts,
-        )
-        .map_err(|error| RunError {
-            message: format!("failed to preserve raw FEM bootstrap: {error}"),
-        })?;
+            &bootstrap_run,
+        )? {
+            super::eigen_path::SingleKCheckpointAdmission::Completed => {}
+            super::eigen_path::SingleKCheckpointAdmission::Interrupted(interrupted) => {
+                return Ok(ProcessPoolPreparation::Interrupted(interrupted));
+            }
+        }
         let bootstrap_magnetization = bootstrap_run.result.final_magnetization.clone();
         if bootstrap_magnetization.len() != plan.mesh.nodes.len()
             || bootstrap_magnetization
@@ -607,5 +610,8 @@ pub(super) fn prepare_process_pool_samples(
             ),
         });
     }
-    Ok((precomputed, pool_result.report))
+    Ok(ProcessPoolPreparation::Ready {
+        precomputed,
+        report: pool_result.report,
+    })
 }
