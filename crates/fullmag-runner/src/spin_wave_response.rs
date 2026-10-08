@@ -341,7 +341,7 @@ pub(crate) fn append_requested_spin_wave_artifacts(
                 .iter()
                 .map(|drive| {
                     let evaluation_time = match drive.time_origin {
-                        FieldTimeOriginIR::StageLocal => *time - time_stage.start_time_s,
+                        FieldTimeOriginIR::StageLocal => *time - time_stage.waveform_origin_time_s(),
                         FieldTimeOriginIR::Absolute => *time,
                     };
                     drive.amplitude_b_t / crate::MU0
