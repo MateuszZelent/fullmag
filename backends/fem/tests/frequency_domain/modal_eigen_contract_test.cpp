@@ -13,12 +13,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -1163,10 +1165,12 @@ struct FloquetContourSharedDomainFixture {
     std::vector<double> descriptor_alpha = std::vector<double>(5u, 0.01);
     FullmagFemModalLinearizationDescriptor descriptor{};
 
-    std::array<std::uint32_t, 4> magnetic_certificate_regions{{1u, 1u, 1u, 1u}};
-    std::array<std::uint32_t, 5> scalar_certificate_regions{{2u, 2u, 2u, 2u, 2u}};
-    std::array<std::uint32_t, 4> magnetic_boundary_axes{{0u, 1u, 2u, 7u}};
-    std::array<std::uint32_t, 5> scalar_boundary_axes{{0u, 1u, 2u, 7u, 4u}};
+    std::vector<std::uint32_t> magnetic_certificate_regions{1u, 1u, 1u, 1u};
+    std::vector<std::uint32_t> scalar_certificate_regions{2u, 2u, 2u, 2u, 2u};
+    std::vector<std::uint32_t> magnetic_boundary_axes{0u, 1u, 2u, 7u};
+    std::vector<std::uint32_t> scalar_boundary_axes{0u, 1u, 2u, 7u, 4u};
+    std::uint64_t magnetic_reduced_node_count = 1u;
+    std::uint64_t scalar_reduced_node_count = 2u;
     FullmagFemModalCertificateV6RegionRole magnetic_roles[1]{{1u, 1u}};
     FullmagFemModalCertificateV6RegionRole scalar_roles[1]{{2u, 2u}};
     FullmagFemModalCertificateV6Relation magnetic_generators[3]{
@@ -1261,8 +1265,144 @@ struct FloquetContourSharedDomainFixture {
         return view;
     }
 
-    void initialize()
+    void expand_with_internal_magnetic_nodes(std::size_t internal_node_count)
     {
+        if (internal_node_count == 0u) {
+            return;
+        }
+
+        const std::array<double, 3> airbox_vertex{{
+            nodes[12u], nodes[13u], nodes[14u]}};
+        nodes.resize(12u);
+        std::vector<std::array<std::uint32_t, 4>> magnetic_cells{{
+            {{0u, 1u, 2u, 3u}}}};
+        const auto coordinate = [this](
+                                   std::uint32_t node,
+                                   std::size_t axis) {
+            return nodes[3u * static_cast<std::size_t>(node) + axis];
+        };
+        const auto signed_determinant = [&coordinate](
+                                            const std::array<std::uint32_t, 4> &cell) {
+            const double ax = coordinate(cell[1], 0u) - coordinate(cell[0], 0u);
+            const double ay = coordinate(cell[1], 1u) - coordinate(cell[0], 1u);
+            const double az = coordinate(cell[1], 2u) - coordinate(cell[0], 2u);
+            const double bx = coordinate(cell[2], 0u) - coordinate(cell[0], 0u);
+            const double by = coordinate(cell[2], 1u) - coordinate(cell[0], 1u);
+            const double bz = coordinate(cell[2], 2u) - coordinate(cell[0], 2u);
+            const double cx = coordinate(cell[3], 0u) - coordinate(cell[0], 0u);
+            const double cy = coordinate(cell[3], 1u) - coordinate(cell[0], 1u);
+            const double cz = coordinate(cell[3], 2u) - coordinate(cell[0], 2u);
+            return ax * (by * cz - bz * cy) -
+                ay * (bx * cz - bz * cx) +
+                az * (bx * cy - by * cx);
+        };
+
+        for (std::size_t index = 0u; index < internal_node_count; ++index) {
+            const std::array<std::uint32_t, 4> parent = magnetic_cells.front();
+            magnetic_cells.erase(magnetic_cells.begin());
+            const std::uint32_t center =
+                static_cast<std::uint32_t>(nodes.size() / 3u);
+            for (std::size_t axis = 0u; axis < 3u; ++axis) {
+                nodes.push_back(0.25 * (
+                    coordinate(parent[0], axis) + coordinate(parent[1], axis) +
+                    coordinate(parent[2], axis) + coordinate(parent[3], axis)));
+            }
+            std::array<std::array<std::uint32_t, 4>, 4> children{{
+                {{parent[0], parent[1], parent[2], center}},
+                {{parent[0], center, parent[1], parent[3]}},
+                {{parent[0], center, parent[2], parent[3]}},
+                {{center, parent[1], parent[2], parent[3]}}}};
+            for (std::array<std::uint32_t, 4> child : children) {
+                if (signed_determinant(child) < 0.0) {
+                    std::swap(child[0], child[1]);
+                }
+                check(
+                    signed_determinant(child) > 0.0,
+                    "expanded Floquet fixture subdivision must have positive tetrahedra");
+                magnetic_cells.push_back(child);
+            }
+        }
+
+        const std::uint32_t airbox_node =
+            static_cast<std::uint32_t>(nodes.size() / 3u);
+        nodes.insert(nodes.end(), airbox_vertex.begin(), airbox_vertex.end());
+        cell_types.clear();
+        cell_offsets.assign(1u, 0u);
+        cell_nodes.clear();
+        cell_ordinals.clear();
+        cell_markers.clear();
+        const auto append_cell = [this](
+                                     const std::array<std::uint32_t, 4> &cell,
+                                     std::uint32_t marker) {
+            cell_types.push_back(FULLMAG_FEM_CELL_TET4);
+            cell_nodes.insert(cell_nodes.end(), cell.begin(), cell.end());
+            cell_offsets.push_back(static_cast<std::uint32_t>(cell_nodes.size()));
+            cell_ordinals.push_back(static_cast<std::uint64_t>(cell_ordinals.size()));
+            cell_markers.push_back(marker);
+        };
+        for (const auto &cell : magnetic_cells) {
+            append_cell(cell, 1u);
+        }
+        append_cell({{0u, 2u, 1u, airbox_node}}, 0u);
+        std::replace(facet_nodes.begin(), facet_nodes.end(), 4u, airbox_node);
+
+        const std::size_t node_count = nodes.size() / 3u;
+        const std::size_t magnetic_node_count = node_count - 1u;
+        equilibrium.assign(3u * node_count, 0.0);
+        for (std::size_t node = 0u; node < node_count; ++node) {
+            equilibrium[3u * node + 2u] = 1.0;
+        }
+        h_eff = equilibrium;
+        h_demag.assign(3u * node_count, 0.0);
+        phi0.assign(node_count, 0.0);
+        scalar_classes.assign(node_count, 0u);
+        magnetic_classes.assign(
+            node_count, std::numeric_limits<std::uint32_t>::max());
+        for (std::size_t node = 0u; node < 4u; ++node) {
+            magnetic_classes[node] = 0u;
+        }
+        for (std::size_t node = 4u; node < magnetic_node_count; ++node) {
+            magnetic_classes[node] = static_cast<std::uint32_t>(node - 3u);
+            scalar_classes[node] = static_cast<std::uint32_t>(node - 3u);
+        }
+        scalar_classes[airbox_node] =
+            static_cast<std::uint32_t>(internal_node_count + 1u);
+        magnetic_reduced_node_count =
+            static_cast<std::uint64_t>(internal_node_count + 1u);
+        scalar_reduced_node_count =
+            static_cast<std::uint64_t>(internal_node_count + 2u);
+        a_qq_offsets.assign(2u * node_count + 1u, 0u);
+
+        descriptor_frames.assign(6u * node_count, 0.0);
+        descriptor_external.assign(3u * node_count, 0.0);
+        descriptor_alpha.assign(node_count, 0.01);
+        for (std::size_t node = 0u; node < node_count; ++node) {
+            descriptor_frames[6u * node] = 1.0;
+            descriptor_frames[6u * node + 4u] = 1.0;
+        }
+
+        magnetic_certificate_regions.assign(magnetic_node_count, 1u);
+        scalar_certificate_regions.assign(node_count, 2u);
+        magnetic_boundary_axes.assign(magnetic_node_count, 0u);
+        magnetic_boundary_axes[0] = 0u;
+        magnetic_boundary_axes[1] = 1u;
+        magnetic_boundary_axes[2] = 2u;
+        magnetic_boundary_axes[3] = 7u;
+        scalar_boundary_axes.assign(node_count, 0u);
+        scalar_boundary_axes[0] = 0u;
+        scalar_boundary_axes[1] = 1u;
+        scalar_boundary_axes[2] = 2u;
+        scalar_boundary_axes[3] = 7u;
+        scalar_boundary_axes[airbox_node] = 4u;
+    }
+
+    void initialize(std::size_t internal_magnetic_nodes = 0u)
+    {
+        expand_with_internal_magnetic_nodes(internal_magnetic_nodes);
+        const std::uint64_t mesh_node_count =
+            static_cast<std::uint64_t>(nodes.size() / 3u);
+        const std::uint64_t full_tangent_dof_count = 2u * mesh_node_count;
+
         mesh = fullmag_fem_mesh_desc{
             FULLMAG_FEM_MESH_DESC_ABI_VERSION,
             sizeof(fullmag_fem_mesh_desc),
@@ -1280,15 +1420,15 @@ struct FloquetContourSharedDomainFixture {
             facet_markers.data(), facet_markers.size(),
             mesh_periodic_node_pairs.data(), mesh_periodic_node_pairs.size(),
             periodic_boundary_markers.data(), periodic_boundary_markers.size()};
-        for (std::uint64_t node = 0u; node < 5u; ++node) {
+        for (std::uint64_t node = 0u; node < mesh_node_count; ++node) {
             descriptor_frames[6u * node] = 1.0;
             descriptor_frames[6u * node + 4u] = 1.0;
         }
         descriptor.abi_version = FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_V1_ABI_VERSION;
         descriptor.struct_size = sizeof(descriptor);
         descriptor.schema_version = FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_SCHEMA;
-        descriptor.node_count = 5u;
-        descriptor.tangent_dof_count = 10u;
+        descriptor.node_count = mesh_node_count;
+        descriptor.tangent_dof_count = full_tangent_dof_count;
         descriptor.coordinate_unit = "m";
         descriptor.magnetisation_unit = "A/m";
         descriptor.time_unit = "s";
@@ -1315,22 +1455,26 @@ struct FloquetContourSharedDomainFixture {
         c_certificate.mesh_magnetic = make_c_view(
             1u, 1u, "magnetic:film",
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            4u, magnetic_certificate_regions.data(), magnetic_boundary_axes.data(),
+            static_cast<std::uint64_t>(magnetic_certificate_regions.size()),
+            magnetic_certificate_regions.data(), magnetic_boundary_axes.data(),
             magnetic_roles, 1u, magnetic_generators, 3u, magnetic_closure, 6u);
         c_certificate.payload_magnetic = make_c_view(
             2u, 1u, "magnetic:film",
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            4u, magnetic_certificate_regions.data(), magnetic_boundary_axes.data(),
+            static_cast<std::uint64_t>(magnetic_certificate_regions.size()),
+            magnetic_certificate_regions.data(), magnetic_boundary_axes.data(),
             magnetic_roles, 1u, magnetic_generators, 3u, magnetic_closure, 6u);
         c_certificate.mesh_scalar = make_c_view(
             1u, 2u, "airbox:shared",
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            5u, scalar_certificate_regions.data(), scalar_boundary_axes.data(),
+            static_cast<std::uint64_t>(scalar_certificate_regions.size()),
+            scalar_certificate_regions.data(), scalar_boundary_axes.data(),
             scalar_roles, 1u, scalar_generators, 3u, scalar_closure, 6u);
         c_certificate.payload_scalar = make_c_view(
             2u, 2u, "airbox:shared",
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            5u, scalar_certificate_regions.data(), scalar_boundary_axes.data(),
+            static_cast<std::uint64_t>(scalar_certificate_regions.size()),
+            scalar_certificate_regions.data(), scalar_boundary_axes.data(),
             scalar_roles, 1u, scalar_generators, 3u, scalar_closure, 6u);
         c_views[0] = c_certificate.mesh_magnetic;
         c_views[1] = c_certificate.payload_magnetic;
@@ -1350,22 +1494,42 @@ struct FloquetContourSharedDomainFixture {
         check(fd::verify_mesh_symmetry_certificate_v6(binding_request, bootstrap) !=
                   fd::FrequencyDomainStatus::ok,
               "contour fixture bootstrap must reject missing payload class metadata");
-        check(bootstrap.magnetic_canonical_class_ids.size() == 4u &&
-                  bootstrap.scalar_canonical_class_ids.size() == 5u,
+        check(bootstrap.magnetic_canonical_class_ids.size() ==
+                      magnetic_certificate_regions.size() &&
+                  bootstrap.scalar_canonical_class_ids.size() ==
+                      scalar_certificate_regions.size(),
               "contour fixture bootstrap must derive both canonical class maps");
         magnetic_expected_class_ids = bootstrap.magnetic_canonical_class_ids;
         scalar_expected_class_ids = bootstrap.scalar_canonical_class_ids;
         magnetic_expected_class_digest_strings = bootstrap.magnetic_class_digests;
         scalar_expected_class_digest_strings = bootstrap.scalar_class_digests;
         /* Canonical IDs are dense and ordered by their first node. */
-        magnetic_expected_class_digests.clear();
-        magnetic_expected_class_digests.push_back({
-            0u, 4u, magnetic_expected_class_digest_strings.front().c_str()});
-        scalar_expected_class_digests.clear();
-        scalar_expected_class_digests.push_back({
-            0u, 4u, scalar_expected_class_digest_strings.front().c_str()});
-        scalar_expected_class_digests.push_back({
-            4u, 1u, scalar_expected_class_digest_strings.back().c_str()});
+        const auto populate_expected_class_digests = [](
+                                                        const std::vector<std::uint64_t> &ids,
+                                                        const std::vector<std::string> &digests,
+                                                        std::vector<FullmagFemModalCertificateV6ClassDigest> &out) {
+            out.clear();
+            out.reserve(digests.size());
+            for (std::size_t class_id = 0u; class_id < digests.size(); ++class_id) {
+                const auto first = std::find(
+                    ids.begin(), ids.end(), static_cast<std::uint64_t>(class_id));
+                check(first != ids.end(),
+                      "each expanded certificate class must have a canonical first node");
+                const std::uint64_t first_node =
+                    static_cast<std::uint64_t>(std::distance(ids.begin(), first));
+                const std::uint64_t count = static_cast<std::uint64_t>(
+                    std::count(ids.begin(), ids.end(), static_cast<std::uint64_t>(class_id)));
+                out.push_back({first_node, count, digests[class_id].c_str()});
+            }
+        };
+        populate_expected_class_digests(
+            magnetic_expected_class_ids,
+            magnetic_expected_class_digest_strings,
+            magnetic_expected_class_digests);
+        populate_expected_class_digests(
+            scalar_expected_class_ids,
+            scalar_expected_class_digest_strings,
+            scalar_expected_class_digests);
         c_certificate.payload_magnetic.expected_class_ids = magnetic_expected_class_ids.data();
         c_certificate.payload_magnetic.expected_class_id_count = magnetic_expected_class_ids.size();
         c_certificate.payload_magnetic.expected_class_digests =
@@ -1411,12 +1575,13 @@ struct FloquetContourSharedDomainFixture {
         payload.uniform_saturation_magnetisation_a_per_m = 2.0;
         payload.gamma0_m_per_a_s = 3.0;
         payload.magnetic_a_qq_csr = FullmagFemCsrMatrixView{
-            10u, 10u, a_qq_offsets.data(), a_qq_offsets.size(),
+            full_tangent_dof_count, full_tangent_dof_count,
+            a_qq_offsets.data(), a_qq_offsets.size(),
             nullptr, 0u, nullptr, 0u};
         payload.scalar_reduced_node = scalar_classes.data();
-        payload.scalar_reduced_node_count = 2u;
+        payload.scalar_reduced_node_count = scalar_reduced_node_count;
         payload.magnetic_reduced_node = magnetic_classes.data();
-        payload.magnetic_reduced_node_count = 1u;
+        payload.magnetic_reduced_node_count = magnetic_reduced_node_count;
         payload.magnetic_pair_count = 6u;
         payload.airbox_pair_count = 6u;
         payload.boundary_kind = "robin";
@@ -1461,7 +1626,9 @@ struct FloquetContourSharedDomainFixture {
             "sha256:2222222222222222222222222222222222222222222222222222222222222222";
         char map_error[256]{};
         check(fd::compute_modal_shared_domain_map_binding_digest(
-                  payload, accepted_certificate, 4u, map_binding_digest, map_error) ==
+                  payload, accepted_certificate,
+                  static_cast<std::uint64_t>(magnetic_certificate_regions.size()),
+                  map_binding_digest, map_error) ==
                   fd::FrequencyDomainStatus::ok,
               map_error);
         payload.mesh_certificate_map_binding_digest = map_binding_digest.c_str();
@@ -1490,6 +1657,111 @@ struct FloquetContourSharedDomainFixture {
         }
     }
 };
+
+CsrOwned mass_scaled_floquet_stiffness(
+    const FloquetContourSharedDomainFixture &fixture)
+{
+    const std::size_t node_count = fixture.nodes.size() / 3u;
+    const std::size_t tangent_dof_count = 2u * node_count;
+    std::vector<double> consistent_mass(node_count * node_count, 0.0);
+    for (std::size_t element = 0u; element < fixture.cell_markers.size(); ++element) {
+        if (fixture.cell_markers[element] != 1u) {
+            continue;
+        }
+        const std::size_t begin = fixture.cell_offsets[element];
+        const std::size_t end = fixture.cell_offsets[element + 1u];
+        check(end - begin == 4u, "expanded Floquet mass fixture uses Tet4 cells");
+        std::array<std::uint32_t, 4> cell{};
+        std::copy_n(fixture.cell_nodes.begin() + static_cast<std::ptrdiff_t>(begin),
+                    4u,
+                    cell.begin());
+        const auto coordinate = [&fixture](
+                                    std::uint32_t node,
+                                    std::size_t axis) {
+            return fixture.nodes[3u * static_cast<std::size_t>(node) + axis];
+        };
+        const double ax = coordinate(cell[1], 0u) - coordinate(cell[0], 0u);
+        const double ay = coordinate(cell[1], 1u) - coordinate(cell[0], 1u);
+        const double az = coordinate(cell[1], 2u) - coordinate(cell[0], 2u);
+        const double bx = coordinate(cell[2], 0u) - coordinate(cell[0], 0u);
+        const double by = coordinate(cell[2], 1u) - coordinate(cell[0], 1u);
+        const double bz = coordinate(cell[2], 2u) - coordinate(cell[0], 2u);
+        const double cx = coordinate(cell[3], 0u) - coordinate(cell[0], 0u);
+        const double cy = coordinate(cell[3], 1u) - coordinate(cell[0], 1u);
+        const double cz = coordinate(cell[3], 2u) - coordinate(cell[0], 2u);
+        const double volume = std::abs(
+            ax * (by * cz - bz * cy) -
+            ay * (bx * cz - bz * cx) +
+            az * (bx * cy - by * cx)) / 6.0;
+        check(std::isfinite(volume) && volume > 0.0,
+              "expanded Floquet mass fixture must contain positive-volume cells");
+        for (std::size_t local_row = 0u; local_row < 4u; ++local_row) {
+            for (std::size_t local_column = 0u; local_column < 4u; ++local_column) {
+                const std::size_t row = cell[local_row];
+                const std::size_t column = cell[local_column];
+                const double local_mass =
+                    volume * (local_row == local_column ? 2.0 : 1.0) / 20.0;
+                consistent_mass[row * node_count + column] += local_mass;
+            }
+        }
+    }
+
+    double reduced_corner_mass = 0.0;
+    std::array<double, 4> corner_phase_rad{};
+    for (std::size_t node = 0u; node < 4u; ++node) {
+        for (std::size_t axis = 0u; axis < 3u; ++axis) {
+            corner_phase_rad[node] -= fixture.k_vector[axis] *
+                fixture.nodes[3u * node + axis];
+        }
+    }
+    for (std::size_t row = 0u; row < 4u; ++row) {
+        for (std::size_t column = 0u; column < 4u; ++column) {
+            reduced_corner_mass +=
+                consistent_mass[row * node_count + column] *
+                std::cos(corner_phase_rad[column] - corner_phase_rad[row]);
+        }
+    }
+    check(std::isfinite(reduced_corner_mass) && reduced_corner_mass > 0.0,
+          "expanded Floquet fixture has a positive phase-reduced corner mass");
+    const double base_stiffness_scale = 4.0 / reduced_corner_mass;
+    std::vector<double> class_scale(node_count, 0.0);
+    const std::uint32_t no_magnetic_class =
+        std::numeric_limits<std::uint32_t>::max();
+    for (std::size_t node = 0u; node < node_count; ++node) {
+        const std::uint32_t class_id = fixture.magnetic_classes[node];
+        if (class_id != no_magnetic_class) {
+            class_scale[node] =
+                base_stiffness_scale * (1.0 + 0.02 * static_cast<double>(class_id));
+        }
+    }
+
+    std::vector<double> stiffness(
+        tangent_dof_count * tangent_dof_count, 0.0);
+    for (std::size_t row_node = 0u; row_node < node_count; ++row_node) {
+        if (class_scale[row_node] == 0.0) {
+            for (std::size_t tangent = 0u; tangent < 2u; ++tangent) {
+                const std::size_t dof = 2u * row_node + tangent;
+                stiffness[dof * tangent_dof_count + dof] = 1.0;
+            }
+            continue;
+        }
+        for (std::size_t column_node = 0u; column_node < node_count; ++column_node) {
+            if (class_scale[column_node] == 0.0) {
+                continue;
+            }
+            const double value =
+                std::sqrt(class_scale[row_node] * class_scale[column_node]) *
+                consistent_mass[row_node * node_count + column_node];
+            for (std::size_t tangent = 0u; tangent < 2u; ++tangent) {
+                const std::size_t row = 2u * row_node + tangent;
+                const std::size_t column = 2u * column_node + tangent;
+                stiffness[row * tangent_dof_count + column] = value;
+            }
+        }
+    }
+    return dense_to_csr(
+        tangent_dof_count, tangent_dof_count, stiffness.data());
+}
 
 FullmagFemModalEigenRequest make_floquet_contour_request(
     const FloquetContourSharedDomainFixture &fixture,
@@ -4413,25 +4685,31 @@ void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
     fullmag_fem_frequency_domain_result_destroy(&nearest_result);
 }
 
-void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics()
+void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(
+    bool count_certificate_only = false)
 {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
     FloquetContourSharedDomainFixture fixture{};
-    fixture.initialize();
+    fixture.initialize(count_certificate_only ? 5u : 0u);
 
     // The shared-domain production path consumes the full magnetic A_qq
     // block from the immutable payload and does not materialize K/G through
-    // the legacy dense request fields.  Give the minimal fixture a positive
-    // diagonal stiffness so its reduced Floquet pencil has a nonzero spectrum.
+    // the legacy dense request fields. The default compact fixture uses a
+    // positive diagonal block; the focused count case uses a positive
+    // consistent-mass-scaled block on additional physical magnetic nodes.
     CsrOwned magnetic_stiffness{};
-    magnetic_stiffness.rows = 10u;
-    magnetic_stiffness.columns = 10u;
-    magnetic_stiffness.row_offsets.push_back(0u);
-    for (std::uint32_t row = 0u; row < 10u; ++row) {
-        magnetic_stiffness.column_indices.push_back(row);
-        magnetic_stiffness.values.push_back(1.0);
-        magnetic_stiffness.row_offsets.push_back(
-            static_cast<std::uint32_t>(magnetic_stiffness.values.size()));
+    if (count_certificate_only) {
+        magnetic_stiffness = mass_scaled_floquet_stiffness(fixture);
+    } else {
+        magnetic_stiffness.rows = 10u;
+        magnetic_stiffness.columns = 10u;
+        magnetic_stiffness.row_offsets.push_back(0u);
+        for (std::uint32_t row = 0u; row < 10u; ++row) {
+            magnetic_stiffness.column_indices.push_back(row);
+            magnetic_stiffness.values.push_back(1.0);
+            magnetic_stiffness.row_offsets.push_back(
+                static_cast<std::uint32_t>(magnetic_stiffness.values.size()));
+        }
     }
     fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
 
@@ -4450,132 +4728,138 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         "{\"operator_family\":\"mfem_linearized_llg\","
         "\"payload_kind\":\"certified_shared_domain\"}";
 
-    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
-    check(result.status == FULLMAG_FEM_FD_OK,
-          "shared-domain Floquet nearest-frequency fixture should reach production SLEPc");
-    check(contains(result.resolved_engine_id, "floquet_airbox_cpu_schur_slepc"),
-          "shared-domain nearest-frequency fixture resolves the Floquet CPU engine");
-    check(contains(result.diagnostics_json,
-                   "\"solver_adapter\":\"floquet_airbox_cpu_schur_slepc\""),
-          "shared-domain nearest-frequency diagnostics publish the resolved Floquet adapter");
-    check(contains(result.diagnostics_json,
-                   "\"mfem_operator_payload\":\"floquet_shared_domain_sparse_matshell\""),
-          "nearest regression exercises the shared-domain production MatShell payload");
-    check(contains(result.result_json,
-                   "\"floquet_descriptor_certified\":true"),
-          "shared-domain nearest path certifies with an explicit positive tolerance");
-    check(contains(result.diagnostics_json,
-                   "\"target_kind\":\"nearest_frequency\""),
-          "shared-domain nearest diagnostics preserve the requested target kind");
-    check(contains(result.diagnostics_json,
-                   "\"spectrum_completeness\":\"selected_only\""),
-          "shared-domain nearest diagnostics remain selected-only");
-    check(contains(result.diagnostics_json, "\"window_complete\":false"),
-          "shared-domain nearest diagnostics do not claim a complete window");
-    check(contains(result.diagnostics_json, "\"ksp_diagnostics_available\":"),
-          "shared-domain nearest diagnostics publish cached shifted-KSP availability");
-    check(contains(result.diagnostics_json,
-                   "\"shifted_ksp_configuration_before_eps\":"),
-          "shared-domain nearest diagnostics publish the pre-EPS KSP configuration field");
-    check(contains(result.diagnostics_json,
-                   "\"ksp_true_residual_criterion\":{\"schema_version\":"),
-          "shared-domain nearest diagnostics publish true-residual criterion aggregates");
-    check(contains(result.diagnostics_json,
-                   "\"ksp_monitor_progress\":{\"schema_version\":\"floquet_shifted_ksp_monitor_progress.v1\""),
-          "shared-domain nearest diagnostics publish a separately versioned monitor snapshot");
-    check(contains(result.diagnostics_json,
-                   "\"source\":\"petsc_ksp_monitor\""),
-          "shared-domain nearest diagnostics identify the monitor source");
-    check(contains(result.diagnostics_json,
-                   "\"recursive_residual_semantics\":\"petsc_monitor_recursive_norm_not_true_residual\""),
-          "shared-domain nearest diagnostics do not label the monitor norm as a true residual");
-    check(contains(result.diagnostics_json,
-                   "\"last_observed_reason_is_final\":false"),
-          "shared-domain nearest diagnostics never promote a monitor reason to the final reason");
-    check(contains(result.diagnostics_json,
-                   "\"ksp_last_true_residual_available\":"),
-          "shared-domain nearest diagnostics publish true-residual sample availability");
-    check(contains(result.diagnostics_json, "\"ksp_last_true_residual_norm\":"),
-          "shared-domain nearest diagnostics publish the cached true-residual norm");
-    check(contains(result.diagnostics_json, "\"ksp_last_rhs_norm\":"),
-          "shared-domain nearest diagnostics publish the cached true-residual RHS norm");
-    check(contains(result.diagnostics_json, "\"ksp_last_true_relative_residual\":"),
-          "shared-domain nearest diagnostics publish the cached true-relative residual");
-    check(contains(result.diagnostics_json, "\"ksp_true_residual_sample_count\":"),
-          "shared-domain nearest diagnostics publish the cached residual sample count");
-    check(contains(result.diagnostics_json,
-                   "\"ksp_true_residual_measurement_failure_count\":"),
-          "shared-domain nearest diagnostics publish residual measurement failures");
-    check(contains(result.diagnostics_json, "\"ksp_pc_side\":"),
-          "shared-domain nearest diagnostics publish the available PC side or null");
-    check(contains(result.diagnostics_json, "\"ksp_norm_type\":"),
-          "shared-domain nearest diagnostics publish the available norm type or null");
-    check(contains(result.diagnostics_json, "\"ksp_converged_reason\":"),
-          "shared-domain nearest diagnostics publish the available KSP reason or null");
-    check(contains(result.diagnostics_json, "\"eps_converged_reason\":"),
-          "shared-domain nearest diagnostics publish the available EPS reason or null");
-    check(contains(result.diagnostics_json, "\"eps_dimensions_available\":"),
-          "shared-domain nearest diagnostics publish EPS dimensions availability");
-    check(contains(result.diagnostics_json, "\"eps_nev\":"),
-          "shared-domain nearest diagnostics publish the resolved EPS dimensions or null");
-    check(contains(result.diagnostics_json, "\"eps_ncv\":"),
-          "shared-domain nearest diagnostics publish the resolved EPS subspace or null");
-    check(contains(result.diagnostics_json, "\"eps_mpd\":"),
-          "shared-domain nearest diagnostics publish the resolved EPS maximum projected dimension or null");
-    check(!contains(result.diagnostics_json,
-                    "\"shifted_ksp_failure_probe\":"),
-          "successful nearest diagnostics omit the failure-only shifted-KSP probe");
-    const char *basic_ksp_keys[] = {
-        "\"ksp_type\":", "\"ksp_rtol\":", "\"ksp_atol\":",
-        "\"ksp_final_residual\":"};
-    for (const char *key : basic_ksp_keys) {
-        check(count_occurrences(result.diagnostics_json, key) == 1u,
-              "nearest Floquet diagnostics must serialize each basic KSP field exactly once");
-    }
-    check(!contains(result.result_json, "\"ksp_diagnostics_available\":"),
-          "nearest result JSON keeps shifted-KSP telemetry in diagnostics only");
-    check(contains(result.result_json, "\"solve_complete\":true"),
-          "nearest result preserves solve completion independently of window coverage");
-    check(contains(result.result_json, "\"spectrum_completeness\":\"selected_only\""),
-          "nearest result remains selected-only");
-    check(contains(result.result_json, "\"window_complete\":false"),
-          "nearest result does not claim a complete window");
-    fullmag_fem_frequency_domain_result_destroy(&result);
-
-    FullmagFemModalEigenRequest underfilled_nearest_request = request;
-    underfilled_nearest_request.requested_mode_count = 100;
-    FullmagFemFrequencyDomainResult underfilled_nearest_result =
-        fullmag_fem_modal_eigen_solve(&underfilled_nearest_request);
-    check(underfilled_nearest_result.status == FULLMAG_FEM_FD_SOLVE_ERROR,
-          "native nearest solve cannot report success when its requested count is underfilled");
-    check(contains(underfilled_nearest_result.result_json,
-                   "\"accepted_mode_count\":") &&
-              !contains(underfilled_nearest_result.result_json,
-                        "\"accepted_mode_count\":0") &&
-              !contains(underfilled_nearest_result.result_json,
-                        "\"accepted_mode_count\":100") &&
-              contains(underfilled_nearest_result.result_json,
-                       "\"modes\":[{") &&
-              contains(underfilled_nearest_result.result_json,
+    if (!count_certificate_only) {
+        FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+        check(result.status == FULLMAG_FEM_FD_OK,
+              "shared-domain Floquet nearest-frequency fixture should reach production SLEPc");
+        check(contains(result.resolved_engine_id, "floquet_airbox_cpu_schur_slepc"),
+              "shared-domain nearest-frequency fixture resolves the Floquet CPU engine");
+        check(contains(result.diagnostics_json,
+                       "\"solver_adapter\":\"floquet_airbox_cpu_schur_slepc\""),
+              "shared-domain nearest-frequency diagnostics publish the resolved Floquet adapter");
+        check(contains(result.diagnostics_json,
+                       "\"mfem_operator_payload\":\"floquet_shared_domain_sparse_matshell\""),
+              "nearest regression exercises the shared-domain production MatShell payload");
+        check(contains(result.result_json,
                        "\"floquet_descriptor_certified\":true"),
-          "public nearest result retains certified modes below the requested count");
-    check(contains(underfilled_nearest_result.result_json,
-                   "\"solve_complete\":false") &&
-              contains(underfilled_nearest_result.result_json,
-                       "\"window_complete\":false") &&
-              contains(underfilled_nearest_result.result_json,
-                       "\"stop_reason\":\"floquet_nev_refill_dimension_limit_reached\""),
-          "public nearest JSON reports the refill limit without claiming solve or window completion");
-    fullmag_fem_frequency_domain_result_destroy(&underfilled_nearest_result);
-    std::printf("PASS: public_native_floquet_nearest_underfill_retains_certified_modes\n");
+              "shared-domain nearest path certifies with an explicit positive tolerance");
+        check(contains(result.diagnostics_json,
+                       "\"target_kind\":\"nearest_frequency\""),
+              "shared-domain nearest diagnostics preserve the requested target kind");
+        check(contains(result.diagnostics_json,
+                       "\"spectrum_completeness\":\"selected_only\""),
+              "shared-domain nearest diagnostics remain selected-only");
+        check(contains(result.diagnostics_json, "\"window_complete\":false"),
+              "shared-domain nearest diagnostics do not claim a complete window");
+        check(contains(result.diagnostics_json, "\"ksp_diagnostics_available\":"),
+              "shared-domain nearest diagnostics publish cached shifted-KSP availability");
+        check(contains(result.diagnostics_json,
+                       "\"shifted_ksp_configuration_before_eps\":"),
+              "shared-domain nearest diagnostics publish the pre-EPS KSP configuration field");
+        check(contains(result.diagnostics_json,
+                       "\"ksp_true_residual_criterion\":{\"schema_version\":"),
+              "shared-domain nearest diagnostics publish true-residual criterion aggregates");
+        check(contains(result.diagnostics_json,
+                       "\"ksp_monitor_progress\":{\"schema_version\":\"floquet_shifted_ksp_monitor_progress.v1\""),
+              "shared-domain nearest diagnostics publish a separately versioned monitor snapshot");
+        check(contains(result.diagnostics_json,
+                       "\"source\":\"petsc_ksp_monitor\""),
+              "shared-domain nearest diagnostics identify the monitor source");
+        check(contains(result.diagnostics_json,
+                       "\"recursive_residual_semantics\":\"petsc_monitor_recursive_norm_not_true_residual\""),
+              "shared-domain nearest diagnostics do not label the monitor norm as a true residual");
+        check(contains(result.diagnostics_json,
+                       "\"last_observed_reason_is_final\":false"),
+              "shared-domain nearest diagnostics never promote a monitor reason to the final reason");
+        check(contains(result.diagnostics_json,
+                       "\"ksp_last_true_residual_available\":"),
+              "shared-domain nearest diagnostics publish true-residual sample availability");
+        check(contains(result.diagnostics_json, "\"ksp_last_true_residual_norm\":"),
+              "shared-domain nearest diagnostics publish the cached true-residual norm");
+        check(contains(result.diagnostics_json, "\"ksp_last_rhs_norm\":"),
+              "shared-domain nearest diagnostics publish the cached true-residual RHS norm");
+        check(contains(result.diagnostics_json, "\"ksp_last_true_relative_residual\":"),
+              "shared-domain nearest diagnostics publish the cached true-relative residual");
+        check(contains(result.diagnostics_json, "\"ksp_true_residual_sample_count\":"),
+              "shared-domain nearest diagnostics publish the cached residual sample count");
+        check(contains(result.diagnostics_json,
+                       "\"ksp_true_residual_measurement_failure_count\":"),
+              "shared-domain nearest diagnostics publish residual measurement failures");
+        check(contains(result.diagnostics_json, "\"ksp_pc_side\":"),
+              "shared-domain nearest diagnostics publish the available PC side or null");
+        check(contains(result.diagnostics_json, "\"ksp_norm_type\":"),
+              "shared-domain nearest diagnostics publish the available norm type or null");
+        check(contains(result.diagnostics_json, "\"ksp_converged_reason\":"),
+              "shared-domain nearest diagnostics publish the available KSP reason or null");
+        check(contains(result.diagnostics_json, "\"eps_converged_reason\":"),
+              "shared-domain nearest diagnostics publish the available EPS reason or null");
+        check(contains(result.diagnostics_json, "\"eps_dimensions_available\":"),
+              "shared-domain nearest diagnostics publish EPS dimensions availability");
+        check(contains(result.diagnostics_json, "\"eps_nev\":"),
+              "shared-domain nearest diagnostics publish the resolved EPS dimensions or null");
+        check(contains(result.diagnostics_json, "\"eps_ncv\":"),
+              "shared-domain nearest diagnostics publish the resolved EPS subspace or null");
+        check(contains(result.diagnostics_json, "\"eps_mpd\":"),
+              "shared-domain nearest diagnostics publish the resolved EPS maximum projected dimension or null");
+        check(!contains(result.diagnostics_json,
+                        "\"shifted_ksp_failure_probe\":"),
+              "successful nearest diagnostics omit the failure-only shifted-KSP probe");
+        const char *basic_ksp_keys[] = {
+            "\"ksp_type\":", "\"ksp_rtol\":", "\"ksp_atol\":",
+            "\"ksp_final_residual\":"};
+        for (const char *key : basic_ksp_keys) {
+            check(count_occurrences(result.diagnostics_json, key) == 1u,
+                  "nearest Floquet diagnostics must serialize each basic KSP field exactly once");
+        }
+        check(!contains(result.result_json, "\"ksp_diagnostics_available\":"),
+              "nearest result JSON keeps shifted-KSP telemetry in diagnostics only");
+        check(contains(result.result_json, "\"solve_complete\":true"),
+              "nearest result preserves solve completion independently of window coverage");
+        check(contains(result.result_json, "\"spectrum_completeness\":\"selected_only\""),
+              "nearest result remains selected-only");
+        check(contains(result.result_json, "\"window_complete\":false"),
+              "nearest result does not claim a complete window");
+        fullmag_fem_frequency_domain_result_destroy(&result);
+    }
+
+    if (!count_certificate_only) {
+        FullmagFemModalEigenRequest underfilled_nearest_request = request;
+        underfilled_nearest_request.requested_mode_count = 100;
+        FullmagFemFrequencyDomainResult underfilled_nearest_result =
+            fullmag_fem_modal_eigen_solve(&underfilled_nearest_request);
+        check(underfilled_nearest_result.status == FULLMAG_FEM_FD_SOLVE_ERROR,
+              "native nearest solve cannot report success when its requested count is underfilled");
+        check(contains(underfilled_nearest_result.result_json,
+                       "\"accepted_mode_count\":") &&
+                  !contains(underfilled_nearest_result.result_json,
+                            "\"accepted_mode_count\":0") &&
+                  !contains(underfilled_nearest_result.result_json,
+                            "\"accepted_mode_count\":100") &&
+                  contains(underfilled_nearest_result.result_json,
+                           "\"modes\":[{") &&
+                  contains(underfilled_nearest_result.result_json,
+                           "\"floquet_descriptor_certified\":true"),
+              "public nearest result retains certified modes below the requested count");
+        check(contains(underfilled_nearest_result.result_json,
+                       "\"solve_complete\":false") &&
+                  contains(underfilled_nearest_result.result_json,
+                           "\"window_complete\":false") &&
+                  contains(underfilled_nearest_result.result_json,
+                           "\"stop_reason\":\"floquet_nev_refill_dimension_limit_reached\""),
+              "public nearest JSON reports the refill limit without claiming solve or window completion");
+        fullmag_fem_frequency_domain_result_destroy(&underfilled_nearest_result);
+        std::printf("PASS: public_native_floquet_nearest_underfill_retains_certified_modes\n");
+    }
 
     // Reuse the exact imported native operator through the public production
-    // entry. The broad window spans overlapping subwindows; its outer merge
-    // must use the owned positive mass instead of the former Euclidean path.
+    // entry. The normal suite spans overlapping subwindows; the focused count
+    // path uses one narrow subwindow to isolate certificate admission.
     FullmagFemModalEigenRequest window_request = request;
     window_request.target_kind = "frequency_window";
-    window_request.frequency_min_hz = 0.05;
-    window_request.frequency_max_hz = 0.30;
+    window_request.frequency_min_hz =
+        count_certificate_only ? 0.145 : 0.05;
+    window_request.frequency_max_hz =
+        count_certificate_only ? 0.195 : 0.30;
     window_request.requested_mode_count = 1;
     window_request.completeness_policy = 0;
     FullmagFemFrequencyDomainResult window_result =
@@ -4601,8 +4885,103 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     check(!contains(window_result.diagnostics_json,
                     "\"shifted_ksp_failure_probe\":"),
           "successful window subsolves omit the failure-only shifted-KSP probe");
+    check(contains(window_result.diagnostics_json,
+                   "\"window_completeness\":{\"policy\":\"best_effort\"") &&
+              contains(window_result.diagnostics_json,
+                       "\"certification_method\":\"none\"") &&
+              contains(window_result.diagnostics_json,
+                       "\"additional_modes_may_exist\":true"),
+          "best_effort preserves the native Floquet window's explicit non-certification");
+
+    if (count_certificate_only) {
+        const std::size_t best_effort_subwindow_count =
+            count_occurrences(window_result.diagnostics_json, "\"requested_hz\":[");
+        check(best_effort_subwindow_count == 1u &&
+                  count_occurrences(
+                      window_result.diagnostics_json,
+                      "\"status\":\"ok\",\"requested_hz\":[") ==
+                      best_effort_subwindow_count &&
+                  !contains(window_result.diagnostics_json,
+                            "\"status\":\"partial\"") &&
+                  !contains(window_result.diagnostics_json,
+                            "floquet_nev_refill_dimension_limit_reached"),
+              "best_effort control has one completed native subwindow with no partial or refill-limit result");
+
+        const double best_effort_modes_before_cap =
+            extract_json_number(
+                window_result.diagnostics_json,
+                "\"accepted_modes_before_cap\":",
+                "public_native_floquet_count_fixture_unique_modes");
+        check(best_effort_modes_before_cap >= 4.0,
+              "expanded fixture supplies at least four independent in-window modes before the public cap");
+
+        FullmagFemModalEigenRequest uncertified_count_request = window_request;
+        uncertified_count_request.completeness_policy = 1;
+        FullmagFemFrequencyDomainResult uncertified_count_result =
+            fullmag_fem_modal_eigen_solve(&uncertified_count_request);
+        const double retained_uncertified_mode_count =
+            extract_json_number(
+                uncertified_count_result.result_json,
+                "\"accepted_mode_count\":",
+                "public_native_floquet_certified_count_without_certificate");
+        check(uncertified_count_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+                  contains(uncertified_count_result.result_json,
+                           "\"status\":\"solve_error\"") &&
+                  contains(uncertified_count_result.diagnostics_json,
+                           "\"policy\":\"certified_count\"") &&
+                  contains(uncertified_count_result.diagnostics_json,
+                           "\"certification_method\":\"none\"") &&
+                  contains(uncertified_count_result.diagnostics_json,
+                           "\"certification_unavailable_reason\":\"native_floquet_count_certificate_unavailable\""),
+              "certified_count fails closed when native Floquet has no count-certificate producer");
+        check(retained_uncertified_mode_count > 0.0 &&
+                  contains(uncertified_count_result.result_json, "\"modes\":[{") &&
+                  contains(uncertified_count_result.diagnostics_json,
+                           "\"additional_modes_may_exist\":true") &&
+                  contains(uncertified_count_result.diagnostics_json,
+                           "\"window_complete\":false"),
+              "strict failure retains validated diagnostic modes without claiming window completeness");
+
+        const double strict_modes_before_cap =
+            extract_json_number(
+                uncertified_count_result.diagnostics_json,
+                "\"accepted_modes_before_cap\":",
+                "public_native_floquet_strict_count_fixture_unique_modes");
+        check(strict_modes_before_cap >= 4.0,
+              "strict adapter retains the same four independent modes before enforcing the certificate gate");
+
+        const std::size_t strict_subwindow_count =
+            count_occurrences(
+                uncertified_count_result.diagnostics_json, "\"requested_hz\":[");
+        check(strict_subwindow_count == 1u &&
+                  count_occurrences(
+                      uncertified_count_result.diagnostics_json,
+                      "\"status\":\"ok\",\"requested_hz\":[") ==
+                      strict_subwindow_count &&
+                  count_occurrences(
+                      uncertified_count_result.diagnostics_json,
+                      "\"stop_reason\":\"converged\"") == strict_subwindow_count &&
+                  !contains(uncertified_count_result.diagnostics_json,
+                            "\"status\":\"partial\"") &&
+                  !contains(uncertified_count_result.diagnostics_json,
+                            "\"stop_reason\":\"partial_convergence\"") &&
+                  !contains(uncertified_count_result.diagnostics_json,
+                            "floquet_nev_refill_dimension_limit_reached") &&
+                  contains(uncertified_count_result.diagnostics_json,
+                           "\"stop_reason\":\"count_certificate_unavailable\"") &&
+                  !contains(uncertified_count_result.diagnostics_json,
+                            "\"window_completeness\":{\"policy\":\"certified_count\",\"status\":\"solver_error\""),
+              "certified_count fails only after its one native subwindow completed without refill or solver error");
+        check(contains(uncertified_count_result.error_message, "count certificate"),
+              "strict native failure reports the unavailable count certificate directly");
+        fullmag_fem_frequency_domain_result_destroy(&uncertified_count_result);
+    }
     fullmag_fem_frequency_domain_result_destroy(&window_result);
     std::printf("PASS: native_floquet_production_window_positive_mass_merge\n");
+    if (count_certificate_only) {
+        std::printf("PASS: public_native_floquet_certified_count_requires_count_certificate\n");
+        return;
+    }
 
     // The public count is a maximum publication cap. The per-subwindow NEV
     // guard is internal overfetch and can exceed the real-split dimension, so
@@ -4781,6 +5160,12 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                        "\"status\":\"solve_error\""),
           "window failure probe does not promote the failed solve to completion");
     fullmag_fem_frequency_domain_result_destroy(&hard_ksp_window_result);
+#else
+    if (count_certificate_only) {
+        std::fprintf(stderr,
+                     "FAIL: --floquet-count-certificate requires MFEM and SLEPc");
+        std::exit(2);
+    }
 #endif
 }
 
@@ -5126,6 +5511,10 @@ int main(int argc, char **argv)
             modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator();
             generic_dense_window_refills_after_search_filtering();
             std::printf("PASS: generic_modal_mass_refill_contract\n");
+            return 0;
+        }
+        if (argc == 2 && std::strcmp(argv[1], "--floquet-count-certificate") == 0) {
+            modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(true);
             return 0;
         }
         std::fprintf(stderr, "FAIL: unknown modal eigen contract test argument\n");

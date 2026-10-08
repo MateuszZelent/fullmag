@@ -2296,7 +2296,9 @@ Repository-owned related contracts:
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp | solve_slepc_sparse_gyrotropic_modal_eigen | Return the internal result carrying `FloquetShiftedKspFailureProbe`, separate from completed post-solve KSP telemetry and with the attempted EPS NEV/NCV. |
 | backends/fem/cpu/frequency_domain/mode_deduplication.cpp | deduplicate_modes_by_frequency_and_overlap_with_mass_action | Strict comparison-only normalization using an explicit caller-owned geometric mass action; rejects a missing or invalid metric and retains original candidate data. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | solve_slepc_tiny_gyrotropic_modal_eigen | Generic dense and sparse requests apply the supplied geometric mass after residual screening, then refill with fixed resolved NCV/MPD and a cumulative outer-iteration budget. |
-| backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | solve_sparse_production_modal_window_payload | Generic sparse window applies the CSR mass directly across subwindows, performs global mass-aware deduplication before the public cap, and reports incomplete outcomes explicitly. |
+| backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | production_window_diagnostics_json | Serialize raw native adapter status and stop reason per subwindow, plus the explicit missing-certificate reason for strict sparse Floquet windows. |
+| backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | main | The --floquet-count-certificate entrypoint uses an expanded positive-mass fixture, proves at least four distinct modes exist before the public cap, and asserts its sole subwindow is status ok/converged before certified_count fails for the unavailable certificate. |
+| crates/fullmag-runner/src/fem/eigen_native_window.rs | execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance | Return non-OK native solve status before parsing result_json modes; strict-count error modes remain C ABI diagnostics and are not runner artifacts. |
 | backends/fem/tests/frequency_domain/mode_deduplication_test.cpp | main | The test entrypoint calls `slepc_hard_solve_error_prevents_followup_queries_and_cleanup`, `slepc_vector_query_error_leaves_acquired_views_in_quarantine`, `slepc_destroy_sequence_stops_and_retains_remaining_handles_on_failure`, and `generic_candidate_span_gram_rejects_indefinite_dense_and_csr_mass`, alongside the finalizer fixture; injected callbacks verify the shared operation/destroy gates only, not PETSc runtime failures. The other cases cover phase-copy rank deficiency, mass-orthogonal modes, candidate-span PSD rejection, and missing/invalid mass. |
 | backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | main | The test entrypoint calls `generic_dense_window_refills_after_search_filtering`, covering provider-backed dense refill, partial output, nearest underfill, mass rejection, and budget telemetry; GHA execution pending. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | SLEPcModalCandidateFinalization finalize_slepc_modal_candidates_with_mass | Before overlap deduplication, form and certify only the residual-approved candidate-span Gram matrix using the declared dense or CSR mass action. |
@@ -2687,8 +2689,24 @@ zwróconych modów może być mniejsza od publicznego limitu. Jeśli pula przekr
 limit publikacji, istniejąca klasyfikacja truncated_by_requested_count pozostaje
 właściwa. Status ok oznacza dostępny wynik runtime; nie zastępuje odrębnej
 kwalifikacji naukowej 8-band. Pusta pula, wyczerpanie budżetu EPS, anulowanie
-lub błąd solvera oraz polityka certified_count pozostają fail-closed. Anulowanie
-jest sprawdzane przed
+lub błąd solvera oraz polityka certified_count pozostają fail-closed. Dla
+natywnego sparse Floquet powód jest konkretny: bounded shift-invert EPS pools
+dostarczają residual-screened kandydatów, ale nie certyfikat liczby modów dla
+całego okna. Partition raportuje `certification_method=none`; jedyny obecny
+producer `count_certificate` należy do osobnego solvera contour-interval.
+Wynik `certified_count` z tego Floquet adaptera musi więc zakończyć się
+`solve_error` z `native_floquet_count_certificate_unavailable`, również gdy
+shift-y się zbiegły. C ABI może zachować już zwalidowane mody w polu
+`modes` odpowiedzi błędu wyłącznie jako diagnostykę; status nie oznacza
+udanego strict-policy. Runner Rust
+`execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance`
+zwraca błąd przed parsowaniem `result_json.modes`, gdy status native nie jest
+`Ok`, więc ta ścieżka nie publikuje tych modów do artefaktu. Diagnostyka utrzymuje
+`additional_modes_may_exist=true` i brak certyfikacji; solverowy błąd albo
+częściowa zbieżność zachowują własną klasyfikację. Polityka `best_effort`
+może nadal zwrócić niepustą, residual- i mass-screened pulę z
+`complete=false`; nie oznacza to certyfikacji pokrycia ani liczby modów.
+Anulowanie jest sprawdzane przed
 próbą, przez standardowe EPSStoppingBasic z EPS_CONVERGED_USER oraz przed
 następnym retry; wynik ma status interrupted, nie zbieżność.
 
@@ -2727,6 +2745,9 @@ produkcji całej dyspersji.
 | `source-floquet-tangent-mass-overlap-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `main` | Unique test entrypoint calls `finalizes_certified_candidates_by_tangent_mass_before_nearest_cap`; direct candidates bypass EPS and do not prove supply, residual certification or refill/NEV; no-provider GHA 37795426460 passed |
 | `source-floquet-nev-refill-owner` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Repeated safe EPS attempts increase NEV within fixed initial NCV/MPD, recertify the final pool with the owned positive tangent mass, and account against one cumulative EPS outer-iteration budget; source visible, provider GHA pending |
 | `source-floquet-nev-refill-adapter` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_payload` | Unique dispatcher routes frequency-window requests into `solve_sparse_production_modal_window_payload`, which propagates cancellation and exposes attempt/budget diagnostics; partial/cancelled outcomes remain explicit; runtime pending |
+| `source-floquet-window-count-certificate-diagnostics` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `production_window_diagnostics_json` | Preserve raw per-subwindow adapter status/stop reason and report the missing count certificate separately from EPS/refill outcomes |
+| `source-floquet-window-count-cap-public-regression` | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `main` | Focused expanded fixture has at least four distinct pre-cap modes; its sole subwindow is status ok/converged before strict policy fails with the explicit certificate reason; provider GHA pending |
+| `source-floquet-window-strict-error-consumer` | `crates/fullmag-runner/src/fem/eigen_native_window.rs` | `execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance` | Non-OK native status returns before parsing C ABI diagnostic modes; these candidates do not become runner artifacts |
 | `source-floquet-nev-refill-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `main` | Test entrypoint calls `refills_native_floquet_nev_before_tangent_mass_cap`; provider-backed EPS regression covers duplicate refill, fixed dimensions, ceilings, cancellation and mass/residual gates; execution pending |
 | `source-floquet-window-cross-subwindow-dedup-followup` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_payload` | The unique dispatcher enters the native window adapter whose subwindow merge uses the owned positive CSR mass finalizer before the final window cap; production-entry regression pending |
 

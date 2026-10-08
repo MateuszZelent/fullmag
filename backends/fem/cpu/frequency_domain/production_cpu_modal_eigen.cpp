@@ -26,6 +26,8 @@ namespace {
 constexpr double kWindowDedupFrequencyRelativeTolerance = 1.0e-8;
 constexpr double kWindowDedupFrequencyAbsoluteToleranceHz = 1.0e-12;
 constexpr double kWindowDedupOverlapThreshold = 0.90;
+constexpr const char *kNativeFloquetCountCertificateUnavailableReason =
+    "native_floquet_count_certificate_unavailable";
 
 bool dynamic_demag_k_payload_is_declared(const ModalEigenRequest &) noexcept;
 bool dynamic_demag_k_payload_is_consistent(const ModalEigenRequest &) noexcept;
@@ -1671,7 +1673,11 @@ std::string production_window_diagnostics_json(
     const bool certified =
         partition.uncertified_subwindows.empty() &&
         std::strcmp(partition.certification_method, "none") != 0;
+    const bool native_floquet_certified_count_unavailable =
+        request.floquet_shared_domain_operator != nullptr &&
+        request.completeness_policy == 1;
     const bool exhausted_without_modes =
+        !native_floquet_certified_count_unavailable &&
         !truncated_by_requested_count &&
         accepted_modes.empty() &&
         !subwindow_solves.empty() &&
@@ -1795,6 +1801,10 @@ std::string production_window_diagnostics_json(
             "") +
         ",\"additional_modes_may_exist\":" +
         std::string(additional_modes_may_exist) +
+        (native_floquet_certified_count_unavailable
+            ? ",\"certification_unavailable_reason\":\"" +
+                std::string(kNativeFloquetCountCertificateUnavailableReason) + "\""
+            : "") +
         "},\"subwindows\":[";
 
     for (std::size_t i = 0; i < subwindow_solves.size(); ++i) {
@@ -1811,7 +1821,10 @@ std::string production_window_diagnostics_json(
         json +=
             "{\"index\":" +
             std::to_string(subwindow.index) +
-            ",\"requested_hz\":[" +
+            ",\"status\":\"" +
+            std::string(
+                solve.result.status != nullptr ? solve.result.status : "unknown") +
+            "\",\"requested_hz\":[" +
             format_double(subwindow.requested_min_hz) + "," +
             format_double(subwindow.requested_max_hz) +
             "],\"search_hz\":[" +
@@ -2653,14 +2666,13 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
     }
 
     FrequencyDomainContractResult result{};
-    const std::string window_diagnostics =
-        production_window_diagnostics_json(
-            request,
-            partition,
-            subwindow_solves,
-            accepted_modes,
-            accepted_mode_count_before_cap,
-            truncated_by_requested_count);
+    const std::string window_diagnostics = production_window_diagnostics_json(
+        request,
+        partition,
+        subwindow_solves,
+        accepted_modes,
+        accepted_mode_count_before_cap,
+        truncated_by_requested_count);
     if (subwindow_hard_failure || accepted_modes.empty()) {
         result.status = FrequencyDomainStatus::solve_error;
         result.error_message = subwindow_hard_failure
@@ -3437,6 +3449,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     const bool shared_domain_floquet =
         request.floquet_shared_domain_operator != nullptr;
     const bool native_floquet_sparse = shared_domain_floquet;
+    const bool native_floquet_certified_count_unavailable =
+        native_floquet_sparse && request.completeness_policy == 1;
     SLEPcTangentMassActionContext tangent_mass_context{};
     if (!shared_domain_floquet &&
         !create_slepc_tangent_mass_action_context(
@@ -3630,6 +3644,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         }
     }
     const bool exhausted_without_modes =
+        !native_floquet_certified_count_unavailable &&
         !truncated_by_requested_count &&
         accepted_modes.empty() &&
         !subwindow_solves.empty() &&
@@ -3664,11 +3679,12 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     }
     const char *window_stop_reason = subwindow_hard_failure
         ? "subwindow_failed" : (cancellation_interrupted ?
-            "cancelled" : (truncated_by_requested_count ?
+            "cancelled" : (native_floquet_certified_count_unavailable ?
+        "count_certificate_unavailable" : (truncated_by_requested_count ?
         "requested_count_reached" :
         (accepted_modes.empty() ?
             (partial_convergence ? "partial_convergence" : "window_exhausted") :
-            (partial_convergence ? "partial_convergence" : "converged"))));
+            (partial_convergence ? "partial_convergence" : "converged")))));
     const char *window_completeness_status = subwindow_hard_failure
         ? "solver_error" : (truncated_by_requested_count ?
         "truncated_by_requested_count" :
@@ -3694,14 +3710,13 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     const char *kSparseWindowSolverModel = modal_request_is_nonzero_k_floquet(request)
         ? "floquet_multi_shift_invert_slepc_sparse"
         : "slepc_multi_shift_invert_production_cpu_sparse_csr";
-    const std::string window_diagnostics =
-        production_window_diagnostics_json(
-            request,
-            partition,
-            subwindow_solves,
-            accepted_modes,
-            accepted_mode_count_before_cap,
-            truncated_by_requested_count);
+    const std::string window_diagnostics = production_window_diagnostics_json(
+        request,
+        partition,
+        subwindow_solves,
+        accepted_modes,
+        accepted_mode_count_before_cap,
+        truncated_by_requested_count);
     if (subwindow_hard_failure) {
         const char *failure_reason = subwindow_failure_reason != nullptr
             ? subwindow_failure_reason : "subwindow_solver_failed";
@@ -3765,7 +3780,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             : FrequencyDomainStatus::solve_error;
         result.error_message = cancellation_interrupted
             ? "native FEM modal_eigen production CPU sparse CSR multi-shift solve was cancelled"
-            : "native FEM modal_eigen production CPU sparse CSR multi-shift solve found no accepted modes in the requested window";
+            : native_floquet_certified_count_unavailable
+                ? "native FEM modal_eigen certified_count requires a window count certificate; the sparse Floquet shift-invert adapter does not produce one"
+                : "native FEM modal_eigen production CPU sparse CSR multi-shift solve found no accepted modes in the requested window";
         result.diagnostics_json =
             "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -3839,8 +3856,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         !best_effort_dimension_limited_partial_with_modes;
     result.status = cancellation_interrupted
         ? FrequencyDomainStatus::interrupted
-        : refill_incomplete ? FrequencyDomainStatus::solve_error
-                            : FrequencyDomainStatus::ok;
+        : (refill_incomplete || native_floquet_certified_count_unavailable)
+            ? FrequencyDomainStatus::solve_error
+            : FrequencyDomainStatus::ok;
     result.error_message = cancellation_interrupted
         ? std::string("native FEM modal_eigen production CPU sparse CSR multi-shift solve was cancelled")
         : refill_incomplete
@@ -3850,7 +3868,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
               : std::string(
                   "native FEM modal_eigen generic sparse window remained incomplete "
                   "after bounded refill; no complete spectrum is claimed"))
-            : std::string();
+            : native_floquet_certified_count_unavailable
+                ? "native FEM modal_eigen certified_count requires a window count certificate; the sparse Floquet shift-invert adapter does not produce one"
+                : std::string();
     const char *deduplication_inner_product =
         native_floquet_sparse ? "floquet_positive_tangent_mass" :
                                 "mfem_sparse_tangent_mass";
@@ -3861,7 +3881,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"" +
         std::string(cancellation_interrupted
-            ? "interrupted" : refill_incomplete ? "solve_error" : "ok") +
+            ? "interrupted"
+            : (refill_incomplete || native_floquet_certified_count_unavailable)
+                ? "solve_error" : "ok") +
         "\","
         "\"complete\":" +
         std::string(window_complete ? "true" : "false") +
@@ -3924,7 +3946,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"" +
         std::string(cancellation_interrupted
-            ? "interrupted" : refill_incomplete ? "solve_error" : "ok") +
+            ? "interrupted"
+            : (refill_incomplete || native_floquet_certified_count_unavailable)
+                ? "solve_error" : "ok") +
         "\","
         "\"solver_adapter\":\"" +
         std::string(kSparseAdapter) +

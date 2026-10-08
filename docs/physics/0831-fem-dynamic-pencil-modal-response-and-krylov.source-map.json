@@ -1551,13 +1551,25 @@
       "id": "source-floquet-nev-refill-adapter",
       "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
       "symbol": "solve_sparse_production_modal_payload",
-      "responsibility": "Keep public Eigenmodes.count as an output cap and the internal per-subwindow NEV guard as overfetch. For best_effort, dimension-limited refill with a nonempty certified post-filter/deduplicated pool may return status ok while window completeness remains partial and incomplete; preserve the internal stop reason. Empty pools, certified_count, EPS budget exhaustion, cancellation, and hard failures remain fail-closed; runtime pending"
+      "responsibility": "Keep public Eigenmodes.count as an output cap and route native sparse windows to shift-invert. Best_effort may return a nonempty certified post-filter/deduplicated pool while incomplete; strict certified_count fails closed because the native Floquet route has no count-certificate producer. Preserve cancellation and refill semantics; runtime pending"
+    },
+    {
+      "id": "source-floquet-window-count-certificate-diagnostics",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "production_window_diagnostics_json",
+      "responsibility": "Serialize the raw native adapter status and mapped stop reason per subwindow, alongside an explicit strict-count certificate-unavailable reason."
     },
     {
       "id": "source-floquet-window-count-cap-public-regression",
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
       "symbol": "main",
-      "responsibility": "Exercise the public production frequency-window adapter with a narrow dimension-limited band: best_effort returns the nonempty certified pool under the public count cap with partial window metadata; certified_count remains fail-closed. The same C ABI regression checks hard nearest/window KSP failure-probe JSON and its absence on successful solves; provider-backed runtime pending."
+      "responsibility": "The --floquet-count-certificate C ABI mode uses an expanded positive-mass fixture with at least four distinct pre-cap modes; its one actual subwindow has status ok/stop_reason converged with no partial/refill-limit result, then certified_count fails only for the missing certificate while retaining diagnostic modes; provider-backed targeted run pending."
+    },
+    {
+      "id": "source-floquet-window-strict-error-consumer",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs",
+      "symbol": "execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance",
+      "responsibility": "Reject non-OK native modal status before parsing result_json modes; C ABI diagnostic candidates from a strict-count error do not become runner artifacts."
     },
     {
       "id": "source-floquet-nev-refill-regression",
