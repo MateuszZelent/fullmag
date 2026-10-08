@@ -46,7 +46,7 @@ export function EChartsCanvasSurface({
 }: {
   children?: ReactNode;
   diagnostics?: {
-    instanceCreated?: (instance: ChartRendererInstance) => void;
+    instanceCreated?: (instance: ChartRendererInstance) => void | (() => void);
     instanceDisposed?: () => void;
     modelUpdated?: (model: ChartRenderModel) => void;
     setOption?: () => void;
@@ -103,13 +103,17 @@ export function EChartsCanvasSurface({
     void import("echarts")
       .then((echarts) => {
         if (cancelled) return;
+        let disposeInstanceDiagnostics: (() => void) | null = null;
         const owner = createChartRendererOwner(
           {
             init: (target) => {
               const instance = echarts.init(target, undefined, {
                 renderer: "canvas",
               }) as ECharts;
-              callbacksRef.current.diagnostics?.instanceCreated?.(instance);
+              const diagnosticCleanup =
+                callbacksRef.current.diagnostics?.instanceCreated?.(instance);
+              disposeInstanceDiagnostics =
+                typeof diagnosticCleanup === "function" ? diagnosticCleanup : null;
               return instance;
             },
           },
@@ -158,6 +162,8 @@ export function EChartsCanvasSurface({
         const origDispose = owner.dispose.bind(owner);
         owner.dispose = () => {
           themeObserver?.disconnect();
+          disposeInstanceDiagnostics?.();
+          disposeInstanceDiagnostics = null;
           origDispose();
           callbacksRef.current.diagnostics?.instanceDisposed?.();
         };

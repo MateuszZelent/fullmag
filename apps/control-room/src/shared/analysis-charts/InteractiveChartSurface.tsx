@@ -36,7 +36,7 @@ export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks 
   dataExportModel?: ChartRenderModel;
   dataStatus?: string;
   diagnostics?: {
-    instanceCreated?: (instance: ChartRendererInstance) => void;
+    instanceCreated?: (instance: ChartRendererInstance) => void | (() => void);
     instanceDisposed?: () => void;
     modelUpdated?: (model: ChartRenderModel) => void;
     resized?: () => void;

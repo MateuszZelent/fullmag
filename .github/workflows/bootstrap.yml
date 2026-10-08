@@ -337,6 +337,9 @@ jobs:
           done
           test "$inspector_ready" = 1
           pnpm --dir apps/control-room run smoke:inspector
+          CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
+            CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
+            pnpm --dir apps/control-room run smoke:analysis-plots
           ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-source-verify-post-write
 
       - name: Run start screen stylesheet browser check

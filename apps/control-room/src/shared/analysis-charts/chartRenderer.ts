@@ -345,8 +345,9 @@ export function chartRenderModelToEChartsOption(
         lineStyle: { color, width: 1.5 },
         name: seriesDisplayName(series, yScales),
         progressive: 0,
+        // Keep line markers hidden at rest while retaining their emphasis hit target.
         showSymbol: series.kind === "scatter",
-        symbol: series.kind === "scatter" ? "circle" : "none",
+        symbol: "circle",
         symbolSize: 4,
         type: series.kind,
         yAxisIndex: series.yAxis,

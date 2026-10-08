@@ -30,6 +30,12 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("selectPublishedDataset");
     expect(smokeScript).toContain("installAnalysisDatasetFixtureRoutes");
     expect(smokeScript).toContain("analysisStatusFixture");
+    expect(smokeScript).toContain('schema_version: "eigen_spectrum.v2"');
+    expect(smokeScript).toContain('schemaVersion: "frequency_domain_eigen_spectrum.v1"');
+    expect(smokeScript).toContain('schemaVersion: "frequency_domain_eigen_mode_resource.v1"');
+    expect(smokeScript).toContain('schema_version: "eigen_mode.v2"');
+    expect(smokeScript).toContain('frequency_domain_response_sweep_resource.v1');
+    expect(smokeScript).toContain('eigen/modes/sample_${String(expectedSelection.sampleIndex).padStart(4, "0")}/mode_${String(expectedSelection.modeIndex).padStart(4, "0")}.json');
     expect(smokeScript).toContain(
       `url.pathname === "${SESSION_STATUS_PATH}"`,
     );
@@ -74,6 +80,16 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("verifyPointSelection");
     expect(smokeScript).toContain("dispatchPointClick");
     expect(smokeScript).toContain("dispatchDataZoom");
+    expect(smokeScript).toContain("inspectFrequencyChartOption");
+    expect(smokeScript).toContain("readRenderedOption");
+    expect(smokeScript).toContain("resolveRenderedDataPoint");
+    expect(smokeScript).toContain("lastRenderedClick");
+    expect(smokeScript).toContain("requireDispersionRenderEvidence");
+    expect(smokeScript).toContain("nonNullPointCount !== 5_000");
+    expect(smokeScript).toContain('entry.type === "scatter"');
+    expect(smokeScript).toContain("targetPreviousIsNullSentinel");
+    expect(smokeScript).toContain("line.connectNulls !== false");
+    expect(smokeScript).toContain("clickDataIndex !== renderedClick.targetDataIndex");
     expect(smokeScript).toContain("collectAnalysisPlotProof");
     expect(smokeScript).toContain("ECharts canvas appears blank");
     expect(smokeScript).toContain("analysis series legend is missing");

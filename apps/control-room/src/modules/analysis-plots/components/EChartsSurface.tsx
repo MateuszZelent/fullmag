@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ECharts } from "echarts";
 
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -29,6 +30,7 @@ import {
   recordChartInstanceDisposed,
   recordChartModelBuilt,
   recordChartResize,
+  registerRenderedChartDiagnostics,
   recordChartSetOption,
 } from "./chartDiagnostics";
 import { cancelRangeCommit, scheduleRangeCommit } from "./chartRangeCommit";
@@ -124,6 +126,7 @@ function EChartsSurfaceImpl({
         instanceCreated: (chart) => {
           recordChartInstanceCreated();
           if (onRangeChange) recordChartDispatchDataZoom(chart as never);
+          return registerRenderedChartDiagnostics(chart as unknown as ECharts);
         },
         instanceDisposed: recordChartInstanceDisposed,
         modelUpdated: (model) => {

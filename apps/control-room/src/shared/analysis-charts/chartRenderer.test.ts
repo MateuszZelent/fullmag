@@ -87,6 +87,9 @@ describe("chart renderer owner", () => {
       expect.objectContaining({
         connectNulls: false,
         data: [[1, 0.25, 0], [3, null, null], [3, 0.5, 2]],
+        showSymbol: false,
+        symbol: "circle",
+        type: "line",
       }),
     ]);
   });
