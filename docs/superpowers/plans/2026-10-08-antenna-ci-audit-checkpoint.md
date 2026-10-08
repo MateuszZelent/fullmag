@@ -698,3 +698,39 @@ niekolinearne źródła z różnymi waveformami; nieaktywne drives;
 stage-local/absolute oraz resumed waveform origin; wspólna konwencja
 FFT obu składowych transverse. Następnie numeryczne wykonanie collectora
 i runtime, nie tylko kontrola source-layout. T00–T18 pozostaje otwarte.
+
+## Przyrost fixtures po wykonanym CI
+
+Baza `ae399f057fbe49129cc333e077926729a400cd45`; poprawki nie zmieniają
+produkcji, zasobów API ani solverów.
+
+- `AntennaCompositionPanels.dom.test.tsx`: nowe edytory konsumują
+  `useSessionResourceIdentity`, placement również
+  `useGeometryRealizationResource`. Stary mock kernela z samym `invalidate`
+  nie realizował tej granicy i powodował `resources.getRevision is not a
+  function`. Fixture mockuje teraz te dwa zasoby jawnie; bounds są idle,
+  ponieważ ten zestaw nie kwalifikuje placement. `importOriginal` zachowuje
+  rzeczywisty eksport `KernelContext`, konsumowany przez
+  `InspectorEditSession.tsx::useRegisterInspectorEditSession`. Istniejące
+  asercje transakcji, draftu, ACK/focus/scroll nie zostały usunięte; zapis
+  width stations dodatkowo sprawdza pełny `sessionScopeKey`.
+- `StageAutosaveSection.test.tsx`: dokładne oczekiwanie `until_seconds`
+  to tekst `"4e-12"`, zgodnie z
+  `StudyStageAuthoringModel.ts::studyStageDraftToSceneStage` i istniejącą
+  regresją kanonicznego tekstu Run. Dodano niezależną asercję wartości
+  numerycznej `4e-12 s`; cadence fields/table pozostają liczbami. Nie
+  zmieniono fizycznego czasu ani produkcyjnego JSON.
+- `useSimulationPreparation.test.tsx`: dodano wyłącznie diagnostykę
+  nieudanej fazy: zakresy żądań, ostatnie sześć stanów i liczność status GET.
+  Zachowano predykaty, counts 3/4, sześć ticków i retry 11 ms. To **nie jest
+  naprawa** błędu B: dotychczasowy log false/true nie rozróżniał braku
+  request od nieoczekiwanego statusu lub dodatkowego request.
+
+Scoped ESLint PASS; architecture hygiene PASS; parser/source duration
+contract PASS i `Number("4e-12") === 4e-12` PASS. Kontrola AST subagenta
+potwierdziła zachowanie 107 dotychczasowych asercji paneli (pierwsze
+argumenty), z dodatkowym argumentem scope. Te dowody nie są wykonaniem
+React/Vitest. Pełny TypeScript noEmit bez incremental PASS, exit 0
+(sesja 2188); CI nowych fixtures wymaga odbioru.
+Pozostają błędy B, CSS i viewport source contracts oraz wszystkie
+niezakwalifikowane bramki T00–T18. Brak restartu, merge i cleanup.

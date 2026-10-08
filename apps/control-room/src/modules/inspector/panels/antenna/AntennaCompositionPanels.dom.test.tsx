@@ -49,7 +49,8 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/kernel/KernelContext")>(),
   useKernel: () => ({
     api: { model: { commitTransaction: mocks.commitTransaction } },
     resources: { invalidate: mocks.invalidate },
@@ -59,6 +60,25 @@ vi.mock("@/kernel/KernelContext", () => ({
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   publishCommittedSceneResource: vi.fn(),
   useSceneResource: () => mocks.scene,
+}));
+
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => ({
+    sessionId: "session-1",
+    sessionEpoch: "epoch-1",
+    requestScopeEpoch: "instance-1:7",
+  }),
+}));
+
+// This composition fixture does not qualify placement bounds or their resource lifecycle.
+vi.mock("@/kernel/resources/useGeometryRealizationResource", () => ({
+  useGeometryRealizationResource: () => ({
+    data: null,
+    error: null,
+    refetch: vi.fn(),
+    revision: null,
+    status: "idle",
+  }),
 }));
 
 vi.mock("@/kernel/resources/antennaResources", () => ({
@@ -1019,7 +1039,7 @@ describe("AntennaCompositionPanel runtime results", () => {
         geometry: expect.objectContaining({ geometry_params: expect.objectContaining({
           stations: [{ s: 0, signal_width_m: 60e-9 }, { s: 1, signal_width_m: 25e-9 }],
         }) }),
-      }));
+      }), { sessionScopeKey: "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7" });
       expect(find("DIV", "Antenna conductor")).toBe(panel);
       expect(find("INPUT", "Station 1 signal width")).toBe(input);
       expect(unrelatedInput.disabled).toBe(false);

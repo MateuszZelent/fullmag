@@ -412,7 +412,11 @@ describe("useSimulationPreparation", () => {
         if (predicate()) return;
         await act(async () => vi.advanceTimersByTimeAsync(1));
       }
-      expect(predicate(), phase).toBe(true);
+      expect(predicate(), `${phase}: ${JSON.stringify({
+        loadScopes: load.mock.calls.map(([options]) => options.sessionScopeKey),
+        observations: observations.slice(-6).map(resultSnapshot),
+        statusRequests: statusLoad.mock.calls.length,
+      })}`).toBe(true);
     }
   });
 
