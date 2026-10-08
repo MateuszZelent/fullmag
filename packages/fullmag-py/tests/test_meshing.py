@@ -5656,7 +5656,9 @@ class MeshScaffoldTests(unittest.TestCase):
             periodic_node_pairs=node_pairs,
             periodic_mesh_certificate=certificate,
         )
-        _recertify_scaled_periodic_mesh(si_mesh)
+        original_si_mesh = si_mesh
+        si_mesh = _recertify_scaled_periodic_mesh(si_mesh)
+        self.assertEqual(original_si_mesh.periodic_mesh_certificate, certificate)
         expected_si_certificate = certify_extracted_periodic_mesh(
             nodes / 1.0e6, faces, markers, si_pairs, node_pairs,
         )
@@ -5669,7 +5671,7 @@ class MeshScaffoldTests(unittest.TestCase):
         si_mesh.periodic_boundary_pairs[0]["translation"] = [2.0e-6, 0.0, 0.0]
         with self.assertRaisesRegex(ValueError, "translation residual"):
             _recertify_scaled_periodic_mesh(si_mesh)
-        self.assertIsNone(si_mesh.periodic_mesh_certificate)
+        self.assertEqual(si_mesh.periodic_mesh_certificate, expected_si_certificate)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             json_path = Path(tmp_dir) / "mirrored.json"

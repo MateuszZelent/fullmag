@@ -202,18 +202,19 @@ def _quality_volumes_in_si(
     )
 
 
-def _recertify_scaled_periodic_mesh(mesh: MeshData) -> None:
-    """Bind periodic evidence to final SI coordinates, validating all relations."""
-    mesh.periodic_mesh_certificate = None
-    if not mesh.periodic_boundary_pairs:
-        return
-    mesh.periodic_mesh_certificate = certify_extracted_periodic_mesh(
-        mesh.nodes,
-        mesh.boundary_faces,
-        mesh.boundary_markers,
-        mesh.periodic_boundary_pairs,
-        mesh.periodic_node_pairs,
+def _recertify_scaled_periodic_mesh(mesh: MeshData) -> MeshData:
+    """Return immutable SI mesh with newly validated periodic evidence."""
+    candidate = _dc_replace(mesh, periodic_mesh_certificate=None)
+    if not candidate.periodic_boundary_pairs:
+        return candidate
+    certificate = certify_extracted_periodic_mesh(
+        candidate.nodes,
+        candidate.boundary_faces,
+        candidate.boundary_markers,
+        candidate.periodic_boundary_pairs,
+        candidate.periodic_node_pairs,
     )
+    return _dc_replace(candidate, periodic_mesh_certificate=certificate)
 
 
 THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED = (
@@ -2468,7 +2469,7 @@ def _generate_coincident_ring_airbox_mesh(
                 if raw_mesh.per_domain_quality is not None else None
             ),
         )
-        _recertify_scaled_periodic_mesh(result)
+        result = _recertify_scaled_periodic_mesh(result)
         if scoped_layer_partitioning:
             scoped_descriptors = [
                 config
@@ -2866,7 +2867,7 @@ def generate_swept_box_cylinder_ring_mesh(
                 if raw_mesh.per_domain_quality is not None else None
             ),
         )
-        _recertify_scaled_periodic_mesh(result)
+        result = _recertify_scaled_periodic_mesh(result)
         result.validate_strict(require_positive_orientation=True)
         emit_progress(
             "Gmsh swept ring realization: "

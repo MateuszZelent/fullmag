@@ -329,6 +329,8 @@ Po konwersji ring z mikrometrów do metrów nie wolno zachować certyfikatu
 sprzed skalowania. `_recertify_scaled_periodic_mesh` ponownie sprawdza
 bijekcję węzłów i ścian, przeciwne normalne oraz domknięcie narożników na
 końcowym MeshData, używając przeskalowanych translacji i tolerancji SI.
+MeshData jest niezmienny: helper tworzy kandydata bez starego certyfikatu,
+a po sukcesie zwraca nowy obiekt z certyfikatem SI. Wejście pozostaje niezmienione.
 Błąd certyfikacji zatrzymuje publikację; sama podmiana fingerprintu nie wystarcza.
 Dotyczy obu tras ring, wspólnych dla FEM CPU/GPU; FDM nie dotyczy.
 Nie zmienia geometrii ani tolerancji. Regresja syntetyczna porównuje certyfikat
