@@ -83,6 +83,74 @@ fn branch_writer_preserves_recorded_pair_policy_and_gap() {
 }
 
 #[test]
+fn tracked_pair_overlap_is_published_as_confidence_in_json_and_csv() {
+    let temp = TempDirGuard::new("tracked-overlap-confidence");
+    let mut result = sample_result();
+    result.branches.clear();
+    result.samples[0].modes[0].reduced_vector = Some(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    result.samples[0].modes[0].node_mass_weights = Some(vec![1.0, 1.0]);
+    let mut next_sample = result.samples[0].clone();
+    next_sample.sample.sample_index = 1;
+    next_sample.sample.label = Some("X".to_string());
+    next_sample.sample.path_s = 1.0;
+    next_sample.modes[0].reduced_vector = Some(vec![
+        Complex64::new(0.8, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.6, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    next_sample.modes[0].node_mass_weights = Some(vec![1.0, 1.0]);
+    result.samples.push(next_sample);
+
+    let tracking = fullmag_ir::ModeTrackingIR {
+        method: fullmag_ir::ModeTrackingMethodIR::OverlapHungarian,
+        frequency_window_hz: None,
+        overlap_floor: 0.5,
+        max_branch_gap: 0,
+    };
+    crate::eigen::tracking::track_branches(&mut result, Some(&tracking));
+    let point = &result.branches[0].points[1];
+    assert!((point.overlap_prev.unwrap() - 0.8).abs() < 1.0e-12);
+    assert!((point.tracking_confidence - 0.8).abs() < 1.0e-12);
+    assert_eq!(
+        point.tracking_edge.as_ref().unwrap().score_source.as_str(),
+        "modal_overlap_weighted_score"
+    );
+
+    write_branch_bundle(&temp.path, &result).expect("tracked branch artifacts should write");
+    let branches: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/branches.v2.json"))
+            .expect("branch JSON should be readable"),
+    )
+    .expect("branch JSON should be valid");
+    let json_point = &branches["branches"][0]["points"][1];
+    assert_eq!(json_point["tracking_confidence"].as_f64(), Some(0.8));
+    assert_eq!(json_point["overlap_prev"].as_f64(), Some(0.8));
+    assert_eq!(
+        json_point["tracking_edge"]["score_source"],
+        "modal_overlap_weighted_score"
+    );
+
+    let branch_table = std::fs::read_to_string(temp.path.join("eigen/branch_table.csv"))
+        .expect("branch table CSV should be readable");
+    let lines = branch_table.lines().collect::<Vec<_>>();
+    let headers = lines[0].split(',').collect::<Vec<_>>();
+    let columns = lines[2].split(',').collect::<Vec<_>>();
+    let column = |name: &str| headers.iter().position(|header| *header == name).unwrap();
+    assert_eq!(columns[column("tracking_confidence")], "0.800000");
+    assert_eq!(columns[column("overlap_prev")], "0.800000");
+}
+
+#[test]
 fn actual_plan_gamma_is_shared_by_spectra_and_mode_fields() {
     let temp = TempDirGuard::new("actual-gamma");
     let mut result = sample_result();

@@ -1459,7 +1459,7 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
                     raw_mode_index,
                     frequency_real_hz,
                     frequency_imag_hz,
-                    tracking_confidence: edge.score,
+                    tracking_confidence: overlap_prev.unwrap_or(edge.score),
                     overlap_prev,
                     tracking_edge: Some(tracking_edge),
                 });
@@ -1711,6 +1711,21 @@ mod tests {
             .iter()
             .skip(1)
             .all(|point| point.overlap_prev.is_none())));
+        for branch in &result.branches {
+            let previous = &branch.points[0];
+            let point = &branch.points[1];
+            let expected_frequency_score = finite_frequency_score_values(
+                previous.frequency_real_hz,
+                point.frequency_real_hz,
+                cfg.frequency_window_hz,
+            )
+            .unwrap();
+            assert_eq!(
+                point.tracking_edge.as_ref().unwrap().score_source.as_str(),
+                "frequency_score_fallback"
+            );
+            assert!((point.tracking_confidence - expected_frequency_score).abs() < 1.0e-12);
+        }
         assert_eq!(
             result
                 .notes
@@ -1887,7 +1902,9 @@ mod tests {
         assert_eq!(result.samples[2].modes[0].branch_id, Some(1));
         assert_eq!(result.branches.len(), 2);
         assert_eq!(result.branches[0].points.len(), 1);
+        assert_eq!(result.branches[0].points[0].tracking_confidence, 1.0);
         assert_eq!(result.branches[1].points[0].sample_index, 2);
+        assert_eq!(result.branches[1].points[0].tracking_confidence, 0.0);
         let restart = result.branches[1].points[0].tracking_edge.as_ref().unwrap();
         assert!(matches!(restart.transition, TrackingTransition::NewBranch));
         assert_eq!(restart.score_source.as_str(), "modal_overlap_unavailable");
@@ -2024,7 +2041,7 @@ mod tests {
     }
 
     #[test]
-    fn tracked_points_export_raw_overlap_separately_from_confidence() {
+    fn tracked_points_publish_scalar_overlap_without_changing_assignment_score() {
         let previous = [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
         let current = [Complex64::new(0.8, 0.0), Complex64::new(0.6, 0.0)];
         let mut result = PathSolveResult {
@@ -2054,8 +2071,67 @@ mod tests {
 
         let point = &result.branches[0].points[1];
         assert!((point.overlap_prev.unwrap() - 0.8).abs() < 1.0e-12);
-        assert!((point.tracking_confidence - 0.83).abs() < 1.0e-12);
-        assert!((point.tracking_confidence - point.overlap_prev.unwrap()).abs() > 1.0e-3);
+        assert!((point.tracking_confidence - 0.8).abs() < 1.0e-12);
+        let assignment_score =
+            tracking_edge_score(&mode(0, 1.0, previous), &mode(0, 1.0, current), &cfg).unwrap();
+        assert!((assignment_score - 0.83).abs() < 1.0e-12);
+        assert!((point.tracking_confidence - point.overlap_prev.unwrap()).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn weighted_tracking_confidence_publishes_pair_overlap_not_assignment_score() {
+        let previous_vector = [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ];
+        let current_vector = [
+            Complex64::new(0.8, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.6, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ];
+        let mut previous = mode(0, 1.0, previous_vector);
+        let mut current = mode(0, 1.0, current_vector);
+        previous.node_mass_weights = Some(vec![1.0, 1.0]);
+        current.node_mass_weights = Some(vec![1.0, 1.0]);
+        let mut result = PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5,
+            samples: vec![sample(0, vec![previous.clone()]), sample(1, vec![current.clone()])],
+            branches: Vec::new(),
+            solver_model: EigenSolverModel::ReferenceScalarTangent,
+            notes: Vec::new(),
+            include_demag: false,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            solver_policy: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+        let cfg = ModeTrackingIR {
+            method: ModeTrackingMethodIR::OverlapHungarian,
+            frequency_window_hz: None,
+            overlap_floor: 0.5,
+            max_branch_gap: 0,
+        };
+
+        track_branches(&mut result, Some(&cfg));
+
+        let point = &result.branches[0].points[1];
+        assert_eq!(
+            point.tracking_edge.as_ref().unwrap().score_source.as_str(),
+            "modal_overlap_weighted_score"
+        );
+        assert!((point.overlap_prev.unwrap() - 0.8).abs() < 1.0e-12);
+        assert!((point.tracking_confidence - 0.8).abs() < 1.0e-12);
+        let assignment_score = tracking_edge_score(&previous, &current, &cfg).unwrap();
+        assert!((assignment_score - 0.83).abs() < 1.0e-12);
+        assert!((point.tracking_confidence - point.overlap_prev.unwrap()).abs() < 1.0e-12);
     }
 
     #[test]
@@ -2375,6 +2451,9 @@ mod tests {
             .branches
             .iter()
             .all(|branch| branch.points[1].tracking_confidence > 0.99));
+        assert!(result.branches.iter().all(|branch| {
+            (branch.points[1].tracking_confidence - transport.score).abs() < 1.0e-12
+        }));
         assert!(result
             .notes
             .iter()

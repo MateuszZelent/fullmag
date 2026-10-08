@@ -1589,7 +1589,7 @@ managed physics evidence.
 
 | Claim | Lane | Repository path + stable symbol | Responsibility | Evidence status |
 |---|---|---|---|---|
-| Phase-aware mode kinematics | common FEM | `backends/fem/src/frequency_domain/mode_kinematics.cpp` + `map_eigenvalue` | Apply the declared phase convention with exact-zero default classification; retain caller-supplied absolute tolerance without asserting nullspace certification. | Focused source regression prepared; runtime and physical nullspace qualification pending |
+| Phase-aware mode kinematics | common FEM | `backends/fem/src/frequency_domain/mode_kinematics.cpp` + `frequency_hz_from_omega_rad_s` | Convert the phase-signed angular frequency produced by `map_eigenvalue`; the mapper applies exact-zero default classification and retains caller-supplied absolute tolerance without asserting nullspace certification. | Focused source regression prepared; runtime and physical nullspace qualification pending |
 | Stage-first modal authoring | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Capture the modal stage specification without executing it. | source tested; runtime unvalidated |
 | Stage-first driven authoring | common | `packages/fullmag-py/src/fullmag/world.py` + `frequency_response_stage` | Capture frequency samples, drive and solver policy. | source tested; runtime unvalidated |
 | Modal Python validation/lowering | common | `packages/fullmag-py/src/fullmag/model/study.py` + `class Eigenmodes` | Validate modal inputs and serialize canonical study IR. | source tested |
@@ -2173,7 +2173,9 @@ Repository-owned related contracts:
 | Source path | Symbol | Responsibility |
 |---|---|---|
 | backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Withhold positive shifted KSP convergence until the current reconstructed solution satisfies the requested true residual criterion; preserve default negative outcomes and iteration budget with per-KSP reusable workspace. |
-| backends/fem/src/frequency_domain/mode_kinematics.cpp | map_eigenvalue | Phase-aware omega/frequency mapping with exact-zero default classification and explicit absolute-threshold support. |
+| backends/fem/src/frequency_domain/mode_kinematics.cpp | frequency_hz_from_omega_rad_s | Convert the phase-signed angular frequency produced by `map_eigenvalue` to hertz; the mapper retains exact-zero default classification and explicit absolute-threshold support. |
+| backends/fem/include/frequency_domain/mode_kinematics.hpp | select_positive_frequency_mode | The adjacent `ModeKinematicsPolicy` initializes `kDefaultZeroFrequencyToleranceRadPerS` to 0 rad/s; nonzero nullspace/Goldstone classification requires independent certification. |
+| backends/fem/tests/frequency_domain/mode_kinematics_test.cpp | main | Test entrypoint calls `default_zero_frequency_classification_preserves_small_finite_branches`; source test only. |
 
 Stable repository-relative `path + symbol` is the primary source identity.
 The links below resolve the committed source baseline
@@ -2575,15 +2577,15 @@ produkcji całej dyspersji.
 
 | Source ID | Path | Symbol | Responsibility |
 |---|---|---|---|
-| `source-floquet-tangent-mass-assembly` | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` | `assemble_poisson_airbox_shared_domain` | Full geometric P1 tangent mass on physical magnetic nodes and phase-reduced complex CSR |
-| `source-floquet-tangent-mass-regression` | `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` | `floquet_positive_tangent_mass_matches_independent_phase_reduction` | Independent tet4/prism6 mass and $C_q^\mathsf H M C_q$ oracle with phase copies and nonuniform tangent frames; MFEM CPU GHA 37797035215 passed |
+| `source-floquet-tangent-mass-assembly` | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp` | `assemble_poisson_airbox_shared_domain` | Unique declared entrypoint; its implementation forms full geometric P1 tangent mass on physical magnetic nodes and phase-reduced complex CSR |
+| `source-floquet-tangent-mass-regression` | `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` | `main` | Unique test entrypoint calls `floquet_positive_tangent_mass_matches_independent_phase_reduction`; independent tet4/prism6 mass and $C_q^\mathsf H M C_q$ oracle with phase copies and nonuniform tangent frames; MFEM CPU GHA 37797035215 passed |
 | `source-floquet-tangent-mass-overlap-owner` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `detail::finalize_certified_floquet_candidates` | Apply the positive reduced CSR mass action to already residual-certified candidates, retain original modes by source index, then target-rank and cap |
-| `source-floquet-tangent-mass-overlap-seam` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp` | `detail::CertifiedFloquetModalCandidate` | Internal data seam shared by production and deterministic finalizer regression |
-| `source-floquet-tangent-mass-overlap-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `finalizes_certified_candidates_by_tangent_mass_before_nearest_cap` | Directly tests the production finalizer with explicitly supplied candidates; bypasses EPS and does not prove candidate supply, residual certification or refill/NEV; no-provider GHA 37795426460 passed |
+| `source-floquet-tangent-mass-overlap-seam` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp` | `finalize_certified_floquet_candidates` | Unique internal finalizer declaration uses `CertifiedFloquetModalCandidate`, retaining the original accepted mode and target distance |
+| `source-floquet-tangent-mass-overlap-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `main` | Unique test entrypoint calls `finalizes_certified_candidates_by_tangent_mass_before_nearest_cap`; direct candidates bypass EPS and do not prove supply, residual certification or refill/NEV; no-provider GHA 37795426460 passed |
 | `source-floquet-nev-refill-owner` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Repeated safe EPS attempts increase NEV within fixed initial NCV/MPD, recertify the final pool with the owned positive tangent mass, and account against one cumulative EPS outer-iteration budget; source visible, provider GHA pending |
-| `source-floquet-nev-refill-adapter` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_window_payload` | Propagate the existing cancellation callback, expose attempt/budget diagnostics, and preserve explicit partial/cancelled window outcomes; source visible, runtime pending |
-| `source-floquet-nev-refill-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `refills_native_floquet_nev_before_tangent_mass_cap` | Provider-backed EPS regression for duplicate-cluster refill, fixed dimensions, dimension and iteration limits, cancellation and mass/residual gates; execution pending |
-| `source-floquet-window-cross-subwindow-dedup-followup` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_window_payload` | Native Floquet subwindow merge uses the owned positive CSR mass finalizer before the final window cap; production-entry regression pending |
+| `source-floquet-nev-refill-adapter` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_payload` | Unique dispatcher routes frequency-window requests into `solve_sparse_production_modal_window_payload`, which propagates cancellation and exposes attempt/budget diagnostics; partial/cancelled outcomes remain explicit; runtime pending |
+| `source-floquet-nev-refill-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `main` | Test entrypoint calls `refills_native_floquet_nev_before_tangent_mass_cap`; provider-backed EPS regression covers duplicate refill, fixed dimensions, ceilings, cancellation and mass/residual gates; execution pending |
+| `source-floquet-window-cross-subwindow-dedup-followup` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_payload` | The unique dispatcher enters the native window adapter whose subwindow merge uses the owned positive CSR mass finalizer before the final window cap; production-entry regression pending |
 
 
 ## Rzeczywisty parametr żyromagnetyczny w wynikach (S07/S10, źródła WIP)
@@ -2693,6 +2695,7 @@ Mapa implementacji: `crates/fullmag-runner/src/eigen/types.rs` +
 | `source-tracking-edge-record` | `crates/fullmag-runner/src/eigen/types.rs` | `TrackingEdgeProvenance` | źródła WIP; bez managed runtime |
 | `source-tracking-edge-producer` | `crates/fullmag-runner/src/eigen/tracking.rs` | `track_branches` | źródła WIP; bez managed runtime |
 | `source-tracking-edge-writer` | `crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs` | `write_branch_bundle_with_sample_namespace` | źródła WIP; bez managed runtime |
+| `source-tracking-confidence-writer-regression` | `crates/fullmag-runner/src/eigen/artifacts/tests.rs` | `tracked_pair_overlap_is_published_as_confidence_in_json_and_csv` | Rzeczywiste `track_branches`→JSON/CSV; bez lokalnego wykonania |
 | `source-tracking-edge-signed-regression` | `crates/fullmag-runner/src/eigen/tracking.rs` | `signed_k_tracking_records_split_transport_without_mutating_raw_modes` | źródła WIP; bez managed runtime |
 | `source-tracking-edge-artifact-validator` | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `validate_tracking_edge_provenance` | niezależna walidacja rekordu; bez replay pól/runtime |
 
@@ -2730,6 +2733,14 @@ Porównuje amplitudowe overlapy, cosinusy kątów głównych i heuristic score
 producenta (85% overlap/minimum principal cosine i 15% frequency score).
 Frequency score odtwarza zapisane frequency_window_hz lub względną
 zmianę częstotliwości, zgodnie z finite_frequency_score_values.
+Ten blend pozostaje wynikiem przypisania używanym do wyboru krawędzi.
+Publikowane `tracking_confidence` ma osobną semantykę: dla krawędzi z
+rzeczywistym skalarnym overlapem (ważonym lub euklidesowym) jest równy
+`overlap_prev`, a nie ważonemu wynikowi dopasowania. Gdy brak skalarnego
+overlapu — przy frequency fallback lub transporcie podprzestrzeni — confidence
+zachowuje wynik przypisania. Początkowy seed ma confidence $1$; restart jako
+nowa gałąź ma $0$. Regresja przeprowadza rzeczywiste `track_branches` przez
+zapis JSON i CSV, aby oba pola zachowały te odrębne wartości.
 Zgodność algebraiczna wykorzystuje tolerancję bezwymiarową 1e-9;
 nie jest tolerancją residualu eigenproblem ani zgodności z analityką.
 Brak zależnej historii gałęzi lub pola oznacza brak pełnego replay.
