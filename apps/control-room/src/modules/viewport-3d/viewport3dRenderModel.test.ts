@@ -39,6 +39,7 @@ import {
 } from "./model/viewport3DTargetFieldBuffer";
 import { buildViewport3DTopologyIndexBundle } from "./viewport3dTopologyIndexModel";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
+import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 
 type TargetFieldBufferOptions = Parameters<
   typeof buildViewport3DTargetFieldBufferWithResourceKey
@@ -1288,6 +1289,205 @@ describe("viewport3dRenderModel", () => {
     expect(model?.scalarColorsByMode.get("magnitude")?.colors.length).toBe(12);
     expect(model?.scalarColorsByMode.has("monochrome")).toBe(false);
   });
+
+  it.each(["surface_faces", "thickness_average_z"] as const)(
+    "routes active modal complex data through %s target surfaces ahead of stale scoped fields",
+    (projectionMode) => {
+      const topologyModel = buildViewport3DTopologyRenderModel(
+        topologyFixture(),
+        [
+          {
+            boundary_face_count: 1,
+            boundary_face_start: 0,
+            id: "part-a",
+            label: "Part A",
+            nodeCount: 4,
+            nodeStart: 0,
+            surface_faces: [[0, 1, 2]],
+          },
+        ],
+        [],
+        undefined,
+        {
+          meshGenerationId: "generation-7",
+          meshRevision: "mesh-7",
+          meshTopologyHash: "topology-7",
+        },
+      );
+      const staleScopedTimeField = {
+        ...fieldVectorFixture(),
+        domainGenerationId: "generation-7",
+        formatVersion: 3 as const,
+        indexing: "full_domain" as const,
+        meshTopologyHash: "topology-7",
+        meshTopologyRevision: "mesh-7",
+        scopeId: "part-a",
+        scopeKind: "part" as const,
+        values: new Float64Array([
+          -9, 0, 0,
+          -5, 0, 0,
+          -1, 0, 0,
+          -3, 0, 0,
+        ]),
+      };
+      const staleScopedBuffer = buildViewport3DTargetFieldBuffer({
+        domain: {
+          domainGenerationId: "generation-7",
+          meshTopologyHash: "topology-7",
+          meshTopologyRevision: "mesh-7",
+          pointCount: 4,
+        },
+        fieldRevision: "time-r4",
+        fieldVector: staleScopedTimeField,
+        query: {
+          component: "full",
+          scope_id: "part-a",
+          scope_kind: "part",
+        },
+        responseDomainGenerationId: "generation-7",
+        targetIds: ["part-a"],
+        topologyRevision: "mesh-7",
+      });
+      const modalQuantityId = "analysis:eigen:sample-a:mode-a";
+      const complexFieldVector = {
+        componentCount: 3,
+        domainGenerationId: "generation-7",
+        dtype: "complex128" as const,
+        fieldGenerationId: "modal-field-generation-9",
+        formatVersion: 5 as const,
+        grid: [4, 1, 1] as [number, number, number],
+        indexing: "full_domain" as const,
+        meshTopologyHash: "topology-7",
+        meshTopologyRevision: "mesh-7",
+        pointCount: 4,
+        quantityId: modalQuantityId,
+        sourceId: "analysis/eigen/run-a/mode-a",
+        sourceKind: "live" as const,
+        sourceRevision: "modal-revision-9",
+        valueCount: 24,
+        values: new Float64Array([
+          1, 2, 2, 0, 3, 0,
+          3, 4, 2, 0, 3, 0,
+          5, 6, 2, 0, 3, 0,
+          7, 8, 2, 0, 3, 0,
+        ]),
+      };
+      const targetRenderPlans = new Map([
+        [
+          "part-a",
+          targetRenderPlanFixture({
+            quantityId: modalQuantityId,
+            surfaceProjectionMode: projectionMode,
+            targetId: "part-a",
+            vectorsVisible: false,
+          }),
+        ],
+      ]);
+      const options = {
+        analysisOverlayActive: true,
+        analysisFieldIntentActive: true,
+        analysisOverlaySourceIdentity: {
+          fieldBufferId: "analysis-mode-field:run-a:stage-a:sample-a:mode-a:field-a:r9",
+          resourceKey: "data/fields/field-a",
+        },
+        complexFieldVector,
+        modeOverlay: {
+          phasorAmplitudeMax: 8,
+          representation: "phase_rotated_real",
+        },
+        partTargetFieldBuffers: new Map([["part-a", staleScopedBuffer]]),
+        scalarColorsVisible: true,
+        scalarColorModes: new Set(["x"]),
+        targetRenderPlans,
+        visualizationPhaseRad: Math.PI / 2,
+        wavevectorKf: [1, 2, 3] as [number, number, number],
+        cellOrigin: [0.25, 0.5, 0.75] as [number, number, number],
+        floquetSpatialConvention: "dst_equals_src_exp_minus_i_k_dot_delta_r",
+        phasorConvention: "exp_i_omega_t",
+      };
+
+      const modalModel = buildViewport3DFieldRenderModel(
+        topologyModel,
+        staleScopedTimeField,
+        0.5,
+        options,
+      );
+      const modalSurface = resolveViewport3DTargetSurfaceLayerInput({
+        fieldModel: modalModel,
+        partId: "part-a",
+        scalarColorMode: "x",
+      }).scalarColors;
+
+      expect(modalSurface).not.toBeNull();
+      expect(modalSurface?.projectionMode).toBe(projectionMode);
+      expect(modalSurface).toMatchObject({
+        complexPhaseRad: Math.PI / 2,
+        floquetSpatialConvention:
+          "dst_equals_src_exp_minus_i_k_dot_delta_r",
+        phasorConvention: "exp_i_omega_t",
+        sourceFieldBufferId:
+          "analysis-mode-field:run-a:stage-a:sample-a:mode-a:field-a:r9",
+        sourceResourceKey: "data/fields/field-a",
+        wavevectorKf: [1, 2, 3],
+        cellOrigin: [0.25, 0.5, 0.75],
+      });
+      const expectedRealVector =
+        projectionMode === "surface_faces" ? [3, 4, 3] : [4, 5, 3];
+      const expectedImagVector =
+        projectionMode === "surface_faces" ? [4, 0, 0] : [5, 0, 0];
+      expect(modalSurface?.complexRealValues).toHaveLength(9);
+      expect(modalSurface?.complexImagValues).toHaveLength(9);
+      expect(Array.from(modalSurface!.complexRealValues ?? [])).toEqual(
+        [...expectedRealVector, ...expectedRealVector, ...expectedRealVector],
+      );
+      expect(Array.from(modalSurface!.complexImagValues ?? [])).toEqual(
+        [...expectedImagVector, ...expectedImagVector, ...expectedImagVector],
+      );
+      expect(modalModel?.targetPasses.get("part-a")?.fieldBufferState).toBe(
+        "derived-global",
+      );
+
+      const pendingModel = buildViewport3DFieldRenderModel(
+        topologyModel,
+        staleScopedTimeField,
+        0.5,
+        { ...options, complexFieldVector: null },
+      );
+      expect(
+        resolveViewport3DTargetSurfaceLayerInput({
+          fieldModel: pendingModel,
+          partId: "part-a",
+          scalarColorMode: "x",
+        }).scalarColors,
+      ).toBeNull();
+
+      const baselineModel = buildViewport3DFieldRenderModel(
+        topologyModel,
+        staleScopedTimeField,
+        0.5,
+        {
+          partTargetFieldBuffers: new Map([["part-a", staleScopedBuffer]]),
+          scalarColorsVisible: true,
+          scalarColorModes: new Set(["x"]),
+          targetRenderPlans: new Map([
+            [
+              "part-a",
+              targetRenderPlanFixture({ targetId: "part-a" }),
+            ],
+          ]),
+        },
+      );
+      const baselineSurface = resolveViewport3DTargetSurfaceLayerInput({
+        fieldModel: baselineModel,
+        partId: "part-a",
+        scalarColorMode: "x",
+      }).scalarColors;
+      expect(baselineSurface?.sourceFieldBufferId).toBe(staleScopedBuffer.bufferId);
+      expect(baselineModel?.targetPasses.get("part-a")?.fieldBufferState).toBe(
+        "target-buffer",
+      );
+    },
+  );
 
   it("carries analysis overlay visualization phase as render state", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(

@@ -33,6 +33,7 @@ import {
   resolveViewport3DActiveQuantityId,
   resolveViewport3DAnalysisComplexFieldQuery,
   resolveViewport3DAnalysisComplexProjectionEnabled,
+  resolveViewport3DModeFieldOverlaySourceIdentity,
   resolveViewport3DDisplayedLiveValue,
   resolvePrimaryFieldDisplayedEnvelope,
   type Viewport3DPrimaryFieldRetainedState,
@@ -2496,6 +2497,49 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("resolveViewport3DAnalysisComplexFieldQuery");
     expect(source).toContain("asDecodedComplexFieldVector");
     expect(source).toContain("Boolean(analysisOverlay) ||");
+  });
+
+  it("binds modal surface provenance to the active owner and validated binary revision", () => {
+    const metadata = {
+      binaryQuery: {
+        component: "full" as const,
+        scope_kind: "full" as const,
+        view: "complex" as const,
+      },
+      fieldId: "eigen-field-a",
+      intent: {
+        analysisRunId: "run a",
+        analysisStageId: "stage/1",
+        artifactRevision: "artifact-4",
+        modeId: "mode:2",
+        sampleId: "sample/3",
+      },
+      resourceRevision: "field-r9",
+    };
+    const canonicalResourceKey = resolveViewport3DFieldVectorResourceKey(
+      metadata.fieldId,
+      metadata.binaryQuery,
+    );
+    expect(
+      resolveViewport3DModeFieldOverlaySourceIdentity({ metadata }),
+    ).toEqual({
+      fieldBufferId:
+        "analysis-mode-field:run%20a:stage%2F1:artifact-4:sample%2F3:mode%3A2:eigen-field-a:field-r9",
+      resourceKey: canonicalResourceKey,
+    });
+    expect(
+      resolveViewport3DModeFieldOverlaySourceIdentity({ metadata: null }),
+    ).toBeNull();
+
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    expect(source).toContain("analysisFieldIntentActive: Boolean(analysisFieldIntent)");
+    expect(source).toContain("analysisOverlaySourceIdentity,");
+    expect(source).toContain("metadata.binaryQuery,");
+    const chunkedColorBlock = source.slice(
+      source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors({"),
+      source.indexOf("const fieldRenderModelBuildOptions = useMemo(", source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors({")),
+    );
+    expect(chunkedColorBlock).toContain("!analysisFieldIntent");
   });
 
   it("requests analysis complex field data without making phase part of the resource key", () => {

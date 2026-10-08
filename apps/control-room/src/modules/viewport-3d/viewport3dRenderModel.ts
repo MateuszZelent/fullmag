@@ -17,6 +17,7 @@ import { buildAirOnlyVisualizationNodeSelection } from "@/shared/domain/mesh/vis
 
 import {
   buildMappedVertexScalarColors,
+  buildProjectedComplexSurfaceShaderValues,
   buildSurfaceFaceScalarColors,
   buildThicknessAverageZScalarColors,
   buildVertexScalarColors,
@@ -244,6 +245,13 @@ export interface Viewport3DVectorBuildReference {
 
 export interface Viewport3DFieldRenderOptions {
   analysisOverlayActive?: boolean;
+  /** A validated mode/result field intent owns target field inputs before and after binary readiness. */
+  analysisFieldIntentActive?: boolean;
+  /** Stable owner/revision identity attached to complex surface buffers and adoption receipts. */
+  analysisOverlaySourceIdentity?: {
+    fieldBufferId: string;
+    resourceKey: string | null;
+  } | null;
   legacyResponseOverlayActive?: boolean;
   buildDomainId?: string;
   buildSessionId?: string;
@@ -729,11 +737,13 @@ export function buildViewport3DFieldRenderModel(
     options.modeOverlay,
     visualizationPhaseRad,
   );
+  const phaseProjectedComplexFieldVector = buildCachedComplexPhaseProjection(
+    options.complexFieldVector,
+    visualizationPhaseRad,
+  );
   const renderFieldVector =
-    buildCachedComplexPhaseProjection(
-      options.complexFieldVector,
-      visualizationPhaseRad,
-    ) ?? fieldVector;
+    phaseProjectedComplexFieldVector ??
+    (options.analysisFieldIntentActive ? null : fieldVector);
   const fullFieldVector = isFullTopologyFieldVector(
     renderFieldVector,
     topology,
@@ -837,18 +847,27 @@ export function buildViewport3DFieldRenderModel(
       targetRenderPlan?.vectors.surfaceOffsetScale ??
       options.partVectorSurfaceOffsetScales?.get(partId) ??
       0;
-    const {
-      explicitFieldBuffer: explicitPartFieldBuffer,
-      explicitFieldVector: explicitPartFieldVector,
-      fieldVector: resolvedPartFieldVector,
-    } = resolveViewport3DTargetFieldInput({
+    const resolvedPartFieldInput = resolveViewport3DTargetFieldInput({
       fallbackFieldVector: fullFieldVector,
       legacyPartFieldVectors: options.partFieldVectors,
       partId,
       targetFieldBuffers: options.partTargetFieldBuffers,
     });
+    // An active analysis-field intent owns the surface/vector source for its lifetime,
+    // including the metadata/binary handoff. Scoped live buffers are retained
+    // in their resource maps but cannot replace the active mode field.
+    const explicitPartFieldBuffer = options.analysisFieldIntentActive
+      ? null
+      : resolvedPartFieldInput.explicitFieldBuffer;
+    const explicitPartFieldVector = options.analysisFieldIntentActive
+      ? null
+      : resolvedPartFieldInput.explicitFieldVector;
+    const resolvedPartFieldVector = options.analysisFieldIntentActive
+      ? fullFieldVector
+      : resolvedPartFieldInput.fieldVector;
     const partUsesMagneticOnlyField = Boolean(
       !explicitPartFieldVector &&
+        !resolvedPartFieldVector &&
         !fullFieldVector &&
         magneticFieldValueResolver &&
         magneticPartSet.has(partModel),
@@ -938,9 +957,10 @@ export function buildViewport3DFieldRenderModel(
       partScalarColorModes &&
       partScalarColorModes.size > 0
     ) {
-      const partScalarRangesByMode =
-        options.partScalarRangesByMode?.get(partId) ??
-        (partFieldVector === renderFieldVector ? options.scalarRangesByMode : null);
+      const partScalarRangesByMode = options.analysisFieldIntentActive
+        ? options.scalarRangesByMode
+        : options.partScalarRangesByMode?.get(partId) ??
+          (partFieldVector === renderFieldVector ? options.scalarRangesByMode : null);
       partScalarColorsByMode = new Map<string, ScalarColorBuffer | null>();
       for (const colorMode of partScalarColorModes) {
         if (!colorMode) continue;
@@ -984,16 +1004,74 @@ export function buildViewport3DFieldRenderModel(
                 partScalarColorPalette,
                 partScalarRangesByMode?.get(colorMode),
               );
-        partScalarColorsByMode.set(
-          colorMode,
-          attachScalarColorSourceIdentity(
-            builtScalarColors,
-            resolveFieldBufferSourceIdentity(
-              explicitPartFieldBuffer,
-              partFieldVector,
-            ),
-          ),
+        const scalarColorsWithIdentity = attachScalarColorSourceIdentity(
+          builtScalarColors,
+          options.analysisFieldIntentActive &&
+              options.analysisOverlaySourceIdentity
+            ? options.analysisOverlaySourceIdentity
+            : resolveFieldBufferSourceIdentity(
+                explicitPartFieldBuffer,
+                partFieldVector,
+              ),
         );
+        if (
+          options.analysisFieldIntentActive &&
+          options.complexFieldVector &&
+          scalarColorsWithIdentity
+        ) {
+          const complexNodeIndices = fullFieldVector
+            ? null
+            : renderFieldVector
+              ? resolveFieldVectorNodeIndices(renderFieldVector, topology)
+              : null;
+          const projectionMode = scalarColorsWithIdentity.projectionMode;
+          if (
+            projectionMode === "surface_faces" ||
+            projectionMode === "thickness_average_z"
+          ) {
+            const projectedComplexValues =
+              buildProjectedComplexSurfaceShaderValues({
+                complexFieldVector: options.complexFieldVector,
+                positions: topology.positions,
+                projectionMode,
+                surfaceIndices: partModel.surfaceIndices,
+                targetNodeIndices: complexNodeIndices,
+                vertexCount: topology.nodeCount,
+              });
+            if (
+              projectedComplexValues &&
+              projectedComplexValues.complexRealValues.length ===
+                scalarColorsWithIdentity.colors.length &&
+              projectedComplexValues.complexImagValues.length ===
+                scalarColorsWithIdentity.colors.length
+            ) {
+              scalarColorsWithIdentity.complexRealValues =
+                projectedComplexValues.complexRealValues;
+              scalarColorsWithIdentity.complexImagValues =
+                projectedComplexValues.complexImagValues;
+              scalarColorsWithIdentity.complexPhaseRad = visualizationPhaseRad;
+              scalarColorsWithIdentity.wavevectorKf = options.wavevectorKf;
+              scalarColorsWithIdentity.cellOrigin = options.cellOrigin;
+              scalarColorsWithIdentity.floquetSpatialConvention =
+                options.floquetSpatialConvention;
+              scalarColorsWithIdentity.phasorConvention =
+                options.phasorConvention;
+            }
+          } else {
+            attachComplexShaderValues(
+              scalarColorsWithIdentity,
+              options.complexFieldVector,
+              complexNodeIndices,
+              topology.nodeCount,
+              visualizationPhaseRad,
+              options.wavevectorKf,
+              options.cellOrigin,
+              options.floquetSpatialConvention,
+              options.phasorConvention,
+            );
+          }
+        }
+        partScalarColorsByMode.set(colorMode, scalarColorsWithIdentity);
       }
       scalarColorsByPartAndMode.set(partId, partScalarColorsByMode);
     }
@@ -1426,6 +1504,10 @@ function buildVectorGlyphBuildReference({
     targetVisualizationRevision,
     topologyRevision,
   });
+  const sourceIdentity =
+    options.analysisFieldIntentActive && options.analysisOverlaySourceIdentity
+      ? options.analysisOverlaySourceIdentity
+      : resolveFieldBufferSourceIdentity(fieldBuffer ?? null, fieldVector);
   const groupKey = [
     "vector-glyph",
     sessionId,
@@ -1443,7 +1525,7 @@ function buildVectorGlyphBuildReference({
 
   return {
     buildKey,
-    ...resolveFieldBufferSourceIdentity(fieldBuffer ?? null, fieldVector),
+    ...sourceIdentity,
     fieldRevision,
     groupKey,
     revisionSummary,

@@ -2639,6 +2639,49 @@ export function resolveViewport3DAnalysisComplexProjectionEnabled(
   return query?.view === "phase_rotated_real";
 }
 
+export function resolveViewport3DModeFieldOverlaySourceIdentity({
+  metadata,
+}: {
+  metadata: {
+    binaryQuery: FieldVectorQuery;
+    fieldId: string;
+    intent: {
+      analysisRunId: string;
+      analysisStageId: string;
+      artifactRevision: string;
+      modeId: string;
+      sampleId: string;
+    };
+    resourceRevision: string;
+  } | null;
+}): { fieldBufferId: string; resourceKey: string } | null {
+  if (
+    !metadata ||
+    !metadata.fieldId.trim() ||
+    !metadata.resourceRevision.trim()
+  ) {
+    return null;
+  }
+  const resourceKey = resolveViewport3DFieldVectorResourceKey(
+    metadata.fieldId,
+    metadata.binaryQuery,
+  );
+  if (!resourceKey.trim()) return null;
+  const ownerIdentity = [
+    metadata.intent.analysisRunId,
+    metadata.intent.analysisStageId,
+    metadata.intent.artifactRevision,
+    metadata.intent.sampleId,
+    metadata.intent.modeId,
+    metadata.fieldId,
+    metadata.resourceRevision,
+  ].map((part) => encodeURIComponent(part)).join(":");
+  return {
+    fieldBufferId: `analysis-mode-field:${ownerIdentity}`,
+    resourceKey,
+  };
+}
+
 function selectViewport3DComputeRunning(
   status: ResourceResult<LiveStatusResource>,
 ): boolean {
@@ -5035,6 +5078,15 @@ export function useViewport3DSceneModel({
     analysisFieldIntent,
     modeFieldOverlay.field,
   ]);
+  const analysisOverlaySourceIdentity = useMemo(
+    () =>
+      analysisFieldIntent
+        ? resolveViewport3DModeFieldOverlaySourceIdentity({
+            metadata: modeFieldOverlay.metadata,
+          })
+        : null,
+    [analysisFieldIntent, modeFieldOverlay.metadata],
+  );
   const fdmUsesPrimaryField = sameViewport3DQuantityId(
     fdmSettings.activeQuantityId,
     primaryFieldQuantityId,
@@ -6452,7 +6504,9 @@ export function useViewport3DSceneModel({
     colorModes: primaryFieldRenderOptions.scalarColorModes,
     colorPalette:
       primaryFieldRenderOptions.scalarColorPalette ?? scalarColorPalette,
-    enabled: primaryFieldRenderOptions.scalarColorsVisible !== false,
+    enabled:
+      primaryFieldRenderOptions.scalarColorsVisible !== false &&
+      !analysisFieldIntent,
     fieldRevision: primaryFieldRevision,
     fieldScalarRangesByMode,
     fieldVector: committedFieldVector,
@@ -6498,6 +6552,8 @@ export function useViewport3DSceneModel({
           {
             ...fieldRenderModelBuildOptions,
             analysisOverlayActive,
+            analysisFieldIntentActive: Boolean(analysisFieldIntent),
+            analysisOverlaySourceIdentity,
             buildDomainId: "shared-domain",
             buildSessionId: "current",
             complexFieldVector: analysisComplexField,
@@ -6536,6 +6592,8 @@ export function useViewport3DSceneModel({
     fieldCompatibleTopologyRenderModel,
     analysisComplexField,
     analysisOverlayActive,
+    analysisFieldIntent,
+    analysisOverlaySourceIdentity,
     fieldRenderModelBuildOptions,
     fieldScalarRangesByMode,
     primaryFieldRevision,

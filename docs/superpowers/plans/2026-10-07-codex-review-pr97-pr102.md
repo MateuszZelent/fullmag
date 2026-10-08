@@ -1079,3 +1079,15 @@ modal_eigen i floquet_modal_solver z wymaganymi markerami/macros. Domyślna tras
 positive-mass pozostaje bez SLEPc; browser scope obejmuje teraz także pełny gate
 Control Room dla nowych źródeł GUI. Nowy profil wymaga rzeczywistego GHA przed
 jakimkolwiek twierdzeniem o build/link/solver/provider qualification.
+
+### Modal per-target rendering — poprawka po drugim review
+
+Zreviewowany patch wylicza canonical resource key z validated metadata/query,
+nie z nieistniejącego pola snapshotu. Per-target complex Re/Im mają to samo
+mapowanie world-Z columns/face averaging i kolejność face-expanded vertices co
+scalar projection dla surface_faces oraz thickness_average_z. Active intent
+blokuje starsze scoped time fields i chunked overrides także przed binary ready.
+Regresje używają rzeczywistego target surface resolvera, sprawdzają długości,
+średnie, phase/k/owner identity oraz zachowanie non-modal baseline. Source review
+PASS, parser Node PASS; types/Vitest/browser/WebGL wymagają świeżego GHA.
+CPU-SLEPc run37800314609/job113390449283 potwierdzony IN_PROGRESS; nie ponowiono.

@@ -1,4 +1,7 @@
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import type {
+  DecodedComplexFieldVector,
+  DecodedFieldVector,
+} from "@/kernel/api/codecs";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 
 import { buildFdmFieldIndexResolver } from "./model/fdmFieldIndexing";
@@ -706,6 +709,202 @@ export function buildThicknessAverageZScalarColors(
   };
 }
 
+/**
+ * Projects complex modal pairs using the same face averaging and world-Z
+ * columns as the scalar surface buffer, returning face-expanded shader values.
+ */
+export function buildProjectedComplexSurfaceShaderValues({
+  complexFieldVector,
+  positions,
+  projectionMode,
+  surfaceIndices,
+  targetNodeIndices,
+  vertexCount,
+}: {
+  complexFieldVector: DecodedComplexFieldVector | null | undefined;
+  positions?: ArrayLike<number> | null;
+  projectionMode: "surface_faces" | "thickness_average_z";
+  surfaceIndices: Uint32Array | null | undefined;
+  targetNodeIndices?: ArrayLike<number> | null;
+  vertexCount: number;
+}): {
+  complexImagValues: Float32Array;
+  complexRealValues: Float32Array;
+} | null {
+  if (
+    !complexFieldVector ||
+    !surfaceIndices ||
+    surfaceIndices.length === 0 ||
+    surfaceIndices.length % 3 !== 0 ||
+    complexFieldVector.pointCount === 0
+  ) {
+    return null;
+  }
+
+  const nodeToFieldIndex = buildNodeToFieldIndexMap(
+    complexFieldVector,
+    vertexCount,
+    targetNodeIndices,
+  );
+  if (!nodeToFieldIndex) return null;
+
+  let projectedVectors: ReadonlyMap<number, ComplexFieldVector6> | null = null;
+  if (projectionMode === "thickness_average_z") {
+    if (!positions || positions.length < vertexCount * 3) return null;
+    projectedVectors = buildWorldZProjectedComplexVectors({
+      complexFieldVector,
+      nodeToFieldIndex,
+      positions,
+      vertexCount,
+    });
+    if (!projectedVectors) return null;
+  }
+
+  const complexRealValues = new Float32Array(surfaceIndices.length * 3);
+  const complexImagValues = new Float32Array(surfaceIndices.length * 3);
+  for (
+    let faceIndex = 0;
+    faceIndex < surfaceIndices.length / 3;
+    faceIndex += 1
+  ) {
+    const surfaceOffset = faceIndex * 3;
+    const nodeA = surfaceIndices[surfaceOffset] ?? -1;
+    const nodeB = surfaceIndices[surfaceOffset + 1] ?? -1;
+    const nodeC = surfaceIndices[surfaceOffset + 2] ?? -1;
+    const fieldA = nodeToFieldIndex.get(nodeA);
+    const fieldB = nodeToFieldIndex.get(nodeB);
+    const fieldC = nodeToFieldIndex.get(nodeC);
+    if (fieldA === undefined || fieldB === undefined || fieldC === undefined) {
+      return null;
+    }
+
+    const vectorA = projectedVectors
+      ? projectedVectors.get(nodeA)
+      : complexFieldVector6(complexFieldVector, fieldA);
+    const vectorB = projectedVectors
+      ? projectedVectors.get(nodeB)
+      : complexFieldVector6(complexFieldVector, fieldB);
+    const vectorC = projectedVectors
+      ? projectedVectors.get(nodeC)
+      : complexFieldVector6(complexFieldVector, fieldC);
+    if (!vectorA || !vectorB || !vectorC) return null;
+    const faceVector: ComplexFieldVector6 = [
+      (vectorA[0] + vectorB[0] + vectorC[0]) / 3,
+      (vectorA[1] + vectorB[1] + vectorC[1]) / 3,
+      (vectorA[2] + vectorB[2] + vectorC[2]) / 3,
+      (vectorA[3] + vectorB[3] + vectorC[3]) / 3,
+      (vectorA[4] + vectorB[4] + vectorC[4]) / 3,
+      (vectorA[5] + vectorB[5] + vectorC[5]) / 3,
+    ];
+
+    for (let corner = 0; corner < 3; corner += 1) {
+      const targetOffset = (faceIndex * 3 + corner) * 3;
+      complexRealValues[targetOffset] = faceVector[0];
+      complexRealValues[targetOffset + 1] = faceVector[1];
+      complexRealValues[targetOffset + 2] = faceVector[2];
+      complexImagValues[targetOffset] = faceVector[3];
+      complexImagValues[targetOffset + 1] = faceVector[4];
+      complexImagValues[targetOffset + 2] = faceVector[5];
+    }
+  }
+  return { complexImagValues, complexRealValues };
+}
+
+type ComplexFieldVector6 = readonly [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
+
+function complexFieldVector6(
+  fieldVector: DecodedComplexFieldVector,
+  fieldIndex: number,
+): ComplexFieldVector6 {
+  const base = fieldIndex * fieldVector.componentCount * 2;
+  const componentValue = (componentIndex: number, pairComponent: 0 | 1) =>
+    componentIndex < fieldVector.componentCount
+      ? fieldVector.values[base + componentIndex * 2 + pairComponent] ?? 0
+      : 0;
+  return [
+    componentValue(0, 0),
+    componentValue(1, 0),
+    componentValue(2, 0),
+    componentValue(0, 1),
+    componentValue(1, 1),
+    componentValue(2, 1),
+  ];
+}
+
+function buildWorldZProjectedComplexVectors({
+  complexFieldVector,
+  nodeToFieldIndex,
+  positions,
+  vertexCount,
+}: {
+  complexFieldVector: DecodedComplexFieldVector;
+  nodeToFieldIndex: ReadonlyMap<number, number>;
+  positions: ArrayLike<number>;
+  vertexCount: number;
+}): Map<number, ComplexFieldVector6> | null {
+  const bounds = worldZProjectionBounds(positions, vertexCount);
+  if (!bounds) return null;
+  const tolerance = worldZProjectionTolerance(bounds);
+  if (!Number.isFinite(tolerance) || tolerance <= 0) return null;
+  const columns = new Map<
+    string,
+    { count: number; sums: [number, number, number, number, number, number] }
+  >();
+  const nodeColumnKeys = new Map<number, string>();
+
+  for (const [nodeIndex, fieldIndex] of nodeToFieldIndex) {
+    if (nodeIndex < 0 || nodeIndex >= vertexCount) return null;
+    const positionOffset = nodeIndex * 3;
+    const x = positions[positionOffset] ?? Number.NaN;
+    const y = positions[positionOffset + 1] ?? Number.NaN;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const key = `${Math.round(x / tolerance)}:${Math.round(y / tolerance)}`;
+    const column = columns.get(key) ?? {
+      count: 0,
+      sums: [0, 0, 0, 0, 0, 0],
+    };
+    const vector = complexFieldVector6(complexFieldVector, fieldIndex);
+    column.count += 1;
+    for (let componentIndex = 0; componentIndex < 6; componentIndex += 1) {
+      column.sums[componentIndex] =
+        (column.sums[componentIndex] ?? 0) +
+        (vector[componentIndex] ?? 0);
+    }
+    columns.set(key, column);
+    nodeColumnKeys.set(nodeIndex, key);
+  }
+
+  const columnVectors = new Map<string, ComplexFieldVector6>();
+  for (const [key, column] of Array.from(columns).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (column.count <= 0) return null;
+    columnVectors.set(key, [
+      column.sums[0] / column.count,
+      column.sums[1] / column.count,
+      column.sums[2] / column.count,
+      column.sums[3] / column.count,
+      column.sums[4] / column.count,
+      column.sums[5] / column.count,
+    ]);
+  }
+
+  const projected = new Map<number, ComplexFieldVector6>();
+  for (const [nodeIndex, key] of nodeColumnKeys) {
+    const vector = columnVectors.get(key);
+    if (!vector) return null;
+    projected.set(nodeIndex, vector);
+  }
+  return projected;
+}
+
 export async function buildVertexScalarColorsChunked(
   fieldVector: Viewport3DFieldVector,
   options: ChunkedFieldTransformOptions = {},
@@ -988,7 +1187,10 @@ export function resolveScalarRangeDiagnostics(
 }
 
 function buildNodeToFieldIndexMap(
-  fieldVector: Viewport3DFieldVector,
+  fieldVector: Pick<
+    Viewport3DFieldVector,
+    "indexing" | "nodeIndices" | "pointCount"
+  >,
   vertexCount: number,
   targetNodeIndices?: ArrayLike<number> | null,
 ): Map<number, number> | null {
