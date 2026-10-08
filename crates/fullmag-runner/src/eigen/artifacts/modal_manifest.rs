@@ -409,11 +409,19 @@ fn write_eigen_solver_diagnostics_artifact(
 }
 
 fn dispersion_frequency_source(result: &PathSolveResult) -> Option<&'static str> {
-    result.dispersion_validation.as_ref()?;
-    // The validation block declares an independent comparison oracle. It is
-    // evaluated after the native modal solve and must never select an analytic
-    // replacement for that solve.
-    Some("numeric_modal_solver_with_analytic_comparison")
+    if result.dispersion_validation.is_some() {
+        // The validation block declares an independent comparison oracle. It is
+        // evaluated after the native modal solve and must never select an analytic
+        // replacement for that solve.
+        return Some("numeric_modal_solver_with_analytic_comparison");
+    }
+    matches!(
+        result.solver_model,
+        EigenSolverModel::ProductionCpuShiftInvert
+            | EigenSolverModel::ProductionGpuDenseK0Macrospin
+            | EigenSolverModel::ProductionGpuModalDeviceKrylov
+    )
+    .then_some("numeric_modal_solver")
 }
 
 fn dispersion_reference_model(result: &PathSolveResult) -> Option<&'static str> {

@@ -2368,6 +2368,36 @@ fn production_dispersion_with_de_bv_validation_writes_analytic_columns() {
 }
 
 #[test]
+fn native_modal_manifest_distinguishes_numeric_solve_from_comparison() {
+    let temp = TempDirGuard::new("eigen-artifacts-modal-frequency-source");
+    for (solver_model, expected_source) in [
+        (
+            EigenSolverModel::ProductionCpuShiftInvert,
+            Some("numeric_modal_solver"),
+        ),
+        (EigenSolverModel::ReferenceScalarTangent, None),
+    ] {
+        let mut result = sample_result_with_solver_model(solver_model);
+        result.samples[0].sample.k_vector = [1.5e6, 0.0, 0.0];
+        result.samples[0].sample.path_s = 1.5e6;
+        result.include_demag = true;
+        write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
+            .expect("frequency-domain manifest should write");
+
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain manifest should be written"),
+        )
+        .expect("frequency-domain manifest should parse");
+        assert_eq!(
+            manifest["validation"]["dispersion_frequency_source"],
+            expected_source.map_or(Value::Null, |source| Value::String(source.to_string()))
+        );
+        assert!(manifest["validation"]["dispersion_reference_model"].is_null());
+    }
+}
+
+#[test]
 fn production_cpu_shift_invert_mode_artifacts_use_production_phasor_contract() {
     let temp = TempDirGuard::new("eigen-artifacts-production-phasor");
     let result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);

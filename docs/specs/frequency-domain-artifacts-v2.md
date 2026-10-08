@@ -1064,17 +1064,26 @@ and checks that exact validation intent against the published branch data.
 The same `validation` object must also state where the published branch
 frequencies came from:
 
+- `dispersion_frequency_source = "numeric_modal_solver"` identifies a native
+  FEM branch that was solved numerically without a configured analytic comparison;
 - `dispersion_frequency_source =
-  "numeric_modal_solver_with_analytic_comparison"` for a FEM branch that was
-  actually solved numerically;
-- `dispersion_reference_model = "kalinikos_slab_n0"` identifies the independent
-  comparison oracle and does not change the FEM solver selection;
+  "numeric_modal_solver_with_analytic_comparison"` identifies a native FEM
+  branch that was solved numerically and compared with an independent oracle;
+- For the current native source tokens, `dispersion_reference_model =
+  "kalinikos_slab_n0"` identifies the comparison oracle and is present only
+  with `numeric_modal_solver_with_analytic_comparison`; it does not change the
+  FEM solver selection. Without a comparison, the field is null. Reference-only
+  manifests without a comparison may leave both source and model null;
 - `dynamic_demag_operator_source = "numeric_modal_solver"` is required for
   nonzero-k demagnetizing runs, so validators and Control Room can distinguish
   actual FEM dynamic demag from the separate reference CSV;
-- `analytic_reference_model` and
-  `analytic_thin_film_de_bv_reference_not_fem_demag_k` are legacy values and
-  must not be emitted by the current FEM runner.
+- Artifact validation retains read compatibility for older DE/BV manifests
+  that use `analytic_reference_model` with
+  `analytic_thin_film_de_bv_reference_not_fem_demag_k`. The current FEM runner
+  must not emit these legacy values. Compatibility acceptance by the artifact
+  verifier is not scientific qualification: the dedicated DE/BV scientific
+  comparison gate still requires `numeric_modal_solver_with_analytic_comparison`
+  and numeric dynamic demagnetization provenance.
 
 ## modes/sample_XXXX/mode_YYYY.json
 

@@ -1469,7 +1469,11 @@ def _write_scientific_evidence(
             "analytic_solver_used_for_frequencies": (
                 False
                 if frequency_source
-                in {"native_solver_attested", "numeric_modal_solver_with_analytic_comparison"}
+                in {
+                    "native_solver_attested",
+                    "numeric_modal_solver",
+                    "numeric_modal_solver_with_analytic_comparison",
+                }
                 else None
             ),
             "dynamic_demag_operator_source": dynamic_source,

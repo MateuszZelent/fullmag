@@ -1042,6 +1042,93 @@ mod output_publication_tests {
     }
 
     #[test]
+    fn actual_path_manifest_distinguishes_numeric_solve_from_comparison() {
+        let mut result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5,
+            samples: [0, 2, 7]
+                .into_iter()
+                .map(|sample_index| crate::eigen::SingleKSolveResult {
+                    sample: KSampleDescriptor {
+                        sample_index,
+                        label: None,
+                        segment_index: None,
+                        path_s: sample_index as f64,
+                        t_in_segment: 0.0,
+                        k_vector: [sample_index as f64, 0.0, 0.0],
+                    },
+                    modes: Vec::new(),
+                    relaxation_steps: 0,
+                    solver_model: crate::eigen::EigenSolverModel::ReferenceScalarTangent,
+                    solver_notes: Vec::new(),
+                    solver_diagnostics: None,
+                })
+                .collect(),
+            branches: Vec::new(),
+            solver_model: crate::eigen::EigenSolverModel::ReferenceScalarTangent,
+            notes: Vec::new(),
+            include_demag: true,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            solver_policy: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+        let outputs = [OutputIR::DispersionCurve {
+            name: "bands".into(),
+            include_branch_table: false,
+        }];
+        let plan = residual_transport_test_plan();
+        let build = |result: &crate::eigen::PathSolveResult| {
+            build_eigen_path_frequency_domain_manifest(
+                FemEngine::CpuNative,
+                result,
+                &[],
+                &plan,
+                &outputs,
+            )
+        };
+
+        let reference_manifest = build(&result);
+        assert!(reference_manifest["validation"]["dispersion_frequency_source"].is_null());
+        assert!(reference_manifest["validation"]["dispersion_reference_model"].is_null());
+
+        result.solver_model = crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+        for sample in &mut result.samples {
+            sample.solver_model = result.solver_model;
+        }
+        let native_manifest = build(&result);
+        assert_eq!(
+            native_manifest["validation"]["dispersion_frequency_source"],
+            "numeric_modal_solver"
+        );
+        assert!(native_manifest["validation"]["dispersion_reference_model"].is_null());
+
+        result.dispersion_validation = Some(fullmag_ir::FemEigenDispersionValidationIR {
+            kind: "thin_film_de_bv_low_k".into(),
+            analytic_model: "kalinikos_slab_n0".into(),
+            film_thickness_m: 20e-9,
+            equilibrium_magnetization: [1.0, 0.0, 0.0],
+            film_normal: [0.0, 0.0, 1.0],
+            frequency_window_hz: fullmag_ir::FemEigenDispersionValidationWindowIR {
+                min: 0.0,
+                max: 5.0e9,
+            },
+            max_k_rad_per_m: 3.0e6,
+            max_relative_error: 0.1,
+            scenarios: Vec::new(),
+        });
+        let comparison_manifest = build(&result);
+        assert_eq!(
+            comparison_manifest["validation"]["dispersion_frequency_source"],
+            "numeric_modal_solver_with_analytic_comparison"
+        );
+        assert_eq!(
+            comparison_manifest["validation"]["dispersion_reference_model"],
+            "kalinikos_slab_n0"
+        );
+    }
+
+    #[test]
     fn conflicting_signed_sample_sidecars_fail_before_deduplication() {
         let path = "eigen/metadata/sample_0007/certified_fem_equilibrium_fields.v2.json";
         let artifact = |bytes: &[u8]| AuxiliaryArtifact {

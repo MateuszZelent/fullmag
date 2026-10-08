@@ -314,6 +314,54 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
             with self.assertRaises(benchmark.BenchmarkError):
                 benchmark._validate_case_artifacts(root / "c0", "c1")
 
+    def test_numeric_only_frequency_source_is_recorded_as_non_analytic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory) / "c0"
+            (case_dir / "frequency_domain").mkdir(parents=True)
+            (case_dir / "eigen" / "diagnostics").mkdir(parents=True)
+            (case_dir / "frequency_domain" / "manifest.v1.json").write_text(
+                json.dumps(
+                    {
+                        "validation": {
+                            "dispersion_frequency_source": "numeric_modal_solver",
+                            "dispersion_reference_model": None,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (case_dir / "eigen" / "diagnostics" / "solver.v1.json").write_text(
+                json.dumps({"solver_model": "slepc_multi_shift_invert_production_cpu_dense"}),
+                encoding="utf-8",
+            )
+            artifact_result = {
+                "required_artifact_hashes": {
+                    relative: {"sha256": chr(97 + index) * 64}
+                    for index, relative in enumerate(
+                        (
+                            "metadata.json",
+                            "eigen/spectrum.v2.json",
+                            "eigen/branches.v2.json",
+                            "eigen/dispersion.csv",
+                            "frequency_domain/manifest.v1.json",
+                            "eigen/diagnostics/solver.v1.json",
+                        )
+                    )
+                }
+            }
+
+            benchmark._write_scientific_evidence(case_dir, "c0", artifact_result)
+
+            evidence = json.loads(
+                (case_dir / benchmark.EVIDENCE_RELATIVE_PATH).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                evidence["numeric_run"]["frequency_source"], "numeric_modal_solver"
+            )
+            self.assertIs(
+                evidence["numeric_run"]["analytic_solver_used_for_frequencies"], False
+            )
+
     def test_external_scientific_evidence_is_staged_and_hash_bound(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

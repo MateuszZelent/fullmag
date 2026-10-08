@@ -6053,7 +6053,7 @@ def test_validator_rejects_exchange_only_nonreciprocal_reference_dispersion(
     assert "exchange-only reciprocal dispersion" in (result.stderr + result.stdout)
 
 
-def test_validator_accepts_low_k_de_bv_analytic_dispersion(
+def test_validator_accepts_legacy_low_k_de_bv_analytic_dispersion(
     tmp_path: Path,
 ) -> None:
     k_vectors = (
@@ -6171,6 +6171,53 @@ def test_validator_rejects_low_k_de_bv_missing_frequency_source(
 
     assert result.returncode != 0
     assert "manifest.validation.dispersion_frequency_source" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_low_k_de_bv_without_numeric_comparison(
+    tmp_path: Path,
+) -> None:
+    k_vectors = (
+        (0.0, 0.0, 0.0),
+        (1.5e6, 0.0, 0.0),
+        (3.0e6, 0.0, 0.0),
+        (0.0, 0.0, 0.0),
+        (0.0, 1.5e6, 0.0),
+        (0.0, 3.0e6, 0.0),
+    )
+    frequencies = tuple(
+        low_k_de_bv_expected_frequency_hz(
+            k, "backward_volume" if index < 3 else "damon_eshbach"
+        )
+        for index, k in enumerate(k_vectors)
+    )
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=k_vectors,
+    )
+    write_low_k_de_bv_dispersion_metadata(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["validation"].update(
+        {
+            "dispersion_frequency_source": "numeric_modal_solver",
+            "dispersion_reference_model": None,
+            "dynamic_demag_operator_source": "numeric_modal_solver",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        "--require-reference-full-2x2-floquet",
+        "--require-low-k-de-bv-analytic-dispersion",
+    )
+
+    assert result.returncode != 0
+    assert "must distinguish analytic_reference_model from numeric_modal_solver_with_analytic_comparison" in (
         result.stderr + result.stdout
     )
 
@@ -6443,6 +6490,65 @@ def test_validator_accepts_nearest_target_without_frequency_window(
     result = run_validator(tmp_path)
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_native_numeric_source_without_reference_model(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.setdefault("validation", {}).update(
+        {
+            "dispersion_frequency_source": "numeric_modal_solver",
+            "dispersion_reference_model": None,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_reference_model_without_numeric_comparison(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.setdefault("validation", {}).update(
+        {
+            "dispersion_frequency_source": "numeric_modal_solver",
+            "dispersion_reference_model": "kalinikos_slab_n0",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion_reference_model must be null" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_comparison_without_reference_model(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.setdefault("validation", {}).update(
+        {
+            "dispersion_frequency_source": "numeric_modal_solver_with_analytic_comparison",
+            "dispersion_reference_model": None,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "manifest.validation.dispersion_reference_model" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_accepts_exp_i_omega_t_phase_convention(tmp_path: Path) -> None:

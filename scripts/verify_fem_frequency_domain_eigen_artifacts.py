@@ -2572,6 +2572,21 @@ def validate_manifest_physics(manifest: dict) -> None:
         physics.get("normalization"),
         "manifest.physics.normalization",
     )
+    validation = manifest.get("validation")
+    if isinstance(validation, dict):
+        frequency_source = validation.get("dispersion_frequency_source")
+        reference_model = validation.get("dispersion_reference_model")
+        comparison_source = "numeric_modal_solver_with_analytic_comparison"
+        if frequency_source == comparison_source:
+            require_non_empty_string(
+                reference_model,
+                "manifest.validation.dispersion_reference_model",
+            )
+        elif frequency_source == "numeric_modal_solver" and reference_model is not None:
+            fail(
+                "manifest.validation.dispersion_reference_model must be null "
+                "for numeric_modal_solver without a comparison"
+            )
 
 
 def validate_mode_gamma_matches_constants(mode: dict, constants: dict, name: str) -> None:

@@ -870,3 +870,20 @@ SI execution proof: GHA37778512534 job113315395758 na a0999b68c SUCCESS,
 coincident/general ring i cylinder kontrolny zgadzają objętości z nodes SI.
 Review4060116295 implemented. To dowód jednostek mesher metadata, nie obliczeń
 dyspersji/solver provider ani naukowej kwalifikacji zbieżności.
+
+### Review4061061326 — prawdziwa provenance porównania
+
+Obaj producerzy rozróżniają numeric_modal_solver (native bez comparison) oraz
+numeric_modal_solver_with_analytic_comparison (z validation). Reference bez
+comparison zachowuje null. Model referencyjny wymagany tylko dla comparison,
+a dla numeric-only musi być null. Reader zachowuje starsze analytic-reference
+artefakty; zgodność odczytu nie stanowi kwalifikacji naukowej. COMSOL scientific
+gate nie został osłabiony. Nie zmieniono wersji schematu ani ścieżki solvera.
+Source review PASS po przywróceniu compatibility. GHA obejmuje obu producerów,
+pięć specific verifier regresji i evidence writer. Wykonanie oczekiwane.
+
+Nowy browser trace37778366459 wskazał expandInspectorNode: selected parent
+model:object:film:visualization. Potwierdzony source defect: pointerdown SVG
+nie przechodził HTMLElement guard, a click handler był tylko na Chevron SVG,
+nie całym branch hitbox. Poprawka event routing jest przygotowywana; pozytywny
+matched-B overlay/vector/WebGL nadal NOT VERIFIED.

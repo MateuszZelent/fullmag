@@ -74,7 +74,10 @@ jobs:
         run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
 
       - name: Run native modal artifact provenance contract
-        run: cargo test -p fullmag-runner native_modal_artifact_limitations_follow_executed_operator_payload --lib
+        run: |
+          cargo test -p fullmag-runner native_modal_artifact_limitations_follow_executed_operator_payload --lib
+          cargo test -p fullmag-runner native_modal_manifest_distinguishes_numeric_solve_from_comparison --lib
+          cargo test -p fullmag-runner actual_path_manifest_distinguishes_numeric_solve_from_comparison --lib
 
       - name: Run sample-scoped eigen artifact contracts
         run: cargo test -p fullmag-runner output_publication_tests --lib

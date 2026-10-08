@@ -33,6 +33,17 @@ jobs:
         run: |
           python -m pip install 'pytest>=9,<10' 'matplotlib>=3.8,<4'
           python -m pip install -e "packages/fullmag-py[meshing]"
+      - name: Run frequency-domain provenance verifier regressions
+        env:
+          PYTHONPATH: scripts
+        run: >-
+          python -B -m pytest -q
+          scripts/test_verify_fem_frequency_domain_eigen_artifacts.py::test_validator_accepts_legacy_low_k_de_bv_analytic_dispersion
+          scripts/test_verify_fem_frequency_domain_eigen_artifacts.py::test_validator_rejects_low_k_de_bv_without_numeric_comparison
+          scripts/test_verify_fem_frequency_domain_eigen_artifacts.py::test_validator_accepts_native_numeric_source_without_reference_model
+          scripts/test_verify_fem_frequency_domain_eigen_artifacts.py::test_validator_rejects_reference_model_without_numeric_comparison
+          scripts/test_verify_fem_frequency_domain_eigen_artifacts.py::test_validator_rejects_comparison_without_reference_model
+
       - name: Validate artifact root, plot and parity consumers
         env:
           PYTHONPATH: scripts

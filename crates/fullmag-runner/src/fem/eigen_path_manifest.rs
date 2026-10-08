@@ -810,12 +810,15 @@ pub(super) fn eigen_path_dispersion_frequency_source(
             | crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin
             | crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov
     );
-    if result.dispersion_validation.is_none() && !native_production {
-        return serde_json::Value::Null;
-    }
     // Validation metadata is postsolve comparison intent. It must never select
     // an analytic solver or change the native FEM execution path.
-    serde_json::json!("numeric_modal_solver_with_analytic_comparison")
+    if result.dispersion_validation.is_some() {
+        return serde_json::json!("numeric_modal_solver_with_analytic_comparison");
+    }
+    if native_production {
+        return serde_json::json!("numeric_modal_solver");
+    }
+    serde_json::Value::Null
 }
 
 pub(super) fn eigen_path_dispersion_reference_model(
