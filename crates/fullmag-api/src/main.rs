@@ -2448,6 +2448,15 @@ async fn main() {
         );
     }
 
+    let submit_store_root = run_intent_persistence::configured_submit_store_root(
+        &repo_root,
+        &runtime_state_root,
+    );
+    if std::env::var_os("FULLMAG_MANAGED_REPO_ROOT").is_some() && submit_store_root.is_none() {
+        tracing::error!("Managed accepted-run storage is invalid: verify the resolver environment and the registered checkout in storage/index/<worktree-id>.json");
+        std::process::exit(1);
+    }
+
     let state = Arc::new(AppState {
         development_admission: Default::default(),
         development_restored_authoring: Default::default(),
@@ -2455,10 +2464,7 @@ async fn main() {
         development_restart_transport: router_v2::handlers::platform::development_restart_request::DevelopmentRestartTransportConfig::from_environment(),
         development_consumer_readiness: Default::default(),
         repo_root: repo_root.clone(),
-        submit_store_root: run_intent_persistence::configured_submit_store_root(
-            &repo_root,
-            &runtime_state_root,
-        ),
+        submit_store_root,
         submit_backlog_limit: run_intent_persistence::configured_submit_backlog_limit()
             .expect("accepted run backlog limit configuration must be valid"),
         current_workspace_root,

@@ -61,6 +61,31 @@ ale nie narzuca lokalizacji Windows/Linux. Resolver czyta tylko zarządzane
 zmienne storage, bez wykonywania kodu i interpolacji; zmienne procesu mają
 pierwszeństwo (w szczególności dla ścieżek wewnątrz kontenera). Wszystkie
 worktree korzystają z `.env` głównego checkoutu. Nie kopiuj pliku z sekretami.
+
+Resolver emituje `FULLMAG_MANAGED_REPO_ROOT` wyłącznie dla profili natywnego
+Windows workspace: `windows-native-fdm-cpu` i `windows-native-fdm-cpu-dev`. Jest
+to kanoniczny źródłowy checkout zarejestrowany przez Git; odziedziczona wartość
+tej zmiennej nie jest override'em. Pozostałe profile nie emitują origin, a
+managed run usuwa odziedziczoną zmienną z env procesu potomnego. Trasy
+Linux/Docker/FEM zachowują dotychczasowe mapowanie hosta i kontenera; binding
+rejestru origin dla tych tras pozostaje NOT VERIFIED.
+Tożsamość źródeł pozostaje oddzielna od `FULLMAG_REPO_ROOT` wskazującego staging
+frontendu lub od katalogu pakietu runtime używanego do Python/assets. Accepted
+store używa explicit origin wyłącznie do walidacji managed layout: wymaga pełnego
+storage/runs/worktree env, lokalnego regularnego markera storage oraz wpisu
+`storage/index/<worktree_id>.json` o zgodnym schema, worktree ID i canonical
+`repo_root`. Wpis rejestru musi istnieć także dla głównego checkoutu przed
+uruchomieniem tej trasy. Nie może być symlinkiem/reparse point, tak samo jak
+jego katalogi nadrzędne. Origin musi leżeć poza storage, we właściwym projekcie.
+Nie ustanawia drugiego fizycznego rootu danych. Błędny lub częściowy explicit
+managed env blokuje store bez fallbacku do installed user state; przy braku
+`FULLMAG_MANAGED_REPO_ROOT` zachowany jest wcześniejszy kontrakt uruchomienia.
+Preflight `run-windows-workspace` sprawdza ten binding przed inicjalizacją i
+startem API; brak lub niezgodny rejestr daje komunikat wymagający istniejącej
+akcji `fullmag_storage.py register` z jawnym task-id, owner i purpose. Preflight
+nie rejestruje automatycznie właściciela i nie zmienia read-only `resolve` ani
+trasy build-only.
+
 Poniższy układ rodzeństwa jest wyłącznie fallbackiem zgodności przy braku
 konfiguracji; nowe buildy agenta wymagają jawnej deklaracji w `.env`.
 Niestandardowy root nadal wymaga zatwierdzonego markera projektu. Instrukcje

@@ -61,7 +61,7 @@ PATH_OVERRIDES = {
     "FULLMAG_WINDOWS_PNPM_ROOT": "cache_root",
 }
 MANAGED_VARIABLES = set(PATH_OVERRIDES) | {
-    "FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_WINDOWS_VOLATILE_ROOT", "FULLMAG_STORAGE_PROFILE",
+    "FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_MANAGED_REPO_ROOT", "FULLMAG_WINDOWS_VOLATILE_ROOT", "FULLMAG_STORAGE_PROFILE",
     "FULLMAG_STORAGE_LOCK_TOKEN", "FULLMAG_STORAGE_LOCK_KEY",
     "FULLMAG_BUILD_STORAGE_ROOT", "FULLMAG_STORAGE_USE_MANAGED_EXT4",
     "FULLMAG_NATIVE_STORAGE_PROFILE", "FULLMAG_NATIVE_BUILD_IMAGE",
@@ -267,6 +267,8 @@ def resolve_layout(repo_root, profile=None, environ=None):
     if git(repo, "rev-parse", "--show-superproject-working-tree"):
         raise StorageError("Resolve storage from the Fullmag checkout, not a Git submodule")
     registrations = worktree_records(repo)
+    if repo not in {Path(record["worktree"]).resolve() for record in registrations if "worktree" in record}:
+        raise StorageError("Source checkout is not a registered Git worktree")
     main_repo = Path(registrations[0]["worktree"]).resolve()
     env = {**storage_dotenv(main_repo), **env}
     project = main_repo.parent
@@ -368,6 +370,9 @@ def resolve_layout(repo_root, profile=None, environ=None):
                          FULLMAG_NATIVE_STORAGE_LEGACY="1" if infrastructure["native_storage_legacy"] else "0",
                          FULLMAG_MANAGED_EXT4="1" if managed else "0")
     if profile in WINDOWS_WORKSPACE_STORAGE_PROFILES.values():
+        # Origin registry paths are qualified only for native Windows workspace.
+        # Linux/container profiles keep their existing host/container mapping.
+        variables["FULLMAG_MANAGED_REPO_ROOT"] = str(repo)
         # Reduce intermediate path length for the MSVC linker's legacy path limit.
         # Final artifacts remain in target; existing caches are never removed.
         variables["CARGO_BUILD_BUILD_DIR"] = str(validate_path(
@@ -468,6 +473,46 @@ def initialize(layout):
         (root / directory).mkdir(exist_ok=True)
     for field in ("build_root", "cache_root", "temp_root", "runtime_root", "frontend_root", "runs_root"):
         Path(layout[field]).mkdir(parents=True, exist_ok=True)
+
+
+def validate_native_workspace_registration(layout):
+    """Read-only origin/store preflight before starting a native workspace."""
+    root = absolute(layout["storage_root"], "native workspace storage root")
+    repo = absolute(layout["repo_root"], "native workspace origin")
+    expected_id = layout["worktree_id"]
+    message = (
+        "Native workspace requires a matching managed worktree registration before launch; "
+        "use fullmag_storage.py register with this checkout and explicit task-id, owner and purpose"
+    )
+
+    def read_record(path, label):
+        try:
+            validated = validate_path(path, root, label)
+            if is_link(path) or any(is_link(parent) for parent in path.parents):
+                raise StorageError(f"{label} must not traverse a symlink/reparse point")
+            if not validated.is_file() or validated.stat().st_size > 1024 * 1024:
+                raise StorageError(f"{label} must be a regular bounded JSON file")
+            record = json.loads(validated.read_text(encoding="utf-8"))
+            if not isinstance(record, dict):
+                raise StorageError(f"{label} must contain a JSON object")
+            return record
+        except (OSError, ValueError, StorageError) as error:
+            raise StorageError(f"{message}: {path}: {error}") from error
+
+    marker = read_record(root / ".fullmag-storage.json", "storage marker")
+    registration_path = root / "index" / f"{expected_id}.json"
+    registration = read_record(registration_path, "managed worktree registration")
+    try:
+        registered_repo = absolute(registration.get("repo_root", ""), "registered origin")
+    except (OSError, ValueError, StorageError) as error:
+        raise StorageError(f"{message}: {registration_path}: invalid registered origin") from error
+    if (marker != {"schema": SCHEMA, "project_root": layout["project_root"]}
+            or registration.get("schema") != SCHEMA
+            or registration.get("worktree_id") != expected_id
+            or not _same_path(registered_repo, repo)
+            or inside(repo, root) or inside(root, repo)
+            or layout["env"].get("FULLMAG_MANAGED_REPO_ROOT") != str(repo)):
+        raise StorageError(f"{message}: {registration_path}: origin, worktree or project binding mismatch")
 
 
 def is_link(path):
@@ -872,6 +917,15 @@ container keeps its durable queue lease even after the host file lock closes.
         yield
 
 
+def _managed_child_environment(layout):
+    # A Windows origin cannot leak into Linux/FEM/container launches. Keep
+    # other inherited values (including active lock tokens) unchanged.
+    child_env = dict(os.environ)
+    child_env.pop("FULLMAG_MANAGED_REPO_ROOT", None)
+    child_env.update(layout["env"])
+    return child_env
+
+
 def _run_logged_command(command, repo_root, child_env, log_path, *, cancelled=None):
     """Keep complete compiler diagnostics, including stderr and nonzero exits."""
     with log_path.open("xb") as log:
@@ -928,6 +982,8 @@ def _run_managed_command(
         if native_user_build and workspace_request_id is not None:
             cancel_check = _native_build_cancellation(layout, initial_active)
         assert_no_independent_service(layout)
+    if execution_mode == "windows-workspace" and native_workspace_paths:
+        validate_native_workspace_registration(layout)
     initialize(layout)
     heavy_lock = (
         managed_heavy_lock(layout, native_user_build=native_user_build, cancelled=cancel_check)
@@ -936,7 +992,7 @@ def _run_managed_command(
     )
     if execution_mode == "windows-workspace" and native_workspace_paths:
         from windows.runtime_lease import run_sealed_runtime
-        return run_sealed_runtime(layout, command, {**os.environ, **layout["env"]}, workspace_backend_profile)
+        return run_sealed_runtime(layout, command, _managed_child_environment(layout), workspace_backend_profile)
     with heavy_lock, build_lock(layout, wait_timeout_seconds=NATIVE_BUILD_LOCK_WAIT_SECONDS if native_user_build else 0,
                                 cancelled=cancel_check):
         request_receipt_path = None
@@ -946,7 +1002,7 @@ def _run_managed_command(
             )
             if os.path.lexists(request_receipt_path):
                 raise StorageError("Workspace build request id already has a receipt; request ids cannot be replayed")
-        child_env = {**os.environ, **layout["env"]}
+        child_env = _managed_child_environment(layout)
         if execution_mode == "windows-workspace-build" and native_user_build:
             from windows.runtime_lease import active_runtime, assert_frozen_dependencies, assert_no_independent_service
             assert_no_independent_service(layout, child_env)

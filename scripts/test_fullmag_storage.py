@@ -42,6 +42,52 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(layout, self.resolve())
         self.assertFalse((self.project / "storage").exists())
 
+    def test_managed_origin_is_canonical_and_ignores_inherited_override(self):
+        self.env["FULLMAG_MANAGED_REPO_ROOT"] = str(self.project / "foreign-checkout")
+        for profile in storage.WINDOWS_WORKSPACE_STORAGE_PROFILES.values():
+            layout = self.resolve(profile=profile)
+            with self.subTest(profile=profile):
+                self.assertEqual(layout["env"]["FULLMAG_MANAGED_REPO_ROOT"], str(self.repo.resolve()))
+        self.assertEqual(layout["env"]["FULLMAG_PROJECT_STORAGE_ROOT"], str(self.project / "storage"))
+        self.assertFalse((self.project / "storage").exists())
+
+    def test_non_workspace_profiles_do_not_emit_or_inherit_managed_origin(self):
+        self.env["FULLMAG_MANAGED_REPO_ROOT"] = str(self.project / "foreign-checkout")
+        for profile in ("test", "linux-host", "windows-native", "fem-runtime"):
+            layout = self.resolve(profile=profile)
+            with self.subTest(profile=profile):
+                self.assertNotIn("FULLMAG_MANAGED_REPO_ROOT", layout["env"])
+                with patch.dict(os.environ, {"FULLMAG_MANAGED_REPO_ROOT": self.env["FULLMAG_MANAGED_REPO_ROOT"],
+                                              "FULLMAG_STORAGE_LOCK_TOKEN": "preserved-lock"}):
+                    child_env = storage._managed_child_environment(layout)
+                self.assertNotIn("FULLMAG_MANAGED_REPO_ROOT", child_env)
+                self.assertEqual(child_env["FULLMAG_STORAGE_LOCK_TOKEN"], "preserved-lock")
+        native = self.resolve(profile="windows-native-fdm-cpu-dev")
+        with patch.dict(os.environ, {"FULLMAG_MANAGED_REPO_ROOT": "foreign"}):
+            self.assertEqual(storage._managed_child_environment(native)["FULLMAG_MANAGED_REPO_ROOT"], str(self.repo.resolve()))
+
+    def test_managed_origin_rejects_unregistered_checkout(self):
+        with patch.object(storage, "worktree_records", return_value=[{"worktree": str(self.project / "other")}]):
+            with self.assertRaisesRegex(storage.StorageError, "not a registered Git worktree"):
+                self.resolve()
+
+    def test_native_launch_preflight_requires_matching_registration_without_writes(self):
+        layout = self.resolve(profile="windows-native-fdm-cpu")
+        with self.assertRaisesRegex(storage.StorageError, "requires a matching managed worktree registration"):
+            storage.validate_native_workspace_registration(layout)
+        self.assertFalse(Path(layout["storage_root"]).exists())
+        storage.initialize(layout)
+        record_path = Path(layout["storage_root"]) / "index" / f"{layout['worktree_id']}.json"
+        record = {"schema": storage.SCHEMA, "worktree_id": layout["worktree_id"], "repo_root": layout["repo_root"]}
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        before = record_path.read_bytes()
+        storage.validate_native_workspace_registration(layout)
+        self.assertEqual(record_path.read_bytes(), before)
+        for field, value in (("schema", "wrong"), ("worktree_id", "foreign-123"), ("repo_root", str(self.project))):
+            record_path.write_text(json.dumps({**record, field: value}), encoding="utf-8")
+            with self.subTest(field=field), self.assertRaisesRegex(storage.StorageError, "binding mismatch"):
+                storage.validate_native_workspace_registration(layout)
+
     def test_inventory_ignores_non_registration_json_arrays(self):
         layout = self.resolve()
         index = Path(layout["storage_root"]) / "index"
@@ -92,6 +138,8 @@ class StorageTests(unittest.TestCase):
         layout = storage.resolve_layout(worktree, profile="test", environ={})
         self.assertEqual(Path(layout["storage_root"]), custom)
         self.assertNotEqual(layout["build_root"], self.resolve()["build_root"])
+        native_layout = storage.resolve_layout(worktree, profile="windows-native-fdm-cpu-dev", environ={})
+        self.assertEqual(native_layout["env"]["FULLMAG_MANAGED_REPO_ROOT"], str(worktree.resolve()))
 
     def test_cargo_intermediate_override_cannot_escape_profile(self):
         self.env["CARGO_BUILD_BUILD_DIR"] = str(self.project / "outside")
@@ -302,6 +350,9 @@ class StorageTests(unittest.TestCase):
         launcher.write_text("# workspace fixture\n", encoding="utf-8")
         runner_marker = Path(layout["storage_root"]) / "index" / "local-runner-container.json"
         runner_marker.write_text(json.dumps({"container_id": "fixture"}), encoding="utf-8")
+        (runner_marker.parent / f"{layout['worktree_id']}.json").write_text(json.dumps({
+            "schema": storage.SCHEMA, "worktree_id": layout["worktree_id"], "repo_root": layout["repo_root"],
+        }), encoding="utf-8")
 
         with self.assertRaises(storage.StorageError):
             storage.run(layout, [sys.executable, "-c", "raise SystemExit(99)"])
