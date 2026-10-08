@@ -17,7 +17,7 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 import fullmag_storage
-from windows import stage_workspace_frontend
+from windows import build_snapshot, stage_workspace_frontend
 from frontend_source_workspace import (
     SourceWorkspaceError,
     prepare_source_workspace,
@@ -149,6 +149,29 @@ class FrontendSourceWorkspaceTests(unittest.TestCase):
             for path in paths
         }
 
+    def _stage_frozen_workspace(self, origin_repo: Path | None = None):
+        build_root = Path(self.native_layout["build_root"])
+        snapshot = build_snapshot.create_snapshot(origin_repo or self.repo, build_root)
+        stage = stage_workspace_frontend.stage_workspace_frontend(
+            Path(snapshot["source_root"]),
+            build_root,
+            mode="dev",
+            web_port=3197,
+            source_snapshot_record=snapshot["record_path"],
+        )
+        workspace = Path(stage["workspace_root"])
+        root_modules = workspace / "node_modules"
+        root_modules.mkdir()
+        (root_modules / "root-dependency.marker").write_text(
+            "root dependency data", encoding="utf-8"
+        )
+        app_modules = workspace / "apps" / "control-room" / "node_modules"
+        app_modules.mkdir()
+        (app_modules / "app-dependency.marker").write_text(
+            "app dependency data", encoding="utf-8"
+        )
+        return snapshot, stage, workspace
+
     def test_reuses_same_checkout_dependencies_and_keeps_inputs_unchanged(self) -> None:
         before = self._dependency_input_snapshot()
         checked = validate_dependency_workspace(
@@ -186,6 +209,74 @@ class FrontendSourceWorkspaceTests(unittest.TestCase):
             (self.repo / "pnpm-lock.yaml").read_bytes(),
         )
         self.assertEqual(self._dependency_input_snapshot(), before)
+
+    def test_accepts_dependencies_from_a_verified_snapshot_of_this_worktree(self) -> None:
+        snapshot, stage, workspace = self._stage_frozen_workspace()
+        self.assertEqual(snapshot["origin_worktree_id"], self.native_layout["worktree_id"])
+        manifest = json.loads(Path(stage["manifest_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            set(manifest["build_source_snapshot"]),
+            {"record_path", "inventory_sha256", "source_root"},
+        )
+        self.assertEqual(manifest["source_root"], snapshot["source_root"])
+
+        checked = validate_dependency_workspace(self.repo, self.layout, workspace)
+        self.assertEqual(checked["dependency_workspace"], str(workspace))
+        self.assertEqual(checked["dependency_stage_id"], stage["stage_id"])
+
+    def test_frozen_snapshot_from_another_worktree_is_rejected(self) -> None:
+        foreign_repo = self.root / "foreign-checkout"
+        shutil.copytree(self.repo, foreign_repo, ignore=shutil.ignore_patterns(".git"))
+        subprocess.run(["git", "-C", str(foreign_repo), "init", "--quiet"], check=True)
+        subprocess.run(
+            ["git", "-C", str(foreign_repo), "config", "user.name", "Foreign fixture"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(foreign_repo), "config", "user.email", "foreign@example.invalid"],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(foreign_repo), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(foreign_repo), "commit", "--quiet", "-m", "Foreign fixture"],
+            check=True,
+        )
+        _, _, workspace = self._stage_frozen_workspace(foreign_repo)
+
+        with self.assertRaisesRegex(SourceWorkspaceError, "another repository checkout"):
+            validate_dependency_workspace(self.repo, self.layout, workspace)
+
+    def test_frozen_snapshot_inventory_binding_must_match_the_verified_record(self) -> None:
+        _, stage, workspace = self._stage_frozen_workspace()
+        manifest_path = Path(stage["manifest_path"])
+        original = manifest_path.read_bytes()
+        data = json.loads(original)
+        data["build_source_snapshot"]["inventory_sha256"] = "0" * 64
+        manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+        with self.assertRaisesRegex(SourceWorkspaceError, "binding differs"):
+            validate_dependency_workspace(self.repo, self.layout, workspace)
+        manifest_path.write_bytes(original)
+
+    def test_frozen_snapshot_source_bindings_must_match_the_verified_record(self) -> None:
+        _, stage, workspace = self._stage_frozen_workspace()
+        manifest_path = Path(stage["manifest_path"])
+        original = manifest_path.read_bytes()
+        cases = (
+            ("binding", "build_source_snapshot", "source_root", str(self.repo)),
+            ("manifest", None, "source_root", str(self.repo)),
+        )
+        try:
+            for label, container, field, value in cases:
+                with self.subTest(binding=label):
+                    data = json.loads(original)
+                    target = data if container is None else data[container]
+                    target[field] = value
+                    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+                    with self.assertRaises(SourceWorkspaceError):
+                        validate_dependency_workspace(self.repo, self.layout, workspace)
+        finally:
+            manifest_path.write_bytes(original)
 
     def test_missing_root_or_app_node_modules_is_rejected(self) -> None:
         for missing in (

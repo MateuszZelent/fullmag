@@ -24,7 +24,7 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 import fullmag_storage
-from windows import stage_workspace_frontend
+from windows import build_snapshot, stage_workspace_frontend
 
 
 SCHEMA = "fullmag.native-workspace-frontend-source.v1"
@@ -188,10 +188,65 @@ def _check_manifest_path(
         )
 
 
+def _check_manifest_source_root(
+    manifest: dict[str, Any],
+    repo: Path,
+    build_root: Path,
+    expected_worktree_id: str,
+) -> None:
+    if "build_source_snapshot" not in manifest:
+        _check_manifest_path(manifest, "source_root", repo, repo)
+        return
+
+    binding = manifest.get("build_source_snapshot")
+    binding_fields = {"record_path", "inventory_sha256", "source_root"}
+    if not isinstance(binding, dict) or set(binding) != binding_fields:
+        raise SourceWorkspaceError("Frozen source binding must contain exactly record_path, inventory_sha256, and source_root")
+    record_path_value = binding.get("record_path")
+    inventory_sha256 = binding.get("inventory_sha256")
+    source_root_value = binding.get("source_root")
+    if (
+        not isinstance(record_path_value, str)
+        or not Path(record_path_value).is_absolute()
+        or not isinstance(inventory_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", inventory_sha256)
+        or not isinstance(source_root_value, str)
+        or not Path(source_root_value).is_absolute()
+    ):
+        raise SourceWorkspaceError("Frozen source binding contains an invalid path or inventory digest")
+
+    record_path = _validated_regular_file(
+        Path(record_path_value), build_root, "frozen source snapshot record"
+    )
+    try:
+        verified = build_snapshot.verify_snapshot(record_path, build_root)
+    except (OSError, ValueError, build_snapshot.SnapshotError, fullmag_storage.StorageError) as error:
+        raise SourceWorkspaceError(f"Frozen source snapshot failed verification: {error}") from error
+
+    if (
+        record_path_value != verified.get("record_path")
+        or inventory_sha256 != verified.get("inventory_sha256")
+        or source_root_value != verified.get("source_root")
+    ):
+        raise SourceWorkspaceError("Frozen source binding differs from the verified snapshot record")
+
+    origin_repo_root = verified.get("origin_repo_root")
+    if not isinstance(origin_repo_root, str) or not _same_path(origin_repo_root, repo):
+        raise SourceWorkspaceError("Frozen source snapshot belongs to another repository checkout")
+    if verified.get("origin_worktree_id") != expected_worktree_id:
+        raise SourceWorkspaceError("Frozen source snapshot belongs to another registered worktree")
+
+    verified_source_root = _validated_directory(
+        Path(source_root_value), build_root, "verified frozen frontend source root"
+    )
+    _check_manifest_path(manifest, "source_root", verified_source_root, build_root)
+
+
 def _read_dependency_manifest(
     repo: Path,
     build_root: Path,
     dependency_workspace: Path,
+    expected_worktree_id: str,
 ) -> tuple[dict[str, Any], Path, Path, Path, str]:
     workspace = _validated_directory(dependency_workspace, build_root, "native dependency workspace")
     if workspace.name != "workspace":
@@ -232,7 +287,7 @@ def _read_dependency_manifest(
         raise SourceWorkspaceError("Native frontend source manifest has an invalid staging mode")
 
     expected_app = expected_workspace / "apps" / "control-room"
-    _check_manifest_path(manifest, "source_root", repo, repo)
+    _check_manifest_source_root(manifest, repo, build_root, expected_worktree_id)
     _check_manifest_path(manifest, "build_root", build_root, build_root)
     _check_manifest_path(manifest, "stage_root", expected_stage_root, build_root)
     _check_manifest_path(manifest, "workspace_root", expected_workspace, build_root)
@@ -340,7 +395,7 @@ def validate_dependency_workspace(
             "native workspace build root",
         )
         manifest, manifest_path, workspace, app_root, manifest_sha256 = _read_dependency_manifest(
-            repo_root, build_root, requested
+            repo_root, build_root, requested, matching_layout["worktree_id"]
         )
 
         root_modules = _validated_directory(

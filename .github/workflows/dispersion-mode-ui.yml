@@ -22,7 +22,7 @@ jobs:
         env:
           PYTHONPATH: scripts
           MPLBACKEND: Agg
-        run: python -B -m pytest -q scripts/test_de_ui_session_scope.py scripts/test_run_de_100nm_pilot.py
+        run: python -B -m pytest -q scripts/test_de_ui_session_scope.py scripts/test_run_de_100nm_pilot.py scripts/test_frontend_source_workspace.py
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -38,7 +38,19 @@ jobs:
         with:
           node-version: 24.18.0
       - name: Prepare isolated managed frontend paths
-        run: python scripts/fullmag_storage.py prepare-links --repo-root . --profile control-room-ci --frontend
+        run: |
+          python scripts/fullmag_storage.py prepare-links --repo-root . --profile control-room-ci --frontend
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "scripts")
+          import fullmag_storage
+          layout = fullmag_storage.resolve_layout(Path.cwd(), "control-room-ci")
+          for relative in ("node_modules", "apps/control-room/node_modules"):
+              target = Path(layout["frontend_root"]) / relative
+              fullmag_storage.validate_path(target, layout["storage_root"])
+              target.mkdir(parents=True, exist_ok=True)
+          PY
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile --store-dir "$FULLMAG_PROJECT_STORAGE_ROOT/cache/pnpm"
       - name: Check types and module/resource contracts

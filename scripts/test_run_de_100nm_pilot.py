@@ -1,5 +1,6 @@
 """Regression checks for the immutable DE pilot execution route."""
 import contextlib
+from dataclasses import dataclass
 import hashlib
 import io
 import os
@@ -30,6 +31,22 @@ class _FixtureDslRecorder:
     def __init__(self):
         self.mesh_calls = []
         self.runtime_metadata = []
+
+
+@dataclass(frozen=True)
+class _FixtureFieldAutosave:
+    quantity: str
+    every: object = None
+    every_steps: int | None = None
+
+
+@dataclass(frozen=True)
+class _FixtureStageAutosave:
+    target: str = "main"
+    layout: str = "continuous"
+    format: str = "zarr"
+    table: object | None = None
+    fields: tuple[_FixtureFieldAutosave, ...] = ()
 
 
 class _FixtureDslNode:
@@ -193,7 +210,8 @@ class PilotTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test"
+                layout={"repo_root": str(root)}, image_digest="sha256:test",
+                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
             )
             request = {"source": {}, "job": {}, "runtime": {}}
             with patch.object(pilot.managed, "_run_request", return_value=request), \
@@ -276,7 +294,8 @@ class PilotTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test"
+                layout={"repo_root": str(root)}, image_digest="sha256:test",
+                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
             )
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
@@ -304,7 +323,8 @@ class PilotTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test"
+                layout={"repo_root": str(root)}, image_digest="sha256:test",
+                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
             )
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
@@ -411,7 +431,8 @@ class PilotTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test"
+                layout={"repo_root": str(root)}, image_digest="sha256:test",
+                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
             )
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
@@ -597,7 +618,8 @@ class PilotTests(unittest.TestCase):
                 "floquet_schur_action_diagnostic": _schur_action_fixture(status="failed"),
             }), encoding="utf-8")
             context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test"
+                layout={"repo_root": str(root)}, image_digest="sha256:test",
+                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
             )
             request = {"source": {}, "job": {}, "runtime": {}}
             with patch.object(pilot.managed, "_run_request", return_value=request), \
@@ -1236,6 +1258,8 @@ class PilotTests(unittest.TestCase):
             for name in ("study", "ParallelExecutionPolicy", "Box", "KPoint", "KPath",
                          "PeriodicBC", "FloquetBC"):
                 setattr(fullmag, name, _FixtureDslNode(recorder, name))
+            fullmag.FieldAutosave = _FixtureFieldAutosave
+            fullmag.StageAutosave = _FixtureStageAutosave
             fullmag.init = _FixtureDslNode(recorder, "init")
             with patch.dict(os.environ, environment, clear=True), \
                     patch.dict(sys.modules, {"fullmag": fullmag}):
