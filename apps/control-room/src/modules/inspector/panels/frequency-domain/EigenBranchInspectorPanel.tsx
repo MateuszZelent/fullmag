@@ -182,6 +182,7 @@ export function buildEigenBranchModePlotHandoff(
       artifactRevision,
       equilibriumId,
       kContextKind,
+      normalization: manifestContext.normalization,
       representation: EIGEN_MODE_FIELD_REPRESENTATION,
       resourceRef,
       studyProduct,

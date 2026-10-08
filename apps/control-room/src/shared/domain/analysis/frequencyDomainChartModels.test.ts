@@ -1204,6 +1204,7 @@ describe("frequencyDomainChartModels", () => {
       branchId: "acoustic",
       calculationMode: "dispersion_modal",
       fieldId: "analysis:eigen:sample-0000:mode-0002",
+      frequencyHz: 12.5e9,
       kind: "results.eigen.mode",
       modeId: "sample-0000/mode-0002",
       modeIndex: 2,
@@ -1213,6 +1214,7 @@ describe("frequencyDomainChartModels", () => {
       ),
       sampleId: "k-path-sample-0000",
       sampleIndex: 0,
+      source: "eigen-mode",
       type: "frequency-domain",
     });
   });
