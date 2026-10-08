@@ -535,3 +535,29 @@ nie zmieniano frontendu ani nie osłabiano jego bramek.
 
 PR nadal wymaga zielonego CI, review i brakujących dowodów runtime/nauki.
 Worktree zachowane do dalszej pracy; T00–T18 pozostaje otwarte.
+
+## Frontend — dwa potwierdzone rozjazdy fixtures
+
+Na bazie `774cea4fe61e14cf9daf250fbf31161d5c7ace94` uzupełniono mock
+DevelopmentBackendBanner o useDevelopmentWorkspacePaused=false.
+Test konfliktu przesunięcia sprawdza teraz dokładny zestaw dziewięciu
+zasobów oraz ich unikalność, zamiast starego oczekiwania liczby osiem.
+Zachowano kontrolę rewizji scene:43 dla preparation i 43 dla pozostałych,
+konflikt 409, refetch/rebase/retry, reset szkicu i blokadę orbitowania.
+Nie zmieniano komponentów ani produkcyjnej polityki invalidacji.
+
+Kontrola parsera/AST z task storage frontend-fixture-contract-20261008.cjs:
+baseline HEAD 2/2 FAIL, working source 2/2 PASS. Porównuje importowane
+hooki z eksportami mocka i niezależnie zadeklarowany zestaw z rzeczywistą
+tablicą geometry dependents; nie emituje TypeScript ani nie wykonuje React.
+Scoped ESLint --max-warnings=0 PASS (exec50097 completed/0), whitespace PASS.
+Architecture hygiene PASS z właściwego cwd apps/control-room; wcześniejsze
+uruchomienie z root repo błędnie rozwiązywało ścieżki i nie jest dowodem regresji.
+Scoped review diffu: brak nowych zmian produkcyjnych i osłabionych asercji.
+
+Nie kompilowano ani nie uruchamiano Vitest. Wykonanie tych fixtures w CI,
+pełny TypeScript/lint/test gate oraz dwa pozostałe problemy Inspector/retry
+nadal wymagają odbioru. Dla bazowego HEAD kontrola GitHub potwierdziła
+control-room-contracts 113155821640 i dokumentację 113155821560 in_progress,
+managed-fem queued; nie przypisuje się ich przyszłemu commitowi.
+T00–T18 nadal aktywne; bez merge, cleanup i restartu workspace.

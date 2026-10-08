@@ -4,7 +4,17 @@ import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
-import { MODEL_SCENE_PATH, SESSIONS_PATH, SIMULATION_PREPARATION_PATH } from "@/kernel/api/apiPaths";
+import {
+  MESHING_BUILDS_CURRENT_PATH,
+  MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+  MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
+  MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
+  MODEL_SCENE_PATH,
+  SESSIONS_PATH,
+  SIMULATION_PREPARATION_PATH,
+} from "@/kernel/api/apiPaths";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { EventBus } from "@/kernel/events/EventBus";
@@ -143,9 +153,20 @@ describe("mounted viewport object move integration", () => {
         object_id: "magnet-a",
         transform: { translation: [5e-9, 0, 0] },
       });
-      // Geometry dependents: scene, validation, diagnostics, readiness, status,
-      // preparation, current mesh build and latest successful mesh build.
-      expect(fixture.invalidate).toHaveBeenCalledTimes(8);
+      const invalidatedKeys = fixture.invalidate.mock.calls.map(([resourceKey]) => resourceKey);
+      const expectedKeys = [
+        MODEL_SCENE_PATH,
+        MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
+        MODEL_GEOMETRY_VALIDATION_PATH,
+        MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+        MODEL_READINESS_PATH,
+        SESSION_STATUS_RESOURCE_KEY,
+        SIMULATION_PREPARATION_PATH,
+        MESHING_BUILDS_CURRENT_PATH,
+        MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+      ];
+      expect([...invalidatedKeys].sort()).toEqual([...expectedKeys].sort());
+      expect(new Set(invalidatedKeys).size).toBe(expectedKeys.length);
       expect(
         fixture.invalidate.mock.calls.every(([resourceKey, revision]) =>
           revision === (resourceKey === SIMULATION_PREPARATION_PATH ? "scene:43" : 43)

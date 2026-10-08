@@ -8,6 +8,7 @@ import { DevelopmentBackendBanner } from "./DevelopmentBackendBanner";
 vi.mock("../KernelContext", () => ({ useKernel: () => ({}) }));
 vi.mock("../resources/developmentBackendResource", () => ({ useDevelopmentBackendResource: vi.fn() }));
 vi.mock("../development/useDevelopmentWorkspacePaused", () => ({
+  useDevelopmentWorkspacePaused: () => false,
   useDevelopmentWorkspacePublicationError: () => null,
 }));
 
