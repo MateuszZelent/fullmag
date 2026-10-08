@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -282,6 +283,18 @@ def _identity_string(value, label):
     raise managed.BenchmarkError(f"{label} is missing a non-empty identity")
 
 
+def _session_scope_header(session_id, session_epoch, request_scope_epoch):
+    """Match the API/browser's ordered encodeURIComponent scope contract."""
+    from urllib.parse import quote
+    values = (session_id, session_epoch, request_scope_epoch)
+    if any(not isinstance(value, str) or not value.strip() for value in values):
+        raise ValueError("Canonical session scope requires all three non-empty identities")
+    safe = "-_.!~*'()"
+    return "&".join(f"{key}={quote(value, safe=safe)}" for key, value in zip(
+        ("session", "epoch", "request_scope_epoch"), values
+    ))
+
+
 def _status_identity(value, label="status"):
     """Extract scope/session/run identity and realized resource proof."""
 
@@ -314,6 +327,8 @@ def _status_identity(value, label="status"):
         )
     return {
         "session_id": session_id,
+        "session_epoch": _identity_string(session["session_epoch"], f"{label} session_epoch") if "session_epoch" in session else None,
+        "request_scope_epoch": _identity_string(session["request_scope_epoch"], f"{label} request_scope_epoch") if "request_scope_epoch" in session else None,
         "scope_field": scope_field,
         "scope": scope,
         "run_id": run_id,
@@ -333,7 +348,7 @@ def _validate_export_status_receipt(receipt, solver_exit_code, label="UI archive
         )
     before = _status_identity(receipt.get("before_status"), f"{label} pre-export status")
     after = _status_identity(receipt.get("after_status"), f"{label} post-export status")
-    for key in ("session_id", "scope_field", "scope"):
+    for key in ("session_id", "session_epoch", "request_scope_epoch", "scope_field", "scope"):
         if before[key] != after[key]:
             raise managed.BenchmarkError(
                 f"{label} session scope identity changed across export ({key})"
@@ -1035,13 +1050,15 @@ def _ui_archive_shell(pilot):
         "            if key in value:",
         "                return identity(value[key], label)",
         "    raise RuntimeError(f'{label} is missing a non-empty identity')",
+        *inspect.getsource(_session_scope_header).splitlines(),
         "def inspect_status(value, label):",
         "    status = unwrap_status(value, label)",
         "    session = status['session']",
         "    session_id = identity(session.get('session_id'), f'{label} session_id')",
-        "    scope_field = ('request_scope_epoch' if 'request_scope_epoch' in session",
-        "                   else 'session_epoch')",
-        "    scope = identity(session.get(scope_field), f'{label} {scope_field}')",
+        "    session_epoch = identity(session.get('session_epoch'), f'{label} session_epoch')",
+        "    request_scope_epoch = identity(session.get('request_scope_epoch'), f'{label} request_scope_epoch')",
+        "    scope_field = 'canonical'",
+        "    scope = _session_scope_header(session_id, session_epoch, request_scope_epoch)",
         "    run = status.get('run')",
         "    run_id = None",
         "    if run is not None:",
@@ -1058,6 +1075,7 @@ def _ui_archive_shell(pilot):
         "    if type(field_catalog_revision) is not int or field_catalog_revision <= 0:",
         "        raise RuntimeError(f'{label} has no published field catalog revision')",
         "    return {'session_id': session_id, 'scope_field': scope_field,",
+        "            'session_epoch': session_epoch, 'request_scope_epoch': request_scope_epoch,",
         "            'scope': scope, 'run_id': run_id,",
         "            'cell_count': cell_count,",
         "            'field_catalog_revision': field_catalog_revision}",
@@ -1104,7 +1122,7 @@ def _ui_archive_shell(pilot):
         "except urllib.error.HTTPError as error:",
         "    detail = error.read().decode('utf-8', 'replace')[-1000:]",
         "    raise RuntimeError(f'post-export session status failed ({error.code}): {detail}')",
-        "for key in ('session_id', 'scope_field', 'scope'):",
+        "for key in ('session_id', 'session_epoch', 'request_scope_epoch', 'scope_field', 'scope'):",
         "    if before_identity[key] != after_identity[key]:",
         "        raise RuntimeError(f'session scope identity changed across export ({key})')",
         "if (before_identity.get('run_id') is not None and",

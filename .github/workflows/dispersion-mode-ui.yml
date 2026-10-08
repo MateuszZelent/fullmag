@@ -1,0 +1,52 @@
+name: Dispersion and mode UI
+on:
+  push:
+    branches: [codex/dispersion-mode-ui-20261008]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install interpreted contract dependencies
+        run: |
+          python -m pip install 'pytest>=9,<10' 'matplotlib>=3.8,<4' pyyaml
+          python -m pip install -e packages/fullmag-py
+      - name: Validate capture and runtime artifact contracts
+        env:
+          PYTHONPATH: scripts
+          MPLBACKEND: Agg
+        run: python -B -m pytest -q scripts/test_de_ui_session_scope.py scripts/test_run_de_100nm_pilot.py
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+      - name: Prepare isolated managed frontend paths
+        run: python scripts/fullmag_storage.py prepare-links --repo-root . --profile control-room-ci --frontend
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile --store-dir "$FULLMAG_PROJECT_STORAGE_ROOT/cache/pnpm"
+      - name: Check types and module/resource contracts
+        run: |
+          pnpm --dir apps/control-room typecheck
+          pnpm --dir apps/control-room check:architecture-hygiene
+          pnpm --dir apps/control-room check:api-hygiene
+      - name: Lint
+        run: pnpm --dir apps/control-room lint
+      - name: Run Control Room regressions
+        run: pnpm --dir apps/control-room test
