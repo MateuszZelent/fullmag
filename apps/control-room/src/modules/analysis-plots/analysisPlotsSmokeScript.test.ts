@@ -1,7 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { SESSIONS_PATH, SESSION_STATUS_PATH } from "@/kernel/api/apiPaths";
+import {
+  MODEL_UNIVERSE_PATH,
+  SESSIONS_PATH,
+  SESSION_STATUS_PATH,
+  VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
 
 const packageJsonUrl = new URL("../../../package.json", import.meta.url);
 const smokeScriptUrl = new URL(
@@ -65,9 +71,9 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain(
       `url.pathname === "${SESSION_STATUS_PATH}"`,
     );
-    expect(smokeScript).toContain('url.pathname === "/v2/sessions/current/visualization/state"');
-    expect(smokeScript).toContain('url.pathname === "/v2/sessions/current/visualization/mode-compositions/active"');
-    expect(smokeScript).toContain('url.pathname === "/v2/sessions/current/model/universe"');
+    expect(smokeScript).toContain(`url.pathname === "${VISUALIZATION_STATE_PATH}"`);
+    expect(smokeScript).toContain(`url.pathname === "${VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH}"`);
+    expect(smokeScript).toContain(`url.pathname === "${MODEL_UNIVERSE_PATH}"`);
     expect(smokeScript).toContain("function analysisVisualizationStateFixture()");
     expect(smokeScript).toContain("function analysisModeCompositionFixture(frequencyDomainPublished)");
     expect(smokeScript).toContain('schema_version: "mode-composition.v1"');
