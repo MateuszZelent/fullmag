@@ -5,6 +5,7 @@ when this check passes. Frequencies are never replaced by a reference model.
 """
 from __future__ import annotations
 import csv
+import io
 import json
 import math
 from pathlib import Path
@@ -1001,7 +1002,10 @@ def validate_gamma_demag_probe(
 
 def validate_rows(path: Path, sampling: str, solver_diagnostics_path: Path,
                   metadata_path: Path | None = None, *,
-                  selection_scope: str = "frequency_window"):
+                  selection_scope: str = "frequency_window",
+                  verified_csv_bytes: bytes | None = None):
+    if verified_csv_bytes is not None and not isinstance(verified_csv_bytes, bytes):
+        raise TypeError("verified DE-SMOKE CSV payload must be bytes")
     if sampling not in SAMPLING:
         raise ValueError("unsupported DE-SMOKE sampling")
     if selection_scope not in {"frequency_window", "selected_only"}:
@@ -1064,7 +1068,14 @@ def validate_rows(path: Path, sampling: str, solver_diagnostics_path: Path,
     rows = []
     seen = set()
     seen_branch = set()
-    with Path(path).open(encoding="utf-8-sig", newline="") as stream:
+    csv_stream = (
+        Path(path).open(encoding="utf-8-sig", newline="")
+        if verified_csv_bytes is None
+        else io.TextIOWrapper(
+            io.BytesIO(verified_csv_bytes), encoding="utf-8-sig", newline=""
+        )
+    )
+    with csv_stream as stream:
         for row in csv.DictReader(stream):
             indices = {}
             for key in ("sample_index", "raw_mode_index", "branch_id"):

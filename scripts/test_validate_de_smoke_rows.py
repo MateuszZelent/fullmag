@@ -400,6 +400,36 @@ def test_absolute_residual_is_not_compared_to_relative_tolerance(tmp_path):
     assert any('full descriptor' in item for item in result['pending_requirements'])
 
 
+def test_verified_csv_bytes_remain_authoritative_after_disk_tamper(tmp_path):
+    sampling = "k2"
+    csv_path = tmp_path / "dispersion.csv"
+    write(csv_path, rows(sampling))
+    verified_csv_bytes = csv_path.read_bytes()
+
+    tampered_rows = rows(sampling)
+    tampered_rows[0]["ky_rad_per_m"] = SAMPLING[sampling][0] + 1.0
+    write(csv_path, tampered_rows)
+    assert csv_path.read_bytes() != verified_csv_bytes
+
+    diagnostics_path = tmp_path / "solver.v1.json"
+    write_diagnostics(diagnostics_path, sampling)
+    metadata_path = tmp_path / "metadata.json"
+    write_metadata(metadata_path)
+    write_spectrum_v3(tmp_path / "spectrum.v3.json", sampling)
+
+    result = validate_rows(
+        csv_path,
+        sampling,
+        diagnostics_path,
+        metadata_path,
+        verified_csv_bytes=verified_csv_bytes,
+    )
+
+    assert result["status"] == "pass"
+    assert result["mode_rows"] == len(rows(sampling))
+    assert result["max_absolute_residual_norm"] == pytest.approx(1e-10)
+
+
 def test_relative_original_block_residual_is_used_when_absolute_alias_is_unavailable(tmp_path):
     data=rows('k2')
     data[0]['residual_norm']=''

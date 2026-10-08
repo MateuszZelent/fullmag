@@ -3,13 +3,17 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 import math
 from pathlib import Path
 from verify_fem_frequency_domain_eigen_artifacts import kalinikos_slab_n0_frequency_hz
 from validate_de_smoke_rows import (
     SAMPLING, load_spectrum_v3_modes, validate_selected_only_diagnostics)
-from de_pilot_receipts import validate_de_pilot_receipts
+from de_pilot_receipts import (
+    read_required_artifact_bytes,
+    validate_de_pilot_receipts,
+)
 
 PARAMETERS = dict(geometry="damon_eshbach", bias_field_a_per_m=0.1/(4e-7*math.pi),
                   film_thickness_m=100e-9, exchange_stiffness_j_per_m=13e-12,
@@ -33,8 +37,8 @@ def finite_airbox_gamma_hz(air_each_side_m=2e-6, parameters=None):
         bias*(bias + parameters["saturation_magnetisation_a_per_m"]*nz))
 
 
-def read_modes(path, expected_k=None):
-    with path.open(encoding="utf-8-sig", newline="") as stream:
+def _read_modes_payload(path, payload, expected_k=None):
+    with io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8-sig", newline="") as stream:
         raw = list(csv.DictReader(stream))
     if not raw:
         raise ValueError("Numerical dispersion is empty")
@@ -97,6 +101,15 @@ def read_modes(path, expected_k=None):
     return rows
 
 
+def read_modes(path, expected_k=None, *, payload=None):
+    """Read standalone CSV bytes, or parse the exact bytes bound to a receipt."""
+    if payload is None:
+        payload = Path(path).read_bytes()
+    if not isinstance(payload, bytes):
+        raise TypeError("dispersion CSV payload must be bytes")
+    return _read_modes_payload(path, payload, expected_k)
+
+
 def compare_branch(rows, branch, parameters=None, expected_k=None):
     selected = sorted((r for r in rows if r["branch_id"] == branch), key=lambda r:r["ky_rad_per_m"])
     expected_k = tuple(k*1e6 for k in range(-40, 41, 10)) if expected_k is None else tuple(expected_k)
@@ -154,6 +167,9 @@ def load_comparison_input(run):
             len(set(expected_k)) != len(expected_k)):
         raise ValueError("Missing or invalid declared DE wavevector samples")
     source = run/pilot/"eigen/dispersion.csv"
+    dispersion_payload = read_required_artifact_bytes(
+        result, run, pilot, "eigen/dispersion.csv"
+    )
     if pilot != "de100":
         from validate_de_smoke_rows import validate_rows
         if model.get("sampling") != sampling or request.get("sampling") != sampling or tuple(expected_k) != SAMPLING[sampling]:
@@ -179,13 +195,35 @@ def load_comparison_input(run):
                                      rel_tol=1e-12, abs_tol=1e-6)):
                 raise ValueError("selected-only request target disagrees with metadata")
             diagnostics_path = run/pilot/"eigen/diagnostics/solver.v1.json"
-            validate_rows(source, sampling, diagnostics_path, metadata_path,
-                          selection_scope="selected_only")
+            validate_rows(
+                source,
+                sampling,
+                diagnostics_path,
+                metadata_path,
+                selection_scope="selected_only",
+                verified_csv_bytes=dispersion_payload,
+            )
             validate_selected_only_diagnostics(diagnostics_path, float(target_hz))
         else:
-            validate_rows(source, sampling, run/pilot/"eigen/diagnostics/solver.v1.json", metadata_path)
-    rows = read_modes(source, expected_k)
-    return request, rows, parameters, tuple(expected_k), padding, source, metadata_path
+            validate_rows(
+                source,
+                sampling,
+                run/pilot/"eigen/diagnostics/solver.v1.json",
+                metadata_path,
+                verified_csv_bytes=dispersion_payload,
+            )
+    rows = read_modes(source, expected_k, payload=dispersion_payload)
+    dispersion_sha256 = hashlib.sha256(dispersion_payload).hexdigest()
+    return (
+        request,
+        rows,
+        parameters,
+        tuple(expected_k),
+        padding,
+        source,
+        metadata_path,
+        dispersion_sha256,
+    )
 
 
 def main(argv=None):
@@ -193,7 +231,16 @@ def main(argv=None):
     parser.add_argument("run", type=Path, help="managed de100 or DE-SMOKE run containing run-request.json")
     parser.add_argument("--branch-id", type=int, help="explicit branch selected using physical mode profiles")
     args = parser.parse_args(argv)
-    request, rows, parameters, expected_k, padding, source, metadata_path = load_comparison_input(args.run)
+    (
+        request,
+        rows,
+        parameters,
+        expected_k,
+        padding,
+        source,
+        metadata_path,
+        dispersion_sha256,
+    ) = load_comparison_input(args.run)
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     result_path = args.run / "run-result.json"
     result_payload = (json.loads(result_path.read_text(encoding="utf-8"))
@@ -243,7 +290,7 @@ def main(argv=None):
             "residual_scope_counts":residual_scope_counts,
             "max_relative_residual_l2_by_scope":residual_maxima,
             "model_sha256":request["model_sha256"],"source_job":request["job"],
-            "dispersion_sha256":hashlib.sha256(source.read_bytes()).hexdigest(),
+            "dispersion_sha256":dispersion_sha256,
             "selected_branch":args.branch_id,"mode_rows":len(rows),
             "gamma_open_film_hz":reference(0, parameters),
             "gamma_finite_airbox_hz":finite_airbox_gamma_hz(padding, parameters),

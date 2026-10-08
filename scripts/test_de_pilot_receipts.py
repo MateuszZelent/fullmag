@@ -1,10 +1,14 @@
 """Receipt regression fixtures are not numerical FEM evidence."""
 import copy
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from de_pilot_receipts import validate_de_pilot_receipts
+from de_pilot_receipts import (
+    read_required_artifact_bytes,
+    validate_de_pilot_receipts,
+)
 
 
 def receipts(pilot="de-smoke-k0"):
@@ -90,6 +94,47 @@ class ReceiptTests(unittest.TestCase):
         request, result = receipts("de100")
         del request["cases"], request["operation"]
         validate_de_pilot_receipts(request, result, "de100")
+
+    def test_required_artifact_reader_is_bound_to_contained_relative_path(self):
+        with TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            case = run / "de100"
+            artifact = case / "eigen/dispersion.csv"
+            artifact.parent.mkdir(parents=True)
+            payload = b"bound dispersion bytes\n"
+            artifact.write_bytes(payload)
+            result = {
+                "artifacts": {
+                    "required_artifact_hashes": {
+                        "eigen/dispersion.csv": {
+                            "size": len(payload),
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                        }
+                    }
+                }
+            }
+
+            self.assertEqual(
+                read_required_artifact_bytes(
+                    result, run, "de100", "eigen/dispersion.csv"
+                ),
+                payload,
+            )
+            with self.assertRaisesRegex(ValueError, "normalized relative path"):
+                read_required_artifact_bytes(
+                    {
+                        "artifacts": {
+                            "required_artifact_hashes": {
+                                "../outside.csv": result["artifacts"][
+                                    "required_artifact_hashes"
+                                ]["eigen/dispersion.csv"]
+                            }
+                        }
+                    },
+                    run,
+                    "de100",
+                    "../outside.csv",
+                )
 
 
 if __name__ == "__main__":
