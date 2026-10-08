@@ -1,5 +1,8 @@
 //! Artifact writing: metadata, scalars CSV, field snapshots.
 
+#[path = "frequency_domain_owner.rs"]
+mod frequency_domain_owner;
+
 use crate::artifact_pipeline::ArtifactPipelineSummary;
 use crate::dispatch::{
     effective_fem_device_request, normalized_runtime_element_markers,
@@ -2142,6 +2145,10 @@ pub(crate) fn write_artifacts(
     }
 
     let mut auxiliary_artifacts = executed.auxiliary_artifacts.clone();
+    frequency_domain_owner::bind_manifest_owner(
+        &mut auxiliary_artifacts,
+        &problem.problem_meta.runtime_metadata,
+    )?;
     if let Some(producer_provenance) =
         fem_relaxation_producer_provenance_artifact(problem, plan, executed)?
     {

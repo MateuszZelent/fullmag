@@ -50887,3 +50887,58 @@ mod session_scope;
 
 #[path = "tests/workspace_items.rs"]
 mod workspace_items;
+
+
+#[tokio::test]
+async fn archived_frequency_domain_uses_exact_producer_owner_and_rejects_conflict() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().unwrap();
+        snapshot.stage_execution = None;
+        snapshot.live_state = None;
+    }
+    fs::create_dir_all(artifact_dir.join("frequency_domain")).unwrap();
+    fs::create_dir_all(artifact_dir.join("eigen")).unwrap();
+    fs::write(artifact_dir.join("metadata.json"), serde_json::to_vec(&serde_json::json!({
+        "problem_meta": {"runtime_metadata": {
+            "producer_run_id": "run:archived-fem", "producer_stage_id": "stage-001",
+            "producer_stage_kind": "flat_eigenmodes", "active_stage_id": "modes"
+        }}
+    })).unwrap()).unwrap();
+    fs::write(artifact_dir.join("frequency_domain/manifest.v1.json"), serde_json::to_vec(&serde_json::json!({
+        "schema_version": "frequency_domain_manifest.v1", "study_product": "modal_eigen"
+    })).unwrap()).unwrap();
+    fs::write(artifact_dir.join("eigen/spectrum.v2.json"), serde_json::to_vec(&serde_json::json!({
+        "schema_version": "eigen_spectrum.v2", "samples": []
+    })).unwrap()).unwrap();
+    fs::write(artifact_dir.join("eigen/branches.v2.json"), serde_json::to_vec(&serde_json::json!({
+        "schema_version": "eigen_branches.v2", "branches": []
+    })).unwrap()).unwrap();
+    for route in ["manifest.v1", "eigen/spectrum.v2", "eigen/branches.v2"] {
+        let response = app.clone().oneshot(Request::builder().method("GET")
+            .uri(format!("/v2/sessions/current/analysis/frequency-domain/{route}"))
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = body_json(response).await;
+        let artifact = if route == "manifest.v1" { &payload["result_manifest"] } else { &payload };
+        assert_eq!(artifact["run_id"], "run:archived-fem");
+        assert_eq!(artifact["stage_id"], "stage-001");
+    }
+    let captured = super::handlers::analysis::frequency_domain::capture_frequency_domain_artifact_set_for_test(&state, &["eigen/spectrum.v2.json"]).await.unwrap();
+    fs::write(artifact_dir.join("metadata.json"), serde_json::to_vec(&serde_json::json!({
+        "problem_meta": {"runtime_metadata": {
+            "producer_run_id": "run:archived-fem", "producer_stage_id": "stage-002",
+            "producer_stage_kind": "flat_eigenmodes"
+        }}
+    })).unwrap()).unwrap();
+    assert!(super::handlers::analysis::frequency_domain::validate_frequency_domain_artifact_set_for_test(&state, &captured).await.is_err());
+    fs::write(artifact_dir.join("frequency_domain/manifest.v1.json"), serde_json::to_vec(&serde_json::json!({
+        "schema_version": "frequency_domain_manifest.v1", "study_product": "modal_eigen",
+        "run_id": "foreign-run", "stage_id": "stage-001"
+    })).unwrap()).unwrap();
+    let response = app.oneshot(Request::builder().method("GET")
+        .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}

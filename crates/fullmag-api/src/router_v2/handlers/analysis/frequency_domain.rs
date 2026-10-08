@@ -1,5 +1,8 @@
 //! Frequency-domain analysis family manifest and artifact resource endpoints.
 
+#[path = "frequency_domain_owner.rs"]
+mod frequency_domain_owner;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path as FsPath, PathBuf},
@@ -2134,12 +2137,16 @@ pub(crate) struct FrequencyDomainArtifactSetCapture {
     live_identity: FrequencyDomainCapturedLiveIdentity,
     artifact_path: String,
     identity: FrequencyDomainLiveArtifactIdentity,
+    published_owner: Option<frequency_domain_owner::PublishedOwner>,
 }
 
 impl FrequencyDomainArtifactSetCapture {
     fn bind_artifact_path(&mut self, artifact_path: &str) {
         self.artifact_path = artifact_path.to_string();
         self.identity = self.live_identity.artifact_identity(artifact_path);
+        if let Some(owner) = &self.published_owner {
+            owner.apply(&mut self.identity);
+        }
     }
 }
 
@@ -2180,7 +2187,11 @@ async fn capture_frequency_domain_artifact_set(
     let (artifact_dir, artifact_set_id) = canonical_frequency_domain_artifact_root(&artifact_root)?;
     let live_identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot);
     let artifact_path = artifact_paths.first().copied().unwrap_or_default();
-    let identity = live_identity.artifact_identity(artifact_path);
+    let published_owner = frequency_domain_owner::read_owner(&artifact_dir, artifact_path)?;
+    let mut identity = live_identity.artifact_identity(artifact_path);
+    if let Some(owner) = &published_owner {
+        owner.apply(&mut identity);
+    }
     Ok(FrequencyDomainArtifactSetCapture {
         request_context,
         artifact_dir,
@@ -2188,6 +2199,7 @@ async fn capture_frequency_domain_artifact_set(
         live_identity,
         artifact_path: artifact_path.to_string(),
         identity,
+        published_owner,
     })
 }
 
@@ -2207,9 +2219,15 @@ async fn validate_current_frequency_domain_artifact_set(
         .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
     let (artifact_dir, artifact_set_id) = canonical_frequency_domain_artifact_root(&artifact_root)?;
     let live_identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot);
+    let published_owner = frequency_domain_owner::read_owner(&artifact_dir, &captured.artifact_path)?;
+    let mut identity = live_identity.artifact_identity(&captured.artifact_path);
+    if let Some(owner) = &published_owner {
+        owner.apply(&mut identity);
+    }
     if artifact_dir != captured.artifact_dir
         || artifact_set_id != captured.artifact_set_id
-        || live_identity.artifact_identity(&captured.artifact_path) != captured.identity
+        || published_owner != captured.published_owner
+        || identity != captured.identity
     {
         return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
     }
@@ -3418,11 +3436,19 @@ async fn field_resource(
     metadata: Option<FrequencyDomainFieldMetadata>,
 ) -> Result<Json<FrequencyDomainFieldResource>, ApiError> {
     let present = try_resolve_artifact_path(&artifact_dir, artifact_path)?.is_some();
+    let published_owner = if present {
+        frequency_domain_owner::read_owner(artifact_dir, artifact_path)?
+    } else {
+        None
+    };
     let metadata = metadata.unwrap_or_default();
     let content_digest = present
         .then(|| frequency_domain_field_content_digest(&artifact_dir, artifact_path, &metadata))
         .transpose()?;
     crate::validate_current_live_request_context(state, request_context).await?;
+    if present && frequency_domain_owner::read_owner(artifact_dir, artifact_path)? != published_owner {
+        return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
+    }
     Ok(Json(FrequencyDomainFieldResource {
         schema_version: schema_version.to_string(),
         status: if present { "ready" } else { "missing" }.to_string(),
