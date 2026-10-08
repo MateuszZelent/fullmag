@@ -74,11 +74,21 @@ def synthetic_bundle(inputs, mutation=None):
         ("charge_content_digest", 1, "placeholder"),
         ("closure_revision", 1, source_input["revision"]), ("face_count", 2, 108)]
     for face, moment, weight in zip(faces, moments, weights):
+        a, b, c = (xyz[v] for v in face)
+        ab, ac = [b[i] - a[i] for i in range(3)], [c[i] - a[i] for i in range(3)]
+        normal = (ab[1]*ac[2] - ab[2]*ac[1], ab[2]*ac[0] - ab[0]*ac[2],
+                  ab[0]*ac[1] - ab[1]*ac[0])
+        outward = []
+        for owner in sorted(incidence[face], key=lambda index: elements[index]):
+            opposite = next(v for v in elements[owner] if v not in face)
+            orientation = sum(normal[i] * (xyz[opposite][i] - a[i]) for i in range(3))
+            outward.append((moment if orientation < 0 else -moment) or 0.0)
         source += [("face_vertex_id", 2, v) for v in face] + [
             ("face_side_count", 2, len(incidence[face])),
             ("face_rt0_to_canonical_weight", 4, weight),
             ("face_canonical_flux_a", 4, moment or 0.0),
-            ("face_first_outward_a", 4, 0.0), ("face_second_outward_a", 4, 0.0),
+            ("face_first_outward_a", 4, outward[0]),
+            ("face_second_outward_a", 4, outward[1] if len(outward) == 2 else 0.0),
             ("face_canonical_jump_a", 4, 0.0)]
     if mutation:
         mutation(charge, source)
@@ -112,6 +122,7 @@ def test_all_geometric_moments_with_permuted_signed_nonunit_dofs(inputs):
 
 
 @pytest.mark.parametrize("mutation", ["coefficient", "weight", "canonical", "jump",
+                                      "first_outward", "second_outward",
                                       "xyz", "dof", "adjacency", "face_count"])
 def test_resigned_mutations_cannot_hide_rt0_or_geometry_mismatch(inputs, mutation):
     def mutate(charge, source):
@@ -119,6 +130,8 @@ def test_resigned_mutations_cannot_hide_rt0_or_geometry_mismatch(inputs, mutatio
         elif mutation == "weight": change(source, "face_rt0_to_canonical_weight", 0.0)
         elif mutation == "canonical": change(source, "face_canonical_flux_a", 1.0)
         elif mutation == "jump": change(source, "face_canonical_jump_a", 1.0)
+        elif mutation == "first_outward": change(source, "face_first_outward_a", 1.0)
+        elif mutation == "second_outward": change(source, "face_second_outward_a", 1.0)
         elif mutation == "xyz": change(charge, "xyz_m", 10.0)
         elif mutation == "dof": change(charge, "signed_rt0_dof", 108)
         elif mutation == "adjacency": change(charge, "first_element", 36)
@@ -134,6 +147,30 @@ def test_wrong_input_pin_and_nested_hash_are_rejected(inputs):
     change(outer, "charge_content_sha256", "0" * 64)
     with pytest.raises(ValueError, match="nested hash"):
         check.compare_rt0_fixture(inputs, encode(outer))
+
+
+def test_outward_sides_follow_element_keys_not_native_adjacency(inputs):
+    def mutate(charge, source):
+        for i, row in enumerate(charge):
+            if row[0] == "second_element" and row[2] != (1 << 64) - 1:
+                first, second = charge[i - 1][2], row[2]
+                charge[i - 1] = ("first_element", 2, second)
+                charge[i] = ("second_element", 2, first)
+    result = check.compare_rt0_fixture(inputs, synthetic_bundle(inputs, mutate))
+    assert result["max_face_moment_error_a"] == 0.0
+
+
+def test_balanced_sign_reversal_cannot_hide_outward_mismatch(inputs):
+    def mutate(charge, source):
+        for i, row in enumerate(source):
+            if row[0] == "face_side_count" and row[2] == 2 and source[i + 3][2] != 0.0:
+                for index in (i + 3, i + 4):
+                    name, tag, value = source[index]
+                    source[index] = (name, tag, -value)
+                return
+        raise AssertionError("Synthetic fixture has no current-carrying internal face")
+    with pytest.raises(ValueError, match="outward face moment mismatch"):
+        check.compare_rt0_fixture(inputs, synthetic_bundle(inputs, mutate))
 
 
 @pytest.mark.parametrize("data", [b"", b"\0" * 7, struct.pack(">Q", 257),

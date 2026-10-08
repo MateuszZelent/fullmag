@@ -97,6 +97,8 @@ def compare_rt0_fixture(inputs, bundle, *, flux_tolerance_a=1e-8):
     moments uniquely determine the RT0 field on a tetrahedron. This checks the
     measured coefficients through retained native physical weights, not an
     independent implementation of MFEM's reference-basis normalization.
+    Retained outward fluxes use lexicographic element-key order, independently
+    of the charge record's native first/second adjacency order.
     """
     if fixture_input_digest(inputs) != FIXTURE_INPUT_SHA256:
         raise ValueError("RT0 check requires the exact fixed-fixture inputs")
@@ -192,12 +194,20 @@ def compare_rt0_fixture(inputs, bundle, *, flux_tolerance_a=1e-8):
         if not math.isfinite(actual) or not math.isfinite(error) or error > flux_tolerance_a:
             raise ValueError(f"RT0 fixture face moment mismatch: {face}")
         maximum_error = max(maximum_error, error)
-        for owner in owners:
+        outward = []
+        for owner in sorted(owners, key=lambda index: element_keys[index]):
             opposite = next(v for v in element_keys[owner] if v not in face)
             orientation = math.fsum(v * (xyz[opposite][i] - a[i]) for i, v in enumerate(area))
             if orientation == 0.0:
                 raise ValueError("Degenerate RT0 fixture face orientation")
             balances[owner].append(actual if orientation < 0 else -actual)
+            outward.append(expected if orientation < 0 else -expected)
+        if len(outward) == 1:
+            outward.append(0.0)
+        outward_error = max(abs(physical[6] - outward[0]), abs(physical[7] - outward[1]))
+        if outward_error > flux_tolerance_a:
+            raise ValueError(f"RT0 fixture outward face moment mismatch: {face}")
+        maximum_error = max(maximum_error, outward_error)
     maximum_balance = max(abs(math.fsum(values)) for values in balances)
     if maximum_balance > flux_tolerance_a:
         raise ValueError("RT0 fixture independently summed element balance failed")
