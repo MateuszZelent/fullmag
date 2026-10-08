@@ -2,11 +2,11 @@
 
 ## Zakres i stan
 
-Pełny rejestr obejmuje 259 komentarzy liniowych Codex oraz jedną dodatkową uwagę w treści review (ID5440044234) w PR #97. Wszystkie pobrano stronicowanym API. PR #102 nie zawiera sugestii do kodu od Codex; komentarze o limitach i podsumowania nie są żądaniami implementacji.
+Pełny rejestr obejmuje 263 komentarzy liniowych Codex oraz jedną dodatkową uwagę w treści review (ID5440044234) w PR #97. Wszystkie pobrano stronicowanym API. PR #102 nie zawiera sugestii do kodu od Codex; komentarze o limitach i podsumowania nie są żądaniami implementacji.
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 23, `duplicate`: 89, `implemented`: 65, `implemented_pending_ci`: 11, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 67. Łącznie 260 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 23, `duplicate`: 90, `implemented`: 65, `implemented_pending_ci`: 11, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 70. Łącznie 264 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -274,6 +274,10 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4224318154](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4224318154) / #97 | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | implemented_pending_ci | Native sparse Floquet certified_count nie zwraca sukcesu bez count certificate; error/cancellation mają pierwszeństwo. BestEffort pozostaje niecertyfikowane. Rozszerzony algebraiczny owner izoluje certificate gate od underfill/refill. |
 | [4224318169](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4224318169) / #97 | `backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp` | implemented_pending_ci | Serializacja generycznych wyników dense/CSR i każdego modu mapuje podpisaną lambda według request.phase_convention; rzeczywista etykieta phasor_convention trafia do provenance bez abs(lambda.imag), zmian przestrzennej fazy Floqueta ani migracji DSL/IR. |
 | [4224318179](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4224318179) / #97 | `scripts/local_runner/retention_executor.py` | implemented | Zatwierdzone execution przenoszone atomowo do prywatnej kwarantanny; przed rmtree sprawdzane containment, tożsamość rodziców i pełne tree identity. Mismatch zachowuje drzewo, restart utrwala interrupted_unknown bez ponowienia. |
+| [4225198879](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198879) / #97 | `apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases.ts` | valid_unfixed | Tabela aliasów nie zawiera pięciu wybieralnych liści Resonance; routing przez kind może pozostawać na poprzednim module. |
+| [4225198873](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198873) / #97 | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` | valid_unfixed | artifact_set_id hash canonical directory path nie wykrywa mieszanych generacji plików. Wymagany spójny kontrakt producenta i czytelnika. |
+| [4225198867](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198867) / #97 | `apps/runner-console/src/views/StorageView.js` | duplicate | Ten sam ograniczony timeout pełnego skanu storage. Dirty StorageView nadal7000ms; wcześniej odrzucony zapis konsoli nie jest uznany za gotowy. Powtórzenie 4061898648. |
+| [4225198861](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198861) / #97 | `crates/fullmag-plan/src/fem.rs` | valid_unfixed | Floquet-airbox guard fem.rs używa is_some dla skalarów DMI, więc Some(0.0) odrzuca neutralny fizycznie przypadek; source potwierdza. |
 
 ## Przygotowane przyrosty
 
@@ -1702,3 +1706,10 @@ Generic37856133644 terminalnie FAIL przy kompilacji: std::strcmp brakowało cstr
 - GHA [37859465446](https://github.com/MateuszZelent/fullmag/actions/runs/37859465446) FAIL w rzeczywistej ścieżce MFEM/SLEPc: `Matrix is missing diagonal entry 0` w symbolic LU podczas EPSSetUp. Artefakt zachowany; diagnoza struktury CSR trwa. Nie promujemy generic mass/refill jako zweryfikowanego.
 - Poprawka #4224318169 zachowuje oba znaki temporalnej konwencji w mapowaniu top-level i modes oraz etykiecie provenance. Osiem przypadków rzeczywistego C ABI ma osobny profil `modal-phase-slepc`, wymagający MFEM/SLEPc i dokładnego markera. Source review i validator dokumentacji PASS; hosted provider, runtime i nauka pozostają NOT VERIFIED.
 - PR97 nadal OPEN, PR102 CLOSED (sprawdzone na GitHub). Zamykanie pozostałego PR nastąpi po rozliczeniu pełnego zakresu uwag, nie po tym fragmencie.
+
+
+### Korekta strukturalnej przekątnej PETSc
+
+- Po diagnozie GHA37859465446 adapter `create_real_frequency_rotated_pencil` tworzy dokładnie zerowy wpis diagonalny w każdym wierszu obu real-split AIJ matrices przed kopiowaniem fizycznych wartości. Stosuje istniejący sprawdzany `ADD_VALUES`; nie zmienia epsilon, shiftu, tolerancji ani wejściowego CSR. Błąd insercji przechodzi istniejącą kwarantannę bez dalszych operacji na grafie.
+- Zachowano rzeczywistą regresję publicznego C ABI `modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator`, wraz z asercjami compact off-diagonal CSR. Validator noty0831/source-map PASS. Review i provider-backed CI wymagane przed potwierdzeniem naprawy.
+- Poprawka fazy jest na remote w `39399b8c6`; jej osobna bramka [37862208552](https://github.com/MateuszZelent/fullmag/actions/runs/37862208552) została zlecona. Ponowienie fixture’u count [37862073867](https://github.com/MateuszZelent/fullmag/actions/runs/37862073867) również ma konkretny uchwyt CI.

@@ -2743,6 +2743,12 @@
       "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
       "symbol": "main",
       "responsibility": "Keep the original near-pole failure fixture separate from refill and verify attempt-scoped scalar probe consistency; provider-backed execution NOT VERIFIED."
+    },
+    {
+      "id": "source-slepc-rotated-structural-diagonal",
+      "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp",
+      "symbol": "bool create_real_frequency_rotated_pencil",
+      "responsibility": "Retain exact zero diagonal slots in both rotated AIJ matrices for symbolic LU, without altering physical CSR values or regularizing the pencil; assembly errors preserve graph quarantine. Actual-provider regression pending."
     }
   ],
   "public_api": {

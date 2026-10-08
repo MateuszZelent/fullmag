@@ -2331,6 +2331,7 @@ Repository-owned related contracts:
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
+| backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | bool create_real_frequency_rotated_pencil | Retain exact zero structural diagonal slots in both real-split AIJ matrices for symbolic LU; preserve the operator and quarantine on hard assembly errors. Actual-provider regression pending. |
 | backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Preserve the default convergence result and iteration budget; apply the unchanged reconstructed true-residual gate and retain scalar callback observations for a hard-error-only probe. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp | solve_slepc_sparse_gyrotropic_modal_eigen | Return the internal result carrying `FloquetShiftedKspFailureProbe`, separate from completed post-solve KSP telemetry and with the attempted EPS NEV/NCV. |
 | backends/fem/cpu/frequency_domain/mode_deduplication.cpp | deduplicate_modes_by_frequency_and_overlap_with_mass_action | Strict comparison-only normalization using an explicit caller-owned geometric mass action; rejects a missing or invalid metric and retains original candidate data. |
@@ -4004,3 +4005,21 @@ odrębna od dowodu rzeczywiście użytych dimensions.
 | scripts/run_de_100nm_pilot.py | _validate_window_policy_request | Wspólny preflight polityki/KSP/Γ przed jakimkolwiek dispatch |
 | scripts/run_de_100nm_pilot.py | _validate_krylov_trials | Przekazanie żądanej polityki do postsolve proof, bez zmiany native inputs |
 | scripts/test_de_gamma_krylov_trial.py | class GammaWindowPolicyPilotRoutingTests | Forwarding oraz odrzucenie ignored-policy przed execute dispatch |
+
+
+### PETSc real-split pencil: structural zero diagonal
+
+`backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp` +
+`create_real_frequency_rotated_pencil` must retain an explicit diagonal slot
+for every row of each rotated AIJ matrix. Compact physical CSR operators can
+have only off-diagonal entries; realification can also move the generalized
+mass into off-diagonal blocks. An absent slot prevents PETSc SeqAIJ symbolic
+LU even when the shifted operator is numerically invertible. Adding an exact
+zero with the same `ADD_VALUES` assembly mode preserves the operator and its
+existing nonzero diagonal values; it is not regularization, a changed shift,
+or an epsilon perturbation. Hard assembly errors retain the existing graph
+quarantine boundary. The public MFEM compact-CSR fixture
+`modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator` keeps
+its off-diagonal input and must pass through the actual SLEPc provider.
+GHA37859465446 reproduced the missing-slot failure before this correction;
+execution after correction is **NOT VERIFIED**.

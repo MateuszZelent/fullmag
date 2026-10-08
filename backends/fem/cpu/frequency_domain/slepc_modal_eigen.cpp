@@ -502,7 +502,21 @@ bool create_real_frequency_rotated_pencil(
         return true;
     };
 
-    const bool rows_copied = copy_rows(stiffness, *rotated_stiffness, false) &&
+    // SeqAIJ symbolic LU needs structural diagonal entries even when the
+    // physical real-split pencil has exact zero diagonal values. ADD_VALUES
+    // keeps the existing assembly mode and leaves the operator unchanged.
+    const auto insert_zero_diagonal = [&](Mat destination) {
+        for (PetscInt row = 0; row < doubled_size; ++row) {
+            if (!set_rotated_value(
+                    destination, row, row, static_cast<PetscScalar>(0.0))) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const bool rows_copied = insert_zero_diagonal(*rotated_stiffness) &&
+        insert_zero_diagonal(*rotated_gyrotropic) &&
+        copy_rows(stiffness, *rotated_stiffness, false) &&
         copy_rows(gyrotropic, *rotated_gyrotropic, true);
     if (!rows_copied && row_api_failed) {
         quarantine_slepc_modal_objects(
