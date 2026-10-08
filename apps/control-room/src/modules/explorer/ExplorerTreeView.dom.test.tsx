@@ -100,7 +100,10 @@ describe("ExplorerTreeView branch interaction", () => {
     Object.defineProperty(TestElement.prototype, "closest", {
       configurable: true,
       value(this: TestElement, selector: string) {
-        let current: TestElement | null = this;
+        if (this.matches(selector)) return this;
+        let current: TestElement | null = this.parentNode instanceof TestElement
+          ? this.parentNode
+          : null;
         while (current) {
           if (current.matches(selector)) return current;
           current = current.parentNode instanceof TestElement
