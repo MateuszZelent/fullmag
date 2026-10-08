@@ -992,6 +992,9 @@ async function inspectFrequencyChartOption(page, fixture) {
 
 async function clickFrequencyDomainPoint(page, expected, fixtureId) {
   const host = page.locator(".fm-analysis-plots__echarts").first();
+  await host.evaluate((element) => {
+    element.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
+  });
   const coordinateTarget = await page.evaluate(({ rowId, seriesType }) => {
     const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
     const option = diagnostics?.readRenderedOption?.();
@@ -1318,6 +1321,10 @@ function tooltipIncludesTerms(tooltip, expectedTerms) {
 async function readFrequencyDomainTooltipEvidence(host, coordinateTarget) {
   return host.evaluate((element, target) => {
     const rect = element.getBoundingClientRect();
+    const document = element.ownerDocument;
+    const pointerTarget = document.elementFromPoint(target.x, target.y);
+    const footer = document.querySelector(".fm-footer");
+    const footerRect = footer?.getBoundingClientRect() ?? null;
     const option = window.__FULLMAG_CHART_DIAGNOSTICS__?.readRenderedOption?.();
     const series = Array.isArray(option?.series)
       ? option.series[target.seriesIndex]
@@ -1340,7 +1347,19 @@ async function readFrequencyDomainTooltipEvidence(host, coordinateTarget) {
         seriesType: series?.type ?? null,
       },
       pointer: { x: target.x, y: target.y },
-      tooltipTexts: Array.from(element.ownerDocument.querySelectorAll(".fm-chart-tooltip"))
+      pointerHit: {
+        className: typeof pointerTarget?.className === "string" ? pointerTarget.className : "",
+        tagName: pointerTarget?.tagName ?? null,
+        insideChartHost: pointerTarget !== null && element.contains(pointerTarget),
+        insideFooter: pointerTarget !== null && footer?.contains(pointerTarget) === true,
+      },
+      footerRect: footerRect ? {
+        bottom: footerRect.bottom,
+        left: footerRect.left,
+        right: footerRect.right,
+        top: footerRect.top,
+      } : null,
+      tooltipTexts: Array.from(document.querySelectorAll(".fm-chart-tooltip"))
         .map((node) => ({
           className: typeof node.className === "string" ? node.className : "",
           text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),

@@ -54,6 +54,9 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain('tooltipTerms: ["mode index: 1", "Eigen frequency", "2.25 GHz"]');
     expect(smokeScript).toContain("fm-chart-tooltip");
     expect(smokeScript).toContain("tooltip-failure.png");
+    expect(smokeScript).toContain('scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" })');
+    expect(smokeScript).toContain("document.elementFromPoint(target.x, target.y)");
+    expect(smokeScript).toContain("insideFooter: pointerTarget !== null && footer?.contains(pointerTarget) === true");
     expect(smokeScript).toContain('schemaVersion: "frequency_domain_eigen_spectrum.v1"');
     expect(smokeScript).toContain('schemaVersion: "frequency_domain_eigen_mode_resource.v1"');
     expect(smokeScript).toContain('schema_version: "eigen_mode.v2"');
