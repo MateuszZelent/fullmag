@@ -1280,7 +1280,7 @@ describe("study runtime command resource bundles", () => {
     expect(hookSource).not.toContain(frequencyDomainFamilyPath);
   });
 
-  it("requires fresh session status and accepts an explicit no-run identity", () => {
+  it("retains identity from stale status data and accepts an explicit no-run identity", () => {
     const statusData = statusWith({
       run: null,
       sessionEpoch: "epoch-current",
@@ -1300,6 +1300,24 @@ describe("study runtime command resource bundles", () => {
       selectStageExecutionSessionIdentity({
         data: statusData,
         status: "stale",
+      }),
+    ).toEqual(identity);
+    expect(
+      selectStageExecutionSessionIdentity({
+        data: statusData,
+        status: "error",
+      }),
+    ).toEqual(identity);
+    expect(
+      selectStageExecutionSessionIdentity({
+        data: null,
+        status: "error",
+      }),
+    ).toBeNull();
+    expect(
+      selectStageExecutionSessionIdentity({
+        data: statusData,
+        status: "loading",
       }),
     ).toBeNull();
     expect(

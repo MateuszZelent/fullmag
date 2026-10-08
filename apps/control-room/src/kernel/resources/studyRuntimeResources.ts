@@ -834,7 +834,13 @@ function nonEmptyStageExecutionIdentityValue(value: unknown): string | null {
 export function selectStageExecutionSessionIdentity(
   status: StageExecutionSessionStatus,
 ): StageExecutionSessionIdentity | null {
-  if (status.status !== "ready" || !status.data) return null;
+  // A retained status snapshot keeps its last-good identity during refresh failure;
+  // the stage payload is still exposed only after an exact tuple match.
+  if (
+    !status.data ||
+    (status.status !== "ready" && status.status !== "stale" &&
+      status.status !== "error")
+  ) return null;
 
   const sessionId = nonEmptyStageExecutionIdentityValue(
     status.data.session?.session_id,
@@ -948,9 +954,13 @@ export function useStageExecutionResource({
     stageExecutionStatus,
   ]);
 
+  const stageExecutionStatusCanRetainData =
+    stageExecutionResource.status === "ready" ||
+    stageExecutionResource.status === "stale" ||
+    stageExecutionResource.status === "error";
   const stageExecutionMatches =
     sessionIdentity !== null &&
-    stageExecutionResource.status === "ready" &&
+    stageExecutionStatusCanRetainData &&
     stageExecutionMatchesSessionIdentity(
       stageExecutionResource.data,
       sessionIdentity,

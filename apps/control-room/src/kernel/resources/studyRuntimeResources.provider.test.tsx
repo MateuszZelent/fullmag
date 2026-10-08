@@ -23,6 +23,7 @@ import {
 } from "@/kernel/realtime/communicationPolicy";
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import { MAGNETIZATION_TEXTURE_COMMANDS } from "@/kernel/authoring/magnetization-texture/commands";
+import type { StageExecutionResource } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
 
 import {
@@ -33,6 +34,7 @@ import {
   useMeshPeriodicPairsResource,
   useModelReadinessResource,
   useRuntimeCommandControlResourceData,
+  useStageExecutionResource,
 } from "./studyRuntimeResources";
 import {
   SESSION_STATUS_RESOURCE_KEY,
@@ -91,6 +93,25 @@ function readinessAt(sceneRevision: number) {
     ready_to_export: true,
     ready_to_run: true,
     scene_revision: sceneRevision,
+  };
+}
+
+function stageExecutionAt(
+  runId: string,
+  revision: number,
+): StageExecutionResource {
+  return {
+    active_stage_index: null,
+    active_stage_kind: null,
+    completed_stage_indexes: [],
+    revision,
+    run_id: runId,
+    runtime_state: "running",
+    session_epoch: "scratch-session@1700000000000",
+    session_id: "scratch-session",
+    stage_statuses: [],
+    stages: [],
+    total_stages: 0,
   };
 }
 
@@ -165,6 +186,122 @@ describe("production runtime command resource provider", () => {
       await vi.waitFor(() => {
         expect(readinessLoad).toHaveBeenCalledTimes(1);
         expect(container.textContent).toBe("7");
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("retains same-run stage execution through status refresh failure and clears it on run change", async () => {
+    const statusFailure = new Error("status refresh temporarily failed");
+    const nextRunStatus = deferred<ReturnType<typeof statusAt>>();
+    const nextRunExecution = deferred<StageExecutionResource>();
+    const statusLoad = vi.fn()
+      .mockResolvedValueOnce(statusAt(1, { run_id: "run-a" }))
+      .mockRejectedValueOnce(statusFailure)
+      .mockImplementationOnce(() => nextRunStatus.promise);
+    const stageExecutionLoad = vi.fn()
+      .mockResolvedValueOnce(stageExecutionAt("run-a", 1))
+      .mockImplementationOnce(() => nextRunExecution.promise);
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: {
+        sessions: {
+          ...sessionsApi,
+          current: { status: statusLoad },
+        },
+        simulation: {
+          stages: { execution: stageExecutionLoad },
+        },
+      },
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({
+        config: { enabled: false },
+      }),
+      resources,
+    } as unknown as KernelApi;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    let latestStageExecution: ReturnType<typeof useStageExecutionResource> | null =
+      null;
+    let latestStatusRefreshError: Error | null = null;
+    let latestStatusRunId: string | null = null;
+    let latestStatusState = "loading";
+    let refetchStatus: () => void = () => undefined;
+
+    function Harness() {
+      const status = useSessionStatusSelector(
+        (resource) => ({
+          data: resource.data,
+          refetch: resource.refetch,
+          refreshError: resource.refreshError ?? resource.error,
+          status: resource.status,
+        }),
+        {
+          isEqual: (previous, next) =>
+            previous.data === next.data &&
+            previous.refreshError === next.refreshError &&
+            previous.status === next.status,
+        },
+      );
+      refetchStatus = status.refetch;
+      latestStatusRefreshError = status.refreshError ?? null;
+      latestStatusRunId = status.data?.run?.run_id ?? null;
+      latestStatusState = status.status;
+      latestStageExecution = useStageExecutionResource();
+      return <div>{latestStageExecution?.data?.run_id ?? "no stage run"}</div>;
+    }
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Harness />
+          </KernelContext.Provider>,
+        );
+      });
+      await vi.waitFor(() => {
+        expect(statusLoad).toHaveBeenCalledTimes(1);
+        expect(stageExecutionLoad).toHaveBeenCalledTimes(1);
+        expect(latestStageExecution?.data?.run_id).toBe("run-a");
+      });
+
+      await act(async () => {
+        refetchStatus();
+        await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(2));
+      });
+      await vi.waitFor(() => {
+        expect(latestStatusState).toBe("stale");
+        expect(latestStatusRefreshError).toBe(statusFailure);
+        expect(latestStageExecution?.data?.run_id).toBe("run-a");
+        expect(container.textContent).toBe("run-a");
+      });
+
+      await act(async () => {
+        refetchStatus();
+        await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(3));
+        nextRunStatus.resolve(statusAt(2, { run_id: "run-b" }));
+        await nextRunStatus.promise;
+      });
+      await vi.waitFor(() => {
+        expect(latestStatusRunId).toBe("run-b");
+        expect(stageExecutionLoad).toHaveBeenCalledTimes(2);
+        expect(latestStageExecution?.data).toBeNull();
+        expect(container.textContent).toBe("no stage run");
+      });
+
+      await act(async () => {
+        nextRunExecution.resolve(stageExecutionAt("run-b", 2));
+        await nextRunExecution.promise;
+      });
+      await vi.waitFor(() => {
+        expect(latestStageExecution?.status).toBe("ready");
+        expect(latestStageExecution?.data?.run_id).toBe("run-b");
+        expect(container.textContent).toBe("run-b");
       });
     } finally {
       await act(async () => root.unmount());
