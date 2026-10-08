@@ -627,7 +627,10 @@ def _inspect_image(
             capture_output=True,
             text=True,
             check=False,
+            timeout=DOCKER_LIFECYCLE_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as error:
+        raise BenchmarkError("Docker image inspection exceeded its deadline") from error
     except OSError as error:
         raise BenchmarkError("Docker image inspection could not start") from error
     if completed.returncode != 0:

@@ -838,3 +838,16 @@ CUDA proof: run37777057359 / SHA69104903e / native job113310469941 SUCCESS.
 Log: dziewięć configure regresji, OK, bez skips; późniejszy CABI również SUCCESS.
 Review4060116361 implemented w zakresie selekcji ścieżek. Pliki fixture nie
 stanowią rzeczywistych bibliotek drivera; managed link/loader nadal NOT VERIFIED.
+
+### Review4060116330 — deadline inspekcji obrazu
+
+Docker image inspect używa teraz istniejącego 30s lifecycle deadline.
+TimeoutExpired staje się jawnym BenchmarkError, który wywołujący obsługuje po
+zwolnieniu kontekstów lock/use. Nie zmieniono immutable digest/volume checks.
+Regresja sprawdza argument timeout i kontrolowany failure przy jego przekroczeniu.
+Source/diff review PASS; wykonanie w artifact-consumers GHA oczekiwane.
+
+Doprecyzowanie browser37775325905: trace wyklucza tylko wektor o oczekiwanym ID,
+nie wszystkie field requests. Wewnętrzny timeout60s może dotyczyć wyboru Inspector
+node przed wait30s na uniform. Metadata fixture spełnia aktualny predicate;
+resource race nie jest udowodniony. Dalsza diagnostyka zachowa stack i phase marker.

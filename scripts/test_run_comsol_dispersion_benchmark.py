@@ -272,8 +272,19 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
         result = benchmark._inspect_image(image, run=called)
         self.assertEqual(result["id"], image)
         called.assert_called_once()
+        self.assertEqual(called.call_args.kwargs["timeout"], benchmark.DOCKER_LIFECYCLE_TIMEOUT_SECONDS)
         with self.assertRaises(benchmark.BenchmarkError):
             benchmark._inspect_image("fullmag/fem-gpu:local", run=called)
+
+    def test_image_check_timeout_is_a_bounded_benchmark_failure(self):
+        image = "sha256:" + "a" * 64
+        called = Mock(side_effect=benchmark.subprocess.TimeoutExpired(
+            ["docker", "image", "inspect", image],
+            benchmark.DOCKER_LIFECYCLE_TIMEOUT_SECONDS,
+        ))
+        with self.assertRaisesRegex(benchmark.BenchmarkError, "exceeded its deadline"):
+            benchmark._inspect_image(image, run=called)
+        self.assertEqual(called.call_args.kwargs["timeout"], benchmark.DOCKER_LIFECYCLE_TIMEOUT_SECONDS)
 
     def test_case_artifacts_require_json_csv_mode_and_potential_payloads(self):
         with tempfile.TemporaryDirectory() as directory:
