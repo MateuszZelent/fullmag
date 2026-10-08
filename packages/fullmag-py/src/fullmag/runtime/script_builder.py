@@ -604,14 +604,7 @@ def render_loaded_problem_as_script(
     lines.append("")
     lines.extend(_render_solver(base_problem, overrides=overrides, surface=surface))
 
-    output_problem = base_problem
-    if not _study_outputs(base_problem.study):
-        for stage in stages:
-            candidate_study = getattr(stage.problem, "study", None)
-            if _study_outputs(candidate_study):
-                output_problem = stage.problem
-                break
-    output_lines = _render_outputs(output_problem, magnet_vars, surface=surface)
+    output_lines = _render_outputs(base_problem, magnet_vars, surface=surface)
     if output_lines:
         lines.append("")
         lines.extend(output_lines)

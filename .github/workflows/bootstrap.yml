@@ -461,6 +461,12 @@ jobs:
           python -m pytest -q
           packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py
 
+      - name: Run ordered stage script roundtrip regressions
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_script_builder_roundtrip.py
+          packages/fullmag-py/tests/test_study_stages.py
+
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
 

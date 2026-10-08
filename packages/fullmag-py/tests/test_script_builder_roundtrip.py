@@ -529,6 +529,50 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
 
 
 class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
+    def test_stage_autosave_does_not_leak_into_earlier_stage_outputs(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("ordered-stage-autosave")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_relax(
+            stage_id="initial-relax",
+            algorithm="projected_gradient_bb",
+            max_steps=2,
+        )
+        study.stages.autosave("m", every=1e-12, stage_id="enable-m-output")
+        study.stages.add_run(stage_id="sampled-run", until=2e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertNotIn('study.save("m", every=1e-12)', rendered)
+        initial_stage = rendered.index("study.stages.add_relax(")
+        autosave_action = rendered.index(
+            'study.stages.autosave("m", every=1e-12, stage_id="enable-m-output")'
+        )
+        sampled_stage = rendered.index("study.stages.add_run(")
+        self.assertLess(initial_stage, autosave_action)
+        self.assertLess(autosave_action, sampled_stage)
+
+        expected_later_outputs = [
+            {"kind": "field", "name": "m", "every_seconds": 1e-12}
+        ]
+        expected_outputs_by_stage = [[], [], expected_later_outputs]
+        for candidate in (loaded, rewritten):
+            self.assertEqual(
+                [
+                    stage.problem.study.to_ir()["sampling"]["outputs"]
+                    for stage in candidate.stages
+                ],
+                expected_outputs_by_stage,
+            )
+
     def test_stage_autosave_roundtrips_for_relax_and_run(self) -> None:
         script = """
         import fullmag as fm
