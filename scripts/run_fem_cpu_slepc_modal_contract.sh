@@ -41,8 +41,9 @@ floquet_targets=(
   fem_floquet_modal_solver_contract
 )
 shared_domain_target=fem_poisson_airbox_shared_domain_contract
-targets=("$modal_target" "${floquet_targets[@]}" "$shared_domain_target")
-ctest_regex='^fem_(poisson_airbox_modal_eigen_slepc|poisson_airbox_shared_domain|floquet_(magnetic_operator|bloch_scalar|airbox_operator|dynamic_demag_k|waveguide_demag_k|waveguide_cross_section|modal_solver))_contract$'
+modal_cabi_target=fem_modal_eigen_contract
+targets=("$modal_target" "$modal_cabi_target" "${floquet_targets[@]}" "$shared_domain_target")
+ctest_regex='^fem_(modal_eigen|poisson_airbox_modal_eigen_slepc|poisson_airbox_shared_domain|floquet_(magnetic_operator|bloch_scalar|airbox_operator|dynamic_demag_k|waveguide_demag_k|waveguide_cross_section|modal_solver))_contract$'
 
 cmake_attestation="$report_dir/cmake-attestation.json"
 runtime_probe="$report_dir/fullmag-fem-availability.json"
@@ -126,6 +127,7 @@ payload = {
             "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256=" + os.environ["SOURCE_SNAPSHOT"],
         ],
         "modal_target": "fem_poisson_airbox_modal_eigen_slepc_contract",
+        "modal_cabi_target": "fem_modal_eigen_contract",
         "shared_domain_target": "fem_poisson_airbox_shared_domain_contract",
         "floquet_targets": [
             "fem_floquet_magnetic_operator_contract",
@@ -140,6 +142,7 @@ payload = {
         "ctest_completed": os.environ.get("CTEST_COMPLETED") == "1",
         "executed_targets": ([
             "fem_poisson_airbox_modal_eigen_slepc_contract",
+            "fem_modal_eigen_contract",
             "fem_floquet_magnetic_operator_contract",
             "fem_floquet_bloch_scalar_contract",
             "fem_floquet_airbox_operator_contract",

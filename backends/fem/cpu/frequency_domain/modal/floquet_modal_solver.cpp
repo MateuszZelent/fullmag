@@ -4122,7 +4122,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         FloquetFullDescriptorDiagnostics full_descriptor{};
 #if FULLMAG_HAS_MFEM_STACK
         const double full_certificate_tolerance = std::min(
-            spectral_request.residual_tolerance,
+            static_cast<double>(eigen_tolerance),
             kFloquetPotentialResidualTolerance);
         full_descriptor = certify_floquet_full_descriptor(
             operator_view,

@@ -3928,6 +3928,9 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     check(contains(result.diagnostics_json,
                    "\"mfem_operator_payload\":\"floquet_shared_domain_sparse_matshell\""),
           "nearest regression exercises the shared-domain production MatShell payload");
+    check(contains(result.result_json,
+                   "\"floquet_descriptor_certified\":true"),
+          "shared-domain nearest path certifies with an explicit positive tolerance");
     check(contains(result.diagnostics_json,
                    "\"target_kind\":\"nearest_frequency\""),
           "shared-domain nearest diagnostics preserve the requested target kind");
@@ -4002,6 +4005,15 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     check(contains(result.result_json, "\"window_complete\":false"),
           "nearest result does not claim a complete window");
     fullmag_fem_frequency_domain_result_destroy(&result);
+
+    request.residual_tolerance = 0.0;
+    FullmagFemFrequencyDomainResult default_tolerance_result =
+        fullmag_fem_modal_eigen_solve(&request);
+    check(default_tolerance_result.status == FULLMAG_FEM_FD_OK &&
+              contains(default_tolerance_result.result_json,
+                       "\"floquet_descriptor_certified\":true"),
+          "shared-domain nearest path resolves zero request tolerance before certifying");
+    fullmag_fem_frequency_domain_result_destroy(&default_tolerance_result);
 #endif
 }
 
