@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { SESSION_STATUS_PATH } from "@/kernel/api/apiPaths";
+import { SESSIONS_PATH, SESSION_STATUS_PATH } from "@/kernel/api/apiPaths";
 
 const packageJsonUrl = new URL("../../../package.json", import.meta.url);
 const smokeScriptUrl = new URL(
@@ -30,7 +30,26 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("selectPublishedDataset");
     expect(smokeScript).toContain("installAnalysisDatasetFixtureRoutes");
     expect(smokeScript).toContain("analysisStatusFixture");
+    expect(smokeScript).toContain(
+      `const SESSION_COLLECTION_PATH = "${SESSIONS_PATH}";`,
+    );
+    expect(smokeScript).toContain("function sessionCollectionFixture()");
+    expect(smokeScript).toContain("session_id: FIXTURE_SESSION_ID");
+    expect(smokeScript).toContain("url.pathname !== SESSION_COLLECTION_PATH");
+    expect(smokeScript).toContain("current: true");
+    expect(smokeScript).toContain("session_epoch: FIXTURE_SESSION_EPOCH");
+    expect(smokeScript).toContain(
+      "request_scope_epoch: FIXTURE_REQUEST_SCOPE_EPOCH",
+    );
     expect(smokeScript).toContain('schema_version: "eigen_spectrum.v2"');
+    expect(smokeScript).toContain("residual_norm: 2e-4");
+    expect(smokeScript).toContain("residual_relative_l2: 1e-7");
+    expect(smokeScript).toContain('"Relative residual (L2)": 1e-7');
+    expect(smokeScript).toContain('"Spectrum residual (type unspecified)": 2e-4');
+    expect(smokeScript).toContain("waitForFrequencyDomainResidualFields");
+    expect(smokeScript).toContain("expectModeDetailRelativeL2Absent: true");
+    expect(smokeScript).toContain("modeDetailCanonicalRelativeL2Present");
+    expect(smokeScript).toContain("page.waitForResponse(");
     expect(smokeScript).toContain('schemaVersion: "frequency_domain_eigen_spectrum.v1"');
     expect(smokeScript).toContain('schemaVersion: "frequency_domain_eigen_mode_resource.v1"');
     expect(smokeScript).toContain('schema_version: "eigen_mode.v2"');
@@ -44,6 +63,8 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain('.fm-toast[data-variant="error"]');
     expect(smokeScript).toContain("fulfillMissingFixtureResource");
     expect(smokeScript).not.toContain("fixture resource not published");
+    expect(smokeScript).not.toContain("allowMissingSessionSmoke");
+    expect(smokeScript).toContain("disableRealtime");
     expect(smokeScript).toContain("CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE");
     expect(smokeScript).toContain("makeRowsFixture");
     expect(smokeScript).toContain("waitForAnalysisRowsAndCanvas");

@@ -29,6 +29,10 @@ const acceptanceDirectory =
 const ANALYSIS_SURFACES = [
   "Dynamics", "Resonance & FMR", "Dispersion", "Hysteresis", "Comparison",
 ];
+const SESSION_COLLECTION_PATH = "/v2/sessions";
+const FIXTURE_SESSION_ID = "analysis-plots-fixture";
+const FIXTURE_SESSION_EPOCH = "00000000-0000-4000-8000-000000000017";
+const FIXTURE_REQUEST_SCOPE_EPOCH = "00000000-0000-4000-8000-000000000018";
 const ROWS_BIN_PATTERN =
   /^\/v2\/sessions\/current\/data\/tables\/[^/]+\/rows\.bin(?:\?|$)/;
 const FREQUENCY_DOMAIN_PATHS = {
@@ -54,11 +58,10 @@ async function main() {
   const rowsBinRequests = [];
   const analysisPlotRequests = [];
 
-  await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
+  await page.addInitScript(({ disableRealtime, baseUrl }) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
-      ...(allowMissingSessionSmoke ? { allowMissingSessionSmoke: true } : {}),
-      ...(allowMissingSessionSmoke ? { disableRealtime: true } : {}),
+      ...(disableRealtime ? { disableRealtime: true } : {}),
       controlRoomApiBase: baseUrl,
     };
     window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__ = true;
@@ -72,7 +75,7 @@ async function main() {
       resizeCalls: 0,
       setOptionCalls: 0,
     };
-  }, { allowMissingSessionSmoke: useFixture, baseUrl: apiBase });
+  }, { disableRealtime: useFixture, baseUrl: apiBase });
 
   if (useFixture) await installAnalysisDatasetFixtureRoutes(page);
 
@@ -739,7 +742,6 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
     await page.addInitScript(({ apiBase }) => {
       window.__FULLMAG_CONFIG__ = {
         ...(window.__FULLMAG_CONFIG__ ?? {}),
-        allowMissingSessionSmoke: true,
         disableRealtime: true,
         controlRoomApiBase: apiBase,
       };
@@ -1040,11 +1042,48 @@ async function clickFrequencyDomainPoint(page, expected) {
     (request) => currentSessionPath(request.url())?.split("?")[0] === expectedModePath,
     { timeout: 800 },
   ).catch(() => null);
+  const expectedModeResponse = page.waitForResponse(
+    (response) => currentSessionPath(response.url())?.split("?")[0] === expectedModePath,
+    { timeout: 800 },
+  ).catch(() => null);
   await page.mouse.click(coordinateTarget.x, coordinateTarget.y);
   const request = await expectedModeRequest;
-  if (!request) {
+  const modeResponse = await expectedModeResponse;
+  if (!request || !modeResponse) {
     throw new Error(
-      `Mouse click at the rendered row ${expected.rowId} coordinate did not request ${expectedModePath}.`,
+      `Mouse click at the rendered row ${expected.rowId} coordinate did not request and receive ${expectedModePath}.`,
+    );
+  }
+  if (!modeResponse.ok()) {
+    throw new Error(
+      `Selected eigen mode resource returned HTTP ${modeResponse.status()} for ${expectedModePath}.`,
+    );
+  }
+  let modePayload = null;
+  try {
+    modePayload = (await modeResponse.json())?.payload ?? null;
+  } catch (error) {
+    throw new Error(
+      `Selected eigen mode resource was not valid JSON for ${expectedModePath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const modeDetailCanonicalRelativeL2Present =
+    modePayload !== null &&
+    Object.prototype.hasOwnProperty.call(modePayload, "residual_relative_l2");
+  if (expected.expectModeDetailRelativeL2Absent && (
+    modePayload === null ||
+    typeof modePayload !== "object" ||
+    Array.isArray(modePayload) ||
+    modePayload.sample_index !== expected.sampleIndex ||
+    modePayload.raw_mode_index !== expected.modeIndex
+  )) {
+    throw new Error(
+      `Selected eigen mode response did not contain the requested sample/mode payload: ${JSON.stringify(modePayload)}`,
+    );
+  }
+  if (expected.expectModeDetailRelativeL2Absent && modeDetailCanonicalRelativeL2Present) {
+    throw new Error(
+      `Selected mode detail published residual_relative_l2; the browser fallback case must obtain it from the spectrum.`,
     );
   }
   await page.waitForFunction(
@@ -1084,6 +1123,9 @@ async function clickFrequencyDomainPoint(page, expected) {
       `Rendered row ${expected.rowId} did not select sample ${expected.sampleIndex}, mode ${expected.modeIndex}, field ${expected.fieldId}. Inspector: ${inspectorText}`,
     );
   }
+  const residualFields = expected.residualFields
+    ? await waitForFrequencyDomainResidualFields(page, expected.residualFields)
+    : null;
   const renderedClick = await page.evaluate(({ rowId, sourceGapRow }) => {
     const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
     const click = diagnostics?.lastRenderedClick;
@@ -1136,13 +1178,60 @@ async function clickFrequencyDomainPoint(page, expected) {
     expectedModePath,
     fieldId: expected.fieldId,
     modeId: expected.modeId,
+    modeDetailCanonicalRelativeL2Present,
     resourceRef: expected.resourceRef,
     renderedClick,
+    residualFields,
     rowId: expected.rowId,
     sampleId: expected.sampleId,
     sampleIndex: expected.sampleIndex,
     tooltip: tooltipMatch,
   };
+}
+
+async function waitForFrequencyDomainResidualFields(page, expectedFields) {
+  await page.waitForFunction((fields) => {
+    const panel = document.querySelector(
+      '[data-inspector-owner="frequency-domain.eigen-mode"]',
+    );
+    if (!panel) return false;
+    const renderedFields = new Map(
+      Array.from(panel.querySelectorAll(".fm-inspector-field-row"))
+        .map((row) => [
+          row.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() ?? "",
+          row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? "",
+        ]),
+    );
+    return Object.entries(fields).every(([label, expected]) => {
+      if (!renderedFields.has(label)) return false;
+      const rendered = renderedFields.get(label);
+      return typeof expected === "number"
+        ? Number(rendered) === expected
+        : rendered === expected;
+    });
+  }, expectedFields, { timeout: 1_200 }).catch(async () => {
+    const renderedFields = await readFrequencyDomainInspectorFields(page);
+    throw new Error(
+      `Selected eigen mode residual fields did not match the published spectrum fallback: ${JSON.stringify({ expectedFields, renderedFields })}`,
+    );
+  });
+  return readFrequencyDomainInspectorFields(page);
+}
+
+async function readFrequencyDomainInspectorFields(page) {
+  return page.evaluate(() => {
+    const panel = document.querySelector(
+      '[data-inspector-owner="frequency-domain.eigen-mode"]',
+    );
+    if (!panel) return {};
+    return Object.fromEntries(
+      Array.from(panel.querySelectorAll(".fm-inspector-field-row"))
+        .map((row) => [
+          row.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() ?? "",
+          row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? "",
+        ]),
+    );
+  });
 }
 
 async function readFrequencyDomainTooltip(host) {
@@ -1167,12 +1256,18 @@ function createFrequencyDomainChartFixtures() {
         fieldId: spectrumFieldId,
         modeId: "sample-0003/mode-0042",
         modeIndex: 42,
+        expectModeDetailRelativeL2Absent: true,
         rowId: 1,
         resourceRef: frequencyModeFieldResourceKey(spectrumFieldId),
         sampleId: "spectrum-sample-0003",
         sampleIndex: 3,
         seriesType: "line",
         frequencyHz: 2.25e9,
+        residualFields: {
+          "Absolute residual (L2)": "not available",
+          "Relative residual (L2)": 1e-7,
+          "Spectrum residual (type unspecified)": 2e-4,
+        },
       },
       id: "modal-spectrum-alias-and-derived-field-key",
       minimumLegendCount: 1,
@@ -1191,6 +1286,8 @@ function createFrequencyDomainChartFixtures() {
               frequency_hz: 2.25e9,
               mode_field_available: true,
               mode_field_id: spectrumFieldId,
+              residual_norm: 2e-4,
+              residual_relative_l2: 1e-7,
               mode_id: "sample-0003/mode-0042",
               raw_mode_index: 42,
             },
@@ -1332,6 +1429,26 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     table_id: datasetRef,
     total_rows: 256,
   };
+  await page.route(`**${SESSION_COLLECTION_PATH}`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const cors = {
+      "access-control-expose-headers": "x-api-contract-version",
+      "access-control-allow-origin": "*",
+      "x-api-contract-version": "1.0.0",
+    };
+    if (request.method() !== "GET" || url.pathname !== SESSION_COLLECTION_PATH) {
+      await fulfillMissingFixtureResource(route, cors);
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify(sessionCollectionFixture()),
+      contentType: "application/json",
+      headers: cors,
+      status: 200,
+    });
+  });
+
   await page.route("**/v2/sessions/current/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -1527,7 +1644,7 @@ function frequencyDomainManifestFixture(fixture) {
     revision: payloadDigest,
     run_id: "analysis-frequency-fixture-run",
     schema_version: "frequency_domain_manifest.v1",
-    session_id: "analysis-fixture",
+    session_id: FIXTURE_SESSION_ID,
     stage_id: "analysis-frequency-fixture-stage",
     status: "ready",
   };
@@ -1642,7 +1759,7 @@ function frequencyDomainJsonArtifactFixture({ artifactPath, payload, resourceKey
     revision: contentDigest,
     run_id: "analysis-frequency-fixture-run",
     schema_version: schemaVersion,
-    session_id: "analysis-fixture",
+    session_id: FIXTURE_SESSION_ID,
     stage_id: "analysis-frequency-fixture-stage",
     status: "ready",
   };
@@ -1662,7 +1779,7 @@ function frequencyDomainTextArtifactFixture(text) {
     revision: contentDigest,
     run_id: "analysis-frequency-fixture-run",
     schema_version: "frequency_domain_eigen_dispersion.v1",
-    session_id: "analysis-fixture",
+    session_id: FIXTURE_SESSION_ID,
     stage_id: "analysis-frequency-fixture-stage",
     status: "ready",
     text,
@@ -1735,12 +1852,26 @@ function analysisStatusFixture({
     run: null,
     runtime_bundle_version: "analysis-plots-fixture",
     session: {
-      created_at: "0",
-      name: "analysis-plots-fixture",
-      session_id: "analysis-plots-fixture",
+      created_at: "2026-10-08T00:00:00.000Z",
+      name: FIXTURE_SESSION_ID,
+      request_scope_epoch: FIXTURE_REQUEST_SCOPE_EPOCH,
+      session_epoch: FIXTURE_SESSION_EPOCH,
+      session_id: FIXTURE_SESSION_ID,
       workspace_root: "/tmp/fullmag-analysis-plots-fixture",
     },
     solver: { state: "idle" },
+  };
+}
+
+function sessionCollectionFixture() {
+  return {
+    schema_version: "2.0.0",
+    sessions: [{
+      current: true,
+      name: FIXTURE_SESSION_ID,
+      session_id: FIXTURE_SESSION_ID,
+      status: "active",
+    }],
   };
 }
 
