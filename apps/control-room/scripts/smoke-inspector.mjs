@@ -1791,6 +1791,8 @@ async function ensureModelNodeVisible(page, nodeId) {
     ? ["model:universe", "model:airbox"]
     : nodeId.startsWith("model:object:film:magnetic-texture:")
       ? ["model:objects", "model:object:film", "model:object:film:magnetic-texture"]
+      : nodeId.startsWith("model:object:film:visualization:")
+        ? ["model:objects", "model:object:film", "model:object:film:visualization"]
       : nodeId.startsWith("model:object:film:")
         ? ["model:objects", "model:object:film"]
       : nodeId.startsWith("model:mesh:unassigned:")
