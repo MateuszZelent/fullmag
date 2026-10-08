@@ -2131,26 +2131,18 @@ def _generate_coincident_ring_airbox_mesh(
             source_entities = [(2, current_annulus)] + (
                 [(2, current_hole)] if current_hole is not None else []
             )
-            if scoped_layer_partitioning:
-                # Build the exact layer volumes and owner tags before any mesh
-                # exists, so scoped 3D fields can be evaluated without sharing
-                # a premeshed source face across magnetic and air layers.
-                extruded = gmsh.model.geo.extrude(
-                    source_entities,
-                    0.0,
-                    0.0,
-                    step,
-                )
-            else:
-                extruded = gmsh.model.geo.extrude(
-                    source_entities,
-                    0.0,
-                    0.0,
-                    step,
-                    numElements=[1],
-                    heights=[1.0],
-                    recombine=True,
-                )
+            # Keep every requested z interval to one extrusion layer. The
+            # scoped path leaves the source face unmeshed so owner-tagged 3D
+            # fields remain active for in-plane sizing during mesh generation.
+            extruded = gmsh.model.geo.extrude(
+                source_entities,
+                0.0,
+                0.0,
+                step,
+                numElements=[1],
+                heights=[1.0],
+                recombine=True,
+            )
             gmsh.model.geo.synchronize()
             volumes = [int(tag) for dim, tag in extruded if int(dim) == 3]
             if len(volumes) != (2 if tool is not None else 1):

@@ -110,6 +110,13 @@ wynik musi przejść istniejący exact count, wszystkie węzły magnetyczne musz
 leżeć na dokładnie zadanych płaszczyznach, każda warstwa musi być niepusta,
 a żaden tetraedr magnetyczny nie może przecinać wewnętrznej płaszczyzny.
 Dodatkowe poziomy z są błędem, nie dopuszczoną przybliżoną realizacją.
+Każdy zadany przedział GEO ma jawnie jedną warstwę ekstrudowania
+(`numElements=[1]`, znormalizowane `heights=[1.0]`, `recombine=True`).
+Dotyczy to także trasy scoped: ściana źródłowa pozostaje niesiatkowana przed
+ustaleniem owner tags, a pola regionalne zachowują swój zakres w płaszczyźnie.
+Pomijanie parametrów warstwy pozwalało Gmsh dodać poziomy z i kończyło się
+odmową exact-count. Poprawka zachowuje bramki liczby płaszczyzn i gęstości;
+jej świeża regresja actualGmsh pozostaje **NOT VERIFIED** do wykonania w CI.
 
 Raport rozróżnia plan od wyniku. Przed meshingiem oraz po błędzie nie wolno
 emitować potwierdzenia `layer_planes_realized`. Dowód powstaje dopiero po
