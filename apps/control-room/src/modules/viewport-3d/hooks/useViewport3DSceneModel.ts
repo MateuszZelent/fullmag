@@ -6605,7 +6605,6 @@ export function useViewport3DSceneModel({
     analysisOverlay?.floquetSpatialConvention,
     analysisOverlay?.phasorConvention,
     analysisOverlay?.wavevectorKf,
-    analysisFieldIntent,
     analysisOverlay?.source,
     modeFieldOverlay.metadata?.availableViews,
     modeFieldOverlay.phasorAmplitudeMax,

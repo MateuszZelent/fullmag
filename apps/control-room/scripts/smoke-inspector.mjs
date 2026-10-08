@@ -2909,6 +2909,14 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") return fulfillJson(route, inspectorFrequencyManifest(fixture));
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") return fulfillJson(route, inspectorFrequencySpectrum(fixture));
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") return fulfillJson(route, inspectorFrequencyBranches(fixture));
+    const eigenModeMatch = /^\/v2\/sessions\/current\/analysis\/frequency-domain\/eigen\/modes\/(\d+)\/(\d+)$/.exec(path);
+    if (eigenModeMatch) {
+      return fulfillJson(route, inspectorFrequencyMode(
+        fixture,
+        Number(eigenModeMatch[1]),
+        Number(eigenModeMatch[2]),
+      ));
+    }
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") {
       const race = fixture.modalDispersionRace;
       if (fixture.analysisProduct === "modal_eigen" && race?.phase === "run-a-delayed") {
@@ -3772,6 +3780,33 @@ function inspectorFrequencySpectrum() {
     resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
     schema_version: "frequency_domain_eigen_spectrum.v2",
     status: "ready",
+  };
+}
+
+function inspectorFrequencyMode(fixture, sampleIndex, modeIndex) {
+  const branches = inspectorFrequencyBranches(fixture);
+  const branch = branches.payload.branches.find((candidate) =>
+    candidate.points.some((point) =>
+      point.sample_index === sampleIndex && point.raw_mode_index === modeIndex,
+    ),
+  );
+  const mode = branch?.points.find((point) =>
+    point.sample_index === sampleIndex && point.raw_mode_index === modeIndex,
+  );
+  return {
+    ...branches,
+    artifact_path: `eigen/modes/sample_${String(sampleIndex).padStart(4, "0")}/mode_${String(modeIndex).padStart(4, "0")}.json`,
+    missing_reason: mode ? null : "fixture_mode_not_present",
+    payload: mode ? {
+      ...mode,
+      branch_id: branch.branch_id,
+      frequency_hz: mode.frequency_real_hz,
+      schema_version: "eigen_mode.v2",
+      solver_model: branches.payload.solver_model,
+    } : null,
+    resource_key: `/v2/sessions/current/analysis/frequency-domain/eigen/modes/${sampleIndex}/${modeIndex}`,
+    schema_version: "frequency_domain_eigen_mode_resource.v1",
+    status: mode ? "ready" : "missing",
   };
 }
 

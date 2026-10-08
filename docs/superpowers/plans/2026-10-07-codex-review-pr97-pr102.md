@@ -1100,3 +1100,13 @@ Hook React Doctor79/100 zgłosił dwa await-in-loop; sourceHEAD~1 potwierdza, ż
 to istniejące yieldToMain pętle chunking/cancellation, bez nowego await w patchu.
 Nie usuwano yieldów ani nie tłumiono diagnostyki.
 CPU-SLEPc run37800314609/job113390449283 nadal IN_PROGRESS; nie restartowano go.
+
+GUI69c2e0cd2 run37801898690: production typecheck PASS; lint FAIL z powodu
+jednego zduplikowanego analysisFieldIntent dependency. Browser przechodzi
+matched-B modal metadata/vector/shader-uniform handoff, a potem zatrzymuje się
+na nieobsłużonym fixture GET eigen/modes/1/2 przed resetem kolejnego przypadku.
+Usunięto wyłącznie duplicate dep (pozostaje wcześniejszy wpis). Dodano canonical
+mode-detail route z danych istniejącej branches fixture, tym samym ownerem i
+rzeczywistym artifact path/schema. Nieobecny punkt daje missing, nie zawsze-ready.
+Browser error assertion pozostaje bez osłabienia. Source review/Node parse PASS;
+świeży pełny browser/types/Vitest gate wymagany.
