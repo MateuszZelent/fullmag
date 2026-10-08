@@ -4,6 +4,8 @@
 *.mphtxt -text
 justfile text eol=lf
 scripts/local_runner/worker_entrypoint.py text eol=lf
+# This controller is compared byte-for-byte with its immutable source capsule.
+scripts/run_nonzero_k_validation_controller.py text eol=lf
 agent/skills/**/scripts/* text eol=lf
 .agents/skills/**/scripts/* text eol=lf
 

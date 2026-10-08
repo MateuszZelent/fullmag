@@ -445,6 +445,9 @@ jobs:
       - name: Run COMSOL scientific gate regression suite
         run: python -B scripts/test_validate_comsol_dispersion_scientific_gate.py -v
 
+      - name: Run nonzero-k controller capsule attestation regression
+        run: python -B scripts/test_nonzero_k_validation_controller.py -v
+
       - name: Run DE Gamma Krylov trial contracts
         run: python scripts/test_de_gamma_krylov_trial.py -v
 

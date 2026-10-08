@@ -11,6 +11,39 @@ def write_pinned_controller(storage, job):
 
 
 class ControllerTests(unittest.TestCase):
+    def test_hash_bound_controller_checkout_matches_commit_and_capsule_bytes(self):
+        import hashlib
+        import subprocess
+        import tempfile
+
+        repository = Path(__file__).resolve().parents[1]
+        relative = "scripts/run_nonzero_k_validation_controller.py"
+        attributes = subprocess.run(
+            ["git", "check-attr", "eol", "--", relative],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(attributes.stdout.strip(), f"{relative}: eol: lf")
+
+        committed = subprocess.run(
+            ["git", "show", f"HEAD:{relative}"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+        ).stdout
+        executing_path = Path(controller.__file__).resolve()
+        self.assertEqual(executing_path.read_bytes(), committed)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            capsule = Path(temporary) / "capsule"
+            pinned = capsule / relative
+            pinned.parent.mkdir(parents=True)
+            pinned.write_bytes(committed)
+            config = {"controller_sha256": hashlib.sha256(committed).hexdigest()}
+            controller.validate_controller_source(config, capsule, executing_path)
+
     def test_execution_rejects_modified_controller_before_running_pilots(self):
         import hashlib
         import tempfile
