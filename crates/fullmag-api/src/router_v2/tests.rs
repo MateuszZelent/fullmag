@@ -44291,19 +44291,27 @@ fn openapi_mode_field_availability_is_optional_boolean() {
         let schema = schemas
             .get(schema_name)
             .expect("mode schema must be present");
-        let availability = schema
-            .get("properties")
-            .and_then(|properties| properties.get("mode_field_available"))
+        let schema_parts: Vec<&serde_json::Value> = schema
+            .get("allOf")
+            .and_then(|all_of| all_of.as_array())
+            .map(|all_of| std::iter::once(schema).chain(all_of.iter()).collect())
+            .unwrap_or_else(|| vec![schema]);
+        let availability = schema_parts
+            .iter()
+            .find_map(|part| {
+                part.get("properties")
+                    .and_then(|properties| properties.get("mode_field_available"))
+            })
             .expect("mode schema must expose typed availability");
         assert_eq!(
             availability.get("type"),
             Some(&serde_json::json!(["boolean", "null"])),
             "{schema_name}.mode_field_available must be a nullable boolean"
         );
-        let is_required = schema
-            .get("required")
-            .and_then(|value| value.as_array())
-            .is_some_and(|required| {
+        let is_required = schema_parts
+            .iter()
+            .filter_map(|part| part.get("required").and_then(|value| value.as_array()))
+            .any(|required| {
                 required
                     .iter()
                     .any(|field| field.as_str() == Some("mode_field_available"))

@@ -761,3 +761,27 @@ istniejącej realizacji opisanej w 0828-fem-frequency-domain-floquet-demag.md.
 Sanitizer ma rzeczywisty dowód pure-helper compile/run. Oba callsites GPU mają
 source review status propagation; kompilacja z providerem GPU i kwalifikacja
 fizyczna nadal NOT VERIFIED. Nie utożsamia się znaczników PASS z zielonym całym CI.
+### Checkpoint 08.10 — CI 37771858494 i akcja CPU
+
+CI dla 1b8a08bf72f665ef147a54fb909e56195f520540 zakończone FAILURE.
+Native job 113293130327 przeszedł naprawiony gated-operator test; zatrzymanie
+nastąpiło w teście bezpośredniej akcji Poisson-airbox shift-invert CPU.
+Źródło src/frequency_domain/modal_eigen_solver.cpp wywołuje referencyjną akcję
+CPU bez bramki SLEPc. Poprawiono tylko nieaktualną asercję OFF; status OK oraz
+zawartość artefaktu pozostają wymagane. Commit:
+fe7852d9838821cbd1f6d0132be0df2e7cc5a6d7, wypchnięty na branch PR97.
+Weryfikacja wykonania: oczekuje na GitHub Actions 37774134308.
+Nie wykonano lokalnych testów ani kompilacji.
+
+Rust job 113293130194 zatrzymał się wcześniej niż frequency_domain_:
+openapi_mode_field_availability_is_optional_boolean nie znalazł właściwości
+w wybranym schemacie. Nie oznacza to braku bool w wygenerowanym OpenAPI;
+trwa sprawdzenie nawigacji po rzeczywistym schemacie. Nie zaliczono quantity
+ani pozostałych filtrów na podstawie tego runu.
+Browser job 113293130343: timeout oczekiwanej odpowiedzi vector dla matched
+run B, smoke-inspector.mjs:1601. Diagnostyka w toku; bramka WebGL i ownership
+pozostaje NOT VERIFIED. PR97 pozostaje OPEN, pełny cel nieukończony.
+
+Dalszy review schematu: snapshot OpenAPI obu modeli zawiera pole w inline
+properties elementu allOf. Poprawiony test przegląda root i elementy allOf,
+zachowując dokładny typ boolean/null i brak required. Produkcji nie zmieniono.
