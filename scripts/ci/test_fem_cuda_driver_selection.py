@@ -200,7 +200,7 @@ class CudaDriverSelectionTests(unittest.TestCase):
     def _assert_rejected(self, result, expected_message):
         output = result.stdout + result.stderr
         self.assertNotEqual(result.returncode, 0, output)
-        self.assertIn(expected_message, output)
+        self.assertIn(expected_message, " ".join(output.split()), output)
 
     def _assert_selected(self, result, expected_path):
         output = result.stdout + result.stderr
