@@ -511,6 +511,103 @@ describe("StudyGlobalAuthoringModel", () => {
     );
   });
 
+  it("loads an explicit null parallel policy as canonical serial defaults", () => {
+    const draft = createStudyGlobalDraft({ study: { parallel_execution: null } });
+    expect(draft.parallelExecution).toEqual({
+      mode: "serial",
+      maxCpuPercent: "90",
+      maxMemoryPercent: "80",
+      memoryReserveMiB: "1024",
+      maxWorkers: "",
+      threadsPerWorker: "1",
+    });
+    expect(
+      validateStudyGlobalDraft(draft).map((issue) => issue.message),
+    ).not.toContain("Parallel execution mode must be serial or adaptive.");
+
+    const request = buildStudyGlobalMergePatch(draft);
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(requireJsonObject(request.merge_patch.study).parallel_execution).toEqual({
+      mode: "serial",
+      max_cpu_percent: 90,
+      max_memory_percent: 80,
+      memory_reserve_bytes: 1073741824,
+      max_workers: null,
+      threads_per_worker: 1,
+    });
+  });
+
+  it("preserves valid non-default serial policy fields through the study patch", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        parallel_execution: {
+          mode: "serial",
+          max_cpu_percent: 75,
+          max_memory_percent: 60,
+          memory_reserve_bytes: 268435456,
+          max_workers: 2,
+          threads_per_worker: 3,
+        },
+      },
+    });
+    expect(draft.parallelExecution).toEqual({
+      mode: "serial",
+      maxCpuPercent: "75",
+      maxMemoryPercent: "60",
+      memoryReserveMiB: "256",
+      maxWorkers: "2",
+      threadsPerWorker: "3",
+    });
+    const policyIssues = validateStudyGlobalDraft(draft).filter((issue) =>
+      issue.message.startsWith("Maximum CPU target") ||
+      issue.message.startsWith("Maximum memory target") ||
+      issue.message.startsWith("Memory reserve") ||
+      issue.message.startsWith("Maximum workers") ||
+      issue.message.startsWith("Threads per worker"),
+    );
+    expect(policyIssues).toEqual([]);
+
+    const request = buildStudyGlobalMergePatch(draft);
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(requireJsonObject(request.merge_patch.study).parallel_execution).toEqual({
+      mode: "serial",
+      max_cpu_percent: 75,
+      max_memory_percent: 60,
+      memory_reserve_bytes: 268435456,
+      max_workers: 2,
+      threads_per_worker: 3,
+    });
+  });
+
+  it("still validates numeric limits for serial parallel policies", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        parallel_execution: {
+          mode: "serial",
+          max_cpu_percent: 0,
+          max_memory_percent: 101,
+          memory_reserve_bytes: -1,
+          max_workers: 0,
+          threads_per_worker: 0,
+        },
+      },
+    });
+    expect(validateStudyGlobalDraft(draft).map((issue) => issue.message)).toEqual(
+      expect.arrayContaining([
+        "Maximum CPU target must be finite and in the range (0, 100].",
+        "Maximum memory target must be finite and in the range (0, 100].",
+        "Memory reserve (MiB) must be finite, nonnegative, and convert to a safe integer number of bytes.",
+        "Maximum workers must be a positive integer.",
+        "Threads per worker must be a positive integer.",
+      ]),
+    );
+    expect(() => buildStudyGlobalMergePatch(draft)).toThrow(
+      "Maximum CPU target must be finite and in the range (0, 100].",
+    );
+  });
+
   it("keeps malformed imported parallel policy values visible for validation", () => {
     const draft = createStudyGlobalDraft({
       study: {

@@ -183,7 +183,9 @@ export function createStudyGlobalDraft(scene: unknown): StudyGlobalDraft {
   const rawParallelExecution = study?.parallel_execution;
   const parallelExecution = asRecord(rawParallelExecution);
   const parallelPolicyShapeInvalid =
-    rawParallelExecution !== undefined && parallelExecution === null;
+    rawParallelExecution !== undefined &&
+    rawParallelExecution !== null &&
+    parallelExecution === null;
   const parallelMode = parallelModeText(
     parallelPolicyShapeInvalid ? rawParallelExecution : parallelExecution?.mode,
   );
