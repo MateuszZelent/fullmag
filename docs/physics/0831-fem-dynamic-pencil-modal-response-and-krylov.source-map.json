@@ -142,7 +142,25 @@
         "source-mode-kinematics",
         "source-mode-kinematics-policy",
         "source-mode-kinematics-regression",
-        "source-contract-regression"
+        "source-contract-regression",
+        "source-modal-phase-aware-result-serialization",
+        "test-modal-phase-aware-cabi"
+      ]
+    },
+    {
+      "id": "eq-fem-eigen-frequency-mapping-exp-minus",
+      "symbols": [
+        "lambda_shift",
+        "omega",
+        "frequency",
+        "time",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-mode-kinematics",
+        "source-mode-kinematics-policy",
+        "source-modal-phase-aware-result-serialization",
+        "test-modal-phase-aware-cabi"
       ]
     },
     {
@@ -2677,6 +2695,24 @@
       "path": "backends/fem/tests/frequency_domain/mode_kinematics_test.cpp",
       "symbol": "main",
       "responsibility": "Unique test executable entrypoint calls default_zero_frequency_classification_preserves_small_finite_branches, which regresses signed 1 rad/s and 1 kHz modes, exact zero, both phase conventions and explicit tolerance boundaries; source test only."
+    },
+    {
+      "id": "source-modal-phase-aware-result-serialization",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "std::string mode_kinematics_json_fields",
+      "responsibility": "Map selected and per-mode signed eigenvalues through map_eigenvalue(lambda, phase_convention), publish the actual phasor_convention label at both levels, and preserve raw lambda, mode vectors, amplitudes, and residuals. Provider-backed phase-branch proof is NOT VERIFIED pending GHA."
+    },
+    {
+      "id": "source-modal-request-phase-diagnostic",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "FrequencyDomainContractResult nonzero_k_floquet_k0_poisson_path_unavailable",
+      "responsibility": "Report the request's actual temporal phasor convention in the unavailable-path diagnostics."
+    },
+    {
+      "id": "test-modal-phase-aware-cabi",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void generic_slepc_phase_convention_cabi",
+      "responsibility": "Exercise actual generic dense and CSR SLEPc C ABI providers for nearest and window results under both temporal conventions; check top-level and every mode's actual phasor_convention, signed lambda, frequency, omega, and branch. The existing contour-minus rejection remains in the full contract suite; tiny validation keeps request-based mapping. GHA execution pending; NOT VERIFIED."
     },
     {
       "id": "source-floquet-ksp-failure-probe-dto",

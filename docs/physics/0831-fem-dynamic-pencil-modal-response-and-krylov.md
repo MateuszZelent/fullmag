@@ -257,6 +257,33 @@ An importer using `exp(-i omega t)` maps into this convention by complex
 conjugating the phasor representation and reversing the eigenvalue/frequency
 signs consistently. It is not a second implementation path.
 
+The existing modal request's `phase_convention` selects the temporal mapping
+used for the returned signed eigenvalue. For a request using
+$e^{-\mathrm{i}\omega t}$,
+
+```{math}
+:label: eq-fem-eigen-frequency-mapping-exp-minus
+\lambda=-\mathrm{i}\omega,
+\qquad
+\omega=\mathrm{i}\lambda,
+\qquad
+f=\frac{\operatorname{Re}(\omega)}{2\pi}.
+```
+
+The mapper keeps the input complex `lambda` unchanged. The positive physical
+frequency branch is selected from the signed imaginary part: positive for
+$e^{+\mathrm{i}\omega t}$ and negative for $e^{-\mathrm{i}\omega t}$. Frequency
+and angular frequency retain that sign; taking $|\operatorname{Im}(\lambda)|$ would erase the requested
+branch. This temporal choice is independent of the spatial Floquet phase
+$p=\exp(-\mathrm{i}\mathbf{k}\cdot\Delta\mathbf{r})$ defined by
+`eq-fem-dynamic-floquet-constraint`; a
+change of temporal phasor convention does not conjugate or replace the spatial
+Bloch phase. No Python or `ProblemIR` field changes here; the existing native
+modal request carries this convention. Successful result JSON records the
+actual `phasor_convention` in the top-level kinematics object and each returned
+mode. This is additive result provenance, not a new Python, `ProblemIR`, or
+C ABI request field.
+
 (assumptions-and-validity)=
 ### 2.4 Assumptions and validity limits
 
@@ -1707,6 +1734,7 @@ managed physics evidence.
 | Poisson BC/gauge | manufactured Robin, Dirichlet, and pure-Neumann P1 cases | Poisson-airbox modal/response |
 | Demag physics | sphere/ellipsoid sign and energy plus airbox-padding convergence | production demag claims |
 | Modal/response parity | modal frequency matches driven resonance and original residual | modal/reduced response |
+| Temporal phasor branch | C ABI generic dense and CSR providers, nearest and window selections, both conventions; compare top-level and every mode's signed lambda, frequency, omega, and branch | all generic modal result mappings |
 | Nonnormal response | left/right modal and Petrov-Galerkin reduced oracles | damped/nonconservative ROM |
 | Floquet | phase-plus-frame cycle, k=0 periodic parity, supercell, exchange `k^2` | nonzero-k claims |
 | Spectrum | selected-window completeness, finite-mode filtering, conjugate pairing | interior-window eigensolve |
@@ -1716,6 +1744,17 @@ managed physics evidence.
 Analytical expected values are verifier inputs only. They never construct the
 operator under test. Native FEM runtime qualification must use repository
 container-backed `just` recipes; host-only checks cannot promote capability.
+
+The focused `modal_eigen_contract_test --modal-slepc-phase-convention` mode
+must run the actual generic SLEPc provider for dense and CSR payloads under
+both temporal conventions and both nearest-frequency and frequency-window
+requests. It checks top-level and every returned mode's signed eigenvalue,
+frequency, angular frequency, branch sign, and actual `phasor_convention`
+label. Tiny validation continues to map the request convention, and the
+contour-minus rejection remains covered by the full contract test. The focused
+mode fails when MFEM or SLEPc is unavailable and prints the exact marker
+`PASS: modal_slepc_phase_convention_contract` only after those checks pass.
+Provider-backed GHA execution is pending; source proof is **NOT VERIFIED**.
 
 ## 6. Completeness checklist
 
@@ -2301,6 +2340,9 @@ Repository-owned related contracts:
 | crates/fullmag-runner/src/fem/eigen_native_window.rs | execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance | Return non-OK native solve status before parsing result_json modes; strict-count error modes remain C ABI diagnostics and are not runner artifacts. |
 | backends/fem/tests/frequency_domain/mode_deduplication_test.cpp | main | The test entrypoint calls `slepc_hard_solve_error_prevents_followup_queries_and_cleanup`, `slepc_vector_query_error_leaves_acquired_views_in_quarantine`, `slepc_destroy_sequence_stops_and_retains_remaining_handles_on_failure`, and `generic_candidate_span_gram_rejects_indefinite_dense_and_csr_mass`, alongside the finalizer fixture; injected callbacks verify the shared operation/destroy gates only, not PETSc runtime failures. The other cases cover phase-copy rank deficiency, mass-orthogonal modes, candidate-span PSD rejection, and missing/invalid mass. |
 | backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | main | The test entrypoint calls `generic_dense_window_refills_after_search_filtering`, covering provider-backed dense refill, partial output, nearest underfill, mass rejection, and budget telemetry; GHA execution pending. |
+| backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | std::string mode_kinematics_json_fields | Map top-level selections and all serialized modes using the request's temporal phase convention; publish its `phasor_convention` label while preserving raw eigenvalues, vectors, amplitudes, and residuals. Provider-backed phase-branch proof is **NOT VERIFIED** pending GHA. |
+| backends/fem/src/frequency_domain/modal_eigen_solver.cpp | FrequencyDomainContractResult nonzero_k_floquet_k0_poisson_path_unavailable | Preserve the requested temporal phasor label in unavailable-path diagnostics. |
+| backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | void generic_slepc_phase_convention_cabi | Exercise actual dense and CSR generic SLEPc C ABI providers for nearest and window results under both conventions; assert top-level and all-mode signed kinematics, preserve existing contour-minus coverage and request-based tiny-validation mapping, and print `PASS: modal_slepc_phase_convention_contract`. GHA execution pending; **NOT VERIFIED**. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | SLEPcModalCandidateFinalization finalize_slepc_modal_candidates_with_mass | Before overlap deduplication, form and certify only the residual-approved candidate-span Gram matrix using the declared dense or CSR mass action. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | bool destroy_slepc_modal_objects | Stop after hard PETSc/SLEPc operation errors, check each destructor, and quarantine remaining per-call handles without further graph calls, retrying, or publishing canonical output. |
 | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | Copy callback-owned scalar telemetry before releasing an unsafe failed EPS/KSP graph; do not query PETSc objects after a hard solve error. |

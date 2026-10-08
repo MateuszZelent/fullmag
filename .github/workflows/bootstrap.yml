@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       contract_scope:
-        description: Select bootstrap, browser, native modal, positive-mass, or CPU SLEPc modal contracts.
+        description: Select bootstrap, browser, native modal, positive-mass, or focused CPU SLEPc modal contracts.
         type: choice
         required: true
         default: bootstrap
@@ -19,11 +19,12 @@ on:
           - floquet-modal-slepc
           - generic-modal-slepc
           - floquet-count-slepc
+          - modal-phase-slepc
           - retention
 
 jobs:
   native-modal-cabi-contract:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -56,7 +57,7 @@ jobs:
           if-no-files-found: error
 
   rust-contracts:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -174,7 +175,7 @@ jobs:
         run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts
 
   generated-api-determinism:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -201,7 +202,7 @@ jobs:
           ./scripts/ci/run_frontend3d_required_gate.sh generated-api-determinism
 
   api-hygiene-rg13:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -228,7 +229,7 @@ jobs:
           PATH=/usr/bin:/bin "$node_bin" apps/control-room/scripts/check-api-hygiene.mjs
 
   control-room-contracts:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -277,7 +278,7 @@ jobs:
         run: pnpm --dir apps/control-room build
 
   browser-fixture-smoke:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -377,7 +378,7 @@ jobs:
           if-no-files-found: error
 
   fdm-relaxation-qualification:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -399,7 +400,7 @@ jobs:
         run: timeout --foreground 180s cargo test -p fullmag-runner --test physics_validation fdm_relaxation::uniform_field_alignment -- --ignored --nocapture
 
   python-contracts:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -521,7 +522,7 @@ jobs:
 
 
   windows-volatile-storage-contracts:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -555,6 +556,14 @@ jobs:
     uses: ./.github/workflows/fem-positive-mass-contract.yml
     with:
       contract_profile: generic-modal-slepc
+
+  fem-modal-phase-slepc-contract:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'modal-phase-slepc' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fem-positive-mass-contract.yml
+    with:
+      contract_profile: modal-phase-slepc
 
   fem-floquet-count-slepc-contract:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'floquet-count-slepc' }}

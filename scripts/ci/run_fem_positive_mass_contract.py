@@ -134,6 +134,24 @@ CONTRACT_PROFILES["generic-modal-slepc"] = {
     "timeout": dict(CONTRACT_PROFILES["floquet-modal-slepc"]["timeout"]),
 }
 
+CONTRACT_PROFILES["modal-phase-slepc"] = {
+    **CONTRACT_PROFILES["generic-modal-slepc"],
+    "slug": "fem-modal-phase-slepc-contract",
+    "schema": "fullmag.ci.fem.modal_phase_slepc_contract.v1",
+    "preflight_schema": "fullmag.ci.fem.modal_phase_slepc_preflight.v1",
+    "qualification_scope": "mfem_cpu_slepc_modal_phase_convention_source_contract_only",
+    "tests": [{
+        "name": "fem_modal_eigen_phase_convention_contract",
+        "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+        "marker": "PASS: modal_slepc_phase_convention_contract",
+        "compile_definitions": [
+            "-DFULLMAG_HAS_MFEM_STACK=1",
+            "-DFULLMAG_FEM_WITH_SLEPC=1",
+            "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+        ],
+    }],
+}
+
 CONTRACT_PROFILES["floquet-count-slepc"] = {
     **CONTRACT_PROFILES["generic-modal-slepc"],
     "slug": "fem-floquet-count-slepc-contract",

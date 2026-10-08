@@ -16,6 +16,7 @@ on:
       - 'native/CMakeLists.txt'
       - 'native/cmake/FindFullmagMfem.cmake'
       - 'backends/fem/CMakeLists.txt'
+      - 'backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp'
       - 'backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp'
       - 'backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp'
       - 'backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp'
@@ -35,6 +36,7 @@ on:
           - floquet-modal-slepc
           - generic-modal-slepc
           - floquet-count-slepc
+          - modal-phase-slepc
 
 permissions:
   contents: read
@@ -42,7 +44,7 @@ permissions:
 jobs:
   fem-positive-mass-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ (inputs.contract_profile == 'floquet-modal-slepc' || inputs.contract_profile == 'generic-modal-slepc' || inputs.contract_profile == 'floquet-count-slepc') && 240 || 180 }}
+    timeout-minutes: ${{ (inputs.contract_profile == 'floquet-modal-slepc' || inputs.contract_profile == 'generic-modal-slepc' || inputs.contract_profile == 'floquet-count-slepc' || inputs.contract_profile == 'modal-phase-slepc') && 240 || 180 }}
     env:
       FULLMAG_STORAGE_PROFILE: linux-host
     steps:

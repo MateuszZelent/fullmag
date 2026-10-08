@@ -1000,6 +1000,10 @@ add_custom_target(fem_modal_eigen_floquet_count_contract
     DEPENDS fem_modal_eigen_contract)
 add_test(NAME fem_modal_eigen_floquet_count_contract
     COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --floquet-count-certificate)
+add_custom_target(fem_modal_eigen_phase_convention_contract
+    DEPENDS fem_modal_eigen_contract)
+add_test(NAME fem_modal_eigen_phase_convention_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --modal-slepc-phase-convention)
 
 add_fem_source_facade_contract(
     fem_poisson_airbox_eigen_oracle_contract

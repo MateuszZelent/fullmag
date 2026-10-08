@@ -49,6 +49,18 @@ namespace fullmag::fem::frequency_domain {
 
 namespace {
 
+const char *phase_convention_json_label(
+    FrequencyDomainPhaseConvention phase_convention) noexcept
+{
+    switch (phase_convention) {
+    case FrequencyDomainPhaseConvention::exp_i_omega_t:
+        return "exp_i_omega_t";
+    case FrequencyDomainPhaseConvention::exp_minus_i_omega_t:
+        return "exp_minus_i_omega_t";
+    }
+    return "unknown";
+}
+
 bool supported_frequency_domain_abi(std::uint32_t version) noexcept
 {
     return version == kFrequencyDomainAbiVersion ||
@@ -379,7 +391,8 @@ FrequencyDomainContractResult nonzero_k_floquet_k0_poisson_path_unavailable(
         "\"required_operator_payload_kind\":\"floquet_airbox_shared_domain_operator\","
         "\"requested_poisson_path\":\"k0_real_shared_domain\","
         "\"spectral_transform\":\"shift_invert\","
-        "\"phasor_convention\":\"exp_i_omega_t\"}";
+        "\"phasor_convention\":\"" +
+        std::string(phase_convention_json_label(request.phase_convention)) + "\"}";
     result.diagnostics_json = with_operator_diagnostics(
         std::move(result.diagnostics_json),
         request.operator_request.operator_diagnostics_json);

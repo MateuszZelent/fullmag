@@ -3937,6 +3937,222 @@ void modal_without_validation_problem_stays_unavailable()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void assert_modal_phase_kinematics(
+    const std::string &json,
+    const std::string &test_context,
+    double expected_lambda_imag,
+    const char *expected_phasor_convention,
+    bool require_mode_vectors)
+{
+    const auto number = [&](const char *key) {
+        return extract_json_number(json.c_str(), key, test_context.c_str());
+    };
+    const auto close_to = [&](double actual, double expected, double tolerance,
+                              const char *field) {
+        const std::string message = test_context + " " + field;
+        check(
+            std::isfinite(actual) && std::abs(actual - expected) <= tolerance,
+            message.c_str());
+    };
+
+    check(
+        contains(
+            json.c_str(),
+            (std::string("\"phasor_convention\":\"") +
+             expected_phasor_convention + "\"").c_str()),
+        (test_context + " reports the actual phasor convention").c_str());
+    const std::size_t phasor_key = json.find("\"phasor_convention\":");
+    check(phasor_key != std::string::npos, "kinematics record has phasor provenance");
+    check(
+        json.find("\"phasor_convention\":", phasor_key + 1u) == std::string::npos,
+        (test_context + " has exactly one phasor-convention key").c_str());
+
+    const double frequency_hz = number("\"frequency_hz\":");
+    const double omega_rad_s = number("\"omega_rad_s\":");
+    const double lambda_real = number("\"lambda_real_per_s\":");
+    const double lambda_imag = number("\"lambda_imag_rad_per_s\":");
+    const double eigenvalue_real = number("\"eigenvalue_real\":");
+    const double eigenvalue_imag = number("\"eigenvalue_imag\":");
+    const double branch_sign = number("\"branch_sign\":");
+    const double relative_residual = number("\"relative_residual\":");
+    close_to(frequency_hz, 1.0, 1.0e-6, "frequency_hz is positive and convention mapped");
+    close_to(omega_rad_s, 6.2831853071795864769, 1.0e-5,
+             "omega_rad_s is positive and convention mapped");
+    close_to(lambda_real, 0.0, 1.0e-5, "raw lambda real part is preserved");
+    close_to(lambda_imag, expected_lambda_imag, 1.0e-5,
+             "raw lambda imaginary sign follows the requested convention");
+    close_to(eigenvalue_real, lambda_real, 0.0,
+             "eigenvalue_real preserves the raw lambda real part");
+    close_to(eigenvalue_imag, lambda_imag, 0.0,
+             "eigenvalue_imag preserves the raw lambda imaginary part");
+    close_to(branch_sign, 1.0, 0.0, "branch_sign selects positive physical frequency");
+    check(
+        std::isfinite(relative_residual) && relative_residual >= 0.0 &&
+            relative_residual <= 1.0e-8,
+        (test_context + " retains a finite accepted residual").c_str());
+
+    if (require_mode_vectors) {
+        const std::size_t real_vector = json.find("\"mode_vector_real\":[");
+        const std::size_t imag_vector = json.find("\"mode_vector_imag\":[");
+        check(real_vector != std::string::npos,
+              (test_context + " retains mode_vector_real").c_str());
+        check(imag_vector != std::string::npos,
+              (test_context + " retains mode_vector_imag").c_str());
+        const std::size_t real_end = json.find(']', real_vector);
+        const std::size_t imag_end = json.find(']', imag_vector);
+        check(real_end > real_vector + std::strlen("\"mode_vector_real\":["),
+              (test_context + " retains real mode-vector amplitudes").c_str());
+        check(imag_end > imag_vector + std::strlen("\"mode_vector_imag\":["),
+              (test_context + " retains imaginary mode-vector amplitudes").c_str());
+    }
+}
+
+void generic_slepc_phase_convention_cabi()
+{
+    constexpr int tangent_dof_count = 10;
+    const std::size_t matrix_size =
+        static_cast<std::size_t>(tangent_dof_count * tangent_dof_count);
+    std::vector<double> stiffness(matrix_size, 0.0);
+    std::vector<double> gyrotropic(matrix_size, 0.0);
+    std::vector<double> tangent_mass(matrix_size, 0.0);
+    for (int block = 0; block < tangent_dof_count / 2; ++block) {
+        const int row = 2 * block;
+        const double omega = 6.2831853071795864769 *
+            static_cast<double>(block + 1);
+        stiffness[static_cast<std::size_t>(row * tangent_dof_count + row)] = omega;
+        stiffness[static_cast<std::size_t>(
+            (row + 1) * tangent_dof_count + row + 1)] = omega;
+        gyrotropic[static_cast<std::size_t>(
+            row * tangent_dof_count + row + 1)] = 1.0;
+        gyrotropic[static_cast<std::size_t>(
+            (row + 1) * tangent_dof_count + row)] = -1.0;
+        tangent_mass[static_cast<std::size_t>(
+            row * tangent_dof_count + row)] = 1.0;
+        tangent_mass[static_cast<std::size_t>(
+            (row + 1) * tangent_dof_count + row + 1)] = 1.0;
+    }
+
+    const CsrOwned stiffness_csr = dense_to_csr(
+        tangent_dof_count, tangent_dof_count, stiffness.data());
+    const CsrOwned gyrotropic_csr = dense_to_csr(
+        tangent_dof_count, tangent_dof_count, gyrotropic.data());
+    const CsrOwned mass_csr = dense_to_csr(
+        tangent_dof_count, tangent_dof_count, tangent_mass.data());
+    const bool sparse_payloads[] = {false, true};
+    const char *target_kinds[] = {"nearest_frequency", "frequency_window"};
+    const bool negative_phasors[] = {false, true};
+
+    for (const bool sparse_payload : sparse_payloads) {
+        for (const char *target_kind : target_kinds) {
+            for (const bool negative_phasor : negative_phasors) {
+                FullmagFemModalEigenRequest request = base_request();
+                request.operator_request.mesh_asset_id =
+                    "generic_modal_phase_convention_fixture";
+                request.target_kind = target_kind;
+                request.target_frequency_hz = 1.0;
+                request.frequency_min_hz =
+                    std::strcmp(target_kind, "frequency_window") == 0 ? 0.99 : 0.0;
+                request.frequency_max_hz =
+                    std::strcmp(target_kind, "frequency_window") == 0 ? 1.01 : 0.0;
+                request.requested_mode_count = 1;
+                request.completeness_policy = 0;
+                request.residual_tolerance = 1.0e-10;
+                request.max_outer_iterations = 256;
+                request.max_linear_iterations = 256;
+                request.eigensolver_family = 1;
+                request.phase_convention = negative_phasor
+                    ? FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T
+                    : FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+                request.operator_request.operator_diagnostics_json =
+                    "{\"operator_family\":\"generic_modal_phase_convention_fixture\","
+                    "\"payload_kind\":\"dense_linearized_mfem_operator\"}";
+                if (sparse_payload) {
+                    request.mfem_sparse_operator_enabled = 1;
+                    request.mfem_sparse_stiffness_csr = stiffness_csr.view();
+                    request.mfem_sparse_gyrotropic_csr = gyrotropic_csr.view();
+                    request.mfem_sparse_mass_csr = mass_csr.view();
+                    request.operator_request.operator_diagnostics_json =
+                        "{\"operator_family\":\"generic_modal_phase_convention_fixture\","
+                        "\"payload_kind\":\"sparse_csr\"}";
+                } else {
+                    request.mfem_operator_enabled = 1;
+                    request.mfem_tangent_dof_count = tangent_dof_count;
+                    request.mfem_stiffness_matrix_row_major = stiffness.data();
+                    request.mfem_gyrotropic_matrix_row_major = gyrotropic.data();
+                    request.mfem_mass_matrix_row_major = tangent_mass.data();
+                }
+
+                char context[160]{};
+                std::snprintf(
+                    context,
+                    sizeof(context),
+                    "%s %s %s",
+                    sparse_payload ? "CSR" : "dense",
+                    target_kind,
+                    negative_phasor ? "exp_minus_i_omega_t" : "exp_i_omega_t");
+                FullmagFemFrequencyDomainResult result =
+                    fullmag_fem_modal_eigen_solve(&request);
+                check(
+                    result.status == FULLMAG_FEM_FD_OK,
+                    "generic SLEPc C ABI phase fixture must produce accepted modes");
+                check(
+                    contains(result.diagnostics_json, "\"solver_adapter\":\"slepc_modal_eigen\""),
+                    "generic phase fixture must use the SLEPc modal provider");
+                check(
+                    contains(
+                        result.diagnostics_json,
+                        sparse_payload
+                            ? "\"mfem_operator_payload\":\"sparse_csr\""
+                            : "\"mfem_operator_payload\":\"dense_gyrotropic_matrix\""),
+                    "generic phase fixture must exercise the requested dense or CSR provider");
+
+                const std::string result_json = result.result_json;
+                const std::size_t modes_key = result_json.find("\"modes\":[");
+                check(modes_key != std::string::npos,
+                      "generic SLEPc result must publish its mode array");
+                const std::string top_level = result_json.substr(0, modes_key);
+                const char *phasor_label = negative_phasor
+                    ? "exp_minus_i_omega_t" : "exp_i_omega_t";
+                const double expected_lambda_imag = negative_phasor
+                    ? -6.2831853071795864769 : 6.2831853071795864769;
+                assert_modal_phase_kinematics(
+                    top_level,
+                    std::string(context) + " top-level",
+                    expected_lambda_imag,
+                    phasor_label,
+                    false);
+                const double accepted_mode_count = extract_json_number(
+                    top_level.c_str(),
+                    "\"accepted_mode_count\":",
+                    context);
+                check(
+                    accepted_mode_count == 1.0,
+                    "focused phase fixture must select exactly one physical mode");
+                const std::size_t mode_begin = result_json.find('{', modes_key);
+                const std::size_t mode_end = result_json.find('}', mode_begin);
+                check(
+                    mode_begin != std::string::npos &&
+                        mode_end != std::string::npos,
+                    "generic SLEPc result must contain its single mode object");
+                const std::string mode = result_json.substr(
+                    mode_begin,
+                    mode_end - mode_begin + 1u);
+                check(
+                    result_json.find("\"mode_index\":1", mode_end + 1u) ==
+                        std::string::npos,
+                    "focused phase result must not publish an additional mode");
+                assert_modal_phase_kinematics(
+                    mode,
+                    std::string(context) + " mode 0",
+                    expected_lambda_imag,
+                    phasor_label,
+                    true);
+                fullmag_fem_frequency_domain_result_destroy(&result);
+            }
+        }
+    }
+}
+
 void modal_sparse_validation_error_preserves_explicit_k_vector()
 {
     constexpr double k_vector_rad_m[] = {0.0, 0.0, 0.0};
@@ -5511,6 +5727,19 @@ void modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact()
 int main(int argc, char **argv)
 {
     if (argc > 1) {
+        if (argc == 2 &&
+            std::strcmp(argv[1], "--modal-slepc-phase-convention") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+            generic_slepc_phase_convention_cabi();
+            std::printf("PASS: modal_slepc_phase_convention_contract\n");
+            return 0;
+#else
+            std::fprintf(
+                stderr,
+                "FAIL: --modal-slepc-phase-convention requires MFEM and SLEPc\n");
+            return 3;
+#endif
+        }
         if (argc == 2 && std::strcmp(argv[1], "--generic-mass-refill") == 0) {
             modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator();
             generic_dense_window_refills_after_search_filtering();
