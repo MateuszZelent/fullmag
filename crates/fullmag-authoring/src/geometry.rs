@@ -315,6 +315,16 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 GeometrySupportStatus::Preview,
             ),
             primitive(
+                "cpw_antenna_layout",
+                "CPW Antenna Layout",
+                "antenna",
+                true,
+                false,
+                true,
+                false,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
                 "triangular_prism",
                 "Triangular Prism",
                 "core",
@@ -868,6 +878,26 @@ fn validate_geometry_node(
                 ));
             }
         }
+        "CPWAntennaLayout" => {
+            if *backend_target != GeometryBackendTarget::Fem {
+                diagnostics.push(error(
+                    "GEOMETRY_KIND_UNSUPPORTED",
+                    "CPWAntennaLayout requires the FEM geometry pipeline.".to_string(),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+            if let Err(reason) = parse_cpw_layout(&geometry.geometry_params) {
+                diagnostics.push(error(
+                    "GEOMETRY_PARAM_INVALID",
+                    format!("Invalid CPWAntennaLayout: {reason}"),
+                    Some(object_id.to_string()),
+                    Some(path.to_string()),
+                    &["realize_geometry", "build_mesh", "run_solver"],
+                ));
+            }
+        }
         "Difference" => validate_difference_node(
             &geometry.geometry_params,
             backend_target,
@@ -1073,6 +1103,21 @@ fn parse_microstrip_layout(params: &Value) -> Result<MicrostripLayout, &'static 
         return Err("stations must start at s=0 and end at s=1");
     }
 
+    let (rotation, translation) = parse_antenna_layout_transform(params)?;
+    Ok(MicrostripLayout {
+        length_m,
+        thickness_m,
+        return_width_m,
+        return_offset_m,
+        stations,
+        rotation,
+        translation,
+    })
+}
+
+fn parse_antenna_layout_transform(
+    params: &Value,
+) -> Result<([[f64; 3]; 3], [f64; 3]), &'static str> {
     let transform = params.get("transform");
     if transform.is_some_and(|value| !value.is_object()) {
         return Err("transform must be a rigid transform object");
@@ -1099,15 +1144,92 @@ fn parse_microstrip_layout(params: &Value) -> Result<MicrostripLayout, &'static 
     } else {
         [0.0; 3]
     };
-    Ok(MicrostripLayout {
-        length_m,
-        thickness_m,
-        return_width_m,
-        return_offset_m,
-        stations,
-        rotation,
-        translation,
-    })
+    Ok((rotation, translation))
+}
+
+struct CpwWidthStation {
+    s: f64,
+    signal_width_m: f64,
+    left_gap_m: f64,
+    right_gap_m: f64,
+    left_ground_width_m: f64,
+    right_ground_width_m: f64,
+}
+
+struct CpwLayout {
+    length_m: f64,
+    thickness_m: f64,
+    stations: Vec<CpwWidthStation>,
+    rotation: [[f64; 3]; 3],
+    translation: [f64; 3],
+}
+
+fn parse_cpw_layout(params: &Value) -> Result<CpwLayout, &'static str> {
+    let positive = |value: &Value, key| match number_param(value, key) {
+        Some(number) if number.is_finite() && number > 0.0 => Ok(number),
+        _ => Err("CPW dimensions, gaps, widths and conductivity must be positive SI values"),
+    };
+    let length_m = positive(params, "length_m")?;
+    let thickness_m = positive(params, "thickness_m")?;
+    positive(params, "conductivity_s_per_m")?;
+    let raw = params.get("stations").and_then(Value::as_array)
+        .filter(|stations| stations.len() >= 2)
+        .ok_or("stations must contain at least two ordered width stations")?;
+    let mut stations: Vec<CpwWidthStation> = Vec::with_capacity(raw.len());
+    for station in raw {
+        let s = number_param(station, "s").ok_or("station s must be finite")?;
+        if !s.is_finite() || !(0.0..=1.0).contains(&s) {
+            return Err("station s must lie in [0, 1]");
+        }
+        if stations.last().is_some_and(|previous| s <= previous.s) {
+            return Err("station positions must be strictly increasing");
+        }
+        stations.push(CpwWidthStation {
+            s,
+            signal_width_m: positive(station, "signal_width_m")?,
+            left_gap_m: positive(station, "left_gap_m")?,
+            right_gap_m: positive(station, "right_gap_m")?,
+            left_ground_width_m: positive(station, "left_ground_width_m")?,
+            right_ground_width_m: positive(station, "right_ground_width_m")?,
+        });
+    }
+    if stations.first().map(|station| station.s) != Some(0.0)
+        || stations.last().map(|station| station.s) != Some(1.0)
+    {
+        return Err("stations must start at s=0 and end at s=1");
+    }
+    let (rotation, translation) = parse_antenna_layout_transform(params)?;
+    Ok(CpwLayout { length_m, thickness_m, stations, rotation, translation })
+}
+
+fn cpw_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
+    let layout = parse_cpw_layout(params).ok()?;
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for station in layout.stations {
+        let half_signal = station.signal_width_m / 2.0;
+        for (left, right) in [
+            (-half_signal, half_signal),
+            (-half_signal - station.left_gap_m - station.left_ground_width_m,
+             -half_signal - station.left_gap_m),
+            (half_signal + station.right_gap_m,
+             half_signal + station.right_gap_m + station.right_ground_width_m),
+        ] {
+            for y in [left, right] {
+                for z in [-layout.thickness_m / 2.0, layout.thickness_m / 2.0] {
+                    let local = [station.s * layout.length_m, y, z];
+                    for axis in 0..3 {
+                        let world = (0..3)
+                            .map(|component| layout.rotation[axis][component] * local[component])
+                            .sum::<f64>() + layout.translation[axis];
+                        min[axis] = min[axis].min(world);
+                        max[axis] = max[axis].max(world);
+                    }
+                }
+            }
+        }
+    }
+    Some((min, max))
 }
 
 fn vec3_from_value(value: &Value) -> Option<[f64; 3]> {
@@ -1176,6 +1298,7 @@ fn microstrip_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
 fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3])> {
     match geometry.geometry_kind.as_str() {
         "MicrostripAntennaLayout" => microstrip_layout_bounds(&geometry.geometry_params),
+        "CPWAntennaLayout" => cpw_layout_bounds(&geometry.geometry_params),
         "Box" => {
             let size = vec3_param(&geometry.geometry_params, "size")
                 .or_else(|| vec3_param(&geometry.geometry_params, "dimensions"))?;
@@ -1823,6 +1946,70 @@ mod tests {
             .iter()
             .any(|diagnostic| diagnostic.code == "GEOMETRY_PARAM_INVALID"
                 && diagnostic.message.contains("right-handed")));
+    }
+
+    fn cpw_params() -> Value {
+        json!({
+            "length_m": 1e-6, "thickness_m": 10e-9, "conductivity_s_per_m": 5.8e7,
+            "stations": [
+                {"s": 0.0, "signal_width_m": 50e-9, "left_gap_m": 100e-9,
+                 "right_gap_m": 200e-9, "left_ground_width_m": 200e-9, "right_ground_width_m": 300e-9},
+                {"s": 0.5, "signal_width_m": 600e-9, "left_gap_m": 100e-9,
+                 "right_gap_m": 200e-9, "left_ground_width_m": 200e-9, "right_ground_width_m": 300e-9},
+                {"s": 1.0, "signal_width_m": 50e-9, "left_gap_m": 100e-9,
+                 "right_gap_m": 200e-9, "left_ground_width_m": 200e-9, "right_ground_width_m": 300e-9}
+            ],
+            "transform": {"rotation_matrix": [[0,-1,0],[1,0,0],[0,0,1]],
+                          "translation_m": [2e-6,-0.5e-6,20e-9]}
+        })
+    }
+
+    #[test]
+    fn cpw_scene_uses_all_station_bounds_and_rejects_fdm() {
+        let mut scene = scene_with_object(SceneGeometry {
+            geometry_kind: "CPWAntennaLayout".to_string(),
+            geometry_params: cpw_params(),
+            bounds_min: Some([-1.0; 3]), bounds_max: Some([1.0; 3]),
+        });
+        scene.objects[0].role = "antenna".to_string();
+        scene.objects[0].material_ref.clear();
+        scene.objects[0].magnetization_ref = None;
+        assert_eq!(validate_geometry_scene(&scene, GeometryBackendTarget::Fem).status, "ready");
+        let snapshot = realize_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        let body = &snapshot.bodies[0];
+        for (actual, expected) in body.bounds_min.iter().zip([1.2e-6, -0.5e-6, 15e-9]) {
+            assert!((actual - expected).abs() < 1e-18);
+        }
+        for (actual, expected) in body.bounds_max.iter().zip([2.6e-6, 0.5e-6, 25e-9]) {
+            assert!((actual - expected).abs() < 1e-18);
+        }
+        assert!(body.material_ref.is_empty());
+        assert!(body.magnetization_ref.is_none());
+        assert!(validate_geometry_scene(&scene, GeometryBackendTarget::Fdm).diagnostics
+            .iter().any(|diagnostic| diagnostic.code == "GEOMETRY_KIND_UNSUPPORTED"));
+    }
+
+    #[test]
+    fn cpw_layout_rejects_invalid_stations_and_transforms() {
+        for key in ["signal_width_m", "left_gap_m", "right_gap_m",
+                    "left_ground_width_m", "right_ground_width_m"] {
+            let mut params = cpw_params();
+            params["stations"][1][key] = json!(0.0);
+            assert!(parse_cpw_layout(&params).is_err(), "{key}");
+            params["stations"][1].as_object_mut().unwrap().remove(key);
+            assert!(parse_cpw_layout(&params).is_err(), "missing {key}");
+        }
+        for (index, s) in [(0, 0.1), (1, 0.0), (1, 1.1), (2, 0.9)] {
+            let mut params = cpw_params();
+            params["stations"][index]["s"] = json!(s);
+            assert!(parse_cpw_layout(&params).is_err());
+        }
+        for rotation in [json!([[-1,0,0],[0,1,0],[0,0,1]]),
+                         json!([[2,0,0],[0,1,0],[0,0,1]])] {
+            let mut params = cpw_params();
+            params["transform"]["rotation_matrix"] = rotation;
+            assert!(parse_cpw_layout(&params).is_err());
+        }
     }
 
     #[test]
