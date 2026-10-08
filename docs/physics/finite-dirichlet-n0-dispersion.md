@@ -342,7 +342,8 @@ bez certyfikacji pełnego widma. Zachowuje film 40×40×10 nm, PBC xy,
 Bx=0.1 T, Ms=800 kA/m, A=13 pJ/m i finite airbox Dirichleta ±2 µm.
 Wybiera po jednym modzie `target="nearest"` względem tej samej dodatniej
 częstotliwości dla $k_y=(-25,-15,-5,0,5,15,25)\,\mathrm{rad/\mu m}$,
-$k_x=k_z=0$. Python/IR, CSV i pola zachowują rad/m.
+$k_x=k_z=0$. Python/IR, CSV i pola zachowują rad/m. Jawny identyfikator
+stage `modes` wiąże widmo i pola z etapem autora; nie zmienia operatora.
 
 Referencja n=0 jest porównaniem po obliczeniu. Mod nearest nie dowodzi
 n=0 ani ciągłości tej samej gałęzi; połączenie punktów w UI służy

@@ -35,6 +35,7 @@ def test_de_smoke_preserves_physical_problem(monkeypatch, sampling, ky, mode_cou
     finally:
         fm.reset()
     assert len(stages) == 2
+    assert loaded.stages[1].stage_id == "modes"
     relax, eigen = stages
     geometry = eigen["geometry"]["entries"]
     assert len(geometry) == 1

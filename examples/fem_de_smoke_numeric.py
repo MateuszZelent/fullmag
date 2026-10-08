@@ -257,8 +257,9 @@ study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
         fields=(fm.FieldAutosave("m", every_steps=100),),
     )
 )
+# Bind exported spectra and mode fields to a stable authored stage identity.
 study.stages.add_eigenmodes(
-    count=REQUESTED_MODE_COUNT, target=MODAL_TARGET,
+    stage_id="modes", count=REQUESTED_MODE_COUNT, target=MODAL_TARGET,
     target_frequency=TARGET_FREQUENCY_HZ if MODAL_TARGET == "nearest" else None,
     frequency_min=FREQUENCY_MIN_HZ if MODAL_TARGET == "frequency_window" else None,
     frequency_max=FREQUENCY_MAX_HZ if MODAL_TARGET == "frequency_window" else None,
