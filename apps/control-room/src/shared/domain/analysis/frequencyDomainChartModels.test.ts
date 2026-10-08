@@ -97,6 +97,7 @@ describe("frequencyDomainChartModels", () => {
         modeFieldId: "field-0",
         modeFieldResourceKey: fieldVectorResourceKey("field-0"),
         rawModeIndex: 3,
+        residualNorm: 1e-7,
         sampleIndex: 2,
       }),
     ]);
@@ -105,6 +106,61 @@ describe("frequencyDomainChartModels", () => {
     ]);
     expect(model.series[0]?.unit).toBe("GHz");
     expect(model.series[0]?.xUnit).toBe("1");
+  });
+
+  it("reads canonical relative L2 from spectrum.v3 without mode-detail artifacts", () => {
+    const model = buildEigenSpectrumChartModel(
+      jsonResource({
+        samples: [{
+          modes: [{
+            frequency_real_hz: 2.25e9,
+            raw_mode_index: 4,
+            residual_norm: 6e-5,
+            residual_relative_l2: 2e-9,
+          }],
+          sample_id: "k-path-sample-0003",
+          sample_index: 3,
+        }],
+        schema_version: "eigen_spectrum.v3",
+      }, "eigen/spectrum.v3.json"),
+    );
+
+    expect(model.points).toHaveLength(1);
+    expect(model.points[0]).toMatchObject({
+      frequencyHz: 2.25e9,
+      modeFieldId: null,
+      modeFieldResourceKey: null,
+      rawModeIndex: 4,
+      residualNorm: 6e-5,
+      residualRelativeL2: 2e-9,
+      sampleId: "k-path-sample-0003",
+      sampleIndex: 3,
+    });
+  });
+
+  it.each([null, Number.NaN, Number.POSITIVE_INFINITY, -1, "2e-9"])(
+    "omits invalid canonical spectrum relative L2 values (%s)",
+    (residualRelativeL2) => {
+      const model = buildEigenSpectrumChartModel(jsonResource({
+        modes: [{
+          frequency_hz: 2.25e9,
+          raw_mode_index: 4,
+          residual_relative_l2: residualRelativeL2,
+        }],
+        schema_version: "eigen_spectrum.v3",
+      }));
+
+      expect(model.points[0]).not.toHaveProperty("residualRelativeL2");
+    },
+  );
+
+  it("preserves zero as a valid canonical spectrum relative L2 value", () => {
+    const model = buildEigenSpectrumChartModel(jsonResource({
+      modes: [{ frequency_hz: 2.25e9, raw_mode_index: 4, residual_relative_l2: 0 }],
+      schema_version: "eigen_spectrum.v3",
+    }));
+
+    expect(model.points[0]).toMatchObject({ residualRelativeL2: 0 });
   });
 
   it("honors explicit false mode-field availability even when an id is present", () => {
@@ -1323,6 +1379,7 @@ describe("frequencyDomainChartModels", () => {
         fieldId: "response-field-0",
         frequencyHz: 9.5e9,
         observableId: "mx",
+        residualNorm: 1e-5,
       }),
     );
     expect(model.series.map((series) => series.quantity)).toEqual([
@@ -1333,6 +1390,36 @@ describe("frequencyDomainChartModels", () => {
     ]);
     expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 2 }]);
     expect(model.series[3]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 5 }]);
+  });
+
+  it("parses published response absolute and relative L2 as separate values", () => {
+    const model = buildFrequencyResponseChartModel(jsonResource({
+      points: [
+        {
+          frequency_hz: 9.5e9,
+          relative_residual_l2_norm: 2e-9,
+          residual_l2_norm: 6e-5,
+          residual_norm: 4e-7,
+        },
+        {
+          frequency_hz: 9.6e9,
+          relative_residual_l2_norm: -1,
+          residual_l2_norm: Number.NaN,
+        },
+        { frequency_hz: 9.7e9 },
+      ],
+      schema_version: "magnetic_response_sweep.v2",
+    }));
+
+    expect(model.points[0]).toMatchObject({
+      residualAbsoluteL2: 6e-5,
+      residualNorm: 4e-7,
+      residualRelativeL2: 2e-9,
+    });
+    expect(model.points[1]).not.toHaveProperty("residualAbsoluteL2");
+    expect(model.points[1]).not.toHaveProperty("residualRelativeL2");
+    expect(model.points[2]).not.toHaveProperty("residualAbsoluteL2");
+    expect(model.points[2]).not.toHaveProperty("residualRelativeL2");
   });
 
   it("uses typed observable units and fails closed when a response unit is not published", () => {

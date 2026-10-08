@@ -384,6 +384,7 @@ export interface EigenSpectrumPoint {
   modeId: string | null;
   rawModeIndex: number;
   residualNorm: number | null;
+  residualRelativeL2?: number | null;
   sampleIndex: number;
   sampleId?: string | null;
   tangentLeakageMax: number | null;
@@ -401,6 +402,7 @@ export interface EigenSpectrumPayloadMode {
   modeId: string | null;
   rawModeIndex: number;
   residualNorm: number | null;
+  residualRelativeL2?: number | null;
   sampleIndex: number;
   sampleId: string | null;
   tangentLeakageMax: number | null;
@@ -503,6 +505,8 @@ export interface FrequencyResponsePoint {
   observableId: string;
   phaseRad: number | null;
   residualNorm: number | null;
+  residualAbsoluteL2?: number | null;
+  residualRelativeL2?: number | null;
   susceptibility: readonly number[] | null;
   overlap?: number | null;
 }
@@ -585,6 +589,12 @@ function array(value: unknown): unknown[] {
 function finiteNumber(value: unknown): number | null {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nonnegativeFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
 }
 
 function finiteNumberList(value: unknown): number[] {
@@ -916,6 +926,9 @@ export function readEigenSpectrumPayload(
       modeFieldId,
       rawModeFieldResourceKey,
     );
+    const residualRelativeL2 = nonnegativeFiniteNumber(
+      item.residual_relative_l2 ?? item.residualRelativeL2,
+    );
     return [{
       branchId: stringValue(item.branch_id ?? item.branchId),
       dampingRateHz: finiteNumber(item.damping_rate_hz ?? item.dampingRateHz),
@@ -939,6 +952,7 @@ export function readEigenSpectrumPayload(
       modeId,
       rawModeIndex,
       residualNorm: finiteNumber(item.residual_norm ?? item.relative_residual_norm),
+      ...(residualRelativeL2 != null ? { residualRelativeL2 } : {}),
       sampleIndex,
       sampleId,
       tangentLeakageMax: finiteNumber(
@@ -974,6 +988,9 @@ export function buildEigenSpectrumChartModel(
       modeId: mode.modeId,
       rawModeIndex: mode.rawModeIndex,
       residualNorm: mode.residualNorm,
+      ...(mode.residualRelativeL2 !== undefined
+        ? { residualRelativeL2: mode.residualRelativeL2 }
+        : {}),
       sampleIndex: mode.sampleIndex,
       sampleId: mode.sampleId,
       tangentLeakageMax: mode.tangentLeakageMax,
@@ -1497,6 +1514,12 @@ export function buildFrequencyResponseChartModel(
     const susceptibility = susceptibilityValues(
       item?.susceptibility ?? item?.susceptibility_tensor ?? item?.susceptibilityTensor,
     );
+    const residualAbsoluteL2 = nonnegativeFiniteNumber(
+      item?.residual_l2_norm ?? item?.residualAbsoluteL2,
+    );
+    const residualRelativeL2 = nonnegativeFiniteNumber(
+      item?.relative_residual_l2_norm ?? item?.residualRelativeL2,
+    );
     points.push({
       absorbedPowerDensity: finiteNumber(
         item?.absorbed_power_density ?? item?.absorbedPowerDensity,
@@ -1514,6 +1537,8 @@ export function buildFrequencyResponseChartModel(
       observableId: stringValue(item?.observable_id ?? item?.observableId) ?? "response",
       phaseRad: finiteNumber(item?.phase_rad ?? item?.phaseRad ?? item?.response_phase),
       residualNorm: finiteNumber(item?.residual_norm ?? item?.relative_residual_norm),
+      ...(residualAbsoluteL2 != null ? { residualAbsoluteL2 } : {}),
+      ...(residualRelativeL2 != null ? { residualRelativeL2 } : {}),
       susceptibility: susceptibility.length ? susceptibility : null,
       overlap: finiteNumber(item?.overlap_score ?? item?.overlapScore ?? item?.overlap),
     });

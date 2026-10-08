@@ -2448,7 +2448,7 @@ export function FrequencyResponsePointInspectorPanel(
           label="Absorbed power density"
           value={summary.absorbedPowerDensity}
         />
-        <FieldRow label="Residual" value={summary.residual} />
+        <FrequencyResponsePointResidualFields residuals={summary.residuals} />
         <FieldRow label="3D field" value={summary.fieldStatus} />
         <FieldRow label="Available field views" value={summary.availableViews} />
         <FieldRow label="Provenance" value={summary.provenance} />
@@ -4837,6 +4837,70 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
   };
 }
 
+export interface FrequencyResponsePointResidualSummary {
+  absoluteL2: number | null;
+  relativeL2: number | null;
+  reported: number | null;
+}
+
+export function countResidualEvidencePoints(
+  points: readonly {
+    residualAbsoluteL2?: number | null;
+    residualNorm: number | null;
+    residualRelativeL2?: number | null;
+  }[],
+): number {
+  return points.filter((point) =>
+    (typeof point.residualNorm === "number" && Number.isFinite(point.residualNorm)) ||
+    nonnegativeFiniteNumber(point.residualAbsoluteL2) != null ||
+    nonnegativeFiniteNumber(point.residualRelativeL2) != null,
+  ).length;
+}
+
+export function buildFrequencyResponsePointResidualSummary(
+  payload: unknown,
+  point: Pick<
+    FrequencyResponsePoint,
+    "residualAbsoluteL2" | "residualNorm" | "residualRelativeL2"
+  > | null,
+): FrequencyResponsePointResidualSummary {
+  const resource = record(payload);
+  return {
+    absoluteL2:
+      nonnegativeFiniteNumber(resource?.residual_l2_norm) ??
+      nonnegativeFiniteNumber(point?.residualAbsoluteL2),
+    relativeL2:
+      nonnegativeFiniteNumber(resource?.relative_residual_l2_norm) ??
+      nonnegativeFiniteNumber(point?.residualRelativeL2),
+    reported:
+      finiteNumber(resource?.residual_norm ?? resource?.relative_residual_norm) ??
+      finiteNumber(point?.residualNorm),
+  };
+}
+
+export function FrequencyResponsePointResidualFields({
+  residuals,
+}: {
+  residuals: FrequencyResponsePointResidualSummary;
+}) {
+  return (
+    <>
+      <FieldRow
+        label="Absolute residual (L2)"
+        value={formatNumberOrUnavailable(residuals.absoluteL2)}
+      />
+      <FieldRow
+        label="Relative residual (L2)"
+        value={formatNumberOrUnavailable(residuals.relativeL2)}
+      />
+      <FieldRow
+        label="Response residual (type unspecified)"
+        value={formatNumberOrUnavailable(residuals.reported)}
+      />
+    </>
+  );
+}
+
 function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   const frequencyIndex = ref?.frequencyIndex ?? null;
@@ -4875,12 +4939,7 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     finiteNumber(payload?.absorbed_power_density) ??
     firstPoint?.absorbedPowerDensity ??
     null;
-  const residual =
-    finiteNumber(payload?.relative_residual_l2_norm) ??
-    finiteNumber(payload?.relative_residual_norm) ??
-    finiteNumber(payload?.residual_l2_norm) ??
-    firstPoint?.residualNorm ??
-    null;
+  const residuals = buildFrequencyResponsePointResidualSummary(payload, firstPoint);
   const fieldId =
     ref?.fieldId ?? fieldMeta.data?.field_id ?? firstPoint?.fieldId ?? null;
   const fieldResource = ref?.resourceRef ?? fieldMeta.data?.resource_key ?? null;
@@ -4952,7 +5011,7 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     observableRows: `${matchingPoints.length} sweep row(s)`,
     phase: phase == null ? "not available" : `${formatNumber(phase)} rad`,
     provenance: provenance || "not available",
-    residual: formatNumberOrUnavailable(residual),
+    residuals,
     resourceKey:
       frequencyIndex == null
         ? "not available"
@@ -4992,9 +5051,7 @@ function useFrequencyResponseFrequencyPointsSummary() {
   const amplitudes = responseModel.points.flatMap((point) =>
     point.amplitude == null ? [] : [point.amplitude],
   );
-  const residuals = responseModel.points.flatMap((point) =>
-    point.residualNorm == null ? [] : [point.residualNorm],
-  );
+  const residuals = countResidualEvidencePoints(responseModel.points);
   const manifestFieldCount = responseFieldResourcesFromManifest(manifestPayload)
     .length;
   const sweepFieldCount = responseModel.points.filter((point) => point.fieldId)
@@ -5016,7 +5073,7 @@ function useFrequencyResponseFrequencyPointsSummary() {
     progressState: progress.data
       ? `${progress.data.status}; ${progress.data.completed_frequency_points}/${progress.data.total_frequency_points}`
       : "not available",
-    residualCoverage: `${residuals.length}/${responseModel.points.length} point(s)`,
+    residualCoverage: `${residuals}/${responseModel.points.length} point(s)`,
     resourceKey:
       responseSweep.data?.resource_key ??
       ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
@@ -5199,9 +5256,7 @@ function useFrequencyResponseDiagnosticsSummary() {
     .length;
   const sweepFieldCount = responseModel.points.filter((point) => point.fieldId)
     .length;
-  const residualCount = responseModel.points.filter(
-    (point) => point.residualNorm != null,
-  ).length;
+  const residualCount = countResidualEvidencePoints(responseModel.points);
   const krylovPreconditionerKind = stringValue(
     diagnosticsPayload?.krylov_preconditioner_kind,
   );
@@ -5313,9 +5368,7 @@ function useFrequencyResponseFrequencyJobSummary() {
     .length;
   const sweepFieldCount = responseModel.points.filter((point) => point.fieldId)
     .length;
-  const residualCount = responseModel.points.filter(
-    (point) => point.residualNorm != null,
-  ).length;
+  const residualCount = countResidualEvidencePoints(responseModel.points);
   const progressSummary = frequencyResponseSweepStatusSummary({
     data: progress.data,
     resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
@@ -5434,12 +5487,8 @@ function useFrequencyDomainSolverDiagnosticSummary() {
     manifestPayload,
   );
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
-  const responseResidualCount = responseModel.points.filter(
-    (point) => point.residualNorm != null,
-  ).length;
-  const modalResidualCount = spectrumModel.points.filter(
-    (point) => point.residualNorm != null,
-  ).length;
+  const responseResidualCount = countResidualEvidencePoints(responseModel.points);
+  const modalResidualCount = countResidualEvidencePoints(spectrumModel.points);
   const modalDiagnostics = eigenDiagnosticTransportSummary(eigenDiagnostics.data);
 
   return {
@@ -5775,6 +5824,12 @@ export function isDrivenExcitationMissing(manifestPayload: unknown): boolean {
 function finiteNumber(value: unknown): number | null {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nonnegativeFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
 }
 
 function stringValue(value: unknown): string | null {

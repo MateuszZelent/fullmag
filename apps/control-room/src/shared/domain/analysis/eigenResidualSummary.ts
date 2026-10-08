@@ -19,6 +19,7 @@ function record(value: unknown): Record<string, unknown> | null {
 export function buildEigenResidualSummary(
   modePayload: unknown,
   spectrumResidual: unknown,
+  spectrumRelativeL2?: unknown,
 ): EigenResidualSummary {
   const mode = record(modePayload);
   const block = record(mode?.block_residuals);
@@ -32,7 +33,9 @@ export function buildEigenResidualSummary(
   return {
     // The artifact contract defines residual_norm as the legacy absolute L2 alias.
     absoluteL2: nonnegativeFinite(mode?.residual_absolute_l2) ?? nonnegativeFinite(mode?.residual_norm),
-    relativeL2: nonnegativeFinite(mode?.residual_relative_l2),
+    relativeL2:
+      nonnegativeFinite(mode?.residual_relative_l2) ??
+      nonnegativeFinite(spectrumRelativeL2),
     reportedSpectrumResidual: nonnegativeFinite(spectrumResidual),
     scope,
   };

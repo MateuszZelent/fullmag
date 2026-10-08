@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
 
-import { buildEigenModeIdentityViewModel } from "./EigenModeInspectorPanel";
+import { buildEigenResidualSummary } from "@/shared/domain/analysis/eigenResidualSummary";
 
-describe("EigenModeInspectorPanel identity model", () => {
+import {
+  buildEigenModeIdentityViewModel,
+  EigenModeResidualFields,
+} from "./EigenModeInspectorPanel";
+
+describe("EigenModeInspectorPanel model and residual fields", () => {
   it("keeps mode index, branch and field provenance together", () => {
     expect(
       buildEigenModeIdentityViewModel({
@@ -28,5 +34,29 @@ describe("EigenModeInspectorPanel identity model", () => {
       modeIndex: 5,
       sampleIndex: null,
     });
+  });
+
+  it("renders spectrum canonical relative L2 under the typed inspector label", () => {
+    const residual = buildEigenResidualSummary(null, 6e-5, 2e-9);
+    const html = renderToStaticMarkup(
+      <EigenModeResidualFields residual={residual} />,
+    );
+
+    expect(html).toContain("Relative residual (L2)");
+    expect(html).toContain("2.000e-9");
+    expect(html).toContain("Spectrum residual (type unspecified)");
+    expect(html).toContain("0.00006000");
+  });
+
+  it("keeps a legacy spectrum residual under its unspecified-norm label", () => {
+    const residual = buildEigenResidualSummary(null, 6e-5);
+    const html = renderToStaticMarkup(
+      <EigenModeResidualFields residual={residual} />,
+    );
+
+    expect(html).toContain("Relative residual (L2)");
+    expect(html).toContain("not available");
+    expect(html).toContain("Spectrum residual (type unspecified)");
+    expect(html).toContain("0.00006000");
   });
 });
