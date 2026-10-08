@@ -28,6 +28,53 @@ pub(super) use eigen_path_guards::eigen_path_single_k_point_plan;
 use eigen_path_guards::*;
 use eigen_path_manifest::*;
 
+const NATIVE_MODE_PHYSICAL_PROVENANCE_FIELDS: &[&str] = &[
+    "floquet_descriptor_certified",
+    "floquet_full_descriptor_certified",
+    "floquet_seam_frame_certified",
+    "floquet_gauge_policy_satisfied",
+    "floquet_geometric_bc_certified",
+    "potential_representation",
+    "gauge_constraint_backward_error",
+    "gauge_constraint_policy",
+    "poisson_boundary_kind",
+    "poisson_gauge_policy",
+    "magnetic_relative_residual",
+    "potential_relative_residual",
+    "floquet_full_magnetic_relative_residual",
+    "floquet_full_potential_relative_residual",
+    "floquet_scalar_phase_seam_relative_residual",
+    "floquet_tangent_frame_seam_relative_residual",
+    "floquet_cartesian_magnetic_seam_relative_residual",
+    "floquet_equilibrium_pair_relative_residual",
+    "potential_dof_count",
+];
+
+fn eigen_path_native_mode_diagnostics_record(
+    sample_index: usize,
+    native_mode: &Value,
+) -> Option<Value> {
+    let blocks = native_mode.get("block_residuals")?;
+    let physical_provenance = NATIVE_MODE_PHYSICAL_PROVENANCE_FIELDS
+        .iter()
+        .filter_map(|field| {
+            native_mode
+                .get(*field)
+                .map(|value| ((*field).to_owned(), value.clone()))
+        })
+        .collect::<serde_json::Map<String, Value>>();
+    let mut record = serde_json::json!({
+        "sample_index": sample_index,
+        "raw_mode_index": native_mode["index"],
+        "frequency_hz": native_mode["frequency_real_hz"],
+        "block_residuals": blocks,
+    });
+    if !physical_provenance.is_empty() {
+        record["native_mode_physical_provenance"] = Value::Object(physical_provenance);
+    }
+    Some(record)
+}
+
 fn eigen_path_sample_id_prefix(plan: &FemEigenPlanIR) -> &'static str {
     if bias_field_sweep_requested(plan) {
         "bias-field-sample"
@@ -232,6 +279,96 @@ pub(crate) mod test_support {
         assert_eq!(
             super::eigen_path_native_mode_identities(&unordered, 3).unwrap(),
             vec![(9, 2.0e9), (1, 1.0e9)]
+        );
+    }
+
+    #[test]
+    fn eigen_path_native_mode_provenance_preserves_source_fields_verbatim() {
+        let gamma_blocks = serde_json::json!({
+            "backend_reported_residual": 4.4122215564584725e-11,
+            "certification_tolerance": 1.0e-8,
+            "certified": true,
+            "eps_full": 4.063137496500715e-11,
+            "eps_gauge": 0.0,
+            "eps_phi": 4.257253215205244e-15,
+            "eps_q": 4.063137496500715e-11,
+            "eps_reduced": null,
+            "floquet_cartesian_magnetic_seam_relative_residual": null,
+            "floquet_equilibrium_pair_relative_residual": null,
+            "floquet_full_magnetic_relative_residual": null,
+            "floquet_full_potential_relative_residual": null,
+            "floquet_gauge_policy_satisfied": false,
+            "floquet_scalar_phase_seam_relative_residual": null,
+            "floquet_seam_frame_certified": false,
+            "floquet_tangent_frame_seam_relative_residual": null,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": false,
+            "scope": "native_descriptor",
+        });
+        let gamma_mode = serde_json::json!({
+            "index": 0,
+            "frequency_real_hz": 1.0e9,
+            "block_residuals": gamma_blocks,
+        });
+        let gamma_record =
+            super::eigen_path_native_mode_diagnostics_record(0, &gamma_mode).unwrap();
+        assert_eq!(gamma_record["block_residuals"], gamma_blocks);
+        assert!(gamma_record
+            .get("native_mode_physical_provenance")
+            .is_none());
+
+        let nonzero_k_mode = serde_json::json!({
+            "index": 3,
+            "frequency_real_hz": 1.25e9,
+            "block_residuals": {"eps_gauge": null, "certified": true},
+            "floquet_descriptor_certified": true,
+            "floquet_full_descriptor_certified": true,
+            "floquet_seam_frame_certified": true,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_geometric_bc_certified": false,
+            "potential_representation": "complex_coefficients",
+            "gauge_constraint_backward_error": null,
+            "gauge_constraint_policy": "nonzero_k_poisson_without_mean_constraint",
+            "poisson_boundary_kind": "poisson_dirichlet",
+            "poisson_gauge_policy": "none",
+            "magnetic_relative_residual": 7.414516364001927e-15,
+            "potential_relative_residual": 5.180404624821577e-15,
+            "floquet_full_magnetic_relative_residual": 7.66136350289418e-15,
+            "floquet_full_potential_relative_residual": 5.189832792868164e-15,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "floquet_cartesian_magnetic_seam_relative_residual": 5.544231434742526e-37,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "potential_dof_count": 432,
+        });
+        let nonzero_k_record =
+            super::eigen_path_native_mode_diagnostics_record(7, &nonzero_k_mode).unwrap();
+        assert_eq!(nonzero_k_record["sample_index"], 7);
+        assert_eq!(nonzero_k_record["raw_mode_index"], 3);
+        assert_eq!(nonzero_k_record["frequency_hz"], 1.25e9);
+        assert_eq!(
+            nonzero_k_record["native_mode_physical_provenance"],
+            serde_json::json!({
+                "floquet_descriptor_certified": true,
+                "floquet_full_descriptor_certified": true,
+                "floquet_seam_frame_certified": true,
+                "floquet_gauge_policy_satisfied": true,
+                "floquet_geometric_bc_certified": false,
+                "potential_representation": "complex_coefficients",
+                "gauge_constraint_backward_error": null,
+                "gauge_constraint_policy": "nonzero_k_poisson_without_mean_constraint",
+                "poisson_boundary_kind": "poisson_dirichlet",
+                "poisson_gauge_policy": "none",
+                "magnetic_relative_residual": 7.414516364001927e-15,
+                "potential_relative_residual": 5.180404624821577e-15,
+                "floquet_full_magnetic_relative_residual": 7.66136350289418e-15,
+                "floquet_full_potential_relative_residual": 5.189832792868164e-15,
+                "floquet_scalar_phase_seam_relative_residual": 0.0,
+                "floquet_tangent_frame_seam_relative_residual": 0.0,
+                "floquet_cartesian_magnetic_seam_relative_residual": 5.544231434742526e-37,
+                "floquet_equilibrium_pair_relative_residual": 0.0,
+                "potential_dof_count": 432,
+            })
         );
     }
 
@@ -580,13 +717,7 @@ pub(crate) fn parse_worker_single_k_result(
         let records = modes_array
             .iter()
             .filter_map(|native_mode| {
-                let blocks = native_mode.get("block_residuals")?;
-                Some(serde_json::json!({
-                    "sample_index": sample.sample_index,
-                    "raw_mode_index": native_mode["index"],
-                    "frequency_hz": native_mode["frequency_real_hz"],
-                    "block_residuals": blocks,
-                }))
+                eigen_path_native_mode_diagnostics_record(sample.sample_index, native_mode)
             })
             .collect::<Vec<_>>();
         diagnostics.insert(
@@ -1199,13 +1330,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                 let records = modes_array
                     .iter()
                     .filter_map(|native_mode| {
-                        let blocks = native_mode.get("block_residuals")?;
-                        Some(serde_json::json!({
-                            "sample_index": sample.sample_index,
-                            "raw_mode_index": native_mode["index"],
-                            "frequency_hz": native_mode["frequency_real_hz"],
-                            "block_residuals": blocks,
-                        }))
+                        eigen_path_native_mode_diagnostics_record(sample.sample_index, native_mode)
                     })
                     .collect::<Vec<_>>();
                 diagnostics.insert(

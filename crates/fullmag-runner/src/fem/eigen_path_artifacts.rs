@@ -384,7 +384,7 @@ mod output_publication_tests {
     }
 
     #[test]
-    fn eigen_path_transports_only_the_matching_native_block_certificate() {
+    fn eigen_path_native_mode_provenance_transports_only_matching_gamma_and_nonzero_k_records() {
         let plan = residual_transport_test_plan();
         let sample = KSampleDescriptor {
             sample_index: 2,
@@ -401,32 +401,153 @@ mod output_publication_tests {
             "certification_tolerance": 1.0e-8,
             "floquet_seam_frame_certified": true, "certified": true,
         });
+        let provenance = serde_json::json!({
+            "floquet_descriptor_certified": true,
+            "floquet_full_descriptor_certified": true,
+            "floquet_seam_frame_certified": true,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_geometric_bc_certified": false,
+            "potential_representation": "complex_coefficients",
+            "gauge_constraint_backward_error": null,
+            "gauge_constraint_policy": "nonzero_k_poisson_without_mean_constraint",
+            "poisson_boundary_kind": "poisson_dirichlet",
+            "poisson_gauge_policy": "none",
+            "magnetic_relative_residual": 7.414516364001927e-15,
+            "potential_relative_residual": 5.180404624821577e-15,
+            "floquet_full_magnetic_relative_residual": 7.66136350289418e-15,
+            "floquet_full_potential_relative_residual": 5.189832792868164e-15,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "floquet_cartesian_magnetic_seam_relative_residual": 5.544231434742526e-37,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "potential_dof_count": 432,
+        });
         let record = serde_json::json!({
             "sample_index": 2, "raw_mode_index": 0, "frequency_hz": 1.0e9,
-            "block_residuals": blocks,
+            "block_residuals": blocks, "native_mode_physical_provenance": provenance,
         });
         let mut diagnostics = serde_json::json!({
             "block_residuals": {"certified": false},
             "native_mode_block_residuals": [record.clone()],
         });
-        let publish = |diagnostics: &serde_json::Value| {
+        let publish = |sample: &KSampleDescriptor, diagnostics: &serde_json::Value| {
             eigen_path_mode_v3_json(
                 &plan,
-                &sample,
+                sample,
                 &mode,
                 crate::eigen::EigenSolverModel::ProductionCpuShiftInvert,
                 Some(diagnostics),
             )
         };
-        assert_eq!(publish(&diagnostics)["block_residuals"], blocks);
+        let nonzero_k_mode = publish(&sample, &diagnostics);
+        assert_eq!(nonzero_k_mode["block_residuals"], blocks);
+        assert_eq!(nonzero_k_mode["floquet_descriptor_certified"], true);
+        assert_eq!(nonzero_k_mode["floquet_full_descriptor_certified"], true);
+        assert_eq!(nonzero_k_mode["floquet_gauge_policy_satisfied"], true);
+        assert_eq!(nonzero_k_mode["floquet_geometric_bc_certified"], false);
+        assert_eq!(
+            nonzero_k_mode["gauge_constraint_policy"],
+            "nonzero_k_poisson_without_mean_constraint"
+        );
+        assert_eq!(
+            nonzero_k_mode["gauge_constraint_backward_error"],
+            serde_json::Value::Null
+        );
+        assert_eq!(nonzero_k_mode["poisson_boundary_kind"], "poisson_dirichlet");
+        assert_eq!(nonzero_k_mode["poisson_gauge_policy"], "none");
+        assert_eq!(
+            nonzero_k_mode["magnetic_relative_residual"],
+            7.414516364001927e-15
+        );
+        assert_eq!(
+            nonzero_k_mode["potential_relative_residual"],
+            5.180404624821577e-15
+        );
+        assert_eq!(
+            nonzero_k_mode["floquet_full_magnetic_relative_residual"],
+            7.66136350289418e-15
+        );
+        assert_eq!(
+            nonzero_k_mode["floquet_full_potential_relative_residual"],
+            5.189832792868164e-15
+        );
+        assert_eq!(
+            nonzero_k_mode["floquet_scalar_phase_seam_relative_residual"],
+            0.0
+        );
+        assert_eq!(
+            nonzero_k_mode["floquet_tangent_frame_seam_relative_residual"],
+            0.0
+        );
+        assert_eq!(
+            nonzero_k_mode["floquet_cartesian_magnetic_seam_relative_residual"],
+            5.544231434742526e-37
+        );
+        assert_eq!(nonzero_k_mode["floquet_equilibrium_pair_relative_residual"], 0.0);
+        assert_eq!(nonzero_k_mode["potential_dof_count"], 432);
+
         diagnostics["native_mode_block_residuals"][0]["frequency_hz"] = serde_json::json!(2.0e9);
-        assert!(publish(&diagnostics).get("block_residuals").is_none());
+        let mismatched_frequency = publish(&sample, &diagnostics);
+        assert!(mismatched_frequency.get("block_residuals").is_none());
+        assert!(mismatched_frequency.get("floquet_descriptor_certified").is_none());
         diagnostics["native_mode_block_residuals"] =
             serde_json::json!([record.clone(), record.clone()]);
-        assert!(publish(&diagnostics).get("block_residuals").is_none());
+        let duplicate_identity = publish(&sample, &diagnostics);
+        assert!(duplicate_identity.get("block_residuals").is_none());
+        assert!(duplicate_identity.get("floquet_descriptor_certified").is_none());
         diagnostics["native_mode_block_residuals"] = serde_json::json!([record]);
         diagnostics["native_mode_block_residuals"][0]["sample_index"] = serde_json::json!(1);
-        assert!(publish(&diagnostics).get("block_residuals").is_none());
+        let wrong_sample = publish(&sample, &diagnostics);
+        assert!(wrong_sample.get("block_residuals").is_none());
+        assert!(wrong_sample
+            .get("floquet_descriptor_certified")
+            .is_none());
+
+        let gamma_sample = KSampleDescriptor {
+            sample_index: 0,
+            label: Some("Gamma".into()),
+            segment_index: None,
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+        // The raw Gamma sample carries its Poisson policy and boundary data only in
+        // sample-level solver diagnostics, not in the per-mode record. Preserve its
+        // exact per-mode block and leave those fields absent instead of copying the
+        // nonzero-k certificate or synthesizing mode provenance.
+        let gamma_blocks = serde_json::json!({
+            "backend_reported_residual": 4.4122215564584725e-11,
+            "certification_tolerance": 1.0e-8,
+            "certified": true,
+            "eps_full": 4.063137496500715e-11,
+            "eps_gauge": 0.0,
+            "eps_phi": 4.257253215205244e-15,
+            "eps_q": 4.063137496500715e-11,
+            "eps_reduced": null,
+            "floquet_cartesian_magnetic_seam_relative_residual": null,
+            "floquet_equilibrium_pair_relative_residual": null,
+            "floquet_full_magnetic_relative_residual": null,
+            "floquet_full_potential_relative_residual": null,
+            "floquet_gauge_policy_satisfied": false,
+            "floquet_scalar_phase_seam_relative_residual": null,
+            "floquet_seam_frame_certified": false,
+            "floquet_tangent_frame_seam_relative_residual": null,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": false,
+            "scope": "native_descriptor",
+        });
+        let gamma_diagnostics = serde_json::json!({
+            "native_mode_block_residuals": [{
+                "sample_index": 0,
+                "raw_mode_index": 0,
+                "frequency_hz": 1.0e9,
+                "block_residuals": gamma_blocks,
+            }],
+        });
+        let gamma_mode = publish(&gamma_sample, &gamma_diagnostics);
+        assert_eq!(gamma_mode["block_residuals"], gamma_blocks);
+        assert!(gamma_mode.get("gauge_constraint_policy").is_none());
+        assert!(gamma_mode.get("floquet_descriptor_certified").is_none());
     }
 
     #[test]
@@ -1909,6 +2030,16 @@ pub(super) fn eigen_path_mode_json(
                             <= 1.0e-12 * frequency.abs().max(1.0)
                     {
                         value["block_residuals"] = blocks.clone();
+                        if let Some(provenance) = record
+                            .get("native_mode_physical_provenance")
+                            .and_then(serde_json::Value::as_object)
+                        {
+                            for field in NATIVE_MODE_PHYSICAL_PROVENANCE_FIELDS {
+                                if let Some(field_value) = provenance.get(*field) {
+                                    value[*field] = field_value.clone();
+                                }
+                            }
+                        }
                     }
                 }
             }
