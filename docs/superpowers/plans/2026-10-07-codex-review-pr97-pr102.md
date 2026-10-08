@@ -983,3 +983,11 @@ jest regresją tego rzeczywistego błędu. Pozytywny modal handoff nadal NOT VER
 
 Trasa MFEM source contract zapisana i wysłana jako
 0f6da649a40cc863600e78825bc6c472053e7269. Wykonanie oracle oczekiwane w GHA.
+
+GitHub odrzucił bezpośredni dispatch nowego workflow MFEM (404: brak na default
+branch); PR97 ma mergeStateStatus=DIRTY, więc push nie uruchamia workflow PR.
+Dodano selektywny dispatch istniejącego bootstrap: domyślny bootstrap zachowuje
+wszystkie kontrole; positive-mass uruchamia wyłącznie reusable MFEM contract;
+browser uruchamia Control Room i smoke dla nowej poprawki transportowej.
+Nie scala to PR, nie zmienia mastera i nie wymaga lokalnej kompilacji testów.
+Poprawka transportu opublikowana jako32ba085b491a1fd01f0f6a71f57edb61009b3013.

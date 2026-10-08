@@ -1,6 +1,7 @@
 name: FEM positive tangent-mass source contract
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - '.github/workflows/fem-positive-mass-contract.yml'
