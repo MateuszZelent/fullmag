@@ -63,7 +63,7 @@ describe("DispersionModeAction", () => {
   it("requires the exact sample equilibrium identity when rebinding a mode", () => {
     expect(dispersionModeSelectionMatches(targetModeRef, target)).toBe(true);
     expect(dispersionModeSelectionMatches({ ...targetModeRef, equilibriumId: "eq-other-sample" }, target)).toBe(false);
-    expect(dispersionModeSelectionMatches({ ...targetModeRef, equilibriumId: null }, target)).toBe(false);
+    expect(dispersionModeSelectionMatches({ ...targetModeRef, equilibriumId: undefined }, target)).toBe(false);
   });
 
   it("rebinds the clicked chart mode before dispatching the 3D command", async () => {

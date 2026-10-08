@@ -202,6 +202,7 @@ describe("EigenBranchInspectorPanel point model", () => {
     const artifact: FrequencyDomainJsonArtifactResource = {
       artifact_set_id: "sha256:artifact-set-7",
       artifact_path: "eigen/branches.v2.json",
+      schema_version: "frequency_domain_eigen_branches.v2",
       content_digest: "sha256:branch-bytes-7",
       revision: "sha256:branches-revision-7",
       resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -249,6 +250,7 @@ describe("EigenBranchInspectorPanel point model", () => {
     const artifact: FrequencyDomainJsonArtifactResource = {
       artifact_set_id: "sha256:artifact-set-7",
       artifact_path: "eigen/branches.v2.json",
+      schema_version: "frequency_domain_eigen_branches.v2",
       content_digest: "sha256:branch-bytes-7",
       revision: "sha256:branches-revision-7",
       resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
