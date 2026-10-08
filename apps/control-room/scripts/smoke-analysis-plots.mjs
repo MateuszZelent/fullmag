@@ -946,6 +946,8 @@ async function inspectFrequencyChartOption(page, fixture) {
           ).length,
           seriesIndex,
           showSymbol: entry.showSymbol === true,
+          symbolSize: entry.symbolSize ?? null,
+          symbolFill: entry.itemStyle?.color ?? null,
           sourceGapRowRetained: sourceGapRow == null
             ? null
             : data.some((row) => Array.isArray(row) && row[2] === sourceGapRow),
@@ -980,9 +982,11 @@ async function inspectFrequencyChartOption(page, fixture) {
         `${fixture.id} did not cap each series at 5,000 rendered points: ${JSON.stringify(evidence.series)}`,
       );
     }
-    if (scatter.showSymbol !== true || line.showSymbol !== false) {
+    if (scatter.showSymbol !== true || scatter.symbolSize !== 4 ||
+        line.showSymbol !== true || line.symbolSize !== 2 ||
+        line.symbolFill !== "transparent") {
       throw new Error(
-        `${fixture.id} changed scatter symbols or line symbols: ${JSON.stringify(evidence.series)}`,
+        `${fixture.id} did not preserve visible scatter and transparent bounded line hit targets: ${JSON.stringify(evidence.series)}`,
       );
     }
     if (line.connectNulls !== false) {

@@ -161,6 +161,9 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("JSON.stringify({ ...failureEvidence, screenshot }, null, 2)");
     expect(smokeScript).toContain("requireDispersionRenderEvidence");
     expect(smokeScript).toContain("nonNullPointCount !== 5_000");
+    expect(smokeScript).toContain('line.symbolFill !== "transparent"');
+    expect(smokeScript).toContain("line.symbolSize !== 2");
+    expect(smokeScript).toContain("scatter.symbolSize !== 4");
     expect(smokeScript).toContain('entry.type === "scatter"');
     expect(smokeScript).toContain("targetPreviousIsNullSentinel");
     expect(smokeScript).toContain("line.connectNulls !== false");
