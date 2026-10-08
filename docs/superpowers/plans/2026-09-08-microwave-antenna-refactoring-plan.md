@@ -6084,6 +6084,13 @@ Ich przygotowanie zależności i Cargo pozostaje zarządzane przez środowisko T
 
 ## T15. Zbudować spójne UI i naprawić utratę parametrów/draftu
 
+**Przyrost 2026-10-08 — kreator CPW:** dodano kanoniczną komendę tworzenia
+trzech przewodników, terminali, current module i portu oraz oba wejścia wstążki.
+Podsumowanie przewodnika obejmuje wszystkie pięć wymiarów stacji CPW.
+Dowody, korekta kontraktu targetów i granice odbioru:
+[checkpoint kreatora CPW](2026-10-08-antenna-cpw-creator-checkpoint.md).
+Nie zamyka T04/T15 ani brakujących bramek current→field→LLG/FFT.
+
 **Przyrost 2026-10-08 — podgląd CPW WebGL:** produkcyjna warstwa primitive
 przeszła Chrome smoke: widoczny canvas, aktywny WebGL, złote piksele,
 odstęp nad/pod targetem i cleanup śledzonych geometrii. Pełne dowody i granice:

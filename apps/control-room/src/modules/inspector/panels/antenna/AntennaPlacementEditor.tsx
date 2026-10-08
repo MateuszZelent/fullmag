@@ -132,7 +132,7 @@ export function AntennaPlacementEditor({ objectId, scene, status, refetch }: Pro
       <option value="above">Above (+world Z)</option><option value="below">Below (−world Z)</option>
     </FormField>
     <FormField label="Antenna clearance" unit="m" value={gap} onChange={(event) => update({ gap: event.currentTarget.value })}
-      hint="Positive vertical gap between world-Z bounds of the entire signal/return assembly and target. Not the internal return offset or minimum Euclidean distance." />
+      hint="Positive vertical gap between world-Z bounds of the entire conductor assembly and target. Not an internal conductor offset or minimum Euclidean distance." />
     <FieldRow label="Proposed Δz" unit="m" value={placement ? placement.delta[2].toExponential(6) : "unavailable"} />
     <FieldRow label="Committed translation" unit="m" value={JSON.stringify(scene?.objects?.find((object) => object.id === objectId)?.transform?.translation ?? [0, 0, 0])} />
     {reason ? <FeedbackBanner kind="warning" message={reason} /> : null}

@@ -1193,30 +1193,61 @@ function sceneArray(scene: unknown, key: string): JsonValue[] {
   });
 }
 
-function defaultMicrostripCurrentTransport(objectId: string): JsonObject {
+function defaultCpwAntennaObject(objectId: string): JsonObject {
+  return {
+    ...defaultMicrostripAntennaObject(objectId),
+    name: "CPW antenna",
+    geometry: {
+      geometry_kind: "CPWAntennaLayout",
+      geometry_params: {
+        length_m: 1e-6,
+        thickness_m: 10e-9,
+        conductivity_s_per_m: 5.8e7,
+        stations: [0, 1].map((s) => ({
+          s, signal_width_m: 50e-9,
+          left_gap_m: 50e-9, right_gap_m: 50e-9,
+          left_ground_width_m: 200e-9, right_ground_width_m: 200e-9,
+        })),
+        transform: {
+          rotation_matrix: [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+          translation_m: [0, -0.5e-6, 0],
+        },
+        conductors: [
+          { id: "signal", kind: "signal" },
+          { id: "ground_left", kind: "ground_left" },
+          { id: "ground_right", kind: "ground_right" },
+        ],
+        terminal_faces: {
+          signal: { inlet: "local_u_min", outlet: "local_u_max" },
+          ground_left: { inlet: "local_u_min", outlet: "local_u_max" },
+          ground_right: { inlet: "local_u_min", outlet: "local_u_max" },
+        },
+      },
+      bounds_min: [-275e-9, -0.5e-6, -5e-9],
+      bounds_max: [275e-9, 0.5e-6, 5e-9],
+    },
+  };
+}
+
+function defaultMicrostripCurrentTransport(
+  objectId: string,
+  conductorIds = ["signal", "return"],
+): JsonObject {
   const currentId = `${objectId}:current`;
   return {
     boundaries: [
-      {
-        id: "signal_in",
-        kind: "equipotential_current_terminal",
-        surfaces: [{ object_id: objectId, orientation: [0, -1, 0], surface_id: "antenna_terminal:signal:local_u_min" }],
-      },
-      {
-        id: "signal_out",
-        kind: "equipotential_current_terminal",
-        surfaces: [{ object_id: objectId, orientation: [0, 1, 0], surface_id: "antenna_terminal:signal:local_u_max" }],
-      },
-      {
-        id: "return_in",
-        kind: "equipotential_current_terminal",
-        surfaces: [{ object_id: objectId, orientation: [0, -1, 0], surface_id: "antenna_terminal:return:local_u_min" }],
-      },
-      {
-        id: "return_out",
-        kind: "equipotential_current_terminal",
-        surfaces: [{ object_id: objectId, orientation: [0, 1, 0], surface_id: "antenna_terminal:return:local_u_max" }],
-      },
+      ...conductorIds.flatMap((id) => [
+        {
+          id: `${id}_in`,
+          kind: "equipotential_current_terminal",
+          surfaces: [{ object_id: objectId, orientation: [0, -1, 0], surface_id: `antenna_terminal:${id}:local_u_min` }],
+        },
+        {
+          id: `${id}_out`,
+          kind: "equipotential_current_terminal",
+          surfaces: [{ object_id: objectId, orientation: [0, 1, 0], surface_id: `antenna_terminal:${id}:local_u_max` }],
+        },
+      ]),
       {
         id: "insulating_outer",
         kind: "insulating",
@@ -1239,23 +1270,18 @@ function defaultMicrostripCurrentTransport(objectId: string): JsonObject {
   };
 }
 
-function defaultMicrostripPortMode(objectId: string): JsonObject {
+function defaultMicrostripPortMode(
+  objectId: string,
+  conductorIds = ["signal", "return"],
+): JsonObject {
   return {
     schema_version: "antenna_port_mode.v2",
-    branches: [
-      {
-        id: "signal",
-        inlet_terminal_ref: "signal_in",
-        outlet_terminal_ref: "signal_out",
-        signed_weight: 1,
-      },
-      {
-        id: "return",
-        inlet_terminal_ref: "return_in",
-        outlet_terminal_ref: "return_out",
-        signed_weight: -1,
-      },
-    ],
+    branches: conductorIds.map((id, index) => ({
+      id,
+      inlet_terminal_ref: `${id}_in`,
+      outlet_terminal_ref: `${id}_out`,
+      signed_weight: index === 0 ? 1 : -1 / (conductorIds.length - 1),
+    })),
     current_transport_id: `${objectId}:current`,
     id: `${objectId}:port:common`,
     normalization_current_a: 1,
@@ -1438,9 +1464,9 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       });
     },
   },
-  {
-    id: "geometry.add-microstrip-antenna",
-    title: "Add Microstrip Antenna",
+  ...(["microstrip", "cpw"] as const).map((layout): CommandContribution => ({
+    id: `geometry.add-${layout}-antenna`,
+    title: layout === "cpw" ? "Add CPW Antenna" : "Add Microstrip Antenna",
     category: "Geometry",
     group: "geometry",
     scope: "workspace",
@@ -1466,6 +1492,10 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       preparation.before ??= scene;
       preparation.baseRevision = baseRevision;
       const objectId = draftObjectId("antenna");
+      const conductorIds = layout === "cpw"
+        ? ["signal", "ground_left", "ground_right"]
+        : ["signal", "return"];
+      const label = layout === "cpw" ? "CPW antenna" : "Microstrip antenna";
       const request: AuthoringTransactionRequest = {
         base_revision: baseRevision,
         kind: "merge_patch",
@@ -1476,15 +1506,15 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
           ],
           antenna_port_modes: [
             ...sceneArray(scene, "antenna_port_modes"),
-            defaultMicrostripPortMode(objectId),
+            defaultMicrostripPortMode(objectId, conductorIds),
           ],
           current_transports: [
             ...sceneArray(scene, "current_transports"),
-            defaultMicrostripCurrentTransport(objectId),
+            defaultMicrostripCurrentTransport(objectId, conductorIds),
           ],
           objects: [
             ...sceneObjects(scene),
-            defaultMicrostripAntennaObject(objectId),
+            layout === "cpw" ? defaultCpwAntennaObject(objectId) : defaultMicrostripAntennaObject(objectId),
           ],
         },
       };
@@ -1494,19 +1524,19 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
         : await context.api.model.commitTransaction(request);
       const obsoleteAfterWrite = obsoleteSessionResult(context);
       if (obsoleteAfterWrite) return obsoleteAfterWrite;
-      selectCommittedObject(context, objectId, "Microstrip antenna");
+      selectCommittedObject(context, objectId, label);
       await recordAuthoringMutationHistory(
         context,
-        "Add microstrip antenna",
+        `Add ${layout} antenna`,
         preparation,
         response.committed_scene,
         captureAuthoringHistoryWorkspaceState(context),
       );
       assertCurrentSessionScope(context);
       invalidateSceneAuthoringResources(context, response.scene_revision);
-      return { message: "Microstrip antenna draft added; field solve requires a mesh-exact ConservativeCurrentView.", status: "completed" };
+      return { message: `${label} draft added; field solve requires a mesh-exact ConservativeCurrentView.`, status: "completed" };
     },
-  },
+  })),
   {
     id: "geometry.commit-object-draft",
     title: "Commit Object Draft",

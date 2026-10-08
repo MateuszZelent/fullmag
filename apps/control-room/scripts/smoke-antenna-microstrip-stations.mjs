@@ -271,7 +271,74 @@ try {
   assert.equal(pageErrors.length, 0, pageErrors.join(" | "));
   assert.equal(consoleErrors.length, 0, consoleErrors.join(" | "));
   checks.push({ name: "bounded workflow and settled idle have no polling, implicit mutation or runtime/console errors", passed: true, requests: final.calls.length, renders: final.renderCommits });
-  requestEvidence = { ...(requestEvidence ?? {}), [layout]: final };
+  // Execute the actual registered creator against the same typed, controlled transport.
+  await page.getByTestId("antenna-stations-scroll").evaluate((element) => { element.style.height = "auto"; element.style.overflow = "visible"; });
+  for (const createLayout of [layout === "cpw" ? "microstrip" : "cpw", layout]) {
+  const beforeCreation = await read();
+  await page.evaluate((kind) => {
+    window.__antennaCreatedResult = null;
+    window.__antennaStationsFixture.createAntenna(kind).then((result) => { window.__antennaCreatedResult = result; });
+  }, createLayout);
+  await page.waitForFunction(() => window.__antennaStationsFixture.read().pendingWrites === 1, undefined, { timeout });
+  const creationPending = await read();
+  const creationRequest = creationPending.calls.filter((call) => call.method === "POST").at(-1).body;
+  assert.equal(creationRequest.kind, "merge_patch");
+  assert.equal(creationRequest.base_revision, beforeCreation.revision);
+  assert.deepEqual(creationRequest.merge_patch.objects.slice(0, -1), beforeCreation.scene.objects);
+  for (const key of ["current_transports", "antenna_port_modes", "antenna_field_solve_stages"]) {
+    assert.deepEqual(creationRequest.merge_patch[key].slice(0, -1), beforeCreation.scene[key] ?? [], `Creator lost existing ${key}`);
+  }
+  const created = creationRequest.merge_patch.objects.at(-1);
+  const transport = creationRequest.merge_patch.current_transports.at(-1);
+  const port = creationRequest.merge_patch.antenna_port_modes.at(-1);
+  const solve = creationRequest.merge_patch.antenna_field_solve_stages.at(-1);
+  const ids = createLayout === "cpw" ? ["signal", "ground_left", "ground_right"] : ["signal", "return"];
+  assert.equal(created.geometry.geometry_kind, createLayout === "cpw" ? "CPWAntennaLayout" : "MicrostripAntennaLayout");
+  assert.deepEqual(created.geometry.geometry_params.conductors.map((part) => part.id), ids);
+  assert.equal(created.magnetization_ref, null);
+  assert.deepEqual(created.physics_stack, []);
+  assert.equal(transport.name, `${created.id}:current`);
+  assert.equal(transport.boundaries.length, ids.length * 2 + 1);
+  assert.equal(port.source_object_id, created.id);
+  assert.equal(port.current_transport_id, transport.name);
+  assert.deepEqual(port.branches.map((branch) => branch.signed_weight), createLayout === "cpw" ? [1, -0.5, -0.5] : [1, -1]);
+  for (const branch of port.branches) {
+    for (const [key, face] of [["inlet_terminal_ref", "min"], ["outlet_terminal_ref", "max"]]) {
+      const boundary = transport.boundaries.find((entry) => entry.id === branch[key]);
+      assert.ok(boundary);
+      assert.equal(boundary.surfaces[0].object_id, created.id);
+      assert.equal(boundary.surfaces[0].surface_id, `antenna_terminal:${branch.id}:local_u_${face}`);
+    }
+  }
+  assert.equal(solve.source_object_id, created.id);
+  assert.deepEqual(solve.target_refs, [{ kind: "global" }], "Creator must retain the canonical global sampling target, not an invalid empty executable stage");
+  assert.equal(transport.conservative_current_view, undefined, "Creator must not fabricate solved current");
+  assert.equal(creationPending.scene.objects.length, beforeCreation.scene.objects.length, "Pending creation was applied before ACK");
+  await page.evaluate(() => window.__antennaStationsFixture.releaseWrite());
+  await page.waitForFunction(() => window.__antennaCreatedResult?.status === "completed", undefined, { timeout });
+  await ready();
+  const afterCreation = await read();
+  assert.equal(afterCreation.scene.objects.at(-1).id, created.id);
+  assert.equal(afterCreation.revision, beforeCreation.revision + 1);
+  assert.equal(afterCreation.calls.filter((call) => call.method === "POST").length, beforeCreation.calls.filter((call) => call.method === "POST").length + 1);
+  assert.equal(afterCreation.unexpected.length, 0);
+  const details = page.getByTestId("antenna-created-details");
+  await page.waitForFunction((id) => document.querySelector('[data-testid="antenna-created-details"]')?.getAttribute("data-object-id") === id, created.id, { timeout });
+  assert.ok((await details.innerText()).includes(created.geometry.geometry_kind));
+  if (createLayout === "cpw") {
+    for (const label of ["1 · Signal width", "1 · Left gap", "1 · Right gap", "1 · Left ground", "1 · Right ground"]) assert.ok((await details.innerText()).includes(label));
+    assert.ok(!(await details.innerText()).includes("Return width"));
+    const clipped = await details.locator(".fm-inspector-field-row__value").evaluateAll((values) => values.filter((value) => value.scrollWidth > value.clientWidth + 1).length);
+    assert.equal(clipped, 0, "CPW conductor summary clips scientific values");
+  } else assert.ok((await details.innerText()).includes("Return width"));
+  await details.scrollIntoViewIfNeeded();
+  await screenshot(`15-created-${createLayout}-details`);
+  assert.equal(pageErrors.length, 0, pageErrors.join(" | "));
+  assert.equal(consoleErrors.length, 0, consoleErrors.join(" | "));
+  checks.push({ name: `${createLayout} production creator preserves existing inventory and commits one complete conductor/terminal/current/port draft only after ACK`, passed: true });
+  }
+  const afterCreation = await read();
+  requestEvidence = { ...(requestEvidence ?? {}), [layout]: afterCreation };
   await page.close();
   page = null;
   }

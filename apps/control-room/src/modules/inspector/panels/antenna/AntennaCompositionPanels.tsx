@@ -162,7 +162,8 @@ function conductorDetails(
 ): DetailModel {
   const object = scene?.objects?.find((candidate) => candidate.id === objectId);
   const geometry = recordValue(object?.geometry);
-  const params = geometry?.geometry_kind === "MicrostripAntennaLayout"
+  const isCpw = geometry?.geometry_kind === "CPWAntennaLayout";
+  const params = isCpw || geometry?.geometry_kind === "MicrostripAntennaLayout"
     ? recordValue(geometry.geometry_params)
     : null;
   const stations = Array.isArray(params?.stations) ? params.stations : [];
@@ -178,20 +179,47 @@ function conductorDetails(
         { label: "Length", value: numberValue(params.length_m, "m") },
         { label: "Thickness", value: numberValue(params.thickness_m, "m") },
         { label: "Conductivity", value: numberValue(params.conductivity_s_per_m, "S/m") },
-        { label: "Return width", value: numberValue(params.return_width_m, "m") },
-        { label: "Return offset", value: numberValue(params.return_offset_m, "m") },
-        ...stations.map((entry, index) => {
+        ...(!isCpw ? [
+          { label: "Return width", value: numberValue(params.return_width_m, "m") },
+          { label: "Return offset", value: numberValue(params.return_offset_m, "m") },
+        ] : []),
+        ...stations.flatMap((entry, index) => {
           const station = recordValue(entry);
-          return {
+          if (isCpw) return [
+            { label: `Station ${index + 1}`, value: `s=${numberValue(station?.s)}` },
+            ...[
+              ["Signal width", "signal_width_m"],
+              ["Left gap", "left_gap_m"],
+              ["Right gap", "right_gap_m"],
+              ["Left ground", "left_ground_width_m"],
+              ["Right ground", "right_ground_width_m"],
+            ].map(([label, key]) => ({
+              label: `${index + 1} · ${label}`,
+              value: numberValue(station?.[key], "m"),
+            })),
+          ];
+          return [{
             label: `Station ${index + 1}`,
             value: `s=${numberValue(station?.s)}, signal width=${numberValue(station?.signal_width_m, "m")}`,
-          };
+          }];
         }),
       ] : []),
       { label: "Material", value: textValue(object?.material_ref, "unassigned") },
       { label: "Mesh policy", value: object?.object_mesh ? "authored" : "default" },
     ],
   };
+}
+
+export function AntennaConductorDetails({ objectId, scene }: {
+  objectId: string | null;
+  scene: SceneResource | null;
+}) {
+  const model = conductorDetails(objectId, scene);
+  const object = scene?.objects?.find((candidate) => candidate.id === objectId);
+  const isCpw = recordValue(object?.geometry)?.geometry_kind === "CPWAntennaLayout";
+  return <InspectorGroup title={model.title} badge={model.badge} className={isCpw ? "fm-antenna-inspection" : undefined}>
+    {model.rows.map((row) => <FieldRow key={row.label} {...row} />)}
+  </InspectorGroup>;
 }
 
 function portDetails(
@@ -876,7 +904,7 @@ export function AntennaCompositionPanel({
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorGroup title={model.title} badge={model.badge}>
+      {kind === "conductor" ? <AntennaConductorDetails objectId={objectId} scene={scene.data} /> : <InspectorGroup title={model.title} badge={model.badge}>
         {model.rows.map((row) => (
           <FieldRow
             key={row.label}
@@ -894,7 +922,7 @@ export function AntennaCompositionPanel({
               : "To publish H_ant or FFT results, run the configured field-solve/projection stage first."}
           />
         ) : null}
-      </InspectorGroup>
+      </InspectorGroup>}
       {kind === "conductor" && objectId ? <MicrostripGeometryEditor objectId={objectId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
       {kind === "conductor" && objectId ? <AntennaPlacementEditor objectId={objectId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}
       {kind === "solution" && objectId && resourceId ? <AntennaSolveTargetsEditor key={`targets:${objectId}:${resourceId}`} objectId={objectId} stageId={resourceId} scene={scene.data} status={scene.status} refetch={scene.refetch} /> : null}

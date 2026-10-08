@@ -10,12 +10,16 @@ import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { KernelContext } from "@/kernel/KernelContext";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
+import { GEOMETRY_LIFECYCLE_COMMANDS } from "@/kernel/authoring/geometryLifecycleCommandContributions";
+import type { CommandResult } from "@/kernel/commands/commandTypes";
+import { SelectionController } from "@/kernel/selection/SelectionController";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import type { KernelApi } from "@/kernel/types";
 import { MicrostripGeometryEditor } from "@/modules/inspector/panels/antenna/MicrostripGeometryEditor";
+import { AntennaConductorDetails } from "@/modules/inspector/panels/antenna/AntennaCompositionPanels";
 
 const OBJECT_ID = "fixture-microstrip-conductor";
 const API_INSTANCE = "22222222-2222-4222-8222-222222222222";
@@ -30,6 +34,7 @@ interface FixtureControl {
   refreshUnrelated(): void;
   releaseScene(): void;
   insertFormerPosition(): void;
+  createAntenna(layout: "microstrip" | "cpw"): Promise<CommandResult>;
 }
 declare global { interface Window { __antennaStationsFixture?: FixtureControl; } }
 
@@ -93,6 +98,13 @@ function makeFixture() {
       }
       if (request.method === "POST" && path === MODEL_TRANSACTIONS_PATH) {
         const transaction = body as AuthoringTransactionRequest;
+        if (transaction.kind === "merge_patch" && transaction.base_revision === state.scene.revision) {
+          return new Promise<Response>((resolve) => pendingWrites.push(() => {
+            const revision = Number(state.scene.revision) + 1;
+            state.scene = { ...state.scene, ...structuredClone(transaction.merge_patch), revision, scene_revision: revision } as SceneResource;
+            resolve(json({ scene_revision: revision, transaction_kind: transaction.kind, committed_scene: structuredClone(state.scene) }));
+          }));
+        }
         if (transaction.kind !== "patch_object_geometry" || transaction.object_id !== OBJECT_ID || transaction.base_revision !== state.scene.revision) {
           unexpected.push("invalid geometry transaction");
           return json({ error: "Invalid fixed fixture transaction", code: "revision_conflict" }, 409);
@@ -109,7 +121,13 @@ function makeFixture() {
   });
   // Production hooks, shared cache, API facade and editor are not replaced.
   const kernel = { api, bus, resources, diagnostics, diagnosticRecorder } as unknown as KernelApi;
+  const selection = new SelectionController(bus);
   const control: FixtureControl = {
+    createAntenna: async (layout) => {
+      const command = GEOMETRY_LIFECYCLE_COMMANDS.find((entry) => entry.id === `geometry.add-${layout}-antenna`);
+      if (!command) throw new Error("Production antenna command is absent");
+      return command.run({ source: "ribbon", api, resources, selection, sessionScopeKey: expectedScope, isCurrentSessionScope: () => true });
+    },
     read: () => ({ calls: structuredClone(calls), pendingWrites: pendingWrites.length, pendingSceneReads: pendingSceneReads.length, renderCommits: state.renderCommits, revision: Number(state.scene.revision), scene: structuredClone(state.scene), unexpected: [...unexpected], invalidations: [...invalidations] }),
     releaseWrite: () => {
       const release = pendingWrites.shift();
@@ -142,8 +160,12 @@ function makeFixture() {
 
 function EditorHarness() {
   const resource = useSceneResource();
+  const created = resource.data?.objects?.findLast((object) => object.id !== OBJECT_ID);
   return <div data-testid="antenna-stations-editor" data-resource-status={resource.status} data-scene-revision={resource.data?.revision}>
     <MicrostripGeometryEditor objectId={OBJECT_ID} scene={resource.data} status={resource.status} refetch={resource.refetch} />
+    {created ? <div data-testid="antenna-created-details" data-object-id={created.id} style={{ width: 320, maxWidth: "100%" }}>
+      <AntennaConductorDetails objectId={created.id} scene={resource.data} />
+    </div> : null}
   </div>;
 }
 

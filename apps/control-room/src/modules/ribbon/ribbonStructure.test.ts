@@ -1975,7 +1975,6 @@ describe("ribbon structure", () => {
       "physics-add-dmi",
       "physics-add-ku",
       "manage-rf",
-      "add-cpw",
     ]);
     const matchedIds = new Set<string>();
 
@@ -2413,6 +2412,19 @@ describe("ribbon structure", () => {
       commandId: "geometry.add-microstrip-antenna",
     });
     expect(microstripAction?.disabled).not.toBe(true);
+  });
+
+  it("wires Physics and Geometry CPW actions to one antenna command", () => {
+    const cpwAction = ALL_TAB_CONTENT.physics.groups.find(
+      (group) => group.id === "rf-sources",
+    )?.actions.find((action) => action.id === "add-cpw");
+    expect(cpwAction).toMatchObject({ commandId: "geometry.add-cpw-antenna" });
+    expect(cpwAction?.disabled).not.toBe(true);
+    const geometryAction = ALL_TAB_CONTENT.geometry.groups.flatMap(
+      (group) => group.actions,
+    ).find((action) => action.id === "geometry.add-cpw-antenna");
+    expect(geometryAction).toBeDefined();
+    expect(geometryAction?.disabled).not.toBe(true);
   });
 
   it("wires global Surface and Texture ribbon menus to object and part display defaults", async () => {

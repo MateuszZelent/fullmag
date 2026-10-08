@@ -322,6 +322,7 @@ const geometryTab: RibbonTabContent = {
         { id: "geometry.add-cylinder",     icon: icon(Cylinder), label: "Cylinder",       iconColor: "text-cyan-400" },
         { id: "geometry.add-sphere",       icon: icon(Circle),   label: "Sphere",         iconColor: "text-violet-400" },
         { id: "geometry.add-microstrip-antenna", icon: icon(RadioTower), label: "Microstrip", iconColor: "text-rose-300" },
+        { id: "geometry.add-cpw-antenna", icon: icon(RadioTower), label: "CPW", iconColor: "text-sky-400" },
         { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      disabled: true, iconColor: "text-purple-300" },
         { id: "builder-add-disk",          icon: icon(Disc),     label: "Disk",           disabled: true, iconColor: "text-sky-400" },
         { id: "geometry.add-thin-film",    icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
@@ -517,7 +518,7 @@ const physicsTab: RibbonTabContent = {
       actions: [
         { id: "manage-rf",      icon: icon(RadioTower), label: "RF Sources",  disabled: true, iconColor: "text-cyan-400",    menu: menu("physics-rf", "RF source", ["Add microstrip", "Add CPW", "List sources"]) },
         { id: "add-microstrip", icon: icon(Plus),       label: "Microstrip",  commandId: "geometry.add-microstrip-antenna", iconColor: "text-teal-400" },
-        { id: "add-cpw",        icon: icon(Plus),       label: "CPW",         disabled: true, iconColor: "text-sky-400" },
+        { id: "add-cpw",        icon: icon(Plus),       label: "CPW",         commandId: "geometry.add-cpw-antenna", iconColor: "text-sky-400" },
       ],
     },
   ],
