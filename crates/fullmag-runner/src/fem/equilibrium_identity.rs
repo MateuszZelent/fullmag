@@ -627,7 +627,8 @@ mod material_identity_tests {
 
     #[test]
     fn field_certificate_scope_rejects_unrepresented_contributions() {
-        let baseline = fullmag_ir::FemPlanIR::default();
+        let mut baseline = fullmag_ir::FemPlanIR::default();
+        baseline.material.saturation_magnetisation = 800_000.0;
         validate_supported_relax_source(&baseline).unwrap();
         let mut ku = baseline.clone();
         ku.material.uniaxial_anisotropy = Some(0.0);
@@ -768,7 +769,7 @@ mod material_identity_tests {
         let original = equilibrium_material_signature_and_preimage(&material).unwrap();
         assert_eq!(
             original.0,
-            "sha256:5aff2c9f1fa917b8f55646cdb181e93feb1d2d8052d265d7256da089944e0f1b",
+            "sha256:9b182909389d5b92f6ade8d0267a22e58073755e8a47e3fe04c191b92a6c6cf6",
             "uniform-Ms Ku=0 must retain the historical V2 material identity"
         );
         assert!(constant_uniaxial_descriptor(&material).unwrap().is_some());

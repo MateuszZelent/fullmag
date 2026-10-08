@@ -1523,9 +1523,9 @@ async function qualifyModalArtifactOwnershipRace(
     .locator(".fm-explorer .fm-tabs-trigger")
     .filter({ hasText: /^Model$/ });
   await modelTab.click();
-  await selectInspectorNode(page, inspector, "model:object:film:visualization:mode-visualization", {
-    owner: "object-mode-visualization-overview",
-    label: "Mode view with unmatched run A artifact",
+  await selectInspectorNode(page, inspector, "model:object:film:visualization", {
+    owner: "object-visualization",
+    label: "Object viewport with unmatched run A artifact",
   });
   await assertHealthyViewportCanvas(page, "unmatched run A modal artifacts");
   const staleUniforms = await page.evaluate(

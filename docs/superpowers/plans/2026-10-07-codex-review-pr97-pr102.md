@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 27, `implemented_pending_browser`: 8, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 99. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 27, `implemented_pending_browser`: 8, `implemented_pending_ci`: 7, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 97. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -225,7 +225,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4207587018](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587018) / #97 | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | valid_unfixed | Nowy błąd wiązania polityk per-object. asset_pipeline.py:1218–1224 przekazuje cały mesh_workflow przy geometries=[geometry], a _size_field_plan.py:1586–1591 odrzuca właściciela innego obiektu zamiast ograniczyć polityki standalone do bieżącego właściciela. Shared-domain walidacja wszystkich ownerów musi pozostać. |
 | [4207587028](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587028) / #97 | `apps/control-room/src/kernel/resources/studyRuntimeResources.ts` | duplicate | Ten sam guard retained identity w studyRuntimeResources.ts:837: każdy status poza ready usuwa identity mimo zachowanych data. Nowy trigger stale odświeżenia rozszerza wcześniejszy trigger error, lecz przyczyna i poprawka są wspólne. Powtórzenie 4204074508. |
 | [4207587037](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587037) / #97 | `crates/fullmag-api/src/quantities.rs` | implemented_pending_ci | Nowa sprzeczność katalogu i historii. quantities.rs:55–57 zwraca scalar_available=false dla latest_step modalnego przed sprawdzeniem zachowanej fizycznej historii lub run_value (:59–70). tables.rs zachowuje fizyczne wiersze, więc dostępne dane zostają ukryte w katalogu. |
-| [4207587048](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587048) / #97 | `crates/fullmag-api/src/router_v2/handlers/analysis/results.rs` | valid_unfixed | Nowa luka typed availability. frequency_domain.rs:326/518 definiuje oba mode payload bez jawnego mode_field_available; results.rs:1557 czyta extras przez as_bool i akceptuje wszystko inne niż bool false. String false może ominąć wyłączenie, jeśli field_status/ID/mesh są gotowe. Dodać typed Option<bool> i strict decode, zachowując uzasadnioną legacy semantykę. |
+| [4207587048](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587048) / #97 | `crates/fullmag-api/src/router_v2/handlers/analysis/results.rs` | implemented_pending_ci | Nowa luka typed availability. frequency_domain.rs:326/518 definiuje oba mode payload bez jawnego mode_field_available; results.rs:1557 czyta extras przez as_bool i akceptuje wszystko inne niż bool false. String false może ominąć wyłączenie, jeśli field_status/ID/mesh są gotowe. Dodać typed Option<bool> i strict decode, zachowując uzasadnioną legacy semantykę. |
 | [4207587059](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587059) / #97 | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | valid_unfixed | Nowa niespójność gradingu z. _gmsh_swept.py:2003–2009 przy braku airbox hmin/hmax ustala h_inner=h_outer=hmax; _box_airbox_layer_levels:1923 clampuje growth do h_outer, więc warstwy nie grubieją. Pole lateral grading w :2243–2250 używa innego domyślnego outer=inner*ratio^4. Wymaga spójnego targetu, bez arbitralnego zwiększania jawnego hmax. |
 | [4207587066](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587066) / #97 | `apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts` | implemented_pending_browser | Nowa utrata przerw po decymacji. frequencyDomainChartModels.ts:1102/1124 oznacza breakBefore, lecz modules/analysis-plots/frequencyDomainSeriesAdapter.ts:22–66 wybiera jedynie endpoints/extrema/fill i może usunąć punkt graniczny. finiteFrequencySeries zachowuje marker w punktach; renderer dostaje serię bez przerwy. |
 | [4207587076](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587076) / #97 | `crates/fullmag-ir/src/validation.rs` | duplicate | Ten sam niepełny publiczny validator V04. study_v04.rs:330 kończy po representation/BC/k_sampling, bez count/target/dynamics/sampling; validation.rs wywołuje właśnie tę metodę. Nie naprawiono przez migrację regionów. Powtórzenie 4204074492. |
@@ -242,7 +242,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4207786370](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786370) / #97 | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | duplicate | Dokładnie wcześniej wykazany legacy real-split mismatch. modal_eigen_solver.cpp:2247 zachowuje oryginalny pointer N*N, lecz zapisuje count dynamicznego wyniku (2N)^2. Starszy ledger już dokumentuje ten pointer/count oraz konieczność realifikacji własnego bufora; nowy opis podkreśla możliwe OOB certifiera. Nie wykonano runtime/ASan. Powtórzenie 4061343721. |
 | [4207786385](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786385) / #97 | `scripts/local_runner/build_executor.py` | valid_unfixed | Nowa luka kompletności modalnego pakietu. build_executor.py:702–725 dla contract profile wymaga scenario result + FEM lib + source identity, zamiast BASE_REQUIRED_OUTPUTS. build_entrypoint.py:266–271/1031 wymaga fullmag-bin/API/core/launcher/web. Receipt pomijający plik i wpis może przejść executor i zakończyć niekompletny build sukcesem. |
 | [4207979046](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979046) / #97 | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | duplicate | Ten sam błędny metric fallback deduplikacji. production_cpu_modal_eigen.cpp:3080 ustawia metric tylko poza floquet_shared_domain_operator, pozostawiając nullptr i Euclidean fallback. Wcześniejszy algebraiczny kontrprzykład masowo ortogonalnych modów pozostaje aktualny; nie potrzeba nowej deklaracji runtime proof. Powtórzenie 4060687822. |
-| [4207979056](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979056) / #97 | `packages/fullmag-py/src/fullmag/model/study.py` | valid_unfixed | Nowy błąd typu publicznej solver tolerance. fullmag/model/study.py:186 zamienia residual_tolerance=True przez float na 1.0, podczas gdy _positive_int:215 jawnie odrzuca bool dla iteration limits. FemEigenSolverPolicyIR dopuszcza dodatnie 1.0, więc literal bool staje się rzeczywistą tolerancją. Odrzucić bool przed konwersją. |
+| [4207979056](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979056) / #97 | `packages/fullmag-py/src/fullmag/model/study.py` | implemented_pending_ci | Nowy błąd typu publicznej solver tolerance. fullmag/model/study.py:186 zamienia residual_tolerance=True przez float na 1.0, podczas gdy _positive_int:215 jawnie odrzuca bool dla iteration limits. FemEigenSolverPolicyIR dopuszcza dodatnie 1.0, więc literal bool staje się rzeczywistą tolerancją. Odrzucić bool przed konwersją. |
 | [4207979065](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979065) / #97 | `backends/fem/include/frequency_domain/mode_kinematics.hpp` | duplicate | Ta sama soft-mode uwaga; źródło już poprawione. mode_kinematics.hpp:13 ma default=0.0, a mode_kinematics_test.cpp testuje ±1rad/s/±1kHz i both phasors. Publiczne dodatnie mody nie są usuwane przez 1e5rad/s. Provider/scientific qualification nie wynika z source fix. Powtórzenie 4206565211. |
 | [4207979074](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979074) / #97 | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | valid_unfixed | Nowy brak kontrolowanej walidacji reserved marker. _gmsh_swept.py:1943ff Box layered route nie odrzuca airbox.boundary_marker=10, lecz interface używa physical surface10 i Gamma_out używa boundary_marker (:2219). Pozostałe routes mają guard (:2516/:3211). Dodać guard przed meshingiem, nie przemianowywać semantycznych grup. |
 | [4207979082](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979082) / #97 | `apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.tsx` | valid_unfixed | Nowy brak canonical residual w UI. frequencyDomainChartModels.ts:940/1505 czyta residual_norm/relative_residual_norm, ale typed spectrum.v3 mode publikuje residual_relative_l2. EigenModeInspectorPanel podsumowuje spectrumPoint.residualNorm, zatem poprawny relative-L2 jest pokazywany jako unavailable. Zachować jawnie jego semantykę w parserze/modelu. |
@@ -661,3 +661,44 @@ CABI run37763186739: masa fixture 0,-1,1,0, lecz request pointer różni się od
 adresu fixture, a adapter kopiuje ten sam błędny pointer. Dodano strict pre-call
 pointer assertions, żeby następne wykonanie rozdzieliło konstrukcję requestu od
 nadpisania w C ABI. Nie zmieniono physics/threshold w odpowiedzi na uszkodzone dane.
+## Checkpoint 2026-10-08 — rtol i typowana dostępność modu
+
+4207979056: commit 06d850befca9606ed860ee4b3857b44cd122186a odrzuca booleany
+jako residual_tolerance przed konwersją float. Regresja sprawdza True/False,
+dodatnią wartość, obydwa limity, serialization i puste defaults. AST i source
+review PASS; wykonanie należy do existing Python API GHA, nie uruchamiano go lokalnie.
+
+4207587048: commit 842f09b9b6475afeed84f35a396e0f2fa5c32639 dodaje Option<bool>
+do spectrum-v3 i field-sweep. String false jest odrzucany, jawne false blokuje field_ref;
+absent/null zachowuje stary adapter fallback bez nowego wymogu mesh dla v3.
+Dopisano jawne filtry czterech nowych/zmienionych testów. Test OpenAPI sprawdza
+rzeczywisty typ boolean|null, a nie błędne type.as_str(); pole pozostaje optional.
+
+| Kontrola źródeł bez testów | Terminal receipt | Wynik |
+|---|---|---|
+| OpenAPI | 53d03dc4be304a35bb635b9334890852 | PASS |
+| Wygenerowany klient | 91a65f682d9c44d88a6426493e8d41dd | PASS |
+| Produkcyjny TypeScript | 53267239763f44789e04be6f0533dc7d | PASS |
+
+Pierwsza próba codegen odmówiła z powodu aktywnego lease storage; niczego nie
+odblokowywano ani nie przenoszono. Powtórzono ją po rzeczywistym released state
+w ramach tej samej managed route i istniejącego target/cache. Brak testów i nauki
+w powyższych receipts; nie przypisuje się source gate zakresu runtime.
+
+GHA37764235204: planner i runtime-scope testy 4207786279 przeszły; identity suite
+6 PASS/2 FAIL. Naprawiono fixture Ms=0 przez dodatnie 800000 A/m. Producer golden
+9b1829… dotyczy niezmienionej gałęzi normalizacji/serializacji historycznego Ku=0.
+Odrębny replay golden 5aff2c… zachowano dla jego dokładnych zapisanych bajtów,
+które nie są ponowną normalizacją osi producenta. Nie zmieniono produkcyjnych
+reguł ani hashingu w odpowiedzi na błędne oczekiwania testów.
+
+CABI pre-call asercja wykazała błędny pointer jeszcze przed raw_vector_wins solve,
+lecz po wcześniejszych invalid cases. Przygotowany checker mierzy factory przed
+pierwszym wywołaniem, input mutation, solve i destroy; nie dereferencjonuje pointerów.
+Przyczyna produkcyjna/kompilatorowa pozostaje NOT PROVEN.
+
+Browser negative ownership próbował wybrać mode-view mimo braku active overlay,
+gdy taki child zgodnie z builderem nie istnieje. Wybiera teraz istniejący object
+Visualization; zachowano stale Plot disabled, zdrowy canvas, brak obcego uniformu
+oraz brak requestu candidate field. Dodatnia ścieżka run B z prawdziwym overlay
+pozostaje. Wymagane świeże GHA po korektach fixture.

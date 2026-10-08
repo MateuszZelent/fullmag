@@ -3281,6 +3281,25 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
     constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+    const auto check_tiny_matrix_buffer_bindings = [&](const char *case_name,
+                                                       const char *phase,
+                                                       const FullmagFemModalEigenRequest &request) {
+        char message[256]{};
+        std::snprintf(message,
+                      sizeof(message),
+                      "case=%s phase=%s mass pointer must remain bound to the outer fixture buffer",
+                      case_name,
+                      phase);
+        check(request.tiny_validation_mass_matrix_row_major == gyrotropic_mass_row_major,
+              message);
+        std::snprintf(message,
+                      sizeof(message),
+                      "case=%s phase=%s stiffness pointer must remain bound to the outer fixture buffer",
+                      case_name,
+                      phase);
+        check(request.tiny_validation_stiffness_matrix_row_major == stiffness_matrix_row_major,
+              message);
+    };
     const auto tiny_floquet_request = [&]() {
         FullmagFemModalEigenRequest request = base_request();
         request.operator_request.spin_wave_bc_kind = "floquet";
@@ -3288,11 +3307,20 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
         request.tiny_validation_tangent_dof_count = 2;
         request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
         request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+        check_tiny_matrix_buffer_bindings("tiny_floquet_request", "construction", request);
         return request;
     };
-    const auto expect_invalid_wavevector = [](FullmagFemModalEigenRequest request) {
+    const FullmagFemModalEigenRequest initial_factory_request = tiny_floquet_request();
+    check_tiny_matrix_buffer_bindings(
+        "initial_factory_request",
+        "before first C ABI call",
+        initial_factory_request);
+    const auto expect_invalid_wavevector = [&](const char *case_name,
+                                              FullmagFemModalEigenRequest request) {
+        check_tiny_matrix_buffer_bindings(case_name, "after input mutations", request);
         FullmagFemFrequencyDomainResult result =
             fullmag_fem_modal_eigen_solve(&request);
+        check_tiny_matrix_buffer_bindings(case_name, "after solve", request);
         check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
               "an invalid declared Floquet wavevector must fail validation");
         check(contains(result.diagnostics_json, "invalid_floquet_wavevector"),
@@ -3300,6 +3328,7 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
         check(!contains(result.diagnostics_json, "tiny_validation_solver"),
               "invalid Floquet wavevector must be rejected before tiny validation");
         fullmag_fem_frequency_domain_result_destroy(&result);
+        check_tiny_matrix_buffer_bindings(case_name, "after result destroy", request);
     };
     const auto report_unexpected_success_status = [](
         const char *case_name,
@@ -3321,11 +3350,16 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
         std::numeric_limits<double>::infinity(),
         -std::numeric_limits<double>::infinity(),
     };
-    for (double component : nonfinite_components) {
+    const char *const fixed_nonfinite_case_names[] = {
+        "fixed_nan",
+        "fixed_positive_infinity",
+        "fixed_negative_infinity",
+    };
+    for (std::size_t index = 0; index < 3; ++index) {
         FullmagFemModalEigenRequest request = tiny_floquet_request();
         request.has_floquet_k_vector = 1;
-        request.floquet_k_vector_rad_per_m[0] = component;
-        expect_invalid_wavevector(request);
+        request.floquet_k_vector_rad_per_m[0] = nonfinite_components[index];
+        expect_invalid_wavevector(fixed_nonfinite_case_names[index], request);
     }
 
     const double short_wavevector[] = {0.0, 0.0};
@@ -3334,28 +3368,41 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     FullmagFemModalEigenRequest invalid_length = tiny_floquet_request();
     invalid_length.operator_request.k_vector_rad_m = short_wavevector;
     invalid_length.operator_request.k_vector_len = 2;
-    expect_invalid_wavevector(invalid_length);
+    expect_invalid_wavevector("short_raw_vector", invalid_length);
 
     const int invalid_raw_lengths[] = {0, -1, 4};
-    for (int invalid_raw_length : invalid_raw_lengths) {
+    const char *const invalid_raw_length_case_names[] = {
+        "zero_raw_length",
+        "negative_raw_length",
+        "long_raw_length",
+    };
+    for (std::size_t index = 0; index < 3; ++index) {
+        const int invalid_raw_length = invalid_raw_lengths[index];
         FullmagFemModalEigenRequest invalid_raw_length_request = tiny_floquet_request();
         invalid_raw_length_request.operator_request.k_vector_rad_m =
             invalid_raw_length == 4 ? long_wavevector : raw_zero_wavevector;
         invalid_raw_length_request.operator_request.k_vector_len = invalid_raw_length;
-        expect_invalid_wavevector(invalid_raw_length_request);
+        expect_invalid_wavevector(
+            invalid_raw_length_case_names[index],
+            invalid_raw_length_request);
     }
 
     FullmagFemModalEigenRequest null_raw_pointer_with_length = tiny_floquet_request();
     null_raw_pointer_with_length.operator_request.k_vector_rad_m = nullptr;
     null_raw_pointer_with_length.operator_request.k_vector_len = 3;
-    expect_invalid_wavevector(null_raw_pointer_with_length);
+    expect_invalid_wavevector("null_raw_pointer_with_length", null_raw_pointer_with_length);
 
-    for (double component : nonfinite_components) {
-        const double raw_nonfinite_wavevector[] = {component, 0.0, 0.0};
+    const char *const raw_nonfinite_case_names[] = {
+        "raw_nan_component",
+        "raw_positive_infinity_component",
+        "raw_negative_infinity_component",
+    };
+    for (std::size_t index = 0; index < 3; ++index) {
+        const double raw_nonfinite_wavevector[] = {nonfinite_components[index], 0.0, 0.0};
         FullmagFemModalEigenRequest request = tiny_floquet_request();
         request.operator_request.k_vector_rad_m = raw_nonfinite_wavevector;
         request.operator_request.k_vector_len = 3;
-        expect_invalid_wavevector(request);
+        expect_invalid_wavevector(raw_nonfinite_case_names[index], request);
     }
 
     // A valid raw vector takes precedence over a malformed fixed-array fallback.
@@ -3406,7 +3453,7 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     raw_invalid_length_with_fallback.operator_request.k_vector_rad_m = short_wavevector;
     raw_invalid_length_with_fallback.operator_request.k_vector_len = 2;
     raw_invalid_length_with_fallback.has_floquet_k_vector = 1;
-    expect_invalid_wavevector(raw_invalid_length_with_fallback);
+    expect_invalid_wavevector("raw_invalid_length_with_fallback", raw_invalid_length_with_fallback);
 
     // An empty raw pointer/length pair can still select the explicit fallback.
     FullmagFemModalEigenRequest raw_empty_with_fallback = tiny_floquet_request();
