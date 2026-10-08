@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 39, `implemented_pending_browser`: 8, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 87. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 39, `implemented_pending_browser`: 8, `implemented_pending_ci`: 6, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 86. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -60,7 +60,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4061343721](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343721) / #97 | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | valid_unfixed | Dla q=2 oryginalne K/G mają 4 wpisy i n=2, demag ma 16. Adapter n nie zmienia się. |
 | [4061343735](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343735) / #97 | `backends/fem/cpu/frequency_domain/floquet_airbox_operator.cpp` | already_fixed | Obecny C_q transportuje lokalną bazę i sprawdza ortonormalność, a mismatched m odrzuca. |
 | [4061343743](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343743) / #97 | `scripts/local_runner/container_main.py` | duplicate | Powtarza allow_profiles health mismatch z #4060116248; obecny HEAD zwraca skonfigurowaną allow-listę. Powtórzenie 4060116248. |
-| [4061684269](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684269) / #97 | `scripts/compare_de_100nm_pilot.py` | valid_unfixed | Receipt validator sprawdza request/result identity, nie required_artifact_hashes. Comparator czyta dispersion.csv bez porównania z hashem result; nowy hash w comparison.json nie wiąże wejścia z receipt. |
+| [4061684269](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684269) / #97 | `scripts/compare_de_100nm_pilot.py` | implemented_pending_ci | Comparator wiąże dokładne bajty dispersion.csv z contained path, size i SHA256 run-result. Te same bajty trafiają do walidatora naukowego, parsera i hasha raportu; companion artifacts i fizyka nie są kwalifikowane tą poprawką. |
 | [4061684277](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684277) / #97 | `scripts/run_de_100nm_pilot.py` | already_fixed | subprocess.run ma host watchdog, TimeoutExpired jest obsługiwany, a finally uruchamia cleanup po timeout/niezerowym wyniku. |
 | [4061684283](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684283) / #97 | `crates/fullmag-runner/src/fem/eigen_path.rs` | valid_unfixed | Po native return nie sprawdza executed.result.status przed checkpoint/parsing; outer result zawsze Completed. |
 | [4061684290](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061684290) / #97 | `crates/fullmag-runner/src/fem/eigen_native_window.rs` | implemented | Result.status=status może Cancelled, completion bierze literal Completed. |
@@ -1355,3 +1355,32 @@ Receipt-bound DE comparison jest rozszerzany, aby scientific validator i parser
 czytały te same zweryfikowane bajty CSV, bez ponownego otwierania pliku.
 
 PR97 nadal OPEN; PR102 CLOSED. Nie zakończono pełnego audytu ani celu.
+
+### Opublikowane poprawki i aktywne bramki 2026-10-08
+
+`1582a394f` wiąże dispersion.csv z receipt i przekazuje dokładnie te same bajty
+validatorowi i parserowi. Source review sześciu skryptów PASS; AST/diff/YAML PASS.
+Nowa uwaga4061684269 ma implemented_pending_ci, nie kwalifikację numeryczną.
+Workflow jawnie uruchamia trzy suite receipt/comparator/validate_rows oraz
+tracking tests i real writer confidence regression, wcześniej pomijane filtrami.
+
+`fd275de8a185a5d48d5534a5b08613c41f86747a` zawiera source-approved poprawkę
+KSP snapshot oraz ograniczone dimension-limit recovery best_effort window.
+Oba pozytywne provenance requests mają policy0; strict policy i negative contour
+pozostają osobnymi fail-closed regresjami. Bramka dokumentacji naukowej PASS.
+
+GHA37826981190/bootstrap i GHA37826986842/provider zlecono na tym samym SHA.
+Provider job113482264242 został potwierdzony IN_PROGRESS. Wcześniejszy celowany
+browser37826316640 pozostaje obserwowany; kolejne runy go nie anulują.
+Brak wyniku tych bramek oznacza NOT VERIFIED; nie promowano uwag dotyczących
+masy, refillu ani przeglądarki na podstawie samego source approval.
+
+Trwa osobna source diagnosis pustej próbki density w rzeczywistym layered Gmsh;
+nie zmieniono geometrii, progów4–12nm, bulk>=10nm ani kwalifikacji layer planes.
+
+Celowany browser37826316640 jest już terminalny: ControlRoom113479993673 SUCCESS,
+browser113479993143 FAIL. Pierwszy frequency-case ma fm-chart-tooltip widoczny,
+lecz bez tekstu; applied tuple [1,2.25,1], host top830/height326 i pointer y919.
+Zachowano log ci-37826316640-browser.log oraz screenshot w artefakcie GHA.
+To konkretny nowy dowód dla diagnozy tooltip/scroll/formatter; nie usunięto
+asercji i nie uznano ośmiu browser uwag za zamknięte. Worker analizuje artefakt.
