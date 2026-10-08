@@ -217,6 +217,7 @@ def _tet_edge_lengths_by_cylinder_scope(
     *,
     radius: float,
     half_height: float,
+    classify_edges_by_midpoint: bool = False,
 ) -> tuple[list[float], list[float]]:
     nodes = np.asarray(mesh.nodes, dtype=np.float64)
     elements = np.asarray(mesh.elements, dtype=np.int32)
@@ -228,16 +229,33 @@ def _tet_edge_lengths_by_cylinder_scope(
     for index, tet in enumerate(elements):
         if element_markers[index] != owner_marker:
             continue
+        edge_node_pairs = np.asarray(
+            [[tet[first], tet[second]] for first, second in edges],
+            dtype=np.int32,
+        )
+        edge_points = nodes[edge_node_pairs]
+        tet_edge_lengths = np.linalg.norm(
+            edge_points[:, 0, :] - edge_points[:, 1, :],
+            axis=1,
+        )
+        if classify_edges_by_midpoint:
+            # Exact through-thickness layers can place every tet centroid
+            # outside a thinner authored region even when in-region edges
+            # exist. Sample each edge at its own location instead.
+            midpoints = edge_points.mean(axis=1)
+            in_region = (
+                np.hypot(midpoints[:, 0], midpoints[:, 1]) <= radius
+            ) & (np.abs(midpoints[:, 2]) <= half_height)
+            region_lengths.extend(tet_edge_lengths[in_region].tolist())
+            bulk_lengths.extend(tet_edge_lengths[~in_region].tolist())
+            continue
         centroid = nodes[tet].mean(axis=0)
         in_region = (
             np.hypot(centroid[0], centroid[1]) <= radius
             and abs(centroid[2]) <= half_height
         )
-        edge_lengths = region_lengths if in_region else bulk_lengths
-        edge_lengths.extend(
-            float(np.linalg.norm(nodes[tet[first]] - nodes[tet[second]]))
-            for first, second in edges
-        )
+        selected_lengths = region_lengths if in_region else bulk_lengths
+        selected_lengths.extend(float(length) for length in tet_edge_lengths)
     return region_lengths, bulk_lengths
 
 
@@ -12367,6 +12385,52 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, size_field)
         self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, lower_field)
 
+    def test_edge_midpoint_density_sample_preserves_coarse_in_region_edge(self) -> None:
+        nodes = np.asarray(
+            [
+                [-20.0, 0.0, 0.0],
+                [20.0, 0.0, 0.0],
+                [0.0, 20.0, 10.0],
+                [0.0, -20.0, 10.0],
+            ],
+            dtype=np.float64,
+        ) * 1e-9
+        mesh = SimpleNamespace(
+            nodes=nodes,
+            elements=np.asarray(
+                [[0, 1, 2, 3], [0, 1, 2, 3]],
+                dtype=np.int32,
+            ),
+            element_markers=np.asarray([1, 0], dtype=np.int32),
+        )
+
+        centroid_region, _centroid_bulk = _tet_edge_lengths_by_cylinder_scope(
+            mesh,
+            1,
+            radius=15e-9,
+            half_height=4e-9,
+        )
+        midpoint_region, midpoint_bulk = _tet_edge_lengths_by_cylinder_scope(
+            mesh,
+            1,
+            radius=15e-9,
+            half_height=4e-9,
+            classify_edges_by_midpoint=True,
+        )
+
+        # The tet centroid is at z=5 nm, outside the region; the 40 nm edge
+        # midpoint is at the origin and must remain visible as a coarse sample.
+        self.assertEqual(centroid_region, [])
+        self.assertEqual(len(midpoint_region), 1)
+        np.testing.assert_allclose(
+            midpoint_region,
+            [40e-9],
+            rtol=0.0,
+            atol=1e-24,
+        )
+        self.assertGreater(float(np.median(midpoint_region)), 12e-9)
+        self.assertEqual(len(midpoint_bulk), 5)
+
     def test_direct_layered_box_region_floor_beats_eligible_upper_actual_density(self) -> None:
         try:
             import gmsh
@@ -12568,6 +12632,9 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     1,
                     radius=15e-9,
                     half_height=4e-9,
+                    classify_edges_by_midpoint=(
+                        strategy == "thin_film_tetrahedral"
+                    ),
                 )
                 self.assertTrue(region_lengths)
                 self.assertTrue(bulk_lengths)

@@ -117,6 +117,14 @@ ustaleniem owner tags, a pola regionalne zachowują swój zakres w płaszczyźni
 Pomijanie parametrów warstwy pozwalało Gmsh dodać poziomy z i kończyło się
 odmową exact-count. Poprawka zachowuje bramki liczby płaszczyzn i gęstości;
 jej świeża regresja actualGmsh pozostaje **NOT VERIFIED** do wykonania w CI.
+Regresja gęstości cienkiej warstwy klasyfikuje próbki według środków krawędzi
+w zadanym regionie, mierząc pełne długości tych krawędzi; centroid tetraedru
+może leżeć poza regionem przecinającym środkową płaszczyznę warstwy.
+Próbka pusta nadal jest błędem, a progi median pozostają bez zmiany.
+Negatywna geometria testowa zachowuje 40 nm krawędź przecinającą region i nie
+przycina jej do dopuszczalnych 12 nm; powietrze jest wyłączone z pomiaru.
+Ten pomiar median nie stanowi gwarancji jakości każdej krawędzi ani kwalifikacji
+solvera. Regresja free-tet zachowuje wcześniejszą klasyfikację centroidową.
 
 Raport rozróżnia plan od wyniku. Przed meshingiem oraz po błędzie nie wolno
 emitować potwierdzenia `layer_planes_realized`. Dowód powstaje dopiero po
