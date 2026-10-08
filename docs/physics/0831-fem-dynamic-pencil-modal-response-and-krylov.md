@@ -2530,9 +2530,12 @@ Deterministyczna regresja finalizatora przekazuje jawny zestaw już
 residual-certified kandydatów bezpośrednio do tej samej funkcji, którą wywołuje
 solver; sprawdza duplikat, odrębny mass-orthogonal mode i cap po deduplikacji.
 Omija EPS celowo, więc nie dowodzi, że SLEPc dostarczy te kandydaty, ani nie
-weryfikuje ich certyfikacji lub refill/NEV. Kod/test nie były kompilowane ani
-uruchomione; managed runtime, rzeczywiste wykorzystanie metryki i naukowa
-kwalifikacja pozostają **NOT VERIFIED**.
+weryfikuje ich certyfikacji lub refill/NEV. Finalizator i ta regresja zostały
+skompilowane oraz uruchomione w no-provider GHA run `37795426460`, job
+`113373527111`, na commicie `082295567367c31d81b26e1904a8a627dc1d24cf`: CTest
+3/3 PASS, w tym `fem_floquet_modal_solver_contract`. Assembly MFEM i EPS nie są
+dowodzone przez ten run; managed runtime, rzeczywiste wykorzystanie metryki
+w EPS i naukowa kwalifikacja pozostają **NOT VERIFIED**.
 
 | Source ID | Path | Symbol | Responsibility |
 |---|---|---|---|
@@ -2540,7 +2543,7 @@ kwalifikacja pozostają **NOT VERIFIED**.
 | `source-floquet-tangent-mass-regression` | `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` | `floquet_positive_tangent_mass_matches_independent_phase_reduction` | Independent tet4/prism6 mass and $C_q^\mathsf H M C_q$ oracle with phase copies and nonuniform tangent frames; authored, uncompiled |
 | `source-floquet-tangent-mass-overlap-owner` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `detail::finalize_certified_floquet_candidates` | Apply the positive reduced CSR mass action to already residual-certified candidates, retain original modes by source index, then target-rank and cap |
 | `source-floquet-tangent-mass-overlap-seam` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp` | `detail::CertifiedFloquetModalCandidate` | Internal data seam shared by production and deterministic finalizer regression |
-| `source-floquet-tangent-mass-overlap-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `finalizes_certified_candidates_by_tangent_mass_before_nearest_cap` | Directly tests the production finalizer with explicitly supplied candidates; bypasses EPS and does not prove candidate supply, residual certification or refill/NEV; authored, uncompiled |
+| `source-floquet-tangent-mass-overlap-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `finalizes_certified_candidates_by_tangent_mass_before_nearest_cap` | Directly tests the production finalizer with explicitly supplied candidates; bypasses EPS and does not prove candidate supply, residual certification or refill/NEV; no-provider GHA 37795426460 passed |
 | `source-floquet-window-cross-subwindow-dedup-followup` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_window_payload` | Outer native Floquet subwindow merge still uses generic overlap dedup without sparse tangent-mass action; follow-up required |
 
 

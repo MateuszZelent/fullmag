@@ -1472,7 +1472,7 @@
       "id": "source-floquet-tangent-mass-overlap-regression",
       "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
       "symbol": "finalizes_certified_candidates_by_tangent_mass_before_nearest_cap",
-      "responsibility": "Directly tests the production finalizer with explicitly supplied certified candidates; bypasses EPS and does not prove candidate supply, residual certification, or refill/NEV; authored, uncompiled"
+      "responsibility": "Directly tests the production finalizer with explicitly supplied certified candidates; bypasses EPS and does not prove candidate supply, residual certification, or refill/NEV; no-provider GHA 37795426460 passed"
     },
     {
       "id": "source-floquet-window-cross-subwindow-dedup-followup",
