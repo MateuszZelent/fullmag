@@ -27,6 +27,7 @@ from managed_runtime_artifact_root import resolve_runtime_artifact_root
 from runtime_source_change_policy import is_non_runtime_path
 from de_shifted_ksp_trial import validate_shifted_ksp_trial
 from de_gamma_krylov_trial import validate_gamma_krylov_trial
+from de_ui_seven_krylov_trial import validate_ui_seven_krylov_trial
 from validate_de_smoke_rows import (
     PARALLEL_PROBE_FREQUENCY_WINDOW_HZ,
     PARALLEL_PROBE_VECTORS_RAD_PER_M,
@@ -1187,6 +1188,10 @@ def _validate_shifted_ksp_trial_request(pilot, requested_type, nearest_frequency
     if dense_oracle:
         raise managed.BenchmarkError("shifted KSP type diagnostic requires a native pilot")
     if modal_target == "nearest":
+        if pilot == UI_SEVEN_PILOT:
+            if requested_type != "fgmres":
+                raise managed.BenchmarkError("ui-seven nearest Krylov diagnostics require explicit FGMRES")
+            return
         sampling = PILOTS.get(pilot, (None, None))[1]
         wavevectors = SAMPLING.get(sampling, ())
         if len(wavevectors) != 1 or wavevectors[0] == 0.0:
@@ -1194,9 +1199,34 @@ def _validate_shifted_ksp_trial_request(pilot, requested_type, nearest_frequency
                 "nearest shifted KSP trial requires exactly one nonzero DE/BV sample")
 
 
+def _validate_ui_seven_krylov_request(
+        pilot, requested_type, requested_rtol, eps_prefilter, gmres_restart,
+        nearest_frequency, spectral_target, *, dense_oracle=False):
+    if pilot != UI_SEVEN_PILOT:
+        return
+    requested = (requested_type, requested_rtol, eps_prefilter, gmres_restart)
+    if all(value is None for value in requested):
+        return
+    modal_target, _ = _modal_selection(pilot, nearest_frequency, spectral_target)
+    if modal_target != "nearest":
+        raise managed.BenchmarkError("ui-seven Krylov diagnostics require nearest selected-only targeting")
+    if dense_oracle:
+        raise managed.BenchmarkError("ui-seven Krylov diagnostics require the native solver")
+    if requested_type != "fgmres":
+        raise managed.BenchmarkError("ui-seven Krylov diagnostics require explicit FGMRES")
+    if requested_rtol != "1e-9":
+        raise managed.BenchmarkError("ui-seven shifted KSP rtol is pinned to 1e-9")
+    if eps_prefilter not in EPS_PREFILTER_CHOICES:
+        raise managed.BenchmarkError("ui-seven Krylov diagnostics require an explicit supported EPS prefilter")
+    if gmres_restart != "30":
+        raise managed.BenchmarkError("ui-seven GMRES restart is pinned to 30")
+
+
 def _validate_window_policy_request(pilot, policy, shifted_ksp_type):
     if policy is None:
         return
+    if pilot == UI_SEVEN_PILOT:
+        raise managed.BenchmarkError("ui-seven nearest diagnostics cannot request a window Krylov policy")
     if not isinstance(policy, str) or policy not in (
         "bounded_double_nev_v1", "bounded_quadruple_nev_window_v2",
     ):
@@ -1216,6 +1246,19 @@ def _validate_krylov_trials(case_dir, sampling, requested_type, requested_rtol,
     wavevectors = SAMPLING.get(sampling, ())
     if spectral_target not in ("frequency_window", "nearest"):
         raise managed.BenchmarkError("shifted KSP trial spectral target is unsupported")
+    if sampling == UI_SEVEN_SAMPLING:
+        if spectral_target != "nearest":
+            raise managed.BenchmarkError("ui-seven Krylov diagnostics require nearest selected-only targeting")
+        if expected_window_krylov_policy is not None:
+            raise managed.BenchmarkError("ui-seven nearest diagnostics cannot request a window Krylov policy")
+        return {"ui_seven_krylov_trial": validate_ui_seven_krylov_trial(
+            case_dir,
+            target_frequency_hz,
+            requested_type,
+            requested_rtol,
+            eps_prefilter,
+            gmres_restart,
+        )}
     if spectral_target == "nearest" and (len(wavevectors) != 1 or wavevectors[0] == 0.0):
         raise managed.BenchmarkError("nearest shifted KSP trial requires one nonzero sample")
     if gmres_restart is not None and gmres_restart not in GMRES_RESTART_CHOICES:
@@ -1260,6 +1303,10 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
     _validate_shifted_ksp_trial_request(pilot, shifted_ksp_type,
                                       nearest_target_frequency_ghz, spectral_target,
                                       dense_oracle=dense_oracle)
+    _validate_ui_seven_krylov_request(
+        pilot, shifted_ksp_type, shifted_ksp_rtol, eps_prefilter, gmres_restart,
+        nearest_target_frequency_ghz, spectral_target, dense_oracle=dense_oracle,
+    )
     if schur_action_diagnostic and (pilot == "de100" or parallel_probe):
         raise managed.BenchmarkError(
             "Schur action diagnostic is restricted to non-parallel DE-SMOKE pilots")
@@ -2006,6 +2053,82 @@ def _modal_krylov_environment(command):
     return values
 
 
+def _validate_ui_seven_dispatch(command, target_frequency_hz, shifted_ksp_type,
+                                shifted_ksp_rtol, eps_prefilter, gmres_restart):
+    if not isinstance(command, (list, tuple)) or not command or not isinstance(command[-1], str):
+        raise managed.BenchmarkError("ui-seven dispatch command is malformed")
+    shell = command[-1]
+    expected_base = {
+        "FULLMAG_DE_SMOKE_SAMPLING": UI_SEVEN_SAMPLING,
+        "FULLMAG_DE_SMOKE_MODAL_TARGET": "nearest",
+        "FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ": format(target_frequency_hz / 1e9, ".17g"),
+        "FULLMAG_DE_SMOKE_SOLVER_RTOL": "1e-8",
+    }
+    for name, value in expected_base.items():
+        exports = [line for line in shell.splitlines() if line.startswith(f"export {name}=")]
+        if exports != [f"export {name}={value}"]:
+            raise managed.BenchmarkError(f"ui-seven dispatch does not match requested {name}")
+    for name in ("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ", "FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ"):
+        if any(line.startswith(f"export {name}=") for line in shell.splitlines()):
+            raise managed.BenchmarkError("ui-seven nearest dispatch cannot request a frequency window")
+
+    requested_type_present = shifted_ksp_type is not None
+    modal = _modal_krylov_environment(command)
+    if not requested_type_present:
+        if modal:
+            raise managed.BenchmarkError("ui-seven dispatch has unrequested modal Krylov controls")
+        floquet_krylov_names = {
+            "FULLMAG_FLOQUET_EPS_PREFILTER_ABS",
+            "FULLMAG_FLOQUET_SHIFTED_KSP_RTOL",
+            "FULLMAG_FLOQUET_SHIFTED_KSP_TYPE",
+            "FULLMAG_FLOQUET_GMRES_RESTART",
+        }
+        floquet_exports = [
+            line for line in shell.splitlines()
+            if any(line.startswith(f"export {name}=") for name in floquet_krylov_names)
+        ]
+        if floquet_exports:
+            raise managed.BenchmarkError("ui-seven dispatch has unrequested Floquet Krylov controls")
+        return
+
+    expected_modal = {
+        "FULLMAG_MODAL_EPS_PREFILTER_ABS": eps_prefilter,
+        "FULLMAG_MODAL_SHIFTED_KSP_RTOL": shifted_ksp_rtol,
+        "FULLMAG_MODAL_SHIFTED_KSP_TYPE": shifted_ksp_type,
+        "FULLMAG_MODAL_GMRES_RESTART": gmres_restart,
+    }
+    if modal != expected_modal:
+        raise managed.BenchmarkError("ui-seven modal Krylov dispatch disagrees with the explicit request")
+    expected_floquet = {
+        key.replace("FULLMAG_MODAL_", "FULLMAG_FLOQUET_"): value
+        for key, value in expected_modal.items()
+    }
+    floquet = {}
+    allowed_floquet = {
+        "FULLMAG_FLOQUET_EPS_PREFILTER_ABS": EPS_PREFILTER_CHOICES,
+        "FULLMAG_FLOQUET_SHIFTED_KSP_RTOL": SHIFTED_KSP_RTOL_CHOICES,
+        "FULLMAG_FLOQUET_SHIFTED_KSP_TYPE": SHIFTED_KSP_TYPE_CHOICES,
+        "FULLMAG_FLOQUET_GMRES_RESTART": GMRES_RESTART_CHOICES,
+    }
+    for line in shell.splitlines():
+        if not line.startswith("export FULLMAG_FLOQUET_"):
+            continue
+        name, separator, value = line[len("export "):].partition("=")
+        if name not in allowed_floquet:
+            if name.startswith((
+                    "FULLMAG_FLOQUET_EPS_PREFILTER",
+                    "FULLMAG_FLOQUET_SHIFTED_KSP",
+                    "FULLMAG_FLOQUET_GMRES_RESTART")):
+                raise managed.BenchmarkError("invalid ui-seven Floquet Krylov export")
+            continue
+        if (not separator or name not in allowed_floquet or value not in allowed_floquet[name]
+                or (name in floquet and floquet[name] != value)):
+            raise managed.BenchmarkError("invalid ui-seven Floquet Krylov export")
+        floquet[name] = value
+    if floquet != expected_floquet:
+        raise managed.BenchmarkError("ui-seven Floquet Krylov dispatch disagrees with the explicit request")
+
+
 def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None, dense_oracle=False, solver_rtol=None, eps_prefilter=None, shifted_ksp_rtol=None, gmres_restart=None, mesh_level=None, thickness_layers=None, nearest_target_frequency_ghz=None, spectral_target=None, frequency_min_ghz=None, frequency_max_ghz=None, ui_enabled=False, capture_session=False, ui_frontend=None, ui_web_root=None, ui_host_port=UI_API_PORT, parallel_mode=None, probe_input_dir=None, schur_action_diagnostic=False, shifted_ksp_type=None, air_growth_rate=None, expected_window_krylov_policy=None):
     _validate_window_policy_request(pilot, expected_window_krylov_policy, shifted_ksp_type)
     _validate_air_growth_rate_request(
@@ -2027,12 +2150,21 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     _validate_shifted_ksp_trial_request(pilot, shifted_ksp_type,
                                       nearest_target_frequency_ghz, spectral_target,
                                       dense_oracle=dense_oracle)
+    _validate_ui_seven_krylov_request(
+        pilot, shifted_ksp_type, shifted_ksp_rtol, eps_prefilter, gmres_restart,
+        nearest_target_frequency_ghz, spectral_target, dense_oracle=dense_oracle,
+    )
     if schur_action_diagnostic and (pilot == "de100" or _is_parallel_probe(pilot)):
         raise managed.BenchmarkError(
             "Schur action diagnostic is restricted to non-parallel DE-SMOKE pilots")
     model = pilot_model(pilot)
     modal_target, target_frequency_hz = _modal_selection(
         pilot, nearest_target_frequency_ghz, spectral_target)
+    if pilot == UI_SEVEN_PILOT:
+        _validate_ui_seven_dispatch(
+            command, target_frequency_hz, shifted_ksp_type, shifted_ksp_rtol,
+            eps_prefilter, gmres_restart,
+        )
     frequency_window = _frequency_window_bounds(
         pilot, modal_target, frequency_min_ghz, frequency_max_ghz
     )
@@ -2545,6 +2677,12 @@ def main(argv=None):
         _validate_shifted_ksp_trial_request(args.pilot, args.shifted_ksp_type,
                                           args.nearest_target_frequency_ghz, args.spectral_target,
                                           dense_oracle=args.dense_oracle)
+        _validate_ui_seven_krylov_request(
+            args.pilot, args.shifted_ksp_type, args.shifted_ksp_rtol,
+            args.eps_prefilter, args.gmres_restart,
+            args.nearest_target_frequency_ghz, args.spectral_target,
+            dense_oracle=args.dense_oracle,
+        )
         _validate_window_policy_request(
             args.pilot, args.expected_window_krylov_policy, args.shifted_ksp_type,
         )

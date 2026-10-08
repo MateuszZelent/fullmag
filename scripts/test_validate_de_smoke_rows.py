@@ -377,7 +377,7 @@ def test_ui_seven_selected_only_rows_validate_every_signed_sample_and_gamma(tmp_
 
 
 @pytest.mark.parametrize('mutation,match', [
-    ('missing_row', 'missing DE-SMOKE samples'),
+    ('missing_row', 'ui-seven selected-only rows require exactly raw mode 0'),
     ('duplicate_row', 'duplicate mode or branch'),
     ('wrong_vector', 'wavevector does not match'),
     ('residual', 'exceeds'),

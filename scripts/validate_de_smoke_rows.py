@@ -529,7 +529,8 @@ def validate_selected_only_diagnostics(
         if set(by_sample) != set(range(expected_sample_count)):
             raise ValueError("selected-only native diagnostics have missing sample indices")
         sample_payloads = [by_sample[index] for index in range(expected_sample_count)]
-        record_vectors = [vectors_by_sample[index] for index in range(expected_sample_count)]
+        record_vectors = ([vectors_by_sample[index] for index in range(expected_sample_count)]
+                          if normalized_vectors is not None else [None] * expected_sample_count)
 
         root_sample_count = diagnostics.get("sample_count")
         if root_sample_count is not None or expected_sample_count > 1:

@@ -1506,6 +1506,54 @@ class PilotTests(unittest.TestCase):
                 self.assertEqual(gamma.call_count, int("gamma_krylov_trial" in expected_keys))
                 self.assertEqual(floquet.call_count, int("shifted_ksp_trial" in expected_keys))
 
+    def test_ui_seven_nearest_krylov_admission_is_pinned_and_does_not_weaken_legacy_paths(self):
+        pilot._validate_shifted_ksp_trial_request(
+            pilot.UI_SEVEN_PILOT, "fgmres", None, "nearest")
+        pilot._validate_ui_seven_krylov_request(
+            pilot.UI_SEVEN_PILOT, "fgmres", "1e-9", "1e-9", "30",
+            None, "nearest")
+        for pilot_name in ("de-smoke-two", "de-smoke-positive-six"):
+            with self.subTest(pilot=pilot_name), self.assertRaises(pilot.managed.BenchmarkError):
+                pilot._validate_shifted_ksp_trial_request(
+                    pilot_name, "fgmres", "10", "nearest")
+        for requested_type, rtol, eps, restart, target in (
+                ("gmres", "1e-9", "1e-9", "30", "nearest"),
+                ("fgmres", "1e-8", "1e-9", "30", "nearest"),
+                ("fgmres", "1e-9", None, "30", "nearest"),
+                ("fgmres", "1e-9", "1e-9", "8", "nearest"),
+                ("fgmres", "1e-9", "1e-9", "30", "frequency_window"),
+        ):
+            with self.subTest(request=(requested_type, rtol, eps, restart, target)), \
+                    self.assertRaises(pilot.managed.BenchmarkError):
+                pilot._validate_ui_seven_krylov_request(
+                    pilot.UI_SEVEN_PILOT, requested_type, rtol, eps, restart,
+                    None, target)
+        with self.assertRaises(pilot.managed.BenchmarkError):
+            pilot._validate_window_policy_request(
+                pilot.UI_SEVEN_PILOT, "bounded_double_nev_v1", "fgmres")
+
+    def test_ui_seven_dispatch_binds_modal_and_floquet_exports_to_the_request(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  image_digest="sha256:test",
+                                  job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v2"})
+        with patch.object(pilot.managed, "_compose_command",
+                          return_value=["docker", "run", "placeholder"]):
+            command = pilot.compose_command(
+                context, Path("/outputs"), pilot=pilot.UI_SEVEN_PILOT,
+                shifted_ksp_type="fgmres", shifted_ksp_rtol="1e-9",
+                eps_prefilter="1e-9", gmres_restart="30")
+        shell = command[-1]
+        pilot._validate_ui_seven_dispatch(
+            command, 10e9, "fgmres", "1e-9", "1e-9", "30")
+        for export in (
+                "export FULLMAG_MODAL_SHIFTED_KSP_TYPE=fgmres",
+                "export FULLMAG_FLOQUET_SHIFTED_KSP_TYPE=fgmres"):
+            mutated = "\n".join(line for line in shell.splitlines() if line != export)
+            with self.subTest(export=export), self.assertRaises(pilot.managed.BenchmarkError):
+                pilot._validate_ui_seven_dispatch(
+                    [*command[:-1], mutated], 10e9,
+                    "fgmres", "1e-9", "1e-9", "30")
+
     def test_nearest_pilot_is_single_k_selected_only_and_fail_closed(self):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
                                   image_digest="sha256:test",
@@ -1564,7 +1612,7 @@ class PilotTests(unittest.TestCase):
                 self.assertIn("export FULLMAG_DE_SMOKE_SOLVER_RTOL=1e-8", shell)
                 self.assertNotIn("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ", shell)
                 self.assertNotIn("FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ", shell)
-                with self.assertRaisesRegex(pilot.managed.BenchmarkError, "ui-seven requires nearest"):
+                with self.assertRaisesRegex(pilot.managed.BenchmarkError, "nearest pilot cannot request frequency_window"):
                     pilot.compose_command(
                         context, output, pilot=pilot.UI_SEVEN_PILOT,
                         spectral_target="frequency_window")
