@@ -15,7 +15,7 @@ import { KernelContext } from "../KernelContext";
 import { DiagnosticRecorderController } from "../performance/diagnostic-recorder/DiagnosticRecorderController";
 import { updateRealtimeCommunicationPolicy } from "../realtime/communicationPolicy";
 import { ResourceInvalidationController } from "./ResourceInvalidationController";
-import { resetSharedResourceRuntimeStoreForTests } from "./ResourceRuntimeStore";
+import { resetSharedResourceRuntimeStoreForTests, sharedResourceRuntimeStore } from "./ResourceRuntimeStore";
 import {
   sessionRequestScopeKey,
   sessionScopedResourceKey,
@@ -282,6 +282,7 @@ describe("useSimulationPreparation", () => {
     async (firstConsumer) => {
       const pending = deferred<SimulationPreparationResource>();
       const load = vi.fn(() => pending.promise);
+      const ensureLoadSpy = vi.spyOn(sharedResourceRuntimeStore, "ensureLoad");
       const { bus, kernel, resources } = makeKernel(load, statusFixture(8));
       const failures: KernelEventMap["resource:load-failed"][] = [];
       const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
@@ -295,9 +296,9 @@ describe("useSimulationPreparation", () => {
       );
       resources.invalidate(SCOPED_PREPARATION_RESOURCE_KEY, 8);
 
-      const optionalProbe = <Probe observations={optionalObservations} />;
+      const optionalProbe = <Probe key="optional" observations={optionalObservations} />;
       const requiredProbe = (
-        <Probe observations={requiredObservations} requiredRevision={8} />
+        <Probe key="required" observations={requiredObservations} requiredRevision={8} />
       );
       const firstProbe =
         firstConsumer === "optional" ? optionalProbe : requiredProbe;
@@ -308,7 +309,7 @@ describe("useSimulationPreparation", () => {
         await act(async () => {
           root.render(
             <KernelContext.Provider value={kernel}>
-              <>{firstProbe}</>
+              <div>{firstProbe}{null}</div>
             </KernelContext.Provider>,
           );
         });
@@ -320,10 +321,10 @@ describe("useSimulationPreparation", () => {
         await act(async () => {
           root.render(
             <KernelContext.Provider value={kernel}>
-              <>
+              <div>
                 {firstProbe}
                 {secondProbe}
-              </>
+              </div>
             </KernelContext.Provider>,
           );
         });
@@ -337,6 +338,16 @@ describe("useSimulationPreparation", () => {
             ),
           "both consumers did not observe the pending shared request",
         );
+
+        // Loading is a snapshot, not evidence that the second hook's
+        // scheduled ensureLoad has joined the existing in-flight request.
+        await waitFor(
+          () => ensureLoadSpy.mock.calls.filter(([request]) =>
+            request.resourceKey.endsWith(SIMULATION_PREPARATION_PATH),
+          ).length >= 2,
+          "both consumers did not join the shared preparation request",
+        );
+        expect(load).toHaveBeenCalledTimes(1);
 
         await act(async () => {
           pending.reject(

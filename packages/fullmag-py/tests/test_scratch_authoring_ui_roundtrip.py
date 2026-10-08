@@ -324,10 +324,10 @@ def test_scene_document_rejects_unsupported_stage_instead_of_dropping_it() -> No
     from fullmag.runtime.script_builder import render_scene_document_as_script
 
     builder = _builder(backend="fem")
-    builder["stages"].append({"kind": "frequency_response"})
+    builder["stages"].append({"kind": "unsupported_fixture_stage"})
     scene = build_scene_document_from_builder(builder)
 
-    with pytest.raises(ValueError, match="does not support stage kind 'frequency_response'"):
+    with pytest.raises(ValueError, match="stage kind 'unsupported_fixture_stage' cannot be captured"):
         render_scene_document_as_script(scene)
 
 
@@ -381,7 +381,7 @@ def test_scene_document_preserves_signed_eigen_stage_ids_and_k_vectors() -> None
     [
         ("eigen_count", 0, "invalid eigen_count"),
         ("eigen_k_vector", "10.0,20.0", "invalid eigen_k_vector"),
-        ("eigen_k_path", "malformed", "invalid eigen_k_path"),
+        ("eigen_k_path", "malformed", "SceneDocument eigenmodes k_path is invalid"),
     ],
 )
 def test_scene_document_rejects_malformed_explicit_eigen_values(

@@ -37,7 +37,7 @@ jobs:
 
       - name: Compile and run strict modal mass deduplication contract
         run: |
-          g++ -std=c++17 -UNDEBUG -Ibackends/fem backends/fem/tests/frequency_domain/mode_deduplication_test.cpp backends/fem/cpu/frequency_domain/mode_deduplication.cpp backends/fem/cpu/frequency_domain/mode_filter.cpp backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp -o "$RUNNER_TEMP/fullmag-modal-mass-dedup-test"
+          g++ -std=c++17 -UNDEBUG -Ibackends/fem -Ibackends/fem/include -Inative/include backends/fem/tests/frequency_domain/mode_deduplication_test.cpp backends/fem/cpu/frequency_domain/mode_deduplication.cpp backends/fem/cpu/frequency_domain/mode_filter.cpp backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp -o "$RUNNER_TEMP/fullmag-modal-mass-dedup-test"
           "$RUNNER_TEMP/fullmag-modal-mass-dedup-test"
 
       - name: Compile and run dependency-free native modal ABI contract
