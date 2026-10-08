@@ -40,3 +40,4 @@ jobs:
           scripts/test_managed_runtime_artifact_root.py
           scripts/test_plot_signed_de_campaign.py
           scripts/test_validate_serial_adaptive_probe.py
+          scripts/test_comsol_modal_field_certificate.py

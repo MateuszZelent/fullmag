@@ -265,3 +265,27 @@ def test_payload_cannot_be_borrowed_from_another_mode(tmp_path, other_path):
     report = load_module().validate_modal_field_certificate(root, mode_selections=[(0, 7)])
     assert report["status"] == "fail"
     assert any("payload path does not match" in reason for reason in report["reasons"])
+
+
+@pytest.mark.parametrize("relative_escape", [False, True])
+def test_external_native_metadata_cannot_certify_a_case(tmp_path, relative_escape):
+    root, _ = write_case(tmp_path, vectors=good_vectors(), raw_mode_index=7)
+    external = tmp_path / "borrowed-metadata.json"
+    external.write_bytes((root / "metadata.json").read_bytes())
+    selected = root / ".." / external.name if relative_escape else external
+    report = load_module().validate_modal_field_certificate(
+        root, mode_selections=[(0, 7)], metadata_path=selected
+    )
+    assert report["status"] == "fail"
+    assert report["qualification"] == "NOT VERIFIED"
+    assert report["file_hashes"] == []
+    assert any("native metadata.json" in reason for reason in report["reasons"])
+
+
+def test_explicit_in_case_native_metadata_remains_accepted(tmp_path):
+    root, _ = write_case(tmp_path, vectors=good_vectors(), raw_mode_index=7)
+    report = load_module().validate_modal_field_certificate(
+        root, mode_selections=[(0, 7)], metadata_path=root / "metadata.json"
+    )
+    assert report["status"] == "pass", report["reasons"]
+    assert "metadata.json" in {record["path"] for record in report["file_hashes"]}

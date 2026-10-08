@@ -701,6 +701,17 @@ def validate_modal_field_certificate(
     native_metadata = (
         Path(metadata_path) if metadata_path is not None else case_dir / "metadata.json"
     )
+    # Bind caller-supplied metadata to this case before reading or hashing it.
+    try:
+        relative_metadata = native_metadata.absolute().relative_to(case_dir.absolute())
+    except ValueError:
+        reasons.append("native metadata.json must be contained in case_dir")
+        return base
+    native_metadata = _safe_relative_path(
+        case_dir, relative_metadata.as_posix(), "native metadata.json", reasons
+    )
+    if native_metadata is None:
+        return base
     metadata = _read_json(native_metadata, label="native metadata.json", case_dir=case_dir, file_hashes=hashes, reasons=reasons)
     backend_plan: Mapping[str, Any] | None = None
     contract: dict[str, Any] = {"selected_pairs": [], "requested_pair_ids": [], "node_pair_ids": [], "boundary_pair_ids": [], "missing_pair_ids": []}

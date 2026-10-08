@@ -785,3 +785,13 @@ pozostaje NOT VERIFIED. PR97 pozostaje OPEN, pełny cel nieukończony.
 Dalszy review schematu: snapshot OpenAPI obu modeli zawiera pole w inline
 properties elementu allOf. Poprawiony test przegląda root i elementy allOf,
 zachowując dokładny typ boolean/null i brak required. Produkcji nie zmieniono.
+
+### Review4060687869 — powiązanie metadanych z przypadkiem
+
+Certyfikat modalny sprawdza teraz containment jawnie przekazanego metadata_path
+przed odczytem i hashowaniem, a następnie używa istniejącej kontroli względnej
+ścieżki i reparse points. Zewnętrzny plik oraz traversal nie mogą certyfikować
+lokalnego wyniku. Parametry fizyczne, tolerancje i konwencja Floqueta bez zmian.
+Regresje obejmują plik zewnętrzny, ../ oraz poprawny jawny plik w case_dir.
+Suite dodano do workflow dispersion-artifact-consumers. Diff/source review PASS;
+wykonanie wyłącznie GHA pozostaje wymagane. Nie oznaczono kwalifikacji naukowej.
