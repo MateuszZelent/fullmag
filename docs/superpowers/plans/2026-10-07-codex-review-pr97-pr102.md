@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 27, `implemented_pending_browser`: 8, `implemented_pending_ci`: 7, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 97. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 29, `implemented_pending_browser`: 8, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 97. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -231,7 +231,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4207587076](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587076) / #97 | `crates/fullmag-ir/src/validation.rs` | duplicate | Ten sam niepełny publiczny validator V04. study_v04.rs:330 kończy po representation/BC/k_sampling, bez count/target/dynamics/sampling; validation.rs wywołuje właśnie tę metodę. Nie naprawiono przez migrację regionów. Powtórzenie 4204074492. |
 | [4207587086](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587086) / #97 | `crates/fullmag-plan/src/fem.rs` | valid_unfixed | Nowy silent-ignore dla solver policy na reference CPU. Planner fem.rs:5210 przyjmuje policy; eigen_capability.rs:38–63 nie wybiera native window dla zwykłego lowest, a eigen_execution.rs:1536ff realizuje reference_effective_field_generalized bez odczytu plan.solver_policy. Odczyty policy w :1083 są w GPU entrypoint, nie tej trasie. Trzeba honorować albo odrzucać nieobsługiwane kontrolki. |
 | [4207786265](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786265) / #97 | `crates/fullmag-runner/src/fem/eigen_path.rs` | valid_unfixed | Nowy mixed-topology blocker. eigen_path.rs:879 tworzy MeshTopology::from_ir przed solve, a fullmag-engine/src/fem.rs:1019 wymaga tet4 oraz dalej tri3. Legalne P1 prism6/quad4 obsługiwane przez native provider nie przechodzą tego legacy adaptera; analogiczny tracking w puli wymaga spójnej naprawy. |
-| [4207786279](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786279) / #97 | `crates/fullmag-plan/src/fem.rs` | implemented_pending_ci | Nowy guard nieaktywnej anizotropii. fem.rs:1664–1683 first_unsupported_floquet_airbox_local_interaction sprawdza Option::is_some dla współczynników i osi. Ku/Kc=0 z zachowaną osią jest odrzucane mimo nieaktywnej interakcji; zastosować istniejące predykaty aktywności, nie poszerzać obsługi niezerowych modułów. |
+| [4207786279](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786279) / #97 | `crates/fullmag-plan/src/fem.rs` | implemented | Nowy guard nieaktywnej anizotropii. fem.rs:1664–1683 first_unsupported_floquet_airbox_local_interaction sprawdza Option::is_some dla współczynników i osi. Ku/Kc=0 z zachowaną osią jest odrzucane mimo nieaktywnej interakcji; zastosować istniejące predykaty aktywności, nie poszerzać obsługi niezerowych modułów. |
 | [4207786284](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786284) / #97 | `scripts/local_runner/runtime_retention.py` | duplicate | Ten sam konflikt retencji runtime/execution. runtime_retention.py:164–179 usuwa payload i publikuje tombstone removed, natomiast archiwalna walidacja build receipt nadal wymaga pierwotnych artefaktów. Tombstone nie jest uwzględniony jako dowód usunięcia pakietu. Powtórzenie 4205652698. |
 | [4207786295](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786295) / #97 | `scripts/local_runner/runtime_use.py` | valid_unfixed | Nowy błąd lifetime registry. runtime_use.py:111–147 dopuszcza nieistniejący leaf i trwale rejestruje output root; runtime_retention.py:30–37 rozwiązuje każdy zapisany root przez _checked_child, a retention.py:123 zgłasza missing_run_path. Brak recovery/unregister przy przerwaniu publikacji lub usunięciu starego wyniku blokuje preview. |
 | [4207786303](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786303) / #97 | `.github/workflows/bootstrap.yml` | duplicate | Powtórzenie nieaktywnej rekomendacji usunięcia cargo test z GHA. Jawna decyzja użytkownika pozwala na testy wyłącznie w GitHub Actions; zakaz lokalnej kompilacji nie unieważnia bootstrap CI. .github/workflows/bootstrap.yml pozostaje dozwoloną trasą; nic lokalnie nie uruchamiano. Powtórzenie 4204792243. |
@@ -242,7 +242,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4207786370](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786370) / #97 | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | duplicate | Dokładnie wcześniej wykazany legacy real-split mismatch. modal_eigen_solver.cpp:2247 zachowuje oryginalny pointer N*N, lecz zapisuje count dynamicznego wyniku (2N)^2. Starszy ledger już dokumentuje ten pointer/count oraz konieczność realifikacji własnego bufora; nowy opis podkreśla możliwe OOB certifiera. Nie wykonano runtime/ASan. Powtórzenie 4061343721. |
 | [4207786385](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786385) / #97 | `scripts/local_runner/build_executor.py` | valid_unfixed | Nowa luka kompletności modalnego pakietu. build_executor.py:702–725 dla contract profile wymaga scenario result + FEM lib + source identity, zamiast BASE_REQUIRED_OUTPUTS. build_entrypoint.py:266–271/1031 wymaga fullmag-bin/API/core/launcher/web. Receipt pomijający plik i wpis może przejść executor i zakończyć niekompletny build sukcesem. |
 | [4207979046](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979046) / #97 | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | duplicate | Ten sam błędny metric fallback deduplikacji. production_cpu_modal_eigen.cpp:3080 ustawia metric tylko poza floquet_shared_domain_operator, pozostawiając nullptr i Euclidean fallback. Wcześniejszy algebraiczny kontrprzykład masowo ortogonalnych modów pozostaje aktualny; nie potrzeba nowej deklaracji runtime proof. Powtórzenie 4060687822. |
-| [4207979056](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979056) / #97 | `packages/fullmag-py/src/fullmag/model/study.py` | implemented_pending_ci | Nowy błąd typu publicznej solver tolerance. fullmag/model/study.py:186 zamienia residual_tolerance=True przez float na 1.0, podczas gdy _positive_int:215 jawnie odrzuca bool dla iteration limits. FemEigenSolverPolicyIR dopuszcza dodatnie 1.0, więc literal bool staje się rzeczywistą tolerancją. Odrzucić bool przed konwersją. |
+| [4207979056](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979056) / #97 | `packages/fullmag-py/src/fullmag/model/study.py` | implemented | Nowy błąd typu publicznej solver tolerance. fullmag/model/study.py:186 zamienia residual_tolerance=True przez float na 1.0, podczas gdy _positive_int:215 jawnie odrzuca bool dla iteration limits. FemEigenSolverPolicyIR dopuszcza dodatnie 1.0, więc literal bool staje się rzeczywistą tolerancją. Odrzucić bool przed konwersją. |
 | [4207979065](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979065) / #97 | `backends/fem/include/frequency_domain/mode_kinematics.hpp` | duplicate | Ta sama soft-mode uwaga; źródło już poprawione. mode_kinematics.hpp:13 ma default=0.0, a mode_kinematics_test.cpp testuje ±1rad/s/±1kHz i both phasors. Publiczne dodatnie mody nie są usuwane przez 1e5rad/s. Provider/scientific qualification nie wynika z source fix. Powtórzenie 4206565211. |
 | [4207979074](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979074) / #97 | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | valid_unfixed | Nowy brak kontrolowanej walidacji reserved marker. _gmsh_swept.py:1943ff Box layered route nie odrzuca airbox.boundary_marker=10, lecz interface używa physical surface10 i Gamma_out używa boundary_marker (:2219). Pozostałe routes mają guard (:2516/:3211). Dodać guard przed meshingiem, nie przemianowywać semantycznych grup. |
 | [4207979082](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979082) / #97 | `apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.tsx` | valid_unfixed | Nowy brak canonical residual w UI. frequencyDomainChartModels.ts:940/1505 czyta residual_norm/relative_residual_norm, ale typed spectrum.v3 mode publikuje residual_relative_l2. EigenModeInspectorPanel podsumowuje spectrumPoint.residualNorm, zatem poprawny relative-L2 jest pokazywany jako unavailable. Zachować jawnie jego semantykę w parserze/modelu. |
@@ -708,3 +708,34 @@ zastępują implicit captures tablic. Bufory pozostają zewnętrzne i żywe prze
 cały test; wszystkie niezależne asercje bezpośredniego bindingu oraz solve/destroy
 zachowano. Source review PASS; przyczyna kompilatorowa NOT PROVEN, skuteczność
 naprawy wymaga świeżego GHA. Macierze i physics nie zostały zmienione.
+
+## Checkpoint — potwierdzone source contracts i sanitizer GPU
+
+Run37768262448, SHA436b75a565115dfdeda56b3be8198a9bf14524dd:
+4207786279 ma pokrycie planera, runtime scope, identity (8 PASS) i rzeczywistego
+shared-domain payload buildera (PASS), job113281142319. Nie jest to produkcyjny
+recompute ani dowód MFEM/GPU fizyki. 4207979056: Python API314 PASS, 1 skipped,
+w tym dokładny bool-rtol test, job113281142692. Te dwie uwagi mają teraz status
+implemented dla ich kontraktowego zakresu; całe workflow nadal FAILURE.
+
+Jawny binding fixture przeszedł raw-wavevector validation. Kolejne zatrzymanie
+CABI: gated-operator diagnostics oczekuje production_cpu_modal_gated_operator_terms_present.
+Nie osłabiono warunku. Bounded print ujawni status, include_demag, periodic count
+oraz oba JSON-y; źródło nie uzasadnia zmiany oczekiwania bez rzeczywistego powodu.
+API frequency_domain_ ma 54 PASS i jeden błąd missing-metadata response text.
+Dodano body do tej samej asercji, pozostawiając oczekiwany status i powód.
+
+Dodatkowa uwaga4060016735: pure nonfinite_json_sanitizer.hpp zachowuje quoted
+string/key bytes i escapes, zastępując wyłącznie kompletne niecytowane nan/inf
+oraz ich ujemne warianty przez null. Preflight sprawdza terminator, quote closure
+oraz łączny growth przed mutacją. Przy braku capacity nie zapisuje pozornego zera.
+Obydwa GPU callsites przechodzą do artifact_error, complete:false i jawnego reason;
+returned status nie jest nadpisywany. Fallback ma dotychczasowy schema GPU.
+Helper normalizuje tokeny; nie jest pełnym walidatorem składni JSON.
+
+Source review helpera, obu callerów i scoped testów PASS. Kontrakt pure helpera
+wykonuje się pierwszy w CABI main, przed niezależnym failing Floquet testem, ze
+znacznikiem PASS. Pokrywa quoted/escaped text, token boundaries, exact/spare
+capacity, missing terminator, malformed quote i null pointer. Unit GHA oraz
+kompilacja/provider GPU nadal wymagane; nie wykonano lokalnych testów/buildów.
+Do dokumentu nie przypisuje się nieistniejącej naukowej kwalifikacji.

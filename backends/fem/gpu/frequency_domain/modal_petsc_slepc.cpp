@@ -1,4 +1,5 @@
 #include "frequency_domain/modal_gpu_krylov.hpp"
+#include "frequency_domain/nonfinite_json_sanitizer.hpp"
 
 #include "frequency_domain/mode_kinematics.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
@@ -71,62 +72,6 @@ void copy_message(char *destination, std::size_t size, const char *message) noex
 bool string_equals(const char *actual, const char *expected) noexcept
 {
     return actual != nullptr && expected != nullptr && std::strcmp(actual, expected) == 0;
-}
-
-// JSON has no NaN/Infinity literals.  A failed or incomplete modal solve can
-// still leave non-finite diagnostic scalars; normalize those tokens to null so
-// the Rust finite-value gate can reject the result explicitly instead of
-// failing while parsing the diagnostics envelope.
-void sanitize_nonfinite_json(char *json, std::size_t capacity) noexcept
-{
-    if (json == nullptr || capacity == 0u) {
-        return;
-    }
-    std::size_t length = 0u;
-    while (length < capacity && json[length] != '\0') {
-        ++length;
-    }
-    if (length == capacity) {
-        return;
-    }
-    for (std::size_t index = 0u; index < length;) {
-        std::size_t token_length = 0u;
-        if (index + 4u <= length && json[index] == '-' &&
-            (std::strncmp(json + index + 1u, "nan", 3u) == 0 ||
-             std::strncmp(json + index + 1u, "inf", 3u) == 0)) {
-            token_length = 4u;
-        } else if (index + 3u <= length &&
-                   (std::strncmp(json + index, "nan", 3u) == 0 ||
-                    std::strncmp(json + index, "inf", 3u) == 0)) {
-            token_length = 3u;
-        }
-        if (token_length == 0u) {
-            ++index;
-            continue;
-        }
-
-        constexpr char replacement[] = "null";
-        constexpr std::size_t replacement_length = sizeof(replacement) - 1u;
-        if (length + replacement_length - token_length + 1u <= capacity) {
-            std::memmove(
-                json + index + replacement_length,
-                json + index + token_length,
-                length - index - token_length + 1u);
-            std::memcpy(json + index, replacement, replacement_length);
-            length += replacement_length - token_length;
-            index += replacement_length;
-        } else {
-            // Preserve a valid envelope even if the diagnostics buffer is
-            // full: collapse the token in place and shift the tail left.
-            json[index] = '0';
-            std::memmove(
-                json + index + 1u,
-                json + index + token_length,
-                length - index - token_length + 1u);
-            length -= token_length - 1u;
-            ++index;
-        }
-    }
 }
 
 void publish_hypre_device_policy(
@@ -2147,6 +2092,48 @@ bool copy_cuda_vector_to_host(
     return restored;
 }
 
+void fail_diagnostics_json_sanitization(
+    PoissonAirboxModalEigenResult *result) noexcept
+{
+    if (result == nullptr) {
+        return;
+    }
+    char previous_error[sizeof(result->error_message)]{};
+    copy_message(previous_error, sizeof(previous_error), result->error_message);
+    result->status = FrequencyDomainStatus::artifact_error;
+    copy_message(
+        result->stop_reason,
+        sizeof(result->stop_reason),
+        "diagnostics_json_sanitization_failed");
+    copy_message(
+        result->eps_stop_reason,
+        sizeof(result->eps_stop_reason),
+        "diagnostics_json_sanitization_failed");
+    if (previous_error[0] == '\0') {
+        copy_message(
+            result->error_message,
+            sizeof(result->error_message),
+            "GPU modal diagnostics JSON sanitization failed");
+    } else {
+        std::snprintf(
+            result->error_message,
+            sizeof(result->error_message),
+            "GPU modal diagnostics JSON sanitization failed after: %s",
+            previous_error);
+    }
+    constexpr char fallback_json[] =
+        "{\"schema_version\":\"poisson_airbox_modal_eigen_gpu_petsc.v1\","
+        "\"status\":\"artifact_error\",\"complete\":false,"
+        "\"reason\":\"diagnostics_json_sanitization_failed\","
+        "\"requested_execution\":\"production_gpu\","
+        "\"resolved_execution\":\"production_gpu\","
+        "\"fallback_used\":false}";
+    static_assert(
+        sizeof(fallback_json) <= sizeof(result->diagnostics_json),
+        "sanitization failure JSON must fit the bounded diagnostics buffer");
+    std::memcpy(result->diagnostics_json, fallback_json, sizeof(fallback_json));
+}
+
 FrequencyDomainStatus fail(
     PoissonAirboxModalEigenResult *result,
     FrequencyDomainStatus status,
@@ -2272,8 +2259,10 @@ FrequencyDomainStatus fail(
         static_cast<unsigned long long>(result->hot_loop_d2h_bytes),
         static_cast<unsigned long long>(result->setup_h2d_transfer_count),
         static_cast<unsigned long long>(result->final_d2h_transfer_count));
-    sanitize_nonfinite_json(result->diagnostics_json, sizeof(result->diagnostics_json));
-    return status;
+    if (!sanitize_nonfinite_json(result->diagnostics_json, sizeof(result->diagnostics_json))) {
+        fail_diagnostics_json_sanitization(result);
+    }
+    return result->status;
 }
 
 bool validate_problem(
@@ -2653,7 +2642,9 @@ void write_success_diagnostics(
         problem.gauge_policy != nullptr ? problem.gauge_policy : "",
         problem.gauge_reason != nullptr ? problem.gauge_reason : "",
         result.full_residual_certified ? "true" : "false");
-    sanitize_nonfinite_json(out->diagnostics_json, sizeof(out->diagnostics_json));
+    if (!sanitize_nonfinite_json(out->diagnostics_json, sizeof(out->diagnostics_json))) {
+        fail_diagnostics_json_sanitization(out);
+    }
 }
 
 FrequencyDomainStatus solve_gpu_frequency_window(

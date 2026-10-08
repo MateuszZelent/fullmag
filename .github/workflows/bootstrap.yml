@@ -114,11 +114,12 @@ jobs:
 
       - name: Run frequency-domain artifact ownership contracts
         run: |
-          cargo test -p fullmag-api --bin fullmag-api frequency_domain_
           cargo test -p fullmag-api --bin fullmag-api field_sweep_items_keep_their_owner_identity_and_encode_resource_paths
           cargo test -p fullmag-api --bin fullmag-api spectrum_v3_items_project_durable_field_identity_without_mutating_payload
           cargo test -p fullmag-api --bin fullmag-api openapi_mode_field_availability_is_optional_boolean
           cargo test -p fullmag-api --bin fullmag-api openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract
+          cargo test -p fullmag-api --bin fullmag-api quantities::tests
+          cargo test -p fullmag-api --bin fullmag-api frequency_domain_
 
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast

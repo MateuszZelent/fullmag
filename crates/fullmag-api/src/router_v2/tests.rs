@@ -46171,10 +46171,14 @@ async fn frequency_domain_eigen_mode_field_rejects_payload_without_metadata() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = body_bytes(response).await;
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(payload["error"]
-        .as_str()
-        .expect("error should be present")
-        .contains("metadata"));
+    assert!(
+        payload["error"]
+            .as_str()
+            .expect("error should be present")
+            .contains("metadata"),
+        "unexpected eigen mode metadata response body: {}",
+        String::from_utf8_lossy(&body)
+    );
 
     let response = app
         .oneshot(

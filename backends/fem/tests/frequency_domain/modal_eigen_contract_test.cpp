@@ -7,6 +7,7 @@
 #include "frequency_domain/floquet_dynamic_demag_k.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
+#include "frequency_domain/nonfinite_json_sanitizer.hpp"
 #include "fullmag_fem.h"
 
 #include <array>
@@ -47,6 +48,86 @@ void check(bool condition, const char *message)
         std::fprintf(stderr, "FAIL: %s\n", message);
         std::exit(1);
     }
+}
+
+void nonfinite_json_sanitizer_has_bounded_fail_closed_semantics()
+{
+    constexpr char input[] = R"json({"nan_key":"nan inf -nan -inf",
+        "escaped \"nan\" key":"value has \"inf\" and nan",
+        "plain_nan":nan,"negative_nan":-nan,
+        "positive_inf":inf,"negative_inf":-inf,
+        "partial":"infinity nanometer xinf"})json";
+    constexpr char expected[] = R"json({"nan_key":"nan inf -nan -inf",
+        "escaped \"nan\" key":"value has \"inf\" and nan",
+        "plain_nan":null,"negative_nan":null,
+        "positive_inf":null,"negative_inf":null,
+        "partial":"infinity nanometer xinf"})json";
+    std::array<char, sizeof(input) + 8u> buffer{};
+    std::memcpy(buffer.data(), input, sizeof(input));
+    check(
+        fd::sanitize_nonfinite_json(buffer.data(), buffer.size()),
+        "bounded nonfinite JSON sanitizer accepts sufficient capacity");
+    check(
+        std::strcmp(buffer.data(), expected) == 0,
+        "bounded nonfinite JSON sanitizer preserves quoted bytes and rewrites only value tokens");
+
+    char partial_tokens[] = "nanometer infix xnan";
+    check(
+        fd::sanitize_nonfinite_json(partial_tokens, sizeof(partial_tokens)),
+        "bounded nonfinite JSON sanitizer accepts terminated text");
+    check(
+        std::strcmp(partial_tokens, "nanometer infix xnan") == 0,
+        "bounded nonfinite JSON sanitizer requires complete token boundaries");
+
+    char exact_capacity[] = "{\"value\":inf}";
+    char exact_capacity_before[sizeof(exact_capacity)]{};
+    std::memcpy(exact_capacity_before, exact_capacity, sizeof(exact_capacity));
+    check(
+        !fd::sanitize_nonfinite_json(exact_capacity, sizeof(exact_capacity)),
+        "bounded nonfinite JSON sanitizer rejects expansion without spare capacity");
+    check(
+        std::memcmp(exact_capacity, exact_capacity_before, sizeof(exact_capacity)) == 0,
+        "capacity failure leaves JSON bytes unchanged instead of substituting zero");
+
+    std::array<char, sizeof(exact_capacity) + 1u> spare_capacity{};
+    std::memcpy(spare_capacity.data(), exact_capacity_before, sizeof(exact_capacity));
+    check(
+        fd::sanitize_nonfinite_json(spare_capacity.data(), spare_capacity.size()),
+        "bounded nonfinite JSON sanitizer uses available expansion capacity");
+    check(
+        std::strcmp(spare_capacity.data(), "{\"value\":null}") == 0,
+        "bounded nonfinite JSON sanitizer emits null for a complete token");
+
+    char unterminated[] = {'n', 'a', 'n'};
+    const char unterminated_before[] = {'n', 'a', 'n'};
+    check(
+        !fd::sanitize_nonfinite_json(unterminated, sizeof(unterminated)),
+        "bounded nonfinite JSON sanitizer rejects missing terminator");
+    check(
+        std::memcmp(unterminated, unterminated_before, sizeof(unterminated)) == 0,
+        "unterminated buffer remains unchanged");
+    char malformed_quoted_json[] = "{\"text\":\"nan";
+    char malformed_quoted_json_before[sizeof(malformed_quoted_json)]{};
+    std::memcpy(
+        malformed_quoted_json_before,
+        malformed_quoted_json,
+        sizeof(malformed_quoted_json));
+    check(
+        !fd::sanitize_nonfinite_json(
+            malformed_quoted_json,
+            sizeof(malformed_quoted_json)),
+        "bounded nonfinite JSON sanitizer rejects an unterminated quoted string");
+    check(
+        std::memcmp(
+            malformed_quoted_json,
+            malformed_quoted_json_before,
+            sizeof(malformed_quoted_json)) == 0,
+        "unterminated quoted buffer remains unchanged");
+    check(
+        !fd::sanitize_nonfinite_json(nullptr, 1u),
+        "bounded nonfinite JSON sanitizer rejects a null pointer");
+
+    std::printf("PASS: bounded nonfinite JSON sanitizer contract\n");
 }
 
 bool contains(const char *haystack, const char *needle)
@@ -3798,6 +3879,19 @@ void modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms()
     request.mfem_floquet_periodic_pair_count = 1;
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    if (!contains(result.diagnostics_json,
+                  "\"production_cpu_rejection_reason\":\"production_cpu_modal_gated_operator_terms_present\"")) {
+        std::fprintf(stderr,
+                     "INFO: gated Floquet terms status=%u include_demag=%d pair_count=%llu "
+                     "error=%.512s operator=%.512s diagnostics=%.2048s result=%.2048s\n",
+                     static_cast<unsigned int>(result.status),
+                     request.operator_request.include_demag,
+                     static_cast<unsigned long long>(request.mfem_floquet_periodic_pair_count),
+                     result.error_message != nullptr ? result.error_message : "",
+                     request.operator_request.operator_diagnostics_json,
+                     result.diagnostics_json != nullptr ? result.diagnostics_json : "",
+                     result.result_json != nullptr ? result.result_json : "");
+    }
     check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
           "nonzero-k Floquet modal payload with gated operator terms must remain unavailable");
     check(contains(result.diagnostics_json,
@@ -4458,6 +4552,7 @@ void modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact()
 
 int main()
 {
+    nonfinite_json_sanitizer_has_bounded_fail_closed_semantics();
     FullmagFemFrequencyDomainResult zeroed{};
     fullmag_fem_frequency_domain_result_destroy(&zeroed);
     check(zeroed.status == static_cast<FullmagFemFrequencyDomainStatus>(0),
