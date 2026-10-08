@@ -4406,7 +4406,7 @@ describe("ribbon structure", () => {
     expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
   });
 
-  it("exposes FEM meshing before the bootstrap FDM domain is replaced", () => {
+  it("exposes FEM meshing before the initial FDM domain is replaced", () => {
     const visualization = new ObjectVisualizationController();
     const context = {
       commandContext: { source: "test" as const },

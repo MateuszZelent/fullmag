@@ -1154,14 +1154,17 @@ function checkObjectGeneralPanelVisualizationSelector() {
     "geometryObjectVisualizationColorsEquals",
     "createCommandContext",
     "kernel.commands.execute",
-    'visualization.target.set-shader-mono-color',
+    'visualization.target.set-primitive-mono-color',
     'visualization.target.set-wireframe-color',
     "useVisualizationStateResource",
     "shaderMonoColor",
+    "primitiveMonoColor",
+    "surfaceColorSource",
     "wireframeColor",
   ]);
   forbidTokens(source, "ObjectGeneralPanel visualization selector", [
     "useObjectVisualizationRegistry()",
+    'visualization.target.set-shader-mono-color',
   ]);
 }
 
