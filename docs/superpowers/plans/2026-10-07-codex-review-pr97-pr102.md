@@ -937,3 +937,12 @@ Trwa ustalenie GitHub-hosted MFEM proof; zakaz lokalnej kompilacji testów zacho
 Fixture air/inactive/pinned reduction nadal potrzebna przed pełną admission claim.
 Solver/finalizer jeszcze nie konsumuje nowej metryki; trzy uwagi mode selection
 pozostają otwarte do integracji, cap ordering/refill oraz real-pencil regresji.
+
+### Browser root cause — brak strong ETag w topology fixture
+
+Trace37785083142: ownership compatible, enabled/intent/session true, topologyCurrent
+true, ale hasTopology=false/identity incomplete. Produkcyjny requestTopologyChunked
+odrzuca header FMMT bez strong ETag przed decode. Fixture fulfilTopology wysyłał206
+z Content-Range bez ETag. Dodano ETag z istniejących generation/revision/fingerprint
+manifestu do200 i każdego206. Production identity/admission nie zostały osłabione.
+Source/node/diff review PASS; positive overlay/vector/uniform proof oczekiwany GHA.

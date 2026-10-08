@@ -2945,7 +2945,9 @@ async function installInspectorFixtureApi(page, fixture) {
       const fieldVector = inspectorFieldVector(path, fixture);
       return fulfillBinary(route, fieldVector.buffer, 200, fieldVector.headers);
     }
-    if (path === "/v2/sessions/current/data/domain/topology") return fulfillTopology(route, fixture.topology);
+    if (path === "/v2/sessions/current/data/domain/topology") {
+      return fulfillTopology(route, fixture.topology, fixture.manifest);
+    }
     fixture.unknownGetPaths.push(`${request.method()} ${path}${url.search}`);
     return fulfillJson(
       route,
@@ -3621,9 +3623,10 @@ async function fulfillEmpty(route, status) {
   await route.fulfill({ body: "", headers: { "access-control-allow-origin": "*" }, status });
 }
 
-async function fulfillTopology(route, topology) {
+async function fulfillTopology(route, topology, manifest) {
+  const etag = `"fullmag:${manifest.generation_id}:${manifest.revision}:${manifest.topology_fingerprint}"`;
   const range = route.request().headers().range;
-  if (!range) return fulfillBinary(route, topology);
+  if (!range) return fulfillBinary(route, topology, 200, { etag });
   const match = /^bytes=(\d+)-(\d+)$/.exec(range);
   if (!match) return fulfillEmpty(route, 416);
   const start = Number(match[1]);
@@ -3635,6 +3638,7 @@ async function fulfillTopology(route, topology) {
       "access-control-allow-origin": "*",
       "accept-ranges": "bytes",
       "content-range": `bytes ${start}-${end}/${topology.byteLength}`,
+      etag,
       "x-api-contract-version": "1.0.0",
     },
     status: 206,
