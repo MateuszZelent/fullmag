@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 27, `implemented_pending_browser`: 7, `implemented_pending_ci`: 3, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 102. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 27, `implemented_pending_browser`: 8, `implemented_pending_ci`: 3, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 101. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -227,7 +227,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4207587037](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587037) / #97 | `crates/fullmag-api/src/quantities.rs` | valid_unfixed | Nowa sprzeczność katalogu i historii. quantities.rs:55–57 zwraca scalar_available=false dla latest_step modalnego przed sprawdzeniem zachowanej fizycznej historii lub run_value (:59–70). tables.rs zachowuje fizyczne wiersze, więc dostępne dane zostają ukryte w katalogu. |
 | [4207587048](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587048) / #97 | `crates/fullmag-api/src/router_v2/handlers/analysis/results.rs` | valid_unfixed | Nowa luka typed availability. frequency_domain.rs:326/518 definiuje oba mode payload bez jawnego mode_field_available; results.rs:1557 czyta extras przez as_bool i akceptuje wszystko inne niż bool false. String false może ominąć wyłączenie, jeśli field_status/ID/mesh są gotowe. Dodać typed Option<bool> i strict decode, zachowując uzasadnioną legacy semantykę. |
 | [4207587059](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587059) / #97 | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | valid_unfixed | Nowa niespójność gradingu z. _gmsh_swept.py:2003–2009 przy braku airbox hmin/hmax ustala h_inner=h_outer=hmax; _box_airbox_layer_levels:1923 clampuje growth do h_outer, więc warstwy nie grubieją. Pole lateral grading w :2243–2250 używa innego domyślnego outer=inner*ratio^4. Wymaga spójnego targetu, bez arbitralnego zwiększania jawnego hmax. |
-| [4207587066](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587066) / #97 | `apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts` | valid_unfixed | Nowa utrata przerw po decymacji. frequencyDomainChartModels.ts:1102/1124 oznacza breakBefore, lecz modules/analysis-plots/frequencyDomainSeriesAdapter.ts:22–66 wybiera jedynie endpoints/extrema/fill i może usunąć punkt graniczny. finiteFrequencySeries zachowuje marker w punktach; renderer dostaje serię bez przerwy. |
+| [4207587066](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587066) / #97 | `apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts` | implemented_pending_browser | Nowa utrata przerw po decymacji. frequencyDomainChartModels.ts:1102/1124 oznacza breakBefore, lecz modules/analysis-plots/frequencyDomainSeriesAdapter.ts:22–66 wybiera jedynie endpoints/extrema/fill i może usunąć punkt graniczny. finiteFrequencySeries zachowuje marker w punktach; renderer dostaje serię bez przerwy. |
 | [4207587076](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587076) / #97 | `crates/fullmag-ir/src/validation.rs` | duplicate | Ten sam niepełny publiczny validator V04. study_v04.rs:330 kończy po representation/BC/k_sampling, bez count/target/dynamics/sampling; validation.rs wywołuje właśnie tę metodę. Nie naprawiono przez migrację regionów. Powtórzenie 4204074492. |
 | [4207587086](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207587086) / #97 | `crates/fullmag-plan/src/fem.rs` | valid_unfixed | Nowy silent-ignore dla solver policy na reference CPU. Planner fem.rs:5210 przyjmuje policy; eigen_capability.rs:38–63 nie wybiera native window dla zwykłego lowest, a eigen_execution.rs:1536ff realizuje reference_effective_field_generalized bez odczytu plan.solver_policy. Odczyty policy w :1083 są w GPU entrypoint, nie tej trasie. Trzeba honorować albo odrzucać nieobsługiwane kontrolki. |
 | [4207786265](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207786265) / #97 | `crates/fullmag-runner/src/fem/eigen_path.rs` | valid_unfixed | Nowy mixed-topology blocker. eigen_path.rs:879 tworzy MeshTopology::from_ir przed solve, a fullmag-engine/src/fem.rs:1019 wymaga tet4 oraz dalej tri3. Legalne P1 prism6/quad4 obsługiwane przez native provider nie przechodzą tego legacy adaptera; analogiczny tracking w puli wymaga spójnej naprawy. |
@@ -556,3 +556,50 @@ instalacji nowego narzędzia. Testy wykonywane są wyłącznie w GitHub Actions.
 
 PR #97 pozostaje OPEN; nie wykonano merge. Cel nadal aktywny, z niezamkniętymi
 uwagami i bramkami runtime/provider/nauki opisanymi wyżej.
+### Uwaga 4207786279 — zerowa anizotropia, przygotowana korekta polityki
+
+Zakres to warunek legalności istniejącej trasy FEM CPU, double, strict,
+FloquetAirboxCpuSchurSlepc opisanej w 0828-fem-frequency-domain-floquet-demag.md;
+nie dodajemy nowej realizacji fizyki. Osie przy dokładnie zerowych Ku1, Ku2,
+Kc1, Kc2, Kc3 oraz ich polach nie aktywują energii anizotropii. Planner zachowuje
+wszystkie wejściowe dane i provenance; nie zmienia ich na None ani nie uruchamia
+fallbacku. Każdy niezerowy współczynnik nadal powoduje istniejący błąd unsupported
+local interaction. Celowo nie użyto wspólnego progu 1e-30 predykatów aktywności:
+próg przy bramce capability przepuszczałby nieobsługiwaną niezerową interakcję.
+
+Źródła: crates/fullmag-plan/src/fem.rs +
+first_unsupported_floquet_airbox_local_interaction; tests.rs +
+fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path.
+Regresja sprawdza zera ze wszystkimi osiami, zachowanie rozwiązanego CPU engine
+bez fallbacku oraz odmowę scalar i pojedynczego nodal coefficient 1e-40.
+Pokrywający krok dodano do istniejącego bootstrap GHA. Nie zmieniono Python,
+IR, OpenAPI ani UI vocabulary. FDM CPU/GPU i FEM GPU pozostają bez zmian.
+Source review i wykonanie nowej regresji są jeszcze wymagane; nie podniesiono
+statusu walidacji produkcyjnej.
+Review wykryło analogiczny guard is_some w runnerze. Poprawiono także
+crates/fullmag-runner/src/fem/eigen_shared_domain.rs + validate_shared_domain_modal_scope.
+Regresja eigen_tests.rs + shared_domain_modal_scope_rejects_uncertified_local_tangent_terms
+obejmuje zera z osiami, scalar oraz nodal 1e-40; krok GHA sprawdza oba poziomy.
+Pozostałe A/DMI/surface guards zachowane. Test runtime scope nie zastępuje
+wykonania produkcyjnego MFEM/SLEPc.
+
+### Uwaga 4207587066 — poprawka źródeł, runtime nadal wymagany
+
+Commit e74a1e576f8d55198c144fdfaebbfcf5cad6732e zachowuje breakBefore po
+odrzuceniu punktu granicznego przez decymację. Dobór ekstremów, endpoints i limit
+5000 punktów pozostają; znaczniki przenoszone są na pierwszy zachowany punkt za
+luką. Regresje obejmują 10000 punktów/2500 przerw oraz 25000 punktów/6250 przerw,
+w tym rzeczywiste odrzucenie pierwszego znacznika i wszystkie zachowane interwały.
+Managed production-source receipt dc88351a18fa4c85801c00b1bacd5802: PASS,
+unit_tests=not_compiled_not_run. Testy i browser/UI dowód wymagają GHA.
+
+Diagnostyka CABI w 846f253b6eae925810f903755710078a609ec85d, job113257677764,
+pokazała cztery przypadkowe wartości około 6.95e-310 i determinant 0 zamiast
+zadanych 0,-1,1,0. Przyczyna przekazania bufora pozostaje w diagnozie; nie
+zmieniono progu ani macierzy w celu wymuszenia sukcesu.
+
+Run37760001789: API frequency_domain 53 PASS, 2 FAIL (409 mapping fixture i
+stary offset body[48..] przy phase view). Inspector przeszedł do wyboru child,
+lecz ten węzeł nie jest odnajdywany; aktualny routing fixture nadal wymaga naprawy.
+Zerowa anizotropia ma jeszcze blockers w equilibrium identity/descriptor;
+przygotowanego planner/scope diffu nie przedstawia się jako pełnej poprawki.
