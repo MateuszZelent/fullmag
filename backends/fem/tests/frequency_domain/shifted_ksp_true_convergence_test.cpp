@@ -435,6 +435,15 @@ bool run_ksp_case(
     if (error != 0) {
         return fail("read KSP convergence reason", error);
     }
+    if (!check(context->callback_count > 0 &&
+                   context->callback_observation_available &&
+                   context->last_callback_iteration >= 0 &&
+                   context->last_default_reason_available &&
+                   context->last_reason_after_gate_available,
+               "callback snapshot retains its latest iteration and both convergence reasons")) {
+        cleanup();
+        return false;
+    }
 
     if (expect_convergence) {
         if (!check(reason > 0, "GMRES/FGMRES true solve must converge") ||
@@ -457,6 +466,54 @@ bool run_ksp_case(
                    "reported positive reason must pass the true threshold")) {
             cleanup();
             return false;
+        }
+        const PetscReal expected_probe_threshold = std::max(
+            context->atol,
+            context->rtol * context->last_true_rhs_norm);
+        if (!check(context->last_true_probe_available &&
+                       context->true_probe_count > 0 &&
+                       context->last_true_probe_default_reason_available &&
+                       context->last_true_probe_reason_after_gate_available &&
+                       context->last_true_probe_iteration >= 0 &&
+                       std::isfinite(static_cast<double>(context->last_true_rhs_norm)) &&
+                       std::isfinite(static_cast<double>(context->last_true_residual_norm)) &&
+                       context->last_true_residual_threshold == expected_probe_threshold,
+                   "true-probe snapshot retains finite live norms and the exact unchanged gate threshold")) {
+            cleanup();
+            return false;
+        }
+        if (!check(context->last_true_probe_callback_ordinal <=
+                       context->callback_count,
+                   "true-probe callback ordinal stays within the KSP callback history")) {
+            cleanup();
+            return false;
+        }
+        if (context->last_true_probe_callback_ordinal ==
+            context->callback_count) {
+            if (!check(context->last_true_probe_reason_after_gate ==
+                           context->last_reason_after_gate,
+                       "same-iteration callback and true-probe reasons remain paired")) {
+                cleanup();
+                return false;
+            }
+        }
+        if (zero_rhs &&
+            !check(context->last_true_residual_threshold == 0.0 &&
+                       !context->last_true_tolerance_ratio_available,
+                   "zero-threshold probe keeps its ratio unavailable instead of fabricating a value")) {
+            cleanup();
+            return false;
+        }
+        if (!zero_rhs && context->last_true_residual_threshold > 0.0) {
+            const PetscReal expected_ratio =
+                context->last_true_residual_norm /
+                context->last_true_residual_threshold;
+            if (!check(context->last_true_tolerance_ratio_available &&
+                           context->last_true_tolerance_ratio == expected_ratio,
+                       "positive-threshold probe records only its measured residual ratio")) {
+                cleanup();
+                return false;
+            }
         }
 
         if (force_tiny_recursive_norm) {

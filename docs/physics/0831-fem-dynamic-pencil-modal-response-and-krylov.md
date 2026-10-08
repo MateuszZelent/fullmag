@@ -1941,6 +1941,38 @@ not whether the physical acceptance threshold should be relaxed. If it does
 not, the shifted Schur conditioning and the preconditioner's omission of
 demagnetizing feedback require direct investigation.
 
+#### Failure-only shifted-KSP convergence probe
+
+The native Floquet convergence callback now keeps a bounded scalar snapshot of
+its own observations: callback count, iteration, recursive residual norm,
+default convergence reason, and the reason after the unchanged true-residual
+gate. Only when PETSc's default test proposes convergence does that same live
+callback record $\|b_\sigma\|_2$, the recomputed
+$\|b_\sigma-A_\sigma x_\sigma\|_2$, the applied threshold
+$\max(\mathrm{atol},\mathrm{rtol}\,\|b_\sigma\|_2)$, and the residual to
+threshold ratio. The vectors and PETSc handles are not copied into diagnostics.
+These norms belong only to the internal shifted linear system; they are not
+the original descriptor residual, the magnetic or potential residual, or a
+scientific mode-acceptance metric. The latest callback and latest completed
+true-residual probe keep separate iteration numbers because they can refer to
+different callback invocations; the true probe also records its callback
+ordinal so KSP iteration resets cannot associate it with a later solve's
+recursive residual.
+
+The failed EPS attempt records the NEV and NCV passed to `EPSSetDimensions`;
+these are attempted settings, not queried or resolved dimensions. After a hard
+`EPSSolve` error, the implementation copies only the cached scalar snapshot and
+does not query EPS, KSP, DS, matrices, or vectors. A versioned
+`shifted_ksp_failure_probe.v1` object is emitted only for
+`floquet_slepc_solve_failed`. Unavailable observations are `null` with explicit
+availability flags; they never mean zero residual or successful convergence.
+The existing `ksp_last_*` fields continue to describe completed post-solve
+measurements. This probe is diagnostic only: it does not change the callback
+gate, restart-breakdown tolerance, failure status, or physical mode acceptance
+criteria. Its original near-pole regression is separate from the shifted refill
+fixture. The source regression is prepared; provider-backed execution remains
+**NOT VERIFIED**.
+
 Managed build #151 and run `b96f1961f51e4d34b038b689ee45caaf`
 resolve that bounded experiment for
 $k_y=2\times10^6\,\mathrm{rad\,m^{-1}}$. With restart length 10, SLEPc
@@ -2172,7 +2204,13 @@ Repository-owned related contracts:
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Withhold positive shifted KSP convergence until the current reconstructed solution satisfies the requested true residual criterion; preserve default negative outcomes and iteration budget with per-KSP reusable workspace. |
+| backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Preserve the default convergence result and iteration budget; apply the unchanged reconstructed true-residual gate and retain scalar callback observations for a hard-error-only probe. |
+| backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp | solve_slepc_sparse_gyrotropic_modal_eigen | Return the internal result carrying `FloquetShiftedKspFailureProbe`, separate from completed post-solve KSP telemetry and with the attempted EPS NEV/NCV. |
+| backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | Copy callback-owned scalar telemetry before releasing an unsafe failed EPS/KSP graph; do not query PETSc objects after a hard solve error. |
+| backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | floquet_shifted_ksp_diagnostics_json_fields | Publish `shifted_ksp_failure_probe.v1` only for a hard inner SLEPc solve failure in both nearest and window diagnostics. |
+| backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp | main | Exercise callback capture and same-event threshold arithmetic, including explicit unavailable ratio at zero threshold; provider-backed execution pending. |
+| backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp | main | Preserve the original near-pole case separately from refill; check attempt-scoped scalar availability and threshold arithmetic without changing solver tolerances. |
+| backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | main | Check failure-only JSON exposure on the public nearest/window paths and its absence for successful solves; provider-backed execution pending. |
 | backends/fem/src/frequency_domain/mode_kinematics.cpp | frequency_hz_from_omega_rad_s | Convert the phase-signed angular frequency produced by `map_eigenvalue` to hertz; the mapper retains exact-zero default classification and explicit absolute-threshold support. |
 | backends/fem/include/frequency_domain/mode_kinematics.hpp | select_positive_frequency_mode | The adjacent `ModeKinematicsPolicy` initializes `kDefaultZeroFrequencyToleranceRadPerS` to 0 rad/s; nonzero nullspace/Goldstone classification requires independent certification. |
 | backends/fem/tests/frequency_domain/mode_kinematics_test.cpp | main | Test entrypoint calls `default_zero_frequency_classification_preserves_small_finite_branches`; source test only. |

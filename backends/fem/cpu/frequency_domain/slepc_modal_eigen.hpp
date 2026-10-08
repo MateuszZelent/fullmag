@@ -12,6 +12,47 @@ namespace fullmag::fem::frequency_domain {
 
 struct FloquetSharedDomainSparseModalOperator;
 
+// Callback-time scalar diagnostics for a hard shifted-KSP/EPS failure. These
+// observations are separate from the completed-solve ksp_last_* fields.
+struct FloquetShiftedKspFailureProbe {
+    bool eps_dimension_arguments_available = false;
+    int eps_attempt_number = 0;
+    std::int64_t eps_nev_argument = 0;
+    std::int64_t eps_ncv_argument = 0;
+    std::uint64_t callback_count = 0;
+    bool callback_observation_available = false;
+    std::int64_t last_callback_iteration = -1;
+    bool last_recursive_residual_available = false;
+    double last_recursive_residual_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    bool last_default_reason_available = false;
+    int last_default_reason = 0;
+    bool last_reason_after_gate_available = false;
+    int last_reason_after_gate = 0;
+    std::uint64_t true_probe_attempt_count = 0;
+    std::uint64_t true_probe_count = 0;
+    std::uint64_t true_probe_measurement_failure_count = 0;
+    bool last_true_probe_available = false;
+    std::uint64_t last_true_probe_callback_ordinal = 0;
+    std::int64_t last_true_probe_iteration = -1;
+    double last_true_rhs_norm = std::numeric_limits<double>::quiet_NaN();
+    double last_true_residual_norm = std::numeric_limits<double>::quiet_NaN();
+    double last_true_residual_threshold =
+        std::numeric_limits<double>::quiet_NaN();
+    double last_true_rtol = std::numeric_limits<double>::quiet_NaN();
+    double last_true_atol = std::numeric_limits<double>::quiet_NaN();
+    bool last_true_probe_recursive_residual_available = false;
+    double last_true_probe_recursive_residual_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    bool last_true_probe_default_reason_available = false;
+    int last_true_probe_default_reason = 0;
+    bool last_true_probe_reason_after_gate_available = false;
+    int last_true_probe_reason_after_gate = 0;
+    bool last_true_tolerance_ratio_available = false;
+    double last_true_tolerance_ratio =
+        std::numeric_limits<double>::quiet_NaN();
+};
+
 struct SLEPcModalEigenAdapterStatus {
     const char *solver_adapter = "slepc_modal_eigen";
     const char *solver_adapter_status = "pending";
@@ -253,6 +294,7 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     int eps_finalized_attempt_number = 0;
     int eps_finalized_nev = 0;
     int eps_unique_certified_mode_count = 0;
+    FloquetShiftedKspFailureProbe shifted_ksp_failure_probe{};
     bool eps_iteration_budget_available = false;
     bool eps_cumulative_iterations_available = false;
     bool eps_cancellation_observed = false;

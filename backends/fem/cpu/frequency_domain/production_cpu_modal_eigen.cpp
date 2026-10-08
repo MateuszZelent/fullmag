@@ -261,6 +261,124 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
         std::string(result.eps_cancellation_observed ? "true" : "false") + "}";
     json +=
         ",\"eps_monitor_iteration_scope\":\"last_actual_eps_attempt\"";
+    if (result.unsupported_reason != nullptr &&
+        std::strcmp(
+            result.unsupported_reason,
+            "floquet_slepc_solve_failed") == 0) {
+        const auto &probe = result.shifted_ksp_failure_probe;
+        json +=
+            ",\"shifted_ksp_failure_probe\":{"
+            "\"schema_version\":\"shifted_ksp_failure_probe.v1\","
+            "\"scope\":\"internal_shifted_linear_system_not_original_descriptor\","
+            "\"eps_dimension_semantics\":\"arguments_passed_to_EPSSetDimensions_not_resolved_dimensions\","
+            "\"eps_attempt_number\":" +
+            (probe.eps_attempt_number > 0
+                ? std::to_string(probe.eps_attempt_number)
+                : std::string("null")) +
+            ",\"eps_dimension_arguments_available\":" +
+            std::string(probe.eps_dimension_arguments_available ? "true" : "false") +
+            ",\"eps_nev_argument\":" +
+            (probe.eps_dimension_arguments_available
+                ? std::to_string(probe.eps_nev_argument)
+                : std::string("null")) +
+            ",\"eps_ncv_argument\":" +
+            (probe.eps_dimension_arguments_available
+                ? std::to_string(probe.eps_ncv_argument)
+                : std::string("null")) +
+            ",\"callback_observation_available\":" +
+            std::string(probe.callback_observation_available ? "true" : "false") +
+            ",\"callback_count\":" + std::to_string(probe.callback_count) +
+            ",\"callback_count_scope\":\"registered_callbacks_during_this_eps_attempt\""
+            ",\"last_callback_iteration\":" +
+            (probe.callback_count > 0
+                ? std::to_string(probe.last_callback_iteration)
+                : std::string("null")) +
+            ",\"last_recursive_residual_available\":" +
+            std::string(probe.last_recursive_residual_available ? "true" : "false") +
+            ",\"last_recursive_residual_norm\":" +
+            (probe.last_recursive_residual_available
+                ? format_double(probe.last_recursive_residual_norm)
+                : std::string("null")) +
+            ",\"last_default_reason_available\":" +
+            std::string(probe.last_default_reason_available ? "true" : "false") +
+            ",\"last_default_reason\":" +
+            (probe.last_default_reason_available
+                ? std::to_string(probe.last_default_reason)
+                : std::string("null")) +
+            ",\"last_reason_after_gate_available\":" +
+            std::string(probe.last_reason_after_gate_available ? "true" : "false") +
+            ",\"last_reason_after_gate\":" +
+            (probe.last_reason_after_gate_available
+                ? std::to_string(probe.last_reason_after_gate)
+                : std::string("null")) +
+            ",\"true_probe_attempt_count\":" +
+            std::to_string(probe.true_probe_attempt_count) +
+            ",\"true_probe_attempt_count_scope\":\"positive_default_reason_callbacks_during_this_eps_attempt\""
+            ",\"true_probe_count\":" +
+            std::to_string(probe.true_probe_count) +
+            ",\"true_probe_count_scope\":\"completed_true_gate_measurements_during_this_eps_attempt\""
+            ",\"true_probe_measurement_failure_count\":" +
+            std::to_string(probe.true_probe_measurement_failure_count) +
+            ",\"last_true_probe\":{"
+            "\"available\":" +
+            std::string(probe.last_true_probe_available ? "true" : "false") +
+            ",\"callback_ordinal\":" +
+            (probe.true_probe_attempt_count > 0
+                ? std::to_string(probe.last_true_probe_callback_ordinal)
+                : std::string("null")) +
+            ",\"iteration\":" +
+            (probe.true_probe_attempt_count > 0
+                ? std::to_string(probe.last_true_probe_iteration)
+                : std::string("null")) +
+            ",\"recursive_residual_available\":" +
+            std::string(probe.last_true_probe_recursive_residual_available
+                ? "true" : "false") +
+            ",\"recursive_residual_norm\":" +
+            (probe.last_true_probe_recursive_residual_available
+                ? format_double(probe.last_true_probe_recursive_residual_norm)
+                : std::string("null")) +
+            ",\"default_reason_available\":" +
+            std::string(probe.last_true_probe_default_reason_available
+                ? "true" : "false") +
+            ",\"default_reason\":" +
+            (probe.last_true_probe_default_reason_available
+                ? std::to_string(probe.last_true_probe_default_reason)
+                : std::string("null")) +
+            ",\"reason_after_gate_available\":" +
+            std::string(probe.last_true_probe_reason_after_gate_available
+                ? "true" : "false") +
+            ",\"reason_after_gate\":" +
+            (probe.last_true_probe_reason_after_gate_available
+                ? std::to_string(probe.last_true_probe_reason_after_gate)
+                : std::string("null")) +
+            ",\"rhs_l2_norm\":" +
+            (probe.last_true_probe_available
+                ? format_double(probe.last_true_rhs_norm)
+                : std::string("null")) +
+            ",\"true_residual_l2_norm\":" +
+            (probe.last_true_probe_available
+                ? format_double(probe.last_true_residual_norm)
+                : std::string("null")) +
+            ",\"rtol\":" +
+            (probe.true_probe_attempt_count > 0
+                ? format_double(probe.last_true_rtol)
+                : std::string("null")) +
+            ",\"atol\":" +
+            (probe.true_probe_attempt_count > 0
+                ? format_double(probe.last_true_atol)
+                : std::string("null")) +
+            ",\"threshold_l2_norm\":" +
+            (probe.last_true_probe_available
+                ? format_double(probe.last_true_residual_threshold)
+                : std::string("null")) +
+            ",\"tolerance_ratio_available\":" +
+            std::string(probe.last_true_tolerance_ratio_available
+                ? "true" : "false") +
+            ",\"true_residual_to_threshold_ratio\":" +
+            (probe.last_true_tolerance_ratio_available
+                ? format_double(probe.last_true_tolerance_ratio)
+                : std::string("null")) + "}}";
+    }
     // Sparse nearest success already publishes these configuration fields.
     // Window and nearest failure need them here; emit each key exactly once.
     if (include_basic_fields) {

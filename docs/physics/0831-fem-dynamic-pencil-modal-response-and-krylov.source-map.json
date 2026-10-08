@@ -1489,8 +1489,8 @@
     {
       "id": "source-floquet-window-count-cap-public-regression",
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
-      "symbol": "modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics",
-      "responsibility": "Exercise the public production frequency-window adapter with a narrow dimension-limited band: best_effort returns the nonempty certified pool under the public count cap with partial window metadata; certified_count remains fail-closed; provider-backed runtime pending"
+      "symbol": "main",
+      "responsibility": "Exercise the public production frequency-window adapter with a narrow dimension-limited band: best_effort returns the nonempty certified pool under the public count cap with partial window metadata; certified_count remains fail-closed. The same C ABI regression checks hard nearest/window KSP failure-probe JSON and its absence on successful solves; provider-backed runtime pending."
     },
     {
       "id": "source-floquet-nev-refill-regression",
@@ -2578,8 +2578,8 @@
       "id": "source-floquet-shifted-true-convergence",
       "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp",
       "symbol": "floquet_shifted_true_convergence_test",
-      "responsibility": "Withhold positive shifted KSP convergence until the current reconstructed solution satisfies the requested true residual criterion; preserve default negative outcomes and iteration budget with per-KSP reusable workspace.",
-      "evidence_status": "Source reviewed; standalone real-PETSc CI and fresh managed production runtime pending."
+      "responsibility": "Withhold positive shifted KSP convergence until the current reconstructed solution satisfies the requested true residual criterion; preserve default negative outcomes and iteration budget while caching bounded callback scalars for hard-error diagnosis of the internal shifted system only.",
+      "evidence_status": "Source implementation visible; provider-backed execution NOT VERIFIED."
     },
     {
       "id": "source-mode-kinematics",
@@ -2598,6 +2598,36 @@
       "path": "backends/fem/tests/frequency_domain/mode_kinematics_test.cpp",
       "symbol": "main",
       "responsibility": "Unique test executable entrypoint calls default_zero_frequency_classification_preserves_small_finite_branches, which regresses signed 1 rad/s and 1 kHz modes, exact zero, both phase conventions and explicit tolerance boundaries; source test only."
+    },
+    {
+      "id": "source-floquet-ksp-failure-probe-dto",
+      "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp",
+      "symbol": "solve_slepc_sparse_gyrotropic_modal_eigen",
+      "responsibility": "Return the internal SLEPc result carrying FloquetShiftedKspFailureProbe, separate from completed post-solve KSP telemetry and with exact attempted EPS dimensions."
+    },
+    {
+      "id": "source-floquet-ksp-failure-probe-copy",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context",
+      "responsibility": "Copy only callback-owned scalar observations and exact EPSSetDimensions arguments before returning from a hard solve error; never query PETSc objects after EPSSolve failure."
+    },
+    {
+      "id": "source-floquet-ksp-failure-probe-json",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "floquet_shifted_ksp_diagnostics_json_fields",
+      "responsibility": "Serialize the versioned internal-shifted-system probe only for floquet_slepc_solve_failed in both single-solve and window-subwindow diagnostics; keep unavailable values null."
+    },
+    {
+      "id": "source-floquet-ksp-failure-probe-callback-test",
+      "path": "backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp",
+      "symbol": "main",
+      "responsibility": "Exercise actual callback scalar capture, same-event threshold arithmetic, and zero-threshold availability while keeping the true-residual gate unchanged; provider-backed execution NOT VERIFIED."
+    },
+    {
+      "id": "source-floquet-ksp-failure-probe-near-pole-test",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "main",
+      "responsibility": "Keep the original near-pole failure fixture separate from refill and verify attempt-scoped scalar probe consistency; provider-backed execution NOT VERIFIED."
     }
   ],
   "public_api": {

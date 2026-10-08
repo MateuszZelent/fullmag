@@ -1273,6 +1273,149 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
 #endif
 }
 
+void captures_near_pole_failure_probe()
+{
+#if FULLMAG_FEM_WITH_SLEPC
+    constexpr std::size_t q_dimension = 8u;
+    constexpr double coefficient_scale = 1.0e-60;
+    constexpr double spectral_center_hz = 1.0e6;
+    const double frequency_offsets_hz[q_dimension] = {
+        -0.003, -0.001, 0.001, 0.003, 0.2, 0.4, 0.6, 0.8};
+    std::vector<std::complex<double>> a_diagonal(q_dimension);
+    const std::vector<std::complex<double>> b_diagonal(
+        q_dimension, std::complex<double>(0.0, -coefficient_scale));
+    for (std::size_t row = 0u; row < q_dimension; ++row) {
+        a_diagonal[row] = coefficient_scale * fd::omega_rad_s_from_frequency_hz(
+            spectral_center_hz + frequency_offsets_hz[row]);
+    }
+    const auto a_qq = diagonal_complex_csr(q_dimension, a_diagonal);
+    const auto b_qq = diagonal_complex_csr(q_dimension, b_diagonal);
+    const auto positive_tangent_mass = correlated_mass_csr(
+        q_dimension, 4u, 0.99);
+    const auto p = diagonal_complex_csr(1u, {1.0});
+    const auto a_qphi = q_to_phi_complex_csr(q_dimension, 0.0);
+    const auto a_phiq = phi_to_q_complex_csr(q_dimension, 0.0);
+    fd::FloquetSharedDomainSparseModalOperator operator_view{};
+    operator_view.a_qq = &a_qq;
+    operator_view.b_qq = &b_qq;
+    operator_view.positive_tangent_mass = &positive_tangent_mass;
+    operator_view.p = &p;
+    operator_view.a_qphi = &a_qphi;
+    operator_view.a_phiq = &a_phiq;
+    operator_view.q_complex_dof_count = q_dimension;
+    operator_view.phi_dof_count = 1u;
+
+    fd::SLEPcSparseGyrotropicModalEigenRequest request{};
+    request.tangent_dof_count = static_cast<int>(q_dimension);
+    request.requested_mode_count = 2;
+    request.target_frequency_hz = spectral_center_hz;
+    request.frequency_min_hz = spectral_center_hz - 1.0;
+    request.frequency_max_hz = spectral_center_hz + 1.0;
+    request.residual_tolerance = 1.0e-10;
+    request.max_outer_iterations = 160;
+    request.max_linear_iterations = 96;
+    const auto result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        operator_view, request);
+
+    const bool pinned_petsc_3_24_6 =
+        PETSC_VERSION_MAJOR == 3 && PETSC_VERSION_MINOR == 24 &&
+        PETSC_VERSION_SUBMINOR == 6;
+    if (pinned_petsc_3_24_6) {
+        check(!result.ok && result.status != nullptr &&
+                  std::strcmp(result.status, "solve_error") == 0 &&
+                  result.unsupported_reason != nullptr &&
+                  std::strcmp(result.unsupported_reason,
+                              "floquet_slepc_solve_failed") == 0,
+              "pinned PETSc 3.24.6 keeps the original near-pole KSP failure observable");
+    }
+
+    if (!result.ok && result.unsupported_reason != nullptr &&
+        std::strcmp(result.unsupported_reason,
+                    "floquet_slepc_solve_failed") == 0) {
+        const auto &probe = result.shifted_ksp_failure_probe;
+        check(result.eps_attempt_count >= 1 &&
+                  probe.eps_attempt_number == result.eps_attempt_count &&
+                  probe.eps_dimension_arguments_available &&
+                  probe.eps_nev_argument >= result.eps_initial_nev &&
+                  probe.eps_nev_argument < probe.eps_ncv_argument &&
+                  probe.eps_ncv_argument == 16,
+              "near-pole failure probe records the actual failing attempt dimensions");
+        check(probe.callback_count > 0 &&
+                  probe.last_recursive_residual_available &&
+                  probe.last_default_reason_available &&
+                  probe.last_reason_after_gate_available &&
+                  probe.last_callback_iteration >= 0,
+              "near-pole failure retains its latest independent callback observation");
+        check(probe.true_probe_attempt_count ==
+                  probe.true_probe_count +
+                      probe.true_probe_measurement_failure_count,
+              "near-pole true-probe counters distinguish completed and failed measurements");
+        if (probe.true_probe_attempt_count > 0) {
+            check(probe.last_true_probe_default_reason_available &&
+                      probe.last_true_probe_reason_after_gate_available &&
+                      probe.last_true_probe_iteration >= 0 &&
+                      probe.last_true_probe_callback_ordinal > 0 &&
+                      probe.last_true_probe_callback_ordinal <= probe.callback_count,
+                  "near-pole true-probe reasons remain paired with their own callback iteration");
+            if (probe.last_true_probe_callback_ordinal == probe.callback_count) {
+                check(probe.last_true_probe_reason_after_gate ==
+                          probe.last_reason_after_gate,
+                      "same-event near-pole callback and true-probe reasons agree");
+            }
+            if (probe.last_true_probe_available) {
+                const double expected_threshold = std::max(
+                    probe.last_true_atol,
+                    probe.last_true_rtol * probe.last_true_rhs_norm);
+                check(std::isfinite(probe.last_true_rhs_norm) &&
+                          std::isfinite(probe.last_true_residual_norm) &&
+                          probe.last_true_residual_threshold == expected_threshold,
+                      "near-pole probe threshold is the unchanged shifted-system criterion");
+                if (probe.last_true_tolerance_ratio_available) {
+                    check(probe.last_true_residual_threshold > 0.0 &&
+                              probe.last_true_tolerance_ratio ==
+                                  probe.last_true_residual_norm /
+                                      probe.last_true_residual_threshold,
+                          "near-pole probe ratio is paired with the same shifted-system norms");
+                }
+            }
+        }
+        std::printf(
+            "NEAR_POLE_SHIFTED_KSP_FAILURE attempt=%d nev=%lld ncv=%lld callback_count=%llu callback_iter=%lld recursive_available=%d recursive=%.17g default_reason_available=%d default_reason=%d post_gate_available=%d post_gate_reason=%d true_probe_attempts=%llu true_probes=%llu true_probe_failures=%llu true_probe_available=%d true_probe_iter=%lld rhs=%.17g true_residual=%.17g rtol=%.17g atol=%.17g threshold=%.17g ratio_available=%d ratio=%.17g\n",
+            probe.eps_attempt_number,
+            static_cast<long long>(probe.eps_nev_argument),
+            static_cast<long long>(probe.eps_ncv_argument),
+            static_cast<unsigned long long>(probe.callback_count),
+            static_cast<long long>(probe.last_callback_iteration),
+            probe.last_recursive_residual_available ? 1 : 0,
+            probe.last_recursive_residual_norm,
+            probe.last_default_reason_available ? 1 : 0,
+            probe.last_default_reason,
+            probe.last_reason_after_gate_available ? 1 : 0,
+            probe.last_reason_after_gate,
+            static_cast<unsigned long long>(probe.true_probe_attempt_count),
+            static_cast<unsigned long long>(probe.true_probe_count),
+            static_cast<unsigned long long>(
+                probe.true_probe_measurement_failure_count),
+            probe.last_true_probe_available ? 1 : 0,
+            static_cast<long long>(probe.last_true_probe_iteration),
+            probe.last_true_rhs_norm,
+            probe.last_true_residual_norm,
+            probe.last_true_rtol,
+            probe.last_true_atol,
+            probe.last_true_residual_threshold,
+            probe.last_true_tolerance_ratio_available ? 1 : 0,
+            probe.last_true_tolerance_ratio);
+    } else {
+        check(result.ok && result.accepted_mode_count > 0,
+              "a provider that resolves the near-pole case must return a certified mode");
+        for (const auto &mode : result.accepted_modes) {
+            check(mode.relative_residual <= request.residual_tolerance,
+                  "near-pole success retains the original physical residual gate");
+        }
+    }
+#endif
+}
+
 } // namespace
 
 int main()
@@ -1290,6 +1433,7 @@ int main()
     finalizes_certified_candidates_by_tangent_mass_before_nearest_cap();
     normalizes_si_scale_floquet_pencil();
     refills_native_floquet_nev_before_tangent_mass_cap();
+    captures_near_pole_failure_probe();
     executes_native_sparse_matshell_above_dense_bound(true);
     std::printf("PASS: fem_floquet_modal_solver_contract\n");
     return 0;

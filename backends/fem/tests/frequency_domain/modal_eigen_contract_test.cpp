@@ -4291,6 +4291,9 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
           "shared-domain nearest diagnostics publish the resolved EPS subspace or null");
     check(contains(result.diagnostics_json, "\"eps_mpd\":"),
           "shared-domain nearest diagnostics publish the resolved EPS maximum projected dimension or null");
+    check(!contains(result.diagnostics_json,
+                    "\"shifted_ksp_failure_probe\":"),
+          "successful nearest diagnostics omit the failure-only shifted-KSP probe");
     const char *basic_ksp_keys[] = {
         "\"ksp_type\":", "\"ksp_rtol\":", "\"ksp_atol\":",
         "\"ksp_final_residual\":"};
@@ -4364,6 +4367,9 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
           "native window keeps original descriptor certification after merging");
     check(contains(window_result.result_json, "\"window_complete\":false"),
           "native merge does not promote selected modes to a certified full window");
+    check(!contains(window_result.diagnostics_json,
+                    "\"shifted_ksp_failure_probe\":"),
+          "successful window subsolves omit the failure-only shifted-KSP probe");
     fullmag_fem_frequency_domain_result_destroy(&window_result);
     std::printf("PASS: native_floquet_production_window_positive_mass_merge\n");
 
@@ -4485,6 +4491,65 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                        "\"floquet_descriptor_certified\":true"),
           "shared-domain nearest path resolves zero request tolerance before certifying");
     fullmag_fem_frequency_domain_result_destroy(&default_tolerance_result);
+
+    FullmagFemModalEigenRequest hard_ksp_nearest_request = request;
+    hard_ksp_nearest_request.max_linear_iterations = 1;
+    FullmagFemFrequencyDomainResult hard_ksp_nearest_result =
+        fullmag_fem_modal_eigen_solve(&hard_ksp_nearest_request);
+    check(hard_ksp_nearest_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"unsupported_reason\":\"floquet_slepc_solve_failed\"") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"shifted_ksp_failure_probe\":{\"schema_version\":\"shifted_ksp_failure_probe.v1\""),
+          "nearest hard KSP failure serializes its failure-only scalar probe");
+    check(extract_json_number(
+              hard_ksp_nearest_result.diagnostics_json,
+              "\"eps_attempt_number\":",
+              "nearest_shifted_ksp_failure_probe") >= 1.0 &&
+              extract_json_number(
+                  hard_ksp_nearest_result.diagnostics_json,
+                  "\"eps_nev_argument\":",
+                  "nearest_shifted_ksp_failure_probe") >= 1.0 &&
+              extract_json_number(
+                  hard_ksp_nearest_result.diagnostics_json,
+                  "\"eps_ncv_argument\":",
+                  "nearest_shifted_ksp_failure_probe") >= 1.0,
+          "nearest failure JSON retains the actual attempt and EPS dimension arguments");
+    check(contains(hard_ksp_nearest_result.diagnostics_json,
+                   "\"scope\":\"internal_shifted_linear_system_not_original_descriptor\"") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"true_probe_measurement_failure_count\":") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"callback_ordinal\":"),
+          "nearest failure JSON scopes the callback norms and exposes probe availability counts");
+    if (contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"last_true_probe\":{\"available\":false")) {
+        check(contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"rhs_l2_norm\":null") &&
+                  contains(hard_ksp_nearest_result.diagnostics_json,
+                           "\"true_residual_l2_norm\":null") &&
+                  contains(hard_ksp_nearest_result.diagnostics_json,
+                           "\"threshold_l2_norm\":null"),
+              "unavailable callback measurement values serialize as null rather than zero");
+    }
+    fullmag_fem_frequency_domain_result_destroy(&hard_ksp_nearest_result);
+
+    FullmagFemModalEigenRequest hard_ksp_window_request = window_request;
+    hard_ksp_window_request.max_linear_iterations = 1;
+    FullmagFemFrequencyDomainResult hard_ksp_window_result =
+        fullmag_fem_modal_eigen_solve(&hard_ksp_window_request);
+    check(hard_ksp_window_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+              contains(hard_ksp_window_result.diagnostics_json,
+                       "floquet_slepc_solve_failed") &&
+              contains(hard_ksp_window_result.diagnostics_json,
+                       "\"shifted_ksp_failure_probe\":{\"schema_version\":\"shifted_ksp_failure_probe.v1\""),
+          "window hard KSP failure preserves the failing subwindow probe in aggregate diagnostics");
+    check(contains(hard_ksp_window_result.diagnostics_json,
+                   "\"window_complete\":false") &&
+              contains(hard_ksp_window_result.result_json,
+                       "\"status\":\"solve_error\""),
+          "window failure probe does not promote the failed solve to completion");
+    fullmag_fem_frequency_domain_result_destroy(&hard_ksp_window_result);
 #endif
 }
 

@@ -3967,6 +3967,9 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             return result;
         }
         ++result.eps_attempt_count;
+        result.shifted_ksp_failure_probe = {};
+        result.shifted_ksp_failure_probe.eps_attempt_number =
+            result.eps_attempt_count;
         eps_cleanup_is_safe = true;
         context.error_message[0] = '\0';
         exact_schur_preconditioner_materialized = false;
@@ -3988,8 +3991,18 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         const PetscInt attempt_max_outer = result.eps_attempt_count == 1
             ? configured_max_outer
             : total_outer_iteration_budget - cumulative_outer_iterations;
-        if ((result.eps_attempt_count > 1 && attempt_max_outer <= 0) ||
-            EPSSetDimensions(
+        if (result.eps_attempt_count > 1 && attempt_max_outer <= 0) {
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_slepc_configuration_failed";
+            destroy_all();
+            return result;
+        }
+        result.shifted_ksp_failure_probe.eps_nev_argument =
+            static_cast<std::int64_t>(current_nev);
+        result.shifted_ksp_failure_probe.eps_ncv_argument =
+            static_cast<std::int64_t>(ncv);
+        result.shifted_ksp_failure_probe.eps_dimension_arguments_available = true;
+        if (EPSSetDimensions(
                 eps,
                 current_nev,
                 ncv,
@@ -4325,6 +4338,67 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     eps_cleanup_is_safe = eps_solve_error == 0;
     // Copy only ordinary cached values here. In particular, a hard error
     // below must not query any PETSc handle to recover this progress.
+    if (shifted_ksp_true_convergence_context != nullptr) {
+        const auto &source = *shifted_ksp_true_convergence_context;
+        auto &probe = result.shifted_ksp_failure_probe;
+        probe.callback_count = source.callback_count;
+        probe.callback_observation_available =
+            source.callback_observation_available;
+        probe.last_callback_iteration = static_cast<std::int64_t>(
+            source.last_callback_iteration);
+        probe.last_recursive_residual_available =
+            source.last_recursive_residual_available;
+        if (source.last_recursive_residual_available) {
+            probe.last_recursive_residual_norm = static_cast<double>(
+                source.last_recursive_residual_norm);
+        }
+        probe.last_default_reason_available =
+            source.last_default_reason_available;
+        probe.last_default_reason = source.last_default_reason;
+        probe.last_reason_after_gate_available =
+            source.last_reason_after_gate_available;
+        probe.last_reason_after_gate = source.last_reason_after_gate;
+        probe.true_probe_attempt_count = source.true_probe_attempt_count;
+        probe.true_probe_count = source.true_probe_count;
+        probe.true_probe_measurement_failure_count =
+            source.true_probe_measurement_failure_count;
+        probe.last_true_probe_available = source.last_true_probe_available;
+        probe.last_true_probe_callback_ordinal =
+            source.last_true_probe_callback_ordinal;
+        probe.last_true_probe_iteration = static_cast<std::int64_t>(
+            source.last_true_probe_iteration);
+        if (source.last_true_probe_available) {
+            probe.last_true_rhs_norm = static_cast<double>(
+                source.last_true_rhs_norm);
+            probe.last_true_residual_norm = static_cast<double>(
+                source.last_true_residual_norm);
+            probe.last_true_residual_threshold = static_cast<double>(
+                source.last_true_residual_threshold);
+            probe.last_true_rtol = static_cast<double>(source.last_true_rtol);
+            probe.last_true_atol = static_cast<double>(source.last_true_atol);
+        }
+        probe.last_true_probe_recursive_residual_available =
+            source.last_true_probe_recursive_residual_available;
+        if (source.last_true_probe_recursive_residual_available) {
+            probe.last_true_probe_recursive_residual_norm =
+                static_cast<double>(
+                    source.last_true_probe_recursive_residual_norm);
+        }
+        probe.last_true_probe_default_reason_available =
+            source.last_true_probe_default_reason_available;
+        probe.last_true_probe_default_reason =
+            source.last_true_probe_default_reason;
+        probe.last_true_probe_reason_after_gate_available =
+            source.last_true_probe_reason_after_gate_available;
+        probe.last_true_probe_reason_after_gate =
+            source.last_true_probe_reason_after_gate;
+        probe.last_true_tolerance_ratio_available =
+            source.last_true_tolerance_ratio_available;
+        if (source.last_true_tolerance_ratio_available) {
+            probe.last_true_tolerance_ratio = static_cast<double>(
+                source.last_true_tolerance_ratio);
+        }
+    }
     result.ksp_monitor_registered = last_shifted_solve.monitor_registered;
     result.ksp_monitor_observation_count =
         last_shifted_solve.monitor_observation_count;
