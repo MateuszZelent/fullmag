@@ -4424,9 +4424,8 @@ void modal_poisson_airbox_tail_shift_invert_action_writes_artifact()
     request.poisson_airbox_shift_action_vector_count = 2;
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
-#if FULLMAG_FEM_WITH_SLEPC
     check(result.status == FULLMAG_FEM_FD_OK,
-          "modal C ABI Poisson-airbox shift-invert action must solve");
+          "the Poisson-airbox CPU reference shift-invert action must solve without SLEPc");
     check(contains(result.artifact_manifest_path,
                    "poisson_airbox_modal_shift_invert_action.v1.json"),
           "modal C ABI result must point at the shift-invert action artifact");
@@ -4442,10 +4441,6 @@ void modal_poisson_airbox_tail_shift_invert_action_writes_artifact()
     check(artifact.find("\"full_modal_shift_invert_claim\":true") !=
               std::string::npos,
           "modal C ABI action artifact must claim true modal shift-invert");
-#else
-    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
-          "modal C ABI Poisson-airbox shift-invert action must require SLEPc when unavailable");
-#endif
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
