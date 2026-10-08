@@ -843,6 +843,32 @@ Poprawka nie odtwarza już zakończonego ownera działającego relay.
 Uruchomienie nowego ownera na nowym kodzie i obserwacja dłuższej sesji
 HMR pozostają wymagane. Aktualny frontend jest uzgodniony przez opisany
 wcześniej one-shot helper, nie przez żywy nowy watcher.
-CI resource fix 113170079959 dla bazy nadal `in_progress` przy ostatnim
-odczycie; nie zgłaszamy jeszcze PASS fazy B. Pełna kwalifikacja WebGL,
+CI resource fix 113170079959 dla bazy był `in_progress` przy tym
+odczycie; wynik końcowy opisano poniżej. Pełna kwalifikacja WebGL,
 native/current→field→basis→LLG/FFT i T00–T18 pozostaje otwarta.
+
+## Aktualizacja PR do mastera — 08.10.2026
+
+Ponownie wykonano `git fetch origin master`. Aktualny master to
+`2a3c6becb9c7e111ae1497ec0cd9ac9576acba95`; jest już przodkiem gałęzi
+zadania. Nie ma nowych commitów mastera do scalenia. Istniejący PR #147
+pozostaje otwarty, Draft, z bazą `master`; nie tworzymy duplikatu.
+
+Job Control Room 113170079959 zakończył się FAILURE: 4 pliki FAIL,
+768 PASS i 1 SKIP. Nie zgłosił wcześniejszego błędu fazy B. Pozostałe
+błędy dotyczą mocka statusu sesji, liczności invalidacji geometrii,
+starej asercji źródłowej koloru i zbierania `node:test` przez Vitest.
+Poprawki zachowują rzeczywisty eksport stałej statusu, sprawdzają dziewięć
+invalidacji wraz z zasobem realizacji geometrii i badają resolver koloru
+anteny oraz pierwszeństwo literalnego koloru użytkownika. Test Node ma
+własny runner; wyłączono go wyłącznie ze zbierania przez Vitest.
+Jego wykonanie: 5/5 PASS, exit 0. Scoped ESLint i whitespace PASS.
+TypeScript noEmit/no-incremental PASS, exit 0 (sesja 31332), po korekcie
+fixture do istniejącego trybu `surfaceColorSource: "orientation"`.
+Nie uruchamiano ani nie kompilowano lokalnie testów Vitest.
+
+CI dla `476869809346ad455072e8a07b3205c13c7a1768` potwierdza FAILURE
+`rust-contracts` i `control-room-contracts`; managed FEM pozostaje queued.
+Pozostałe odebrane kontrole, w tym build i browser-fixture-smoke, są
+zielone (deploy SKIP). Nie stanowi to kwalifikacji pełnego modułu.
+Nowy push wymaga ponownego odbioru CI; PR nie jest gotowy do merge.

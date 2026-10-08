@@ -62,7 +62,8 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   useSceneResource: () => mocks.scene,
 }));
 
-vi.mock("@/kernel/resources/useSessionStatus", () => ({
+vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/kernel/resources/useSessionStatus")>(),
   useSessionResourceIdentity: () => ({
     sessionId: "session-1",
     sessionEpoch: "epoch-1",
