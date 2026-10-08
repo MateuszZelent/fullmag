@@ -2475,6 +2475,7 @@ def _generate_coincident_ring_airbox_mesh(
             ),
         )
         result = _recertify_scaled_periodic_mesh(result)
+        result.validate_strict(require_positive_orientation=True)
         if scoped_layer_partitioning:
             scoped_descriptors = [
                 config

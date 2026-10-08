@@ -8,7 +8,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import struct
 from types import SimpleNamespace
 
@@ -16,6 +16,7 @@ import numpy as np
 
 import fullmag as fm
 import fullmag.meshing.asset_pipeline as mesh_asset_pipeline
+from fullmag.meshing import _gmsh_swept as gmsh_swept
 from meshing_production_fixtures import (
     assert_monotone_p95_growth,
     characteristic_tet_size,
@@ -12599,6 +12600,138 @@ class RegionMeshPolicyTests(unittest.TestCase):
             )
         self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, size_field)
         self.assertNotIn(_SCOPED_LAYER_PLANE_PROOF_KEY, lower_field)
+
+    def _run_coincident_ring_with_raw_mesh(self, raw_mesh: MeshData) -> MeshData:
+        geometry = fm.Box(4.0e-6, 2.0e-6, 0.2e-6)
+        airbox = AirboxOptions(
+            size=(4.0e-6, 2.0e-6, 4.0e-6),
+            center=(0.0, 0.0, 0.0),
+            boundary_marker=99,
+        )
+        bounds = gmsh_swept._coincident_ring_airbox_bounds(geometry, airbox)
+        assert bounds is not None
+        scale = 1.0e6
+        xmin, ymin, zmin, xmax, ymax, zmax = (value * scale for value in bounds)
+        levels = {"z": zmin}
+        surface_planes: dict[int, float] = {}
+        next_tag_value = 1
+
+        def next_tag(*_args: object, **_kwargs: object) -> int:
+            nonlocal next_tag_value
+            tag = next_tag_value
+            next_tag_value += 1
+            return tag
+
+        def extrude(_source, _dx, _dy, step, **_kwargs):
+            levels["z"] += float(step)
+            volume_tag = next_tag()
+            top_surface_tag = next_tag()
+            surface_planes[top_surface_tag] = levels["z"]
+            return [(3, volume_tag), (2, top_surface_tag)]
+
+        def bounding_box(dimension, tag):
+            if dimension == 3:
+                return [xmin, ymin, zmin, xmax, ymax, zmax]
+            plane = surface_planes[int(tag)]
+            return [xmin, ymin, plane, xmax, ymax, plane]
+
+        gmsh = Mock()
+        gmsh.__version__ = gmsh_swept._MIXED_SHARED_GMSH_VERSION
+        gmsh.model.geo.addPoint.side_effect = next_tag
+        gmsh.model.geo.addLine.side_effect = next_tag
+        gmsh.model.geo.addCurveLoop.side_effect = next_tag
+        gmsh.model.geo.addPlaneSurface.side_effect = next_tag
+        gmsh.model.geo.extrude.side_effect = extrude
+        gmsh.model.getBoundingBox.side_effect = bounding_box
+        gmsh.model.getBoundary.return_value = []
+
+        with contextlib.ExitStack() as stack:
+            for patcher in (
+                patch.object(gmsh_swept, "_import_gmsh", return_value=gmsh),
+                patch.object(gmsh_swept, "_configure_gmsh_threads"),
+                patch.object(
+                    gmsh_swept,
+                    "_GmshProgressLogger",
+                    side_effect=lambda *_args: contextlib.nullcontext(),
+                ),
+                patch.object(gmsh_swept, "_apply_mesh_options"),
+                patch.object(gmsh_swept, "_apply_post_mesh_options"),
+                patch.object(gmsh_swept, "_reapply_periodic_surface_mappings"),
+                patch.object(gmsh_swept, "_extract_mesh_data", return_value=raw_mesh),
+                patch(
+                    "fullmag.meshing._gmsh_occ._configure_axis_periodic_surfaces",
+                    return_value=[],
+                ),
+                patch(
+                    "fullmag.meshing._gmsh_occ._add_periodic_boundary_physical_groups",
+                    return_value=[],
+                ),
+                patch(
+                    "fullmag.meshing._gmsh_layered_tetrahedra.subdivide_layered_prisms",
+                ),
+            ):
+                stack.enter_context(patcher)
+            return generate_swept_tetrahedral_box_airbox_mesh(
+                geometry,
+                0.8e-6,
+                1,
+                order=1,
+                distribution="fixed",
+                recombine=False,
+                airbox=airbox,
+                options=MeshOptions(compute_quality=False),
+            )
+
+    def _coincident_ring_raw_tet(
+        self,
+        *,
+        degenerate: bool = False,
+        negative: bool = False,
+    ) -> MeshData:
+        nodes = np.asarray(
+            [
+                [0.0, 0.0, -0.1],
+                [1.0, 0.0, -0.1],
+                [0.0, 1.0, -0.1],
+                [0.0, 0.0, 0.1],
+            ],
+            dtype=np.float64,
+        )
+        if degenerate:
+            nodes[2] = [2.0, 0.0, -0.1]
+        elements = [[0, 2, 1, 3] if negative else [0, 1, 2, 3]]
+        return MeshData.from_legacy_tet4(
+            nodes=nodes,
+            elements=elements,
+            element_markers=[1],
+            boundary_faces=[[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]],
+            boundary_markers=[99, 99, 99, 99],
+        )
+
+    def test_coincident_ring_finalization_rejects_degenerate_and_negative_tets(self) -> None:
+        for label, mesh, reason in (
+            (
+                "zero-volume",
+                self._coincident_ring_raw_tet(degenerate=True),
+                "degenerate tet4 Jacobian",
+            ),
+            (
+                "negative-orientation",
+                self._coincident_ring_raw_tet(negative=True),
+                "negative tet4 Jacobian",
+            ),
+        ):
+            with self.subTest(case=label):
+                with self.assertRaisesRegex(ValueError, reason):
+                    self._run_coincident_ring_with_raw_mesh(mesh)
+
+    def test_coincident_ring_finalization_accepts_positive_tet(self) -> None:
+        raw_mesh = self._coincident_ring_raw_tet()
+        result = self._run_coincident_ring_with_raw_mesh(raw_mesh)
+
+        result.validate_strict(require_positive_orientation=True)
+        self.assertEqual(result.n_elements, 1)
+        np.testing.assert_allclose(result.nodes, raw_mesh.nodes / 1.0e6)
 
     def test_layered_box_marker_collision_precedes_gmsh_and_proof_cleanup(self) -> None:
         proof = object()
