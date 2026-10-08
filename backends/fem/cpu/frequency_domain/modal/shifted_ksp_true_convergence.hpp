@@ -3,10 +3,64 @@
 #include <algorithm>
 #include <cmath>
 #include <new>
+#include <type_traits>
 
 #include <petscksp.h>
 
 namespace fullmag::fem::frequency_domain::detail {
+
+// PETSc headers are the ABI authority: older releases accept void*, while
+// PetscCtxDestroyFn accepts void**. Do not guess a PETSC_VERSION threshold.
+template <typename FunctionPointer>
+struct FloquetPetscDestroyArgument;
+
+template <typename Return, typename Argument>
+struct FloquetPetscDestroyArgument<Return (*)(Argument)> {
+    using type = Argument;
+};
+using FloquetPetscContextDestroyArgument =
+    typename FloquetPetscDestroyArgument<decltype(&KSPConvergedDefaultDestroy)>::type;
+
+inline void *borrow_floquet_petsc_destroy_context(void *context)
+{
+    return context;
+}
+
+inline void *borrow_floquet_petsc_destroy_context(void **context)
+{
+    if (context == nullptr) {
+        return nullptr;
+    }
+    void *borrowed = *context;
+    *context = nullptr;
+    return borrowed;
+}
+
+template <typename Destroy>
+inline PetscErrorCode invoke_floquet_petsc_context_destroy(
+    Destroy destroy,
+    void *&context)
+{
+    if (context == nullptr) {
+        return 0;
+    }
+    using Argument = typename FloquetPetscDestroyArgument<Destroy>::type;
+    static_assert(std::is_same_v<Argument, void *> || std::is_same_v<Argument, void **>,
+                  "Unsupported PETSc context destroy ABI");
+    PetscErrorCode error = 0;
+    if constexpr (std::is_same_v<Argument, void **>) {
+        error = destroy(&context);
+    } else {
+        error = destroy(context);
+    }
+    context = nullptr;
+    return error;
+}
+
+inline PetscErrorCode destroy_floquet_ksp_default_context(void *&context)
+{
+    return invoke_floquet_petsc_context_destroy(&KSPConvergedDefaultDestroy, context);
+}
 
 struct FloquetShiftedKspTrueConvergenceContext {
     void *default_context = nullptr;
@@ -41,7 +95,7 @@ inline PetscErrorCode clear_floquet_shifted_ksp_true_convergence_context(
     }
     if (context->default_context != nullptr) {
         const PetscErrorCode error =
-            KSPConvergedDefaultDestroy(context->default_context);
+            destroy_floquet_ksp_default_context(context->default_context);
         context->default_context = nullptr;
         if (first_error == 0) {
             first_error = error;
@@ -51,10 +105,13 @@ inline PetscErrorCode clear_floquet_shifted_ksp_true_convergence_context(
 }
 
 inline PetscErrorCode destroy_floquet_shifted_ksp_true_convergence_context(
-    void *raw_context)
+    FloquetPetscContextDestroyArgument raw_context)
 {
+    // The solver retains the outer allocation until KSP/EPS cleanup finishes.
+    // PETSc owns the callback slot and nested default context, not that allocation.
     return clear_floquet_shifted_ksp_true_convergence_context(
-        static_cast<FloquetShiftedKspTrueConvergenceContext *>(raw_context));
+        static_cast<FloquetShiftedKspTrueConvergenceContext *>(
+            borrow_floquet_petsc_destroy_context(raw_context)));
 }
 
 inline PetscErrorCode create_floquet_shifted_ksp_true_convergence_context(

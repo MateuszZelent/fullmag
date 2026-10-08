@@ -133,8 +133,10 @@ PetscErrorCode inject_tiny_recursive_norm_into_true_callback(
     return 0;
 }
 
-PetscErrorCode destroy_injected_true_convergence_probe(void *raw_probe)
+PetscErrorCode destroy_injected_true_convergence_probe(
+    detail::FloquetPetscContextDestroyArgument raw_context)
 {
+    void *raw_probe = detail::borrow_floquet_petsc_destroy_context(raw_context);
     if (raw_probe == nullptr) {
         return 0;
     }
@@ -144,7 +146,7 @@ PetscErrorCode destroy_injected_true_convergence_probe(void *raw_probe)
             probe->context);
     if (probe->default_context != nullptr) {
         const PetscErrorCode error =
-            KSPConvergedDefaultDestroy(probe->default_context);
+            detail::destroy_floquet_ksp_default_context(probe->default_context);
         probe->default_context = nullptr;
         if (first_error == 0) {
             first_error = error;
@@ -152,6 +154,45 @@ PetscErrorCode destroy_injected_true_convergence_probe(void *raw_probe)
     }
     return first_error;
 }
+PetscErrorCode legacy_destroy_abi_probe(void *context)
+{
+    ++*static_cast<int *>(context);
+    return 0;
+}
+
+PetscErrorCode current_destroy_abi_probe(void **context)
+{
+    ++*static_cast<int *>(*context);
+    *context = nullptr;
+    return 0;
+}
+
+bool exercise_destroy_context_abis()
+{
+    int legacy_calls = 0;
+    void *legacy_context = &legacy_calls;
+    bool ok = check_petsc(detail::invoke_floquet_petsc_context_destroy(
+        legacy_destroy_abi_probe, legacy_context), "legacy void* destroy ABI");
+    ok = check(legacy_calls == 1 && legacy_context == nullptr,
+               "legacy destroy clears its slot exactly once") && ok;
+    ok = check_petsc(detail::invoke_floquet_petsc_context_destroy(
+        legacy_destroy_abi_probe, legacy_context), "legacy repeated cleanup") && ok;
+    ok = check(legacy_calls == 1, "legacy repeated cleanup is idempotent") && ok;
+    int current_calls = 0;
+    void *current_context = &current_calls;
+    ok = check_petsc(detail::invoke_floquet_petsc_context_destroy(
+        current_destroy_abi_probe, current_context), "current void** destroy ABI") && ok;
+    ok = check(current_calls == 1 && current_context == nullptr,
+               "current destroy receives and clears its slot") && ok;
+    ok = check_petsc(detail::invoke_floquet_petsc_context_destroy(
+        current_destroy_abi_probe, current_context), "current repeated cleanup") && ok;
+    ok = check(current_calls == 1, "current repeated cleanup is idempotent") && ok;
+    void *borrowed = &current_calls;
+    ok = check(detail::borrow_floquet_petsc_destroy_context(&borrowed) == &current_calls
+               && borrowed == nullptr, "callback clears the PETSc slot without freeing caller storage") && ok;
+    return ok;
+}
+
 bool exercise_recursive_gap_gate()
 {
     KSP ksp = nullptr;
@@ -241,7 +282,7 @@ bool exercise_recursive_gap_gate()
                      "negative PETSc reasons remain final");
 
     if (default_context != nullptr) {
-        ok = check_petsc(KSPConvergedDefaultDestroy(default_context),
+        ok = check_petsc(detail::destroy_floquet_ksp_default_context(default_context),
                          "destroy synthetic PETSc default context") && ok;
     }
     if (ksp != nullptr) {
@@ -277,7 +318,7 @@ bool run_ksp_case(
             context = nullptr;
         }
         if (probe.default_context != nullptr) {
-            (void)KSPConvergedDefaultDestroy(probe.default_context);
+            (void)detail::destroy_floquet_ksp_default_context(probe.default_context);
             probe.default_context = nullptr;
         }
         if (true_residual != nullptr) {
@@ -450,7 +491,7 @@ bool run_ksp_case(
             }
 
             // Reuse the same KSP and callback workspace with a different RHS.
-            error = KSPConvergedDefaultDestroy(probe.default_context);
+            error = detail::destroy_floquet_ksp_default_context(probe.default_context);
             if (error != 0) {
                 return fail("reset oracle convergence context", error);
             }
@@ -541,7 +582,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    bool ok = exercise_recursive_gap_gate();
+    bool ok = exercise_destroy_context_abis();
+    ok = exercise_recursive_gap_gate() && ok;
     ok = run_ksp_case(KSPGMRES, false, 30, true) && ok;
     ok = run_ksp_case(KSPGMRES, false, 30, true, true) && ok;
     ok = run_ksp_case(KSPFGMRES, false, 30, true) && ok;

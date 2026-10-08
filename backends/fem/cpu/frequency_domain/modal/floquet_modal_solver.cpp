@@ -3820,6 +3820,11 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         destroy_all();
         return result;
     }
+    static_assert(
+        std::is_same_v<
+            decltype(&detail::destroy_floquet_shifted_ksp_true_convergence_context),
+            decltype(&KSPConvergedDefaultDestroy)>,
+        "True-convergence cleanup must match the installed PETSc destroy ABI");
     shifted_ksp_true_convergence_test_registration_attempted = true;
     if (KSPSetConvergenceTest(
             shifted_ksp,
