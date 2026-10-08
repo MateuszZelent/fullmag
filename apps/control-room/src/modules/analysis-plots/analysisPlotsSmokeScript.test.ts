@@ -153,6 +153,12 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toMatch(/proofs\.push\(proof\);\s*persistFixtureProof\(false\);/);
     expect(smokeScript).toContain("persistFixtureProof(true)");
     expect(smokeScript).toContain("lastRenderedClick");
+    expect(smokeScript).toContain("mode-click-failure.json");
+    expect(smokeScript).toContain("appliedTarget");
+    expect(smokeScript).toContain("requestSeen: Boolean(request)");
+    expect(smokeScript).toContain("priorRenderedClick");
+    expect(smokeScript).toContain("targetCoordinate: coordinateTarget");
+    expect(smokeScript).toContain("JSON.stringify({ ...failureEvidence, screenshot }, null, 2)");
     expect(smokeScript).toContain("requireDispersionRenderEvidence");
     expect(smokeScript).toContain("nonNullPointCount !== 5_000");
     expect(smokeScript).toContain('entry.type === "scatter"');

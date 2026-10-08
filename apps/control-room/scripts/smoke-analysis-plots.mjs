@@ -822,6 +822,8 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
           fixture.expectedSelection,
           fixture.id,
           fixture,
+          frequencyRequests,
+          failedResponses,
         );
       }
       if (fixture.screenshot) {
@@ -1236,7 +1238,7 @@ async function zoomFrequencyDomainPoint(page, host, expected, fixture) {
   };
 }
 
-async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture) {
+async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, frequencyRequests, failedResponses) {
   const host = page.locator(".fm-analysis-plots__echarts").first();
   await host.evaluate((element) => {
     element.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
@@ -1263,12 +1265,75 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture) {
     (response) => currentSessionPath(response.url())?.split("?")[0] === expectedModePath,
     { timeout: 800 },
   ).catch(() => null);
+  const priorRenderedClick = await page.evaluate(() =>
+    window.__FULLMAG_CHART_DIAGNOSTICS__?.lastRenderedClick ?? null,
+  );
   await page.mouse.click(coordinateTarget.x, coordinateTarget.y);
   const request = await expectedModeRequest;
   const modeResponse = await expectedModeResponse;
   if (!request || !modeResponse) {
+    const renderedTelemetry = await page.evaluate(({ rowId, seriesType }) => {
+      const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
+      const option = diagnostics?.readRenderedOption?.();
+      const series = Array.isArray(option?.series) ? option.series : [];
+      const seriesIndex = series.findIndex((entry) =>
+        entry?.type === seriesType &&
+        Array.isArray(entry.data) &&
+        entry.data.some((row) => Array.isArray(row) && row[2] === rowId)
+      );
+      const data = seriesIndex >= 0 ? series[seriesIndex].data : [];
+      const dataIndex = data.findIndex((row) => Array.isArray(row) && row[2] === rowId);
+      const point = dataIndex >= 0 ? data[dataIndex] : null;
+      const coordinate = dataIndex >= 0
+        ? diagnostics?.resolveRenderedDataPoint?.(seriesIndex, dataIndex)
+        : null;
+      return {
+        appliedTarget: {
+          data: Array.isArray(point) ? point.slice(0, 3) : null,
+          dataIndex: dataIndex >= 0 ? dataIndex : null,
+          pixel: coordinate ? { x: coordinate.x, y: coordinate.y } : null,
+          seriesIndex: seriesIndex >= 0 ? seriesIndex : null,
+          seriesType: seriesIndex >= 0 ? series[seriesIndex]?.type ?? null : null,
+        },
+        dataZoom: Array.isArray(option?.dataZoom) ? option.dataZoom : [],
+        lastRenderedClick: diagnostics?.lastRenderedClick ?? null,
+      };
+    }, { rowId: expected.rowId, seriesType: expected.seriesType });
+    const failureEvidence = {
+      expectedModePath,
+      failedResponses: failedResponses.slice(-20),
+      frequencyRequests: frequencyRequests.slice(-20),
+      priorRenderedClick,
+      renderedTelemetry,
+      requestSeen: Boolean(request),
+      responseSeen: Boolean(modeResponse),
+      targetCoordinate: coordinateTarget,
+      zoomEvidence,
+    };
+    mkdirSync(acceptanceDirectory, { recursive: true });
+    const screenshot = path.join(
+      acceptanceDirectory,
+      fixtureId + "-mode-click-failure.png",
+    );
+    await page.screenshot({ path: screenshot }).catch(() => undefined);
+    const evidencePath = path.join(
+      acceptanceDirectory,
+      fixtureId + "-mode-click-failure.json",
+    );
+    writeFileSync(
+      evidencePath,
+      JSON.stringify({ ...failureEvidence, screenshot }, null, 2) + "\n",
+      "utf8",
+    );
     throw new Error(
-      `Mouse click at the rendered row ${expected.rowId} coordinate did not request and receive ${expectedModePath}.`,
+      "Mouse click at the rendered row " + expected.rowId +
+        " did not request and receive " + expectedModePath +
+        "; requestSeen=" + Boolean(request) +
+        "; responseSeen=" + Boolean(modeResponse) +
+        "; appliedTarget=" + JSON.stringify(renderedTelemetry.appliedTarget) +
+        "; clickEvent=" + JSON.stringify(renderedTelemetry.lastRenderedClick) +
+        "; observedModePaths=" + JSON.stringify(frequencyRequests.slice(-10)) +
+        "; evidence=" + evidencePath + "; screenshot=" + screenshot,
     );
   }
   if (!modeResponse.ok()) {
