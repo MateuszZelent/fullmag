@@ -410,7 +410,7 @@ def _extract_summary(
     summary.update(
         {
             "schema_version": SCHEMA_VERSION,
-            "status": "passed",
+            "status": "passed" if benchmark_mesh["accepted"] is True else "failed",
             "materialization_status": "passed",
             "benchmark_mesh_status": benchmark_mesh["status"],
             "benchmark_mesh_accepted": benchmark_mesh["accepted"],
@@ -595,9 +595,10 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
         raise
+    benchmark_mesh_accepted = summary.get("benchmark_mesh_accepted") is True
     receipt = {
         "schema_version": SCHEMA_VERSION,
-        "status": "passed",
+        "status": "passed" if benchmark_mesh_accepted else "failed",
         "case": args.case,
         "output": output.as_posix(),
         "toolchain_image_digest": str(args.image_digest),
@@ -620,7 +621,7 @@ def main(argv: list[str] | None = None) -> int:
         "benchmark_mesh_rejection_reasons": summary["benchmark_mesh_rejection_reasons"],
     }
     _write_json(output / "run_receipt.json", receipt)
-    return 0
+    return 0 if benchmark_mesh_accepted else 1
 
 
 if __name__ == "__main__":

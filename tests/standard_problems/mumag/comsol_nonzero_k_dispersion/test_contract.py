@@ -21,6 +21,9 @@ import fullmag as fm
 from tests.standard_problems.mumag.comsol_nonzero_k_dispersion.materialize_real_asset import (
     _assess_benchmark_mesh,
 )
+from tests.standard_problems.mumag.comsol_nonzero_k_dispersion import (
+    materialize_real_asset as materialize_real_asset_module,
+)
 
 from tests.standard_problems.mumag.comsol_nonzero_k_dispersion.config import (
     A_LAT_M,
@@ -514,6 +517,90 @@ def test_materialization_assessment_rejects_a_reported_free_tetrahedral_fallback
     assert assessment["accepted"] is False
     assert any("thin_film operation was not applied" in reason for reason in assessment["rejection_reasons"])
     assert any("build mode" in reason for reason in assessment["rejection_reasons"])
+
+
+@pytest.mark.parametrize(
+    ("accepted", "expected_status", "expected_exit_code"),
+    ((True, "passed", 0), (False, "failed", 1)),
+)
+def test_materialization_cli_terminal_status_follows_benchmark_mesh_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    accepted: bool,
+    expected_status: str,
+    expected_exit_code: int,
+) -> None:
+    benchmark, domain, mesh = _minimal_mesh_for_materialization_assessment()
+    benchmark["geometry"] = {"magnetic_volume_m3": 1e-24}
+    if not accepted:
+        domain["build_report"]["build_mode"] = "conformal_occ"
+        domain["build_report"]["operation_statuses"][0].update(
+            {"status": "skipped", "actual_method": "free_tetrahedral"}
+        )
+    mesh["facets"].update(
+        {"roles": ["exterior"], "offsets": [0, 3], "nodes": [0, 1, 2]}
+    )
+    ir = {
+        "geometry_assets": {
+            "fem_domain_mesh_asset": {**domain, "mesh": mesh},
+        },
+        "problem_meta": {
+            "source_hash": "stub-source-hash",
+            "runtime_metadata": {"comsol_nonzero_k_dispersion": benchmark},
+        },
+        "geometry": {"entries": []},
+        "energy_terms": [],
+    }
+    source_script = tmp_path / "problem.py"
+    source_script.write_text("# stubbed materialization\n", encoding="utf-8")
+    summary = materialize_real_asset_module._extract_summary(
+        ir,
+        source_script=source_script,
+        case="a1",
+        image_digest=materialize_real_asset_module.EXPECTED_IMAGE_DIGEST,
+        stage_ids=["relax", "eigenmodes-1"],
+        started_at="2026-10-08T00:00:00Z",
+        finished_at="2026-10-08T00:00:01Z",
+    )
+    assert summary["status"] == expected_status
+    assert summary["materialization_status"] == "passed"
+    assert summary["benchmark_mesh_accepted"] is accepted
+
+    def materialize_stub(
+        *, output: Path, case: str, image_digest: str
+    ) -> dict[str, object]:
+        assert case == "a1"
+        assert image_digest == materialize_real_asset_module.EXPECTED_IMAGE_DIGEST
+        output.mkdir(parents=True, exist_ok=True)
+        materialize_real_asset_module._write_json(output / "preflight.json", {})
+        materialize_real_asset_module._write_json(output / "problem_ir.json", ir)
+        materialize_real_asset_module._write_json(
+            output / "materialization_summary.json", summary
+        )
+        return summary
+
+    monkeypatch.setattr(
+        materialize_real_asset_module, "materialize", materialize_stub
+    )
+    output = tmp_path / "materialized"
+    exit_code = materialize_real_asset_module.main(
+        ["--output", str(output), "--case", "a1"]
+    )
+
+    receipt = json.loads((output / "run_receipt.json").read_text(encoding="utf-8"))
+    written_summary = json.loads(
+        (output / "materialization_summary.json").read_text(encoding="utf-8")
+    )
+    assert exit_code == expected_exit_code
+    assert written_summary["status"] == expected_status
+    assert written_summary["materialization_status"] == "passed"
+    assert receipt["status"] == expected_status
+    assert receipt["materialization_status"] == "passed"
+    assert receipt["benchmark_mesh_accepted"] is accepted
+    assert receipt["benchmark_mesh_rejection_reasons"] == summary[
+        "benchmark_mesh_rejection_reasons"
+    ]
+    assert all((output / name).is_file() for name in receipt["artifacts"])
 
 
 def test_a1_exact_shared_geo_route_preserves_tet_layers_and_periodicity() -> None:
