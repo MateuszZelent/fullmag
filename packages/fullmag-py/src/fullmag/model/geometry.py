@@ -155,6 +155,625 @@ class ImportedGeometry(_GeometryOps):
 
 
 # ---------------------------------------------------------------------------
+# 3-D conductor-backed antenna geometry
+# ---------------------------------------------------------------------------
+def _antenna_real(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{field} must be a finite real number")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"{field} must be finite")
+    return normalized
+
+
+def _antenna_positive(value: object, field: str) -> float:
+    normalized = _antenna_real(value, field)
+    if normalized <= 0.0:
+        raise ValueError(f"{field} must be positive")
+    return normalized
+
+
+def _antenna_non_negative(value: object, field: str) -> float:
+    normalized = _antenna_real(value, field)
+    if normalized < 0.0:
+        raise ValueError(f"{field} must be non-negative")
+    return normalized
+
+
+def _antenna_alias(primary: object, alias: object, field: str) -> object:
+    if primary is not None and alias is not None and primary != alias:
+        raise ValueError(f"{field} and its compatibility alias disagree")
+    return primary if primary is not None else alias
+
+
+def _normalize_antenna_stations(
+    stations: Sequence[object],
+    expected_type: type,
+    field: str,
+) -> tuple[object, ...]:
+    if isinstance(stations, (str, bytes)):
+        raise TypeError(f"{field} must be a sequence of typed stations")
+    resolved = tuple(stations)
+    if len(resolved) < 2 or any(not isinstance(station, expected_type) for station in resolved):
+        raise ValueError(f"{field} requires at least two {expected_type.__name__} values")
+    positions = tuple(float(getattr(station, "s")) for station in resolved)
+    if positions[0] != 0.0 or positions[-1] != 1.0:
+        raise ValueError(f"{field} must start at s=0 and end at s=1")
+    if any(not current > previous for previous, current in zip(positions, positions[1:])):
+        raise ValueError(f"{field} positions must be strictly increasing")
+    return resolved
+
+
+def _normalize_matrix3(value: object, field: str) -> tuple[tuple[float, float, float], ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 3:
+        raise TypeError(f"{field} must be a 3x3 sequence")
+    rows = []
+    for row_index, row in enumerate(value):
+        if isinstance(row, (str, bytes)) or not isinstance(row, Sequence) or len(row) != 3:
+            raise TypeError(f"{field}[{row_index}] must contain three values")
+        rows.append(tuple(_antenna_real(component, f"{field}[{row_index}][{column}]") for column, component in enumerate(row)))
+    matrix = tuple(rows)
+    gram = tuple(
+        sum(matrix[row][column] * matrix[row][other] for row in range(3))
+        for column in range(3)
+        for other in range(3)
+    )
+    for index, value in enumerate(gram):
+        expected = 1.0 if index in (0, 4, 8) else 0.0
+        if abs(value - expected) > 1e-9:
+            raise ValueError(f"{field} must be an orthonormal rotation matrix")
+    determinant = (
+        matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
+    )
+    if abs(determinant - 1.0) > 1e-9:
+        raise ValueError(f"{field} must have determinant +1")
+    return matrix
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class RigidTransform:
+    """Finite right-handed rigid transform for the complete antenna layout."""
+
+    rotation_matrix: tuple[tuple[float, float, float], ...]
+    translation_m: tuple[float, float, float]
+
+    def __init__(
+        self,
+        rotation_matrix: Sequence[Sequence[float]] | None = None,
+        translation_m: Sequence[float] | None = None,
+        *,
+        rotation: Sequence[Sequence[float]] | None = None,
+        translation: Sequence[float] | None = None,
+    ) -> None:
+        resolved_rotation = _antenna_alias(rotation_matrix, rotation, "rotation_matrix")
+        resolved_translation = _antenna_alias(translation_m, translation, "translation_m")
+        if resolved_rotation is None:
+            resolved_rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        if resolved_translation is None:
+            resolved_translation = (0.0, 0.0, 0.0)
+        object.__setattr__(self, "rotation_matrix", _normalize_matrix3(resolved_rotation, "rotation_matrix"))
+        translation = as_vector3(resolved_translation, "translation_m")
+        object.__setattr__(
+            self,
+            "translation_m",
+            tuple(_antenna_real(component, f"translation_m[{index}]") for index, component in enumerate(translation)),
+        )
+
+    @classmethod
+    def identity(cls) -> "RigidTransform":
+        return cls()
+
+    @property
+    def rotation(self) -> tuple[tuple[float, float, float], ...]:
+        return self.rotation_matrix
+
+    @property
+    def translation(self) -> tuple[float, float, float]:
+        return self.translation_m
+
+    def apply(self, point_m: Sequence[float]) -> tuple[float, float, float]:
+        point = as_vector3(point_m, "point_m")
+        return tuple(
+            sum(self.rotation_matrix[row][column] * point[column] for column in range(3))
+            + self.translation_m[row]
+            for row in range(3)
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "rotation_matrix": [list(row) for row in self.rotation_matrix],
+            "translation_m": list(self.translation_m),
+        }
+
+    @classmethod
+    def from_ir(cls, value: Mapping[str, object]) -> "RigidTransform":
+        return cls(rotation_matrix=value["rotation_matrix"], translation_m=value["translation_m"])
+
+
+AntennaRigidTransform = RigidTransform
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class MicrostripWidthStation:
+    """One normalized longitudinal station of a microstrip signal conductor."""
+
+    s: float
+    signal_width_m: float
+
+    def __init__(
+        self,
+        s: float,
+        signal_width_m: float | None = None,
+        *,
+        signal_width: float | None = None,
+    ) -> None:
+        width = _antenna_alias(signal_width_m, signal_width, "signal_width_m")
+        if width is None:
+            raise TypeError("signal_width_m is required")
+        object.__setattr__(self, "s", _antenna_real(s, "s"))
+        object.__setattr__(self, "signal_width_m", _antenna_positive(width, "signal_width_m"))
+        if not 0.0 <= self.s <= 1.0:
+            raise ValueError("s must lie in [0, 1]")
+
+    @property
+    def signal_width(self) -> float:
+        return self.signal_width_m
+
+    def to_ir(self) -> dict[str, float]:
+        return {"s": self.s, "signal_width_m": self.signal_width_m}
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class CPWWidthStation:
+    """One normalized station of an asymmetric CPW signal/ground profile."""
+
+    s: float
+    signal_width_m: float
+    left_gap_m: float
+    right_gap_m: float
+    left_ground_width_m: float
+    right_ground_width_m: float
+
+    def __init__(
+        self,
+        s: float,
+        signal_width_m: float | None = None,
+        left_gap_m: float | None = None,
+        right_gap_m: float | None = None,
+        left_ground_width_m: float | None = None,
+        right_ground_width_m: float | None = None,
+        *,
+        signal_width: float | None = None,
+        gap: float | None = None,
+        gap_m: float | None = None,
+        ground_width: float | None = None,
+        ground_width_m: float | None = None,
+    ) -> None:
+        width = _antenna_alias(signal_width_m, signal_width, "signal_width_m")
+        symmetric_gap = _antenna_alias(gap_m, gap, "gap_m")
+        symmetric_ground = _antenna_alias(ground_width_m, ground_width, "ground_width_m")
+        left_gap = _antenna_alias(left_gap_m, symmetric_gap, "left_gap_m")
+        right_gap = _antenna_alias(right_gap_m, symmetric_gap, "right_gap_m")
+        left_ground = _antenna_alias(left_ground_width_m, symmetric_ground, "left_ground_width_m")
+        right_ground = _antenna_alias(right_ground_width_m, symmetric_ground, "right_ground_width_m")
+        if any(value is None for value in (width, left_gap, right_gap, left_ground, right_ground)):
+            raise TypeError("CPWWidthStation requires signal width, both gaps, and both ground widths")
+        object.__setattr__(self, "s", _antenna_real(s, "s"))
+        object.__setattr__(self, "signal_width_m", _antenna_positive(width, "signal_width_m"))
+        object.__setattr__(self, "left_gap_m", _antenna_positive(left_gap, "left_gap_m"))
+        object.__setattr__(self, "right_gap_m", _antenna_positive(right_gap, "right_gap_m"))
+        object.__setattr__(self, "left_ground_width_m", _antenna_positive(left_ground, "left_ground_width_m"))
+        object.__setattr__(self, "right_ground_width_m", _antenna_positive(right_ground, "right_ground_width_m"))
+        if not 0.0 <= self.s <= 1.0:
+            raise ValueError("s must lie in [0, 1]")
+
+    @classmethod
+    def symmetric(
+        cls,
+        *,
+        s: float,
+        signal_width: float | None = None,
+        signal_width_m: float | None = None,
+        gap: float | None = None,
+        gap_m: float | None = None,
+        ground_width: float | None = None,
+        ground_width_m: float | None = None,
+    ) -> "CPWWidthStation":
+        return cls(
+            s,
+            signal_width_m=signal_width_m,
+            signal_width=signal_width,
+            gap=gap,
+            gap_m=gap_m,
+            ground_width=ground_width,
+            ground_width_m=ground_width_m,
+        )
+
+    @property
+    def signal_width(self) -> float:
+        return self.signal_width_m
+
+    def to_ir(self) -> dict[str, float]:
+        return {
+            "s": self.s,
+            "signal_width_m": self.signal_width_m,
+            "left_gap_m": self.left_gap_m,
+            "right_gap_m": self.right_gap_m,
+            "left_ground_width_m": self.left_ground_width_m,
+            "right_ground_width_m": self.right_ground_width_m,
+        }
+
+
+def _section_vertices(
+    transform: RigidTransform,
+    u_m: float,
+    center_v_m: float,
+    width_m: float,
+    center_w_m: float,
+    thickness_m: float,
+) -> tuple[tuple[float, float, float], ...]:
+    half_width = width_m / 2.0
+    half_thickness = thickness_m / 2.0
+    local = (
+        (u_m, center_v_m - half_width, center_w_m - half_thickness),
+        (u_m, center_v_m + half_width, center_w_m - half_thickness),
+        (u_m, center_v_m + half_width, center_w_m + half_thickness),
+        (u_m, center_v_m - half_width, center_w_m + half_thickness),
+    )
+    return tuple(transform.apply(point) for point in local)
+
+
+class _AntennaLayoutGeometry(_GeometryOps):
+    """Shared geometry behaviour for straight, piecewise-linear conductor lofts."""
+
+    geometry_name: str
+    length_m: float
+    thickness_m: float
+    transform: RigidTransform
+
+    def _sections(self) -> tuple[dict[str, object], ...]:
+        raise NotImplementedError
+
+    def solid_segments(self) -> tuple[dict[str, object], ...]:
+        sections = self._sections()
+        return tuple(
+            {
+                "from": sections[index],
+                "to": sections[index + 1],
+            }
+            for index in range(len(sections) - 1)
+        )
+
+    def world_bounds(self) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        vertices = [vertex for section in self._sections() for vertex in section["vertices"]]
+        return (
+            tuple(min(vertex[index] for vertex in vertices) for index in range(3)),
+            tuple(max(vertex[index] for vertex in vertices) for index in range(3)),
+        )
+
+
+def _antenna_conductor_ids(
+    conductors: Sequence[Mapping[str, object]], kinds: tuple[str, ...],
+) -> tuple[str, ...]:
+    if any("kind" in part for part in conductors):
+        by_kind = {part.get("kind"): str(part["id"]) for part in conductors}
+        if len(conductors) != len(kinds) or set(by_kind) != set(kinds):
+            raise ValueError("Antenna conductors must declare each expected kind exactly once")
+        return tuple(by_kind[kind] for kind in kinds)
+    ids = tuple(str(part["id"]) for part in conductors)
+    return ids if len(ids) == len(kinds) else kinds
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class MicrostripAntennaLayout(_AntennaLayoutGeometry):
+    """3-D microstrip signal plus explicit parallel return conductor.
+
+    ``return_offset_m`` is the insulating clearance between the signal bottom
+    and return top faces. Curved centerlines and frequency-domain effects are
+    intentionally outside this Tier-1 geometry contract.
+    """
+
+    name: str
+    length_m: float
+    thickness_m: float
+    conductivity_s_per_m: float
+    stations: tuple[MicrostripWidthStation, ...]
+    transform: RigidTransform
+    return_width_m: float
+    return_offset_m: float
+    signal_part_id: str
+    return_part_id: str
+
+    def __init__(
+        self,
+        name: str,
+        length_m: float | None = None,
+        thickness_m: float | None = None,
+        conductivity_s_per_m: float | None = None,
+        stations: Sequence[MicrostripWidthStation] = (),
+        transform: RigidTransform | None = None,
+        return_width_m: float | None = None,
+        return_offset_m: float | None = None,
+        signal_part_id: str = "signal",
+        return_part_id: str = "return",
+        *,
+        length: float | None = None,
+        thickness: float | None = None,
+        conductivity: float | None = None,
+        return_width: float | None = None,
+    ) -> None:
+        resolved_length = _antenna_alias(length_m, length, "length_m")
+        resolved_thickness = _antenna_alias(thickness_m, thickness, "thickness_m")
+        resolved_conductivity = _antenna_alias(conductivity_s_per_m, conductivity, "conductivity_s_per_m")
+        resolved_return_width = _antenna_alias(return_width_m, return_width, "return_width_m")
+        if any(value is None for value in (resolved_length, resolved_thickness, resolved_conductivity, resolved_return_width)):
+            raise TypeError("MicrostripAntennaLayout requires length, thickness, conductivity, and return_width_m")
+        normalized_name = require_non_empty(name, "name")
+        normalized_length = _antenna_positive(resolved_length, "length_m")
+        normalized_thickness = _antenna_positive(resolved_thickness, "thickness_m")
+        normalized_conductivity = _antenna_positive(resolved_conductivity, "conductivity_s_per_m")
+        normalized_return_width = _antenna_positive(resolved_return_width, "return_width_m")
+        normalized_offset = _antenna_non_negative(
+            normalized_thickness if return_offset_m is None else return_offset_m,
+            "return_offset_m",
+        )
+        normalized_stations = _normalize_antenna_stations(stations, MicrostripWidthStation, "stations")
+        signal_id = require_non_empty(signal_part_id, "signal_part_id")
+        return_id = require_non_empty(return_part_id, "return_part_id")
+        if signal_id == return_id:
+            raise ValueError("signal_part_id and return_part_id must differ")
+        object.__setattr__(self, "name", normalized_name)
+        object.__setattr__(self, "length_m", normalized_length)
+        object.__setattr__(self, "thickness_m", normalized_thickness)
+        object.__setattr__(self, "conductivity_s_per_m", normalized_conductivity)
+        object.__setattr__(self, "stations", normalized_stations)
+        object.__setattr__(self, "transform", RigidTransform.identity() if transform is None else transform)
+        if not isinstance(self.transform, RigidTransform):
+            raise TypeError("transform must be a RigidTransform")
+        object.__setattr__(self, "return_width_m", normalized_return_width)
+        object.__setattr__(self, "return_offset_m", normalized_offset)
+        object.__setattr__(self, "signal_part_id", signal_id)
+        object.__setattr__(self, "return_part_id", return_id)
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    @property
+    def conductor_part_ids(self) -> tuple[str, str]:
+        return self.signal_part_id, self.return_part_id
+
+    @property
+    def minimum_signal_width_m(self) -> float:
+        return min(station.signal_width_m for station in self.stations)
+
+    @property
+    def end_face_areas_m2(self) -> dict[str, float]:
+        return {
+            self.signal_part_id: self.stations[0].signal_width_m * self.thickness_m,
+            self.return_part_id: self.return_width_m * self.thickness_m,
+        }
+
+    def _sections(self) -> tuple[dict[str, object], ...]:
+        sections = []
+        for station in self.stations:
+            u_m = station.s * self.length_m
+            sections.append(
+                {
+                    "s": station.s,
+                    "u_m": u_m,
+                    "conductors": {
+                        self.signal_part_id: _section_vertices(self.transform, u_m, 0.0, station.signal_width_m, 0.0, self.thickness_m),
+                        self.return_part_id: _section_vertices(self.transform, u_m, 0.0, self.return_width_m, -(self.thickness_m + self.return_offset_m), self.thickness_m),
+                    },
+                    "vertices": tuple(
+                        vertex
+                        for width, center_w in (
+                            (station.signal_width_m, 0.0),
+                            (self.return_width_m, -(self.thickness_m + self.return_offset_m)),
+                        )
+                        for vertex in _section_vertices(self.transform, u_m, 0.0, width, center_w, self.thickness_m)
+                    ),
+                }
+            )
+        return tuple(sections)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "microstrip",
+            "length_m": self.length_m,
+            "thickness_m": self.thickness_m,
+            "conductivity_s_per_m": self.conductivity_s_per_m,
+            "transform": self.transform.to_ir(),
+            "stations": [station.to_ir() for station in self.stations],
+            "return_width_m": self.return_width_m,
+            "return_offset_m": self.return_offset_m,
+            "conductors": [
+                {"id": self.signal_part_id, "kind": "signal"},
+                {"id": self.return_part_id, "kind": "return"},
+            ],
+            "terminal_faces": {
+                part_id: {"inlet": "local_u_min", "outlet": "local_u_max"}
+                for part_id in self.conductor_part_ids
+            },
+        }
+
+    @classmethod
+    def from_ir(cls, value: Mapping[str, object]) -> "MicrostripAntennaLayout":
+        if value.get("kind") != "microstrip":
+            raise ValueError("microstrip layout kind is required")
+        stations = tuple(MicrostripWidthStation(**station) for station in value["stations"])
+        signal_id, return_id = _antenna_conductor_ids(
+            value.get("conductors", ()), ("signal", "return"),
+        )
+        return cls(
+            name=value["name"],
+            length_m=value.get("length_m", value.get("length")),
+            thickness_m=value.get("thickness_m", value.get("thickness")),
+            conductivity_s_per_m=value.get("conductivity_s_per_m", value.get("conductivity")),
+            stations=stations,
+            transform=RigidTransform.from_ir(value.get("transform", RigidTransform.identity().to_ir())),
+            return_width_m=value["return_width_m"],
+            return_offset_m=value.get("return_offset_m"),
+            signal_part_id=signal_id,
+            return_part_id=return_id,
+        )
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class CPWAntennaLayout(_AntennaLayoutGeometry):
+    """3-D signal plus both ground conductors with an ordered width loft."""
+
+    name: str
+    length_m: float
+    thickness_m: float
+    conductivity_s_per_m: float
+    stations: tuple[CPWWidthStation, ...]
+    transform: RigidTransform
+    signal_part_id: str
+    left_ground_part_id: str
+    right_ground_part_id: str
+
+    def __init__(
+        self,
+        name: str,
+        length_m: float | None = None,
+        thickness_m: float | None = None,
+        conductivity_s_per_m: float | None = None,
+        stations: Sequence[CPWWidthStation] = (),
+        transform: RigidTransform | None = None,
+        signal_part_id: str = "signal",
+        left_ground_part_id: str = "ground_left",
+        right_ground_part_id: str = "ground_right",
+        *,
+        length: float | None = None,
+        thickness: float | None = None,
+        conductivity: float | None = None,
+    ) -> None:
+        resolved_length = _antenna_alias(length_m, length, "length_m")
+        resolved_thickness = _antenna_alias(thickness_m, thickness, "thickness_m")
+        resolved_conductivity = _antenna_alias(conductivity_s_per_m, conductivity, "conductivity_s_per_m")
+        if any(value is None for value in (resolved_length, resolved_thickness, resolved_conductivity)):
+            raise TypeError("CPWAntennaLayout requires length, thickness, and conductivity")
+        normalized_stations = _normalize_antenna_stations(stations, CPWWidthStation, "stations")
+        normalized_ids = tuple(require_non_empty(value, field) for value, field in (
+            (signal_part_id, "signal_part_id"),
+            (left_ground_part_id, "left_ground_part_id"),
+            (right_ground_part_id, "right_ground_part_id"),
+        ))
+        if len(set(normalized_ids)) != 3:
+            raise ValueError("CPW conductor part ids must be unique")
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+        object.__setattr__(self, "length_m", _antenna_positive(resolved_length, "length_m"))
+        object.__setattr__(self, "thickness_m", _antenna_positive(resolved_thickness, "thickness_m"))
+        object.__setattr__(self, "conductivity_s_per_m", _antenna_positive(resolved_conductivity, "conductivity_s_per_m"))
+        object.__setattr__(self, "stations", normalized_stations)
+        object.__setattr__(self, "transform", RigidTransform.identity() if transform is None else transform)
+        if not isinstance(self.transform, RigidTransform):
+            raise TypeError("transform must be a RigidTransform")
+        object.__setattr__(self, "signal_part_id", normalized_ids[0])
+        object.__setattr__(self, "left_ground_part_id", normalized_ids[1])
+        object.__setattr__(self, "right_ground_part_id", normalized_ids[2])
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    @property
+    def conductor_part_ids(self) -> tuple[str, str, str]:
+        return self.signal_part_id, self.left_ground_part_id, self.right_ground_part_id
+
+    @property
+    def minimum_signal_width_m(self) -> float:
+        return min(station.signal_width_m for station in self.stations)
+
+    @property
+    def minimum_gap_m(self) -> float:
+        return min(
+            min(station.left_gap_m, station.right_gap_m)
+            for station in self.stations
+        )
+
+    @property
+    def end_face_areas_m2(self) -> dict[str, float]:
+        station = self.stations[0]
+        return {
+            self.signal_part_id: station.signal_width_m * self.thickness_m,
+            self.left_ground_part_id: station.left_ground_width_m * self.thickness_m,
+            self.right_ground_part_id: station.right_ground_width_m * self.thickness_m,
+        }
+
+    def _sections(self) -> tuple[dict[str, object], ...]:
+        sections = []
+        for station in self.stations:
+            u_m = station.s * self.length_m
+            left_center = -(station.signal_width_m / 2.0 + station.left_gap_m + station.left_ground_width_m / 2.0)
+            right_center = station.signal_width_m / 2.0 + station.right_gap_m + station.right_ground_width_m / 2.0
+            conductor_specs = (
+                (self.signal_part_id, 0.0, station.signal_width_m),
+                (self.left_ground_part_id, left_center, station.left_ground_width_m),
+                (self.right_ground_part_id, right_center, station.right_ground_width_m),
+            )
+            conductors = {
+                part_id: _section_vertices(self.transform, u_m, center_v, width, 0.0, self.thickness_m)
+                for part_id, center_v, width in conductor_specs
+            }
+            sections.append({
+                "s": station.s,
+                "u_m": u_m,
+                "conductors": conductors,
+                "vertices": tuple(vertex for points in conductors.values() for vertex in points),
+            })
+        return tuple(sections)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "cpw",
+            "length_m": self.length_m,
+            "thickness_m": self.thickness_m,
+            "conductivity_s_per_m": self.conductivity_s_per_m,
+            "transform": self.transform.to_ir(),
+            "stations": [station.to_ir() for station in self.stations],
+            "conductors": [
+                {"id": self.signal_part_id, "kind": "signal"},
+                {"id": self.left_ground_part_id, "kind": "ground_left"},
+                {"id": self.right_ground_part_id, "kind": "ground_right"},
+            ],
+            "terminal_faces": {
+                part_id: {"inlet": "local_u_min", "outlet": "local_u_max"}
+                for part_id in self.conductor_part_ids
+            },
+        }
+
+    @classmethod
+    def from_ir(cls, value: Mapping[str, object]) -> "CPWAntennaLayout":
+        if value.get("kind") != "cpw":
+            raise ValueError("CPW layout kind is required")
+        stations = tuple(CPWWidthStation(**station) for station in value["stations"])
+        signal_id, left_id, right_id = _antenna_conductor_ids(
+            value.get("conductors", ()), ("signal", "ground_left", "ground_right"),
+        )
+        return cls(
+            name=value["name"],
+            length_m=value.get("length_m", value.get("length")),
+            thickness_m=value.get("thickness_m", value.get("thickness")),
+            conductivity_s_per_m=value.get("conductivity_s_per_m", value.get("conductivity")),
+            stations=stations,
+            transform=RigidTransform.from_ir(value.get("transform", RigidTransform.identity().to_ir())),
+            signal_part_id=signal_id,
+            left_ground_part_id=left_id,
+            right_ground_part_id=right_id,
+        )
+
+
+AntennaLayout: TypeAlias = MicrostripAntennaLayout | CPWAntennaLayout
+
+
+# ---------------------------------------------------------------------------
 # Primitive shapes
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
@@ -572,6 +1191,8 @@ Geometry: TypeAlias = (
     | Union
     | Intersection
     | Translate
+    | MicrostripAntennaLayout
+    | CPWAntennaLayout
 )
 
 

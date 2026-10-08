@@ -9,6 +9,7 @@
 use fullmag_ir::FdmPlanIR;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -118,7 +119,34 @@ struct ObservationJobIdentity {
 
 struct ObservationSnapshot {
     quantity: String,
-    snapshot: NativeFdmPreviewSnapshot,
+    snapshot: ObservationFieldSnapshot,
+}
+
+enum ObservationFieldSnapshot {
+    Native(NativeFdmPreviewSnapshot),
+    Antenna {
+        basis: Arc<FdmPlanIR>,
+        request: LivePreviewRequest,
+        grid: [u32; 3],
+        time: f64,
+    },
+}
+
+impl ObservationFieldSnapshot {
+    fn into_live_preview_field(self, mask: Option<&[bool]>) -> Result<LivePreviewField, RunError> {
+        match self {
+            Self::Native(snapshot) => snapshot.into_live_preview_field(mask),
+            Self::Antenna { basis, request, grid, time } => {
+                let count = grid.into_iter().try_fold(1usize, |n, extent| {
+                    n.checked_mul(extent as usize)
+                }).ok_or_else(|| RunError { message: "antenna observation grid overflow".into() })?;
+                let values = super::artifacts::copy_resolved_antenna_field(
+                    &basis, &request.quantity, count, time,
+                )?;
+                Ok(crate::preview::build_grid_preview_field(&request, &values, grid, mask))
+            }
+        }
+    }
 }
 
 struct ObservationJob {
@@ -368,6 +396,7 @@ fn requested_observation_demand(
 }
 
 pub(crate) struct FdmLiveObservationScheduler {
+    antenna_basis: Arc<FdmPlanIR>,
     original_grid: [u32; 3],
     active_mask: Option<Vec<bool>>,
     supported: BTreeSet<String>,
@@ -415,6 +444,12 @@ impl FdmLiveObservationScheduler {
             ),
         };
         Self {
+            antenna_basis: Arc::new(FdmPlanIR {
+                antenna_zeeman_masks: plan.antenna_zeeman_masks.clone(),
+                solved_antenna_drive_bases: plan.solved_antenna_drive_bases.clone(),
+                time_stage: plan.time_stage.clone(),
+                ..FdmPlanIR::default()
+            }),
             original_grid,
             active_mask,
             supported,
@@ -752,7 +787,18 @@ impl FdmLiveObservationScheduler {
         for quantity in &demand.quantities {
             let request = full_grid_request(display_state, quantity, self.original_grid);
             let started = Instant::now();
-            match backend.begin_live_preview_snapshot(&request, self.original_grid) {
+            let snapshot = if super::artifacts::is_antenna_field_quantity(quantity) {
+                Ok(ObservationFieldSnapshot::Antenna {
+                    basis: Arc::clone(&self.antenna_basis),
+                    request,
+                    grid: self.original_grid,
+                    time: capture_time,
+                })
+            } else {
+                backend.begin_live_preview_snapshot(&request, self.original_grid)
+                    .map(ObservationFieldSnapshot::Native)
+            };
+            match snapshot {
                 Ok(snapshot) => snapshots.push(ObservationSnapshot {
                     quantity: quantity.clone(),
                     snapshot,
@@ -1093,6 +1139,36 @@ mod tests {
         assert!(!request.auto_scale_enabled);
         assert_eq!(request.max_points, 0);
         assert!(request.all_layers);
+    }
+
+    #[test]
+    fn antenna_observation_uses_captured_time_and_shared_basis() {
+        let basis = std::sync::Arc::new(fullmag_ir::FdmPlanIR {
+            antenna_zeeman_masks: vec![fullmag_ir::ResolvedAntennaZeemanMaskIR {
+                source: "antenna".into(),
+                object: "magnet".into(),
+                amplitude_b_t: 1e-3,
+                direction: [0.0, 1.0, 0.0],
+                spatial_profile: None,
+                waveform: Some(fullmag_ir::TimeDependenceIR::Sinusoidal {
+                    frequency_hz: 1.0, phase_rad: 0.0, offset: 0.0,
+                }),
+                field_xyz: vec![[2.0, 3.0, 4.0]; 2],
+            }],
+            ..fullmag_ir::FdmPlanIR::default()
+        });
+        for (time, sign) in [(0.25, 1.0), (0.75, -1.0)] {
+            let snapshot = super::ObservationFieldSnapshot::Antenna {
+                basis: std::sync::Arc::clone(&basis),
+                request: full_grid_request(&DisplaySelectionState::default(), "H_ant", [2, 1, 1]),
+                grid: [2, 1, 1],
+                time,
+            };
+            let field = snapshot.into_live_preview_field(None).unwrap();
+            assert_eq!(field.quantity, "H_ant");
+            assert_eq!(field.original_grid, [2, 1, 1]);
+            assert_eq!(field.vector_field_values, vec![2.0 * sign, 3.0 * sign, 4.0 * sign, 2.0 * sign, 3.0 * sign, 4.0 * sign]);
+        }
     }
 
     #[test]

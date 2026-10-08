@@ -1,0 +1,480 @@
+{
+  "document": {
+    "path": "docs/audits/2026-09-08-microwave-antenna-worktree-audit.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "audited_not_qualified",
+      "reason": "Source audit; no executed native/device qualification in this report"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "audited_not_qualified",
+      "reason": "Source audit; no executed native/device qualification in this report"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "audited_not_qualified",
+      "reason": "Source audit; no executed native/device qualification in this report"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "audited_not_qualified",
+      "reason": "Source audit; no executed native/device qualification in this report"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "s0",
+      "latex": "$\\mathbf J$",
+      "meaning": "konwencjonalna gęstość prądu",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "s1",
+      "latex": "$\\sigma$",
+      "meaning": "przewodność elektryczna",
+      "si_unit": "$\\mathrm{S\\,m^{-1}}$"
+    },
+    {
+      "id": "s2",
+      "latex": "$V$",
+      "meaning": "potencjał elektryczny",
+      "si_unit": "$\\mathrm V$"
+    },
+    {
+      "id": "s3",
+      "latex": "$\\nabla$",
+      "meaning": "operator różniczkowania przestrzennego",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "s4",
+      "latex": "$\\mathbf r$",
+      "meaning": "położenie obserwacji",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "s5",
+      "latex": "$t$",
+      "meaning": "czas fizyczny",
+      "si_unit": "$\\mathrm s$"
+    },
+    {
+      "id": "s6",
+      "latex": "$p$",
+      "meaning": "indeks portu",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "s7",
+      "latex": "$I_{p,0}$",
+      "meaning": "podpisana amplituda prądu portu",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "s8",
+      "latex": "$f_p$",
+      "meaning": "mnożnik czasowy portu",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "s9",
+      "latex": "$\\mathbf h_p$",
+      "meaning": "wektorowa baza pola na amper",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "s10",
+      "latex": "$\\mathbf H_{\\mathrm{ant}}$",
+      "meaning": "pole anteny",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "s11",
+      "latex": "$\\mathbf H_{\\mathrm{eff}}$",
+      "meaning": "całkowite pole efektywne",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "s12",
+      "latex": "$\\mathbf H_{\\mathrm{other}}$",
+      "meaning": "pozostałe składniki pola efektywnego",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "s13",
+      "latex": "$E_{\\mathrm{ant}}$",
+      "meaning": "energia Zeemana od pola anteny",
+      "si_unit": "$\\mathrm J$"
+    },
+    {
+      "id": "s14",
+      "latex": "$\\mu_0$",
+      "meaning": "przenikalność magnetyczna próżni",
+      "si_unit": "$\\mathrm{H\\,m^{-1}}$"
+    },
+    {
+      "id": "s15",
+      "latex": "$M_s$",
+      "meaning": "magnetyzacja nasycenia",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "s16",
+      "latex": "$\\mathbf m$",
+      "meaning": "unormowana magnetyzacja",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "s17",
+      "latex": "$\\Omega_m$",
+      "meaning": "obszar magnetyczny",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "s18",
+      "latex": "$dV$",
+      "meaning": "element objętości",
+      "si_unit": "$\\mathrm{m^3}$"
+    }
+  ],
+  "equations": [
+    {
+      "id": "audit-antenna-conduction",
+      "symbols": [
+        "s0",
+        "s1",
+        "s2",
+        "s3",
+        "s4",
+        "s5",
+        "s6",
+        "s7",
+        "s8",
+        "s9",
+        "s10",
+        "s11",
+        "s12",
+        "s13",
+        "s14",
+        "s15",
+        "s16",
+        "s17",
+        "s18"
+      ],
+      "sources": [
+        "charge-equation"
+      ]
+    },
+    {
+      "id": "audit-antenna-basis",
+      "symbols": [
+        "s0",
+        "s1",
+        "s2",
+        "s3",
+        "s4",
+        "s5",
+        "s6",
+        "s7",
+        "s8",
+        "s9",
+        "s10",
+        "s11",
+        "s12",
+        "s13",
+        "s14",
+        "s15",
+        "s16",
+        "s17",
+        "s18"
+      ],
+      "sources": [
+        "basis-equation"
+      ]
+    },
+    {
+      "id": "audit-antenna-llg",
+      "symbols": [
+        "s0",
+        "s1",
+        "s2",
+        "s3",
+        "s4",
+        "s5",
+        "s6",
+        "s7",
+        "s8",
+        "s9",
+        "s10",
+        "s11",
+        "s12",
+        "s13",
+        "s14",
+        "s15",
+        "s16",
+        "s17",
+        "s18"
+      ],
+      "sources": [
+        "energy-equation"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "source0",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaPortBranch",
+      "responsibility": "Podpisana referencja terminalu"
+    },
+    {
+      "id": "source1",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaPortMode",
+      "responsibility": "Port i normalizacja"
+    },
+    {
+      "id": "source2",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class SolvedAntennaDrive",
+      "responsibility": "Prąd, waveform, aktywacja"
+    },
+    {
+      "id": "source3",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaFieldSolveStage",
+      "responsibility": "Publiczny obecny kontrakt solve"
+    },
+    {
+      "id": "source4",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "validate_antenna_composition_v03",
+      "responsibility": "Walidacja bieżącego IR"
+    },
+    {
+      "id": "source5",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "validate_antenna_composition",
+      "responsibility": "Walidacja nowszego kontraktu"
+    },
+    {
+      "id": "source6",
+      "path": "crates/fullmag-plan/src/antenna_field_solve.rs",
+      "symbol": "plan_antenna_field_solve_v03",
+      "responsibility": "Wybór solve, mesh i sampling"
+    },
+    {
+      "id": "source7",
+      "path": "crates/fullmag-plan/src/antenna_field_solve.rs",
+      "symbol": "resolve_field_sampling",
+      "responsibility": "Domeny próbkowania"
+    },
+    {
+      "id": "source8",
+      "path": "crates/fullmag-plan/src/antenna_projection.rs",
+      "symbol": "resolve_fem_antenna_projection_mask",
+      "responsibility": "Maska celu FEM"
+    },
+    {
+      "id": "source9",
+      "path": "crates/fullmag-plan/src/util.rs",
+      "symbol": "field_drive_is_active",
+      "responsibility": "Kanoniczna aktywacja regional field"
+    },
+    {
+      "id": "source10",
+      "path": "crates/fullmag-runner/src/native_fem/charge_transport.rs",
+      "symbol": "measured_port_current",
+      "responsibility": "Certyfikat prądu/normalizacja"
+    },
+    {
+      "id": "source11",
+      "path": "crates/fullmag-runner/src/antenna_stage.rs",
+      "symbol": "antenna_field_solution_signatures",
+      "responsibility": "Podpisy zależności"
+    },
+    {
+      "id": "source12",
+      "path": "crates/fullmag-runner/src/antenna_stage.rs",
+      "symbol": "AntennaFieldStageState",
+      "responsibility": "Lifecycle artefaktu"
+    },
+    {
+      "id": "source13",
+      "path": "crates/fullmag-runner/src/antenna_field_solution.rs",
+      "symbol": "load_solved_antenna_drive_basis_projected",
+      "responsibility": "Integralność i dopasowanie próbek"
+    },
+    {
+      "id": "source14",
+      "path": "crates/fullmag-runner/src/antenna_field_solution.rs",
+      "symbol": "materialize_fem_solved_antenna_drive_parts",
+      "responsibility": "Artefakt → plan FEM"
+    },
+    {
+      "id": "source15",
+      "path": "crates/fullmag-runner/src/antenna_fields.rs",
+      "symbol": "drive_is_active",
+      "responsibility": "Aktywacja anteny"
+    },
+    {
+      "id": "source16",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "pack_native_regional_field_drives",
+      "responsibility": "Baza H/A → natywny Zeeman"
+    },
+    {
+      "id": "source17",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "sample_antenna_field_on_plane",
+      "responsibility": "Sampling plane i outside policy"
+    },
+    {
+      "id": "source18",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "attach_solved_antenna_drive_bases",
+      "responsibility": "Publiczny hand-off i odrzucanie lanes"
+    },
+    {
+      "id": "source19",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "execute_antenna_spectrum_requests",
+      "responsibility": "Widmo z opublikowanego artefaktu"
+    },
+    {
+      "id": "source20",
+      "path": "crates/fullmag-authoring/src/scene.rs",
+      "symbol": "SceneDocument",
+      "responsibility": "Kanoniczny właściciel sceny"
+    },
+    {
+      "id": "source21",
+      "path": "crates/fullmag-api/src/router_v2/handlers/model/authoring.rs",
+      "symbol": "apply_scene_merge_patch",
+      "responsibility": "Granica utraty nieznanych pól"
+    },
+    {
+      "id": "source22",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "project_regional_field_drive_bases",
+      "responsibility": "Native projection i nakładanie zmian master"
+    },
+    {
+      "id": "source23",
+      "path": "backends/fem/tests/charge_transport_abi_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Natywny test kontraktu, nieuruchomiony w audycie"
+    },
+    {
+      "id": "charge-equation",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
+      "symbol": "solve_charge",
+      "responsibility": "Native H1/P1 charge solve; source evidence only"
+    },
+    {
+      "id": "basis-equation",
+      "path": "crates/fullmag-runner/src/antenna_fields.rs",
+      "symbol": "dynamic_antenna_drive_terms",
+      "responsibility": "Multiply per-ampere vector basis and attach waveform"
+    },
+    {
+      "id": "energy-equation",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "regional_field_drive_energy",
+      "responsibility": "Native nodal Zeeman energy, runtime not qualified by audit"
+    },
+    {
+      "id": "rt0-cost",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solve_native_fem_steady_transport_rt0",
+      "responsibility": "Existing RT0/Oersted wrapper and fixed pair budget"
+    },
+    {
+      "id": "native-field",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp",
+      "symbol": "class DirectTetraQuadrature",
+      "responsibility": "Native adaptive 3D field owner; source evidence only"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "AntennaPortBranch.terminal_selector_ref",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "niepusty tekst; istnienie referencji sprawdzane w IR/plannerze",
+        "meaning": "referencja terminalu",
+        "backend_support": "kontrakt wspólny; solve FEM CPU",
+        "problem_ir": "antenna_port_modes[].branches[].terminal_selector_ref"
+      },
+      {
+        "python": "AntennaPortBranch.signed_weight",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "liczba skończona; bilans kontroluje port",
+        "meaning": "podpisany udział gałęzi",
+        "backend_support": "kontrakt wspólny; solve FEM CPU",
+        "problem_ir": "antenna_port_modes[].branches[].signed_weight"
+      },
+      {
+        "python": "AntennaPortMode.id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "niepusty tekst",
+        "meaning": "identyfikator portu",
+        "backend_support": "kontrakt wspólny; solve FEM CPU",
+        "problem_ir": "antenna_port_modes[].id"
+      },
+      {
+        "python": "AntennaPortMode.source_object_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "niepusty tekst; istnienie sprawdzane w IR/plannerze",
+        "meaning": "obiekt źródła",
+        "backend_support": "kontrakt wspólny; solve FEM CPU",
+        "problem_ir": "antenna_port_modes[].source_object_id"
+      },
+      {
+        "python": "AntennaPortMode.current_transport_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "niepusty tekst; istnienie sprawdzane w IR/plannerze",
+        "meaning": "właściciel transportu",
+        "backend_support": "kontrakt wspólny; solve FEM CPU",
+        "problem_ir": "antenna_port_modes[].current_transport_id"
+      },
+      {
+        "python": "AntennaPortMode.branches",
+        "type": "Sequence[AntennaPortBranch]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "co najmniej dwie typed branches, suma wag w tolerancji 1e-12, oba znaki",
+        "meaning": "jawny układ sygnału i powrotów",
+        "backend_support": "kontrakt wspólny; solve FEM CPU",
+        "problem_ir": "antenna_port_modes[].branches"
+      },
+      {
+        "python": "AntennaPortMode.normalization_current_a",
+        "type": "float",
+        "default": "1.0",
+        "si_unit": "$\\mathrm A$",
+        "validation": "dokładnie 1 A",
+        "meaning": "normalizacja bazy",
+        "backend_support": "kontrakt wspólny; solve FEM CPU",
+        "problem_ir": "antenna_port_modes[].normalization_current_a"
+      }
+    ]
+  }
+}

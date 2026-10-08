@@ -136,6 +136,48 @@ pub enum DriveActivationIR {
     StageIds { stage_ids: Vec<String> },
 }
 
+/// Study family carried with a resolved time-stage plan.
+///
+/// A resolved runner no longer has the complete [`StudyIR`] value available,
+/// so the planner records this small semantic discriminator explicitly.  The
+/// `Unknown` default is fail-closed for plans deserialized from older schemas.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StudyKindIR {
+    #[default]
+    Unknown,
+    TimeEvolution,
+    Relaxation,
+    Hysteresis,
+    Eigenmodes,
+    FrequencyResponse,
+}
+
+impl StudyKindIR {
+    pub const fn is_unknown(&self) -> bool {
+        matches!(self, Self::Unknown)
+    }
+}
+
+impl DriveActivationIR {
+    /// Resolve activation at a concrete execution stage.
+    ///
+    /// `AllTimeEvolution` is intentionally limited to a TimeEvolution study;
+    /// explicit `StageIds` remain valid for any study whose stage is named by
+    /// the author and are subject to the study-specific waveform validation.
+    pub fn is_active_for(
+        &self,
+        study_kind: StudyKindIR,
+        active_stage_id: Option<&str>,
+    ) -> bool {
+        match self {
+            Self::AllTimeEvolution {} => matches!(study_kind, StudyKindIR::TimeEvolution),
+            Self::StageIds { stage_ids } => active_stage_id
+                .is_some_and(|active| stage_ids.iter().any(|stage| stage == active)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FieldDriveMigrationIR {
@@ -240,9 +282,37 @@ pub enum CurrentModuleIR {
         time_envelope: Option<crate::TimeEnvelopeIR>,
         /// Complete executable charge solve. Legacy records without this
         /// payload remain readable but fail closed for `ohmic_poisson`.
-        #[serde(default, flatten, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            flatten,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_current_transport_definition"
+        )]
         definition: Option<crate::ChargeTransportDefinitionIR>,
     },
+}
+
+fn deserialize_current_transport_definition<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ChargeTransportDefinitionIR>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let remaining = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+    let has_current_source = remaining
+        .get("conservative_current_source")
+        .is_some_and(|source| !source.is_null());
+    let parsed = serde_json::from_value::<crate::ChargeTransportDefinitionIR>(
+        serde_json::Value::Object(remaining),
+    );
+    if has_current_source {
+        // A malformed authored source must not disappear through flatten's
+        // optional legacy-definition behavior.
+        parsed.map(Some).map_err(D::Error::custom)
+    } else {
+        // Preserve readable legacy records without a complete charge payload.
+        Ok(parsed.ok())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1188,6 +1258,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn drive_activation_scopes_default_rf_and_explicit_relax_stage() {
+        let default_rf = DriveActivationIR::AllTimeEvolution {};
+        assert!(default_rf.is_active_for(StudyKindIR::TimeEvolution, Some("run")));
+        assert!(!default_rf.is_active_for(StudyKindIR::Relaxation, Some("relax")));
+
+        let explicit_relax = DriveActivationIR::StageIds {
+            stage_ids: vec!["relax".into()],
+        };
+        assert!(explicit_relax.is_active_for(StudyKindIR::Relaxation, Some("relax")));
+        assert!(!explicit_relax.is_active_for(StudyKindIR::Relaxation, Some("other")));
+        assert!(!explicit_relax.is_active_for(StudyKindIR::Relaxation, None));
+    }
+
+    #[test]
     fn sampling_ir_deserializes_table_autosave_contract() {
         let sampling: SamplingIR = serde_json::from_value(serde_json::json!({
             "outputs": [],
@@ -1576,6 +1660,18 @@ fn get_default_dynamics() -> &'static DynamicsIR {
 }
 
 impl StudyIR {
+    /// Return the stable semantic study family used by resolved execution
+    /// plans and activation checks.
+    pub const fn kind(&self) -> StudyKindIR {
+        match self {
+            Self::TimeEvolution { .. } => StudyKindIR::TimeEvolution,
+            Self::Relaxation { .. } => StudyKindIR::Relaxation,
+            Self::Eigenmodes { .. } => StudyKindIR::Eigenmodes,
+            Self::FrequencyResponse { .. } => StudyKindIR::FrequencyResponse,
+            Self::Hysteresis { .. } => StudyKindIR::Hysteresis,
+        }
+    }
+
     pub fn dynamics(&self) -> &DynamicsIR {
         self.optional_dynamics()
             .expect("this study does not define LLG dynamics")

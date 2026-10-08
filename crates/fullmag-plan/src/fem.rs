@@ -26,6 +26,7 @@ use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
 use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
+use crate::spin_transport::resolve_fem_charge_only_transport;
 use crate::util::{
     mesh_workflow_metadata, problem_domain_frame, runtime_requests_cuda,
     shared_domain_mesh_requested, MU0,
@@ -4043,6 +4044,8 @@ pub(crate) fn plan_fem(
             reasons: vec!["bounded FEM steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the native descriptor".to_string()],
         });
     }
+    let charge_transport_plans =
+        resolve_fem_charge_only_transport(problem, &mesh, &object_segments, &resolved_mesh_parts, false)?;
     let spin_transport_plans = crate::spin_transport::resolve_m1_fem_spin_transport(
         problem,
         &mesh,
@@ -4088,9 +4091,11 @@ pub(crate) fn plan_fem(
         external_field,
         antenna_zeeman_masks,
         field_drives: active_field_drives,
+        solved_antenna_drive_bases: Vec::new(),
         field_drive_geometry_masks,
         time_stage: crate::util::time_stage_context(problem),
         current_modules: problem.current_modules.clone(),
+        charge_transport_plans,
         spin_transport_plans,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
@@ -4151,6 +4156,7 @@ pub(crate) fn plan_fem(
             term_index,
             term,
             &current_transports,
+            &fem_plan.charge_transport_plans,
             &fem_plan.mesh,
             &fem_plan.object_segments,
             &fem_plan.mesh_parts,

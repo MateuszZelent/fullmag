@@ -1,0 +1,19 @@
+{
+  "document": {"path": "docs/superpowers/plans/2026-10-05-antenna-field-reader-checkpoint.md"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "not_qualified", "reason": "Kontrola czytnika artefaktów nie wykonuje runtime ani fizyki FDM CPU."},
+    {"solver": "FDM", "device": "GPU", "status": "not_qualified", "reason": "Kontrola czytnika artefaktów nie wykonuje runtime ani fizyki FDM GPU."},
+    {"solver": "FEM", "device": "CPU", "status": "not_qualified", "reason": "Fixture nie pochodzi z solve FEM CPU; brak nowej kwalifikacji zbieżności."},
+    {"solver": "FEM", "device": "GPU", "status": "not_qualified", "reason": "Fixture nie pochodzi z solve FEM GPU; brak nowej kwalifikacji urządzenia."}
+  ],
+  "symbols": [],
+  "equations": [],
+  "sources": [
+    {"id": "publisher", "path": "crates/fullmag-runner/src/antenna_stage.rs", "symbol": "publish_antenna_field_solution_atomically", "responsibility": "Kontrakt fizycznej rewizji i logicznych refs; nie wykonano solwera."},
+    {"id": "identity", "path": "tests/antenna/verify_field_convergence.py", "symbol": "read_solution", "responsibility": "Jawny legacy/revision layout i tożsamość manifestu."},
+    {"id": "payload", "path": "tests/antenna/verify_field_convergence.py", "symbol": "read_vectors", "responsibility": "Odczyt wyłącznie wybranej rewizji i integralność."},
+    {"id": "regressions", "path": "tests/antenna/test_verify_field_convergence.py", "symbol": "class FieldConvergenceTests", "responsibility": "Interpretowane regresje: 12 PASS, 1 real symlink SKIP na Windows."},
+    {"id": "evidence", "path": "scripts/verify_antenna_field_reader.py", "symbol": "run", "responsibility": "Stała lekka trasa, storage, blokada i terminalne receipts."}
+  ],
+  "public_api": {"parameters": []}
+}

@@ -3579,9 +3579,10 @@ int fullmag_fdm_backend_set_static_external_field_f64(
 #endif
 }
 
-int fullmag_fdm_backend_set_regional_field_drives_v1(
+template <typename Descriptor>
+static int set_regional_field_drives_impl(
     fullmag_fdm_backend *handle,
-    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    const Descriptor *drives,
     uint32_t drive_count)
 {
 #if FULLMAG_HAS_CUDA
@@ -3682,6 +3683,22 @@ int fullmag_fdm_backend_set_regional_field_drives_v1(
     (void)drive_count;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
+}
+
+int fullmag_fdm_backend_set_regional_field_drives_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count)
+{
+    return set_regional_field_drives_impl(handle, drives, drive_count);
+}
+
+int fullmag_fdm_backend_set_regional_field_drives_v2(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v2 *drives,
+    uint32_t drive_count)
+{
+    return set_regional_field_drives_impl(handle, drives, drive_count);
 }
 
 /* ── Error ── */

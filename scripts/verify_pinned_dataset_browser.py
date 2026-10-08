@@ -23,6 +23,23 @@ from verify_control_room_sources import fingerprint, timestamp
 
 PROFILE = "windows-control-room-browser-fixture"
 BROWSER_CHANNEL = "chrome" if os.name == "nt" else None
+SCENARIOS = {
+    "antenna-visualization": ("smoke-antenna-visualization.mjs", "fullmag_antenna_visualization_browser_fixture_v1", "antenna-visualization", "FULLMAG_ANTENNA_VISUALIZATION"),
+    "inspector-routing": ("smoke-inspector.mjs", "fullmag_inspector_routing_browser_fixture_v1", None, "CONTROL_ROOM_INSPECTOR"),
+    "antenna-cpw-viewport": ("smoke-antenna-cpw-viewport.mjs", "fullmag_antenna_cpw_viewport_browser_fixture_v1", "antenna-cpw-viewport", "FULLMAG_ANTENNA_CPW_VIEWPORT"),
+    "pinned-dataset": ("smoke-pinned-materialized-dataset.mjs", "fullmag_pinned_dataset_browser_fixture_v1", None, "FULLMAG_PINNED_DATASET"),
+    "project-document-handoff": ("smoke-project-document-handoff.mjs", "fullmag_project_document_browser_fixture_v1", "project-document-handoff", "FULLMAG_PROJECT_DOCUMENT"),
+    "development-kernel-host": ("smoke-development-kernel-host.mjs", "fullmag_development_kernel_host_browser_fixture_v1", "development-kernel-host", "FULLMAG_PROJECT_DOCUMENT"),
+    "development-run-outcome-handoff": ("smoke-development-run-outcome-handoff.mjs", "fullmag_development_run_outcome_handoff_browser_fixture_v1", "development-run-outcome-handoff", "FULLMAG_DEVELOPMENT_RUN_OUTCOME"),
+    "development-restart-action": ("smoke-development-restart-action.mjs", "fullmag_development_restart_action_browser_fixture_v1", "development-restart-action", "FULLMAG_DEVELOPMENT_RESTART_ACTION"),
+    "antenna-external-lead-inspection": ("smoke-antenna-external-lead-inspection.mjs", "fullmag_antenna_inspection_browser_fixture_v1", "antenna-external-lead-inspection", "FULLMAG_ANTENNA_INSPECTION"),
+    "antenna-microstrip-stations": ("smoke-antenna-microstrip-stations.mjs", "fullmag_antenna_microstrip_stations_browser_fixture_v1", "antenna-microstrip-stations", "FULLMAG_ANTENNA_STATIONS"),
+    "antenna-transport-drafts": ("smoke-antenna-transport-drafts.mjs", "fullmag_antenna_transport_drafts_browser_fixture_v1", "antenna-transport-drafts", "FULLMAG_ANTENNA_TRANSPORT"),
+    "antenna-solve-targets": ("smoke-antenna-solve-targets.mjs", "fullmag_antenna_solve_targets_browser_fixture_v1", "antenna-solve-targets", "FULLMAG_ANTENNA_SOLVE_TARGETS"),
+    "primitive-color-inspector": ("smoke-primitive-color-inspector.mjs", "fullmag_primitive_color_inspector_browser_fixture_v1", "primitive-color-inspector", "FULLMAG_PRIMITIVE_COLOR"),
+    "execution-profiles": ("smoke-execution-profiles.mjs", "fullmag_execution_profiles_browser_fixture_v1", "execution-profiles", "FULLMAG_EXECUTION_PROFILES"),
+    "study-execution-profile": ("smoke-study-execution-profile.mjs", "fullmag_study_execution_profile_browser_fixture_v1", "study-execution-profile", "FULLMAG_STUDY_EXECUTION_PROFILE"),
+}
 
 
 def link_directory(source: Path, target: Path):
@@ -62,16 +79,18 @@ def port_is_open(port: int):
 
 
 def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
-    if scenario not in {"pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff", "development-restart-action", "execution-profiles", "study-execution-profile"}:
+    if scenario not in SCENARIOS:
         raise storage.StorageError("Unknown fixed browser fixture scenario")
     if scenario == "execution-profiles" and port != 3255:
         raise storage.StorageError("Execution profiles browser fixture uses fixed port 3255")
     if scenario == "study-execution-profile" and port != 3256:
         raise storage.StorageError("Study execution profile browser fixture uses fixed port 3256")
+    if scenario == "inspector-routing" and port != 3261:
+        raise storage.StorageError("Inspector routing browser fixture uses fixed port 3261")
+    smoke_name, receipt_schema, fixture_route, report_prefix = SCENARIOS[scenario]
     layout = storage.resolve_layout(repo, PROFILE)
     storage.initialize(layout)
     app = repo / "apps/control-room"
-    smoke_name = {"pinned-dataset": "smoke-pinned-materialized-dataset.mjs", "project-document-handoff": "smoke-project-document-handoff.mjs", "development-kernel-host": "smoke-development-kernel-host.mjs", "development-run-outcome-handoff": "smoke-development-run-outcome-handoff.mjs", "development-restart-action": "smoke-development-restart-action.mjs", "execution-profiles": "smoke-execution-profiles.mjs", "study-execution-profile": "smoke-study-execution-profile.mjs"}[scenario]
     smoke = app / "scripts" / smoke_name
     node = shutil.which("node")
     next_cli = app / "node_modules/next/dist/bin/next"
@@ -93,7 +112,7 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
         before = fingerprint(repo, False)
         receipt_path = run_root / "receipt.json"
         receipt = {
-            "schema": {"pinned-dataset": "fullmag_pinned_dataset_browser_fixture_v1", "project-document-handoff": "fullmag_project_document_browser_fixture_v1", "development-kernel-host": "fullmag_development_kernel_host_browser_fixture_v1", "development-run-outcome-handoff": "fullmag_development_run_outcome_handoff_browser_fixture_v1", "development-restart-action": "fullmag_development_restart_action_browser_fixture_v1", "execution-profiles": "fullmag_execution_profiles_browser_fixture_v1", "study-execution-profile": "fullmag_study_execution_profile_browser_fixture_v1"}[scenario], "state": "running",
+            "schema": receipt_schema, "state": "running",
             "scenario": scenario,
             "repo_root": str(repo), "worktree_id": layout["worktree_id"], "profile": PROFILE,
             "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
@@ -129,13 +148,13 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
                     shutil.copy2(repo / name, snapshot / name)
             if fingerprint(repo, False) != before:
                 raise storage.StorageError("Frontend sources changed while taking the fixture snapshot")
-            if scenario != "pinned-dataset":
-                fixture_page = fixture_app / f"scripts/fixtures/{scenario}-page.tsx"
+            if fixture_route:
+                fixture_page = fixture_app / "scripts/fixtures" / (fixture_route + "-page.tsx")
                 if not fixture_page.is_file():
-                    raise storage.StorageError("Requested browser fixture page is missing")
-                target_page = fixture_app / f"app/{scenario}/page.tsx"
+                    raise storage.StorageError("Browser fixture page is missing")
+                target_page = fixture_app / "app" / fixture_route / "page.tsx"
                 if target_page.exists():
-                    raise storage.StorageError("Project document fixture must not overwrite a product route")
+                    raise storage.StorageError("Browser fixture must not overwrite a product route")
                 target_page.parent.mkdir(parents=True, exist_ok=False)
                 shutil.copy2(fixture_page, target_page)
             link_directory(fixture_app / "node_modules", real_dependencies)
@@ -167,19 +186,13 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
                    "FULLMAG_FRONTEND_SOURCE_RUN_ROOT": str(run_root)}
             if BROWSER_CHANNEL:
                 env["FULLMAG_PINNED_DATASET_BROWSER_CHANNEL"] = BROWSER_CHANNEL
-            if scenario != "pinned-dataset":
-                env["CONTROL_ROOM_URL"] = f"http://127.0.0.1:{port}/{scenario}"
+            env[report_prefix + "_REPORT_DIR"] = str(run_root / "browser")
+            if BROWSER_CHANNEL:
+                env[report_prefix + "_BROWSER_CHANNEL"] = BROWSER_CHANNEL
+            if fixture_route:
+                env["CONTROL_ROOM_URL"] = f"http://127.0.0.1:{port}/{fixture_route}"
                 if scenario in {"development-kernel-host", "development-restart-action", "execution-profiles", "study-execution-profile"}:
                     env["CONTROL_ROOM_URL"] += "?fullmag_api_instance=11111111-1111-4111-8111-111111111111"
-                report_prefix = {
-                    "development-run-outcome-handoff": "FULLMAG_DEVELOPMENT_RUN_OUTCOME",
-                    "development-restart-action": "FULLMAG_DEVELOPMENT_RESTART_ACTION",
-                    "execution-profiles": "FULLMAG_EXECUTION_PROFILES",
-                    "study-execution-profile": "FULLMAG_STUDY_EXECUTION_PROFILE",
-                }.get(scenario, "FULLMAG_PROJECT_DOCUMENT")
-                env[report_prefix + "_REPORT_DIR"] = str(run_root / "browser")
-                if BROWSER_CHANNEL:
-                    env[report_prefix + "_BROWSER_CHANNEL"] = BROWSER_CHANNEL
             receipt["source_view"] = str(fixture_app)
             receipt["dependency_root"] = str(real_dependencies)
             with (run_root / "next.log").open("w", encoding="utf-8") as next_log:
@@ -241,11 +254,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--port", type=int)
-    parser.add_argument("--scenario", choices=("pinned-dataset", "project-document-handoff", "development-kernel-host", "development-run-outcome-handoff", "development-restart-action", "execution-profiles", "study-execution-profile"), default="pinned-dataset")
+    parser.add_argument("--scenario", choices=tuple(SCENARIOS), default="pinned-dataset")
     args = parser.parse_args()
     port = args.port if args.port is not None else {
         "execution-profiles": 3255,
         "study-execution-profile": 3256,
+        "inspector-routing": 3261,
     }.get(args.scenario, 3250)
     if not 1 <= port <= 65535:
         parser.error("port must be between 1 and 65535")

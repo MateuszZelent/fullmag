@@ -7,6 +7,14 @@ import { useSessionStatusSelector } from "./useSessionStatus";
 export type ActiveLaneCapabilitySnapshot =
   LiveStatusResource["capabilities"]["active_lane"];
 
+export function resolveActiveLaneDiscretization(
+  snapshot: ActiveLaneCapabilitySnapshot | null,
+): "fdm" | "fem" | "unknown" {
+  if (snapshot?.source.kind !== "planner") return "unknown";
+  const value = snapshot.resolved?.discretization;
+  return value === "fdm" || value === "fem" ? value : "unknown";
+}
+
 export type ActiveLaneOperationId =
   | "grid_build"
   | "shared_mesh_build"

@@ -64,6 +64,17 @@ odrzuca zgłoszenie. Po utworzeniu kapsuły można dalej edytować branch; build
 otrzymuje kopię, a nie późniejszy stan ścieżki. SHA kapsuły i natywna tożsamość
 `fullmag.source-snapshot.v2` są różnymi, powiązanymi dowodami.
 
+Kopia wykonania musi otrzymać świeże mtime plików, a nie czasy z chwili capture.
+`materialize_capsule` kopiuje bajty przez `copyfile`, odtwarza tryby z manifestu
+i sprawdza size/SHA. Dzięki temu starsza oczekująca kapsuła nie dziedziczy
+pozornej aktualności zależności z później zapisanej wspólnej pamięci Cargo/Make
+przy stałej ścieżce `/workspace`. Kapsuła i cache pozostają niezmienione.
+Regresja tej poprawki przeszła lokalnie; produkcyjne wdrożenie pozostaje
+**NOT VERIFIED**, dopóki nowy obraz koordynatora nie dostarczy poprawionego
+`/runner/build_entrypoint.py` i pełny build nie przejdzie. Zmiana skryptu
+wyłącznie w kapsule nie aktualizuje trusted entrypoint. Nie kasować targetu
+ani nie przerywać aktywnego joba jako obejścia tej usterki.
+
 Nieśledzone wymagane wejście pominięte w kapsule jest błędem, nie cichym buildem
 starszej wersji. Nie kopiuj całego `.env`. Jawne gitlinki zewnętrznych solverów są
 odnotowane, ale niematerializowane; operacja potrzebująca tych źródeł wymaga
@@ -203,6 +214,17 @@ backend API i statyczny Control Room z terminalnego, udanego pakietu
 solvera. Wymaga zachowanej kapsuły źródeł, kompletnych artefaktów i lokalnego
 obrazu o digestcie zgodnym z receiptem buildu.
 
+Tryb `run-managed-browser` nadal wymaga clean commita i kapsuły `commit`.
+Dla dokładnego WIP użyj osobnej recepty:
+`just run-managed-browser-snapshot <pełny-job-id> <pełny-commit> <source-digest> <native-snapshot-sha256> 3104`.
+Digest kapsuły oraz snapshotu natywnego są dwoma różnymi hashami SHA-256
+(64 małe znaki hex, bez prefiksu); oba muszą zgadzać się z terminalnym
+receiptem. Commit jest pełnym bazowym SHA-1 (40 znaków), nie tożsamością WIP.
+Brak jednej z tożsamości, niezgodność, zły tryb kapsuły lub niezgodny
+clean/dirty startup stamp powoduje odmowę. Artefakty i trusted documents
+weryfikuje ten sam pełny validator, bez pomijania kontroli dla snapshotu.
+Ta dodatkowa trasa nie kwalifikuje storage 9p i nie uruchamia solvera.
+
 Launcher ponownie sprawdza kapsułę, trusted documents, wymagane artefakty,
 startup stamp i rzeczywiste mounty/port kontenera. Źródła oraz pakiet pozostają
 read-only. Świeży katalog stanu w storage zawiera również prywatny widok repo
@@ -221,6 +243,126 @@ nie uruchamiaj ponownie bez sprawdzenia poprzedniego kontenera. Zatrzymanie
 właściwego kontenera nie wymaga usuwania danych. Osobny browser smoke musi
 potwierdzić działanie UI; zdrowe `/healthz` nie jest kwalifikacją solvera,
 fizyki ani wydania.
+
+### Eksport OpenAPI z dokładnego snapshotu
+
+`just export-runner-openapi <job-id> <pełny-commit>` pozostaje trasą dla
+czystej kapsuły `commit`. Nie dopuszcza dirty state ani kapsuły `snapshot`.
+Dla jawnego WIP służy osobna recepta
+`just export-runner-openapi-snapshot <job-id> <pełny-commit> <source-digest> <native-snapshot-sha256>`.
+Oba digests są wymaganymi SHA-256 (64 małe znaki hex); commit bazowy nie
+identyfikuje zawartości WIP. Niepełna para, niezgodność z queue/trusted
+context/build receipt/kapsułą lub zły source mode powodują odmowę przed
+alokacją dowodu i przed dostępem do Dockera. Pełne walidatory artefaktów,
+trusted inputs, membership i hashy kapsuły pozostają obowiązkowe.
+
+To diagnostyczny odczyt z terminalnego pakietu, bez buildu, solvera i sesji.
+Kontener wypisuje `--print-openapi-v2`, ma readonly root/package, brak sieci
+i portów. Eksport sprawdza dokładny clean/dirty stamp rzeczywistej natywnej
+tożsamości przed normalizacją. Zachowuje `stdout.raw.json`, log, receipt
+i proof w nowym `storage/runs/<worktree-id>/openapi-export/<id>`; proof nie
+promuje WIP do clean ani nie kwalifikuje fizyki. Zabezpieczenia writer sesji
+nie ulegają zmianie.
+
+Dowód z 2026-10-06: 32 interpretowane regresje, 31 PASS / 1 Windows symlink
+SKIP. Rzeczywisty eksport snapshotu producenta R1 seq 33 zakończył się
+exit 0, input hashes PASS i cleanup confirmed. Zachował dirty provenance.
+Ten pakiet nie zawiera nowego DTO R3. Odbiór eksportu nie zastępuje
+regeneracji aktualnego OpenAPI/TS.
+
+Generator `apps/control-room/scripts/generate-openapi-v2.mjs` ma osobną
+trasę `--input <absolutny-stdout.raw.json> --expected-commit <40-hex>
+--expected-snapshot <64-hex> --expected-source-digest <64-hex>
+--managed-snapshot-receipt <absolutny-receipt.json>`. Wymaga inputu dokładnie
+`receipt-parent/stdout.raw.json` i sąsiedniego `proof.json`; oba dowody muszą
+być ograniczonymi regularnymi plikami. Sprawdza SHA surowych bajtów, ich
+rozmiar, SHA receiptu w proof, komplet pinów source/native, rzeczywisty
+clean/dirty stamp, succeeded/0, pełne input-hash evidence i cleanup.
+Dopiero potem normalizuje zmienne dane buildu i atomowo publikuje JSON.
+Odmowa zachowuje poprzedni kontrakt; brak inputu nie uruchamia Cargo.
+Snapshot receipt i native receipt są wzajemnie wykluczające. Domyślna
+trasa nadal wymaga clean identity; dotychczasowa native receipt zachowuje
+swój odrębny kontrakt. Hashy i wzajemnej zgodności plików nie należy
+przedstawiać jako uwierzytelnienia przeciw aktorowi mogącemu nadpisać
+raw/receipt/proof jednocześnie. Trusted package/capsule gates pozostają
+odpowiedzialnością managed eksportera.
+
+Dowód importu: `just verify-control-room-openapi-import`, 22/22 PASS,
+bez kompilacji native/unit-test bundles; `just check-control-room-api-hygiene`
+PASS. Walidator odczytał również rzeczywisty seq 33 raw/receipt/proof:
+PASS, raw niezmieniony, generated JSON/TS nie nadpisane. Pełna regeneracja
+R3 nadal wymaga terminalnego odpowiedniego buildu i jego własnego eksportu.
+
+### Niezależny czytnik artefaktów anteny — testy bez solvera
+
+`just verify-antenna-field-reader` uruchamia wyłącznie interpretowane regresje
+`tests.antenna.test_verify_field_convergence` oraz
+`tests.antenna.test_matched_libm`. Przed i po wykonaniu fingerprint
+obejmuje także importowane `tests/antenna/direct_quadrature_evidence.py`,
+`tests/antenna/matched_libm.py` i jego regresje;
+zmiana któregokolwiek przypiętego źródła powoduje odmowę receiptu.
+Log i terminalny receipt trafiają przez resolver do profilu
+`antenna-field-reader` w kanonicznym storage, nie do checkoutu.
+
+Testy sprawdzają syntetyczne pliki readera, nie wykonują native, LLG ani Relax.
+Receipt zachowuje `artifact_reader_only_not_native_or_physics`; nie zastępuje
+trzech publikacji native ani producer/input provenance. Rzeczywisty verifier
+wymaga direct-v3 evidence domyślnie; historyczne v1/v2 wolno wczytać wyłącznie
+przez jawne `--allow-legacy-local-estimator`, bez globalnego certyfikatu.
+Parametry analizy `--libm-path` i `--libm-sha256` występują razem:
+absolute library path i jawny expected SHA-256 z przypiętego GNU/Linux
+x86-64 runtime. Adapter wiąże `hypot@GLIBC_2.35`, sprawdza canonical
+resolved path, hash przed/po i nearest-even; nie zmienia fenv ani nie
+wraca do Python hypot po odmowie. Bez pary parametrów raport pozostaje
+`python_hypot_diagnostic_only`, a jawny legacy ma
+`not_applied_legacy_local_estimator`. Żaden profil nie nadaje sam z siebie
+producer/input qualification. Hash i `dladdr` nie chronią mapped ELF przed
+równoległą podmianą; wymagany jest przypięty runtime tylko do odczytu.
+Regresja samego fingerprintu jest w
+`scripts/test_verify_antenna_field_reader.py::test_imported_direct_decoder_changes_reader_fingerprint`.
+
+### Mały test naukowy anteny z sesją w RAM
+
+Po jawnej zgodzie użytkownika można użyć
+`just run-managed-antenna-ram <job-id> <commit> <source-digest> <native-snapshot-sha256>`.
+To osobna, ograniczona trasa FEM CPU/double dla przypiętego przykładu
+`examples/fem_antenna_current_source_inspection.py`, nie alternatywny trwały
+SessionStore i nie uruchomienie LLG. Wymaga terminalnego, udanego buildu
+`fem-cpu-release` i pełnego validatora trusted documents, pakietu oraz kapsuły.
+Nowy przykład jest osobnym, dokładnie zahashowanym wejściem naukowym;
+nie wolno przypisywać go wcześniejszej kapsule buildu.
+
+Launcher przyjmuje kapsułę `snapshot` albo czystą kapsułę `commit`; obie wymagają
+pełnego SHA commita oraz obu jawnych digestów. `commit` wymaga dodatkowo
+`source_snapshot_dirty=false`. Tryb źródeł nie pomija kontroli trusted documents,
+hashy pakietu ani pełnego `verify_source`. Obserwator ponawia te same kontrole.
+Regresja interpretowana: `scripts/test_antenna_ram_source_modes.py::AntennaRamSourceModesTests`;
+nie jest wykonaniem solvera ani kwalifikacją naukową.
+
+Sesja, cache siatki i oryginalny wynik znajdują się wyłącznie na ograniczonym
+tmpfs `/ram` (768 MiB). Kontener ma 2 CPU, 2 GiB RAM, 128 procesów, UID/GID
+65532, read-only rootfs, brak capabilities, podwyższonych uprawnień, sieci,
+portów i named volumes. Kapsuła, pakiet i trzy pliki wejściowe są read-only;
+jedyny zapis na bind hosta to eksport logu, exit marker i kopia wyniku pod
+nowym katalogiem `storage/builds/<worktree-id>/managed-antenna-ram-cpu/runs/<id>`.
+Nie zmienia to allowlisty filesystemów ani kwalifikacji checkpointów na 9p.
+
+Tryb naukowy ustawia `FULLMAG_API_PORT=0`: headless nie wymaga serwera API,
+a kontener nadal nie publikuje portów. `FULLMAG_STATE_DIR=/ram/user-state`
+kieruje osobną historię workspace do RAM; nie należy utożsamiać tej zmiennej
+z `FULLMAG_STATE_ROOT`, który określa root sesji. Oba zapisy są tymczasowe.
+
+`just observe-managed-antenna-ram <absolutny-run-root>` ponawia kontrolę
+pakietu, kapsuły i wejść oraz sprawdza rzeczywisty image, mounty, limity,
+tmpfs, komendę, środowisko i właściciela Compose. Stan inny niż `exited`
+pozostaje oczekujący. Exit 0, właściwy startup stamp i obecność eksportu
+oznaczają wyłącznie `solver_succeeded_comparison_pending`. Oddzielna bramka
+musi odczytać konkretny inspection stage record, zweryfikować jego canonical
+bundle i porównać V/H z niezależnym wzorcem. Receipt zachowuje
+`physics_qualified=false` i `durable_session_storage_qualified=false`.
+Kontener i eksport są zachowane także po błędzie; observer nie startuje
+nowego solve ani nie usuwa zasobów. Utrata RAM po zakończeniu kontenera jest
+zamierzona; eksport nie dowodzi odporności sesji na utratę zasilania.
 
 ### Pozostałe ograniczenia
 

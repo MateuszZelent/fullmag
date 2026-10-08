@@ -6,11 +6,18 @@
 //! Additionally, `backend='fem'` produces an executable `FemPlanIR`
 //! when a precomputed `MeshIR` asset is attached; runner execution is fully supported.
 
-use fullmag_ir::{BackendTarget, ExecutionMode, ExecutionPlanIR, ProblemIR, StudyIR};
+use fullmag_ir::{
+    AntennaFieldSolvePlanIR, BackendTarget, ExecutionMode, ExecutionPlanIR, ProblemIR, StudyIR,
+};
 
 #[cfg(test)]
 use fullmag_ir::*;
 
+mod antenna_composition;
+mod antenna_current_source;
+mod antenna_field_solve;
+mod antenna_projection;
+mod antenna_validity;
 mod antenna_zeeman;
 mod compute_resources;
 mod current_transport;
@@ -43,6 +50,14 @@ mod validate;
 
 pub mod boundary_geometry;
 
+pub use antenna_composition::{bind_antenna_field_solve, bind_antenna_field_solve_v03};
+pub use antenna_current_source::materialize_antenna_external_lead_current_input;
+pub use antenna_field_solve::{plan_antenna_field_solve_execution, AntennaFieldSolveExecutionPlan};
+pub use antenna_projection::resolve_fem_antenna_projection_mask;
+pub use antenna_validity::{
+    antenna_validity_notes, antenna_waveform_bandwidth_aggregate_note,
+    antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth,
+};
 pub use error::PlanError;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
@@ -241,6 +256,19 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         BackendTarget::Auto => unreachable!("auto backend should resolve before dispatch"),
     }?;
 
+    execution_plan
+        .provenance
+        .notes
+        .extend(antenna_waveform_bandwidth_notes(problem));
+    execution_plan
+        .provenance
+        .notes
+        .push(antenna_waveform_bandwidth_aggregate_note(problem));
+    execution_plan
+        .provenance
+        .notes
+        .extend(antenna_validity_notes(problem));
+
     if problem.physics_graph.is_some() {
         let notes = physics_graph_provenance_notes(problem, resolved_backend)
             .map_err(|reasons| PlanError { reasons })?;
@@ -251,6 +279,16 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     }
 
     Ok(execution_plan)
+}
+
+/// Plan one explicit static antenna basis solve without authorizing LLG,
+/// relaxation, eigenmode, or frequency-response execution.
+pub fn plan_antenna_field_solve(
+    problem: &ProblemIR,
+    stage_id: &str,
+    port_mode_id: &str,
+) -> Result<AntennaFieldSolvePlanIR, PlanError> {
+    antenna_field_solve::plan_antenna_field_solve_v03(problem, stage_id, port_mode_id)
 }
 
 #[cfg(test)]

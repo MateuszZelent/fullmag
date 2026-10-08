@@ -1,4 +1,6 @@
 #include "cpu/mfem/transport/periodic_charge_potential.hpp"
+#include "cpu/mfem/transport/affine_trace_relations.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.hpp"
 
 #include <mfem.hpp>
 
@@ -11,7 +13,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <numeric>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -25,44 +26,6 @@ namespace {
 constexpr const char *kOperatorVersion = "fem_charge_h1_periodic_jump.v1";
 
 using FaceKey = std::array<std::uint64_t, 3>;
-struct DisjointSet {
-    explicit DisjointSet(int size)
-        : parent(static_cast<std::size_t>(size)),
-          rank(static_cast<std::size_t>(size), 0)
-    {
-        std::iota(parent.begin(), parent.end(), 0);
-    }
-
-    int find(int value)
-    {
-        int &next = parent.at(static_cast<std::size_t>(value));
-        if (next != value) {
-            next = find(next);
-        }
-        return next;
-    }
-
-    void unite(int left, int right)
-    {
-        left = find(left);
-        right = find(right);
-        if (left == right) {
-            return;
-        }
-        auto &left_rank = rank.at(static_cast<std::size_t>(left));
-        auto &right_rank = rank.at(static_cast<std::size_t>(right));
-        if (left_rank < right_rank) {
-            std::swap(left, right);
-        }
-        parent.at(static_cast<std::size_t>(right)) = left;
-        if (left_rank == right_rank) {
-            ++left_rank;
-        }
-    }
-
-    std::vector<int> parent;
-    std::vector<unsigned char> rank;
-};
 
 double norm3(const std::array<double, 3> &value)
 {
@@ -352,18 +315,6 @@ void validate_conductivity(mfem::Mesh &mesh, mfem::Coefficient &conductivity)
             }
         }
     }
-}
-
-double independent_relative_residual(
-    const mfem::SparseMatrix &matrix,
-    const mfem::Vector &solution,
-    const mfem::Vector &rhs)
-{
-    mfem::Vector residual(rhs.Size());
-    matrix.Mult(solution, residual);
-    residual -= rhs;
-    const double denominator = std::max(rhs.Norml2(), 1.0e-30);
-    return residual.Norml2() / denominator;
 }
 
 #if defined(MFEM_USE_MPI)
@@ -1209,8 +1160,8 @@ PeriodicChargePotentialSolver::Solve(
         throw std::invalid_argument(
             "periodic charge v1 requires a conforming serial P1 space");
     }
-    const int full_size = impl->space->GetVSize();
-    DisjointSet quotient(full_size);
+    std::vector<AffineTraceRelation> trace_relations;
+    trace_relations.reserve(paired_vertices.size());
     for (const auto &[minus_vertex, plus_vertex] : paired_vertices) {
         mfem::Array<int> minus_dofs;
         mfem::Array<int> plus_dofs;
@@ -1221,91 +1172,31 @@ PeriodicChargePotentialSolver::Solve(
             throw std::invalid_argument(
                 "periodic charge v1 requires one positive P1 dof per vertex");
         }
-        quotient.unite(minus_dofs[0], plus_dofs[0]);
+        trace_relations.push_back({minus_dofs[0], plus_dofs[0],
+            request.source_cut.potential_drop_v,
+            request.source_cut.id + ":" + std::to_string(minus_vertex) +
+                ":" + std::to_string(plus_vertex)});
     }
 
-    std::map<int, int> root_to_reduced;
-    std::vector<int> full_to_reduced(static_cast<std::size_t>(full_size));
-    for (int dof = 0; dof < full_size; ++dof) {
-        const int root = quotient.find(dof);
-        const auto insertion = root_to_reduced.emplace(
-            root, static_cast<int>(root_to_reduced.size()));
-        full_to_reduced.at(static_cast<std::size_t>(dof)) = insertion.first->second;
-    }
-    const int reduced_size = static_cast<int>(root_to_reduced.size());
-    if (reduced_size <= 0) {
-        throw std::runtime_error("periodic charge quotient has no degrees of freedom");
-    }
-
-    mfem::BilinearForm diffusion(impl->space.get());
-    diffusion.AddDomainIntegrator(
-        new mfem::DiffusionIntegrator(*request.conductivity));
-    diffusion.Assemble();
-    diffusion.Finalize();
-    const mfem::SparseMatrix &full_matrix = diffusion.SpMat();
-
-    mfem::Vector lift(full_size);
-    const double translation_squared = dot(
-        request.source_cut.translation_m, request.source_cut.translation_m);
+    antenna_field_solve::ChargeTraceSolveRequest trace_request;
+    trace_request.mesh = impl->mesh.get();
+    trace_request.conductivity = request.conductivity;
+    trace_request.stable_vertex_identities = request.stable_vertex_identities;
+    trace_request.trace_relations = std::move(trace_relations);
+    trace_request.absolute_jump_tolerance_v = 1.0e-12;
+    trace_request.relative_jump_tolerance =
+        128.0 * std::numeric_limits<double>::epsilon();
+    trace_request.algebraic_relative_tolerance = request.algebraic_relative_tolerance;
+    trace_request.maximum_iterations = request.maximum_iterations;
+    const auto charge = antenna_field_solve::solve_charge_trace_workspace(trace_request);
+    const double relative_residual = *std::max_element(
+        charge->component_relative_residuals.begin(),
+        charge->component_relative_residuals.end());
     for (int vertex = 0; vertex < impl->mesh->GetNV(); ++vertex) {
         mfem::Array<int> dofs;
         impl->space->GetVertexDofs(vertex, dofs);
-        const auto coordinate = vertex_coordinate(*impl->mesh, vertex);
-        lift[dofs[0]] = request.source_cut.potential_drop_v *
-            dot(coordinate, request.source_cut.translation_m) /
-            translation_squared;
-    }
-
-    mfem::SparseMatrix reduced_matrix(reduced_size);
-    mfem::Array<int> columns;
-    mfem::Vector values;
-    for (int row = 0; row < full_matrix.Height(); ++row) {
-        const int reduced_row = full_to_reduced.at(static_cast<std::size_t>(row));
-        full_matrix.GetRow(row, columns, values);
-        for (int entry = 0; entry < columns.Size(); ++entry) {
-            const int reduced_column = full_to_reduced.at(
-                static_cast<std::size_t>(columns[entry]));
-            reduced_matrix.Add(reduced_row, reduced_column, values[entry]);
-        }
-    }
-    reduced_matrix.Finalize();
-
-    mfem::Vector full_lift_action(full_size);
-    full_matrix.Mult(lift, full_lift_action);
-    mfem::Vector reduced_rhs(reduced_size);
-    reduced_rhs = 0.0;
-    for (int dof = 0; dof < full_size; ++dof) {
-        reduced_rhs[full_to_reduced.at(static_cast<std::size_t>(dof))] -=
-            full_lift_action[dof];
-    }
-
-    mfem::Vector reduced_solution(reduced_size);
-    reduced_solution = 0.0;
-    mfem::SparseMatrix eliminated_matrix(reduced_matrix);
-    reduced_rhs[0] = 0.0;
-    eliminated_matrix.EliminateRowCol(0);
-
-    mfem::GSSmoother preconditioner(eliminated_matrix);
-    mfem::CGSolver solver;
-    solver.SetOperator(eliminated_matrix);
-    solver.SetPreconditioner(preconditioner);
-    solver.SetRelTol(request.algebraic_relative_tolerance);
-    solver.SetAbsTol(0.0);
-    solver.SetMaxIter(request.maximum_iterations);
-    solver.SetPrintLevel(0);
-    solver.Mult(reduced_rhs, reduced_solution);
-    const double relative_residual = independent_relative_residual(
-        eliminated_matrix, reduced_solution, reduced_rhs);
-    if (!solver.GetConverged() || !std::isfinite(relative_residual) ||
-        relative_residual > request.algebraic_relative_tolerance) {
-        throw std::runtime_error(
-            "periodic charge quotient CG did not satisfy the requested tolerance");
-    }
-
-    *impl->field = lift;
-    for (int dof = 0; dof < full_size; ++dof) {
-        (*impl->field)[dof] += reduced_solution[
-            full_to_reduced.at(static_cast<std::size_t>(dof))];
+        (*impl->field)[dofs[0]] = charge->potential_vertex_values_v[
+            static_cast<std::size_t>(vertex)];
     }
 
     mfem::LinearForm mass_weights(impl->space.get());

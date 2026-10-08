@@ -539,7 +539,7 @@ describe("ObjectVisualizationPanel lane routing", () => {
           "Object-scoped FEM viewport snapshots, field carriers, and exact transport metadata",
         owner: "object.visualization.debug",
         selection: objectDebugSelection,
-        target: "Magnetic object target (object:film)",
+        target: "Object target (object:film)",
         title: "Object Visualization Debug",
       },
       {

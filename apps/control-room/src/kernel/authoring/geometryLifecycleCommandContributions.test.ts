@@ -33,6 +33,7 @@ import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
 import { SelectionController } from "../selection/SelectionController";
 
 import {
@@ -88,10 +89,38 @@ function selectBox(selection: SelectionController): void {
   );
 }
 
-function sessionStatus(discretization: string) {
+function sessionStatus(discretization: string, domainDiscretization = discretization) {
+  const activeLane = activeLaneCapabilityFixture();
+  const resolved = discretization === "fem" || discretization === "fdm"
+    ? { ...activeLane.resolved!, backend: discretization, discretization }
+    : null;
   return {
     [SESSION_STATUS_RESOURCE_KEY]: {
-      domain: { discretization },
+      capabilities: {
+        active_lane: {
+          ...activeLane,
+          authored: { ...activeLane.authored, backend: discretization, discretization },
+          requested: { ...activeLane.requested, backend: discretization, discretization },
+          resolved,
+          source: { ...activeLane.source, engine_id: `${discretization}_cpu_reference` },
+          operations: {
+            ...activeLane.operations,
+            grid_build: {
+              ...activeLane.operations.grid_build,
+              state: discretization === "fdm" ? "supported" as const : "unsupported" as const,
+              reason_code: discretization === "fdm" ? "capability_supported" : "capability_unsupported",
+              reason: "Grid building follows the resolved planner lane.",
+            },
+            shared_mesh_build: {
+              state: discretization === "fem" ? "supported" as const : "unsupported" as const,
+              reason_code: discretization === "fem" ? "capability_supported" : "capability_unsupported",
+              reason: "Shared meshing follows the resolved planner lane.",
+              requires: ["discretization:fem"],
+            },
+          },
+        },
+      },
+      domain: { discretization: domainDiscretization },
     },
   };
 }
@@ -739,7 +768,7 @@ describe("geometry lifecycle command contributions", () => {
       },
       "test",
     );
-    const commitTransaction = vi.fn(async () => ({
+    const commitTransaction = vi.fn(async (_request: unknown) => ({
       committed_scene: { revision: 15 },
       scene_revision: 15,
       transaction_kind: "delete_object",
@@ -883,7 +912,7 @@ describe("geometry lifecycle command contributions", () => {
     now.mockRestore();
   });
 
-  it("adds microstrip antennas as auxiliary scene objects with canonical field drives", async () => {
+  it("adds microstrip antennas with current transport, balanced port, and field solve", async () => {
     const registry = registryWithLifecycleCommands();
     const bus = new EventBus<KernelEventMap>();
     const selection = new SelectionController(bus);
@@ -894,10 +923,11 @@ describe("geometry lifecycle command contributions", () => {
         modules: [{ id: "existing-source", kind: "antenna_field_source" }],
       },
       field_drives: { drives: [{ id: "existing-drive", kind: "regional" }] },
+      current_transports: [],
       objects: [{ id: "waveguide", name: "Waveguide", role: "magnet" }],
       revision: 20,
     }));
-    const commitTransaction = vi.fn(async () => ({
+    const commitTransaction = vi.fn(async (_request: unknown) => ({
       committed_scene: { revision: 22 },
       scene_revision: 22,
       transaction_kind: "merge_patch",
@@ -913,55 +943,121 @@ describe("geometry lifecycle command contributions", () => {
     });
 
     expect(result).toEqual({
-      message: "Microstrip antenna added.",
+      message: "Microstrip antenna draft added; field solve requires a mesh-exact ConservativeCurrentView.",
       status: "completed",
     });
-    expect(commitTransaction).toHaveBeenCalledWith({
+    const request = commitTransaction.mock.calls[0]?.[0] as {
+      merge_patch?: Record<string, unknown>;
+    } | undefined;
+    expect(request).toMatchObject({
+      base_revision: 20,
       kind: "merge_patch",
       merge_patch: {
-        field_drives: {
-          drives: [
-            { id: "existing-drive", kind: "regional" },
+        antenna_field_solve_stages: [{
+          conservative_current_view_ref: "antenna-9ix:current:rt0",
+          current_transport_id: "antenna-9ix:current",
+          field_sampling_domain: { kind: "global" },
+          id: "antenna-9ix:solve-field",
+          model: "quasistatic_conduction_biot_savart3d",
+          oersted_realization: "direct_tetra_quadrature",
+          outputs: [{ id: "antenna-9ix:field-solution", quantity: "H_ant_basis" }],
+          port_mode_ids: ["antenna-9ix:port:common"],
+          source_object_id: "antenna-9ix",
+          target_refs: [{ kind: "global" }],
+        }],
+        antenna_port_modes: [{
+          schema_version: "antenna_port_mode.v2",
+          branches: [
             {
-              activation: { kind: "all_time_evolution" },
-              amplitude_B_T: 0.001,
-              direction: [0, 1, 0],
-              enabled: true,
-              id: "antenna-9ix:H_ant",
-              kind: "regional",
-              name: "Microstrip antenna field",
-              spatial_profile: { kind: "geometry_mask", object_id: "antenna-9ix", envelope: { kind: "uniform" } },
-              target: { kind: "global" },
-              time_origin: "stage_local",
-              waveform: { amplitude: 1, cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
+              id: "signal",
+              inlet_terminal_ref: "signal_in",
+              outlet_terminal_ref: "signal_out",
+              signed_weight: 1,
+            },
+            {
+              id: "return",
+              inlet_terminal_ref: "return_in",
+              outlet_terminal_ref: "return_out",
+              signed_weight: -1,
             },
           ],
-        },
-        objects: [
-          { id: "waveguide", name: "Waveguide", role: "magnet" },
-          {
-            geometry: {
-              geometry_kind: "Box",
-              geometry_params: { size: [50e-9, 1e-6, 10e-9] },
-            },
+          current_transport_id: "antenna-9ix:current",
+          id: "antenna-9ix:port:common",
+          normalization_current_a: 1,
+          source_object_id: "antenna-9ix",
+        }],
+        current_transports: [{
+          coupling: "one_way",
+          domain: [{ object_id: "antenna-9ix" }],
+          kind: "current_transport",
+          model: "ohmic_poisson",
+          name: "antenna-9ix:current",
+        }],
+        objects: expect.arrayContaining([
+          expect.objectContaining({
             id: "antenna-9ix",
-            locked: false,
-            magnetization_ref: null,
-            material_ref: "",
-            name: "Microstrip antenna",
-            physics_stack: [],
             role: "antenna",
-            tags: ["role:antenna"],
-            transform: {
-              rotation: [0, 0, 0],
-              scale: [1, 1, 1],
-              translation: [0, 0, 0],
-            },
-            visible: true,
-          },
-        ],
+            geometry: expect.objectContaining({
+              geometry_kind: "MicrostripAntennaLayout",
+              geometry_params: expect.objectContaining({
+                stations: [{ s: 0, signal_width_m: 50e-9 }, { s: 1, signal_width_m: 50e-9 }],
+                return_width_m: 500e-9,
+                return_offset_m: 30e-9,
+                conductors: [{ id: "signal", kind: "signal" }, { id: "return", kind: "return" }],
+              }),
+            }),
+          }),
+        ]),
       },
     });
+    if (!request) throw new Error("antenna add command did not submit a transaction");
+    expect((request.merge_patch?.objects as Array<{ id: string }>).map((object) => object.id)).toEqual([
+      "waveguide",
+      "antenna-9ix",
+    ]);
+    const currentTransports = request.merge_patch?.current_transports as Array<{
+      boundaries?: Array<{
+        id?: string;
+        kind?: string;
+        surfaces?: Array<{ object_id?: string; surface_id?: string }>;
+      }>;
+      gauge?: string;
+      solver?: {
+        engine?: string;
+        operator_version?: string;
+        physical_residual_version?: string;
+      };
+    }> | undefined;
+    expect(currentTransports?.[0]?.boundaries?.map((boundary) => boundary.id)).toEqual([
+      "signal_in",
+      "signal_out",
+      "return_in",
+      "return_out",
+      "insulating_outer",
+    ]);
+    expect(currentTransports?.[0]?.boundaries?.slice(0, 4)).toEqual([
+      expect.objectContaining({ id: "signal_in", kind: "equipotential_current_terminal", surfaces: [expect.objectContaining({ object_id: "antenna-9ix", surface_id: "antenna_terminal:signal:local_u_min" })] }),
+      expect.objectContaining({ id: "signal_out", kind: "equipotential_current_terminal", surfaces: [expect.objectContaining({ object_id: "antenna-9ix", surface_id: "antenna_terminal:signal:local_u_max" })] }),
+      expect.objectContaining({ id: "return_in", kind: "equipotential_current_terminal", surfaces: [expect.objectContaining({ object_id: "antenna-9ix", surface_id: "antenna_terminal:return:local_u_min" })] }),
+      expect.objectContaining({ id: "return_out", kind: "equipotential_current_terminal", surfaces: [expect.objectContaining({ object_id: "antenna-9ix", surface_id: "antenna_terminal:return:local_u_max" })] }),
+    ]);
+    expect(currentTransports?.[0]?.gauge).toBe("terminal_reference");
+    expect(currentTransports?.[0]?.boundaries?.[4]).toMatchObject({
+      id: "insulating_outer",
+      surfaces: [{ object_id: "antenna-9ix", surface_id: "antenna_nonterminal" }],
+    });
+    expect(currentTransports?.[0]?.solver).toEqual({
+      engine: "cg",
+      linear: { absolute_tolerance: 0, max_iterations: 500, relative_tolerance: 1e-10 },
+      operator_version: "fem_charge_conforming_h1_p1.transparent.v1",
+      physical_residual_version: "charge_balance_integrated_l2.v1",
+    });
+    const port = (request.merge_patch?.antenna_port_modes as Array<Record<string, unknown>> | undefined)?.[0];
+    expect(port?.schema_version).toBe("antenna_port_mode.v2");
+    expect(port?.branches).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ terminal_selector_ref: expect.anything() }),
+    ]));
+    expect(request.merge_patch).not.toHaveProperty("field_drives");
     expect(selection.get()).toMatchObject({
       kind: "object.root",
       label: "Microstrip antenna",
@@ -970,6 +1066,69 @@ describe("geometry lifecycle command contributions", () => {
     });
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(22);
     now.mockRestore();
+  });
+
+  it("turns concurrent antenna adds into a revision conflict instead of a silent overwrite", async () => {
+    const registry = registryWithLifecycleCommands();
+    const now = vi.spyOn(Date, "now").mockReturnValue(12345);
+    const scene = vi.fn(async () => ({
+      current_modules: { modules: [] },
+      field_drives: { drives: [] },
+      current_transports: [],
+      objects: [],
+      revision: 20,
+    }));
+    let committed = false;
+    const requests: Array<{ base_revision?: number | null }> = [];
+    const commitTransaction = vi.fn(async (request: { base_revision?: number | null }) => {
+      requests.push(request);
+      if (request.base_revision !== 20) {
+        throw new Error("missing expected scene revision");
+      }
+      if (committed) {
+        throw new ControlRoomApiError(
+          "scene changed",
+          409,
+          "request-antenna-2",
+          "revision_conflict",
+        );
+      }
+      committed = true;
+      return {
+        committed_scene: { revision: 21 },
+        scene_revision: 21,
+        transaction_kind: "merge_patch",
+      };
+    });
+    const run = () =>
+      registry.execute("geometry.add-microstrip-antenna", {
+        api: { model: { commitTransaction, scene } } as never,
+        source: "test",
+      });
+
+    const [first, second] = await Promise.all([run(), run()]);
+
+    expect([first.status, second.status].sort()).toEqual(["completed", "failed"]);
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.base_revision === 20)).toBe(true);
+    now.mockRestore();
+  });
+
+  it("fails closed when the fetched antenna scene has no canonical revision", async () => {
+    const registry = registryWithLifecycleCommands();
+    const scene = vi.fn(async () => ({ objects: [] }));
+    const commitTransaction = vi.fn();
+
+    await expect(
+      registry.execute("geometry.add-microstrip-antenna", {
+        api: { model: { commitTransaction, scene } } as never,
+        source: "test",
+      }),
+    ).resolves.toEqual({
+      message: "The canonical scene revision is unavailable. Refetch the scene before adding an antenna.",
+      status: "failed",
+    });
+    expect(commitTransaction).not.toHaveBeenCalled();
   });
 
   it("does not submit an antenna transaction after the session changes during scene read", async () => {
@@ -1171,6 +1330,63 @@ describe("geometry lifecycle command contributions", () => {
     expect(resolveMeshCommandLane("FDM")).toBe("fdm");
     expect(resolveMeshCommandLane("auto")).toBe("unknown");
     expect(resolveMeshCommandLane(null)).toBe("unknown");
+  });
+
+  it.each([
+    ["fem", "fdm", "mesh.build-shared-domain", "grid.build-fdm"],
+    ["fdm", "fem", "grid.build-fdm", "mesh.build-shared-domain"],
+  ])("uses resolved %s rather than the retained %s domain for mesh commands", (lane, domain, enabledId, disabledId) => {
+    const registry = registryWithLifecycleCommands();
+    const context = {
+      api: { commands: {} } as never,
+      resourceData: { ...sessionStatus(lane, domain), [MODEL_SCENE_PATH]: { revision: 17 } },
+      source: "test" as const,
+    };
+    expect(registry.isEnabled(enabledId, context)).toBe(true);
+    expect(registry.isEnabled(disabledId, context)).toBe(false);
+  });
+
+  it.each(["fem", "fdm"])("never submits a %s build when its planner operation is deferred", async (lane) => {
+    const registry = registryWithLifecycleCommands();
+    const submit = vi.fn();
+    const status = sessionStatus(lane)[SESSION_STATUS_RESOURCE_KEY];
+    const operationId = lane === "fem" ? "shared_mesh_build" : "grid_build";
+    const reason = "Build deferred by the current planner capability profile.";
+    const context = {
+      api: { commands: { submit } } as never,
+      resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          ...status,
+          capabilities: { active_lane: {
+            ...status.capabilities.active_lane,
+            operations: { ...status.capabilities.active_lane.operations,
+              [operationId]: { state: "deferred", reason, requires: [] },
+            },
+          } },
+        },
+        [MODEL_SCENE_PATH]: { revision: 17 },
+      },
+      source: "test" as const,
+    };
+    const commandId = lane === "fem" ? "mesh.build-shared-domain" : "grid.build-fdm";
+    expect(registry.isEnabled(commandId, context)).toBe(false);
+    expect(await registry.execute(commandId, context)).toMatchObject({ status: "failed", message: reason });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it.each(["fem", "fdm"])("does not infer %s command support from a domain without planner resolution", async (domain) => {
+    const registry = registryWithLifecycleCommands();
+    const submit = vi.fn();
+    const context = {
+      api: { commands: { submit } } as never,
+      resourceData: { ...sessionStatus("auto", domain), [MODEL_SCENE_PATH]: { revision: 17 } },
+      source: "test" as const,
+    };
+    for (const id of ["mesh.build-shared-domain", "grid.build-fdm"]) {
+      expect(registry.isEnabled(id, context)).toBe(false);
+      expect(await registry.execute(id, context)).toMatchObject({ status: "failed" });
+    }
+    expect(submit).not.toHaveBeenCalled();
   });
   it("coalesces double-clicks into one confirmation, submission and terminal observer", async () => {
     const registry = registryWithLifecycleCommands();
@@ -1436,11 +1652,11 @@ describe("geometry lifecycle command contributions", () => {
     const detail = vi.fn(() => new Promise((resolve) => { complete = resolve; }));
     const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-old-scene" }));
     const context = { api: { commands: { submit, detail } } as never, source: "test" as const,
-      resourceData: { [SESSION_STATUS_RESOURCE_KEY]: { domain: { discretization: "fem" }, resources: { scene_revision: 3 } } } };
+      resourceData: { [SESSION_STATUS_RESOURCE_KEY]: { ...sessionStatus("fem")[SESSION_STATUS_RESOURCE_KEY], resources: { scene_revision: 3 } } } };
     const first = registry.execute("mesh.build-shared-domain", context);
     await vi.waitFor(() => expect(detail).toHaveBeenCalledOnce());
     const next = await registry.execute("mesh.build-shared-domain", { ...context,
-      resourceData: { [SESSION_STATUS_RESOURCE_KEY]: { domain: { discretization: "fem" }, resources: { scene_revision: 4 } } },
+      resourceData: { [SESSION_STATUS_RESOURCE_KEY]: { ...sessionStatus("fem")[SESSION_STATUS_RESOURCE_KEY], resources: { scene_revision: 4 } } },
     });
     expect(next).toMatchObject({ commandId: "cmd-old-scene", status: "pending", observation: "waiting" });
     expect(submit).toHaveBeenCalledOnce();

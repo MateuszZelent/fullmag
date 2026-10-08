@@ -1,6 +1,6 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "9ff9370eaf3561af814fe124e41f3219f859d694",
     "path": "public_docs/site/python-api/problem/problem.md"
   },
   "backend_matrix": [
@@ -356,6 +356,66 @@
         "meaning": "requested periodic axes and demag policy",
         "backend_support": "requested periodic axes and demag policy",
         "problem_ir": "backend_policy.pbc"
+      },
+      {
+        "python": "Problem.auxiliary_geometry_object_ids",
+        "type": "Mapping[str, str]",
+        "default": "{}",
+        "si_unit": "1",
+        "validation": "niepuste nazwy i ID; klucze należą do auxiliary_geometry_roles; unikalność object_ids względem magnesów",
+        "meaning": "niezmienna tożsamość pomocniczej encji, niezależna od nazwy",
+        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "problem_ir": "physics_objects[].object_id"
+      },
+      {
+        "python": "Problem.antenna_port_modes",
+        "type": "Sequence[AntennaPortMode]",
+        "default": "()",
+        "si_unit": "1",
+        "validation": "elementy AntennaPortMode; unikalne id w kolekcji",
+        "meaning": "deklaracje baz prądowych portów, bez automatycznego solve",
+        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "problem_ir": "antenna_port_modes"
+      },
+      {
+        "python": "Problem.antenna_field_solve_stages",
+        "type": "Sequence[AntennaFieldSolveStage]",
+        "default": "()",
+        "si_unit": "1",
+        "validation": "elementy AntennaFieldSolveStage; unikalne id w kolekcji",
+        "meaning": "deklaracje rozwiązania pola, oddzielone od jawnej akcji etapu",
+        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "problem_ir": "antenna_field_solve_stages"
+      },
+      {
+        "python": "Problem.antenna_target_projections",
+        "type": "Sequence[AntennaTargetProjection]",
+        "default": "()",
+        "si_unit": "1",
+        "validation": "elementy AntennaTargetProjection; unikalne id w kolekcji",
+        "meaning": "żądane rzuty bazy na wybrany cel",
+        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "problem_ir": "antenna_target_projections"
+      },
+      {
+        "python": "Problem.solved_antenna_drives",
+        "type": "Sequence[SolvedAntennaDrive]",
+        "default": "()",
+        "si_unit": "1",
+        "validation": "elementy SolvedAntennaDrive; unikalne id w kolekcji",
+        "meaning": "czasowa konsumpcja uprzednio rozwiązanej bazy",
+        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "problem_ir": "solved_antenna_drives"
+      },
+      {
+        "python": "Problem.antenna_spectrum_requests",
+        "type": "Sequence[AntennaSpectrumRequest]",
+        "default": "()",
+        "si_unit": "1",
+        "validation": "elementy AntennaSpectrumRequest; unikalne id w kolekcji",
+        "meaning": "żądania widma źródła, nie odpowiedź magnetyzacji",
+        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "problem_ir": "antenna_spectrum_requests"
       }
     ]
   }

@@ -1799,6 +1799,48 @@ pub(crate) enum FemStaticPbcLane {
     Unsupported,
 }
 
+/// Time coordinate emitted by the selected stage runner in StepStats and live callbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageStepTimeFrame {
+    StageLocal,
+    Absolute,
+}
+
+/// Resolve the clock contract from the same execution lanes used by dispatch.
+pub fn stage_step_time_frame(
+    problem: &ProblemIR,
+    plan: &ExecutionPlanIR,
+) -> Result<StageStepTimeFrame, RunError> {
+    let frame = match &plan.backend_plan {
+        BackendPlanIR::Fdm(_) => {
+            let runtime = crate::resolve_planned_runtime_engine(problem, plan)?;
+            fdm_stage_step_time_frame(&runtime.engine_id)?
+        }
+        BackendPlanIR::FdmMultilayer(_) => StageStepTimeFrame::StageLocal,
+        BackendPlanIR::Fem(fem) => {
+            if fem_static_periodic_decision(fem).lane == FemStaticPbcLane::ReferenceReduction {
+                StageStepTimeFrame::StageLocal
+            } else {
+                StageStepTimeFrame::Absolute
+            }
+        }
+        BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => {
+            StageStepTimeFrame::StageLocal
+        }
+    };
+    Ok(frame)
+}
+
+fn fdm_stage_step_time_frame(engine_id: &str) -> Result<StageStepTimeFrame, RunError> {
+    match engine_id {
+        "fdm_cpu_reference" => Ok(StageStepTimeFrame::Absolute),
+        "fdm_cuda" => Ok(StageStepTimeFrame::StageLocal),
+        engine => Err(RunError {
+            message: format!("unknown FDM stage step clock for engine '{engine}'"),
+        }),
+    }
+}
+
 /// Result of the FEM static PBC capability decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FemStaticPbcDecision {
@@ -2394,15 +2436,20 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     let stage_oersted_callback_requested =
         crate::native_fem::plan_requests_stage_oersted_callback(&normalized_plan);
     #[cfg(feature = "fem-gpu")]
-    let transport_bundle = if normalized_plan.spin_transport_plans.is_empty() {
+    let transport_bundle = if normalized_plan.spin_transport_plans.is_empty()
+        && normalized_plan.charge_transport_plans.is_empty()
+    {
         None
     } else {
         if engine != FemEngine::CpuNative {
             return Err(RunError {
-                message: "FEM M1 steady spin transport resolved CPU-double, but runtime selected GPU; refusing hidden fallback before provenance".to_string(),
+                message: "FEM charge/spin transport resolved CPU-double, but runtime selected GPU; refusing hidden fallback before provenance".to_string(),
             });
         }
-        crate::native_fem::execute_native_fem_steady_transport_plans(&normalized_plan)?
+        let charge =
+            crate::native_fem::execute_native_fem_charge_transport_plans(&normalized_plan)?;
+        let spin = crate::native_fem::execute_native_fem_steady_transport_plans(&normalized_plan)?;
+        merge_native_fem_transport_bundles(charge, spin)?
     };
     #[cfg(feature = "fem-gpu")]
     if let Some(field) = transport_bundle
@@ -2449,9 +2496,11 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
         }
     }
     #[cfg(not(feature = "fem-gpu"))]
-    if !normalized_plan.spin_transport_plans.is_empty() {
+    if !normalized_plan.spin_transport_plans.is_empty()
+        || !normalized_plan.charge_transport_plans.is_empty()
+    {
         return Err(RunError {
-            message: "FEM steady spin transport requires a runner built with the managed native FEM feature".to_string(),
+            message: "FEM charge/spin transport requires a runner built with the managed native FEM feature".to_string(),
         });
     }
     let pbc_decision = fem_static_periodic_decision(&normalized_plan);
@@ -2512,7 +2561,9 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
         .cloned()
         .collect::<Vec<_>>();
     #[cfg(feature = "fem-gpu")]
-    let runtime_outputs = if normalized_plan.spin_transport_plans.is_empty() {
+    let runtime_outputs = if normalized_plan.spin_transport_plans.is_empty()
+        && normalized_plan.charge_transport_plans.is_empty()
+    {
         outputs
     } else {
         dynamic_outputs.as_slice()
@@ -2602,11 +2653,45 @@ fn steady_transport_output(output: &OutputIR) -> bool {
     )
 }
 
+#[cfg(feature = "fem-gpu")]
+fn merge_native_fem_transport_bundles(
+    left: Option<crate::native_fem::NativeFemSteadyTransportBundle>,
+    right: Option<crate::native_fem::NativeFemSteadyTransportBundle>,
+) -> Result<Option<crate::native_fem::NativeFemSteadyTransportBundle>, RunError> {
+    let Some(mut left) = left else {
+        return Ok(right);
+    };
+    let Some(mut right) = right else {
+        return Ok(Some(left));
+    };
+    match (
+        left.oersted_field_xyz.as_mut(),
+        right.oersted_field_xyz.take(),
+    ) {
+        (Some(left_field), Some(right_field)) => {
+            if left_field.len() != right_field.len() {
+                return Err(RunError {
+                    message: "FEM charge/spin Oersted fields disagree on target size".into(),
+                });
+            }
+            for (left_value, right_value) in left_field.iter_mut().zip(right_field) {
+                *left_value += right_value;
+            }
+        }
+        (None, Some(right_field)) => left.oersted_field_xyz = Some(right_field),
+        _ => {}
+    }
+    left.artifacts.append(&mut right.artifacts);
+    left.field_snapshots.append(&mut right.field_snapshots);
+    left.provenance.append(&mut right.provenance);
+    Ok(Some(left))
+}
+
 fn reject_unsupported_steady_transport_component_outputs(
     plan: &FemPlanIR,
     outputs: &[OutputIR],
 ) -> Result<(), RunError> {
-    if plan.spin_transport_plans.is_empty() {
+    if plan.spin_transport_plans.is_empty() && plan.charge_transport_plans.is_empty() {
         return Ok(());
     }
     for output in outputs {
@@ -3175,6 +3260,8 @@ fn native_fem_requires_initial_snapshot(
 #[cfg(feature = "fem-gpu")]
 fn record_native_fem_initial_field_snapshots(
     backend: &mut NativeFemBackend,
+    engine: FemEngine,
+    plan: &FemPlanIR,
     artifacts: &mut ArtifactRecorder,
     field_schedules: &mut [OutputSchedule],
     node_count: usize,
@@ -3189,7 +3276,19 @@ fn record_native_fem_initial_field_snapshots(
     names.sort();
     names.dedup();
     for name in names {
-        if artifacts.is_streaming() {
+        if engine == FemEngine::CpuNative
+            && crate::fem::relax::snapshots::is_antenna_field_snapshot(&name)
+        {
+            artifacts.record_field_snapshot(
+                crate::fem::relax::snapshots::build_antenna_field_snapshot(
+                    plan,
+                    &name,
+                    current_stats.step,
+                    current_stats.time,
+                    current_stats.dt,
+                )?,
+            )?;
+        } else if artifacts.is_streaming() {
             let snapshot = backend.begin_field_snapshot(
                 &name,
                 current_stats.step,
@@ -3244,6 +3343,7 @@ fn execute_native_fem(
         crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref());
     let time_events = crate::time_events::build_native_fem_stage_event_schedule(
         &plan.field_drives,
+        &plan.solved_antenna_drive_bases,
         0.0,
         until_seconds,
         outputs,
@@ -3258,12 +3358,19 @@ fn execute_native_fem(
         !field_schedules.is_empty(),
     );
 
+    let eager_initial_effective_field = needs_initial_snapshot
+        && plan.time_stage.waveform_origin_time_s() == plan.time_stage.start_time_s;
     let native_execution_mode = native_fem_execution_mode(plan);
     let mut backend = create_native_fem_backend_after_strict_gpu_mode_preflight(
         engine,
         execution_mode,
         native_execution_mode,
-        || NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot),
+        || {
+            NativeFemBackend::create_with_initial_effective_field(
+                plan,
+                eager_initial_effective_field,
+            )
+        },
     )?;
     if engine == FemEngine::NativeGpu {
         backend.set_gpu_execution_request(execution_mode == ExecutionMode::Strict)?;
@@ -3303,7 +3410,10 @@ fn execute_native_fem(
         || backend.validate_strict_gpu_rk_plan(),
     );
     begin_native_fem_stage_after_strict_gpu_preflight(strict_gpu_preflight, || {
-        backend.begin_stage(plan.time_stage.start_time_s)
+        backend.begin_stage_with_waveform_origin(
+            plan.time_stage.start_time_s,
+            plan.time_stage.waveform_origin_time_s(),
+        )
     })?;
     let device_info = backend.device_info()?;
     let gpu_state_info = backend.gpu_state_info()?;
@@ -3462,6 +3572,8 @@ fn execute_native_fem(
     if needs_initial_snapshot && current_stats.step == 0 {
         record_native_fem_initial_field_snapshots(
             &mut backend,
+            engine,
+            plan,
             &mut artifacts,
             &mut field_schedules,
             node_count,
@@ -3649,12 +3761,48 @@ pub(crate) fn flatten_vectors(values: &[[f64; 3]]) -> Vec<f64> {
         .collect()
 }
 
+#[cfg(all(test, feature = "cuda"))]
+fn partition_cuda_field_schedules(
+    outputs: &[OutputIR],
+    transport_active: bool,
+) -> Result<(
+    Vec<crate::schedules::OutputSchedule>,
+    Vec<crate::schedules::OutputSchedule>,
+), RunError> {
+    let field_schedules = crate::schedules::collect_field_schedules(outputs)?;
+    let (mut transport, field): (Vec<_>, Vec<_>) =
+        field_schedules.into_iter().partition(|schedule| {
+            matches!(
+                schedule.name.as_str(),
+                "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt"
+            )
+        });
+    if !transport_active {
+        transport.clear();
+    }
+    Ok((transport, field))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::fem::test_support::*;
     use crate::solvers::fdm::interactions::capabilities::unsupported_cpu_fdm_terms;
 
     use super::*;
+
+    #[test]
+    fn fdm_stage_step_clock_uses_resolved_engine_not_backend_family() {
+        assert_eq!(
+            fdm_stage_step_time_frame("fdm_cpu_reference").unwrap(),
+            StageStepTimeFrame::Absolute
+        );
+        assert_eq!(
+            fdm_stage_step_time_frame("fdm_cuda").unwrap(),
+            StageStepTimeFrame::StageLocal
+        );
+        assert!(fdm_stage_step_time_frame("unknown").is_err());
+    }
+
 
     #[test]
     fn eigen_path_handoff_identity_binds_root_and_matching_sample_diagnostics() {
@@ -4229,6 +4377,38 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
+    fn charge_and_spin_transport_bundles_add_oersted_without_losing_artifacts() {
+        let bundle =
+            |name: &str, field: Vec<f64>| crate::native_fem::NativeFemSteadyTransportBundle {
+                artifacts: vec![AuxiliaryArtifact {
+                    relative_path: name.into(),
+                    bytes: Vec::new(),
+                }],
+                field_snapshots: Vec::new(),
+                provenance: Vec::new(),
+                oersted_field_xyz: Some(field),
+            };
+        let merged = merge_native_fem_transport_bundles(
+            Some(bundle("charge.json", vec![1.0, 2.0, 3.0])),
+            Some(bundle("spin.json", vec![4.0, 5.0, 6.0])),
+        )
+        .expect("compatible transport fields should merge")
+        .expect("merged bundle");
+        assert_eq!(merged.oersted_field_xyz, Some(vec![5.0, 7.0, 9.0]));
+        assert_eq!(merged.artifacts.len(), 2);
+
+        let error = match merge_native_fem_transport_bundles(
+            Some(bundle("charge.json", vec![1.0, 2.0, 3.0])),
+            Some(bundle("spin.json", vec![4.0, 5.0])),
+        ) {
+            Ok(_) => panic!("different target sizes must fail closed"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("target size"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
     fn steady_transport_component_schedule_is_rejected_before_execution() {
         let mut plan = tiny_fem_plan();
         plan.spin_transport_plans = vec![crate::native_fem::test_resolved_steady_transport_plan()];
@@ -4424,10 +4604,12 @@ mod tests {
             enable_demag: false,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
+            charge_transport_plans: Vec::new(),
             spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: fullmag_ir::ExecutionPrecision::Double,

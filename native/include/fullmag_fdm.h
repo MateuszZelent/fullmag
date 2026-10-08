@@ -54,6 +54,7 @@ extern "C" {
 #define FULLMAG_FDM_PLAN_DESC_ABI_V2 UINT32_C(2)
 #define FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1 UINT32_C(1)
+#define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2 UINT32_C(2)
 
 /* ── Enums ── */
 
@@ -804,7 +805,7 @@ typedef struct {
     uint64_t field_len;            /* exactly 3 * cell_count */
     fullmag_fdm_regional_field_drive_waveform waveform;
     fullmag_fdm_regional_field_drive_time_origin time_origin;
-    double stage_start_time_s;     /* used only for STAGE_LOCAL */
+    double stage_start_time_s;     /* absolute segment start; used for ABSOLUTE */
     double frequency_hz;
     double phase_rad;
     double offset;
@@ -817,9 +818,20 @@ typedef struct {
     uint64_t piecewise_point_count;
 } fullmag_fdm_regional_field_drive_desc_v1;
 
+/* Separate descriptor preserves the v1 array stride and binary contract.
+ * Both times are absolute seconds; 0 <= waveform_origin_time_s <=
+ * drive.stage_start_time_s. The v1 adapter sets them equal.
+ */
+typedef struct {
+    fullmag_fdm_regional_field_drive_desc_v1 drive;
+    double waveform_origin_time_s; /* original stage start for STAGE_LOCAL */
+} fullmag_fdm_regional_field_drive_desc_v2;
+
 #if defined(__cplusplus)
 static_assert(sizeof(fullmag_fdm_regional_field_drive_desc_v1) == 120,
               "regional field-drive v1 ABI size changed");
+static_assert(sizeof(fullmag_fdm_regional_field_drive_desc_v2) == 128,
+              "regional field-drive v2 ABI size changed");
 #endif
 
 /* ── Per-step diagnostics ── */
@@ -1421,6 +1433,10 @@ int fullmag_fdm_backend_set_static_external_field_f64(
 int fullmag_fdm_backend_set_regional_field_drives_v1(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count);
+int fullmag_fdm_backend_set_regional_field_drives_v2(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v2 *drives,
     uint32_t drive_count);
 
 /**

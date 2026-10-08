@@ -1,8 +1,8 @@
 //! Bounded, unit-aware time-domain spin-wave response analysis.
 
 use fullmag_ir::{
-    BackendPlanIR, DriveActivationIR, ExecutionPlanIR, FieldSpatialProfileIR, FieldTargetIR,
-    FieldTimeOriginIR, ProblemIR, RegionalFieldDriveIR,
+    BackendPlanIR, ExecutionPlanIR, FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR,
+    ProblemIR,
 };
 use num_complex::Complex64;
 use rustfft::FftPlanner;
@@ -273,31 +273,28 @@ pub(crate) fn append_requested_spin_wave_artifacts(
         value => return Err(run_error(format!("unsupported Γ response_component '{value}'; expected my or mz so S_Gamma uses both transverse components"))),
     };
     let secondary_component = if component == 1 { 2 } else { 1 };
-    let (drives, stage_start_time_s, active_stage_id, reference_m0, reference_m0_secondary) =
-        match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => (
-                fem.field_drives.as_slice(),
-                fem.time_stage.start_time_s,
-                fem.time_stage.active_stage_id.as_deref(),
-                fem_initial_component(fem, component)?,
-                fem_initial_component(fem, secondary_component)?,
-            ),
-            BackendPlanIR::Fdm(fdm) => (
-                fdm.field_drives.as_slice(),
-                fdm.time_stage.start_time_s,
-                fdm.time_stage.active_stage_id.as_deref(),
-                fdm_initial_component(fdm, component)?,
-                fdm_initial_component(fdm, secondary_component)?,
-            ),
-            _ => {
-                return Err(run_error(
-                    "Γ time-domain analysis requires an FDM or FEM time-evolution plan",
-                ))
-            }
-        };
+    let (drives, time_stage, reference_m0, reference_m0_secondary) = match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => (
+            fem.field_drives.as_slice(),
+            &fem.time_stage,
+            fem_initial_component(fem, component)?,
+            fem_initial_component(fem, secondary_component)?,
+        ),
+        BackendPlanIR::Fdm(fdm) => (
+            fdm.field_drives.as_slice(),
+            &fdm.time_stage,
+            fdm_initial_component(fdm, component)?,
+            fdm_initial_component(fdm, secondary_component)?,
+        ),
+        _ => {
+            return Err(run_error(
+                "Γ time-domain analysis requires an FDM or FEM time-evolution plan",
+            ))
+        }
+    };
     let active_drives = drives
         .iter()
-        .filter(|drive| drive.enabled && drive_is_active(drive, active_stage_id))
+        .filter(|drive| crate::time_events::resolved_field_drive_is_active(drive, time_stage))
         .collect::<Vec<_>>();
     if active_drives.is_empty() {
         return Ok(());
@@ -344,7 +341,7 @@ pub(crate) fn append_requested_spin_wave_artifacts(
                 .iter()
                 .map(|drive| {
                     let evaluation_time = match drive.time_origin {
-                        FieldTimeOriginIR::StageLocal => *time - stage_start_time_s,
+                        FieldTimeOriginIR::StageLocal => *time - time_stage.waveform_origin_time_s(),
                         FieldTimeOriginIR::Absolute => *time,
                     };
                     drive.amplitude_b_t / crate::MU0
@@ -389,14 +386,6 @@ pub(crate) fn append_requested_spin_wave_artifacts(
         bytes,
     });
     Ok(())
-}
-
-fn drive_is_active(drive: &RegionalFieldDriveIR, active_stage_id: Option<&str>) -> bool {
-    match &drive.activation {
-        DriveActivationIR::AllTimeEvolution {} => true,
-        DriveActivationIR::StageIds { stage_ids } => active_stage_id
-            .is_some_and(|active| stage_ids.iter().any(|stage_id| stage_id == active)),
-    }
 }
 
 fn fem_initial_component(plan: &fullmag_ir::FemPlanIR, component: usize) -> Result<f64, RunError> {

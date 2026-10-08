@@ -786,6 +786,11 @@ pub(crate) fn input_from_resolved(
             fullmag_ir::ChargePotentialGaugeIR::ZeroMean => {
                 GpuChargeGauge::ZeroMeanPerFreeComponent
             }
+            fullmag_ir::ChargePotentialGaugeIR::TerminalReference => {
+                return Err(GpuChargeTransportError::validation(
+                    "terminal-reference gauge requires dedicated FEM antenna solve",
+                ));
+            }
         },
         attempt_id: 1,
         stage_id: 1,

@@ -525,7 +525,15 @@ pub(crate) fn finalize_native_fem_relaxation(
         .filter(|name| !scheduled_names.contains(name.as_str()))
     {
         let copy_start = std::time::Instant::now();
-        if artifacts.is_streaming() {
+        if engine == FemEngine::CpuNative && super::snapshots::is_antenna_field_snapshot(&name) {
+            artifacts.record_field_snapshot(super::snapshots::build_antenna_field_snapshot(
+                plan,
+                &name,
+                final_stats.step,
+                final_stats.time,
+                final_stats.dt,
+            )?)?;
+        } else if artifacts.is_streaming() {
             let snapshot = backend.begin_field_snapshot(
                 &name,
                 final_stats.step,
@@ -559,7 +567,19 @@ pub(crate) fn finalize_native_fem_relaxation(
             continue;
         }
         let copy_start = std::time::Instant::now();
-        if artifacts.is_streaming() {
+        if engine == FemEngine::CpuNative
+            && super::snapshots::is_antenna_field_snapshot(&schedule.name)
+        {
+            if enqueue_payload {
+                artifacts.record_field_snapshot(super::snapshots::build_antenna_field_snapshot(
+                    plan,
+                    &schedule.name,
+                    final_stats.step,
+                    final_stats.time,
+                    final_stats.dt,
+                )?)?;
+            }
+        } else if artifacts.is_streaming() {
             if enqueue_payload {
                 let snapshot = backend.begin_field_snapshot(
                     &schedule.name,

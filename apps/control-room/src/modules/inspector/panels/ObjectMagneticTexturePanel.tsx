@@ -6,12 +6,16 @@ import {
   acknowledgedAuthoringSceneRevision,
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
-import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
+import {
+  captureAuthoringMutationFence,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import {
+  publishCommittedSceneResource,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -777,7 +781,7 @@ export function ObjectMagneticTexturePanel({
   selection,
 }: InspectorPanelProps) {
   const kernel = useKernel();
-  const { api, authoringHistory, resources } = kernel;
+  const { api, resources } = kernel;
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const activeLane = useActiveLaneCapabilities();
   const scene = useSceneResource();
@@ -857,11 +861,14 @@ export function ObjectMagneticTexturePanel({
       return;
     }
 
+    const mutationContext = captureAuthoringMutationFence(
+      createCommandContext("inspector", kernel, { sessionScopeKey }),
+    );
     setPending(true);
     try {
       const asset = buildObjectMagneticTextureAssetDraft(model, draft);
       const response = await runAuthoringMutationWithHistory(
-        { api, authoringHistory, sessionScopeKey },
+        mutationContext,
         `Save magnetic texture ${model.objectId}`,
         async ({ baseRevision }) => {
           const request = buildMagnetizationTransactionRequest(
@@ -878,9 +885,13 @@ export function ObjectMagneticTexturePanel({
           );
         },
       );
+      if (mutationContext.isCurrentSessionScope?.() !== true) return;
       const revision = acknowledgedAuthoringSceneRevision(response);
+      publishCommittedSceneResource(resources, response.committed_scene, revision,
+        undefined, false, sessionScopeKey, api.resourceCacheScope);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
+      if (mutationContext.isCurrentSessionScope?.() !== true) return;
       setDraftState({
         baseKey: draftKey,
         dirty: false,
@@ -910,10 +921,13 @@ export function ObjectMagneticTexturePanel({
       return;
     }
 
+    const mutationContext = captureAuthoringMutationFence(
+      createCommandContext("inspector", kernel, { sessionScopeKey }),
+    );
     setPending(true);
     try {
       const response = await runAuthoringMutationWithHistory(
-        { api, authoringHistory, sessionScopeKey },
+        mutationContext,
         `Clear magnetic texture ${model.objectId}`,
         async ({ baseRevision }) => {
           const request = buildMagnetizationTransactionRequest(
@@ -930,9 +944,13 @@ export function ObjectMagneticTexturePanel({
           );
         },
       );
+      if (mutationContext.isCurrentSessionScope?.() !== true) return;
       const revision = acknowledgedAuthoringSceneRevision(response);
+      publishCommittedSceneResource(resources, response.committed_scene, revision,
+        undefined, false, sessionScopeKey, api.resourceCacheScope);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
+      if (mutationContext.isCurrentSessionScope?.() !== true) return;
       setDraftState({
         baseKey: draftKey,
         dirty: false,

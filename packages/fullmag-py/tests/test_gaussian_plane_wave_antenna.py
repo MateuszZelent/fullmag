@@ -179,7 +179,7 @@ class GaussianPlaneWaveAntennaTests(unittest.TestCase):
             )
 
     def test_fem_counterpart_preserves_geometry_gradient_and_antenna_contract(self) -> None:
-        scenario_path = Path(__file__).resolve().parents[3] / "tests/vlad/4.5GHz_fem.py"
+        scenario_path = Path(__file__).resolve().parent / "fixtures/gaussian_plane_wave_fem.py"
         loaded = fm.load_problem_from_script(scenario_path, lightweight_assets=True)
         problem = loaded.stages[-1].problem
 

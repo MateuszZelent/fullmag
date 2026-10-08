@@ -13,25 +13,6 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 
-recipe="$1"
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/.." && pwd)"
-resolver="${repo_root}/scripts/fullmag_storage.py"
-python_cmd=""
-if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
-  python_cmd="$(command -v python3)"
-elif command -v python >/dev/null 2>&1 && python -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
-  python_cmd="$(command -v python)"
-else
-  echo "[fullmag just] Python is required for the storage resolver" >&2
-  exit 2
-fi
-
-if [ ! -f "${resolver}" ]; then
-  echo "[fullmag just] common storage resolver is missing: ${resolver}" >&2
-  exit 2
-fi
-
 is_windows_shell() {
   case "${OS:-}" in
     Windows_NT) return 0 ;;
@@ -42,9 +23,80 @@ is_windows_shell() {
   return 1
 }
 
+recipe="$1"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+resolver="${repo_root}/scripts/fullmag_storage.py"
+python_cmd="${FULLMAG_STORAGE_PYTHON:-}"
+if [ -n "${python_cmd}" ] && is_windows_shell && command -v cygpath >/dev/null 2>&1 && [[ "${python_cmd}" == *\\* || "${python_cmd}" =~ ^[A-Za-z]:[\\/] ]]; then
+  python_cmd="$(cygpath -u "${python_cmd}")"
+fi
+if [ -n "${python_cmd}" ] && ! "${python_cmd}" -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
+  python_cmd=""
+fi
+if [ -z "${python_cmd}" ]; then
+  python_candidates=(python3 python)
+  if is_windows_shell; then
+    python_candidates=()
+    # A WindowsApps alias can precede a working interpreter in PATH.
+    while IFS= read -r candidate; do
+      [ -n "${candidate}" ] && python_candidates+=("${candidate}")
+    done < <(type -aP python python3 2>/dev/null || true)
+  fi
+  for python_candidate in "${python_candidates[@]}"; do
+    candidate_path=""
+    if command -v "${python_candidate}" >/dev/null 2>&1; then
+      candidate_path="$(command -v "${python_candidate}")"
+    elif [ -f "${python_candidate}" ]; then
+      candidate_path="${python_candidate}"
+    fi
+    if [ -n "${candidate_path}" ] && "${candidate_path}" -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
+      python_cmd="${candidate_path}"
+      break
+    fi
+  done
+fi
+if [ -z "${python_cmd}" ]; then
+  echo "[fullmag just] Python is required for the storage resolver" >&2
+  exit 2
+fi
+
+# Recipe bodies also invoke Python by name. Keep them on the interpreter
+# that passed the probe, without changing the host's persistent PATH.
+export PATH="$(dirname "${python_cmd}"):${PATH}"
+# Nested launchers may run under a fresh Windows Bash process where the
+# POSIX-form PATH entry is not preserved. Pass the tested absolute interpreter
+# explicitly so they cannot fall back to the WindowsApps alias.
+export FULLMAG_STORAGE_PYTHON="${python_cmd}"
+
+if [ ! -f "${resolver}" ]; then
+  echo "[fullmag just] common storage resolver is missing: ${resolver}" >&2
+  exit 2
+fi
+
+# Python on Windows cannot resolve the POSIX `/usr/bin/bash` entry that Git
+# Bash exposes in PATH. Pass an absolute Windows executable to the managed
+# runner so nested recipe shells inherit the resolved storage environment.
+bash_executable="bash"
+if is_windows_shell && command -v cygpath >/dev/null 2>&1; then
+  bash_path="$(command -v bash)"
+  if [[ "${bash_path}" == /* ]]; then
+    bash_executable="$(cygpath -w "${bash_path}")"
+  fi
+fi
 # Admit this fixed helper before generic diagnostic substring handling, so a
 # composite command cannot use a diagnostic marker to bypass its argument check.
 case "${recipe}" in
+  *"scripts/verify_antenna_field_reader.py"*)
+    antenna_reader_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_antenna_field_reader.py" --repo-root "[^"]+"$'
+    if [[ ! "${recipe}" =~ ${antenna_reader_pattern} ]]; then
+      echo "[fullmag just] invalid antenna field-reader recipe" >&2
+      exit 2
+    fi
+    # This fixed Python-only helper owns resolver preflight, its profile lock
+    # and terminal source-bound receipt. No arbitrary command is forwarded.
+    exec "${python_cmd}" "${script_dir}/verify_antenna_field_reader.py" --repo-root "${repo_root}"
+    ;;
   *"scripts/windows/recover_runtime.py"*)
     runtime_recovery_pattern='^[^[:space:]]+ "[^"]+/scripts/windows/recover_runtime.py" --repo-root "[^"]+" --web-port "([1-9][0-9]{0,4})"$'
     if [[ ! "${recipe}" =~ ${runtime_recovery_pattern} ]]; then
@@ -99,6 +151,10 @@ case "${recipe}" in
     ;;
   *"scripts/export_runner_openapi.py"*)
     export_openapi_pattern='^[^[:space:]]+ "[^"]+/scripts/export_runner_openapi.py" --repo-root "[^"]+" --job-id "([0-9a-f]{32})" --expected-commit "([0-9a-f]{40})"$'
+    export_openapi_snapshot_pattern='^[^[:space:]]+ "[^"]+/scripts/export_runner_openapi.py" --repo-root "[^"]+" --job-id "([0-9a-f]{32})" --expected-commit "([0-9a-f]{40})" --source-digest "([0-9a-f]{64})" --native-snapshot-sha256 "([0-9a-f]{64})"$'
+    if [[ "${recipe}" =~ ${export_openapi_snapshot_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}" --source-digest "${BASH_REMATCH[3]}" --native-snapshot-sha256 "${BASH_REMATCH[4]}"
+    fi
     if [[ ! "${recipe}" =~ ${export_openapi_pattern} ]]; then
       echo "[fullmag just] invalid managed OpenAPI export recipe" >&2
       exit 2
@@ -212,10 +268,10 @@ if [[ "${recipe}" == *"fullmag_storage.py"* &&
       "${recipe}" != *" run "* &&
       "${recipe}" != *" register "* &&
       "${recipe}" != *" finish "* ]]; then
-  FULLMAG_STORAGE_PYTHON="${python_cmd}" exec bash -euo pipefail -c "${recipe}"
+  FULLMAG_STORAGE_PYTHON="${python_cmd}" exec "${bash_executable}" -euo pipefail -c "${recipe}"
 fi
 case "${recipe}" in
-  *"just --list"*|*"just --list --"*) exec bash -euo pipefail -c "${recipe}" ;;
+  *"just --list"*|*"just --list --"*) exec "${bash_executable}" -euo pipefail -c "${recipe}" ;;
 esac
 
 # Read-only capability matrix validation has no mutable project path. Keep it
@@ -248,6 +304,18 @@ esac
 # paths/lock inside the dedicated helper. Do not run the generic compatibility-
 # link or heavy-build wrapper for them.
 case "${recipe}" in
+  *"scripts/run_managed_antenna_ram.py"*)
+    antenna_ram_start_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_antenna_ram.py\" --repo-root \"[^\"]+\" start --job-id '([0-9a-f]{32})' --commit '([0-9a-f]{40})' --source-digest '([0-9a-f]{64})' --native-snapshot-sha256 '([0-9a-f]{64})'$"
+    if [[ "${recipe}" =~ ${antenna_ram_start_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_antenna_ram.py" --repo-root "${repo_root}" start --job-id "${BASH_REMATCH[1]}" --commit "${BASH_REMATCH[2]}" --source-digest "${BASH_REMATCH[3]}" --native-snapshot-sha256 "${BASH_REMATCH[4]}"
+    fi
+    antenna_ram_observe_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_antenna_ram.py\" --repo-root \"[^\"]+\" observe --run-root '([^']+)'$"
+    if [[ "${recipe}" =~ ${antenna_ram_observe_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_antenna_ram.py" --repo-root "${repo_root}" observe --run-root "${BASH_REMATCH[1]}"
+    fi
+    echo "[fullmag just] invalid managed antenna RAM recipe" >&2
+    exit 2
+    ;;
   *"scripts/run_managed_browser.py"*)
     managed_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/run_managed_browser.py" --repo-root "[^"]+" --job-id ([0-9a-f]{32}) --commit ([0-9a-f]{40}) --port ([0-9]{4,5})$'
     if [[ ! "${recipe}" =~ ${managed_browser_pattern} ]]; then
@@ -265,6 +333,18 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/verify_saved_fem_archive_roundtrip.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_pinned_dataset_browser.py"*)
+    antenna_visualization_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3262 --scenario antenna-visualization$'
+    if [[ "${recipe}" =~ ${antenna_visualization_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3262 --scenario antenna-visualization
+    fi
+    inspector_routing_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3261 --scenario inspector-routing$'
+    if [[ "${recipe}" =~ ${inspector_routing_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3261 --scenario inspector-routing
+    fi
+    cpw_viewport_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3260 --scenario antenna-cpw-viewport$'
+    if [[ "${recipe}" =~ ${cpw_viewport_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3260 --scenario antenna-cpw-viewport
+    fi
     restart_action_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3254 --scenario development-restart-action$'
     if [[ "${recipe}" =~ ${restart_action_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3254 --scenario development-restart-action
@@ -276,6 +356,22 @@ case "${recipe}" in
     kernel_host_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3252 --scenario development-kernel-host$'
     if [[ "${recipe}" =~ ${kernel_host_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3252 --scenario development-kernel-host
+    fi
+    transport_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3254 --scenario antenna-transport-drafts$'
+    if [[ "${recipe}" =~ ${transport_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3254 --scenario antenna-transport-drafts
+    fi
+    primitive_color_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3257 --scenario primitive-color-inspector$'
+    if [[ "${recipe}" =~ ${primitive_color_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3257 --scenario primitive-color-inspector
+    fi
+    stations_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3253 --scenario antenna-microstrip-stations$'
+    if [[ "${recipe}" =~ ${stations_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3253 --scenario antenna-microstrip-stations
+    fi
+    antenna_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3252 --scenario antenna-external-lead-inspection$'
+    if [[ "${recipe}" =~ ${antenna_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3252 --scenario antenna-external-lead-inspection
     fi
     project_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3251 --scenario project-document-handoff$'
     if [[ "${recipe}" =~ ${project_browser_pattern} ]]; then
@@ -461,7 +557,7 @@ esac
 if is_windows_shell; then
   case "${recipe}" in
     *"scripts/windows/run_fullmag.ps1"*|*"scripts/windows/run_fullmag_fem.ps1"*|*"scripts/windows/run_fullmag_wsl.ps1"*|*"scripts/windows/setup_fullmag.ps1"*|*"scripts/windows/verify_fem_frequency_domain_native_contract.ps1"*|*"scripts/windows/build_windows_msi.ps1"*)
-      exec bash -euo pipefail -c "${recipe}"
+      exec "${bash_executable}" -euo pipefail -c "${recipe}"
       ;;
   esac
 fi
@@ -492,11 +588,12 @@ esac
 # boundary: the runner resolves the same environment and holds the per-
 # worktree OS lock until every nested bash/docker/cargo command has finished.
 # Its owner token is inherited by nested `just` calls, which are reentrant.
-shell_cmd="$(command -v bash)"
-if is_windows_shell; then
-  # Native Python resolves an unqualified `bash` independently of Git Bash
-  # and can select the Windows WSL launcher. Preserve this exact shell.
-  shell_cmd="$(cygpath -w "${shell_cmd}")"
+# Git Bash otherwise rewrites POSIX-looking bind targets before Docker Desktop
+# sees them.  Install a shell-local wrapper so only Docker invocations disable
+# that conversion; resolver/Python commands still receive normal Windows paths.
+run_recipe="${recipe}"
+if is_windows_shell && [[ "${recipe}" == *"docker compose"* ]]; then
+  run_recipe='docker() { MSYS_NO_PATHCONV=1 command docker "$@"; }; '"${recipe}"
 fi
 exec "${python_cmd}" "${resolver}" run --repo-root "${repo_root}" -- \
-  "${shell_cmd}" -euo pipefail -c "${recipe}"
+  "${bash_executable}" -euo pipefail -c "${run_recipe}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import contextlib
 import copy
 import io
@@ -5444,7 +5445,14 @@ class ProblemApiTests(unittest.TestCase):
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn("fm.Box(1e-07, 4e-08, 2e-08, name=\"host\")", rewritten)
-        self.assertIn(".translate((1.5e-08, 0, 0))", rewritten)
+        translation_offsets = [
+            ast.literal_eval(node.args[0])
+            for node in ast.walk(ast.parse(rewritten))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "translate"
+        ]
+        self.assertEqual(translation_offsets, [(15e-9, 0.0, 0.0)])
         self.assertIn(" - ", rewritten)
 
     def test_script_builder_rewrites_file_texture_override_with_loadfile(self) -> None:

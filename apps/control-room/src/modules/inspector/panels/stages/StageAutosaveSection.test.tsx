@@ -124,8 +124,9 @@ describe("StageAutosaveSection", () => {
       entrypoint_kind: "flat_run",
       kind: "run",
       stage_id: "run-1",
-      until_seconds: 4e-12,
+      until_seconds: "4e-12",
     });
+    expect(Number(studyStageDraftToSceneStage(draft).until_seconds)).toBe(4e-12);
     expect(validateStageAutosaveDraft({ ...draft.stageAutosave, format: "txt" }, "run"))
       .toContain("TXT autosave supports scalar tables only; remove field outputs or choose Zarr/HDF5.");
   });

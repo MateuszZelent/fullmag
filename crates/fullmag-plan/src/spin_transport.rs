@@ -4,14 +4,14 @@ use fullmag_ir::{
     BackendTarget, ChargeBoundaryIR, ExecutionDevice, ExecutionPrecision,
     FdmCpuTransportRealizationIR, FemMeshPartIR, FemObjectSegmentIR, MeshIR, ProblemIR,
     ReactionLengthIR, RegionRefIR, RequestedTransportExecutionIR,
-    ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR,
+    ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR, ResolvedChargeTransportPlanIR,
     ResolvedFdmCoupledSpinTransportIR, ResolvedFdmGpuChargeTransportIR, ResolvedFdmSpinTransportIR,
     ResolvedFdmStructuredCurrentClosureIR, ResolvedFdmStructuredCurrentSourceCutIR,
-    ResolvedFdmTransientSpinTransportIR, ResolvedFemSpinTransportIR, ResolvedReciprocalMaterialIR,
-    ResolvedSpecifiedCurrentFaceIR, ResolvedSpinBoundaryConditionIR, ResolvedSpinBoundaryFaceIR,
-    ResolvedSpinInterfaceFaceIR, ResolvedSpinInterfaceLawIR, ResolvedSpinReactionLengthsIR,
-    ResolvedSpinTransportPlanIR, SpinBoundaryIR, SpinInterfaceIR, SpinTorqueModuleIR,
-    StructuredBoundaryFaceIR, StructuredInternalFaceIR,
+    ResolvedFdmTransientSpinTransportIR, ResolvedFemChargeTransportIR, ResolvedFemSpinTransportIR,
+    ResolvedReciprocalMaterialIR, ResolvedSpecifiedCurrentFaceIR, ResolvedSpinBoundaryConditionIR,
+    ResolvedSpinBoundaryFaceIR, ResolvedSpinInterfaceFaceIR, ResolvedSpinInterfaceLawIR,
+    ResolvedSpinReactionLengthsIR, ResolvedSpinTransportPlanIR, SpinBoundaryIR, SpinInterfaceIR,
+    SpinTorqueModuleIR, StructuredBoundaryFaceIR, StructuredInternalFaceIR,
 };
 #[cfg(test)]
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
@@ -830,6 +830,207 @@ const FEM_RESIDUAL_VERSION: &str = "transport_balance_integrated_l2.v1";
 const FEM_CHARGE_OPERATOR_VERSION: &str = "fem_charge_conforming_h1_p1.transparent.v1";
 const FEM_CHARGE_RESIDUAL_VERSION: &str = "charge_balance_integrated_l2.v1";
 
+pub(crate) fn resolve_fem_charge_only_transport(
+    problem: &ProblemIR,
+    mesh: &MeshIR,
+    object_segments: &[FemObjectSegmentIR],
+    mesh_parts: &[FemMeshPartIR],
+    allow_antenna_current_terminals: bool,
+) -> Result<Vec<ResolvedChargeTransportPlanIR>, PlanError> {
+    let mut plans = Vec::new();
+    let mut errors = Vec::new();
+    for module in &problem.current_modules {
+        let fullmag_ir::CurrentModuleIR::CurrentTransport {
+            name,
+            model,
+            coupling,
+            time_envelope,
+            definition,
+            ..
+        } = module
+        else {
+            continue;
+        };
+        match physics_module_execution_enabled(problem, "current_transport", name) {
+            Ok(Some(false)) => continue,
+            Ok(Some(true) | None) => {}
+            Err(mut reasons) => {
+                errors.append(&mut reasons);
+                continue;
+            }
+        }
+        if problem
+            .spin_transport_modules
+            .iter()
+            .any(|spin| spin.current_source_id == *name)
+        {
+            continue;
+        }
+        if *model == fullmag_ir::CurrentTransportModelIR::PrescribedDensity {
+            continue;
+        }
+
+        let prefix = format!("FEM charge transport '{name}'");
+        if *model != fullmag_ir::CurrentTransportModelIR::OhmicPoisson
+            || *coupling != fullmag_ir::TransportCouplingIR::OneWay
+        {
+            errors.push(format!(
+                "{prefix} charge-only execution requires one-way ohmic_poisson; reciprocal/magnetoresistive transport requires a bound spin transport plan"
+            ));
+            continue;
+        }
+        if !matches!(
+            problem.backend_policy.requested_backend,
+            BackendTarget::Fem | BackendTarget::Auto
+        ) {
+            errors.push(format!("{prefix} requested a non-FEM discretization"));
+        }
+        let Some(charge) = definition.as_ref() else {
+            errors.push(format!(
+                "{prefix} requires a complete CurrentTransportIR definition"
+            ));
+            continue;
+        };
+        if charge.gauge == fullmag_ir::ChargePotentialGaugeIR::TerminalReference
+            && !allow_antenna_current_terminals
+        {
+            errors.push(format!(
+                "{prefix} terminal-reference current electrodes require a dedicated antenna field-solve stage"
+            ));
+            continue;
+        }
+        if time_envelope.is_some() {
+            errors.push(format!(
+                "{prefix} charge-only FEM CPU/double does not yet support a time_envelope; dynamic charge/Oersted stage coupling fails closed"
+            ));
+        }
+        if charge.structured_current_closure.is_some() {
+            errors.push(format!(
+                "{prefix} structured_current_closure is an FDM contract and is not executable on FEM"
+            ));
+        }
+        if !matches!(charge.solver.engine.as_str(), "auto" | "cg") {
+            errors.push(format!("{prefix} requires charge solver engine auto or cg"));
+        }
+        if charge.solver.linear.absolute_tolerance != 0.0 {
+            errors.push(format!(
+                "{prefix} currently requires charge absolute_tolerance=0"
+            ));
+        }
+        if charge.solver.operator_version != FEM_CHARGE_OPERATOR_VERSION
+            || charge.solver.physical_residual_version != FEM_CHARGE_RESIDUAL_VERSION
+        {
+            errors.push(format!(
+                "{prefix} requests an unsupported charge operator/residual version"
+            ));
+        }
+        if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+            errors.push(format!("{prefix} requires double precision"));
+        }
+        if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+            errors.push(format!("{prefix} requires execution_mode=strict"));
+        }
+        let requested_device = match crate::util::runtime_device_request(problem) {
+            Some("cpu") => ExecutionDevice::Cpu,
+            Some("gpu" | "cuda") => {
+                errors.push(format!(
+                    "{prefix} requested GPU, but charge-only FEM has no GPU realization and cannot fall back silently"
+                ));
+                ExecutionDevice::Gpu
+            }
+            _ => ExecutionDevice::Auto,
+        };
+        if errors.iter().any(|reason| reason.starts_with(&prefix)) {
+            continue;
+        }
+
+        let oersted_source_bound = problem.energy_terms.iter().any(|term| {
+            matches!(
+                term,
+                fullmag_ir::EnergyTermIR::OerstedField { source, .. } if source == name
+            )
+        });
+        match materialize_fem_charge_components(
+            charge,
+            mesh,
+            object_segments,
+            mesh_parts,
+            "charge transport",
+            name,
+            name,
+            false,
+        ) {
+            Ok(components) => {
+                if oersted_source_bound && components.conservative_current_view.is_none() {
+                    errors.push(format!(
+                        "{prefix} binds Oersted and therefore requires a complete conservative_current_view"
+                    ));
+                    continue;
+                }
+                let inserted_default_boundaries = if charge.boundaries.is_empty() {
+                    vec!["charge:all_external_surfaces=insulating".into()]
+                } else {
+                    Vec::new()
+                };
+                plans.push(ResolvedChargeTransportPlanIR {
+                    module_id: name.clone(),
+                    resolved_coupling: *coupling,
+                    requested_execution: RequestedTransportExecutionIR {
+                        discretization: problem.backend_policy.requested_backend,
+                        device: requested_device,
+                        precision: problem.backend_policy.execution_precision,
+                        execution_mode: problem.validation_profile.execution_mode,
+                    },
+                    resolved_discretization: BackendTarget::Fem,
+                    resolved_device: ExecutionDevice::Cpu,
+                    resolved_precision: ExecutionPrecision::Double,
+                    resolved_execution_mode: problem.validation_profile.execution_mode,
+                    operator_version: charge.solver.operator_version.clone(),
+                    physical_residual_version: charge.solver.physical_residual_version.clone(),
+                    capabilities: vec![
+                        "transport.charge.ohmic".into(),
+                        "transport.charge.fem_cpu_double".into(),
+                        "transport.coupling.one_way".into(),
+                    ],
+                    inserted_default_boundaries,
+                    antenna_field_solution_request: None,
+                    fem_cpu_double: Some(ResolvedFemChargeTransportIR {
+                        descriptor_schema: "fullmag.fem.charge_transport_descriptor.v1".into(),
+                        charge_definition: charge.clone(),
+                        time_envelope: None,
+                        charge_domain: components.charge_domain,
+                        charge_insulating_boundaries: components.charge_insulating_boundaries,
+                        charge_driven_boundaries: components.charge_driven_boundaries,
+                        charge_conductivity_spm_per_element: components
+                            .charge_conductivity_spm_per_element,
+                        charge_gauge: charge.gauge,
+                        charge_solver: charge.solver.clone(),
+                        charge_dirichlet: components.charge_dirichlet,
+                        resolved_charge_engine: "cg".into(),
+                        stage_coupling: if oersted_source_bound {
+                            "fem_charge_then_oersted_once.v1".into()
+                        } else {
+                            "fem_charge_once.v1".into()
+                        },
+                        capability_status: "reference_executable".into(),
+                        implementation_state: "executable".into(),
+                        validation_state: "affine_runtime_contract_validated".into(),
+                        validation_scope: "fem_cpu_double_conforming_h1_p1_charge_only".into(),
+                        oersted_source_bound,
+                        conservative_current_view: components.conservative_current_view,
+                    }),
+                });
+            }
+            Err(mut reasons) => errors.append(&mut reasons),
+        }
+    }
+    if errors.is_empty() {
+        Ok(plans)
+    } else {
+        Err(PlanError { reasons: errors })
+    }
+}
+
 pub(crate) fn resolve_m1_fem_spin_transport(
     problem: &ProblemIR,
     mesh: &MeshIR,
@@ -914,6 +1115,12 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             ));
             continue;
         };
+        if charge.gauge == fullmag_ir::ChargePotentialGaugeIR::TerminalReference {
+            errors.push(format!(
+                "{prefix} terminal-reference current electrodes require a dedicated antenna field-solve stage"
+            ));
+            continue;
+        }
         let reciprocal = coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
         let expected_model = if reciprocal {
             fullmag_ir::CurrentTransportModelIR::MagnetoresistivePoisson
@@ -1058,11 +1265,15 @@ fn materialize_fem_descriptor(
     time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
 ) -> Result<ResolvedFemSpinTransportIR, Vec<String>> {
     let prefix = format!("FEM spin transport '{}'", module.id);
-    let charge_domain = fem_domain_mask(
-        &charge.domain,
-        mesh.cell_count(),
+    let charge_components = materialize_fem_charge_components(
+        charge,
+        mesh,
         object_segments,
-        "charge domain",
+        mesh_parts,
+        "spin transport",
+        &module.id,
+        &module.current_source_id,
+        reciprocal,
     )?;
     let spin_domain = fem_domain_mask(
         &module.domain,
@@ -1070,43 +1281,8 @@ fn materialize_fem_descriptor(
         object_segments,
         "spin domain",
     )?;
-    require_full_fem_domain(&charge_domain, "charge domain")?;
     require_full_fem_domain(&spin_domain, "spin domain")?;
-    let conservative_current_view = validate_conservative_current_view(
-        charge.conservative_current_view.as_ref(),
-        &module.id,
-        &module.current_source_id,
-        mesh,
-        reciprocal,
-    )?;
-
-    let mut conductivity = vec![f64::NAN; mesh.cell_count()];
-    for assignment in &charge.materials {
-        let mask = fem_domain_mask(
-            std::slice::from_ref(&assignment.region),
-            mesh.cell_count(),
-            object_segments,
-            "charge material",
-        )?;
-        for (index, selected) in mask.into_iter().enumerate() {
-            if selected {
-                if conductivity[index].is_finite() {
-                    return Err(vec![format!(
-                        "charge material assignments overlap at FEM element {index}"
-                    )]);
-                }
-                conductivity[index] = assignment.material.sigma_spm;
-            }
-        }
-    }
-    if conductivity
-        .iter()
-        .any(|value| !value.is_finite() || *value <= 0.0)
-    {
-        return Err(vec![
-            "charge material assignments must cover every FEM element with finite sigma>0".into(),
-        ]);
-    }
+    let conductivity = &charge_components.charge_conductivity_spm_per_element;
 
     let mut spin_by_element: Vec<Option<&fullmag_ir::SpinTransportMaterialIR>> =
         vec![None; mesh.cell_count()];
@@ -1200,26 +1376,9 @@ fn materialize_fem_descriptor(
         None
     };
 
-    validate_charge_face_exact_boundary_ownership(charge, mesh, mesh_parts)?;
     validate_spin_face_exact_boundary_ownership(module, mesh, mesh_parts)?;
-    let charge_dirichlet = resolve_charge_dirichlet(charge, mesh, mesh_parts)?;
     let spin_dirichlet = resolve_spin_dirichlet(module, mesh, mesh_parts)?;
-    let charge_insulating_boundaries =
-        resolve_charge_insulating_boundaries(charge, mesh, mesh_parts)?;
     let spin_insulating_boundaries = resolve_spin_insulating_boundaries(module, mesh, mesh_parts)?;
-    validate_fem_boundary_partition(
-        "charge",
-        mesh,
-        charge_dirichlet
-            .iter()
-            .map(|(marker, _)| ("dirichlet", *marker))
-            .chain(charge_insulating_boundaries.iter().flat_map(|boundary| {
-                boundary
-                    .boundary_attributes
-                    .iter()
-                    .map(move |marker| (boundary.id.as_str(), *marker))
-            })),
-    )?;
     validate_fem_boundary_partition(
         "spin",
         mesh,
@@ -1285,24 +1444,6 @@ fn materialize_fem_descriptor(
             "{prefix} transport torque RHS currently requires reciprocal FEM M2 stage transport; one-way torque remains fail-closed"
         )]);
     }
-    match charge.gauge {
-        fullmag_ir::ChargePotentialGaugeIR::DirichletReference if charge_dirichlet.is_empty() => {
-            return Err(vec![
-                "boundary-reference gauge requires at least one voltage electrode".into(),
-            ]);
-        }
-        fullmag_ir::ChargePotentialGaugeIR::ZeroMean if reciprocal => {
-            return Err(vec![
-                "bounded FEM M2 requires a Dirichlet voltage reference".into(),
-            ]);
-        }
-        fullmag_ir::ChargePotentialGaugeIR::ZeroMean if !charge_dirichlet.is_empty() => {
-            return Err(vec![
-                "zero-mean gauge conflicts with voltage electrodes".into()
-            ]);
-        }
-        _ => {}
-    }
     if module.boundaries.is_empty() && module.solver.default_external_boundary != "spin_insulating"
     {
         return Err(vec![
@@ -1317,7 +1458,7 @@ fn materialize_fem_descriptor(
                 if source == &module.current_source_id
         )
     });
-    if reciprocal && oersted_source_bound && conservative_current_view.is_some() {
+    if reciprocal && oersted_source_bound && charge_components.conservative_current_view.is_some() {
         return Err(vec![format!(
             "{prefix} reciprocal FEM M2 Oersted with a closure-aware RT0/external-lead view requires a dedicated coupled closure realization; H1/P1 combined stage coupling refuses a mismatched current source"
         )]);
@@ -1330,7 +1471,7 @@ fn materialize_fem_descriptor(
         resolve_fem_stage_coupling_for_stage(
             reciprocal,
             oersted_source_bound,
-            conservative_current_view.as_ref(),
+            charge_components.conservative_current_view.as_ref(),
         )
     };
     if torque_target.is_some() && !reciprocal && stage_coupling != FEM_STAGE_OERSTED_CALLBACK_POLICY
@@ -1349,22 +1490,19 @@ fn materialize_fem_descriptor(
         },
         charge_definition: charge.clone(),
         time_envelope: time_envelope.cloned(),
-        charge_domain: fullmag_ir::ResolvedFemTransportDomainIR {
-            regions: charge.domain.clone(),
-            element_mask: charge_domain,
-        },
+        charge_domain: charge_components.charge_domain,
         spin_domain: fullmag_ir::ResolvedFemTransportDomainIR {
             regions: module.domain.clone(),
             element_mask: spin_domain,
         },
-        charge_insulating_boundaries,
+        charge_insulating_boundaries: charge_components.charge_insulating_boundaries,
         spin_insulating_boundaries,
         interfaces,
         torque_target,
-        charge_conductivity_spm_per_element: conductivity,
+        charge_conductivity_spm_per_element: charge_components.charge_conductivity_spm_per_element,
         charge_gauge: charge.gauge,
         charge_solver: charge.solver.clone(),
-        charge_dirichlet,
+        charge_dirichlet: charge_components.charge_dirichlet,
         spin_dirichlet,
         sigma_s_spm: reference.sigma_s_spm,
         reciprocal_material,
@@ -1394,13 +1532,159 @@ fn materialize_fem_descriptor(
             "fem_cpu_double_conforming_h1_p1_transparent_m1".into()
         },
         oersted_source_bound,
+        conservative_current_view: charge_components.conservative_current_view,
+    })
+}
+
+struct FemChargeComponents {
+    charge_domain: fullmag_ir::ResolvedFemTransportDomainIR,
+    charge_insulating_boundaries: Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>,
+    charge_driven_boundaries: Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>,
+    charge_conductivity_spm_per_element: Vec<f64>,
+    charge_dirichlet: Vec<(u32, f64)>,
+    conservative_current_view: Option<fullmag_ir::ResolvedFemConservativeCurrentViewIR>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_fem_charge_components(
+    charge: &fullmag_ir::ChargeTransportDefinitionIR,
+    mesh: &MeshIR,
+    object_segments: &[FemObjectSegmentIR],
+    mesh_parts: &[FemMeshPartIR],
+    owner_kind: &str,
+    owner_id: &str,
+    current_source_id: &str,
+    reciprocal: bool,
+) -> Result<FemChargeComponents, Vec<String>> {
+    if charge.conservative_current_source.is_some() {
+        return Err(vec![format!(
+            "{owner_kind} '{owner_id}' conservative_current_source execution is unavailable: the current-driven owned-bundle producer is not connected; legacy boundary materialization and solve are forbidden"
+        )]);
+    }
+    let charge_domain_mask = fem_domain_mask(
+        &charge.domain,
+        mesh.cell_count(),
+        object_segments,
+        "charge domain",
+    )?;
+    require_full_fem_domain(&charge_domain_mask, "charge domain")?;
+    let conservative_current_view = validate_conservative_current_view(
+        charge.conservative_current_view.as_ref(),
+        owner_kind,
+        owner_id,
+        current_source_id,
+        mesh,
+        reciprocal,
+    )?;
+
+    let mut conductivity = vec![f64::NAN; mesh.cell_count()];
+    for assignment in &charge.materials {
+        let mask = fem_domain_mask(
+            std::slice::from_ref(&assignment.region),
+            mesh.cell_count(),
+            object_segments,
+            "charge material",
+        )?;
+        for (index, selected) in mask.into_iter().enumerate() {
+            if selected {
+                if conductivity[index].is_finite() {
+                    return Err(vec![format!(
+                        "charge material assignments overlap at FEM element {index}"
+                    )]);
+                }
+                conductivity[index] = assignment.material.sigma_spm;
+            }
+        }
+    }
+    if conductivity
+        .iter()
+        .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return Err(vec![
+            "charge material assignments must cover every FEM element with finite sigma>0".into(),
+        ]);
+    }
+
+    validate_charge_face_exact_boundary_ownership(charge, mesh, mesh_parts)?;
+    let charge_dirichlet = resolve_charge_dirichlet(charge, mesh, mesh_parts)?;
+    let charge_driven_boundaries = resolve_charge_driven_boundaries(charge, mesh, mesh_parts)?;
+    let charge_insulating_boundaries =
+        resolve_charge_insulating_boundaries(charge, mesh, mesh_parts)?;
+    let current_terminal_markers = if charge.gauge
+        == fullmag_ir::ChargePotentialGaugeIR::TerminalReference
+    {
+        charge_driven_boundaries
+            .iter()
+            .flat_map(|boundary| {
+                boundary
+                    .boundary_attributes
+                    .iter()
+                    .map(move |marker| (boundary.id.as_str(), *marker))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    validate_fem_boundary_partition(
+        "charge",
+        mesh,
+        charge_dirichlet
+            .iter()
+            .map(|(marker, _)| ("dirichlet", *marker))
+            .chain(current_terminal_markers)
+            .chain(charge_insulating_boundaries.iter().flat_map(|boundary| {
+                boundary
+                    .boundary_attributes
+                    .iter()
+                    .map(move |marker| (boundary.id.as_str(), *marker))
+            })),
+    )?;
+    match charge.gauge {
+        fullmag_ir::ChargePotentialGaugeIR::TerminalReference if reciprocal => {
+            return Err(vec![
+                "terminal-reference gauge is supported only by dedicated one-way antenna current solve".into(),
+            ]);
+        }
+        fullmag_ir::ChargePotentialGaugeIR::TerminalReference if !charge_dirichlet.is_empty() => {
+            return Err(vec![
+                "terminal-reference gauge conflicts with voltage electrodes".into(),
+            ]);
+        }
+        fullmag_ir::ChargePotentialGaugeIR::DirichletReference if charge_dirichlet.is_empty() => {
+            return Err(vec![
+                "boundary-reference gauge requires at least one voltage electrode".into(),
+            ]);
+        }
+        fullmag_ir::ChargePotentialGaugeIR::ZeroMean if reciprocal => {
+            return Err(vec![
+                "bounded FEM M2 requires a Dirichlet voltage reference".into(),
+            ]);
+        }
+        fullmag_ir::ChargePotentialGaugeIR::ZeroMean if !charge_dirichlet.is_empty() => {
+            return Err(vec![
+                "zero-mean gauge conflicts with voltage electrodes".into()
+            ]);
+        }
+        _ => {}
+    }
+
+    Ok(FemChargeComponents {
+        charge_domain: fullmag_ir::ResolvedFemTransportDomainIR {
+            regions: charge.domain.clone(),
+            element_mask: charge_domain_mask,
+        },
+        charge_insulating_boundaries,
+        charge_driven_boundaries,
+        charge_conductivity_spm_per_element: conductivity,
+        charge_dirichlet,
         conservative_current_view,
     })
 }
 
 fn validate_conservative_current_view(
     view: Option<&fullmag_ir::ResolvedFemConservativeCurrentViewIR>,
-    module_id: &str,
+    owner_kind: &str,
+    owner_id: &str,
     current_source_id: &str,
     mesh: &MeshIR,
     reciprocal: bool,
@@ -1408,10 +1692,7 @@ fn validate_conservative_current_view(
     let Some(view) = view else {
         return Ok(None);
     };
-    let prefix = format!(
-        "FEM spin transport '{}' conservative current view",
-        module_id
-    );
+    let prefix = format!("FEM {owner_kind} '{owner_id}' conservative current view");
     if reciprocal {
         return Err(vec![format!(
             "{prefix} is only executable on the one-way Ohmic lane; reciprocal M2 must fail closed"
@@ -1862,6 +2143,7 @@ fn validate_charge_face_exact_boundary_ownership(
         .iter()
         .map(|boundary| {
             let kind = match boundary {
+                ChargeBoundaryIR::EquipotentialCurrentTerminal { .. } => "current_terminal",
                 ChargeBoundaryIR::VoltageElectrode { .. } => "voltage",
                 ChargeBoundaryIR::NormalCurrentElectrode { .. } => "normal_current",
                 ChargeBoundaryIR::Insulating { .. } => "insulating",
@@ -2016,6 +2298,11 @@ fn resolve_charge_dirichlet(
     let mut values = BTreeMap::new();
     for boundary in &charge.boundaries {
         match boundary {
+            ChargeBoundaryIR::EquipotentialCurrentTerminal { surfaces, .. } => {
+                for surface in surfaces {
+                    let _ = surface_markers(surface, mesh, mesh_parts)?;
+                }
+            }
             ChargeBoundaryIR::VoltageElectrode {
                 surfaces,
                 potential_v,
@@ -2042,6 +2329,32 @@ fn resolve_charge_dirichlet(
         }
     }
     Ok(values.into_iter().collect())
+}
+
+fn resolve_charge_driven_boundaries(
+    charge: &fullmag_ir::ChargeTransportDefinitionIR,
+    mesh: &MeshIR,
+    mesh_parts: &[FemMeshPartIR],
+) -> Result<Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>, Vec<String>> {
+    charge
+        .boundaries
+        .iter()
+        .filter_map(|boundary| match boundary {
+            ChargeBoundaryIR::EquipotentialCurrentTerminal { id, surfaces }
+            | ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } => Some((id, surfaces)),
+            _ => None,
+        })
+        .map(|(id, surfaces)| {
+            let mut markers = BTreeSet::new();
+            for surface in surfaces {
+                markers.extend(surface_markers(surface, mesh, mesh_parts)?);
+            }
+            Ok(fullmag_ir::ResolvedFemBoundaryMarkerSetIR {
+                id: id.clone(),
+                boundary_attributes: markers.into_iter().collect(),
+            })
+        })
+        .collect()
 }
 
 fn resolve_charge_insulating_boundaries(
@@ -2228,6 +2541,12 @@ fn materialize_fdm_descriptor(
     time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
     active_graph: &ActiveFdmTransportGraph,
 ) -> Result<ResolvedFdmSpinTransportIR, Vec<String>> {
+    if charge.conservative_current_source.is_some() {
+        return Err(vec![format!(
+            "spin transport '{}' conservative_current_source has no FDM source-solve realization; legacy FDM charge fallback is forbidden",
+            module.id
+        )]);
+    }
     let count = context.region_mask.len();
     if count == 0
         || context.initial_magnetization.len() != count
@@ -2476,6 +2795,11 @@ pub(crate) fn materialize_fdm_gpu_charge_descriptor(
     charge: &fullmag_ir::ChargeTransportDefinitionIR,
     context: &FdmSpinTransportResolutionContext<'_>,
 ) -> Result<ResolvedFdmGpuChargeTransportIR, Vec<String>> {
+    if charge.conservative_current_source.is_some() {
+        return Err(vec![format!(
+            "FDM GPU charge transport '{module_id}' conservative_current_source has no FDM source-solve realization; legacy FDM charge fallback is forbidden"
+        )]);
+    }
     let count = context.region_mask.len();
     if count == 0
         || context
@@ -3164,6 +3488,11 @@ fn resolve_charge_boundaries(
     let mut exact_surfaces = BTreeMap::<(String, StructuredBoundaryFaceIR), String>::new();
     for boundary in boundaries {
         let condition = match boundary {
+            ChargeBoundaryIR::EquipotentialCurrentTerminal { .. } => {
+                return Err(vec![
+                    "equipotential current terminals require a dedicated FEM antenna solve".into(),
+                ]);
+            }
             ChargeBoundaryIR::VoltageElectrode { potential_v, .. } => {
                 ResolvedChargeBoundaryConditionIR::Voltage {
                     potential_v: *potential_v,
@@ -3843,6 +4172,7 @@ mod tests {
                     operator_version: "fv_charge_harmonic_v1".into(),
                 },
                 conservative_current_view: None,
+                conservative_current_source: None,
                 structured_current_closure: None,
             }),
         }];
@@ -4598,23 +4928,31 @@ mod tests {
                 }],
                 potential_v: 0.1,
             },
+            ChargeBoundaryIR::VoltageElectrode {
+                    id: "drive_out".into(),
+                    surfaces: vec![SurfaceRefIR {
+                        object_id: "strip".into(),
+                        surface_id: "left".into(),
+                        orientation: [-1.0, 0.0, 0.0],
+                }],
+                potential_v: 0.1,
+            },
+            ChargeBoundaryIR::VoltageElectrode {
+                id: "ground_in".into(),
+                surfaces: vec![SurfaceRefIR {
+                    object_id: "strip".into(),
+                    surface_id: "right".into(),
+                    orientation: [1.0, 0.0, 0.0],
+                }],
+                potential_v: 0.0,
+            },
             ChargeBoundaryIR::Insulating {
                 id: "natural-zero-flux".into(),
                 surfaces: vec![
                     SurfaceRefIR {
                         object_id: "strip".into(),
-                        surface_id: "left".into(),
-                        orientation: [-1.0, 0.0, 0.0],
-                    },
-                    SurfaceRefIR {
-                        object_id: "strip".into(),
                         surface_id: "front".into(),
                         orientation: [0.0, 1.0, 0.0],
-                    },
-                    SurfaceRefIR {
-                        object_id: "strip".into(),
-                        surface_id: "right".into(),
-                        orientation: [1.0, 0.0, 0.0],
                     },
                     SurfaceRefIR {
                         object_id: "strip".into(),
@@ -4712,6 +5050,84 @@ mod tests {
         (mesh, vec![segment], vec![part])
     }
 
+    fn cube_closed_current_view(mesh: &MeshIR) -> ResolvedFemConservativeCurrentViewIR {
+        let stable_vertex_ids = (1..=mesh.nodes.len() as u64).collect::<Vec<_>>();
+        let boundary_faces = mesh
+            .facets
+            .require_tri3()
+            .expect("cube fixture has tri3 facets")
+            .iter()
+            .enumerate()
+            .map(|(index, face)| {
+                let mut ids = [
+                    stable_vertex_ids[face[0] as usize],
+                    stable_vertex_ids[face[1] as usize],
+                    stable_vertex_ids[face[2] as usize],
+                ];
+                ids.sort_unstable();
+                let source_cut = matches!(mesh.boundary_markers[index], 11 | 16);
+                ConservativeCurrentBoundaryFaceIR {
+                    face_vertex_ids: ids,
+                    role: if source_cut {
+                        ConservativeCurrentBoundaryRoleIR::SourceCut
+                    } else {
+                        ConservativeCurrentBoundaryRoleIR::InsulatingOuter
+                    },
+                    circuit_id: source_cut.then(|| "cut-z".into()),
+                }
+            })
+            .collect();
+        let identity = ConservativeCurrentIdentityIR {
+            source_module_id: "charge".into(),
+            source_state_revision: "charge-state-1".into(),
+            source_field_digest: "charge-field-1".into(),
+            conductivity_digest: "sigma-1".into(),
+            mesh_revision: "mesh-1".into(),
+            topology_revision: "topology-1".into(),
+            geometry_digest: "geometry-1".into(),
+            envelope_revision: "envelope-1".into(),
+            envelope_digest: "envelope-digest-1".into(),
+            evaluated_envelope_multiplier: 1.0,
+            evaluation_time_s: 0.0,
+            stage_identity: 1,
+        };
+        ResolvedFemConservativeCurrentViewIR {
+            stable_vertex_ids,
+            boundary_faces,
+            pins: ConservativeCurrentPinsIR {
+                required_source_state_revision: identity.source_state_revision.clone(),
+                required_source_field_digest: identity.source_field_digest.clone(),
+                required_mesh_revision: identity.mesh_revision.clone(),
+                required_topology_revision: identity.topology_revision.clone(),
+            },
+            identity,
+            closure: ConservativeCurrentClosureIR::ClosedGeometry {
+                operator_version: "fem_closed_current_geometry.v1".into(),
+                revision: "closure-1".into(),
+                digest: "closure-digest-1".into(),
+                source_cuts: vec![ConservativeCurrentSourceCutIR {
+                    id: "cut-z".into(),
+                    translation_m: [0.0, 0.0, 1.0],
+                    potential_drop_v: 0.1,
+                    face_pairs: vec![
+                        ConservativeCurrentSourceCutFacePairIR {
+                            minus_face_vertex_ids: [1, 2, 3],
+                            plus_face_vertex_ids: [5, 6, 7],
+                        },
+                        ConservativeCurrentSourceCutFacePairIR {
+                            minus_face_vertex_ids: [1, 3, 4],
+                            plus_face_vertex_ids: [5, 7, 8],
+                        },
+                    ],
+                }],
+            },
+            algebraic_relative_tolerance: 1.0e-10,
+            physical_relative_gate: 1.0e-8,
+            physical_absolute_gate_a: 1.0e-12,
+            reference_mpi_gather_broadcast: false,
+        }
+    }
+
     #[test]
     fn resolves_canonical_fem_descriptor_without_hidden_defaults() {
         let problem = fem_problem();
@@ -4768,6 +5184,395 @@ mod tests {
             plans[0].inserted_default_boundaries,
             ["spin:all_external_surfaces=spin_insulating"]
         );
+    }
+
+    #[test]
+    fn resolves_charge_only_fem_plan_and_binds_oersted_without_spin_module() {
+        let mut problem = fem_problem();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.spin_transport_modules.clear();
+        problem.energy_terms.push(EnergyTermIR::OerstedField {
+            id: Some("oersted:charge".into()),
+            model: OerstedFieldModelIR::FromCurrentSolution,
+            source: "charge".into(),
+        });
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!()
+        };
+        charge.conservative_current_view = Some(cube_closed_current_view(&mesh));
+
+        let plans = resolve_fem_charge_only_transport(&problem, &mesh, &segments, &parts, false)
+            .expect("complete one-way Ohmic charge solve should materialize without spin");
+        assert!(problem.spin_transport_modules.is_empty());
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].module_id, "charge");
+        assert_eq!(
+            plans[0].requested_execution.discretization,
+            BackendTarget::Fem
+        );
+        assert_eq!(plans[0].requested_execution.device, ExecutionDevice::Auto);
+        assert_eq!(plans[0].resolved_discretization, BackendTarget::Fem);
+        assert_eq!(plans[0].resolved_device, ExecutionDevice::Cpu);
+        assert_eq!(plans[0].resolved_precision, ExecutionPrecision::Double);
+        let descriptor = plans[0]
+            .fem_cpu_double
+            .as_ref()
+            .expect("FEM CPU/double charge descriptor");
+        assert_eq!(
+            descriptor.charge_solver.operator_version,
+            FEM_CHARGE_OPERATOR_VERSION
+        );
+        assert_eq!(
+            descriptor.charge_solver.physical_residual_version,
+            FEM_CHARGE_RESIDUAL_VERSION
+        );
+        assert_eq!(descriptor.charge_conductivity_spm_per_element, [4.0e6; 6]);
+        assert_eq!(descriptor.charge_dirichlet, [(11, 0.0), (12, 0.1)]);
+        assert_eq!(descriptor.capability_status, "reference_executable");
+        assert_eq!(descriptor.implementation_state, "executable");
+        assert_eq!(
+            descriptor.validation_state,
+            "affine_runtime_contract_validated"
+        );
+        assert!(descriptor.oersted_source_bound);
+        assert_eq!(descriptor.stage_coupling, "fem_charge_then_oersted_once.v1");
+
+        let resolved = crate::oersted::resolve_fem_oersted_term(
+            &problem,
+            problem.energy_terms.len() - 1,
+            problem.energy_terms.last().expect("Oersted term"),
+            &[],
+            &plans,
+            &mesh,
+            &segments,
+            &parts,
+        )
+        .expect("resolved charge-only Oersted binding")
+        .expect("active Oersted term");
+        assert!(matches!(
+            resolved,
+            crate::oersted::ResolvedOerstedTerm::SolvedCurrent { source }
+                if source == "charge"
+        ));
+    }
+
+    #[test]
+    fn dedicated_antenna_plan_binds_one_basis_without_mutating_the_normal_llg_plan() {
+        let mut problem = fem_problem();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.spin_transport_modules.clear();
+        let (mesh, _, _) = fem_mesh_fixture();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            solve_region,
+            conductivity_s_per_m,
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!()
+        };
+        *solve_region = None;
+        *conductivity_s_per_m = None;
+        charge.conservative_current_view = Some(cube_closed_current_view(&mesh));
+        problem.geometry_assets = Some(GeometryAssetsIR {
+            fdm_grid_assets: Vec::new(),
+            fem_mesh_assets: vec![FemMeshAssetIR {
+                geometry_name: "strip".into(),
+                mesh_source: None,
+                mesh: Some(mesh.clone()),
+            }],
+            fem_domain_mesh_asset: Some(FemDomainMeshAssetIR {
+                mesh_source: None,
+                mesh: Some(mesh),
+                region_markers: vec![FemDomainRegionMarkerIR {
+                    geometry_name: "strip".into(),
+                    marker: 7,
+                }],
+                object_region_markers: Vec::new(),
+                build_report: None,
+            }),
+        });
+        problem.antenna_port_modes = vec![AntennaPortModeIR {
+            schema_version: fullmag_ir::ANTENNA_PORT_MODE_SCHEMA_VERSION_V2.into(),
+            id: "strip_port".into(),
+            source_object_id: "strip".into(),
+            current_transport_id: "charge".into(),
+            branches: vec![
+                fullmag_ir::AntennaPortBranchV2IR {
+                    id: "drive".into(),
+                    inlet_terminal_ref: "drive".into(),
+                    outlet_terminal_ref: "drive_out".into(),
+                    signed_weight: 1.0,
+                },
+                fullmag_ir::AntennaPortBranchV2IR {
+                    id: "ground".into(),
+                    inlet_terminal_ref: "ground".into(),
+                    outlet_terminal_ref: "ground_in".into(),
+                    signed_weight: -1.0,
+                },
+            ],
+            normalization_current_a: ANTENNA_NORMALIZATION_CURRENT_A,
+        }];
+        problem.antenna_field_solve_stages = vec![AntennaFieldSolveStageIR {
+            id: "solve_strip_antenna".into(),
+            source_object_id: "strip".into(),
+            current_transport_id: "charge".into(),
+            port_mode_ids: vec!["strip_port".into()],
+            conservative_current_view_ref: Some("charge:rt0".into()),
+            model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
+            oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
+            conductor_mesh_policy: "authored_shared_domain".into(),
+            field_sampling_domain: FieldTargetIR::Global {},
+            target_refs: vec![FieldTargetIR::Object {
+                object_id: "strip".into(),
+            }],
+            solver_policy: "production_default".into(),
+            outputs: vec![AntennaNamedOutputIR {
+                id: "strip_field_solution".into(),
+                quantity: "H_ant_basis".into(),
+            }],
+        }];
+
+        let ordinary = crate::plan(&problem).expect("ordinary FEM LLG plan");
+        let BackendPlanIR::Fem(ordinary_fem) = ordinary.backend_plan else {
+            panic!("expected ordinary FEM plan");
+        };
+        assert!(ordinary_fem.charge_transport_plans[0]
+            .antenna_field_solution_request
+            .is_none());
+        assert!(
+            !ordinary_fem.charge_transport_plans[0]
+                .fem_cpu_double
+                .as_ref()
+                .expect("charge descriptor")
+                .oersted_source_bound
+        );
+
+        let antenna =
+            crate::plan_antenna_field_solve(&problem, "solve_strip_antenna", "strip_port")
+                .expect("dedicated antenna precomputation plan");
+        assert_eq!(
+            antenna.schema_version,
+            ANTENNA_FIELD_SOLVE_PLAN_SCHEMA_VERSION
+        );
+        assert_eq!(antenna.solution_id, "strip_field_solution");
+        assert!(antenna
+            .conductor
+            .mesh_parts
+            .iter()
+            .all(|part| part.role == FemMeshPartRole::Conductor));
+        assert_eq!(antenna.field_sampling.carrier_kind, "fem_domain_mesh_asset");
+        assert!(antenna
+            .field_sampling
+            .topology_digest
+            .starts_with("sha256:"));
+        let charge = &antenna.conductor.charge_transport_plans[0];
+        let request = charge
+            .antenna_field_solution_request
+            .as_ref()
+            .expect("bound artifact request");
+        assert_eq!(request.stage_id, "solve_strip_antenna");
+        assert_eq!(request.port_mode_id, "strip_port");
+        assert!(request.material_revision.starts_with("sha256:"));
+        assert!(request.mesh_digest.starts_with("sha256:"));
+        assert!(charge
+            .capabilities
+            .iter()
+            .any(|value| value == "antenna.field_basis.per_ampere"));
+        let descriptor = charge.fem_cpu_double.as_ref().expect("charge descriptor");
+        assert!(descriptor.oersted_source_bound);
+        assert_eq!(descriptor.stage_coupling, "fem_charge_then_oersted_once.v1");
+
+        let mut current_authored = problem.clone();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(current_definition),
+            ..
+        } = &mut current_authored.current_modules[0]
+        else {
+            unreachable!()
+        };
+        current_definition.gauge = ChargePotentialGaugeIR::TerminalReference;
+        current_definition.boundaries = current_definition
+            .boundaries
+            .iter()
+            .map(|boundary| match boundary {
+                ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } => {
+                    ChargeBoundaryIR::EquipotentialCurrentTerminal {
+                        id: id.clone(),
+                        surfaces: surfaces.clone(),
+                    }
+                }
+                other => other.clone(),
+            })
+            .collect();
+        let current_plan = crate::plan_antenna_field_solve(
+            &current_authored,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("current-authored antenna must not require dummy voltage electrodes");
+        let current_descriptor = current_plan.conductor.charge_transport_plans[0]
+            .fem_cpu_double
+            .as_ref()
+            .expect("current-authored charge descriptor");
+        assert!(current_descriptor.charge_dirichlet.is_empty());
+        assert_eq!(current_descriptor.charge_driven_boundaries.len(), 4);
+        assert!(crate::plan(&current_authored).is_err());
+
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge_definition),
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!()
+        };
+        charge_definition
+            .conservative_current_view
+            .as_mut()
+            .expect("RT0 view")
+            .algebraic_relative_tolerance = 1e-11;
+        let revised = crate::plan_antenna_field_solve(
+            &problem,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("changed RT0 tolerance must still resolve");
+        let revised_charge = &revised.conductor.charge_transport_plans[0];
+        let revised_request = revised_charge
+            .antenna_field_solution_request
+            .as_ref()
+            .expect("revised artifact request");
+        assert_eq!(request.material_revision, revised_request.material_revision);
+        assert_ne!(
+            descriptor
+                .conservative_current_view
+                .as_ref()
+                .expect("original RT0 view")
+                .algebraic_relative_tolerance,
+            revised_charge
+                .fem_cpu_double
+                .as_ref()
+                .expect("revised charge descriptor")
+                .conservative_current_view
+                .as_ref()
+                .expect("revised RT0 view")
+                .algebraic_relative_tolerance
+        );
+
+        problem.magnets[0].initial_magnetization =
+            Some(fullmag_ir::InitialMagnetizationIR::Uniform {
+                value: [0.0, 1.0, 0.0],
+            });
+        let changed_m0 = crate::plan_antenna_field_solve(
+            &problem,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("changing m0 must not invalidate the static antenna solve");
+        let changed_m0_request = changed_m0.conductor.charge_transport_plans[0]
+            .antenna_field_solution_request
+            .as_ref()
+            .expect("m0 variant request");
+        assert_eq!(request.material_revision, changed_m0_request.material_revision);
+
+        problem.geometry.entries.push(fullmag_ir::GeometryEntryIR::Box {
+            name: "unrelated_target".into(),
+            size: [10.0e-9, 10.0e-9, 2.0e-9],
+        });
+        let changed_scene = crate::plan_antenna_field_solve(
+            &problem,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("unrelated target geometry must not invalidate the conductor");
+        let changed_scene_request = changed_scene.conductor.charge_transport_plans[0]
+            .antenna_field_solution_request
+            .as_ref()
+            .expect("unrelated geometry variant request");
+        assert_eq!(request.geometry_revision, changed_scene_request.geometry_revision);
+
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge_definition),
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!()
+        };
+        charge_definition.materials[0].material.sigma_spm *= 2.0;
+        let changed_sigma = crate::plan_antenna_field_solve(
+            &problem,
+            "solve_strip_antenna",
+            "strip_port",
+        )
+        .expect("changed conductivity must resolve a new static antenna solve");
+        let changed_sigma_request = changed_sigma.conductor.charge_transport_plans[0]
+            .antenna_field_solution_request
+            .as_ref()
+            .expect("conductivity variant request");
+        assert_ne!(request.material_revision, changed_sigma_request.material_revision);
+    }
+
+    #[test]
+    fn charge_only_fem_rejects_incomplete_and_dynamic_sources() {
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let mut incomplete = fem_problem();
+        incomplete.backend_policy.requested_backend = BackendTarget::Fem;
+        incomplete.spin_transport_modules.clear();
+        let CurrentModuleIR::CurrentTransport { definition, .. } =
+            &mut incomplete.current_modules[0]
+        else {
+            unreachable!()
+        };
+        *definition = None;
+        let error = resolve_fem_charge_only_transport(&incomplete, &mesh, &segments, &parts, false)
+            .expect_err("missing charge definition must fail closed");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("complete CurrentTransportIR definition")));
+
+        let mut dynamic = fem_problem();
+        dynamic.backend_policy.requested_backend = BackendTarget::Fem;
+        dynamic.spin_transport_modules.clear();
+        let CurrentModuleIR::CurrentTransport { time_envelope, .. } =
+            &mut dynamic.current_modules[0]
+        else {
+            unreachable!()
+        };
+        *time_envelope = Some(TimeEnvelopeIR::Constant { value: 1.0 });
+        let error = resolve_fem_charge_only_transport(&dynamic, &mesh, &segments, &parts, false)
+            .expect_err("dynamic charge-only stage coupling must fail closed");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("time_envelope")));
+    }
+
+    #[test]
+    fn bound_spin_transport_does_not_create_a_duplicate_charge_only_plan() {
+        let mut problem = fem_problem();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let charge_plans = resolve_fem_charge_only_transport(&problem, &mesh, &segments, &parts, false)
+            .expect("spin-owned charge source remains valid");
+        assert!(charge_plans.is_empty());
+        let spin_plans = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 8],
+            8.0e5,
+            2.211e5,
+        )
+        .expect("existing charge+spin regression remains unchanged");
+        assert_eq!(spin_plans.len(), 1);
+        assert!(spin_plans[0].fem_cpu_double.is_some());
     }
 
     #[test]
@@ -5506,9 +6311,15 @@ mod tests {
     #[test]
     fn planner_accepts_complete_closed_geometry_rt0_view() {
         let (mesh, view) = valid_rt0_view_for_planner();
-        let resolved =
-            validate_conservative_current_view(Some(&view), "spin", "drive", &mesh, false)
-                .expect("valid RT0 view should lower");
+        let resolved = validate_conservative_current_view(
+            Some(&view),
+            "spin transport",
+            "spin",
+            "drive",
+            &mesh,
+            false,
+        )
+        .expect("valid RT0 view should lower");
         assert_eq!(resolved, Some(view));
     }
 
@@ -5558,9 +6369,15 @@ mod tests {
     fn planner_rejects_duplicate_boundary_and_accepts_complete_external_lead_view() {
         let (mesh, mut view) = valid_rt0_view_for_planner();
         view.boundary_faces[1] = view.boundary_faces[0].clone();
-        let duplicate =
-            validate_conservative_current_view(Some(&view), "spin", "drive", &mesh, false)
-                .expect_err("duplicate boundary must fail closed");
+        let duplicate = validate_conservative_current_view(
+            Some(&view),
+            "spin transport",
+            "spin",
+            "drive",
+            &mesh,
+            false,
+        )
+        .expect_err("duplicate boundary must fail closed");
         assert!(duplicate.join(" ").contains("duplicate"));
 
         let (mesh, mut same_face_view) = valid_rt0_view_for_planner();
@@ -5572,6 +6389,7 @@ mod tests {
         }
         let same_face = validate_conservative_current_view(
             Some(&same_face_view),
+            "spin transport",
             "spin",
             "drive",
             &mesh,
@@ -5598,8 +6416,15 @@ mod tests {
             plus_outer_electrode_face_vertex_ids: vec![[110, 130, 140]],
             lead_conductivity_digest: "lead-sigma".into(),
         };
-        validate_conservative_current_view(Some(&view), "spin", "drive", &mesh, false)
-            .expect("complete external lead must pass planner validation");
+        validate_conservative_current_view(
+            Some(&view),
+            "spin transport",
+            "spin",
+            "drive",
+            &mesh,
+            false,
+        )
+        .expect("complete external lead must pass planner validation");
     }
 
     #[test]

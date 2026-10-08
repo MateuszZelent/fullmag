@@ -55,6 +55,19 @@ describe("physics interaction catalog", () => {
     });
   });
 
+  it("resolves only explicitly object-scoped Exchange to the object interaction contract", () => {
+    expect(findInteractionSpec("exchange", "waveguide")).toMatchObject({
+      availability: "object",
+      scope: "object_or_region",
+      storage: "object_interaction",
+    });
+    expect(findInteractionSpec("exchange", null)?.storage).toBe("study");
+    expect(findInteractionSpec("demag", "waveguide")?.storage).toBe("study");
+    expect(buildObjectInteractionPatchFromDraft(
+      defaultDraftForInteraction("exchange"), null, "waveguide",
+    )).toEqual({ patch: { enabled: true, params: {}, present: true } });
+  });
+
   it("keeps demag global and exposes the implemented and planned demag methods", () => {
     const demag = findInteractionSpec("demag");
 

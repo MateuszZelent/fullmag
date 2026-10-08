@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use crate::ImportedGeometryScaleIR;
+use crate::{
+    AntennaConductorPartIR, AntennaRigidTransformIR, AntennaTerminalFaceSelectorsIR,
+    CpwWidthStationIR, ImportedGeometryScaleIR, MicrostripWidthStationIR,
+};
 
 // ── Problem metadata ──────────────────────────────────────────────────────────
 
@@ -75,6 +78,30 @@ pub enum GeometryEntryIR {
         #[serde(default)]
         z0: f64,
     },
+    #[serde(rename = "microstrip")]
+    MicrostripAntenna {
+        name: String,
+        length_m: f64,
+        thickness_m: f64,
+        conductivity_s_per_m: f64,
+        transform: AntennaRigidTransformIR,
+        stations: Vec<MicrostripWidthStationIR>,
+        return_width_m: f64,
+        return_offset_m: f64,
+        conductors: Vec<AntennaConductorPartIR>,
+        terminal_faces: BTreeMap<String, AntennaTerminalFaceSelectorsIR>,
+    },
+    #[serde(rename = "cpw")]
+    CpwAntenna {
+        name: String,
+        length_m: f64,
+        thickness_m: f64,
+        conductivity_s_per_m: f64,
+        transform: AntennaRigidTransformIR,
+        stations: Vec<CpwWidthStationIR>,
+        conductors: Vec<AntennaConductorPartIR>,
+        terminal_faces: BTreeMap<String, AntennaTerminalFaceSelectorsIR>,
+    },
     Ellipsoid {
         name: String,
         radii: [f64; 3],
@@ -118,6 +145,8 @@ impl GeometryEntryIR {
             | Self::Cylinder { name, .. }
             | Self::SinWaveguide { name, .. }
             | Self::ArchWaveguide { name, .. }
+            | Self::MicrostripAntenna { name, .. }
+            | Self::CpwAntenna { name, .. }
             | Self::Ellipsoid { name, .. }
             | Self::Sphere { name, .. }
             | Self::Ellipse { name, .. }

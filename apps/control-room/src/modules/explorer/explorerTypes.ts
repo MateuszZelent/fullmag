@@ -43,6 +43,14 @@ export type ExplorerNodeKind =
   | "object.frozen-spins"
   | "object.geometry"
   | "object.antenna"
+  | "object.antenna.regional"
+  | "object.antenna.conductor"
+  | "object.antenna.port"
+  | "object.antenna.solution"
+  | "object.antenna.projection"
+  | "object.antenna.drive"
+  | "object.antenna.spectrum"
+  | "object.antenna.visualization"
   | "object.material"
   | "object.physics"
   | "object.physics.scope"
@@ -381,6 +389,14 @@ export interface ExplorerNode {
   modeIndex?: number;
   objectId?: string;
   objectRole?: "antenna" | "magnet" | "auxiliary";
+  antennaResourceId?: string;
+  antennaResourceKind?:
+    | "conductor"
+    | "port"
+    | "solution"
+    | "projection"
+    | "drive"
+    | "spectrum";
   observableId?: string;
   couplingId?: string;
   currentTransportId?: string;

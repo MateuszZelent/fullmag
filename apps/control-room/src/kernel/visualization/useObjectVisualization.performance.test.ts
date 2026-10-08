@@ -70,8 +70,13 @@ describe("object visualization subscription performance contracts", () => {
       'visualization.target.set-wireframe-color',
     );
     expect(objectGeneralPanelSource).toContain(
+      'visualization.target.set-primitive-mono-color',
+    );
+    expect(objectGeneralPanelSource).not.toContain(
       'visualization.target.set-shader-mono-color',
     );
+    expect(objectGeneralPanelSource).toContain("primitiveMonoColor");
+    expect(objectGeneralPanelSource).toContain("surfaceColorSource");
     expect(objectGeneralPanelSource).not.toContain("useObjectVisualizationRegistry()");
   });
 

@@ -174,9 +174,13 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     ? sessionResourceIdentityKey(sessionIdentity)
     : "session:unknown";
   const scopeKey = `${sessionIdentityKey}|${object.mode}|${object.objectId}`;
+  const draftFieldRevisionsRef = useRef<Map<MagneticDraftField, number>>(new Map());
+  const anisotropyFieldRevisionsRef = useRef<Map<AnisotropyField, number>>(new Map());
   const scopeRef = useRef<PanelScope>({ key: scopeKey, token: Symbol(scopeKey) });
   if (scopeRef.current.key !== scopeKey) {
     scopeRef.current = { key: scopeKey, token: Symbol(scopeKey) };
+    draftFieldRevisionsRef.current.clear();
+    anisotropyFieldRevisionsRef.current.clear();
   }
   const scope = scopeRef.current;
   const isCurrentScope = useCallback(
@@ -376,8 +380,6 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
             : null),
       }
     : null;
-  const draftFieldRevisionsRef = useRef<Map<MagneticDraftField, number>>(new Map());
-  const anisotropyFieldRevisionsRef = useRef<Map<AnisotropyField, number>>(new Map());
   const draftTransactionRevisionRef = useRef(0);
   const draftStateForResolution = useMemo(() => {
     if (assignmentBaseDecision !== "rebase" || !assignmentBaseOverrideState ||
@@ -420,8 +422,6 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   function startPending(operation: PendingOperation, pendingScope = scope): void {
     setPendingOperationsState((current) => {
       if (current.scopeToken !== pendingScope.token) {
-        draftFieldRevisionsRef.current.clear();
-        anisotropyFieldRevisionsRef.current.clear();
         return {
           operations: new Set([operation]),
           scopeKey: pendingScope.key,

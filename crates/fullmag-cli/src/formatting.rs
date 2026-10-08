@@ -154,6 +154,7 @@ pub(crate) fn push_engine_log(
         timestamp_unix_ms,
         level: level.to_string(),
         message: message.into(),
+        command_id: None,
     });
     if entries.len() > MAX_ENGINE_LOG_ENTRIES {
         let overflow = entries.len() - MAX_ENGINE_LOG_ENTRIES;
@@ -170,7 +171,10 @@ pub(crate) fn upsert_engine_log_tail(
     let timestamp_unix_ms = unix_time_millis().unwrap_or(0);
     let message = message.into();
     if let Some(last) = entries.last_mut() {
-        if last.level == level && last.message.starts_with(message_prefix) {
+        if last.command_id.is_none()
+            && last.level == level
+            && last.message.starts_with(message_prefix)
+        {
             last.timestamp_unix_ms = timestamp_unix_ms;
             last.message = message;
             return;

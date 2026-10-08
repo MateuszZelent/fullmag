@@ -4,15 +4,16 @@ use crate::{
     EigenDampingPolicyIR, EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR,
     EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
     FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FdmPrecisionPolicyIR,
-    FdmProjectionPolicyIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
-    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, FrequencyExcitationIR,
+    FdmProjectionPolicyIR, FemConnectivityIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
+    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, FieldTargetIR, FrequencyExcitationIR,
     FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR, IntegratorChoice,
     KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR, RegionRefIR,
-    RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedFdmGpuChargeTransportIR,
-    ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy, SpinWaveBoundaryConditionIR,
-    ThermalSeedConfig, TimeDependenceIR, TimeEnvelopeIR,
+    RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedChargeTransportPlanIR,
+    ResolvedFdmGpuChargeTransportIR, ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR,
+    SeedPolicy, SolvedAntennaDriveIR, SpinWaveBoundaryConditionIR, StudyKindIR, ThermalSeedConfig,
+    TimeDependenceIR, TimeEnvelopeIR,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -30,6 +31,67 @@ pub struct ExecutionPlanIR {
     pub common: CommonPlanMeta,
     pub backend_plan: BackendPlanIR,
     pub output_plan: OutputPlanIR,
+    pub provenance: ProvenancePlanIR,
+}
+
+pub const ANTENNA_FIELD_SOLVE_PLAN_SCHEMA_VERSION: &str = "antenna_field_solve_plan.v1";
+
+/// FEM conductor-only payload owned by an antenna field precomputation stage.
+///
+/// This is deliberately smaller than [`FemPlanIR`]: it has no magnetization,
+/// material-energy, time-integrator, or relaxation state and therefore cannot
+/// be executed by an LLG runner accidentally.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaConductorFemPlanIR {
+    pub mesh_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_source: Option<String>,
+    pub mesh: MeshIR,
+    pub object_segments: Vec<FemObjectSegmentIR>,
+    pub mesh_parts: Vec<FemMeshPartIR>,
+    pub fe_order: u32,
+    pub hmax: f64,
+    pub charge_transport_plans: Vec<ResolvedChargeTransportPlanIR>,
+    pub oersted_realization: OerstedRealization,
+}
+
+/// Explicit carrier on which the per-ampere antenna field is evaluated.
+/// It is independent from the conductor mesh carrying electric potential and
+/// current density.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaFieldSamplingPlanIR {
+    pub domain: FieldTargetIR,
+    pub carrier_kind: String,
+    pub location: String,
+    pub topology_digest: String,
+    pub positions_xyz_m: Vec<[f64; 3]>,
+    /// Full connectivity of the sampling carrier when it is available.
+    ///
+    /// Older serialized plans omitted this field; an empty connectivity keeps
+    /// those plans readable but prevents FEM element interpolation at runtime.
+    #[serde(default = "crate::FemConnectivityIR::empty")]
+    pub cells: FemConnectivityIR,
+}
+
+/// Dedicated static antenna precomputation plan.
+///
+/// This wrapper deliberately cannot be passed to the ordinary LLG runner as
+/// an `ExecutionPlanIR`.  Its only executable payload is the resolved FEM
+/// charge/RT0/Oersted plan for one independently normalized port basis.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaFieldSolvePlanIR {
+    pub schema_version: String,
+    pub stage_id: String,
+    pub port_mode_id: String,
+    pub source_object_id: String,
+    pub solution_id: String,
+    pub common: CommonPlanMeta,
+    pub conductor: AntennaConductorFemPlanIR,
+    pub field_sampling: AntennaFieldSamplingPlanIR,
+    pub target_refs: Vec<FieldTargetIR>,
     pub provenance: ProvenancePlanIR,
 }
 
@@ -645,12 +707,37 @@ pub struct ResolvedRegionalFieldDriveBasisIR {
     pub projection_signature: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedSolvedAntennaDriveBasisIR {
+    pub drive: SolvedAntennaDriveIR,
+    pub solution_id: String,
+    pub source_object_id: String,
+    /// Immutable projected Oersted field basis in A/m per A. Runtime only
+    /// evaluates the authored scalar current waveform at integrator stage time.
+    pub field_xyz_apm_per_a: Vec<[f64; 3]>,
+    pub projection_signature: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TimeStageContextIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_stage_id: Option<String>,
     #[serde(default)]
     pub start_time_s: f64,
+    /// Absolute origin of stage-local waveforms. None preserves legacy plans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waveform_origin_time_s: Option<f64>,
+    /// Semantic study family used by stage-scoped drive activation.  Missing
+    /// values from older serialized plans remain `Unknown` and therefore do
+    /// not enable an `AllTimeEvolution` drive accidentally.
+    #[serde(default, skip_serializing_if = "StudyKindIR::is_unknown")]
+    pub study_kind: StudyKindIR,
+}
+
+impl TimeStageContextIR {
+    pub fn waveform_origin_time_s(&self) -> f64 {
+        self.waveform_origin_time_s.unwrap_or(self.start_time_s)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -703,6 +790,8 @@ pub struct FdmPlanIR {
     pub field_drives: Vec<RegionalFieldDriveIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regional_field_drive_bases: Vec<ResolvedRegionalFieldDriveBasisIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub solved_antenna_drive_bases: Vec<ResolvedSolvedAntennaDriveBasisIR>,
     #[serde(default)]
     pub time_stage: TimeStageContextIR,
     /// Explicit inter-region exchange coupling overrides.
@@ -1001,6 +1090,7 @@ pub struct FemObjectSegmentIR {
 pub enum FemMeshPartRole {
     Air,
     MagneticObject,
+    Conductor,
     Interface,
     OuterBoundary,
 }
@@ -1307,6 +1397,8 @@ pub struct FemPlanIR {
     /// their spatial basis against the realized mesh.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_drives: Vec<RegionalFieldDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub solved_antenna_drive_bases: Vec<ResolvedSolvedAntennaDriveBasisIR>,
     /// Closed geometry trees referenced by regional-drive geometry masks.
     /// Native FEM consumes these descriptors and owns spatial projection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1315,6 +1407,9 @@ pub struct FemPlanIR {
     pub time_stage: TimeStageContextIR,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<CurrentModuleIR>,
+    /// Standalone charge-only plans are distinct from spin transport plans.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub charge_transport_plans: Vec<ResolvedChargeTransportPlanIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spin_transport_plans: Vec<ResolvedSpinTransportPlanIR>,
     pub gyromagnetic_ratio: f64,
@@ -1469,9 +1564,11 @@ impl Default for FemPlanIR {
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
             field_drives: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: TimeStageContextIR::default(),
             current_modules: Vec::new(),
+            charge_transport_plans: Vec::new(),
             spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 0.0,
             precision: ExecutionPrecision::default(),
@@ -2096,8 +2193,25 @@ mod tests {
         FemEigenExecutionResolutionIR, FemMeshTopologyFamilyIR, FemMixedTopologyCapabilityStatusIR,
         FemMixedTopologyProvenanceIR, RequestedFemDemagIR, ResolvedFemDemagIR,
         ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
-        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
+        TimeStageContextIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
+        SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+
+    #[test]
+    fn stage_waveform_origin_defaults_to_segment_start_and_round_trips() {
+        let legacy: TimeStageContextIR = serde_json::from_value(serde_json::json!({
+            "start_time_s": 10.5
+        }))
+        .expect("legacy stage context deserializes");
+        assert_eq!(legacy.waveform_origin_time_s(), 10.5);
+
+        let mut resumed = legacy;
+        resumed.waveform_origin_time_s = Some(10.0);
+        let decoded: TimeStageContextIR =
+            serde_json::from_value(serde_json::to_value(&resumed).unwrap()).unwrap();
+        assert_eq!(decoded.start_time_s, 10.5);
+        assert_eq!(decoded.waveform_origin_time_s(), 10.0);
+    }
 
     fn resolved_frozen_spins_fixture() -> ResolvedFrozenSpinsPlanIR {
         let mut hash = Sha256::new();

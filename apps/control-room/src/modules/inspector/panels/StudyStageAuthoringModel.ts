@@ -1341,7 +1341,7 @@ export function studyStageDraftToSceneStage(
       entrypoint_kind: "flat_run",
       kind: "run",
       stage_id: requiredText(draft.stageId, "run"),
-      until_seconds: requiredNumber(draft.untilSeconds, "until_seconds"),
+      until_seconds: String(requiredNumber(draft.untilSeconds, "until_seconds")),
     };
     const autosave = stageAutosaveDraftToValue(draft.stageAutosave, "run");
     if (autosave) stage.autosave = autosave;
@@ -1532,7 +1532,7 @@ export function studyStageDraftToSceneStage(
     algorithm: requiredText(draft.algorithm, "llg_overdamped"),
     entrypoint_kind: "flat_relax",
     kind: "relax",
-    max_steps: requiredInteger(draft.maxSteps, "max_steps"),
+    max_steps: String(requiredInteger(draft.maxSteps, "max_steps")),
     stage_id: requiredText(draft.stageId, "relax"),
     torque_tolerance_apm: requiredNumber(
       draft.torqueTolerance,
@@ -1550,7 +1550,7 @@ export function studyStageDraftToSceneStage(
     setOptionalNumber(stage, "relax_alpha", draft.relaxAlpha);
     setOptionalText(stage, "integrator", draft.solver);
     if (draft.timestepMode === "fixed" && draft.dt.trim()) {
-      stage.fixed_timestep = requiredNumber(draft.dt, "fixed_timestep");
+      stage.fixed_timestep = String(requiredNumber(draft.dt, "fixed_timestep"));
     } else if (draft.timestepMode === "adaptive") {
       const adaptive: JsonObject = { tolerance_mode: draft.toleranceMode };
       if (draft.toleranceMode === "advanced") {

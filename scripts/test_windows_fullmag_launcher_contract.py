@@ -68,6 +68,16 @@ def test_windows_launcher_keeps_build_and_cache_storage_outside_repo() -> None:
     assert "docker" not in launcher.lower()
 
 
+def test_generic_compose_separates_windows_frontend_source_and_container_target() -> None:
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    storage_shell = (ROOT / "scripts" / "just_storage_shell.sh").read_text(encoding="utf-8")
+
+    assert "target: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}" in compose
+    assert "target: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}" not in compose
+    assert "FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}" in compose
+    assert 'MSYS_NO_PATHCONV=1 command docker' in storage_shell
+
+
 def test_windows_gpu_route_builds_cuda_and_fails_closed() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
 

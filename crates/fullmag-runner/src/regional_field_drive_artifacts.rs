@@ -9,6 +9,7 @@ struct RegionalFieldDriveManifest<'a> {
     schema_version: &'static str,
     active_stage_id: &'a Option<String>,
     stage_start_time_s: f64,
+    waveform_origin_time_s: f64,
     stage_end_time_s: f64,
     drive_revision_sha256: String,
     drive_count: usize,
@@ -33,19 +34,24 @@ pub(crate) fn regional_field_drive_artifact(
         return Ok(None);
     }
     let stage_end_time_s = time_stage.start_time_s + until_seconds;
-    let schedule = crate::time_events::build_resolved_stage_event_schedule(
+    let schedule = crate::time_events::build_resolved_stage_event_schedule_with_origin(
         drives,
+        &[],
         time_stage.start_time_s,
+        time_stage.waveform_origin_time_s(),
         stage_end_time_s,
         outputs,
         crate::schedules::OUTPUT_TIME_TOLERANCE,
     );
-    let fsal_invalidation_times_s = crate::time_events::resolved_stage_drive_discontinuities(
-        drives,
-        time_stage.start_time_s,
-        stage_end_time_s,
-        crate::schedules::OUTPUT_TIME_TOLERANCE,
-    );
+    let fsal_invalidation_times_s =
+        crate::time_events::resolved_stage_drive_discontinuities_with_origin(
+            drives,
+            &[],
+            time_stage.start_time_s,
+            time_stage.waveform_origin_time_s(),
+            stage_end_time_s,
+            crate::schedules::OUTPUT_TIME_TOLERANCE,
+        );
     let encoded_drives = serde_json::to_vec(drives).map_err(|error| RunError {
         message: format!("failed to serialize regional field-drive revision: {error}"),
     })?;
@@ -53,6 +59,7 @@ pub(crate) fn regional_field_drive_artifact(
         schema_version: "regional_field_drive.v1",
         active_stage_id: &time_stage.active_stage_id,
         stage_start_time_s: time_stage.start_time_s,
+        waveform_origin_time_s: time_stage.waveform_origin_time_s(),
         stage_end_time_s,
         drive_revision_sha256: format!("{:x}", Sha256::digest(encoded_drives)),
         drive_count: drives.len(),
@@ -100,7 +107,7 @@ mod tests {
     use super::*;
     use fullmag_ir::{
         DriveActivationIR, FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR,
-        FieldTimeOriginIR, TimeDependenceIR,
+        FieldTimeOriginIR, StudyKindIR, TimeDependenceIR,
     };
 
     #[test]
@@ -127,6 +134,8 @@ mod tests {
             &TimeStageContextIR {
                 active_stage_id: Some("run".into()),
                 start_time_s: 10e-12,
+                waveform_origin_time_s: None,
+                study_kind: StudyKindIR::TimeEvolution,
             },
             3e-12,
             &[],
@@ -142,6 +151,52 @@ mod tests {
         assert_eq!(value["schema_version"], "regional_field_drive.v1");
         assert_eq!(value["active_stage_id"], "run");
         assert_eq!(value["event_count"], 4);
+        assert_eq!(value["waveform_origin_time_s"], 10e-12);
         assert_eq!(value["execution_engine"], "native_fem_cpu");
+    }
+
+    #[test]
+    fn resumed_manifest_keeps_original_waveform_events() {
+        let drive = RegionalFieldDriveIR {
+            id: "pulse".into(),
+            name: "Pulse".into(),
+            kind: FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
+            waveform: TimeDependenceIR::Pulse {
+                t_on: 1.0,
+                t_off: 2.0,
+            },
+            time_origin: FieldTimeOriginIR::StageLocal,
+            activation: DriveActivationIR::AllTimeEvolution {},
+            migration: None,
+        };
+        let artifact = regional_field_drive_artifact(
+            &[drive],
+            &TimeStageContextIR {
+                active_stage_id: Some("run".into()),
+                start_time_s: 10.5,
+                waveform_origin_time_s: Some(10.0),
+                study_kind: StudyKindIR::TimeEvolution,
+            },
+            2.5,
+            &[],
+            &ExecutionProvenance::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&artifact.bytes).unwrap();
+        assert_eq!(value["waveform_origin_time_s"], 10.0);
+        assert_eq!(
+            value["event_times_s"],
+            serde_json::json!([10.5, 11.0, 12.0, 13.0])
+        );
+        assert_eq!(
+            value["fsal_invalidation_times_s"],
+            serde_json::json!([11.0, 12.0])
+        );
     }
 }

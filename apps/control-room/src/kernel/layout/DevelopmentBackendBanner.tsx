@@ -314,12 +314,39 @@ function viewForDevelopmentBackendState(
         state: "unknown",
       };
     case "superseded":
+      return {
+        action: "retry",
+        message: "Backend sources changed during the build. Waiting for a current build.",
+        state: "unknown",
+      };
     case "stopped":
+      return {
+        action: "retry",
+        message: "The development backend watcher has stopped. Retry only checks its status.",
+        state: "unknown",
+      };
     case "unknown":
       return {
         action: "retry",
-        message: "Status is unknown. Retry to observe it again.",
+        message: unknownDevelopmentBackendMessage(data.reason),
         state: "unknown",
       };
+  }
+}
+
+function unknownDevelopmentBackendMessage(reason: DevelopmentBackendResource["reason"]): string {
+  switch (reason) {
+    case "configuration_invalid":
+      return "Development backend configuration is invalid. Check the managed launcher configuration.";
+    case "observation_unavailable":
+      return "The development backend status file could not be read. Retry to check it again.";
+    case "observation_invalid":
+      return "The development backend status is invalid or belongs to a different workspace generation.";
+    case "observation_stale":
+      return "The development backend heartbeat is out of date. Retry checks for a fresh status.";
+    case "watcher_stopped":
+      return "The development backend watcher has stopped. Retry only checks its status.";
+    default:
+      return `Development backend status is unconfirmed (${reason}). Retry to observe it again.`;
   }
 }

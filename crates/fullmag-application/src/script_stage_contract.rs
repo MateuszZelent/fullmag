@@ -66,6 +66,8 @@ pub enum StudyPipelineNode {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScriptExecutionConfig {
     pub ir: ProblemIR,
+    #[serde(default, deserialize_with = "deserialize_antenna_inventory")]
+    pub antenna_inventory: ScriptAntennaAuthoringInventory,
     #[serde(default)]
     pub shared_geometry_assets: Option<GeometryAssetsIR>,
     pub default_until_seconds: Option<f64>,
@@ -75,9 +77,65 @@ pub struct ScriptExecutionConfig {
     pub stages: Vec<ScriptExecutionStage>,
 }
 
+/// Authored definitions are not executable until selected by a stage action.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptAntennaAuthoringInventory {
+    #[serde(default)]
+    pub antenna_field_solve_stages: Vec<fullmag_ir::AntennaFieldSolveStageIR>,
+    #[serde(default)]
+    pub antenna_target_projections: Vec<fullmag_ir::AntennaTargetProjectionRefIR>,
+    #[serde(default)]
+    pub solved_antenna_drives: Vec<fullmag_ir::SolvedAntennaDriveIR>,
+    #[serde(default)]
+    pub antenna_spectrum_requests: Vec<fullmag_ir::AntennaSpectrumRequestIR>,
+}
+
+impl ScriptAntennaAuthoringInventory {
+    pub fn validate(&self) -> Result<(), String> {
+        for (collection, ids) in [
+            ("antenna_field_solve_stages", self.antenna_field_solve_stages.iter().map(|item| item.id.as_str()).collect::<Vec<_>>()),
+            ("antenna_target_projections", self.antenna_target_projections.iter().map(|item| item.id.as_str()).collect()),
+            ("solved_antenna_drives", self.solved_antenna_drives.iter().map(|item| item.id.as_str()).collect()),
+            ("antenna_spectrum_requests", self.antenna_spectrum_requests.iter().map(|item| item.id.as_str()).collect()),
+        ] {
+            let mut seen = std::collections::BTreeSet::new();
+            for id in ids {
+                if !seen.insert(id) {
+                    return Err(format!("duplicate {collection} declaration id '{id}'"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn deserialize_antenna_inventory<'de, D>(deserializer: D) -> Result<ScriptAntennaAuthoringInventory, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let inventory = ScriptAntennaAuthoringInventory::deserialize(deserializer)?;
+    inventory.validate().map_err(serde::de::Error::custom)?;
+    Ok(inventory)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ScriptExecutionStageAction {
+    AntennaFieldSolve {
+        stage_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port_mode_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        port_mode_ids: Vec<String>,
+    },
+    AntennaSourceSpectrum {
+        request: fullmag_ir::AntennaSpectrumRequestIR,
+    },
+    AddSolvedAntennaDrive {
+        projection: fullmag_ir::AntennaTargetProjectionRefIR,
+        drive: fullmag_ir::SolvedAntennaDriveIR,
+    },
     SaveState {
         #[serde(default = "default_stage_action_artifact_name")]
         artifact_name: String,
@@ -165,6 +223,23 @@ pub struct ScriptExecutionStage {
 
 #[derive(Debug, Clone)]
 pub enum ResolvedScriptStageAction {
+    AntennaExternalLeadInspection {
+        input: fullmag_ir::ResolvedAntennaExternalLeadCurrentInputIR,
+        requested_execution: fullmag_ir::RequestedTransportExecutionIR,
+        output_id: String,
+    },
+    AntennaFieldSolve {
+        stage_id: String,
+        port_mode_id: String,
+        plan: fullmag_ir::AntennaFieldSolvePlanIR,
+    },
+    AntennaSourceSpectrum {
+        request_id: String,
+    },
+    AddSolvedAntennaDrive {
+        projection_id: String,
+        drive_id: String,
+    },
     SaveState {
         artifact_name: String,
         format: Option<String>,
@@ -219,6 +294,9 @@ pub enum ResolvedScriptStageAction {
 #[serde(rename_all = "snake_case")]
 pub enum StageTransitionKind {
     ContinueInPlace,
+    AntennaExternalLeadInspection,
+    AntennaFieldSolve,
+    AntennaSourceSpectrum,
     TransferState,
     RemeshTransfer,
     BackendTransfer,
@@ -232,6 +310,9 @@ pub enum StageTransitionKind {
 #[serde(rename_all = "snake_case")]
 pub enum StageTransitionReason {
     SameRuntimeContext,
+    AntennaExternalLeadInspection,
+    AntennaFieldSolve,
+    AntennaSourceSpectrum,
     ExplicitRemesh,
     BackendChange,
     MeshGenerationChanged,
@@ -309,6 +390,9 @@ impl StageTransitionMetadata {
         }
         match self.kind {
             StageTransitionKind::ContinueInPlace => "continues",
+            StageTransitionKind::AntennaExternalLeadInspection => "antenna inspection computed",
+            StageTransitionKind::AntennaFieldSolve => "field basis solved",
+            StageTransitionKind::AntennaSourceSpectrum => "source spectrum computed",
             StageTransitionKind::SaveCheckpoint => "preserved",
             StageTransitionKind::LoadState => "restored",
             StageTransitionKind::ExportOnly => "exported",
@@ -358,6 +442,31 @@ impl ResolvedScriptStage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_config_defaults_inventory_without_activating_definitions() {
+        let config: ScriptExecutionConfig = serde_json::from_value(serde_json::json!({
+            "ir": ProblemIR::bootstrap_example()
+        })).unwrap();
+        assert_eq!(config.antenna_inventory, ScriptAntennaAuthoringInventory::default());
+    }
+
+    #[test]
+    fn execution_config_rejects_unknown_inventory_fields_and_duplicate_ids() {
+        let mut wire = serde_json::json!({
+            "ir": ProblemIR::bootstrap_example(),
+            "antenna_inventory": {"unexpected": []}
+        });
+        assert!(serde_json::from_value::<ScriptExecutionConfig>(wire.clone()).unwrap_err().to_string().contains("unknown field"));
+        let projection = serde_json::json!({
+            "id": "projection",
+            "solution": {"kind": "stage_output", "stage_id": "solve", "output_id": "basis"},
+            "target": {"kind": "global"},
+            "output_id": "projected"
+        });
+        wire["antenna_inventory"] = serde_json::json!({"antenna_target_projections": [projection.clone(), projection]});
+        assert!(serde_json::from_value::<ScriptExecutionConfig>(wire).unwrap_err().to_string().contains("duplicate antenna_target_projections declaration id"));
+    }
 
     #[test]
     fn action_wire_field_and_legacy_defaults_are_preserved() {

@@ -1612,6 +1612,19 @@ quadrature exposes a tagged deterministic FP64 policy rather than reusing
 Krylov fields. Python and UI script export must preserve every selected policy
 field and reject unavailable lanes before execution.
 
+Charge-only `CurrentTransport(model="ohmic_poisson", coupling="one_way")`
+jest samodzielnym właścicielem rozwiązania ładunkowego. Powiązanie
+`OerstedField(source=...)` nie może wymagać pomocniczego
+`SpinDriftDiffusion`: moduł spinowy jest potrzebny wyłącznie wtedy, gdy
+użytkownik żąda akumulacji spinu, torque'u lub jawnego sprzężenia
+magnetorezystywnego. Wykonywalny lane musi opublikować z jednego zaakceptowanego
+stanu źródła `V_electric`, `J_charge`, konserwatywny widok RT0/$H(\mathrm{div})$
+oraz `H_oe`. Planner nie może osiągnąć tej semantyki przez samo usunięcie
+walidacji — dopuszczenie jest poprawne dopiero wtedy, gdy istnieje osobny
+resolved charge plan i runtime nie wykonuje ani nie emituje fikcyjnego solve'u
+spinowego. Niepełna definicja ładunku, brak jawnego zamknięcia obwodu albo
+niezakwalifikowany backend pozostają `fail-closed`.
+
 Wzajemny M2 ma rozdzielone polityki numeryczne zależnie od jawnie wybranego
 operatora. FDM używa `fdm_coupled_charge_spin_fv_block_gmres.v1` wraz z
 `reciprocal_nonlinear`; ograniczony FEM CPU/double używa
@@ -2460,7 +2473,7 @@ evidence that the approximation is accurate.
 | `crates/fullmag-fdm-sys/src/lib.rs` | `cpu_oersted_append_only_layout_matches_native_manifest` | exact Rust FFI mirror and every-field C `offsetof` comparison |
 | `crates/fullmag-runner/src/fdm/cpu/native_transport.rs` | `solve_native_m1_snapshot` | resolved closed_geometry certificate, accepted raw face-current binding and fail-closed identity checks without midpoint fallback |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class StructuredCurrentClosure` | public closed_geometry-only source-cut contract and canonical lowering |
-| `crates/fullmag-ir/src/spin_transport.rs` | `validation_errors` | typed closure/source-cut identity, plane and drive validation in ProblemIR |
+| `crates/fullmag-ir/src/spin_transport.rs` | `StructuredCurrentClosureIR` | właściciel typed closed_geometry; metoda `StructuredCurrentClosureIR::validation_errors` sprawdza tożsamości closure/source-cut, płaszczyznę i drive w ProblemIR; nie jest to metoda `ConservativeCurrentSourceIR::validation_errors` |
 | `crates/fullmag-plan/src/spin_transport.rs` | `materialize_structured_current_closure` | exact structured-grid plane, component coverage and return-path preflight |
 | `crates/fullmag-authoring/src/validation.rs` | `validate_scene_structured_current_closure` | SceneDocument closure validation and paired source-cut operator contract |
 | `crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs` | `public_closed_loop_source_cut_publishes_nonzero_oersted_artifact` | positive public nonzero current, H_oe and closure-provenance E2E |
@@ -2481,6 +2494,12 @@ evidence that the approximation is accurate.
 | `crates/fullmag-runner/src/dispatch.rs` | `normalized_fem_plan_for_runtime` | FEM field injection |
 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `solve_coupled_module` | FDM stage owner |
 | `crates/fullmag-plan/src/spin_transport.rs` | `fem_ohmic_oersted_binds_the_solved_charge_field` | planner regression |
+| `crates/fullmag-ir/src/spin_transport.rs` | `ResolvedChargeTransportPlanIR` | standalone resolved one-way charge contract, independent of spin transport |
+| `crates/fullmag-plan/src/spin_transport.rs` | `resolve_fem_charge_only_transport` | materialize static FEM CPU/double charge-only plans and require a complete conservative-current view for Oersted |
+| `native/include/fullmag_fem.h` | `fullmag_fem_solve_charge_transport_v1` | append-only charge-only CPU/double ABI with no spin solve and no GPU fallback |
+| `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_charge` | existing conforming H1/P1 numerical owner reused by the standalone charge ABI |
+| `crates/fullmag-runner/src/native_fem/charge_transport.rs` | `execute_native_fem_charge_transport_plans` | pre-LLG execution, V/J publication, existing RT0/Oersted delegation and no-spin provenance |
+| `backends/fem/tests/charge_transport_abi_contract.cpp` | `main` | managed affine-bar sign, linearity, balance, layout and fail-closed charge-only contract |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solved_current_midpoint_biot_savart_is_finite_and_reverses_with_current` | runtime regression |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `execute_native_fem_steady_transport_plans` | artifact provenance |
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_v1` | public v1 ABI boundary |

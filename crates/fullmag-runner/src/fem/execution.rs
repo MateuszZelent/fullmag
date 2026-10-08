@@ -53,6 +53,41 @@ pub(crate) fn execute_fem<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let dynamic_waveform = |waveform: &fullmag_ir::TimeDependenceIR| {
+        !matches!(waveform, fullmag_ir::TimeDependenceIR::Constant)
+    };
+    let has_dynamic_drive = plan
+        .field_drives
+        .iter()
+        .any(|drive| drive.enabled && dynamic_waveform(&drive.waveform))
+        || plan
+            .solved_antenna_drive_bases
+            .iter()
+            .any(|basis| dynamic_waveform(&basis.drive.waveform))
+        || plan.antenna_zeeman_masks.iter().any(|mask| {
+            mask.waveform.as_ref().is_some_and(dynamic_waveform)
+        })
+        || plan.current_modules.iter().any(|module| match module {
+            fullmag_ir::CurrentModuleIR::AntennaFieldSource { drive, waveform, .. } => {
+                drive.as_ref()
+                    .and_then(|drive| drive.waveform.as_ref())
+                    .is_some_and(dynamic_waveform)
+                    || waveform.as_ref().is_some_and(dynamic_waveform)
+            }
+            fullmag_ir::CurrentModuleIR::CurrentTransport { time_envelope, .. } => {
+                time_envelope.as_ref().is_some_and(|envelope| {
+                    !matches!(envelope, fullmag_ir::TimeEnvelopeIR::Constant { .. })
+                })
+            }
+        });
+    if has_dynamic_drive
+        && plan.time_stage.waveform_origin_time_s() != plan.time_stage.start_time_s
+    {
+        return Err(RunError {
+            message: "exact stage-local waveform resume is not qualified for FEM execution"
+                .to_string(),
+        });
+    }
     let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_plan(plan);
     let fem_mesh_generation_id = Some(stage_asset.identity.generation_id().to_string());
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
@@ -198,9 +233,11 @@ fn execute_native_fem(
             message: "until_seconds must be positive".to_string(),
         });
     }
-    let time_events = crate::time_events::build_resolved_stage_event_schedule(
+    let time_events = crate::time_events::build_resolved_stage_event_schedule_with_origin(
         &plan.field_drives,
+        &plan.solved_antenna_drive_bases,
         plan.time_stage.start_time_s,
+        plan.time_stage.waveform_origin_time_s(),
         plan.time_stage.start_time_s + until_seconds,
         outputs,
         crate::schedules::OUTPUT_TIME_TOLERANCE,

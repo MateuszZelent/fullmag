@@ -198,12 +198,15 @@ pub(crate) fn execute_llg_overdamped(
     let mut last_cached_preview_revision = last_preview_revision;
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut preview_handoff = FemPreviewHandoff::default();
-    let drive_discontinuities = crate::time_events::resolved_stage_drive_discontinuities(
-        &plan.field_drives,
-        plan.time_stage.start_time_s,
-        until_seconds,
-        crate::schedules::OUTPUT_TIME_TOLERANCE,
-    );
+    let drive_discontinuities =
+        crate::time_events::resolved_stage_drive_discontinuities_with_origin(
+            &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
+            plan.time_stage.start_time_s,
+            plan.time_stage.waveform_origin_time_s(),
+            until_seconds,
+            crate::schedules::OUTPUT_TIME_TOLERANCE,
+        );
 
     if let Some(action) = publish_initial_scalar_without_field_snapshot(
         live.as_deref_mut(),
@@ -265,6 +268,8 @@ pub(crate) fn execute_llg_overdamped(
                         let request = display_selection.preview_request();
                         preview_handoff.request_preview(
                             backend,
+                            engine,
+                            plan,
                             &request,
                             node_count,
                             current_stats.step,
@@ -468,6 +473,8 @@ pub(crate) fn execute_llg_overdamped(
                 let request = selection.preview_request();
                 preview_handoff.request_preview(
                     backend,
+                    engine,
+                    plan,
                     &request,
                     node_count,
                     current_stats.step,
@@ -587,7 +594,13 @@ pub(crate) fn execute_llg_overdamped(
             .map(|schedule| schedule.name.clone())
             .collect::<Vec<_>>();
         for name in due_field_names {
-            let metrics = if artifacts.is_streaming() {
+            let metrics = if engine == FemEngine::CpuNative
+                && super::snapshots::is_antenna_field_snapshot(&name)
+            {
+                artifacts.record_field_snapshot(super::snapshots::build_antenna_field_snapshot(
+                    plan, &name, stats.step, stats.time, stats.dt,
+                )?)?
+            } else if artifacts.is_streaming() {
                 let snapshot =
                     backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt)?;
                 artifacts.record_native_fem_field_snapshot(snapshot)?

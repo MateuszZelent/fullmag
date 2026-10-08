@@ -433,6 +433,40 @@ void mixed_global_uniform_drive_uses_canonical_magnetic_nodes() {
     }
 }
 
+void preprojected_antenna_basis_is_owned_and_materialized_at_exact_time() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 2;
+    ctx.mesh.node_volumes = {1.0, 1.0};
+    std::vector<double> basis{1.0, 2.0, 3.0, -1.0, -2.0, -3.0};
+    auto drive_desc = global_uniform_drive_desc();
+    drive_desc.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL;
+    drive_desc.spatial_profile.preprojected_h_xyz_a_per_m = basis.data();
+    drive_desc.spatial_profile.preprojected_h_value_count = basis.size();
+    drive_desc.amplitude_b_t = 0.0;
+    drive_desc.direction[1] = 0.0;
+    drive_desc.waveform.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+    drive_desc.waveform.parameters.sinusoidal = {0.25, 0.0, 0.0};
+    drive_desc.time_origin = FULLMAG_FEM_TIME_STAGE_LOCAL;
+    fullmag_fem_plan_desc plan{};
+    plan.regional_field_drives = &drive_desc;
+    plan.regional_field_drive_count = 1;
+    plan.stage_start_time_s = 10.0;
+    std::string error;
+    check(fullmag::fem::copy_regional_field_drive_plan(ctx, plan, error), error.c_str());
+    basis.assign(basis.size(), 99.0);
+    check(fullmag::fem::project_regional_field_drive_bases(ctx, error), error.c_str());
+    fullmag::fem::materialize_regional_field_drive(ctx, 11.0);
+    const std::vector<double> expected{1.0, 2.0, 3.0, -1.0, -2.0, -3.0};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        check_near(ctx.zeeman.h_drive_xyz[index], expected[index], 1e-12,
+            "preprojected antenna basis exact stage-time value");
+    }
+
+    drive_desc.spatial_profile.preprojected_h_value_count = expected.size() - 1;
+    check(!fullmag::fem::copy_regional_field_drive_plan(ctx, plan, error),
+        "preprojected antenna basis rejects a stale node count");
+}
+
 void spatial_sinc_regional_drive_uses_tetra_volume_projection() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
@@ -718,6 +752,7 @@ int main() {
     regional_drive_invalid_numeric_descriptors_fail_closed();
     global_uniform_regional_drive_projects_and_materializes_exactly();
     mixed_global_uniform_drive_uses_canonical_magnetic_nodes();
+    preprojected_antenna_basis_is_owned_and_materialized_at_exact_time();
     spatial_sinc_regional_drive_uses_tetra_volume_projection();
     spatial_gaussian_plane_wave_uses_global_carrier_origin();
     geometry_mask_projection_matches_analytic_clipped_tetra_volume();

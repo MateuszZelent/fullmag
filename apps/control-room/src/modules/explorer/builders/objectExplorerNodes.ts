@@ -4,11 +4,13 @@ import type {
   ModelTreeObjectSnapshot,
   ModelTreePhysicsInteractionSnapshot,
 } from "../explorerTypes";
-import type { CurrentTransportListResource } from "@/kernel/api/apiTypes";
+import type { CurrentTransportListResource, SceneResource } from "@/kernel/api/apiTypes";
 import type {
   FrozenSpinsDefinition,
   FrozenSpinsSelectionExpression,
 } from "@/kernel/api/apiTypes";
+import { antennaPortStatus } from "@/shared/domain/physics/antennaPortValidation";
+import { antennaStageValidationMessages } from "@/shared/domain/physics/antennaStageValidation";
 
 import { buildPhysicsGraphObjectNode } from "./physicsGraphTree";
 import {
@@ -17,6 +19,10 @@ import {
   type ModelTreeResources,
   visualizationDebugNode,
 } from "./explorerNodeContract";
+
+type AntennaTargetResource = NonNullable<
+  SceneResource["antenna_target_projections"]
+>[number]["target"];
 
 function planarMonitorObjectCreationInput(
   resources: ModelTreeResources,
@@ -100,30 +106,39 @@ export function buildObjectExplorerNode(
           kind: "object.antenna",
           label: "Antenna",
           parentId,
-          badge: "Zeeman mask",
+          badge: "composition",
           icon: "wave",
           objectId,
+          selectable: false,
           status: "ready",
           contextCommands: ["workspace.focus-selection"],
+          children: [
+            {
+              id: `${parentId}:antenna:regional`,
+              kind: "object.antenna.regional",
+              label: "Regional field drive",
+              parentId: `${parentId}:antenna`,
+              badge: "field drive",
+              icon: "wave",
+              objectId,
+              objectRole: "antenna",
+              status: "ready",
+              contextCommands: ["workspace.focus-selection"],
+            },
+            ...antennaCompositionNodes(parentId, objectId, resources),
+          ],
         },
         {
           id: `${parentId}:visualization`,
-          kind: "object.visualization",
+          kind: "object.antenna.visualization",
           label: "Visualization",
           parentId,
           badge: "display",
           icon: "sparkles",
           objectId,
+          objectRole: "antenna",
           status: "ready",
           contextCommands: ["workspace.focus-selection"],
-          children: compactExplorerNodes([
-            modeVisualizationNode(`${parentId}:visualization`, object, resources),
-            visualizationDebugNode({
-              kind: "object.visualization.debug",
-              objectId,
-              parentId: `${parentId}:visualization`,
-            }),
-          ]),
         },
         ...physicsGraphObjectChildren(object, physicsGraph, resources.currentTransports),
       ],
@@ -215,6 +230,133 @@ export function buildObjectExplorerNode(
       ...physicsGraphObjectChildren(object, physicsGraph, resources.currentTransports),
     ],
   };
+}
+
+function antennaCompositionNodes(
+  parentId: string,
+  objectId: string,
+  resources: ModelTreeResources,
+): ExplorerNode[] {
+  const scene = resources.scene;
+  const portModes = (scene?.antenna_port_modes ?? []).filter(
+    (mode) => mode.source_object_id === objectId,
+  );
+  const solveStages = (scene?.antenna_field_solve_stages ?? []).filter(
+    (stage) => stage.source_object_id === objectId,
+  );
+  const solveStageIds = new Set(solveStages.map((stage) => stage.id));
+  const projections = (scene?.antenna_target_projections ?? []).filter(
+    (projection) => solveStageIds.has(projection.solution.stage_id),
+  );
+  const projectionIds = new Set(projections.map((projection) => projection.id));
+  const drives = (scene?.solved_antenna_drives ?? []).filter((drive) =>
+    projectionIds.has(drive.projection_ref),
+  );
+  const spectra = (scene?.antenna_spectrum_requests ?? []).filter((request) =>
+    solveStageIds.has(request.solution_ref.stage_id),
+  );
+  const antennaParentId = `${parentId}:antenna`;
+
+  return [
+    {
+      id: `${antennaParentId}:conductor`,
+      kind: "object.antenna.conductor",
+      label: "Conductor",
+      parentId: antennaParentId,
+      badge: "3D conductor",
+      icon: "box",
+      objectId,
+      objectRole: "antenna",
+      antennaResourceId: objectId,
+      antennaResourceKind: "conductor",
+      status: "ready",
+      contextCommands: ["workspace.focus-selection"],
+    },
+    ...portModes.map((mode) => {
+      const status = antennaPortStatus(mode);
+      return {
+        id: `${antennaParentId}:port:${encodeURIComponent(mode.id)}`,
+        kind: "object.antenna.port" as const,
+        label: `Port ${mode.id}`,
+        parentId: antennaParentId,
+        badge: `${mode.branches.length} branches${status === "ready" ? "" : " · invalid"}`,
+        icon: "activity" as const,
+        objectId,
+        objectRole: "antenna" as const,
+        antennaResourceId: mode.id,
+        antennaResourceKind: "port" as const,
+        status,
+        contextCommands: ["workspace.focus-selection"],
+      };
+    }),
+    ...solveStages.map((stage) => {
+      const invalid = antennaStageValidationMessages(stage, scene ?? null).length > 0;
+      return {
+        id: `${antennaParentId}:solution:${encodeURIComponent(stage.id)}`,
+        kind: "object.antenna.solution" as const,
+        label: `Field solve ${stage.id}`,
+        parentId: antennaParentId,
+        badge: `${stage.outputs.length} outputs · ${invalid ? "invalid" : "configured"}`,
+        icon: "mesh" as const,
+        objectId,
+        objectRole: "antenna" as const,
+        antennaResourceId: stage.id,
+        antennaResourceKind: "solution" as const,
+        status: "warning" as const,
+        contextCommands: ["workspace.focus-selection"],
+      };
+    }),
+    ...projections.map((projection) => ({
+      id: `${antennaParentId}:projection:${encodeURIComponent(projection.id)}`,
+      kind: "object.antenna.projection" as const,
+      label: `Projection ${projection.id}`,
+      parentId: antennaParentId,
+      badge: `${targetDescription(projection.target)} · pending`,
+      icon: "triangle" as const,
+      objectId,
+      objectRole: "antenna" as const,
+      antennaResourceId: projection.id,
+      antennaResourceKind: "projection" as const,
+      status: "warning" as const,
+      contextCommands: ["workspace.focus-selection"],
+    })),
+    ...drives.map((drive) => ({
+      id: `${antennaParentId}:drive:${encodeURIComponent(drive.id)}`,
+      kind: "object.antenna.drive" as const,
+      label: drive.name,
+      parentId: antennaParentId,
+      badge: `${drive.peak_current_a.toExponential(2)} A · configured`,
+      icon: "wave" as const,
+      objectId,
+      objectRole: "antenna" as const,
+      antennaResourceId: drive.id,
+      antennaResourceKind: "drive" as const,
+      status: "warning" as const,
+      contextCommands: ["workspace.focus-selection"],
+    })),
+    ...spectra.map((request) => ({
+      id: `${antennaParentId}:spectrum:${encodeURIComponent(request.id)}`,
+      kind: "object.antenna.spectrum" as const,
+      label: `Spectrum ${request.id}`,
+      parentId: antennaParentId,
+      badge: `${request.transform} · configured`,
+      icon: "activity" as const,
+      objectId,
+      objectRole: "antenna" as const,
+      antennaResourceId: request.id,
+      antennaResourceKind: "spectrum" as const,
+      status: "warning" as const,
+      contextCommands: ["workspace.focus-selection"],
+    })),
+  ];
+}
+
+function targetDescription(
+  target: AntennaTargetResource,
+): string {
+  if (target.kind === "global") return "global";
+  if (target.kind === "object") return `object:${target.object_id}`;
+  return `region:${target.object_id}/${target.region_id}`;
 }
 
 function physicsGraphObjectChildren(

@@ -283,9 +283,10 @@ fn infer_dispatched_command_completion(
             Some(CommandCompletionState::Failed)
         }
         "compute_fields"
-            if command_readiness_matches_requirements(record, snapshot)
-                .ok()
-                .is_some_and(|ready| ready) =>
+            if command_has_terminal_log(record, snapshot, "Field snapshots computed")
+                && command_readiness_matches_requirements(record, snapshot)
+                    .ok()
+                    .is_some_and(|ready| ready) =>
         {
             Some(CommandCompletionState::Completed)
         }
@@ -295,9 +296,7 @@ fn infer_dispatched_command_completion(
             Some(CommandCompletionState::Failed)
         }
         "compute_energies"
-            if command_has_terminal_log(record, snapshot, "Energies computed")
-                || !snapshot.scalar_rows.is_empty()
-                || snapshot_runtime_accepts_commands(snapshot) =>
+            if command_has_terminal_log(record, snapshot, "Energies computed") =>
         {
             Some(CommandCompletionState::Completed)
         }
@@ -369,10 +368,21 @@ fn command_has_terminal_log(
     let min_timestamp = record
         .dispatched_at_unix_ms
         .unwrap_or(record.command.created_at_unix_ms);
+    let requires_command_id = matches!(
+        record.command.kind.as_str(),
+        "compute_fields" | "compute_energies" | "load_state"
+    );
     snapshot
         .engine_log
         .iter()
-        .any(|entry| entry.timestamp_unix_ms >= min_timestamp && entry.message.contains(marker))
+        .any(|entry| {
+            entry.timestamp_unix_ms >= min_timestamp
+                && entry.message.contains(marker)
+                && entry.command_id.as_deref().map_or(
+                    !requires_command_id,
+                    |command_id| command_id == record.command.command_id.as_str(),
+                )
+        })
 }
 
 pub(crate) fn command_readiness_matches_requirements(
@@ -3539,6 +3549,7 @@ mod tests {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                antenna_solve_stage_id: None,
                 kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
@@ -3629,6 +3640,18 @@ mod tests {
                 carrier_fingerprint: None,
             }];
         merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
+        current.engine_log.push(command_engine_log(
+            "cmd-fields",
+            1_700_000_001_000,
+            "success",
+            "Field snapshots computed for the current magnetization",
+        ));
+        current.engine_log.push(command_engine_log(
+            "cmd-energies",
+            1_700_000_001_000,
+            "success",
+            "Energies computed for the current magnetization",
+        ));
         let mut ledger = VecDeque::from([
             fields_command,
             tracked_command("cmd-energies", "compute_energies"),
@@ -3651,26 +3674,128 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_reconciliation_marks_ready_compute_energies_terminal_without_scalar_rows() {
+    fn snapshot_reconciliation_keeps_energy_command_pending_until_its_result() {
         let mut current = test_current_snapshot();
         current.session.status = "waiting_for_compute".to_string();
         current.runtime_status = build_runtime_status_view("waiting_for_compute");
+        current.scalar_rows.push(scalar_row(1, 2.0));
+        current.engine_log.push(command_engine_log(
+            "cmd-energies",
+            1_700_000_000_499,
+            "success",
+            "Energies computed for the current magnetization",
+        ));
 
         let mut ledger = VecDeque::from([tracked_command("cmd-energies", "compute_energies")]);
 
-        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+        assert!(!reconcile_dispatched_command_ledger_from_snapshot(
             &mut ledger,
             &current,
             1_700_000_002_000
         ));
+        assert_eq!(ledger.front().unwrap().status, CommandLifecycleState::Dispatched);
+        assert_eq!(ledger.front().unwrap().completion_status, None);
+
+        current.engine_log.push(command_engine_log(
+            "cmd-energies",
+            1_700_000_002_001,
+            "error",
+            "Compute energies failed: missing antenna basis",
+        ));
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_002
+        ));
 
         let record = ledger.front().expect("ledger record should remain");
-        assert_eq!(record.status, CommandLifecycleState::Completed);
+        assert_eq!(record.status, CommandLifecycleState::Failed);
         assert_eq!(
             record.completion_status,
-            Some(CommandCompletionState::Completed)
+            Some(CommandCompletionState::Failed)
         );
-        assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
+        assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_002));
+    }
+
+    #[test]
+    fn snapshot_reconciliation_does_not_apply_foreign_identified_logs_to_solver_commands() {
+        for kind in ["run", "relax", "solve"] {
+            let mut current = test_current_snapshot();
+            current.session.status = "awaiting_command".to_string();
+            current.runtime_status = build_runtime_status_view("awaiting_command");
+            let record = tracked_command("cmd-target", kind);
+            let dispatched_at = record.dispatched_at_unix_ms.unwrap();
+            for (log_id, timestamp, marker, expected) in [
+                (Some("cmd-other"), dispatched_at, "failed antenna stage-output resolution", CommandCompletionState::Completed),
+                (Some("cmd-other"), dispatched_at, "cancelled", CommandCompletionState::Completed),
+                (Some("cmd-target"), dispatched_at - 1, "failed", CommandCompletionState::Completed),
+                (Some("cmd-target"), dispatched_at, "failed antenna stage-output resolution", CommandCompletionState::Failed),
+                (Some("cmd-target"), dispatched_at, "Error", CommandCompletionState::Failed),
+                (Some("cmd-target"), dispatched_at, "cancelled", CommandCompletionState::Cancelled),
+                (None, dispatched_at, "failed", CommandCompletionState::Failed),
+                (None, dispatched_at, "cancelled", CommandCompletionState::Cancelled),
+            ] {
+                let entry = match log_id {
+                    Some(command_id) => command_engine_log(command_id, timestamp, "system", marker),
+                    None => engine_log(timestamp, "system", marker),
+                };
+                current.engine_log = vec![entry];
+                assert_eq!(
+                    infer_dispatched_command_completion(&record, &current),
+                    Some(expected),
+                    "{kind} must isolate named logs while preserving legacy anonymous outcomes"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_reconciliation_requires_fresh_exact_identity_for_compute_and_import_results() {
+        let cases = [
+            ("compute_fields", "Field snapshots computed", CommandCompletionState::Completed),
+            ("compute_fields", "Compute fields failed", CommandCompletionState::Failed),
+            ("compute_energies", "Energies computed", CommandCompletionState::Completed),
+            ("compute_energies", "Compute energies failed", CommandCompletionState::Failed),
+            ("load_state", "Loaded workspace state from state.h5", CommandCompletionState::Completed),
+            ("load_state", "Failed to load workspace state", CommandCompletionState::Failed),
+        ];
+        for (kind, marker, expected) in cases {
+            let mut current = test_current_snapshot();
+            current.metadata = Some(json!({
+                "artifact_layout": { "backend": "fdm", "grid_cells": [1, 1, 1] }
+            }));
+            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
+            let mut record = tracked_command("cmd-target", kind);
+            if kind == "compute_fields" {
+                record.command.field_materialization_requirements =
+                    vec![crate::schemas::runtime::FieldMaterializationRequirement {
+                        quantity_ids: vec!["m".to_string()],
+                        scope_kind: "full".to_string(),
+                        scope_id: None,
+                        generation_id: domain_generation_id(&current),
+                        carrier_fingerprint: None,
+                    }];
+                assert_eq!(command_readiness_matches_requirements(&record, &current), Ok(true));
+            }
+            let dispatched_at = record.dispatched_at_unix_ms.unwrap();
+            assert_eq!(infer_dispatched_command_completion(&record, &current), None);
+            for entry in [
+                engine_log(dispatched_at, "system", marker),
+                command_engine_log("cmd-other", dispatched_at, "system", marker),
+                command_engine_log("cmd-target", dispatched_at - 1, "system", marker),
+            ] {
+                current.engine_log = vec![entry];
+                assert_eq!(
+                    infer_dispatched_command_completion(&record, &current),
+                    None,
+                    "{kind} must not accept an uncorrelated, foreign or stale result"
+                );
+            }
+            current.engine_log = vec![command_engine_log(
+                "cmd-target", dispatched_at, "system", marker,
+            )];
+            assert_eq!(infer_dispatched_command_completion(&record, &current), Some(expected));
+        }
     }
 
     #[test]
@@ -3821,6 +3946,12 @@ mod tests {
                 carrier_fingerprint: None,
             }];
         merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
+        current.engine_log.push(command_engine_log(
+            "cmd-fields",
+            1_700_000_001_000,
+            "success",
+            "Field snapshots computed for the current magnetization",
+        ));
         let mut ledger = VecDeque::from([TrackedCommandRecord {
             command,
             request_id: None,
@@ -3922,6 +4053,12 @@ mod tests {
                 error: None,
             }];
         current.live_state = Some(live_state);
+        current.engine_log.push(command_engine_log(
+            "cmd-fields",
+            1_700_000_001_000,
+            "success",
+            "Field snapshots computed for the current magnetization",
+        ));
         let mut ledger = VecDeque::from([TrackedCommandRecord {
             command,
             request_id: None,
@@ -3982,7 +4119,8 @@ mod tests {
                 "success",
                 "Remesh complete - 16 nodes, 8 elements",
             ),
-            engine_log(
+            command_engine_log(
+                "cmd-load",
                 1_700_000_000_800,
                 "success",
                 "Loaded workspace state from state.h5 (16 vectors)",
@@ -4279,6 +4417,7 @@ mod tests {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                antenna_solve_stage_id: None,
                 kind: None,
                 status: StageLifecycleState::Paused,
                 command_id: Some("cmd-stage-0".into()),
@@ -4334,6 +4473,7 @@ mod tests {
                     completed_stage_indexes: vec![0],
                     stages: vec![StageExecutionRecord {
                         stage_id: None,
+                        antenna_solve_stage_id: None,
                         kind: None,
                         status: StageLifecycleState::Completed,
                         command_id: Some("cmd-stage-0".into()),
@@ -4546,6 +4686,18 @@ mod tests {
             source: None,
             phase_id: None,
             command_id: None,
+        }
+    }
+
+    fn command_engine_log(
+        command_id: &str,
+        timestamp_unix_ms: u128,
+        level: &str,
+        message: &str,
+    ) -> EngineLogEntry {
+        EngineLogEntry {
+            command_id: Some(command_id.to_string()),
+            ..engine_log(timestamp_unix_ms, level, message)
         }
     }
 
@@ -4902,6 +5054,7 @@ mod tests {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                antenna_solve_stage_id: None,
                 kind: None,
                 status: stage_status,
                 command_id: None,

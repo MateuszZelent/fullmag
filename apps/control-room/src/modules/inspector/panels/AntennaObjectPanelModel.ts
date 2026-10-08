@@ -16,10 +16,27 @@ export interface AntennaObjectDraft {
   amplitudeB: string;
   direction: string;
   waveformKind: "constant" | "sinc_pulse" | "sinusoidal";
+  sincAmplitude: string;
   sincCutoffHz: string;
   sincT0: string;
   sinusoidalFrequencyHz: string;
+  sinusoidalOffset: string;
+  sinusoidalPhaseRad: string;
 }
+
+export const antennaWaveformDefaults = {
+  constant: {},
+  sinc_pulse: {
+    sincAmplitude: "1",
+    sincCutoffHz: "20000000000",
+    sincT0: "5e-11",
+  },
+  sinusoidal: {
+    sinusoidalFrequencyHz: "10000000000",
+    sinusoidalOffset: "0",
+    sinusoidalPhaseRad: "0",
+  },
+} as const;
 
 export interface AntennaObjectDraftPatchResult {
   error: string | null;
@@ -29,6 +46,16 @@ export interface AntennaObjectDraftPatchResult {
 export interface AntennaFieldDrivePatchResult {
   drive: JsonRecord | null;
   error: string | null;
+}
+
+export function isAntennaObjectRevisionConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; status?: unknown };
+  return (
+    candidate.status === 409 &&
+    (candidate.code === "revision_conflict" ||
+      candidate.code === "scene_revision_conflict")
+  );
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -150,6 +177,18 @@ function sourceForObject(scene: SceneResource | null, objectId: string | null): 
   return legacy ? { kind: "legacy", source: legacy } : null;
 }
 
+export function antennaObjectDraftKey(
+  selection: Selection,
+  scene: SceneResource | null,
+): string {
+  const objectId =
+    selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId;
+  const resolved = sourceForObject(scene, objectId);
+  const sourceId =
+    asString(resolved?.source.id) ?? asString(resolved?.source.name) ?? "unassigned";
+  return `${resolved?.kind ?? "missing"}:${objectId ?? "none"}:${sourceId}`;
+}
+
 function sourceField(source: JsonRecord | null): {
   amplitudeB: unknown;
   direction: unknown;
@@ -185,9 +224,12 @@ export function resolveAntennaObjectDraft(
       waveformKind === "sinc_pulse" || waveformKind === "sinusoidal"
         ? waveformKind
         : "constant",
-    sincCutoffHz: compactNumber(waveform?.cutoff_hz, "20000000000"),
-    sincT0: compactNumber(waveform?.t0, "5e-11"),
-    sinusoidalFrequencyHz: compactNumber(waveform?.frequency_hz, "10000000000"),
+    sincAmplitude: compactNumber(waveform?.amplitude, antennaWaveformDefaults.sinc_pulse.sincAmplitude),
+    sincCutoffHz: compactNumber(waveform?.cutoff_hz, antennaWaveformDefaults.sinc_pulse.sincCutoffHz),
+    sincT0: compactNumber(waveform?.t0, antennaWaveformDefaults.sinc_pulse.sincT0),
+    sinusoidalFrequencyHz: compactNumber(waveform?.frequency_hz, antennaWaveformDefaults.sinusoidal.sinusoidalFrequencyHz),
+    sinusoidalOffset: compactNumber(waveform?.offset, antennaWaveformDefaults.sinusoidal.sinusoidalOffset),
+    sinusoidalPhaseRad: compactNumber(waveform?.phase_rad, antennaWaveformDefaults.sinusoidal.sinusoidalPhaseRad),
   };
 }
 
@@ -225,12 +267,47 @@ export function buildAntennaLegacyMigrationPatch(
 }
 
 function draftWaveform(draft: AntennaObjectDraft): { error: string | null; value: JsonRecord } {
-  if (draft.waveformKind === "sinc_pulse") { const cutoff=parsePositive(draft.sincCutoffHz,"Sinc cutoff"); if(cutoff.error)return{error:cutoff.error,value:{}}; const t0=parseFinite(draft.sincT0,"Sinc t0"); if(t0.error)return{error:t0.error,value:{}}; return{error:null,value:{kind:"sinc_pulse",cutoff_hz:cutoff.value,t0:t0.value,amplitude:1}}; }
-  if (draft.waveformKind === "sinusoidal") { const frequency=parsePositive(draft.sinusoidalFrequencyHz,"Sinusoidal frequency"); return frequency.error ? {error:frequency.error,value:{}} : {error:null,value:{kind:"sinusoidal",frequency_hz:frequency.value,phase_rad:0,offset:0}}; }
+  if (draft.waveformKind === "sinc_pulse") {
+    const amplitude = parseFinite(draft.sincAmplitude, "Sinc amplitude");
+    if (amplitude.error) return { error: amplitude.error, value: {} };
+    const cutoff = parsePositive(draft.sincCutoffHz, "Sinc cutoff");
+    if (cutoff.error) return { error: cutoff.error, value: {} };
+    const t0 = parseFinite(draft.sincT0, "Sinc t0");
+    if (t0.error) return { error: t0.error, value: {} };
+    return {
+      error: null,
+      value: {
+        kind: "sinc_pulse",
+        cutoff_hz: cutoff.value,
+        t0: t0.value,
+        amplitude: amplitude.value,
+      },
+    };
+  }
+  if (draft.waveformKind === "sinusoidal") {
+    const frequency = parsePositive(draft.sinusoidalFrequencyHz, "Sinusoidal frequency");
+    if (frequency.error) return { error: frequency.error, value: {} };
+    const phase = parseFinite(draft.sinusoidalPhaseRad, "Sinusoidal phase");
+    if (phase.error) return { error: phase.error, value: {} };
+    const offset = parseFinite(draft.sinusoidalOffset, "Sinusoidal offset");
+    if (offset.error) return { error: offset.error, value: {} };
+    return {
+      error: null,
+      value: {
+        kind: "sinusoidal",
+        frequency_hz: frequency.value,
+        phase_rad: phase.value,
+        offset: offset.value,
+      },
+    };
+  }
   return {error:null,value:{kind:"constant"}};
 }
 
 function parseFinite(value: string, label: string): { error: string | null; value: number } {
+  if (value.trim().length === 0) {
+    return { error: `${label} is required.`, value: 0 };
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return { error: `${label} must be finite.`, value: 0 };

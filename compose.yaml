@@ -22,13 +22,7 @@ services:
         target: /workspace/.fullmag
       - type: bind
         source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
-        target: /fullmag-frontend
-      # Compatibility links in the checkout retain the host's absolute
-      # frontend target. Mount the same source at that absolute path inside
-      # the container so /workspace/apps/control-room symlinks are live.
-      - type: bind
-        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
-        target: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       FULLMAG_BUILD_ROOT: /workspace/.fullmag-build
@@ -41,7 +35,7 @@ services:
       npm_config_cache: /workspace/.fullmag-cache/npm
       COREPACK_HOME: /workspace/.fullmag-cache/corepack
       FULLMAG_RUNTIME_ROOT: /workspace/.fullmag
-      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}
       CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
       PIP_CACHE_DIR: /workspace/.fullmag-cache/pip
       UV_CACHE_DIR: /workspace/.fullmag-cache/uv
@@ -84,10 +78,7 @@ services:
         target: /workspace/.fullmag
       - type: bind
         source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
-        target: /fullmag-frontend
-      - type: bind
-        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
-        target: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       FULLMAG_BUILD_ROOT: /workspace/.fullmag-build
@@ -100,7 +91,7 @@ services:
       npm_config_cache: /workspace/.fullmag-cache/npm
       COREPACK_HOME: /workspace/.fullmag-cache/corepack
       FULLMAG_RUNTIME_ROOT: /workspace/.fullmag
-      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}
       CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
       PIP_CACHE_DIR: /workspace/.fullmag-cache/pip
       UV_CACHE_DIR: /workspace/.fullmag-cache/uv
@@ -146,10 +137,7 @@ services:
         target: /workspace/.fullmag
       - type: bind
         source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
-        target: /fullmag-frontend
-      - type: bind
-        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
-        target: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       FULLMAG_BUILD_ROOT: /workspace/.fullmag-build
@@ -162,7 +150,7 @@ services:
       npm_config_cache: /workspace/.fullmag-cache/npm
       COREPACK_HOME: /workspace/.fullmag-cache/corepack
       FULLMAG_RUNTIME_ROOT: /workspace/.fullmag
-      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}
       CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
       PIP_CACHE_DIR: /workspace/.fullmag-cache/pip
       UV_CACHE_DIR: /workspace/.fullmag-cache/uv
@@ -208,13 +196,11 @@ services:
         target: /workspace/.fullmag
       - type: bind
         source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
-        target: /fullmag-frontend
-      - type: bind
-        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
-        target: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       FULLMAG_BUILD_ROOT: /workspace/.fullmag-build
+      FULLMAG_FEM_CPU_BUILD_ROOT: /workspace/.fullmag-build/fem-cpu-only
       FULLMAG_CARGO_TARGET_DIR: /workspace/target
       CARGO_TARGET_DIR: /workspace/target
       FULLMAG_CACHE_ROOT: /workspace/.fullmag-cache
@@ -224,7 +210,7 @@ services:
       npm_config_cache: /workspace/.fullmag-cache/npm
       COREPACK_HOME: /workspace/.fullmag-cache/corepack
       FULLMAG_RUNTIME_ROOT: /workspace/.fullmag
-      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_CONTAINER_ROOT:?resolve FULLMAG_FRONTEND_CONTAINER_ROOT before running Compose}
       CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
       PIP_CACHE_DIR: /workspace/.fullmag-cache/pip
       UV_CACHE_DIR: /workspace/.fullmag-cache/uv

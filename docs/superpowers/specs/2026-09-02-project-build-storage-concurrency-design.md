@@ -5,13 +5,13 @@
 > 0030](../../adr/0030-project-storage-and-build-concurrency.md). Wystąpienia
 > płaskich katalogów poniżej opisują historyczne dowody wejściowe albo kryteria
 > ich odrzucenia podczas migracji; nie są aktywnymi defaultami. Aktualny
-> operacyjny root to `C:\git\fullmag\storage` na Windowsie oraz
+> operacyjny root to `D:\git\fullmag\storage` na Windowsie oraz
 > `/zfn2/mateuszz/git/fullmag/storage` na managed Linux.
 
 - Status: draft po korekcie granicy storage przez użytkownika, przed przeglądem specyfikacji; storage policy reconciled by ADR 0030
 - Data: 2026-09-02
 - Zakres: storage buildów, cache, runtime’ów i artefaktów uruchomień dla Windows i Linux
-- Checkout referencyjny: `C:\git\fullmag\fullmag`
+- Checkout referencyjny: `D:\git\fullmag\fullmag`
 
 ## Cel
 
@@ -22,9 +22,9 @@ katalogów na głównym poziomie dysku ani współdzielenia mutowalnego `target/
 Dla obecnego checkoutu katalogiem projektu jest nadrzędny katalog repozytorium:
 
 ```text
-repo root:       C:\git\fullmag\fullmag
-project root:    C:\git\fullmag
-storage root:    C:\git\fullmag\storage
+repo root:       D:\git\fullmag\fullmag
+project root:    D:\git\fullmag
+storage root:    D:\git\fullmag\storage
 ```
 
 Linux zachowuje obecny trwały root zarządzanego runnera, ale przyjmuje ten sam
@@ -176,12 +176,12 @@ Resolver działa w tej kolejności:
 3. brak bezpiecznego wyniku kończy działanie z błędem — nie ma fallbacku do
    rootu dysku ani do checkoutu.
 
-Dla obecnego checkoutu domyślny wynik musi być `C:\git\fullmag\storage`. Dla
+Dla obecnego checkoutu domyślny wynik musi być `D:\git\fullmag\storage`. Dla
 dedykowanego Linux runnera musi być `/zfn2/mateuszz/git/fullmag/storage`.
 
 `project root` i `storage root` są różnymi pojęciami: pierwszy wskazuje
 organizację projektu, drugi jest jedyną granicą generowanych danych. Checkout
-`C:\git\fullmag\fullmag` nigdy nie jest storage rootem.
+`D:\git\fullmag\fullmag` nigdy nie jest storage rootem.
 
 Istniejące `FULLMAG_WINDOWS_BUILD_ROOT`, `FULLMAG_WINDOWS_CACHE_ROOT`,
 `FULLMAG_WINDOWS_TEMP_ROOT` oraz linuxowe `FULLMAG_BUILD_ROOT` są traktowane
@@ -195,8 +195,8 @@ zarządzanych recept.
 
 ### Granica Git
 
-`C:\git\fullmag\storage` jest poza drzewem repozytorium Git. Dlatego wpis
-`../storage` w `C:\git\fullmag\fullmag\.gitignore` nie jest mechanizmem
+`D:\git\fullmag\storage` jest poza drzewem repozytorium Git. Dlatego wpis
+`../storage` w `D:\git\fullmag\fullmag\.gitignore` nie jest mechanizmem
 ochrony — Git nie ignoruje plików poza własnym worktree. Nie dodajemy takiego
 pozornego wpisu. Ochronę zapewniają: resolver ścieżki, marker storage,
 manifesty, test `storage root` oraz operacje prune/reset ograniczone do jednej
@@ -295,11 +295,11 @@ indeksem pomocniczym, ale nigdy nie zastępuje manifestu w katalogu builda.
 
 ### Windows
 
-- Domyślny storage to `C:\git\fullmag\storage` dla bieżącego projektu.
+- Domyślny storage to `D:\git\fullmag\storage` dla bieżącego projektu.
 - `C:\fullmag-build`, `C:\fullmag-cache` i `C:\fullmag-tmp` stają się
   katalogami legacy; nowe launchery nie mogą ich samodzielnie tworzyć.
 - Bind mounty Docker wskazują wyłącznie na podkatalogi
-  `C:\git\fullmag\storage`.
+  `D:\git\fullmag\storage`.
 - Cargo, Rustup, pnpm, npm, uv, pip, CUDA i Playwright otrzymują ścieżki
   wyprowadzone z `cache` lub `builds/<date>/<worktree>/build_N`.
 - Launcher odrzuca root dysku, checkout, ścieżki względne oraz ścieżki

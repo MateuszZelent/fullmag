@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
 import { planarMonitorFramePreviewStore } from "./workspace/planarMonitorFramePreview";
@@ -814,7 +814,7 @@ function Viewport3DResourceLifecycleConnector({
 }
 
 export function KernelProvider({ children }: KernelProviderProps) {
-  const host = useMemo(() => new DevelopmentKernelHost(createKernel), []);
+  const [host] = useState(() => new DevelopmentKernelHost(createKernel));
   const { kernel, generation, paused } = useSyncExternalStore(host.subscribe, host.getSnapshot, host.getSnapshot);
   useEffect(() => {
     host.confirmMounted(kernel, (previous, replacement) => {

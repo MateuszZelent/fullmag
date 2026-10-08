@@ -2113,9 +2113,9 @@ export function airboxVisualizationStatePatchFromTargetPatch(
   patch: VisualizationTargetPatch,
   currentOverrides?: VisualizationStateResource["overrides"],
 ): VisualizationStatePatch {
-  const normalized = normalizePatch(
+  const normalized = normalizePatch(persistentVisualizationTargetPatch(
     visualizationTargetSupportedPatch(AIRBOX_VISUALIZATION_TARGET, patch),
-  );
+  ));
   const vectors =
     normalized.vectorsVisible === undefined && normalized.vectorBudget === undefined
       ? {}

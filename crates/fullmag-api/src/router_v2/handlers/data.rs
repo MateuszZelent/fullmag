@@ -1,3 +1,5 @@
+pub mod antenna;
+pub mod antenna_inspection;
 pub mod artifacts;
 pub mod domain;
 pub mod fdm_region_membership;
@@ -15,6 +17,8 @@ pub(crate) mod resolved_vector_field;
 pub mod scalars;
 pub mod tables;
 
+pub use antenna::*;
+pub use antenna_inspection::*;
 pub use artifacts::*;
 pub use domain::*;
 pub use fdm_region_membership::*;

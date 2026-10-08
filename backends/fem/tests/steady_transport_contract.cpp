@@ -115,6 +115,192 @@ void charge_uniform_bar_is_linear_and_conservative()
         "uniform-bar current has the wrong sign or magnitude");
 }
 
+void charge_weak_terminal_reaction_preserves_uneliminated_rhs()
+{
+    constexpr double length_m = 2.0;
+    constexpr double sigma_spm = 5.0;
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        12, 1, 1, mfem::Element::TETRAHEDRON, length_m, 1.0, 1.0);
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::FunctionCoefficient voltage([](const mfem::Vector &x) {
+        return 1.0 - x[0] / length_m;
+    });
+    mfem::GridFunction potential(&space);
+    potential.ProjectCoefficient(voltage);
+    mfem::ConstantCoefficient sigma(sigma_spm);
+    mfem::BilinearForm form(&space);
+    form.AddDomainIntegrator(new mfem::DiffusionIntegrator(sigma));
+    form.Assemble();
+    form.Finalize();
+    mfem::LinearForm rhs(&space);
+    rhs = 0.0;
+    rhs.Assemble();
+
+    mfem::Array<int> inlet_marker(mesh.bdr_attributes.Max());
+    mfem::Array<int> outlet_marker(mesh.bdr_attributes.Max());
+    inlet_marker = 0;
+    outlet_marker = 0;
+    int inlet_attribute = 0;
+    int outlet_attribute = 0;
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        mfem::Array<int> vertices;
+        mesh.GetBdrElementVertices(boundary, vertices);
+        bool inlet = true;
+        bool outlet = true;
+        for (int vertex = 0; vertex < vertices.Size(); ++vertex) {
+            const double x = mesh.GetVertex(vertices[vertex])[0];
+            inlet = inlet && std::abs(x) < 1.0e-12;
+            outlet = outlet && std::abs(x - length_m) < 1.0e-12;
+        }
+        const int attribute = mesh.GetBdrAttribute(boundary) - 1;
+        inlet_marker[attribute] |= inlet;
+        outlet_marker[attribute] |= outlet;
+        if (inlet) {
+            require(inlet_attribute == 0 || inlet_attribute == attribute + 1,
+                "uniform-bar inlet spans multiple boundary attributes");
+            inlet_attribute = attribute + 1;
+        }
+        if (outlet) {
+            require(outlet_attribute == 0 || outlet_attribute == attribute + 1,
+                "uniform-bar outlet spans multiple boundary attributes");
+            outlet_attribute = attribute + 1;
+        }
+    }
+    mfem::Array<int> inlet_dofs, outlet_dofs;
+    space.GetEssentialTrueDofs(inlet_marker, inlet_dofs);
+    space.GetEssentialTrueDofs(outlet_marker, outlet_dofs);
+    require(inlet_dofs.Size() > 0 && outlet_dofs.Size() > 0,
+        "uniform-bar terminal markers have no H1 dofs");
+
+    mfem::Vector original_rhs(rhs);
+    mfem::Vector original_potential(potential);
+    mfem::Vector before(space.GetVSize());
+    form.Mult(potential, before);
+    before -= original_rhs;
+    double inlet_reaction = 0.0;
+    double outlet_reaction = 0.0;
+    for (int i = 0; i < inlet_dofs.Size(); ++i) {
+        inlet_reaction += before[inlet_dofs[i]];
+    }
+    for (int i = 0; i < outlet_dofs.Size(); ++i) {
+        outlet_reaction += before[outlet_dofs[i]];
+    }
+    require(std::abs(inlet_reaction - sigma_spm / length_m) < kTolerance,
+        "uneliminated inlet reaction has the wrong sign or magnitude");
+    require(std::abs(outlet_reaction + sigma_spm / length_m) < kTolerance,
+        "uneliminated outlet reaction has the wrong sign or magnitude");
+
+    auto electrodes = x_electrodes(mesh);
+    mfem::Array<int> essential_dofs;
+    space.GetEssentialTrueDofs(electrodes, essential_dofs);
+    mfem::OperatorPtr system_operator;
+    mfem::Vector solution, system_rhs;
+    form.FormLinearSystem(
+        essential_dofs, potential, rhs, system_operator, solution, system_rhs);
+    mfem::Vector eliminated_rhs(rhs);
+    eliminated_rhs -= original_rhs;
+    require(eliminated_rhs.Normlinf() > kTolerance,
+        "FormLinearSystem did not expose the expected RHS elimination");
+    mfem::Vector after(space.GetVSize());
+    form.FullMult(original_potential, after);
+    after -= original_rhs;
+    after -= before;
+    require(after.Normlinf() < kTolerance,
+        "FullMult does not recover the original terminal reaction");
+
+    mfem::VectorConstantCoefficient magnetization(mfem::Vector({0.0, 0.0, 1.0}));
+    SteadyTransportParameters parameters;
+    SteadyTransportOracle oracle(mesh, sigma, magnetization, parameters);
+    const auto diagnostics = oracle.solve_charge(
+        electrodes, voltage, ChargeGauge::BoundaryReference);
+    require(diagnostics.converged, "weak-current charge solve did not converge");
+    require(std::abs(oracle.boundary_weak_current_a(inlet_attribute) +
+            sigma_spm / length_m) < kTolerance,
+        "weak inlet current has the wrong sign or magnitude");
+    require(std::abs(oracle.boundary_weak_current_a(outlet_attribute) -
+            sigma_spm / length_m) < kTolerance,
+        "weak outlet current has the wrong sign or magnitude");
+
+    mfem::FunctionCoefficient shifted_voltage([](const mfem::Vector &x) {
+        return 8.0 - x[0] / length_m;
+    });
+    require(oracle.solve_charge(
+            electrodes, shifted_voltage, ChargeGauge::BoundaryReference).converged,
+        "shifted-gauge charge solve did not converge");
+    require(std::abs(oracle.boundary_weak_current_a(inlet_attribute) +
+            sigma_spm / length_m) < kTolerance,
+        "weak inlet current changed under a constant potential shift");
+    require(std::abs(oracle.boundary_weak_current_a(outlet_attribute) -
+            sigma_spm / length_m) < kTolerance,
+        "weak outlet current changed under a constant potential shift");
+
+    mfem::FunctionCoefficient doubled_voltage([](const mfem::Vector &x) {
+        return 2.0 - 2.0 * x[0] / length_m;
+    });
+    require(oracle.solve_charge(
+            electrodes, doubled_voltage, ChargeGauge::BoundaryReference).converged,
+        "double-current charge solve did not converge");
+    require(std::abs(oracle.boundary_weak_current_a(inlet_attribute) +
+            2.0 * sigma_spm / length_m) < kTolerance,
+        "weak inlet current is not linear in the voltage difference");
+    require(std::abs(oracle.boundary_weak_current_a(outlet_attribute) -
+            2.0 * sigma_spm / length_m) < kTolerance,
+        "weak outlet current is not linear in the voltage difference");
+
+    mfem::FunctionCoefficient reversed_voltage([](const mfem::Vector &x) {
+        return -1.0 + x[0] / length_m;
+    });
+    require(oracle.solve_charge(
+            electrodes, reversed_voltage, ChargeGauge::BoundaryReference).converged,
+        "reversed-current charge solve did not converge");
+    require(std::abs(oracle.boundary_weak_current_a(inlet_attribute) -
+            sigma_spm / length_m) < kTolerance,
+        "weak inlet current did not reverse sign");
+    require(std::abs(oracle.boundary_weak_current_a(outlet_attribute) +
+            sigma_spm / length_m) < kTolerance,
+        "weak outlet current did not reverse sign");
+
+    const std::vector<std::vector<int>> terminals = {
+        {inlet_attribute}, {outlet_attribute},
+    };
+    const auto prescribed = oracle.solve_charge_terminal_currents(
+        terminals, {-sigma_spm / length_m, sigma_spm / length_m});
+    require(prescribed.diagnostics.converged,
+        "prescribed terminal-current H1 solve did not converge");
+    require(prescribed.gauge_terminal_indices == std::vector<int>{0},
+        "prescribed current solve chose the wrong component gauge");
+    require(std::abs(prescribed.terminal_voltage_v[0]) < kTolerance &&
+            std::abs(prescribed.terminal_voltage_v[1] + 1.0) < kTolerance,
+        "prescribed current solve returned the wrong terminal voltage");
+    require(std::abs(prescribed.measured_outward_current_a[0] + sigma_spm / length_m) < kTolerance &&
+            std::abs(prescribed.measured_outward_current_a[1] - sigma_spm / length_m) < kTolerance,
+        "prescribed current solve did not enforce signed terminal currents");
+
+    const auto doubled = oracle.solve_charge_terminal_currents(
+        terminals, {-2.0 * sigma_spm / length_m, 2.0 * sigma_spm / length_m});
+    require(std::abs(doubled.terminal_voltage_v[1] + 2.0) < kTolerance &&
+            std::abs(doubled.measured_outward_current_a[1] -
+                2.0 * sigma_spm / length_m) < kTolerance,
+        "prescribed current solve is not linear in requested current");
+
+    const auto reversed = oracle.solve_charge_terminal_currents(
+        terminals, {sigma_spm / length_m, -sigma_spm / length_m});
+    require(std::abs(reversed.terminal_voltage_v[1] - 1.0) < kTolerance &&
+            std::abs(reversed.measured_outward_current_a[1] +
+                sigma_spm / length_m) < kTolerance,
+        "prescribed current solve did not preserve current orientation");
+
+    bool rejected_unbalanced = false;
+    try {
+        (void)oracle.solve_charge_terminal_currents(terminals, {-1.0, 0.5});
+    } catch (const std::invalid_argument &) {
+        rejected_unbalanced = true;
+    }
+    require(rejected_unbalanced,
+        "prescribed current solve accepted an unbalanced conductor component");
+}
+
 void missing_charge_gauge_fails_closed()
 {
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
@@ -133,6 +319,119 @@ void missing_charge_gauge_fails_closed()
         rejected = true;
     }
     require(rejected, "charge solve accepted a singular problem without a gauge");
+}
+
+void disconnected_unforced_conductor_receives_independent_gauge()
+{
+    mfem::Mesh mesh(3, 8, 2, 8, 3);
+    const double vertices[8][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0},
+        {3.0, 0.0, 0.0}, {4.0, 0.0, 0.0},
+        {3.0, 1.0, 0.0}, {3.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    for (int component = 0; component < 2; ++component) {
+        const int offset = 4 * component;
+        int tetrahedron[4] = {offset, offset + 1, offset + 2, offset + 3};
+        mesh.AddTet(tetrahedron, component + 1);
+        int faces[4][3] = {
+            {offset, offset + 2, offset + 1},
+            {offset, offset + 1, offset + 3},
+            {offset + 1, offset + 2, offset + 3},
+            {offset + 2, offset, offset + 3},
+        };
+        for (auto &face : faces) {
+            mesh.AddBdrTriangle(face, component + 1);
+        }
+    }
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+
+    mfem::ConstantCoefficient sigma(1.0);
+    mfem::VectorConstantCoefficient magnetization(mfem::Vector({0.0, 0.0, 1.0}));
+    SteadyTransportParameters parameters;
+    SteadyTransportOracle oracle(mesh, sigma, magnetization, parameters);
+    mfem::Array<int> terminal(mesh.bdr_attributes.Max());
+    terminal = 0;
+    terminal[0] = 1;
+    mfem::ConstantCoefficient voltage(1.0);
+    const auto diagnostics = oracle.solve_charge(
+        terminal, voltage, ChargeGauge::BoundaryReference);
+    require(diagnostics.converged,
+        "unforced disconnected conductor made the charge solve singular");
+    mfem::Array<int> dofs;
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        oracle.electric_potential().FESpace()->GetVertexDofs(vertex, dofs);
+        require(dofs.Size() == 1, "disconnected P1 vertex has no unique H1 dof");
+        const double expected = vertex < 4 ? 1.0 : 0.0;
+        require(std::abs(oracle.electric_potential()[dofs[0]] - expected) < kTolerance,
+            "disconnected charge component has the wrong independent gauge");
+    }
+    require(std::abs(oracle.boundary_weak_current_a(1)) < kTolerance,
+        "unforced disconnected conductor created a spurious terminal current");
+}
+
+void disconnected_terminal_currents_keep_independent_scales()
+{
+    mfem::Mesh mesh(3, 16, 2, 12, 3);
+    for (int component = 0; component < 2; ++component) {
+        const double x_offset = 3.0 * component;
+        const double vertices[8][3] = {
+            {x_offset, 0.0, 0.0}, {x_offset + 1.0, 0.0, 0.0},
+            {x_offset + 1.0, 1.0, 0.0}, {x_offset, 1.0, 0.0},
+            {x_offset, 0.0, 1.0}, {x_offset + 1.0, 0.0, 1.0},
+            {x_offset + 1.0, 1.0, 1.0}, {x_offset, 1.0, 1.0},
+        };
+        for (const auto &vertex : vertices) {
+            mesh.AddVertex(vertex);
+        }
+        const int offset = 8 * component;
+        int hex[8] = {
+            offset, offset + 1, offset + 2, offset + 3,
+            offset + 4, offset + 5, offset + 6, offset + 7,
+        };
+        mesh.AddHex(hex, component + 1);
+        const int faces[6][4] = {
+            {offset, offset + 3, offset + 7, offset + 4},
+            {offset + 1, offset + 5, offset + 6, offset + 2},
+            {offset, offset + 1, offset + 2, offset + 3},
+            {offset + 4, offset + 7, offset + 6, offset + 5},
+            {offset, offset + 4, offset + 5, offset + 1},
+            {offset + 3, offset + 2, offset + 6, offset + 7},
+        };
+        for (int face = 0; face < 6; ++face) {
+            int nodes[4] = {
+                faces[face][0], faces[face][1], faces[face][2], faces[face][3],
+            };
+            mesh.AddBdrQuad(nodes, face < 2 ? 2 * component + face + 1 : 5 + component);
+        }
+    }
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+
+    mfem::ConstantCoefficient sigma(1.0);
+    mfem::VectorConstantCoefficient magnetization(mfem::Vector({0.0, 0.0, 1.0}));
+    SteadyTransportParameters parameters;
+    parameters.relative_tolerance = 1.0e-13;
+    SteadyTransportOracle oracle(mesh, sigma, magnetization, parameters);
+    const std::vector<std::vector<int>> terminals = {{1}, {2}, {3}, {4}};
+    const std::vector<double> requested = {-1.0, 1.0, -1.0e-4, 1.0e-4};
+    const auto solution = oracle.solve_charge_terminal_currents(terminals, requested);
+    require(solution.diagnostics.converged &&
+            solution.gauge_terminal_indices == std::vector<int>({0, 2}),
+        "disconnected current components did not receive independent gauges");
+    for (std::size_t terminal = 0; terminal < requested.size(); ++terminal) {
+        const double component_scale = terminal < 2 ? 1.0 : 1.0e-4;
+        require(std::abs(solution.measured_outward_current_a[terminal] - requested[terminal]) <=
+                1.0e-8 * component_scale + 1.0e-18,
+            "disconnected terminal current exceeds its component-local tolerance");
+    }
+    require(std::abs(solution.terminal_voltage_v[1] + 1.0) < kTolerance &&
+            std::abs(solution.terminal_voltage_v[3] + 1.0e-4) < 1.0e-12,
+        "disconnected current components returned incorrect terminal voltages");
 }
 
 void transparent_layered_bar_preserves_series_current()
@@ -627,7 +926,10 @@ int main()
 {
     try {
         charge_uniform_bar_is_linear_and_conservative();
+        charge_weak_terminal_reaction_preserves_uneliminated_rhs();
         missing_charge_gauge_fails_closed();
+        disconnected_unforced_conductor_receives_independent_gauge();
+        disconnected_terminal_currents_keep_independent_scales();
         transparent_layered_bar_preserves_series_current();
         mixing_interface_fails_closed_without_broken_h1();
         invalid_dissipative_block_fails_closed();

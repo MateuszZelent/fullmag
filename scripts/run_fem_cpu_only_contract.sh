@@ -13,10 +13,9 @@ esac
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-report_dir="${FULLMAG_FEM_CPU_REPORT_ROOT:-$repo_root/.fullmag/reports/fem-cpu-only}/$scenario"
-build_dir="${FULLMAG_FEM_CPU_BUILD_ROOT:-/tmp/fullmag-fem-cpu-only-build}/$scenario"
+report_dir="${FULLMAG_FEM_CPU_REPORT_ROOT:-${FULLMAG_RUNTIME_ROOT:?missing managed runtime root}/reports/fem-cpu-only}/$scenario"
+build_dir="${FULLMAG_FEM_CPU_BUILD_ROOT:?missing managed FEM CPU build root}/$scenario"
 mkdir -p "$report_dir"
-rm -rf "$build_dir"
 : > "$report_dir/configure.log"
 : > "$report_dir/build.log"
 : > "$report_dir/test.log"
@@ -39,7 +38,7 @@ if [[ "$scenario" == "oersted-oet0-tsan" ]]; then
   cmake_options+=( -DFULLMAG_OET0_TSAN=ON )
 fi
 
-cmake -S native -B "$build_dir" \
+cmake --fresh -S native -B "$build_dir" \
   -DFULLMAG_ENABLE_CUDA=OFF \
   -DFULLMAG_ENABLE_FEM_GPU=OFF \
   -DFULLMAG_USE_MFEM_STACK=ON \

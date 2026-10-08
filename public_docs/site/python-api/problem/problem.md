@@ -146,6 +146,53 @@ constraint = FrozenSpins(
 | `Problem.parameters` | `ParameterLibrary \| None` | `None` | mixed | optional versioned authoring parameter library; resolved at construction (unknown references, cycles, dimension conflicts rejected), lowered as authoring metadata only | `parameters` |
 | `Problem.pbc` | `FdmPbc \| tuple[bool,bool,bool] \| None` | `None` | $1$ | requested periodic axes and demag policy | `backend_policy.pbc` |
 
+
+### Kolekcje anten i tożsamość pomocniczych obiektów
+
+Kontenery i identyfikatory są bezwymiarowe; fizyczne parametry zagnieżdżonych
+obiektów zachowują własne jednostki SI (m, A, T, Hz, s). Poniższa tabela nie
+zmienia ich normalizacji i nie deklaruje wykonania solvera na wszystkich lanes.
+
+| Python | Typ | Domyślnie | SI | Walidacja konstrukcji | Znaczenie | Wsparcie | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `Problem.auxiliary_geometry_object_ids` | `Mapping[str, str]` | `{}` | $1$ | niepuste nazwy i ID; klucze należą do auxiliary_geometry_roles; unikalność object_ids względem magnesów | niezmienna tożsamość pomocniczej encji, niezależna od nazwy | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `physics_objects[].object_id` |
+| `Problem.antenna_port_modes` | `Sequence[AntennaPortMode]` | `()` | $1$ | elementy AntennaPortMode; unikalne id w kolekcji | deklaracje baz prądowych portów, bez automatycznego solve | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `antenna_port_modes` |
+| `Problem.antenna_field_solve_stages` | `Sequence[AntennaFieldSolveStage]` | `()` | $1$ | elementy AntennaFieldSolveStage; unikalne id w kolekcji | deklaracje rozwiązania pola, oddzielone od jawnej akcji etapu | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `antenna_field_solve_stages` |
+| `Problem.antenna_target_projections` | `Sequence[AntennaTargetProjection]` | `()` | $1$ | elementy AntennaTargetProjection; unikalne id w kolekcji | żądane rzuty bazy na wybrany cel | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `antenna_target_projections` |
+| `Problem.solved_antenna_drives` | `Sequence[SolvedAntennaDrive]` | `()` | $1$ | elementy SolvedAntennaDrive; unikalne id w kolekcji | czasowa konsumpcja uprzednio rozwiązanej bazy | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `solved_antenna_drives` |
+| `Problem.antenna_spectrum_requests` | `Sequence[AntennaSpectrumRequest]` | `()` | $1$ | elementy AntennaSpectrumRequest; unikalne id w kolekcji | żądania widma źródła, nie odpowiedź magnetyzacji | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `antenna_spectrum_requests` |
+
+`Problem.__post_init__` odmawia złego typu elementu i duplikatów id.
+To nie jest pełny preflight wzajemnych referencji port/solve/projection/drive:
+tę granicę musi sprawdzić IR/planner/runtime przed wykonaniem. Nie wolno
+promować samego poprawnego typu kolekcji do rozwiązanej lub dostępnej bazy.
+
+`auxiliary_geometry_object_ids` mapuje nazwę do niezmiennego object_id;
+klucze muszą występować w `auxiliary_geometry_roles`. Dla braku wpisu
+serializer zachowuje compatibility fallback object_id=name. W rekordzie
+`physics_objects[]` nazwa pozostaje osobnym polem, geometry_id odwołuje się
+do geometrii, a type pochodzi z jawnej roli. Typ lub nazwa anteny nie
+uruchamia transportu, solve, projekcji ani LLG. Sam słownik ID nie tworzy
+rekordu physics_object: rekord powstaje dla zadeklarowanej roli.
+
+Pięć kolekcji serializuje się przez `value.to_ir()` do pól tej samej nazwy.
+Rejestracja deklaracji solve nie jest akcją etapu: dedicated stage-first
+workflow musi ją jawnie wybrać. Widmo źródła nie jest dowodem wzbudzonego
+wektora falowego odpowiedzi; ta wymaga osobnej analizy magnetyzacji.
+
+### Macierz granicy authoringu
+
+| Solver | Device | Kontrakt aggregate | Kwalifikacja wykonania |
+|---|---|---|---|
+| FDM | CPU | wspólny typowany graph i lowering | osobna kwalifikacja projekcji/importu i LLG |
+| FDM | GPU | wspólny typowany graph i lowering | osobna CUDA qualification; bez fallbacku CPU |
+| FEM | CPU | wspólny typowany graph i lowering | osobne native solve, projection i time evolution |
+| FEM | GPU | wspólny typowany graph i lowering | CPU precompute nie oznacza GPU solve; konsumpcja device ma własne bramki |
+
+Źródło: `packages/fullmag-py/src/fullmag/model/problem.py`, `class Problem`
+(walidacja `__post_init__`, lowering `to_ir`). Fizykę i realizacje pola opisuje
+[referencja anten CPW](/python-api/current-and-excitations/cpw-antenna), nie ten aggregate API.
+
 ### Canonical stage-first authoring
 
 ```python
@@ -155,6 +202,7 @@ import fullmag as fm
 study = fm.study("problem_api_example")
 study.engine("fdm")
 study.device("cpu", precision="double")
+study.mode("strict")
 study.objects.mesh.defaults(cell_size=(2e-9, 2e-9, 2e-9))
 film = study.geometry(fm.Box(40e-9, 20e-9, 4e-9), name="film")
 film.Ms = 8.0e5
@@ -167,6 +215,22 @@ study.stages.add_run(stage_id="run", until=1e-12)
 
 (python-api-problem-problem-problem-ir)=
 ## ProblemIR
+
+Poniższy wycinek pochodzi z lowering przykładu study przez repozytoryjny loader,
+bez uruchamiania solvera. Żadna kolekcja anten nie jest zadeklarowana, więc
+każda pozostaje pusta; nie pojawia się automatyczny solve ani RF drive.
+Pole `physics_objects` jest pomijane, gdy nie zadeklarowano pomocniczych ról.
+To fragment, nie cały snapshot problemu.
+
+```json
+{
+  "antenna_port_modes": [],
+  "antenna_field_solve_stages": [],
+  "antenna_target_projections": [],
+  "solved_antenna_drives": [],
+  "antenna_spectrum_requests": []
+}
+```
 
 Requested intent remains distinct from planner resolution and execution evidence. The serializer
 preserves selections and frozen-spin constraints as typed graph data; it must not flatten them to

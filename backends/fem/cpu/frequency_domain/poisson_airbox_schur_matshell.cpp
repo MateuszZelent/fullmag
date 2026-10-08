@@ -56,6 +56,37 @@ namespace {
 
 using Complex = std::complex<double>;
 
+#if FULLMAG_FEM_WITH_SLEPC
+#if PETSC_VERSION_LT(3, 14, 3)
+// PETSc added the public GMRES restart-breakdown setter in 3.14.3. The
+// managed qualification image still carries PETSc 3.12, where the default
+// breakdown policy is the only source-compatible option.
+PetscErrorCode set_gmres_breakdown_tolerance_compat(KSP, PetscReal)
+{
+    return PETSC_SUCCESS;
+}
+#else
+PetscErrorCode set_gmres_breakdown_tolerance_compat(KSP ksp, PetscReal tolerance)
+{
+    return KSPGMRESSetBreakdownTolerance(ksp, tolerance);
+}
+#endif
+
+#if defined(SLEPC_VERSION_MAJOR) && \
+    (SLEPC_VERSION_MAJOR > 3 || \
+     (SLEPC_VERSION_MAJOR == 3 && SLEPC_VERSION_MINOR >= 15))
+PetscErrorCode set_st_preconditioner_mat_compat(ST st, Mat matrix)
+{
+    return STSetPreconditionerMat(st, matrix);
+}
+#else
+PetscErrorCode set_st_preconditioner_mat_compat(ST st, Mat matrix)
+{
+    return STPrecondSetMatForPC(st, matrix);
+}
+#endif
+#endif
+
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
@@ -2475,7 +2506,7 @@ bool configure_production_refinement_ksp(
         // conservative diagnostic rather than an exact GMRES recurrence;
         // retain the true residual gate below while allowing this bounded
         // inner solve to continue across a restart.
-        KSPGMRESSetBreakdownTolerance(
+        set_gmres_breakdown_tolerance_compat(
             refinement_ksp,
             static_cast<PetscReal>(32.0)) == 0 &&
         KSPGetPC(refinement_ksp, &refinement_pc) == 0 &&
@@ -4852,7 +4883,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         // (A-tau B)^-1, matching ADR-017 and the full descriptor CPU lane.
         STSetType(st, STSINVERT) == 0 &&
         STSetShift(st, static_cast<PetscScalar>(target_eigenvalue)) == 0 &&
-        STSetPreconditionerMat(st, shifted_preconditioner) == 0 &&
+        set_st_preconditioner_mat_compat(st, shifted_preconditioner) == 0 &&
         STGetKSP(st, &st_ksp) == 0;
     if (configured) {
         // Shift-invert is one uniform GMRES contract for both the exact

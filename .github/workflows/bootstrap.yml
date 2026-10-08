@@ -28,6 +28,26 @@ jobs:
       - name: Install Python runtime dependencies
         run: python -m pip install -e packages/fullmag-py
 
+      - name: Resolve storage for API artifact fixtures
+        run: |
+          python -B - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          result = subprocess.run(
+              [sys.executable, "-B", "scripts/fullmag_storage.py", "resolve",
+               "--profile", "ci-rust-contracts", "--create"],
+              check=True, capture_output=True, text=True,
+          )
+          layout = json.loads(result.stdout)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(
+                  f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
+              )
+          PY
+
       - name: Run Rust quantity, API and CLI contracts
         run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts
 

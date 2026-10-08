@@ -147,6 +147,11 @@ pub(crate) fn create_empty_scene_document(
         spin_transports: Vec::new(),
         spin_torques: Vec::new(),
         oersted_fields: Vec::new(),
+        antenna_port_modes: Vec::new(),
+        antenna_field_solve_stages: Vec::new(),
+        antenna_target_projections: Vec::new(),
+        solved_antenna_drives: Vec::new(),
+        antenna_spectrum_requests: Vec::new(),
         study: SceneStudyState {
             requested_backend: request.backend.clone(),
             requested_device: request.device.clone(),

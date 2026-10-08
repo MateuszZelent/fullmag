@@ -165,6 +165,46 @@ void generic_dependencies_are_certified_or_rejected_physically()
         "accepted dependency did not persist its physical residual");
 }
 
+void negative_intermediate_pivots_preserve_independent_rank()
+{
+    // The third independent RHS is divided by a negative previous pivot;
+    // no dependent-row final normalization is involved in this fixture.
+    const auto certificate = ConservativeConstraintRank::Analyze({
+        generic_row("a", {1}, {-2}, 2.0),
+        generic_row("b", {2}, {1}, 3.0),
+        generic_row("c", {3}, {1}, 4.0),
+    });
+    require(certificate.rows_before == 3 && certificate.rank == 3 &&
+            certificate.omitted_rows.empty(),
+        "negative intermediate Bareiss pivot changed independent rank");
+}
+
+void negative_final_pivots_preserve_signed_physical_residuals()
+{
+    for (const double residual : {1.0, -1.0}) {
+        const double rhs = 4.0 + residual;
+        const auto certificate = ConservativeConstraintRank::Analyze({
+            generic_row("a", {1}, {-2}, 2.0),
+            generic_row("b", {1}, {-4}, rhs),
+        }, 1.0, 0.0);
+        require(certificate.rows_before == 2 && certificate.rank == 1 &&
+                certificate.omitted_rows.size() == 1 &&
+                certificate.omitted_rows[0].constraint_id == "b" &&
+                certificate.omitted_rows[0].reason ==
+                    ConstraintOmissionReason::ConsistentLinearDependency &&
+                certificate.omitted_rows[0].residual_a == residual,
+            "negative final Bareiss pivot changed signed residual or gate equality");
+        const auto error = require_throws<InconsistentDependentConstraint>([&] {
+            (void)ConservativeConstraintRank::Analyze({
+                generic_row("a", {1}, {-2}, 2.0),
+                generic_row("b", {1}, {-4}, rhs),
+            });
+        }, "negative final pivot bypassed physical inconsistency rejection");
+        require(error.constraint_id() == "b" && error.residual_a() == residual,
+            "negative final pivot lost inconsistent row ID or signed residual");
+    }
+}
+
 void physical_gate_boundaries_are_exact_and_inclusive()
 {
     constexpr double absolute_gate = 1.0e-18;
@@ -573,6 +613,8 @@ int main()
 {
     try {
         generic_dependencies_are_certified_or_rejected_physically();
+        negative_intermediate_pivots_preserve_independent_rank();
+        negative_final_pivots_preserve_signed_physical_residuals();
         physical_gate_boundaries_are_exact_and_inclusive();
         persisted_residual_uses_exact_ieee_binary64_rounding();
         incremental_bareiss_handles_nonmonotonic_pivot_columns();

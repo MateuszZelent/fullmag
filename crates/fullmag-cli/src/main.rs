@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::ffi::OsString;
 
 mod accepted_run_transport;
+mod antenna_workflow;
 mod args;
 mod command_bridge;
 mod communication_policy;
@@ -1564,10 +1565,12 @@ mod tests {
             enable_demag: true,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            charge_transport_plans: vec![],
             spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

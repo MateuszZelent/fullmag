@@ -1313,6 +1313,12 @@ fn scene_geometry_entry(
                 )?),
             })
         }
+        "MicrostripAntenna" | "microstrip" | "CPWAntenna" | "cpw" => {
+            Err(ApiError::bad_request(format!(
+                "antenna geometry object '{}' requires the conductor mesh planner; magnetic mesh lowering is not available in this command",
+                object_id
+            )))
+        }
         other => Err(ApiError::bad_request(format!(
             "mesh build cannot lower geometry kind '{}' for object '{}'",
             other, object_id

@@ -1,0 +1,686 @@
+{
+  "document": {
+    "path": "docs/superpowers/plans/2026-09-08-microwave-antenna-refactoring-plan.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "development_executable",
+      "reason": "Stan 2026-09-21: kontrakt Zeemana/FFI i bazowa kwalifikacja native FEM LLG CPU FP64 sa zaliczone; antenowy RHS, wszystkie RK/waveformy, snapshot H_ant i odbior T13/T18 pozostaja otwarte."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "planned_not_qualified",
+      "reason": "Stan 2026-09-21: wspolny target kompiluje sie po adapterach PETSc/SLEPc, ale brak dowodu wykonania antenowej trajektorii na FEM GPU; wymagane T13/T16/T18."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "planned_not_qualified",
+      "reason": "Stan 2026-09-20: istnieja testy CPU/reference bazy i waveformu; publiczny pipeline oraz projekcja na rzeczywiste komorki pozostaja otwarte w T09/T16."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "planned_not_qualified",
+      "reason": "Stan 2026-09-20: brak pelnego dowodu projekcji, uploadu CUDA i parity anteny; wymagane T16 i T18."
+    }
+  ],
+  "symbols": [],
+  "equations": [],
+  "sources": [
+    {"id":"antenna-catalog-asset-owner","path":"crates/fullmag-cli/src/orchestrator.rs","symbol":"read_ready_antenna_stage_outputs","responsibility":"WIP: integralnosc assetu i zgodnosc manifestu przed referencja ready; runtime otwarty.","evidence_status":"source_only"},
+    {"id":"antenna-catalog-port-owner","path":"crates/fullmag-runner/src/antenna_stage.rs","symbol":"load_published_antenna_field_solution_for_port","responsibility":"Wspolna integralnosc historycznego wyniku i obecnosc portu; nie aktualnosc modelu.","evidence_status":"source_only"},
+    {"id":"antenna-catalog-asset-regression","path":"scripts/test_antenna_catalog_asset_source.py","symbol":"class AntennaCatalogAssetSourceTests","responsibility":"Wykonany source RED2 do GREEN2/2; bez Rust i solvera.","evidence_status":"source_only"},
+    {"id":"antenna-catalog-port-rust-regression","path":"crates/fullmag-runner/src/antenna_stage.rs","symbol":"catalog_port_loader_checks_integrity_before_port_membership","responsibility":"Zapisany niewykonany test Rust: poprawny fixture, obcy port i uszkodzony payload.","evidence_status":"source_only"},
+    {"id":"antenna-cache-current-expectation-owner","path":"crates/fullmag-runner/src/antenna_stage.rs","symbol":"inspect_cached_antenna_field_solution","responsibility":"WIP ready cache wykorzystuje Expected i current geometry/material/mesh; runtime/reuse otwarte.","evidence_status":"source_only"},
+    {"id":"antenna-cache-current-expectation-regression","path":"scripts/test_antenna_cache_expectation_source.py","symbol":"class AntennaCacheExpectationSourceTests","responsibility":"Źródłowe kontrole loadera, rewizji, target independence, Stale i race; nie wykonanie Rust.","evidence_status":"source_only"},
+    {"id":"antenna-consumer-activation-preflight","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-consumer-activation-preflight","responsibility":"Samodzielny activation commit i WIP lazy-root/clear-bases, source-only; pełne domknięcia i runtime otwarte.","evidence_status":"planned_contract"},
+    {"id":"antenna-consumer-activation-owner","path":"crates/fullmag-cli/src/orchestrator.rs","symbol":"prepare_solved_antenna_drive_activation","responsibility":"Wspólna context/lane validation oraz clear pustych lub nieaktywnych baz przed dostępem do storage.","evidence_status":"source_only"},
+    {"id":"antenna-consumer-activation-source-regression","path":"scripts/test_antenna_activation_preflight_source.py","symbol":"class AntennaActivationPreflightSourceTests","responsibility":"Wykonany parent RED3 i INDEX3/3, bez Rust/solvera.","evidence_status":"source_only"},
+    {"id":"antenna-consumer-lazy-root-source-regression","path":"scripts/test_antenna_observation_source.py","symbol":"test_consumer_validates_activation_before_resolving_artifact_root","responsibility":"WIP źródłowo: preflight przed root, bez pomijania pustej listy.","evidence_status":"source_only"},
+    {"id":"antenna-consumer-inactive-source-regression","path":"scripts/test_antenna_observation_source.py","symbol":"test_activation_preflight_clears_inactive_or_absent_bases_in_both_lanes","responsibility":"Źródłowo FDM/FEM clear przed false, bez wykonywania Rust.","evidence_status":"source_only"},
+    {"id":"antenna-consumer-strong-load-source-regression","path":"scripts/test_antenna_observation_source.py","symbol":"test_attachment_preserves_strong_loading_after_the_shared_activation_gate","responsibility":"Pełny zależny WIP zachowuje Expected/current freshness i oba projection owners.","evidence_status":"source_only"},
+    {"id":"antenna-build36-terminal-package-acceptance","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-build36-terminal-package-acceptance","responsibility":"Wykonany terminalny receipt/journal126artefaktów i kapsuła7453/79; wyłącznie dokładny starszy pakiet, nie runtime/nauka/currentHEAD.","evidence_status":"planned_contract"},
+    {"id":"antenna-observation-readiness-commit","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-observation-readiness-commit","responsibility":"Zapisany fallible readiness i odmowa energy no-op; źródłowy dowód, runtime/rollback/basis integration otwarte.","evidence_status":"planned_contract"},
+    {"id":"antenna-observation-readiness-source-regression","path":"scripts/test_interactive_observation_readiness_source.py","symbol":"class InteractiveObservationReadinessSourceTests","responsibility":"Wykonany source RED parent5tests6failures → INDEX5/5; nie wykonanie Rust/solvera.","evidence_status":"source_only"},
+    {"id":"antenna-observation-readiness-owner","path":"crates/fullmag-cli/src/interactive_runtime_host.rs","symbol":"ensure_base_runtime_ready","responsibility":"Wspólny fallible preparation/resync; błąd nie jest sukcesem jawnej komendy.","evidence_status":"source_only"},
+    {"id":"antenna-command-result-correlation-commit","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-command-result-correlation-commit","responsibility":"Commit siedmiu plików korelacji compute/import; source 8/8, Rust/runtime i no-op energy nadal otwarte.","evidence_status":"planned_contract"},
+    {"id":"antenna-command-result-independent-source-checks","path":"scripts/test_command_result_identity_source.py","symbol":"class CommandResultIdentitySourceTests","responsibility":"Niezależny wykonany RED parent i GREEN INDEX 8/8, bez kompilacji Rust i uruchomienia solvera.","evidence_status":"source_only"},
+    {"id":"antenna-command-log-explicit-id-isolation","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-command-log-explicit-id-isolation","responsibility":"Źródłowa korekta T12, wykonany RED/GREEN 30/30, Rust/runtime i durable lifecycle otwarte.","evidence_status":"planned_contract"},
+    {"id":"antenna-command-terminal-log-owner","path":"crates/fullmag-api/src/session.rs","symbol":"command_has_terminal_log","responsibility":"Globalny matcher respektuje każde jawne ID, zachowując freshness i legacy anonymous policy.","evidence_status":"source_only"},
+    {"id":"antenna-command-log-source-regression","path":"scripts/test_antenna_observation_source.py","symbol":"test_terminal_log_named_identity_applies_to_all_command_kinds","responsibility":"Wykonany source-only regression, nie wykonanie Rust ani operatora.","evidence_status":"source_only"},
+    {"id":"antenna-command-log-rust-regression","path":"crates/fullmag-api/src/session.rs","symbol":"snapshot_reconciliation_does_not_apply_foreign_identified_logs_to_solver_commands","responsibility":"24 zapisane, niewykonane przypadki; foreign log zachowuje existing idle inference.","evidence_status":"source_only"},
+    {"id":"antenna-r3-fixed-ram-comparison","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-r3-fixed-ram-comparison","responsibility":"Wykonany fixed RAM na R3, independent V/H i geometryczne RT0 PASS; bramki nauki/reuse/provenance otwarte.","evidence_status":"planned_contract"},
+    {"id":"antenna-r3-package-openapi-acceptance","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-r3-package-openapi-acceptance","responsibility":"Terminalny pakiet R3, jego exact OpenAPI i source checks PASS, nie runtime/nauka.","evidence_status":"planned_contract"},
+    {"id":"antenna-scripted-interactive-output-handoff","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-scripted-interactive-output-handoff","responsibility":"Źródłowo wdrożony finalny szablon i nowy stage, 29/29 source, runtime i lifecycle qualification otwarte.","evidence_status":"planned_contract"},
+    {"id":"antenna-new-stage-source-regression","path":"scripts/test_antenna_observation_source.py","symbol":"test_each_interactive_stage_resolves_before_new_sequence_plan_and_attachment","responsibility":"Ordering przed nową sequence/plan/load, bez dowodu całej transakcji resume.","evidence_status":"source_only"},
+    {"id":"antenna-libm-parity-counterexample","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-libm-parity-counterexample","responsibility":"T12/R2: negatywny dowód ogólnej zgodności hypot, jawnie otwarte qualified realization/provenance lub wersjonowana migracja bez ULP slack.","evidence_status":"planned_contract"},
+    {"id":"antenna-matched-libm-reader-realization","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-matched-libm-reader-realization","responsibility":"T12/R2: wdrożony jawny adapter i wykonane 37/37 interpreted; pełne producer/native/provenance gates nadal otwarte.","evidence_status":"planned_contract"},
+    {"id":"antenna-matched-libm-binding","path":"tests/antenna/matched_libm.py","symbol":"class MatchedLibmHypot","responsibility":"Pinned file i wersjonowany symbol normy readera; nie promocja naukowa ani kwalifikacja lane.","evidence_status":"source_only"},
+    {"id":"antenna-retained-native-tau-bit-evidence","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-retained-native-tolerance-bit-evidence","responsibility":"Wykonany odczyt fixed RAM i 4/4 porównania native tau z niezależnym Python, 0 ULP; nie pełny parity ani qualification.","evidence_status":"planned_contract"},
+    {"id":"antenna-managed-snapshot-openapi-import","path":"apps/control-room/scripts/normalize-openapi-build-identity.mjs","symbol":"validateManagedSnapshotOpenApiReceipt","responsibility":"Wykonany import raw/receipt/proof-bound z exact source pins; default clean zachowany, bez regeneracji starego R1 jako R3.","evidence_status":"source_only"},
+    {"id":"antenna-managed-snapshot-openapi-export","path":"scripts/export_runner_openapi.py","symbol":"_validate_managed_build","responsibility":"Jawny exact snapshot export z pełnymi receipt/capsule gates, wykonany na R1; nie odbiór R3 ani nauki.","evidence_status":"source_only"},
+    {"id":"antenna-managed-snapshot-openapi-regression","path":"scripts/test_export_runner_openapi.py","symbol":"test_explicit_snapshot_export_binds_both_digests_and_actual_dirty_state","responsibility":"Wykonana interpretowana regresja obu pinów i prawdziwego dirty state receipt/proof.","evidence_status":"source_only"},
+    {"id":"antenna-independent-evidence-reader","path":"tests/antenna/direct_quadrature_evidence.py","symbol":"verify_direct_evidence","responsibility":"R2 wykonany niezależny reader synthetic wire i raw/ledger/binding; nie producer/input qualification.","evidence_status":"source_only"},
+    {"id":"antenna-independent-reader-contract","path":"docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md","symbol":"DOC-ANCHOR:antenna-global-target-v3-independent-reader-contract","responsibility":"R2 parametry/legacy/odmowy i oddzielne native/provenance/libm gates.","evidence_status":"planned_contract"},
+    {"id": "antenna-direct-evidence-codec", "path": "crates/fullmag-runner/src/antenna_field_solution/direct_quadrature.rs", "symbol": "decode", "responsibility": "R3 bounded raw binary evidence i numerical acceptance, source-only.", "evidence_status": "source_only"},
+    {"id": "antenna-direct-evidence-load-gate", "path": "crates/fullmag-runner/src/antenna_field_solution.rs", "symbol": "verify_antenna_field_solution_referenced_data", "responsibility": "R3 wspólna bramka publication/load/API oraz raw-current/per-A binding; nie qualification.", "evidence_status": "source_only"},
+    {"id": "antenna-direct-evidence-api-gate", "path": "crates/fullmag-api/src/router_v2/handlers/data/antenna.rs", "symbol": "validate_field_solution_payloads", "responsibility": "R3 original bytes/bounded reads/canonical gate przed metadata i H response; generated i runtime pending.", "evidence_status": "source_only"},
+    {"id": "antenna-direct-evidence-contract", "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md", "symbol": "DOC-ANCHOR:antenna-global-target-v3-binary-evidence-contract", "responsibility": "Pełny format i bramki R3, z jawnie otwartą kompilacją/runtime/R2 i kwalifikacją.", "evidence_status": "planned_contract"},
+    {"id": "antenna-direct-snapshot-owned-adapter", "path": "crates/fullmag-runner/src/native_fem/steady_transport/direct_oersted_snapshot.rs", "symbol": "finish", "responsibility": "Źródłowy R1 odbiór pełnego raw snapshotu i bramki binding/options/work; nie utrwalenie i nie runtime proof.", "evidence_status": "source_only"},
+    {"id": "antenna-direct-snapshot-owned-adapter-contract", "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md", "symbol": "DOC-ANCHOR:antenna-global-target-v3-regular-adapter", "responsibility": "Źródłowy checkpoint R1 i jawnie otwarte binary publication/load/verifier oraz runtime.", "evidence_status": "planned_contract"},
+    {"id": "antenna-direct-snapshot-native", "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp", "symbol": "extern \"C\" int fullmag_fem_solve_steady_transport_rt0_oersted_with_snapshots_v1", "responsibility": "R1 native producer zapisany źródłowo: pełne raw target records i odmowa/clear przy error; bez integracji runnera i nowego runtime.", "evidence_status": "source_only"},
+    {"id": "antenna-direct-snapshot-contract", "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md", "symbol": "DOC-ANCHOR:antenna-global-target-v3-regular-export-contract", "responsibility": "Kontrakt append-only raw snapshot i następnego bounded artifact/publish/load/per-A binding; bez pełnej kwalifikacji.", "evidence_status": "planned_contract"},
+    {"id": "antenna-global-v3-fixed-ram-evidence", "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md", "symbol": "DOC-ANCHOR:antenna-global-target-v3-fixed-ram-evidence", "responsibility": "Managed build oraz siódmy fixed RAM V/RT0/H PASS; tylko outside-source model przy 1 A, bez qualification reuse/trwałości/LLG/FFT.", "evidence_status": "planned_contract"},
+    {"id": "antenna-global-v3-regular-export-gap", "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp", "symbol": "solve_rt0", "responsibility": "Required T06/T12: regularny OE-F1 emituje wersję v3, ale gubi per-target ledger oraz scope/policies/caps/work; source review, bez runtime proof.", "evidence_status": "source_only"},
+    {"id": "antenna-global-v3-regular-adapter-gap", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "validate_direct_oersted_convergence", "responsibility": "Required T06/T12: dotychczasowa bramka historycznych unconverged/max-pair-error nie waliduje pełnego v3 record.", "evidence_status": "source_only"},
+    {"id": "antenna-global-v3-regular-publication-gap", "path": "crates/fullmag-runner/src/antenna_field_solution.rs", "symbol": "build_antenna_field_solution_artifacts", "responsibility": "Historyczna luka T06/T09/T12: R3 źródłowo dodaje raw measured-current/per-A binding i wspólną bramkę; build/runtime nadal NOT VERIFIED.", "evidence_status": "source_only"},
+    {"id": "antenna-global-v3-regular-load-gap", "path": "crates/fullmag-runner/src/antenna_field_solution.rs", "symbol": "StoredBasisManifest", "responsibility": "Historyczna luka T06/T09/T12: R3 źródłowo zachowuje diagnostics i balance digest oraz sprawdza numerical acceptance; build/runtime nadal NOT VERIFIED.", "evidence_status": "source_only"},
+    {"id": "antenna-global-v3-regular-verifier-gap", "path": "tests/antenna/verify_field_convergence.py", "symbol": "read_solution_checked", "responsibility": "Historyczny false rejection v3 naprawiony w R2 readerze; native/provenance/libm qualification nadal required, progi bez osłabienia.", "evidence_status": "source_only"},
+    {"id": "antenna-rt0-normalization-source-regression", "path": "scripts/test_antenna_rt0_normalization_source.py", "symbol": "test_mass_and_load_use_unit_flux_coordinates_before_both_kkt_lanes", "responsibility": "Źródłowa regresja shared dense/sparse assembly i niezależny exact model; nie wykonanie MFEM lub operatora sparse.", "evidence_status": "source_only"},
+    {"id": "antenna-rt0-native-normalization-audit", "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md", "symbol": "DOC-ANCHOR:antenna-rt0-native-normalization-audit", "responsibility": "Generic MFEM v4.7, źródłowa korekta współrzędnych bez native proof oraz ilościowa odmowa piątego RAM; poprawka physical measurement i jego zgodności z H jeszcze niewdrożona.", "evidence_status": "planned_contract"},
+    {
+      "id": "antenna-runtime-trusted-materializer",
+      "path": "scripts/local_runner/build_entrypoint.py",
+      "symbol": "materialize_capsule",
+      "responsibility": "Po jawnej zgodzie wdrozono trusted materializer copyfile i potwierdzono zgodny hash; snapshot WIP zgloszono do buildu fad6f31076494ca39938191358e77159, bez terminalnego build/runtime proof.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-runtime-coordinator-health",
+      "path": "scripts/local_runner/container_client.py",
+      "symbol": "status",
+      "responsibility": "Health po kontrolowanej wymianie i resume: przyjmowanie zadan, zywy worker bez bledu; osobno hash importowanego kodu. Nie jest dowodem runtime anten ani kwalifikacji fizyki.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-import-private-preflight",
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "symbol": "validate_imported_magnetization",
+      "responsibility": "Prywatny kandydat IR, kanoniczny planner i strict global flat carrier count dla pieciu wariantow przed publikacja importu; bez runtime, source solve i zmiany zegarow.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-import-private-preflight-regression",
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "symbol": "imported_magnetization_validation_rejects_wrong_size_without_mutating_problem",
+      "responsibility": "Zapisane FDM scenariusze liczności i niezmiennosci IR; unit Rust niekompilowany i nieuruchomiony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-import-fem-global-carrier-regression",
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "symbol": "imported_fem_state_requires_global_nodes_not_local_initializer",
+      "responsibility": "Zapisana regresja local4 kontra global5 dla magnesu z airbox; unit Rust niekompilowany i nieuruchomiony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-import-fem-source-only-regression",
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "symbol": "imported_fem_state_supports_multi_magnet_source_only_mesh",
+      "responsibility": "Zapisana regresja wielomagnesowego importu globalnego mesh_source bez inline mesh; unit Rust niekompilowany i nieuruchomiony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-windows-managed-build",
+      "path": "scripts/fullmag_storage.py",
+      "symbol": "run_windows_workspace_build",
+      "responsibility": "Checkpoint Windows: zamknieta recepta buildu, resolver i terminalny receipt; build ani fizyka niekwalifikowane.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-static-snapshot-replanning-gap",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "snapshot_problem_vector_fields",
+      "responsibility": "T09/T12/T16: zachowana fasada IR deleguje do plan-aware API; produkcyjne obserwacje CLI laduja baze przed wywolaniem, ale wynikowe wektory wymagaja runtime proof.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-observation-prepared-plan",
+      "path": "crates/fullmag-cli/src/antenna_workflow.rs",
+      "symbol": "plan_antenna_observation",
+      "responsibility": "Dokladny ProblemIR, owned artifact root, wspolny loader i materializacja bazy bez source solve i bez przepisywania zegarow.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-observation-planned-batch",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "snapshot_planned_problem_vector_field_batch",
+      "responsibility": "Obserwacja gotowego planu bez utraty baz; zachowany pomocniczy carrier airbox.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-observation-pre-solve",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "refresh_problem_preview_state",
+      "responsibility": "Przed Solve snapshot i materializacja wykorzystuja jedna sprawdzona baze przed publikacja wynikow.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-observation-fallible-runtime",
+      "path": "crates/fullmag-cli/src/interactive_runtime_host.rs",
+      "symbol": "ensure_base_runtime_ready",
+      "responsibility": "Bledy rekonstrukcji i uploadu propagowane do jawnych komend; idle nadal dopuszcza dalsze komendy.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-observation-energy-ack",
+      "path": "crates/fullmag-api/src/session.rs",
+      "symbol": "infer_dispatched_command_completion",
+      "responsibility": "Pola wymagaja skorelowanego wyniku i readiness; energia nie uzywa starych idle/scalars. Exact command_id obejmuje trzy komendy, nie gwarantuje trwalosci ACK.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-observation-routing-regression",
+      "path": "scripts/test_antenna_observation_source.py",
+      "symbol": "class AntennaObservationSourceTests",
+      "responsibility": "26 wykonanych kontroli zrodel prepared plan, remesh, odmow/importu, exact ID, fixtures i globalnego preflight FEM; bez wykonania solvera lub unit Rust.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-command-result-identity",
+      "path": "crates/fullmag-api/src/session.rs",
+      "symbol": "command_has_terminal_log",
+      "responsibility": "Exact command_id, terminalny marker i czas dispatch dla compute_fields/energies/load_state; pozostale komendy bez globalnej zmiany semantyki.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-command-result-producer",
+      "path": "crates/fullmag-cli/src/live_workspace.rs",
+      "symbol": "push_command_log",
+      "responsibility": "ID i bounded log pod jednym lockiem przed request publish; limit 256 nie stanowi durable completion.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-command-result-tail-protection",
+      "path": "crates/fullmag-cli/src/formatting.rs",
+      "symbol": "upsert_engine_log_tail",
+      "responsibility": "Zwykly tail upsert nie nadpisuje skorelowanego terminalnego wpisu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-command-result-rust-regression",
+      "path": "crates/fullmag-api/src/session.rs",
+      "symbol": "snapshot_reconciliation_requires_fresh_exact_identity_for_compute_and_import_results",
+      "responsibility": "Scenariusze missing/foreign/stale/same-ms ID dla szesciu wynikow; Rust test niekompilowany i nieuruchomiony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-convergence-revisioned-layout-gap",
+      "path": "tests/antenna/verify_field_convergence.py",
+      "symbol": "read_solution",
+      "responsibility": "T06: czytnik przypisuje logical refs do dokladnej rewizji; interpretowane regresje 12 PASS/1 SKIP nie kwalifikuja fizyki.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-transport-draft-ui",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx",
+      "symbol": "TransportAuthoringInspector",
+      "responsibility": "T15: scoped draft, Create ACK identity bridge, generation fence, exact revision, Delete/409/canonical scene publication i revision-scoped missing/restore; browser fixture nie kwalifikuje solve.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-transport-draft-reconcile",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
+      "symbol": "reconcileTransportDraft",
+      "responsibility": "Trójstronne uzgodnienie pól draftu z zachowaniem lokalnych edycji i wykrywaniem overlap; zagnieżdżone closure/JSON pozostają atomowe.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-transport-source-cut-identity",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
+      "symbol": "currentTransportDraft",
+      "responsibility": "Lokalne unikalne ID wierszy source cuts zachowane przy odświeżeniu; bez nowego pola fizyki lub payloadu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-microstrip-station-ui",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditor.tsx",
+      "symbol": "MicrostripGeometryEditor",
+      "responsibility": "T15: lokalna tożsamość wierszy i baza draftu po scoped ACK; browser fixture nie kwalifikuje solve.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-microstrip-station-identity",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.ts",
+      "symbol": "widthStationDraft",
+      "responsibility": "Uzgodnienie stacji po położeniu z rezerwacją poprzednich ID i odmową kolizji kluczy Reacta.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-microstrip-station-values",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.ts",
+      "symbol": "widthStationsEqual",
+      "responsibility": "Porównanie skończonych wartości stacji bez lokalnych ID, różnic formatowania lub tolerancji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-inspection-ui",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaExternalLeadInspectionPanel.tsx",
+      "symbol": "AntennaExternalLeadInspectionPanel",
+      "responsibility": "T15: osobny Inspector raw inspection, exact owner/run/stage i ograniczony Range preview; bez kwalifikacji LLG/FFT.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-inspection-ui-mapping",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaExternalLeadInspectionModel.ts",
+      "symbol": "resolveInspectionRuntimeStage",
+      "responsibility": "Jawny antenna_solve_stage_id; wiele wykonań wymaga scoped wyboru runtime ID, bez name/index/latest fallback.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-inspection-ui-selection-context",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaExternalLeadInspectionModel.ts",
+      "symbol": "inspectionSelectionMatchesContext",
+      "responsibility": "Lokalny wybór przypięty do authored ID, runu i ownera; zmiana kontekstu resetuje go przed renderem, również przy ABA.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-inspection-resource-hooks",
+      "path": "apps/control-room/src/kernel/resources/antennaResources.ts",
+      "symbol": "useAntennaExternalLeadInspectionPayloadResource",
+      "responsibility": "T14: scoped owner/digest/revision/Range read-only payload; failed/cancelled nie są bazą LLG.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-inspection-frontend-source-check",
+      "path": "justfile",
+      "symbol": "verify-control-room-resource-client-cache",
+      "responsibility": "T14: interpretowane wykonanie produkcyjnych hooków/fasady i kontroli scope bez unit compilation; native HTTP i UI nie są dowiedzione.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-request-scope-root",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/antenna.rs",
+      "symbol": "require_antenna_artifact_dir",
+      "responsibility": "T14: transition-fenced root capture z kanonicznym kontekstem, bez ambient root nowego importu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-request-scope-import-regression",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/antenna.rs",
+      "symbol": "antenna_root_and_identity_reads_wait_for_session_import_publication",
+      "responsibility": "T14: deterministyczna regresja przerwy między publikacją migawki importu i zmianą inkarnacji; Rust niekompilowany.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-request-scope-http-checker",
+      "path": "scripts/smoke_antenna_external_lead_inspection.py",
+      "symbol": "verify",
+      "responsibility": "T14: read-only scoped HTTP checker i siedem stale-scope odmów; harness Python wykonany, nowy Fullmag runtime NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "source0",
+      "path": "crates/fullmag-authoring/src/scene.rs",
+      "symbol": "SceneDocument",
+      "responsibility": "Kotwica planowanych zadan T03"
+    },
+    {
+      "id": "source1",
+      "path": "crates/fullmag-authoring/src/adapters.rs",
+      "symbol": "scene_document_from_script_builder",
+      "responsibility": "Kotwica planowanych zadan T03"
+    },
+    {
+      "id": "source2",
+      "path": "crates/fullmag-api/src/router_v2/handlers/model/authoring.rs",
+      "symbol": "apply_scene_merge_patch",
+      "responsibility": "Kotwica planowanych zadan T03/T14"
+    },
+    {
+      "id": "source3",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaPortMode",
+      "responsibility": "Kotwica planowanych zadan T02/T03"
+    },
+    {
+      "id": "source4",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class SolvedAntennaDrive",
+      "responsibility": "Kotwica planowanych zadan T03/T07"
+    },
+    {
+      "id": "source5",
+      "path": "crates/fullmag-plan/src/antenna_composition.rs",
+      "symbol": "bind_resolved_antenna_field_solve",
+      "responsibility": "Kotwica planowanych zadan T05"
+    },
+    {
+      "id": "source6",
+      "path": "crates/fullmag-runner/src/native_fem/charge_transport.rs",
+      "symbol": "measured_port_current",
+      "responsibility": "Kotwica planowanych zadan T05"
+    },
+    {
+      "id": "source7",
+      "path": "crates/fullmag-ir/src/field_drive_validation.rs",
+      "symbol": "validate_time_dependence",
+      "responsibility": "Kotwica planowanych zadan T07"
+    },
+    {
+      "id": "source8",
+      "path": "crates/fullmag-plan/src/util.rs",
+      "symbol": "field_drive_is_active",
+      "responsibility": "Kotwica planowanych zadan T07"
+    },
+    {
+      "id": "source9",
+      "path": "crates/fullmag-runner/src/antenna_field_solution.rs",
+      "symbol": "load_solved_antenna_drive_basis_projected",
+      "responsibility": "Kotwica planowanych zadan T08/T09"
+    },
+    {
+      "id": "source10",
+      "path": "crates/fullmag-runner/src/antenna_stage.rs",
+      "symbol": "antenna_field_solution_signatures",
+      "responsibility": "Kotwica planowanych zadan T08"
+    },
+    {
+      "id": "source11",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "sample_antenna_field_on_plane",
+      "responsibility": "Kotwica planowanych zadan T09/T10"
+    },
+    {
+      "id": "source12",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "compute_structured_antenna_source_spectrum",
+      "responsibility": "Kotwica planowanych zadan T10"
+    },
+    {
+      "id": "source13",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "compute_nonuniform_k_antenna_source_spectrum",
+      "responsibility": "Kotwica planowanych zadan T10"
+    },
+    {
+      "id": "source14",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solve_native_fem_steady_transport_rt0",
+      "responsibility": "Kotwica planowanych zadan T06/T11"
+    },
+    {
+      "id": "source15",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "attach_solved_antenna_drive_bases",
+      "responsibility": "Kotwica planowanych zadan T08/T12/T16/T17"
+    },
+    {
+      "id": "source16",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "pack_native_regional_field_drives",
+      "responsibility": "Kotwica planowanych zadan T07/T13"
+    },
+    {
+      "id": "source17",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "project_regional_field_drive_bases",
+      "responsibility": "Kotwica planowanych zadan T00/T13"
+    },
+    {
+      "id": "source18",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Natywny artefakt kwalifikacji FEM LLG CPU/GPU oraz kontrole relax-to-run"
+    },
+    {
+      "id": "source19",
+      "path": "scripts/validate_fem_llg_time_domain_qualification.py",
+      "symbol": "validate",
+      "responsibility": "Walidacja naukowa JSON kwalifikacji FEM LLG"
+    },
+    {
+      "id": "source20",
+      "path": "justfile",
+      "symbol": "verify-fem-llg-time-domain-qualification",
+      "responsibility": "Zarządzana recepta kwalifikacji kontenerowej"
+    },
+    {
+      "id": "source21",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "configure_production_refinement_ksp",
+      "responsibility": "Adapter zgodności PETSc/SLEPc używany przez obraz managed"
+    },
+    {
+      "id": "source22",
+      "path": "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
+      "symbol": "create_gpu_solver_state",
+      "responsibility": "Granica fail-closed zgodności modalnego GPU z PETSc 3.12"
+    },
+    {
+      "id": "source23",
+      "path": "scripts/antenna_macrospin_oracle.py",
+      "symbol": "macrospin_from_field_impulse",
+      "responsibility": "Niezależny wzorzec trajektorii macrospinu z całki pola antenowego"
+    },
+    {
+      "id": "source24",
+      "path": "scripts/antenna_macrospin_oracle.py",
+      "symbol": "waveform_integral",
+      "responsibility": "Niezależne całki pięciu wspieranych przebiegów do bramki T13"
+    },
+    {
+      "id": "source25",
+      "path": "scripts/antenna_macrospin_oracle.py",
+      "symbol": "compare_collinear_trajectory",
+      "responsibility": "Porównanie zapisanych próbek m(t) z niezależnym wzorcem i kontrolą zegara"
+    },
+    {
+      "id": "source26",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Natywne wykonanie 90 trajektorii CPU przez preprojected ABI, z zegarami, adaptacją, odrzuceniami oraz polami, energią i torque zaakceptowanych kroków"
+    },
+    {
+      "id": "source27",
+      "path": "scripts/validate_fem_antenna_trajectories.py",
+      "symbol": "validate",
+      "responsibility": "Niezależna walidacja trajektorii, pól, energii i torque oraz kompletności macierzy integratorów i przebiegów"
+    },
+    {
+      "id": "source28",
+      "path": "justfile",
+      "symbol": "verify-fem-antenna-cpu-trajectories",
+      "responsibility": "Kontenerowe wykonanie bramki antenowej CPU z tożsamością źródeł"
+    },
+    {
+      "id": "source29",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Sześć natywnych trajektorii CPU z zamrożonym spinem i aktywnym polem antenowym"
+    },
+    {
+      "id": "source30",
+      "path": "scripts/validate_fem_antenna_frozen.py",
+      "symbol": "validate",
+      "responsibility": "Niezależna kontrola nieruchomego spinu, aktywnego pola, trajektorii swobodnej i torque"
+    },
+    {
+      "id": "source31",
+      "path": "justfile",
+      "symbol": "verify-fem-antenna-frozen-cpu",
+      "responsibility": "Kontenerowe wykonanie bramki frozen-spin z tożsamością źródeł"
+    },
+    {
+      "id": "source32",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Cztery natywne trajektorie anteny CPU na mieszanej siatce magnetyk-airbox"
+    },
+    {
+      "id": "source33",
+      "path": "scripts/validate_fem_antenna_mixed.py",
+      "symbol": "validate",
+      "responsibility": "Niezależna kontrola pola w airboxie i magnetyku, nieruchomego węzła airboxu oraz torque"
+    },
+    {
+      "id": "source34",
+      "path": "justfile",
+      "symbol": "verify-fem-antenna-mixed-cpu",
+      "responsibility": "Kontenerowa bramka antenowej mieszanej siatki CPU z tożsamością źródeł"
+    },
+    {
+      "id": "source35",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Natywne wykonanie antenowej pary PBC na mieszanej siatce i negatywny preflight bazy"
+    },
+    {
+      "id": "source36",
+      "path": "justfile",
+      "symbol": "verify-fem-antenna-mixed-pbc-cpu",
+      "responsibility": "Kontenerowa bramka pary PBC z tożsamością źródeł"
+    },
+    {
+      "id": "antenna-current-source-inspection-example",
+      "path": "examples/fem_antenna_current_source_inspection.py",
+      "symbol": "lead_cubes",
+      "responsibility": "Publiczny stage-first przykład nowego producenta current-source bez Relax/Run, runtime i fizyka NOT VERIFIED."
+    },
+    {
+      "id": "antenna-current-source-example-roundtrip",
+      "path": "packages/fullmag-py/tests/test_antenna_current_source_example.py",
+      "symbol": "test_script_export_preserves_source_port_target_and_stage",
+      "responsibility": "Interpretowany export/reimport current-source, portu, targetu i jednego etapu z prawidłową bazą ścieżek."
+    },
+    {
+      "id": "managed-browser-exact-snapshot",
+      "path": "scripts/run_managed_browser.py",
+      "symbol": "validate_managed_build",
+      "responsibility": "Dokładny binding kapsuły i natywnego snapshotu z pełnym validatorem artefaktów; nie kwalifikacja runtime ani trwałości."
+    },
+    {
+      "id": "managed-browser-capsule-refusal",
+      "path": "scripts/test_run_managed_browser.py",
+      "symbol": "test_run_refuses_capsule_mismatch_before_docker_or_storage_initialization",
+      "responsibility": "Interpretowane odmowy niezgodnego trybu, commita i zmienionych bajtów przed Dockerem oraz inicjalizacją storage."
+    },
+    {
+      "id": "antenna-negative-pivot-exact-division",
+      "path": "backends/fem/cpu/mfem/transport/conservative_constraint_rank.cpp",
+      "symbol": "divide_rational_integer",
+      "responsibility": "Normalizacja znaku dokładnego ilorazu przed Boost 1.74 rational<cpp_int>; zachowane bramki i rozliczone dwie negacje. Runtime korekty NOT VERIFIED."
+    },
+    {
+      "id": "antenna-negative-pivot-regression-entrypoint",
+      "path": "backends/fem/tests/conservative_constraint_rank_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Jawnie wywołuje negative_intermediate_pivots_preserve_independent_rank i negative_final_pivots_preserve_signed_physical_residuals: ujemny previous_pivot, residual ±1 A, inkluzywny gate i odmowa; bez kompilacji/wykonania testów."
+    },
+    {
+      "id": "antenna-current-source-numerical-oracle",
+      "path": "scripts/antenna_current_source_oracle.py",
+      "symbol": "compare_fixture",
+      "responsibility": "Rzeczywiste input pins, osobne gauge i kompletne V/H porównane z niezależnym wzorcem; native NOT VERIFIED."
+    },
+    {
+      "id": "antenna-current-source-volume-oracle-check",
+      "path": "scripts/test_antenna_current_source_oracle.py",
+      "symbol": "test_reduced_integral_matches_independent_three_dimensional_cubature",
+      "responsibility": "Interpretowana niezależna całka 3D z kontrolą zbieżności, nie produkcyjny solve."
+    },
+    {
+      "id": "managed-antenna-ram-exact-execution",
+      "path": "scripts/run_managed_antenna_ram.py",
+      "symbol": "attest",
+      "responsibility": "Zatwierdzony ograniczony kontener naukowy z sesją w RAM: actual command/env/owner/isolation; runtime NOT VERIFIED."
+    },
+    {
+      "id": "managed-antenna-ram-observation",
+      "path": "scripts/run_managed_antenna_ram.py",
+      "symbol": "observe",
+      "responsibility": "Ponowny dokładny binding pakietu, kapsuły i staged input oraz jawny comparison_pending bez kwalifikacji trwałości/fizyki."
+    },
+    {
+      "id": "managed-antenna-ram-real-byte-refusal",
+      "path": "scripts/test_run_managed_antenna_ram.py",
+      "symbol": "test_real_build_binding_rejects_same_size_byte_mutations",
+      "responsibility": "Interpretowane kontrole rzeczywistego validatora dla mutacji pakietu i kapsuły o tym samym rozmiarze."
+    },
+    {
+      "id": "antenna-exact-inspection-export-integrity",
+      "path": "scripts/antenna_inspection_export.py",
+      "symbol": "read_inspection",
+      "responsibility": "Ograniczony odczyt exact stage/revision, digest i pięć payload hashes; nie native ordered-bundle decoder ani autentyczność."
+    },
+    {
+      "id": "antenna-inspection-export-mutation-refusals",
+      "path": "scripts/test_antenna_inspection_export.py",
+      "symbol": "test_same_size_payload_mutation_is_rejected",
+      "responsibility": "Interpretowane odmowy same-size mutation każdego payloadu, z syntetycznym niekanonicznym bundle i bez native proof."
+    },
+    {
+      "id": "antenna-runtime-action-reference-lowering",
+      "path": "packages/fullmag-py/src/fullmag/runtime/helper.py",
+      "symbol": "_runtime_stage_action",
+      "responsibility": "Referencyjny kształt akcji Rust i materializacja wyłącznie bieżącej definicji w stage IR, z kontrolą konfliktu."
+    },
+    {
+      "id": "antenna-runtime-action-multistage-regression",
+      "path": "packages/fullmag-py/tests/test_antenna_current_source_example.py",
+      "symbol": "test_multi_stage_run_config_never_imports_future_solve_definitions",
+      "responsibility": "Rzeczywisty export-run-config wcześniejszego Run i dwóch solve, bez przecieku przyszłych definicji; nie native proof."
+    },
+    {
+      "id": "antenna-runtime-action-standalone-regression",
+      "path": "packages/fullmag-py/tests/test_antenna_run_config_export.py",
+      "symbol": "test_runtime_export_materializes_only_the_current_definition",
+      "responsibility": "Samodzielna regresja wire contract na izolowanych źródłach HEAD RED→GREEN; nie model ani wykonanie solvera."
+    },
+    {
+      "id": "antenna-exact-ram-comparison",
+      "path": "scripts/compare_managed_antenna_ram.py",
+      "symbol": "compare",
+      "responsibility": "Dokładny binding run/build/capsule i V/RT0/H do wzorca; nie pełna kwalifikacja ani native decoder."
+    },
+    {
+      "id": "antenna-capsule-input-reconstruction",
+      "path": "scripts/compare_managed_antenna_ram.py",
+      "symbol": "reconstruct_inputs",
+      "responsibility": "Izolowany publiczny DSL dokładnej kapsuły i staged skrypt; rekonstrukcja hosta, nie dump wykonanego IR."
+    },
+    {
+      "id": "antenna-ram-comparison-regression",
+      "path": "scripts/test_compare_managed_antenna_ram.py",
+      "symbol": "test_uses_exact_run_values_and_never_promotes_scope",
+      "responsibility": "Interpretowana orkiestracja dokładnych wartości i brak promocji; podstawione runtime/read/oracle, nie native proof."
+    },
+    {
+      "id": "antenna-fixture-rt0-check",
+      "path": "scripts/antenna_rt0_fixture_check.py",
+      "symbol": "compare_rt0_fixture",
+      "responsibility": "Geometria wszystkich momentów i bilans elementów fixture; zachowane native weights, partial extraction bez pełnej kwalifikacji."
+    },
+    {
+      "id": "antenna-fixture-rt0-regression",
+      "path": "scripts/test_antenna_rt0_fixture_check.py",
+      "symbol": "test_all_geometric_moments_with_permuted_signed_nonunit_dofs",
+      "responsibility": "Syntetyczne partial records, signed DOF i niejednostkowe wagi; interpretowane testy, nie wykonanie MFEM."
+    },
+    {
+      "id": "antenna-fixture-rt0-rejection-gate",
+      "path": "scripts/test_compare_managed_antenna_ram.py",
+      "symbol": "test_rt0_mismatch_is_not_success",
+      "responsibility": "RED→GREEN bramki RT0 przed PASS orkiestracji; nie naukowy run ani pełny native decoder."
+    },
+    {
+      "id": "antenna-rt0-continuity-failure-diagnostic",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp",
+      "symbol": "TerminalConstrainedRt0Projection::Ptr project_terminal_constrained_rt0_owned",
+      "responsibility": "Failure-only wartości odmowy z niezmienionym predykatem; bez fizycznej kwalifikacji i bez diagnozy cancellation przed pomiarem."
+    },
+    {
+      "id": "antenna-rt0-continuity-diagnostic-source-regression",
+      "path": "scripts/test_antenna_rt0_failure_diagnostics_source.py",
+      "symbol": "test_diagnostic_is_failure_only_and_preserves_exact_continuity_predicate",
+      "responsibility": "Interpretowana regresja źródła diagnostyki RED→GREEN; nie test C++ ani dowód fizyki."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

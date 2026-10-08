@@ -444,7 +444,6 @@ function useFieldMapModuleController() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,
@@ -525,6 +524,9 @@ export default function FieldMapModule() {
   if (!renderModel) {
     return <FieldMapStatus message="Loading planar field…" planarStatus="loading" />;
   }
+  const ambiguousSurfaceMeta = meta.data && surfaceProjectionStatus(meta.data) === "ambiguous"
+    ? meta.data
+    : null;
 
   return (
     <section className="fm-field-map">
@@ -572,10 +574,10 @@ export default function FieldMapModule() {
         <strong>{plan.quantityId}</strong>
         <span>{presentationPlanar.component}</span>
         <span>{renderModel.display.legendUnit}</span>
-        {meta.data && surfaceProjectionStatus(meta.data) === "ambiguous" ? (
+        {ambiguousSurfaceMeta ? (
           <span className="fm-field-map__diagnostic" role="status">
-            Ambiguous surface: {meta.data.overlap_count} overlaps,{" "}
-            {meta.data.fold_count} folds
+            Ambiguous surface: {ambiguousSurfaceMeta.overlap_count} overlaps,{" "}
+            {ambiguousSurfaceMeta.fold_count} folds
           </span>
         ) : null}
       </header>

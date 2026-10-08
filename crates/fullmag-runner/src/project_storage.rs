@@ -603,7 +603,7 @@ pub fn copy_owned_artifact(
 }
 
 #[cfg(unix)]
-fn open_verified_artifact(root: &Path, relative: &Path) -> Result<File, String> {
+pub(crate) fn open_verified_artifact(root: &Path, relative: &Path) -> Result<File, String> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
@@ -625,6 +625,7 @@ fn open_verified_artifact(root: &Path, relative: &Path) -> Result<File, String> 
         let flags = libc::O_RDONLY
             | libc::O_NOFOLLOW
             | libc::O_CLOEXEC
+            | libc::O_NONBLOCK
             | if directory { libc::O_DIRECTORY } else { 0 };
         let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
         if fd < 0 {
@@ -636,7 +637,7 @@ fn open_verified_artifact(root: &Path, relative: &Path) -> Result<File, String> 
 }
 
 #[cfg(windows)]
-fn open_verified_artifact(root: &Path, relative: &Path) -> Result<File, String> {
+pub(crate) fn open_verified_artifact(root: &Path, relative: &Path) -> Result<File, String> {
     use std::ffi::c_void;
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
@@ -676,6 +677,6 @@ fn open_verified_artifact(root: &Path, relative: &Path) -> Result<File, String> 
 }
 
 #[cfg(not(any(unix, windows)))]
-fn open_verified_artifact(_root: &Path, _relative: &Path) -> Result<File, String> {
+pub(crate) fn open_verified_artifact(_root: &Path, _relative: &Path) -> Result<File, String> {
     Err("verified artifact copy is unsupported on this platform".into())
 }

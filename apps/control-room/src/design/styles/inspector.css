@@ -934,3 +934,99 @@
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-xs);
 }
+
+/* ── Microwave antenna source spectrum ── */
+.fm-antenna-spectrum {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+}
+
+.fm-antenna-spectrum__header,
+.fm-antenna-spectrum__axes,
+.fm-antenna-spectrum__summary {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+}
+
+.fm-antenna-spectrum__title {
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-sm);
+  font-weight: 650;
+}
+
+.fm-antenna-spectrum__subtitle,
+.fm-antenna-spectrum__axes,
+.fm-antenna-spectrum__summary {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.35;
+}
+
+.fm-antenna-spectrum__subtitle {
+  margin: var(--fm-space-1) 0 0;
+}
+
+.fm-antenna-spectrum__badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  padding: 2px var(--fm-space-1);
+  color: var(--fm-success);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.2;
+}
+
+.fm-antenna-spectrum__heatmap {
+  display: grid;
+  aspect-ratio: 1;
+  min-height: 160px;
+  max-height: 320px;
+  gap: var(--fm-chart-cell-separator-width);
+  overflow: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-border-subtle);
+}
+
+.fm-antenna-spectrum__cell {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  background: var(--fm-accent);
+}
+
+.fm-antenna-spectrum__status {
+  margin: 0;
+  color: var(--fm-accent);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.4;
+}
+
+.fm-antenna-spectrum__status--error {
+  color: var(--fm-danger);
+}
+
+.fm-microstrip-station {
+  display: grid;
+  gap: var(--fm-inspector-control-gap);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+}
+
+.fm-microstrip-station-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+}

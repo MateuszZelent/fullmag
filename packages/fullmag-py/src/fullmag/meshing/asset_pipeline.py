@@ -1185,6 +1185,7 @@ def realize_fem_mesh_asset(
     study_universe: Mapping[str, object] | None = None,
     mesh_workflow: Mapping[str, object] | None = None,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
+    object_id: str | None = None,
 ) -> MeshData:
     """Resolve a FEM mesh asset from either a prebuilt mesh or geometry source.
 
@@ -1262,6 +1263,7 @@ def realize_fem_mesh_asset(
             hmax=target.hmax,
             order=target.order,
             options=mesh_options,
+            object_id=object_id,
         )
 
     if mesh.n_elements == 0:

@@ -36,6 +36,15 @@ impl ApiError {
         }
     }
 
+    pub fn not_found_with_code(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            code: Some(code.into()),
+            message: message.into(),
+            diagnostics: Vec::new(),
+        }
+    }
+
     pub fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -101,6 +110,15 @@ impl ApiError {
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             code: None,
+            message: message.into(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    pub fn unprocessable_with_code(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            code: Some(code.into()),
             message: message.into(),
             diagnostics: Vec::new(),
         }

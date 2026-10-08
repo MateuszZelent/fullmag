@@ -30,6 +30,17 @@ storage-inventory:
 run-managed-browser job_id commit port="3104":
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_browser.py" --repo-root "{{repo_root}}" --job-id {{job_id}} --commit {{commit}} --port {{port}}
 
+# A WIP snapshot needs both content identities as well as its base commit.
+run-managed-browser-snapshot job_id commit source_digest native_snapshot_sha256 port="3104":
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_browser.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --port {{quote(port)}}
+
+# Approved scientific fixture only: RAM session, retained export, no build.
+run-managed-antenna-ram job_id commit source_digest native_snapshot_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_ram.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}}
+
+observe-managed-antenna-ram run_root:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_ram.py" --repo-root "{{repo_root}}" observe --run-root {{quote(run_root)}}
+
 storage-prepare:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" prepare-links --repo-root "{{repo_root}}" --compat --frontend
 
@@ -427,6 +438,10 @@ generate-api-openapi:
 export-runner-openapi job_id expected_commit:
     {{storage_python}} "{{repo_root}}/scripts/export_runner_openapi.py" --repo-root "{{repo_root}}" --job-id "{{job_id}}" --expected-commit "{{expected_commit}}"
 
+# WIP admission is explicit and bound to both immutable content identities.
+export-runner-openapi-snapshot job_id expected_commit source_digest native_snapshot_sha256:
+    {{storage_python}} "{{repo_root}}/scripts/export_runner_openapi.py" --repo-root "{{repo_root}}" --job-id "{{job_id}}" --expected-commit "{{expected_commit}}" --source-digest "{{source_digest}}" --native-snapshot-sha256 "{{native_snapshot_sha256}}"
+
 # Lightweight generated client and production source checks; no unit builds.
 generate-control-room-client:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route generate-client --repo-root "{{repo_root}}"
@@ -473,6 +488,10 @@ verify-control-room-development-backend-build-action:
 verify-pinned-dataset-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}"
 
+# Full Inspector CI smoke against controlled HTTP in an isolated workspace.
+verify-inspector-routing-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3261 --scenario inspector-routing
+
 # Production project controller in an isolated Next browser fixture; no unit builds.
 verify-project-document-handoff-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3251 --scenario project-document-handoff
@@ -489,6 +508,29 @@ verify-development-restart-action-browser:
 # Real Study profile component/facade against controlled HTTP; no solver gate.
 verify-study-execution-profile-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3256 --scenario study-execution-profile
+
+# Production antenna Inspector and resource hooks in an isolated browser fixture.
+verify-antenna-visualization-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3262 --scenario antenna-visualization
+
+verify-antenna-external-lead-inspection-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3252 --scenario antenna-external-lead-inspection
+
+# Production CPW primitive layer, WebGL, placement and geometry lifecycle.
+verify-antenna-cpw-viewport-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3260 --scenario antenna-cpw-viewport
+
+# Production microstrip/CPW draft transactions in an isolated browser fixture.
+verify-antenna-microstrip-stations-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3253 --scenario antenna-microstrip-stations
+
+# Production transport draft/conflict lifecycle; controlled HTTP, no native solve.
+verify-antenna-transport-drafts-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3254 --scenario antenna-transport-drafts
+
+# Production primitive color preferences and Object/Airbox Inspector stability.
+verify-primitive-color-inspector-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3257 --scenario primitive-color-inspector
 
 lint-control-room-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route lint --repo-root "{{repo_root}}"
@@ -1246,6 +1288,46 @@ verify-fem-llg-time-domain-qualification:
     python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/source-snapshot.v1.json --output .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/source-snapshot-post.v1.json
     python3 scripts/validate_fem_llg_time_domain_qualification.py .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json
 
+verify-fem-antenna-cpu-trajectories:
+    mkdir -p .fullmag/reports/fem-antenna-trajectories
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output .fullmag/reports/fem-antenna-trajectories/source-snapshot.v1.json
+    source_snapshot_sha256="$("$FULLMAG_STORAGE_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' .fullmag/reports/fem-antenna-trajectories/source-snapshot.v1.json)"; docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      -e FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256="$source_snapshot_sha256" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-antenna-trajectories/qualification.json antenna-cpu'
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare .fullmag/reports/fem-antenna-trajectories/source-snapshot.v1.json --output .fullmag/reports/fem-antenna-trajectories/source-snapshot-post.v1.json
+    "$FULLMAG_STORAGE_PYTHON" scripts/validate_fem_antenna_trajectories.py .fullmag/reports/fem-antenna-trajectories/qualification.json
+
+verify-fem-antenna-frozen-cpu:
+    mkdir -p .fullmag/reports/fem-antenna-frozen
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output .fullmag/reports/fem-antenna-frozen/source-snapshot.v1.json
+    source_snapshot_sha256="$("$FULLMAG_STORAGE_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' .fullmag/reports/fem-antenna-frozen/source-snapshot.v1.json)"; docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      -e FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256="$source_snapshot_sha256" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-antenna-frozen/qualification.json antenna-frozen-cpu'
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare .fullmag/reports/fem-antenna-frozen/source-snapshot.v1.json --output .fullmag/reports/fem-antenna-frozen/source-snapshot-post.v1.json
+    "$FULLMAG_STORAGE_PYTHON" scripts/validate_fem_antenna_frozen.py .fullmag/reports/fem-antenna-frozen/qualification.json
+
+verify-fem-antenna-mixed-cpu:
+    mkdir -p .fullmag/reports/fem-antenna-mixed
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output .fullmag/reports/fem-antenna-mixed/source-snapshot.v1.json
+    source_snapshot_sha256="$("$FULLMAG_STORAGE_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' .fullmag/reports/fem-antenna-mixed/source-snapshot.v1.json)"; docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      -e FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256="$source_snapshot_sha256" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-antenna-mixed/qualification.json antenna-mixed-cpu'
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare .fullmag/reports/fem-antenna-mixed/source-snapshot.v1.json --output .fullmag/reports/fem-antenna-mixed/source-snapshot-post.v1.json
+    "$FULLMAG_STORAGE_PYTHON" scripts/validate_fem_antenna_mixed.py .fullmag/reports/fem-antenna-mixed/qualification.json
+
+verify-fem-antenna-mixed-pbc-cpu:
+    mkdir -p .fullmag/reports/fem-antenna-mixed-pbc
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output .fullmag/reports/fem-antenna-mixed-pbc/source-snapshot.v1.json
+    source_snapshot_sha256="$("$FULLMAG_STORAGE_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' .fullmag/reports/fem-antenna-mixed-pbc/source-snapshot.v1.json)"; docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      -e FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256="$source_snapshot_sha256" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-antenna-mixed-pbc/qualification.json antenna-mixed-pbc-cpu'
+    "$FULLMAG_STORAGE_PYTHON" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare .fullmag/reports/fem-antenna-mixed-pbc/source-snapshot.v1.json --output .fullmag/reports/fem-antenna-mixed-pbc/source-snapshot-post.v1.json
+    "$FULLMAG_STORAGE_PYTHON" scripts/validate_fem_antenna_mixed.py .fullmag/reports/fem-antenna-mixed-pbc/qualification.json
+
 verify-fem-llg-time-domain-qualification-gpu:
     rm -rf .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64
     mkdir -p .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64
@@ -1849,6 +1931,13 @@ verify-fem-oersted-oet0-cpu-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oet0
 
+verify-antenna-contracts group="all":
+    {{storage_python}} scripts/verify_antenna_contracts.py {{quote(group)}}
+
+# Interpreted cold-reader checks only; never compiles native tests or solves fields.
+verify-antenna-field-reader:
+    {{storage_python}} "{{repo_root}}/scripts/verify_antenna_field_reader.py" --repo-root "{{repo_root}}"
+
 verify-fem-oersted-oet0-tsan-cpu-contract:
     docker compose build fem-cpu-tsan
     docker compose run --rm --no-deps fem-cpu-tsan ./scripts/run_fem_cpu_only_contract.sh oersted-oet0-tsan
@@ -1922,6 +2011,33 @@ verify-fem-solved-current-oersted-reference:
 verify-fem-steady-transport-m2-affine-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_steady_transport_abi_contract && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_steady_transport_abi_contract'
+
+# Append-only standalone FEM H1/P1 one-way charge ABI.  The contract proves an
+# affine bar, current sign/linearity, fail-closed validation, Rust layout, and
+# that runner dispatch never enters the spin solve for a charge-only plan.
+verify-fem-charge-transport-abi-contract:
+    host_native_root="${FULLMAG_MANAGED_NATIVE_HOST_ROOT:-}"; \
+      if [ -z "$host_native_root" ] && [ "${FULLMAG_STORAGE_PROFILE:-}" = "windows-native" ]; then host_native_root="${FULLMAG_BUILD_ROOT:?missing managed Windows build root}"; fi; \
+      if [ -z "$host_native_root" ]; then host_native_root="/mnt/fullmag-zfn2-native"; fi; \
+      docker compose --profile fem-gpu run --rm --no-deps -T --interactive=false \
+      -v "$host_native_root:/mnt/fullmag-zfn2-native" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="/mnt/fullmag-zfn2-native" \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:?missing managed native root}/fem-charge-abi"; native_dir="$build_dir/native"; cargo_home="$build_dir/cargo-home"; cargo_target="$build_dir/cargo-target"; mkdir -p "$build_dir" "$cargo_home" "$cargo_target"; cmake -S native -B "$native_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$native_dir" --target fem_charge_transport_abi_contract; export FULLMAG_FEM_LIB_DIR="$native_dir/backends/fem"; export LD_LIBRARY_PATH="$FULLMAG_FEM_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; export CARGO_HOME="$cargo_home"; export CARGO_TARGET_DIR="$cargo_target"; export CARGO_INCREMENTAL=0; "$native_dir/backends/fem/fem_charge_transport_abi_contract"; cargo test -p fullmag-fem-sys tests::charge_transport_v1_layout_is_versioned_and_stable -- --exact; cargo test -p fullmag-runner --features fem-gpu native_fem::charge_transport::tests::charge_only_runtime_source_never_invokes_spin_solve -- --exact; cargo test -p fullmag-runner --features fem-gpu native_fem::charge_transport::tests::antenna_port_current_requires_balance_and_authored_branch_split -- --exact; cargo test -p fullmag-runner --features fem-gpu native_fem::charge_transport::tests::charge_only_runner_executes_native_affine_tetra_without_spin -- --exact --nocapture; cargo test -p fullmag-runner --features fem-gpu dispatch::tests::charge_and_spin_transport_bundles_add_oersted_without_losing_artifacts -- --exact'
+
+# Preprojected antenna H_per_A basis is copied into the established regional
+# Zeeman runtime and evaluated at exact CPU/GPU RK stage time.
+verify-fem-solved-antenna-drive-contract:
+    host_native_root="${FULLMAG_MANAGED_NATIVE_HOST_ROOT:-}"; \
+      if [ -z "$host_native_root" ] && [ "${FULLMAG_STORAGE_PROFILE:-}" = "windows-native" ]; then host_native_root="${FULLMAG_BUILD_ROOT:?missing managed Windows build root}"; fi; \
+      if [ -z "$host_native_root" ]; then host_native_root="/mnt/fullmag-zfn2-native"; fi; \
+      docker compose --profile fem-gpu run --rm --no-deps -T --interactive=false \
+      -v "$host_native_root:/mnt/fullmag-zfn2-native" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="/mnt/fullmag-zfn2-native" \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:?missing managed native root}/fem-charge-abi"; native_dir="$build_dir/native"; cargo_home="$build_dir/cargo-home"; cargo_target="$build_dir/cargo-target"; mkdir -p "$build_dir" "$cargo_home" "$cargo_target"; cmake -S native -B "$native_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$native_dir" --target fem_zeeman_contract; export FULLMAG_FEM_LIB_DIR="$native_dir/backends/fem"; export LD_LIBRARY_PATH="$FULLMAG_FEM_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; export CARGO_HOME="$cargo_home"; export CARGO_TARGET_DIR="$cargo_target"; export CARGO_INCREMENTAL=0; "$native_dir/backends/fem/fem_zeeman_contract"; cargo test -p fullmag-fem-sys tests::regional_field_drive_ffi_layout_matches_native_runtime -- --exact; cargo test -p fullmag-runner --features fem-gpu native_fem::tests::native_pack_materializes_solved_antenna_as_preprojected_per_ampere_basis -- --exact'
 
 # Focused bounded reciprocal-M2 mesh-convergence oracle.  It uses three
 # conforming MFEM tetrahedral resolutions and finite spin-flip, so an affine
@@ -7201,4 +7317,3 @@ verify-fdm-gpu-solved-current-racetrack-production:
         --execution-audit "$evidence_root/execution-audit.v1.json" || true; \
       python3 scripts/verify_fdm_gpu_racetrack_qualification.py --evidence-root "$evidence_root" --source-snapshot "$source_snapshot"; \
       echo "production-qualified racetrack manifest: $evidence_root/fdm_gpu_solved_current_racetrack_qualification_v1.json"'
-                                                                                                                                                                                                                                                  

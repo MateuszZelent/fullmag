@@ -45,8 +45,9 @@ struct DeviceVectorField {
 
 /// Device-side copy of one resolved regional-drive waveform descriptor.
 /// Spatial bases are stored separately as flattened SoA arrays with layout
-/// [drive][cell]. Time offsets are resolved at the Rust/native boundary so
-/// the CUDA kernels only evaluate an absolute stage time.
+/// [drive][cell]. The native FDM clock is stage-local; the upload boundary
+/// encodes the canonical waveform coordinate in `time_offset_s` so kernels do
+/// not need a second host-side waveform evaluation.
 struct RegionalFieldDriveParams {
     int waveform = FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT;
     int reserved = 0;
@@ -2850,6 +2851,10 @@ bool context_mark_static_external_field_profile(
 bool context_upload_regional_field_drives(
     Context &ctx,
     const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count);
+bool context_upload_regional_field_drives(
+    Context &ctx,
+    const fullmag_fdm_regional_field_drive_desc_v2 *drives,
     uint32_t drive_count);
 
 /// Upload sparse demag boundary correction tensors.

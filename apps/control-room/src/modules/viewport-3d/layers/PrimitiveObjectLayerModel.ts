@@ -10,9 +10,11 @@ import {
 } from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import { resolvePrimitiveSurfaceColor } from "@/kernel/visualization/primitiveSurfaceColor";
 import type { PrimitiveDraft } from "@/kernel/authoring/geometryLifecycleCommands";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import type { Viewport3DColors } from "../viewport3dTypes";
 import type {
   Viewport3DBoxCylinderDifferencePreview,
   Viewport3DPrimitiveObject,
@@ -108,6 +110,18 @@ export function resolvePrimitiveObjectRenderSettings(
 export function createPrimitiveObjectGeometry(
   object: Viewport3DPrimitiveObject,
 ): BufferGeometry {
+  if (object.kind === "microstrip" || object.kind === "cpw") {
+    if (!object.antennaPreview) throw new Error("Antenna layout requires an authored section preview.");
+    const preview = object.antennaPreview;
+    const geometry = new BufferGeometry();
+    geometry.setAttribute("position", new BufferAttribute(Float32Array.from(
+      preview.positions, (value, index) => value - object.bounds.center[index % 3],
+    ), 3));
+    geometry.setIndex(preview.indices);
+    geometry.userData.conductorParts = preview.parts;
+    geometry.computeVertexNormals();
+    return geometry;
+  }
   if (object.kind === "box-cylinder-difference" && object.csgPreview) {
     return createBoxCylinderDifferenceGeometry(object.csgPreview);
   }
@@ -120,6 +134,18 @@ export function createPrimitiveObjectGeometry(
     return new CylinderGeometry(x / 2, x / 2, y, 32, 1);
   }
   return new BoxGeometry(x, y, z);
+}
+
+/** Presentation only: a literal user override precedes the authored antenna role default. */
+export function primitiveObjectSurfaceColor(
+  object: Pick<Viewport3DPrimitiveObject, "role">,
+  settings: VisualizationTargetSettings,
+  colors: Viewport3DColors,
+) {
+  const resolved = resolvePrimitiveSurfaceColor(object.role, settings);
+  if (resolved.source === "antenna-theme") return colors.antenna ?? colors.mesh;
+  if (resolved.source === "object-theme") return colors.mesh;
+  return resolved.color;
 }
 
 function createBoxCylinderDifferenceGeometry(

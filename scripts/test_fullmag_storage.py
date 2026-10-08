@@ -36,11 +36,24 @@ class StorageTests(unittest.TestCase):
         profile = kwargs.pop("profile", "test")
         return storage.resolve_layout(self.repo, profile=profile, environ=self.env, **kwargs)
 
-    def test_storage_is_sibling_of_main_checkout_and_stable(self):
+    def test_storage_uses_canonical_project_root_and_is_stable(self):
         layout = self.resolve()
-        self.assertEqual(Path(layout["storage_root"]), self.project / "storage")
+        expected_root = (self.repo if os.name == "nt" else self.project) / "storage"
+        self.assertEqual(Path(layout["storage_root"]), expected_root)
         self.assertEqual(layout, self.resolve())
-        self.assertFalse((self.project / "storage").exists())
+        self.assertFalse(expected_root.exists())
+
+    def test_frontend_container_target_is_linux_safe_on_windows(self):
+        layout = self.resolve()
+        expected_target = "/fullmag-frontend" if os.name == "nt" else layout["frontend_root"]
+        self.assertEqual(layout["env"]["FULLMAG_FRONTEND_CONTAINER_ROOT"], expected_target)
+
+    def test_windows_canonical_storage_override_is_allowed(self):
+        if os.name != "nt":
+            self.skipTest("Windows canonical checkout storage contract")
+        self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(self.repo / "storage")
+        layout = self.resolve(profile="windows-native")
+        self.assertEqual(Path(layout["storage_root"]), self.repo / "storage")
 
     def test_inventory_ignores_non_registration_json_arrays(self):
         layout = self.resolve()
@@ -52,16 +65,17 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result["worktree_count"], 1)
 
     def test_dotenv_storage_root_and_process_precedence(self):
+        project_root = self.repo if os.name == "nt" else self.project
         custom = self.project / "configured-storage"
         custom.mkdir()
         (custom / ".fullmag-storage.json").write_text(json.dumps({
-            "schema": storage.SCHEMA, "project_root": str(self.project)}))
+            "schema": storage.SCHEMA, "project_root": str(project_root)}))
         (self.repo / ".env").write_text(
             f'FULLMAG_PROJECT_STORAGE_ROOT="{custom}"\nUNRELATED_SECRET=ignored\n')
         self.assertEqual(Path(self.resolve()["storage_root"]), custom)
         self.assertNotIn("UNRELATED_SECRET", storage.storage_dotenv(self.repo))
-        self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(self.project / "storage")
-        self.assertEqual(Path(self.resolve()["storage_root"]), self.project / "storage")
+        self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(project_root / "storage")
+        self.assertEqual(Path(self.resolve()["storage_root"]), project_root / "storage")
 
     def test_dotenv_invalid_path_is_not_silently_replaced(self):
         (self.repo / ".env").write_text("FULLMAG_PROJECT_STORAGE_ROOT=relative/path\n")
@@ -79,6 +93,7 @@ class StorageTests(unittest.TestCase):
         self.assertNotEqual(main["build_root"], other["build_root"])
 
     def test_worktree_reads_main_dotenv_without_local_copy(self):
+        project_root = self.repo if os.name == "nt" else self.project
         subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
                         "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"], check=True)
         worktree = self.project / "worktrees" / "task"
@@ -86,7 +101,7 @@ class StorageTests(unittest.TestCase):
         custom = self.project / "host-storage"
         custom.mkdir()
         (custom / ".fullmag-storage.json").write_text(json.dumps({
-            "schema": storage.SCHEMA, "project_root": str(self.project)}))
+            "schema": storage.SCHEMA, "project_root": str(project_root)}))
         (self.repo / ".env").write_text(f'FULLMAG_PROJECT_STORAGE_ROOT="{custom}"\n')
         self.assertFalse((worktree / ".env").exists())
         layout = storage.resolve_layout(worktree, profile="test", environ={})

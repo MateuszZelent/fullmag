@@ -1,6 +1,10 @@
 //! Authoring resource endpoints.
 
-use std::sync::Arc;
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 
 use axum::extract::{Path, State};
 use axum::Json;
@@ -2625,6 +2629,7 @@ fn coupling_resolution_mesh(
         .filter_map(|part| {
             let role = match part.role.as_str() {
                 "magnetic_object" => fullmag_ir::FemMeshPartRole::MagneticObject,
+                "conductor" => fullmag_ir::FemMeshPartRole::Conductor,
                 "air" => fullmag_ir::FemMeshPartRole::Air,
                 "interface" => fullmag_ir::FemMeshPartRole::Interface,
                 "outer_boundary" => fullmag_ir::FemMeshPartRole::OuterBoundary,
@@ -3324,12 +3329,23 @@ pub async fn commit_authoring_transaction(
     Json(req): Json<AuthoringTransactionRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
-    let (transaction_kind, committed) = match req {
+    let response =
+        dispatch_authoring_transaction(state.clone(), req, request_context.clone()).await?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(response)
+}
+
+fn dispatch_authoring_transaction(
+    state: Arc<AppState>,
+    req: AuthoringTransactionRequest,
+    request_context: crate::types::CurrentLiveRequestContext,
+) -> Pin<Box<dyn Future<Output = Result<Json<AuthoringTransactionResponse>, ApiError>> + Send>> {
+    match req {
         AuthoringTransactionRequest::AssignStudyExecution {
             base_revision,
             execution_profile,
             execution_layers,
-        } => {
+        } => Box::pin(async move {
             let current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3347,12 +3363,12 @@ pub async fn commit_authoring_transaction(
                 assigned,
             )
             .await?;
-            ("assign_study_execution", committed)
-        }
+            authoring_transaction_response("assign_study_execution", committed)
+        }),
         AuthoringTransactionRequest::ReplaceScene {
             base_revision,
             scene,
-        } => {
+        } => Box::pin(async move {
             let mut scene_document: SceneDocument =
                 serde_json::from_value(scene).map_err(|error| {
                     ApiError::bad_request(format!("invalid scene document payload: {error}"))
@@ -3372,12 +3388,12 @@ pub async fn commit_authoring_transaction(
                 scene_document,
             )
             .await?;
-            ("replace_scene", committed)
-        }
+            authoring_transaction_response("replace_scene", committed)
+        }),
         AuthoringTransactionRequest::MergePatch {
             base_revision,
             merge_patch,
-        } => {
+        } => Box::pin(async move {
             let current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3391,15 +3407,15 @@ pub async fn commit_authoring_transaction(
                 patched_scene,
             )
             .await?;
-            ("merge_patch", committed)
-        }
+            authoring_transaction_response("merge_patch", committed)
+        }),
         AuthoringTransactionRequest::PatchMagnetization {
             base_revision,
             object_id,
             region_id,
             asset,
             magnetization_ref,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3419,14 +3435,14 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("patch_magnetization", committed)
-        }
+            authoring_transaction_response("patch_magnetization", committed)
+        }),
         AuthoringTransactionRequest::PatchObjectGeometry {
             object_id,
             base_revision,
             geometry,
             transform,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3445,8 +3461,8 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("patch_object_geometry", committed)
-        }
+            authoring_transaction_response("patch_object_geometry", committed)
+        }),
         AuthoringTransactionRequest::CreateObject {
             base_revision,
             object_id,
@@ -3460,7 +3476,7 @@ pub async fn commit_authoring_transaction(
             magnetization_asset,
             universe,
             study_universe_mesh,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3487,15 +3503,15 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("create_object", committed)
-        }
+            authoring_transaction_response("create_object", committed)
+        }),
         AuthoringTransactionRequest::CreateMaterial {
             base_revision,
             material_id,
             name,
             properties,
             references,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3515,13 +3531,13 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("create_material", committed)
-        }
+            authoring_transaction_response("create_material", committed)
+        }),
         AuthoringTransactionRequest::PatchMaterial {
             base_revision,
             material_id,
             patch,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3539,12 +3555,12 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("patch_material", committed)
-        }
+            authoring_transaction_response("patch_material", committed)
+        }),
         AuthoringTransactionRequest::DeleteMaterial {
             base_revision,
             material_id,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3557,12 +3573,12 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("delete_material", committed)
-        }
+            authoring_transaction_response("delete_material", committed)
+        }),
         AuthoringTransactionRequest::DeleteObject {
             base_revision,
             object_id,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3575,13 +3591,13 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("delete_object", committed)
-        }
+            authoring_transaction_response("delete_object", committed)
+        }),
         AuthoringTransactionRequest::RenameObject {
             base_revision,
             object_id,
             name,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3594,13 +3610,13 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("rename_object", committed)
-        }
+            authoring_transaction_response("rename_object", committed)
+        }),
         AuthoringTransactionRequest::CommitObjectTransform {
             base_revision,
             object_id,
             transform,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3618,13 +3634,13 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("commit_object_transform", committed)
-        }
+            authoring_transaction_response("commit_object_transform", committed)
+        }),
         AuthoringTransactionRequest::PatchUniverse {
             base_revision,
             universe,
             sync_study_universe_mesh,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3642,13 +3658,13 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("patch_universe", committed)
-        }
+            authoring_transaction_response("patch_universe", committed)
+        }),
         AuthoringTransactionRequest::CreateObjectRegion {
             base_revision,
             object_id,
             region,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3666,14 +3682,14 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("create_object_region", committed)
-        }
+            authoring_transaction_response("create_object_region", committed)
+        }),
         AuthoringTransactionRequest::PatchObjectRegion {
             base_revision,
             object_id,
             region_id,
             patch,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3692,13 +3708,13 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("patch_object_region", committed)
-        }
+            authoring_transaction_response("patch_object_region", committed)
+        }),
         AuthoringTransactionRequest::PatchObjectMaterialFields {
             base_revision,
             object_id,
             fields,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3716,13 +3732,13 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("patch_object_material_fields", committed)
-        }
+            authoring_transaction_response("patch_object_material_fields", committed)
+        }),
         AuthoringTransactionRequest::DeleteObjectRegion {
             base_revision,
             object_id,
             region_id,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3740,13 +3756,13 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("delete_object_region", committed)
-        }
+            authoring_transaction_response("delete_object_region", committed)
+        }),
         AuthoringTransactionRequest::ReorderObjectRegions {
             base_revision,
             object_id,
             region_ids,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3764,12 +3780,12 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("reorder_object_regions", committed)
-        }
+            authoring_transaction_response("reorder_object_regions", committed)
+        }),
         AuthoringTransactionRequest::CreateCoupling {
             base_revision,
             coupling,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3782,13 +3798,13 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("create_coupling", committed)
-        }
+            authoring_transaction_response("create_coupling", committed)
+        }),
         AuthoringTransactionRequest::PatchCoupling {
             base_revision,
             coupling_id,
             patch,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3806,12 +3822,12 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("patch_coupling", committed)
-        }
+            authoring_transaction_response("patch_coupling", committed)
+        }),
         AuthoringTransactionRequest::DeleteCoupling {
             base_revision,
             coupling_id,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
                 &state,
                 &request_context,
@@ -3824,24 +3840,9 @@ pub async fn commit_authoring_transaction(
                 current_scene,
             )
             .await?;
-            ("delete_coupling", committed)
-        }
-    };
-
-    // The transaction can perform several awaited scene loads/commits.  Keep
-    // the response fenced as well, so a session transition that completes
-    // after the commit cannot publish an ACK for a different current scene.
-    crate::validate_current_live_request_context(&state, &request_context).await?;
-
-    let committed_scene = serde_json::to_value(&committed).map_err(|error| {
-        ApiError::internal(format!("failed to serialize scene document: {error}"))
-    })?;
-
-    Ok(Json(AuthoringTransactionResponse {
-        transaction_kind: transaction_kind.to_string(),
-        scene_revision: committed.revision,
-        committed_scene,
-    }))
+            authoring_transaction_response("delete_coupling", committed)
+        }),
+    }
 }
 
 fn authoring_transaction_response(
@@ -5810,5 +5811,116 @@ mod regional_field_drive_tests {
         let resource = RegionalFieldDriveResource::from_ir(source.clone()).expect("resource");
         let round_tripped = resource.into_ir().expect("IR");
         assert_eq!(round_tripped.spatial_profile, source.spatial_profile);
+    }
+}
+
+#[cfg(test)]
+mod antenna_scene_roundtrip_tests {
+    use super::*;
+
+    #[test]
+    fn merge_patch_preserves_all_five_antenna_composition_collections() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "revision": 12
+        }))
+        .expect("minimal scene");
+        let patched = apply_scene_merge_patch(
+            &scene,
+            &serde_json::json!({
+                "antenna_port_modes": [{
+                    "schema_version": "antenna_port_mode.v2",
+                    "id": "port_1",
+                    "source_object_id": "antenna_1",
+                    "current_transport_id": "transport_1",
+                    "branches": [{
+                        "id": "signal",
+                        "inlet_terminal_ref": "signal_in",
+                        "outlet_terminal_ref": "signal_out",
+                        "signed_weight": 1.0
+                    }, {
+                        "id": "return",
+                        "inlet_terminal_ref": "return_in",
+                        "outlet_terminal_ref": "return_out",
+                        "signed_weight": -1.0
+                    }]
+                }],
+                "antenna_field_solve_stages": [{
+                    "id": "solve_1",
+                    "source_object_id": "antenna_1",
+                    "current_transport_id": "transport_1",
+                    "port_mode_ids": ["port_1"],
+                    "conservative_current_view_ref": "transport_1:rt0",
+                    "model": "quasistatic_conduction_biot_savart3d",
+                    "oersted_realization": "direct_tetra_quadrature",
+                    "conductor_mesh_policy": "authored_shared_domain",
+                    "field_sampling_domain": {"kind": "global"},
+                    "target_refs": [{"kind": "global"}],
+                    "solver_policy": "production_default",
+                    "outputs": [{"id": "basis", "quantity": "H_ant_basis"}]
+                }],
+                "antenna_target_projections": [{
+                    "id": "projection_1",
+                    "solution": {
+                        "stage_id": "solve_1",
+                        "output_id": "basis",
+                        "asset_id": "asset_1",
+                        "content_digest": "sha256:asset"
+                    },
+                    "target": {"kind": "global"},
+                    "output_id": "projected"
+                }],
+                "solved_antenna_drives": [{
+                    "id": "drive_1",
+                    "name": "Drive 1",
+                    "projection_ref": "projection_1",
+                    "port_mode_id": "port_1",
+                    "peak_current_a": 0.01,
+                    "waveform": {"kind": "constant"},
+                    "time_origin": "stage_local",
+                    "activation": {"kind": "all_time_evolution"}
+                }],
+                "antenna_spectrum_requests": [{
+                    "id": "spectrum_1",
+                    "solution_ref": {
+                        "stage_id": "solve_1",
+                        "output_id": "basis",
+                        "asset_id": "asset_1",
+                        "content_digest": "sha256:asset"
+                    },
+                    "target": {"kind": "global"},
+                    "transform": "spatial_fft",
+                    "sampling_plane": {
+                        "origin_m": [0.0, 0.0, 0.0],
+                        "axis_u": [1.0, 0.0, 0.0],
+                        "axis_v": [0.0, 1.0, 0.0],
+                        "extent_u_m": 1.0,
+                        "extent_v_m": 1.0,
+                        "sample_count_u": 2,
+                        "sample_count_v": 2,
+                        "interpolation": "fem_element",
+                        "outside_policy": "error"
+                    },
+                    "window": "rectangular",
+                    "normalization": "integral_si",
+                    "component": "x",
+                    "output_id": "spectrum_out"
+                }]
+            }),
+        )
+        .expect("antenna merge patch must deserialize");
+
+        assert_eq!(patched.antenna_port_modes[0].id, "port_1");
+        assert_eq!(patched.antenna_field_solve_stages[0].id, "solve_1");
+        assert_eq!(patched.antenna_target_projections[0].id, "projection_1");
+        assert_eq!(patched.solved_antenna_drives[0].id, "drive_1");
+        assert_eq!(patched.antenna_spectrum_requests[0].id, "spectrum_1");
+
+        let serialized = serde_json::to_value(patched).expect("scene serialization");
+        assert_eq!(serialized["antenna_port_modes"][0]["id"], "port_1");
+        assert_eq!(serialized["antenna_field_solve_stages"][0]["id"], "solve_1");
+        assert_eq!(serialized["antenna_target_projections"][0]["id"], "projection_1");
+        assert_eq!(serialized["solved_antenna_drives"][0]["id"], "drive_1");
+        assert_eq!(serialized["antenna_spectrum_requests"][0]["id"], "spectrum_1");
     }
 }

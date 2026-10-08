@@ -32,6 +32,11 @@ _SCENE_DOCUMENT_FIELDS = frozenset(
         "magnetization_assets",
         "current_modules",
         "current_transports",
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+        "antenna_spectrum_requests",
         "couplings",
         "field_drives",
         "monitors",
@@ -384,6 +389,15 @@ def _reject_unlowered_scene_fields(scene: Mapping[str, object]) -> None:
     if unknown_scene_fields:
         names = ", ".join(sorted(str(name) for name in unknown_scene_fields))
         raise ValueError(f"scene_document_unlowered_fields: {names}")
+
+    for collection in (
+        "antenna_port_modes", "antenna_field_solve_stages",
+        "antenna_target_projections", "solved_antenna_drives",
+        "antenna_spectrum_requests",
+    ):
+        values = scene.get(collection, [])
+        if not isinstance(values, list):
+            raise ValueError(f"SceneDocument.{collection} must be a list")
 
     outputs = scene.get("outputs")
     if outputs is not None and not isinstance(outputs, Mapping):

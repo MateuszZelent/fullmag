@@ -293,7 +293,7 @@ export function buildMaterialAssignmentPatch(
 
 export function magneticParametersDraftFromResource(
   materialRef: string | null | undefined,
-  material: MaterialResource | null | undefined,
+  material: MaterialResource | NonNullable<SceneResource["materials"]>[number] | null | undefined,
 ): MagneticParametersDraft {
   return {
     aex: formatOptionalNumber(material?.properties.Aex),
@@ -304,6 +304,17 @@ export function magneticParametersDraftFromResource(
     materialRef: normalizeMaterialRef(materialRef ?? "") ?? "",
     ms: formatOptionalNumber(material?.properties.Ms),
   };
+}
+
+export function assignedMaterialParametersDraft(
+  materialId: string,
+  scene: SceneResource,
+): MagneticParametersDraft {
+  const material = scene.materials?.find((entry) => entry.id === materialId);
+  if (!material) {
+    throw new Error(`Assigned material '${materialId}' is missing from the acknowledged scene.`);
+  }
+  return magneticParametersDraftFromResource(materialId, material);
 }
 
 export function materialParametersDraftKey(
@@ -477,12 +488,12 @@ export function buildMaterialParametersPatch(
   };
 }
 
-function formatOptionalNumber(value: number | null | undefined): string {
+function formatOptionalNumber(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
 }
 
 function formatRequiredNumber(
-  value: number | null | undefined,
+  value: unknown,
   fallback: number,
 ): string {
   return typeof value === "number" && Number.isFinite(value)

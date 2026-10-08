@@ -56,7 +56,7 @@ def read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def validate_managed_build(root, expected_commit):
+def validate_managed_build(root, expected_commit, *, source_digest=None, native_snapshot_sha256=None):
     journal = read_json(storage.validate_path(root / "receipt.json", root))
     context = read_json(storage.validate_path(root / "trusted/context.json", root))
     if journal.get("phase") != "terminal" or journal.get("state") != "succeeded" \
@@ -73,7 +73,19 @@ def validate_managed_build(root, expected_commit):
         if digest(path) != value:
             raise ValueError("Trusted build document hash mismatch")
     native = context.get("native_source_identity", {})
-    if not re.fullmatch(r"[0-9a-f]{40}", expected_commit) \
+    snapshot = source_digest is not None or native_snapshot_sha256 is not None
+    if snapshot:
+        if not isinstance(source_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", source_digest) \
+                or not isinstance(native_snapshot_sha256, str) \
+                or not re.fullmatch(r"[0-9a-f]{64}", native_snapshot_sha256):
+            raise ValueError("Explicit snapshot requires both full source and native snapshot digests")
+        if not re.fullmatch(r"[0-9a-f]{40}", expected_commit) \
+                or native.get("head_commit_full") != expected_commit \
+                or context.get("source_digest") != source_digest \
+                or native.get("source_snapshot_sha256") != native_snapshot_sha256 \
+                or type(native.get("source_snapshot_dirty")) is not bool:
+            raise ValueError("Expected snapshot/commit differs from build")
+    elif not re.fullmatch(r"[0-9a-f]{40}", expected_commit) \
             or native.get("head_commit_full") != expected_commit \
             or native.get("source_snapshot_dirty") is not False:
         raise ValueError("Expected clean commit differs from build")
@@ -138,21 +150,23 @@ def docker(*args):
     return result.stdout.strip()
 
 
-def run(repo, job_id, commit, port):
+def run(repo, job_id, commit, port, *, source_digest=None, native_snapshot_sha256=None):
     if not re.fullmatch(r"[0-9a-f]{32}", job_id):
         raise ValueError("Full managed job ID required")
     layout = storage.resolve_layout(repo, PROFILE)
     base = Path(layout["storage_root"])
     build = storage.validate_path(Path(layout["runs_root"]) / job_id, base)
-    context, built = validate_managed_build(build, commit)
+    context, built = validate_managed_build(build, commit,
+        source_digest=source_digest, native_snapshot_sha256=native_snapshot_sha256)
+    source_mode = "snapshot" if source_digest is not None else "commit"
     source_mounts = [m for m in read_json(build / "receipt.json").get("mounts", [])
                      if len(m) == 4 and m[0] == "bind" and m[2] == "/source" and m[3] is False]
     if len(source_mounts) != 1:
         raise ValueError("Managed source capsule mount is missing or ambiguous")
     capsule = storage.validate_path(host_path(source_mounts[0][1]), base)
     manifest = verify_source(capsule, context["source_digest"])
-    if manifest.get("resolved_commit") != commit or manifest.get("source_mode") != "commit":
-        raise ValueError("Managed capsule commit differs from build")
+    if manifest.get("resolved_commit") != commit or manifest.get("source_mode") != source_mode:
+        raise ValueError("Managed capsule source mode/commit differs from build")
     source = capsule / "tree"
     package = storage.validate_path(build / "artifacts/outputs/.fullmag/local", build)
     if not (source / "packages/fullmag-py/src/fullmag").is_dir():
@@ -176,6 +190,7 @@ def run(repo, job_id, commit, port):
                "qualification": "NOT VERIFIED", "profile": PROFILE,
                "compose_project": project,
                "managed_job_id": job_id, "native_source_identity": built["native_source_identity"],
+               "source_mode": source_mode, "source_digest": context["source_digest"],
                "image_digest": context["image_digest"], "url": f"http://localhost:{port}/workspace",
                "run_root": str(root), "build_receipt_sha256": digest(build / "artifacts/build-receipt.json"),
                "launcher_sha256": digest(__file__), "compose_sha256": digest(spec_path),
@@ -231,7 +246,8 @@ def run(repo, job_id, commit, port):
         if logs.returncode:
             raise ValueError("Cannot read running API startup identity")
         check_stamp(logs.stdout + logs.stderr, commit,
-                    context["native_source_identity"]["source_snapshot_sha256"])
+                    context["native_source_identity"]["source_snapshot_sha256"],
+                    dirty=context["native_source_identity"]["source_snapshot_dirty"])
         (root / "startup.log").write_text(logs.stdout + logs.stderr, encoding="utf-8")
         receipt["startup_identity"] = "PASS"
         verify_source(capsule, context["source_digest"])
@@ -254,6 +270,9 @@ if __name__ == "__main__":
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--source-digest", help="Exact capsule digest; requires --native-snapshot-sha256")
+    parser.add_argument("--native-snapshot-sha256", help="Exact native snapshot digest; requires --source-digest")
     parser.add_argument("--port", type=int, default=3104)
     args = parser.parse_args()
-    raise SystemExit(run(args.repo_root, args.job_id, args.commit, args.port))
+    raise SystemExit(run(args.repo_root, args.job_id, args.commit, args.port,
+        source_digest=args.source_digest, native_snapshot_sha256=args.native_snapshot_sha256))

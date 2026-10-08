@@ -337,6 +337,7 @@ pub enum StudyPrimitiveStageKind {
     Eigenmodes,
     FrequencyResponse,
     Hysteresis,
+    AntennaFieldSolve,
     ChangeDevice,
     AddFieldDrive,
     RemoveFieldDrive,
@@ -357,6 +358,7 @@ impl StudyPrimitiveStageKind {
         Self::Eigenmodes,
         Self::FrequencyResponse,
         Self::Hysteresis,
+        Self::AntennaFieldSolve,
         Self::ChangeDevice,
         Self::AddFieldDrive,
         Self::RemoveFieldDrive,
@@ -908,6 +910,16 @@ pub struct ScriptBuilderState {
     pub spin_torques: Vec<crate::SceneSpinTorque>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub oersted_terms: Vec<crate::SceneOerstedField>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_port_modes: Vec<fullmag_ir::AntennaPortModeIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_field_solve_stages: Vec<fullmag_ir::AntennaFieldSolveStageIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_target_projections: Vec<fullmag_ir::AntennaTargetProjectionRefIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub solved_antenna_drives: Vec<fullmag_ir::SolvedAntennaDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_spectrum_requests: Vec<fullmag_ir::AntennaSpectrumRequestIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ScriptBuilderExcitationAnalysisState>,
 }

@@ -115,7 +115,7 @@ describe("pickViewport3DEventHandlers", () => {
     expect(isViewport3DImmediatePointerDownRegion(event)).toBe(true);
   });
 
-  it("blocks native camera controls after dispatching ViewCube HUD pointer-down", () => {
+  it("preserves native camera controls when the HUD-region dispatch hits no widget", () => {
     const state = {
       internal: {
         initialClick: [0, 0],
@@ -142,8 +142,8 @@ describe("pickViewport3DEventHandlers", () => {
     } as unknown as MouseEvent);
 
     expect(pointerDownHandler).toHaveBeenCalledTimes(1);
-    expect(preventDefault).toHaveBeenCalledTimes(1);
-    expect(stopImmediatePropagation).toHaveBeenCalledTimes(1);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(stopImmediatePropagation).not.toHaveBeenCalled();
   });
 
   it("does not replay selection raycasts for camera drags", () => {
@@ -167,6 +167,31 @@ describe("pickViewport3DEventHandlers", () => {
 
     expect(pointerDownHandler).not.toHaveBeenCalled();
     expect(clickHandler).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("does not restart a released HUD gesture on click (hit: %s)", (hit) => {
+    const state = { internal: { initialClick: [0, 0], initialHits: [] as unknown[] } };
+    const store = ({ getState: () => state } as unknown) as Parameters<typeof createViewport3DPointerDownHandler>[0];
+    const pointerDownDispatch = { immediate: false };
+    let dragging = false;
+    const pointerDownHandler = vi.fn(() => {
+      dragging = true;
+      state.internal.initialHits = hit ? [{}] : [];
+    });
+    const clickHandler = vi.fn();
+    const pointerDown = createViewport3DPointerDownHandler(store, pointerDownHandler, pointerDownDispatch);
+    const click = createViewport3DClickSelectionHandler({ store, pointerDownHandler, pointerDownDispatch, clickHandler });
+    const event = { currentTarget: { clientWidth: 800 }, offsetX: 720, offsetY: 80 } as unknown as MouseEvent;
+
+    pointerDown(event);
+    expect(state.internal.initialClick).toEqual([720, 80]);
+    dragging = false;
+    click(event);
+
+    expect(pointerDownHandler).toHaveBeenCalledTimes(1);
+    expect(dragging).toBe(false);
+    expect(pointerDownDispatch.immediate).toBe(false);
+    expect(clickHandler).toHaveBeenCalledTimes(hit ? 0 : 1);
   });
 
   it("skips pointer-move raycasts while camera drag buttons are pressed", () => {

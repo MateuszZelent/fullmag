@@ -88,6 +88,84 @@ class CurrentTransportTests(unittest.TestCase):
                         {"revision": 1, "current_modules": [invalid_payload]}
                     )
 
+    def test_equipotential_terminals_reject_incompatible_electrodes_and_gauge(self) -> None:
+        surface = fm.SurfaceRef("layer", "x_min", (-1.0, 0.0, 0.0))
+        terminal = fm.EquipotentialCurrentTerminal("in", [surface])
+        gauge = fm.ChargePotentialGauge("terminal_reference")
+        with self.assertRaisesRegex(ValueError, "require gauge='terminal_reference'"):
+            fm.CurrentTransport(name="charge", model="ohmic_poisson", boundaries=[terminal])
+        with self.assertRaisesRegex(ValueError, "requires equipotential current terminals"):
+            fm.CurrentTransport(name="charge", model="ohmic_poisson", gauge=gauge)
+        with self.assertRaisesRegex(ValueError, "cannot mix with voltage or current-density electrodes"):
+            fm.CurrentTransport(
+                name="charge", model="ohmic_poisson", gauge=gauge,
+                boundaries=[terminal, fm.VoltageElectrode("voltage", [surface], potential_V=0.0)],
+            )
+
+    def test_equipotential_current_terminals_round_trip_without_dummy_voltages(self) -> None:
+        region = fm.RegionRef("layer")
+        transport = fm.CurrentTransport(
+            name="antenna_charge",
+            model="ohmic_poisson",
+            domain=[region],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    region, fm.ChargeTransportMaterial(sigma_Spm=5.8e7)
+                )
+            ],
+            boundaries=[
+                fm.EquipotentialCurrentTerminal(
+                    "in", [fm.SurfaceRef("layer", "x_min", (-1.0, 0.0, 0.0))]
+                ),
+                fm.EquipotentialCurrentTerminal(
+                    "out", [fm.SurfaceRef("layer", "x_max", (1.0, 0.0, 0.0))]
+                ),
+            ],
+            gauge=fm.ChargePotentialGauge("terminal_reference"),
+            solver=fm.ChargeSolverPolicy(
+                operator_version="fem_charge_conforming_h1_p1.transparent.v1"
+            ),
+        )
+        entry = transport.to_ir()
+        self.assertEqual(entry["gauge"], "terminal_reference")
+        self.assertEqual(
+            [boundary["kind"] for boundary in entry["boundaries"]],
+            ["equipotential_current_terminal", "equipotential_current_terminal"],
+        )
+        scene = build_scene_document_from_builder(
+            {"revision": 1, "geometries": [], "current_modules": [entry]}
+        )
+        self.assertEqual(build_builder_from_scene_document(scene)["current_modules"], [entry])
+        rendered = _render_current_modules(
+            _base_problem(current_modules=[transport]), overrides={}, surface="flat"
+        )
+        self.assertEqual(eval(rendered[1], {"fm": fm}).to_ir(), entry)
+        for boundary in entry["boundaries"]:
+            self.assertEqual(set(boundary), {"id", "kind", "surfaces"})
+
+        for boundary_index in range(len(entry["boundaries"])):
+            for field_name in ("potential_V", "outward_current_density_Apm2", "future_policy"):
+                with self.subTest(boundary=boundary_index, field=field_name):
+                    invalid_entry = copy.deepcopy(entry)
+                    invalid_entry["boundaries"][boundary_index][field_name] = 0.0
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"current_transport\.boundaries\[{boundary_index}\] has unsupported fields: {field_name}",
+                    ):
+                        build_scene_document_from_builder(
+                            {"revision": 1, "current_modules": [invalid_entry]}
+                        )
+            with self.subTest(boundary=boundary_index, field="surface.future_policy"):
+                invalid_entry = copy.deepcopy(entry)
+                invalid_entry["boundaries"][boundary_index]["surfaces"][0]["future_policy"] = "new"
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"current_transport\.boundaries\[{boundary_index}\]\.surfaces\[0\] has unsupported fields: future_policy",
+                ):
+                    build_scene_document_from_builder(
+                        {"revision": 1, "current_modules": [invalid_entry]}
+                    )
+
     def _closed_current_view(self) -> fm.ConservativeCurrentView:
         identity = fm.ConservativeCurrentIdentity(
             source_module_id="drive",
@@ -476,7 +554,7 @@ class CurrentTransportTests(unittest.TestCase):
         from fullmag.runtime.script_builder import _render_field_drives
 
         rendered = "\n".join(
-            _render_field_drives(problem, surface="flat")
+            _render_field_drives(problem, overrides={}, surface="flat")
         )
         self.assertNotIn('model="prescribed_zeeman_mask"', rendered)
         self.assertIn('object_id="center_microstrip"', rendered)

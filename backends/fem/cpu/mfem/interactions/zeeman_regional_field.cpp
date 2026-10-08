@@ -350,16 +350,18 @@ bool copy_regional_field_drive_plan(
             error = "regional field drive marker target must not be empty";
             return false;
         }
-        if (source.spatial_profile.kind > FULLMAG_FEM_SPATIAL_PROFILE_GAUSSIAN_PLANE_WAVE) {
+        if (source.spatial_profile.kind > FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL) {
             error = "regional field drive spatial profile kind is unsupported";
             return false;
         }
+        const bool preprojected = source.spatial_profile.kind ==
+            FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL;
         const double norm = std::sqrt(
             source.direction[0] * source.direction[0] +
             source.direction[1] * source.direction[1] +
             source.direction[2] * source.direction[2]);
         if (!std::isfinite(source.amplitude_b_t) || source.amplitude_b_t < 0.0 ||
-            !std::isfinite(norm) || norm <= 0.0) {
+            (!preprojected && (!std::isfinite(norm) || norm <= 0.0))) {
             error = "regional field drive amplitude must be finite and non-negative; direction must be finite and nonzero";
             return false;
         }
@@ -427,8 +429,30 @@ bool copy_regional_field_drive_plan(
                 }
             }
         }
+        if (preprojected) {
+            const uint64_t expected = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3u;
+            if (source.spatial_profile.preprojected_h_xyz_a_per_m == nullptr ||
+                source.spatial_profile.preprojected_h_value_count != expected) {
+                error = "preprojected regional field basis pointer/count does not match mesh nodes";
+                return false;
+            }
+            drive.preprojected_h_xyz.assign(
+                source.spatial_profile.preprojected_h_xyz_a_per_m,
+                source.spatial_profile.preprojected_h_xyz_a_per_m + expected);
+            if (!std::all_of(drive.preprojected_h_xyz.begin(), drive.preprojected_h_xyz.end(),
+                    [](double value) { return std::isfinite(value); })) {
+                error = "preprojected regional field basis contains a non-finite value";
+                return false;
+            }
+        } else if (source.spatial_profile.preprojected_h_xyz_a_per_m != nullptr ||
+                   source.spatial_profile.preprojected_h_value_count != 0u) {
+            error = "procedural regional field profile must not carry a preprojected basis";
+            return false;
+        }
         drive.amplitude_b_t = source.amplitude_b_t;
-        drive.direction = {source.direction[0] / norm, source.direction[1] / norm, source.direction[2] / norm};
+        drive.direction = preprojected
+            ? std::array<double, 3>{0.0, 0.0, 0.0}
+            : std::array<double, 3>{source.direction[0] / norm, source.direction[1] / norm, source.direction[2] / norm};
         drive.time_origin = source.time_origin;
         if (source.target.element_marker_count > 0) {
             drive.target_element_markers.assign(
@@ -450,6 +474,24 @@ bool project_regional_field_drive_bases(Context &ctx, std::string &error)
         return false;
     }
     for (auto &drive : ctx.zeeman.regional_drives) {
+        if (drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL) {
+            drive.basis_h_xyz = drive.preprojected_h_xyz;
+            for (size_t pair = 0; pair + 1 < ctx.mesh.periodic_node_pairs.size(); pair += 2) {
+                const size_t a = ctx.mesh.periodic_node_pairs[pair];
+                const size_t b = ctx.mesh.periodic_node_pairs[pair + 1];
+                for (size_t c = 0; c < 3u; ++c) {
+                    const double lhs = drive.basis_h_xyz[3u * a + c];
+                    const double rhs = drive.basis_h_xyz[3u * b + c];
+                    if (std::abs(lhs - rhs) >
+                        1.0e-12 * std::max({1.0, std::abs(lhs), std::abs(rhs)})) {
+                        error = "preprojected regional field basis violates periodic node pair " +
+                            std::to_string(pair / 2u);
+                        return false;
+                    }
+                }
+            }
+            continue;
+        }
         drive.basis_h_xyz.assign(nodes * 3u, 0.0);
         if (drive.target_kind == FULLMAG_FEM_FIELD_TARGET_GLOBAL &&
             drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_UNIFORM) {

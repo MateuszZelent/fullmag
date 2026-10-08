@@ -4787,7 +4787,7 @@ bool context_mark_static_external_field_profile(
 
 bool context_upload_regional_field_drives(
     Context &ctx,
-    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    const fullmag_fdm_regional_field_drive_desc_v2 *drives,
     uint32_t drive_count)
 {
     if (drive_count == 0) return true;
@@ -4827,9 +4827,10 @@ bool context_upload_regional_field_drives(
     std::vector<double> piecewise_points;
 
     for (uint32_t drive_index = 0; drive_index < drive_count; ++drive_index) {
-        const auto &descriptor = drives[drive_index];
-        if (descriptor.abi_version != FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1 ||
-            descriptor.struct_size < sizeof(fullmag_fdm_regional_field_drive_desc_v1)) {
+        const auto &entry = drives[drive_index];
+        const auto &descriptor = entry.drive;
+        if (descriptor.abi_version != FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2 ||
+            descriptor.struct_size < sizeof(fullmag_fdm_regional_field_drive_desc_v2)) {
             ctx.last_error = "regional field drive descriptor ABI mismatch";
             return false;
         }
@@ -4839,6 +4840,10 @@ bool context_upload_regional_field_drives(
             return false;
         }
         if (!std::isfinite(descriptor.stage_start_time_s) ||
+            descriptor.stage_start_time_s < 0.0 ||
+            !std::isfinite(entry.waveform_origin_time_s) ||
+            entry.waveform_origin_time_s < 0.0 ||
+            entry.waveform_origin_time_s > descriptor.stage_start_time_s ||
             !std::isfinite(descriptor.frequency_hz) ||
             !std::isfinite(descriptor.phase_rad) ||
             !std::isfinite(descriptor.offset) ||
@@ -4861,9 +4866,13 @@ bool context_upload_regional_field_drives(
 
         auto &resolved = params[drive_index];
         resolved.waveform = static_cast<int>(descriptor.waveform);
+        // The integrator clock starts at zero for each segment. The kernel
+        // evaluates t_solver - time_offset_s. Preserve the authored stage
+        // origin for stage-local waveforms across resumed segments.
         resolved.time_offset_s =
             descriptor.time_origin == FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
-                ? descriptor.stage_start_time_s : 0.0;
+                ? entry.waveform_origin_time_s - descriptor.stage_start_time_s
+                : -descriptor.stage_start_time_s;
         resolved.frequency_hz = descriptor.frequency_hz;
         resolved.phase_rad = descriptor.phase_rad;
         resolved.offset = descriptor.offset;
@@ -5054,6 +5063,34 @@ bool context_upload_regional_field_drives(
     ctx.regional_field_drive_count = drive_count;
     ctx.regional_field_drive_point_count = static_cast<uint64_t>(piecewise_points.size() / 2u);
     return true;
+}
+
+bool context_upload_regional_field_drives(
+    Context &ctx,
+    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count)
+{
+    if (drive_count != 0 && drives == nullptr) {
+        ctx.last_error = "regional field drives require a non-null descriptor array";
+        return false;
+    }
+    std::vector<fullmag_fdm_regional_field_drive_desc_v2> upgraded;
+    upgraded.reserve(drive_count);
+    for (uint32_t index = 0; index < drive_count; ++index) {
+        const auto &legacy = drives[index];
+        if (legacy.abi_version != FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1 ||
+            legacy.struct_size < sizeof(fullmag_fdm_regional_field_drive_desc_v1)) {
+            ctx.last_error = "regional field drive descriptor ABI mismatch";
+            return false;
+        }
+        fullmag_fdm_regional_field_drive_desc_v2 entry{};
+        entry.drive = legacy;
+        entry.drive.abi_version = FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2;
+        entry.drive.struct_size = sizeof(entry);
+        entry.waveform_origin_time_s = legacy.stage_start_time_s;
+        upgraded.push_back(entry);
+    }
+    return context_upload_regional_field_drives(ctx, upgraded.data(), drive_count);
 }
 
 template <typename HostScalar>

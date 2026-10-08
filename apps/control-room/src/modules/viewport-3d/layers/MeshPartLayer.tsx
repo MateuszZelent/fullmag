@@ -558,6 +558,7 @@ export function createMeshPartScalarShaderMaterials({
 export const MeshPartLayer = memo(function MeshPartLayer({
   adoptionRegistry,
   colors,
+  surfaceFallbackColor,
   sessionIdentity,
   vectorColorMode,
   vectorScale,
@@ -577,6 +578,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
+  surfaceFallbackColor?: Viewport3DColors["mesh"];
   sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
   vectorScale: number;
@@ -1096,7 +1098,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   ) return null;
   const meshColor = resolveMeshPartSurfaceMaterialColor(
     renderSettings,
-    colors.mesh,
+    surfaceFallbackColor ?? colors.mesh,
     resolveMeshPartMagnetizationTexturePreviewColor(
       Boolean(fieldModel?.legacyResponseOverlayActive || modalSurfaceActive),
       magnetizationTexturePreview?.color ?? null,

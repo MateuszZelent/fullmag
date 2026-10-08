@@ -255,6 +255,13 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::simulation::runtime::get_object_metrics,
         crate::router_v2::handlers::data::artifacts::list_artifacts,
         crate::router_v2::handlers::data::artifacts::get_artifact,
+        crate::router_v2::handlers::data::antenna::get_antenna_field_solution,
+        crate::router_v2::handlers::data::antenna::get_antenna_field_solution_payload,
+        crate::router_v2::handlers::data::antenna::get_antenna_stage_output_catalog,
+        crate::router_v2::handlers::data::antenna_inspection::get_antenna_external_lead_inspection,
+        crate::router_v2::handlers::data::antenna_inspection::get_antenna_external_lead_inspection_payload,
+        crate::router_v2::handlers::data::antenna::get_antenna_source_spectrum,
+        crate::router_v2::handlers::data::antenna::get_antenna_source_spectrum_payload,
         crate::router_v2::handlers::analysis::eigen::get_spectrum,
         crate::router_v2::handlers::analysis::eigen::get_spectrum_v2,
         crate::router_v2::handlers::analysis::eigen::get_mode,
@@ -1404,6 +1411,70 @@ mod tests {
     }
 
     #[test]
+    fn openapi_exposes_typed_antenna_composition_contract() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let scene = &schemas["SceneResource"]["properties"];
+        for (property, schema) in [
+            ("antenna_port_modes", "AntennaPortModeResource"),
+            ("antenna_field_solve_stages", "AntennaFieldSolveStageResource"),
+            ("antenna_target_projections", "AntennaTargetProjectionResource"),
+            ("solved_antenna_drives", "SolvedAntennaDriveResource"),
+            ("antenna_spectrum_requests", "AntennaSpectrumRequestResource"),
+        ] {
+            assert_eq!(
+                scene[property]["items"]["$ref"],
+                serde_json::json!(format!("#/components/schemas/{schema}")),
+                "SceneResource.{property} must remain semantically typed"
+            );
+        }
+        assert!(schemas["AntennaPortModeResource"]["properties"]["branches"]
+            .to_string()
+            .contains("AntennaPortBranchResource"));
+        assert!(schemas["AntennaFieldSolveStageResource"]["properties"]["target_refs"]
+            .to_string()
+            .contains("FieldTargetResource"));
+        let field_solve = &schemas["AntennaFieldSolveStageResource"];
+        assert!(field_solve["properties"]
+            .get("conservative_current_view_ref")
+            .is_some());
+        assert!(!field_solve["required"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|field| field == "conservative_current_view_ref"));
+        assert!(schemas["AntennaSpectrumRequestResource"]["properties"]["sampling_plane"]
+            .to_string()
+            .contains("AntennaSpectrumSamplingPlaneResource"));
+    }
+
+    #[test]
+    fn openapi_types_antenna_spectrum_payload_and_topology_errors() {
+        let document = openapi_json();
+        for path in [
+            "/v2/sessions/current/data/antenna/source-spectra/{output_id}",
+            "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}",
+        ] {
+            let responses = &document["paths"][path]["get"]["responses"];
+            for status in ["404", "422"] {
+                assert_eq!(
+                    responses[status]["content"]["application/json"]["schema"]["$ref"],
+                    "#/components/schemas/ApiErrorResponse",
+                    "{path} status {status} must expose the typed error body"
+                );
+            }
+            assert!(responses["404"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("missing_payload"));
+            assert!(responses["422"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("unsupported_topology"));
+        }
+    }
+
+    #[test]
     fn openapi_current_transport_preserves_conservative_current_view_payload() {
         let document = openapi_json();
         let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]
@@ -1414,6 +1485,14 @@ mod tests {
             serde_json::json!(true),
             "the scene boundary must accept every validated RT0/H(div) descriptor field"
         );
+    }
+
+    #[test]
+    fn openapi_current_transport_preserves_current_driven_source_payload() {
+        let document = openapi_json();
+        let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]
+            ["properties"]["conservative_current_source"];
+        assert_eq!(property["additionalProperties"], serde_json::json!(true));
     }
 
     #[test]

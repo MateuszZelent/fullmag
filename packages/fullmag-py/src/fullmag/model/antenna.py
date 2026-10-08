@@ -12,6 +12,15 @@ from fullmag._validation import (
     require_positive,
 )
 from fullmag.model.energy import Sinusoidal, TimeDependence
+from fullmag.model.geometry import (
+    AntennaLayout,
+    AntennaRigidTransform,
+    CPWAntennaLayout,
+    CPWWidthStation,
+    MicrostripAntennaLayout,
+    MicrostripWidthStation,
+    RigidTransform,
+)
 
 # FEM-034 / FEM-035: extensible allow-lists for solver and current_distribution.
 # Add new entries here when additional backends or distributions are implemented.
@@ -20,6 +29,18 @@ ANTENNA_FIELD_SOURCE_MODELS = {"mqs_2p5d_az", "prescribed_zeeman_mask"}
 CURRENT_DISTRIBUTIONS = {"uniform"}
 FIELD_TIME_ORIGINS = frozenset({"stage_local", "absolute"})
 SPATIAL_WINDOWS = frozenset({"none", "hann"})
+ANTENNA_OERSTED_REALIZATIONS = frozenset(
+    {"direct_tetra_quadrature", "vector_potential_solver"}
+)
+ANTENNA_SPECTRUM_TRANSFORMS = frozenset({"spatial_fft", "nonuniform_spatial_fft"})
+ANTENNA_SPECTRUM_WINDOWS = frozenset({"rectangular", "hann", "hamming", "blackman"})
+ANTENNA_SPECTRUM_NORMALIZATIONS = frozenset({"integral_si", "unitary_discrete"})
+ANTENNA_SPECTRUM_COMPONENTS = frozenset(
+    {"x", "y", "z", "u", "v", "normal", "vector_power", "transverse"}
+)
+ANTENNA_SPECTRUM_OUTSIDE_POLICIES = frozenset({"error", "zero"})
+ANTENNA_SPECTRUM_INTERPOLATIONS = frozenset({"fem_element", "fdm_trilinear"})
+ANTENNA_PORT_MODE_SCHEMA_VERSION = "antenna_port_mode.v2"
 
 
 def _normalized_vector3(value: Sequence[float], name: str) -> tuple[float, float, float]:
@@ -28,6 +49,234 @@ def _normalized_vector3(value: Sequence[float], name: str) -> tuple[float, float
     if not math.isfinite(norm) or norm <= 1e-15:
         raise ValueError(f"{name} must be non-zero")
     return tuple(component / norm for component in vector)
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaPortBranch:
+    id: str
+    inlet_terminal_ref: str
+    outlet_terminal_ref: str
+    signed_weight: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "id",
+            require_non_empty(self.id, "antenna_port_branch.id"),
+        )
+        for field_name in ("inlet_terminal_ref", "outlet_terminal_ref"):
+            object.__setattr__(
+                self,
+                field_name,
+                require_non_empty(
+                    getattr(self, field_name), f"antenna_port_branch.{field_name}"
+                ),
+            )
+        if self.inlet_terminal_ref == self.outlet_terminal_ref:
+            raise ValueError(
+                "antenna port branch inlet and outlet terminal references must differ"
+            )
+        object.__setattr__(
+            self,
+            "signed_weight",
+            require_finite(self.signed_weight, "signed_weight"),
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "inlet_terminal_ref": self.inlet_terminal_ref,
+            "outlet_terminal_ref": self.outlet_terminal_ref,
+            "signed_weight": self.signed_weight,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaPortMode:
+    id: str
+    source_object_id: str
+    current_transport_id: str
+    branches: tuple[AntennaPortBranch, ...]
+    normalization_current_a: float = 1.0
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        source_object_id: str,
+        current_transport_id: str,
+        branches: Sequence[AntennaPortBranch],
+        normalization_current_a: float = 1.0,
+    ) -> None:
+        object.__setattr__(self, "id", require_non_empty(id, "antenna_port_mode.id"))
+        object.__setattr__(
+            self,
+            "source_object_id",
+            require_non_empty(source_object_id, "antenna_port_mode.source_object_id"),
+        )
+        object.__setattr__(
+            self,
+            "current_transport_id",
+            require_non_empty(current_transport_id, "antenna_port_mode.current_transport_id"),
+        )
+        resolved = tuple(branches)
+        if len(resolved) < 2 or any(not isinstance(branch, AntennaPortBranch) for branch in resolved):
+            raise ValueError("antenna port mode requires at least two typed branches")
+        branch_ids = [branch.id for branch in resolved]
+        if len(set(branch_ids)) != len(branch_ids):
+            raise ValueError("antenna port branch ids must be unique")
+        terminal_refs = [
+            terminal
+            for branch in resolved
+            for terminal in (branch.inlet_terminal_ref, branch.outlet_terminal_ref)
+        ]
+        if len(set(terminal_refs)) != len(terminal_refs):
+            raise ValueError(
+                "antenna port terminal references must be unique across branches"
+            )
+        if abs(sum(branch.signed_weight for branch in resolved)) > 1e-12:
+            raise ValueError("antenna port branch signed weights must sum to zero")
+        positive_weight = sum(
+            branch.signed_weight for branch in resolved if branch.signed_weight > 0.0
+        )
+        if abs(positive_weight - 1.0) > 1e-12 or not any(
+            branch.signed_weight < 0.0 for branch in resolved
+        ):
+            raise ValueError(
+                "antenna port positive branch weights must sum to one and include a return branch"
+            )
+        if normalization_current_a != 1.0:
+            raise ValueError("antenna field basis normalization_current_a must equal exactly 1 A")
+        object.__setattr__(self, "branches", resolved)
+        object.__setattr__(self, "normalization_current_a", 1.0)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "schema_version": ANTENNA_PORT_MODE_SCHEMA_VERSION,
+            "id": self.id,
+            "source_object_id": self.source_object_id,
+            "current_transport_id": self.current_transport_id,
+            "branches": [branch.to_ir() for branch in self.branches],
+            "normalization_current_a": self.normalization_current_a,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaFieldSolutionRef:
+    stage_id: str
+    output_id: str
+    asset_id: str
+    content_digest: str
+
+    def __post_init__(self) -> None:
+        for field_name in ("stage_id", "output_id", "asset_id", "content_digest"):
+            object.__setattr__(
+                self,
+                field_name,
+                require_non_empty(getattr(self, field_name), f"solution_ref.{field_name}"),
+            )
+
+    def to_ir(self) -> dict[str, object]:
+        return {field_name: getattr(self, field_name) for field_name in self.__slots__}
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaStageOutputRef:
+    """Authoring-time reference to an output declared by a solve stage."""
+
+    stage_id: str
+    output_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "stage_id", require_non_empty(self.stage_id, "stage_id"))
+        object.__setattr__(self, "output_id", require_non_empty(self.output_id, "output_id"))
+
+    def to_ir(self) -> dict[str, str]:
+        return {
+            "kind": "stage_output",
+            "stage_id": self.stage_id,
+            "output_id": self.output_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaWaveformBandwidthDeclaration:
+    """Authored physical upper band for a pulse or piecewise drive [Hz]."""
+
+    f_max_hz: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "f_max_hz",
+            require_non_negative(self.f_max_hz, "antenna_waveform_bandwidth.f_max_hz"),
+        )
+
+    def to_ir(self) -> dict[str, float]:
+        return {"f_max_hz": self.f_max_hz}
+
+
+@dataclass(frozen=True, slots=True)
+class SolvedAntennaDrive:
+    id: str
+    name: str
+    projection_ref: str
+    port_mode_id: str
+    peak_current_a: float
+    waveform: TimeDependence
+    bandwidth_declaration: AntennaWaveformBandwidthDeclaration | None = None
+    time_origin: str = "stage_local"
+    activation: DriveActivation | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("id", "name", "projection_ref", "port_mode_id"):
+            object.__setattr__(
+                self,
+                field_name,
+                require_non_empty(getattr(self, field_name), f"solved_antenna_drive.{field_name}"),
+            )
+        object.__setattr__(
+            self,
+            "peak_current_a",
+            require_finite(self.peak_current_a, "solved_antenna_drive.peak_current_a"),
+        )
+        if not hasattr(self.waveform, "to_ir"):
+            raise TypeError("waveform must be a Fullmag time-dependence object")
+        if self.bandwidth_declaration is not None and not isinstance(
+            self.bandwidth_declaration, AntennaWaveformBandwidthDeclaration
+        ):
+            raise TypeError(
+                "bandwidth_declaration must be an AntennaWaveformBandwidthDeclaration"
+            )
+        if self.bandwidth_declaration is not None and self.waveform.to_ir().get("kind") not in {
+            "pulse", "piecewise_linear"
+        }:
+            raise ValueError(
+                "bandwidth_declaration is only valid for pulse or piecewise_linear waveforms"
+            )
+        origin = require_non_empty(self.time_origin, "solved_antenna_drive.time_origin").lower()
+        if origin not in FIELD_TIME_ORIGINS:
+            raise ValueError(f"time_origin must be one of {sorted(FIELD_TIME_ORIGINS)}")
+        resolved_activation = self.activation or DriveActivation.all_time_evolution()
+        if not isinstance(resolved_activation, DriveActivation):
+            raise TypeError("activation must be a DriveActivation")
+        object.__setattr__(self, "time_origin", origin)
+        object.__setattr__(self, "activation", resolved_activation)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "id": self.id,
+            "name": self.name,
+            "projection_ref": self.projection_ref,
+            "port_mode_id": self.port_mode_id,
+            "peak_current_a": self.peak_current_a,
+            "waveform": self.waveform.to_ir(),
+            "time_origin": self.time_origin,
+            "activation": self.activation.to_ir(),
+        }
+        if self.bandwidth_declaration is not None:
+            payload["bandwidth_declaration"] = self.bandwidth_declaration.to_ir()
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +324,332 @@ class FieldTarget:
             payload["object_id"] = self.object_id
         if self.region_id is not None:
             payload["region_id"] = self.region_id
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaNamedOutput:
+    id: str
+    quantity: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", require_non_empty(self.id, "antenna_output.id"))
+        object.__setattr__(
+            self,
+            "quantity",
+            require_non_empty(self.quantity, "antenna_output.quantity"),
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {"id": self.id, "quantity": self.quantity}
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaFieldSolveStage:
+    id: str
+    source_object_id: str
+    current_transport_id: str
+    port_mode_ids: tuple[str, ...]
+    conservative_current_view_ref: str | None
+    field_sampling_domain: FieldTarget
+    target_refs: tuple[FieldTarget, ...]
+    outputs: tuple[AntennaNamedOutput, ...]
+    oersted_realization: str = "direct_tetra_quadrature"
+    model: str = "quasistatic_conduction_biot_savart3d"
+    conductor_mesh_policy: str = "authored_shared_domain"
+    solver_policy: str = "production_default"
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        source_object_id: str,
+        current_transport_id: str,
+        port_mode_ids: Sequence[str],
+        conservative_current_view_ref: str | None = None,
+        field_sampling_domain: FieldTarget,
+        target_refs: Sequence[FieldTarget],
+        outputs: Sequence[AntennaNamedOutput],
+        oersted_realization: str = "direct_tetra_quadrature",
+        model: str = "quasistatic_conduction_biot_savart3d",
+        conductor_mesh_policy: str = "authored_shared_domain",
+        solver_policy: str = "production_default",
+    ) -> None:
+        for name, value in (
+            ("id", id),
+            ("source_object_id", source_object_id),
+            ("current_transport_id", current_transport_id),
+            ("conductor_mesh_policy", conductor_mesh_policy),
+            ("solver_policy", solver_policy),
+        ):
+            object.__setattr__(self, name, require_non_empty(value, f"antenna_field_solve.{name}"))
+        object.__setattr__(
+            self,
+            "conservative_current_view_ref",
+            None
+            if conservative_current_view_ref is None
+            else require_non_empty(
+                conservative_current_view_ref,
+                "antenna_field_solve.conservative_current_view_ref",
+            ),
+        )
+        ports = tuple(require_non_empty(value, "antenna_field_solve.port_mode_id") for value in port_mode_ids)
+        if len(ports) != 1:
+            raise ValueError("antenna field solve requires exactly one port_mode_id per executable stage")
+        if not isinstance(field_sampling_domain, FieldTarget):
+            raise TypeError("field_sampling_domain must be a FieldTarget")
+        targets = tuple(target_refs)
+        if not targets or any(not isinstance(target, FieldTarget) for target in targets):
+            raise ValueError("antenna field solve requires at least one typed target_ref")
+        resolved_outputs = tuple(outputs)
+        if any(not isinstance(output, AntennaNamedOutput) for output in resolved_outputs) or sum(
+            output.quantity == "H_ant_basis" for output in resolved_outputs
+        ) != 1:
+            raise ValueError("antenna field solve requires exactly one H_ant_basis output")
+        realization = require_non_empty(oersted_realization, "oersted_realization").lower()
+        if realization not in ANTENNA_OERSTED_REALIZATIONS:
+            raise ValueError(
+                f"oersted_realization must be one of {sorted(ANTENNA_OERSTED_REALIZATIONS)}"
+            )
+        if model != "quasistatic_conduction_biot_savart3d":
+            raise ValueError("unsupported antenna field model")
+        object.__setattr__(self, "port_mode_ids", ports)
+        object.__setattr__(self, "field_sampling_domain", field_sampling_domain)
+        object.__setattr__(self, "target_refs", targets)
+        object.__setattr__(self, "outputs", resolved_outputs)
+        object.__setattr__(self, "oersted_realization", realization)
+        object.__setattr__(self, "model", model)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "id": self.id,
+            "source_object_id": self.source_object_id,
+            "current_transport_id": self.current_transport_id,
+            "port_mode_ids": list(self.port_mode_ids),
+            "model": self.model,
+            "oersted_realization": self.oersted_realization,
+            "conductor_mesh_policy": self.conductor_mesh_policy,
+            "field_sampling_domain": self.field_sampling_domain.to_ir(),
+            "target_refs": [target.to_ir() for target in self.target_refs],
+            "solver_policy": self.solver_policy,
+            "outputs": [output.to_ir() for output in self.outputs],
+        }
+        if self.conservative_current_view_ref is not None:
+            payload["conservative_current_view_ref"] = self.conservative_current_view_ref
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaTargetProjection:
+    id: str
+    solution: AntennaStageOutputRef | AntennaFieldSolutionRef
+    target: FieldTarget
+    output_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", require_non_empty(self.id, "antenna_projection.id"))
+        object.__setattr__(
+            self,
+            "output_id",
+            require_non_empty(self.output_id, "antenna_projection.output_id"),
+        )
+        if not isinstance(self.solution, (AntennaStageOutputRef, AntennaFieldSolutionRef)):
+            raise TypeError(
+                "solution must be an AntennaStageOutputRef or AntennaFieldSolutionRef"
+            )
+        if not isinstance(self.target, FieldTarget):
+            raise TypeError("target must be a FieldTarget")
+
+    def to_ir(self) -> dict[str, object]:
+        solution = self.solution.to_ir()
+        if isinstance(self.solution, AntennaFieldSolutionRef):
+            solution = {"kind": "resolved_asset", **solution}
+        return {
+            "id": self.id,
+            "solution": solution,
+            "target": self.target.to_ir(),
+            "output_id": self.output_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaSpectrumSamplingPlane:
+    origin_m: tuple[float, float, float]
+    axis_u: tuple[float, float, float]
+    axis_v: tuple[float, float, float]
+    extent_u_m: float
+    extent_v_m: float
+    sample_count_u: int
+    sample_count_v: int
+    interpolation: str = "fem_element"
+    outside_policy: str = "error"
+
+    def __init__(
+        self,
+        *,
+        origin_m: Sequence[float],
+        axis_u: Sequence[float],
+        axis_v: Sequence[float],
+        extent_u_m: float,
+        extent_v_m: float,
+        sample_count_u: int,
+        sample_count_v: int,
+        interpolation: str = "fem_element",
+        outside_policy: str = "error",
+    ) -> None:
+        u = _normalized_vector3(axis_u, "antenna_spectrum.sampling_plane.axis_u")
+        v = _normalized_vector3(axis_v, "antenna_spectrum.sampling_plane.axis_v")
+        if abs(sum(a * b for a, b in zip(u, v, strict=True))) > 1e-12:
+            raise ValueError("antenna spectrum sampling axes must be orthogonal")
+        if not isinstance(sample_count_u, int) or not 2 <= sample_count_u <= 2**32 - 1:
+            raise ValueError("sample_count_u must be an integer in [2, 2**32 - 1]")
+        if not isinstance(sample_count_v, int) or not 2 <= sample_count_v <= 2**32 - 1:
+            raise ValueError("sample_count_v must be an integer in [2, 2**32 - 1]")
+        interpolation = require_non_empty(interpolation, "interpolation").lower()
+        outside_policy = require_non_empty(outside_policy, "outside_policy").lower()
+        if interpolation not in ANTENNA_SPECTRUM_INTERPOLATIONS:
+            raise ValueError(f"interpolation must be one of {sorted(ANTENNA_SPECTRUM_INTERPOLATIONS)}")
+        if outside_policy not in ANTENNA_SPECTRUM_OUTSIDE_POLICIES:
+            raise ValueError(f"outside_policy must be one of {sorted(ANTENNA_SPECTRUM_OUTSIDE_POLICIES)}")
+        object.__setattr__(self, "origin_m", as_vector3(origin_m, "antenna_spectrum.sampling_plane.origin_m"))
+        object.__setattr__(self, "axis_u", u)
+        object.__setattr__(self, "axis_v", v)
+        object.__setattr__(self, "extent_u_m", require_positive(extent_u_m, "extent_u_m"))
+        object.__setattr__(self, "extent_v_m", require_positive(extent_v_m, "extent_v_m"))
+        object.__setattr__(self, "sample_count_u", sample_count_u)
+        object.__setattr__(self, "sample_count_v", sample_count_v)
+        object.__setattr__(self, "interpolation", interpolation)
+        object.__setattr__(self, "outside_policy", outside_policy)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "origin_m": list(self.origin_m),
+            "axis_u": list(self.axis_u),
+            "axis_v": list(self.axis_v),
+            "extent_u_m": self.extent_u_m,
+            "extent_v_m": self.extent_v_m,
+            "sample_count_u": self.sample_count_u,
+            "sample_count_v": self.sample_count_v,
+            "interpolation": self.interpolation,
+            "outside_policy": self.outside_policy,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaSpectrumKGrid:
+    k_u_rad_per_m: tuple[float, ...]
+    k_v_rad_per_m: tuple[float, ...]
+
+    def __init__(self, *, k_u_rad_per_m: Sequence[float], k_v_rad_per_m: Sequence[float]) -> None:
+        for name, values in (("k_u_rad_per_m", k_u_rad_per_m), ("k_v_rad_per_m", k_v_rad_per_m)):
+            if not values:
+                raise ValueError(f"{name} must not be empty")
+            if any(not math.isfinite(float(value)) for value in values):
+                raise ValueError(f"{name} must contain only finite values")
+            object.__setattr__(self, name, tuple(float(value) for value in values))
+
+    def to_ir(self) -> dict[str, object]:
+        return {"k_u_rad_per_m": list(self.k_u_rad_per_m), "k_v_rad_per_m": list(self.k_v_rad_per_m)}
+
+
+@dataclass(frozen=True, slots=True)
+class AntennaSpectrumRequest:
+    id: str
+    solution_ref: AntennaStageOutputRef | AntennaFieldSolutionRef
+    target: FieldTarget
+    transform: str
+    sampling_plane: AntennaSpectrumSamplingPlane
+    window: str
+    normalization: str
+    component: str
+    output_id: str
+    port_mode_id: str | None = None
+    nonuniform_k_grid: AntennaSpectrumKGrid | None = None
+    equilibrium_ref: str | None = None
+    mode_basis_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("id", "component", "output_id"):
+            object.__setattr__(
+                self,
+                name,
+                require_non_empty(getattr(self, name), f"antenna_spectrum.{name}"),
+            )
+        if self.component not in ANTENNA_SPECTRUM_COMPONENTS:
+            raise ValueError(
+                f"component must be one of {sorted(ANTENNA_SPECTRUM_COMPONENTS)}"
+            )
+        if not isinstance(self.solution_ref, (AntennaStageOutputRef, AntennaFieldSolutionRef)):
+            raise TypeError("solution_ref must be an AntennaStageOutputRef or AntennaFieldSolutionRef")
+        if not isinstance(self.target, FieldTarget):
+            raise TypeError("target must be a FieldTarget")
+        if not isinstance(self.sampling_plane, AntennaSpectrumSamplingPlane):
+            raise TypeError("sampling_plane must be an AntennaSpectrumSamplingPlane")
+        if self.port_mode_id is not None:
+            object.__setattr__(
+                self,
+                "port_mode_id",
+                require_non_empty(self.port_mode_id, "antenna_spectrum.port_mode_id"),
+            )
+        transform = require_non_empty(self.transform, "antenna_spectrum.transform").lower()
+        if transform not in ANTENNA_SPECTRUM_TRANSFORMS:
+            raise ValueError(
+                f"transform must be one of {sorted(ANTENNA_SPECTRUM_TRANSFORMS)}"
+            )
+        object.__setattr__(self, "transform", transform)
+        window = require_non_empty(self.window, "antenna_spectrum.window").lower()
+        normalization = require_non_empty(self.normalization, "antenna_spectrum.normalization").lower()
+        if window not in ANTENNA_SPECTRUM_WINDOWS:
+            raise ValueError(f"window must be one of {sorted(ANTENNA_SPECTRUM_WINDOWS)}")
+        if window != "rectangular" and (
+            self.sampling_plane.sample_count_u < 3
+            or self.sampling_plane.sample_count_v < 3
+        ):
+            raise ValueError("non-rectangular windows require at least 3 samples per axis")
+        if normalization not in ANTENNA_SPECTRUM_NORMALIZATIONS:
+            raise ValueError(f"normalization must be one of {sorted(ANTENNA_SPECTRUM_NORMALIZATIONS)}")
+        if transform == "spatial_fft" and self.nonuniform_k_grid is not None:
+            raise ValueError("spatial_fft derives its k grid and forbids nonuniform_k_grid")
+        if transform == "nonuniform_spatial_fft" and not isinstance(self.nonuniform_k_grid, AntennaSpectrumKGrid):
+            raise ValueError("nonuniform_spatial_fft requires nonuniform_k_grid")
+        if self.component == "transverse" and not self.equilibrium_ref:
+            raise ValueError("transverse spectrum requires equilibrium_ref")
+        if self.component != "transverse" and self.equilibrium_ref is not None:
+            raise ValueError("equilibrium_ref is only valid for component='transverse'")
+        for name in ("equilibrium_ref", "mode_basis_ref"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, require_non_empty(value, f"antenna_spectrum.{name}"))
+        if self.component == "transverse":
+            raise ValueError("transverse spectrum is unsupported until certified equilibrium loading and projection exist")
+        if self.mode_basis_ref is not None:
+            raise ValueError("mode_basis_ref is unsupported until modal analysis is implemented")
+        object.__setattr__(self, "window", window)
+        object.__setattr__(self, "normalization", normalization)
+
+    def to_ir(self) -> dict[str, object]:
+        solution_ref = self.solution_ref.to_ir()
+        if isinstance(self.solution_ref, AntennaFieldSolutionRef):
+            solution_ref = {"kind": "resolved_asset", **solution_ref}
+        payload: dict[str, object] = {
+            "id": self.id,
+            "solution_ref": solution_ref,
+            "target": self.target.to_ir(),
+            "transform": self.transform,
+            "sampling_plane": self.sampling_plane.to_ir(),
+            "window": self.window,
+            "normalization": self.normalization,
+            "component": self.component,
+            "output_id": self.output_id,
+        }
+        if self.port_mode_id is not None:
+            payload["port_mode_id"] = self.port_mode_id
+        if self.nonuniform_k_grid is not None:
+            payload["nonuniform_k_grid"] = self.nonuniform_k_grid.to_ir()
+        if self.equilibrium_ref is not None:
+            payload["equilibrium_ref"] = self.equilibrium_ref
+        if self.mode_basis_ref is not None:
+            payload["mode_basis_ref"] = self.mode_basis_ref
         return payload
 
 

@@ -129,6 +129,7 @@ fn public_transport_problem(transparent: bool, native: bool) -> ProblemIR {
                 operator_version: "fv_charge_harmonic_v1".into(),
             },
             conservative_current_view: None,
+            conservative_current_source: None,
             structured_current_closure: None,
         }),
     }];

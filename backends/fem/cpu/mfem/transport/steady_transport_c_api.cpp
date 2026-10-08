@@ -7,11 +7,15 @@
  */
 
 #include "fullmag_fem.h"
+#include <cstddef>
+#include <cstdio>
 
 #if FULLMAG_HAS_MFEM_STACK
 #include "cpu/mfem/transport/steady_transport.hpp"
 #include "cpu/mfem/transport/conservative_current_view.hpp"
 #include "cpu/mfem/transport/periodic_charge_potential.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.hpp"
 #include "cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp"
 #include "cpu/mfem/interactions/oersted/vector_potential.hpp"
 
@@ -19,20 +23,82 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 #endif
 
 namespace {
+
+#if INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_direct_oersted_target_record_v1) == 96);
+static_assert(alignof(fullmag_fem_direct_oersted_target_record_v1) == 8);
+static_assert(offsetof(fullmag_fem_direct_oersted_target_record_v1, final_leaf_count) == 72);
+static_assert(sizeof(fullmag_fem_direct_oersted_snapshot_result_v1) == 896);
+static_assert(alignof(fullmag_fem_direct_oersted_snapshot_result_v1) == 8);
+static_assert(offsetof(fullmag_fem_direct_oersted_snapshot_result_v1, target_records) == 16);
+static_assert(offsetof(fullmag_fem_direct_oersted_snapshot_result_v1, schema_version) == 152);
+static_assert(offsetof(fullmag_fem_direct_oersted_snapshot_result_v1, source_view_identity_digest) == 568);
+static_assert(sizeof(fullmag_fem_accepted_terminal_charge_terminal_v1) == 32);
+static_assert(sizeof(fullmag_fem_accepted_terminal_charge_interface_v1) == 104);
+static_assert(sizeof(fullmag_fem_accepted_terminal_charge_request_v1) == 360);
+static_assert(alignof(fullmag_fem_accepted_terminal_charge_request_v1) == 8);
+static_assert(offsetof(fullmag_fem_accepted_terminal_charge_request_v1, mesh) == 24);
+static_assert(offsetof(fullmag_fem_accepted_terminal_charge_request_v1, stable_vertex_identities) == 256);
+static_assert(offsetof(fullmag_fem_accepted_terminal_charge_request_v1, maximum_iterations) == 352);
+static_assert(sizeof(fullmag_fem_accepted_terminal_charge_result_v1) == 656);
+static_assert(alignof(fullmag_fem_accepted_terminal_charge_result_v1) == 8);
+static_assert(offsetof(fullmag_fem_accepted_terminal_charge_result_v1, canonical_payload) == 16);
+static_assert(offsetof(fullmag_fem_accepted_terminal_charge_result_v1, content_sha256) == 328);
+static_assert(offsetof(fullmag_fem_accepted_terminal_charge_result_v1, error_message) == 393);
+static_assert(sizeof(fullmag_fem_accepted_external_lead_boundary_v1) == 40);
+static_assert(offsetof(fullmag_fem_accepted_external_lead_boundary_v1, circuit_id) == 32);
+static_assert(sizeof(fullmag_fem_accepted_external_lead_branch_v1) == 32);
+static_assert(sizeof(fullmag_fem_accepted_external_lead_request_v1) == 496);
+static_assert(alignof(fullmag_fem_accepted_external_lead_request_v1) == 8);
+static_assert(offsetof(fullmag_fem_accepted_external_lead_request_v1, charge) == 16);
+static_assert(offsetof(fullmag_fem_accepted_external_lead_request_v1, closure_revision) == 376);
+static_assert(offsetof(fullmag_fem_accepted_external_lead_request_v1, target_xyz_m) == 448);
+static_assert(offsetof(fullmag_fem_accepted_external_lead_request_v1, base_quadrature_order) == 464);
+static_assert(offsetof(fullmag_fem_accepted_external_lead_request_v1, maximum_source_target_pairs) == 488);
+static_assert(sizeof(fullmag_fem_accepted_external_lead_result_v1) == 656);
+static_assert(alignof(fullmag_fem_accepted_external_lead_result_v1) == 8);
+static_assert(offsetof(fullmag_fem_accepted_external_lead_result_v1, canonical_payload) == 16);
+static_assert(offsetof(fullmag_fem_accepted_external_lead_result_v1, content_sha256) == 328);
+static_assert(offsetof(fullmag_fem_accepted_external_lead_result_v1, error_message) == 393);
+#endif
+
+void set_error(fullmag_fem_accepted_terminal_charge_result_v1 *result, const char *message)
+{
+    if (result == nullptr || result->struct_size < sizeof(*result)) return;
+    result->canonical_payload_len = 0;
+    result->digest_schema[0] = '\0';
+    result->operator_version[0] = '\0';
+    result->layout_fingerprint[0] = '\0';
+    result->content_sha256[0] = '\0';
+    std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
+}
+
+void set_error(fullmag_fem_accepted_external_lead_result_v1 *result, const char *message)
+{
+    if (result == nullptr || result->struct_size < sizeof(*result)) return;
+    result->canonical_payload_len = 0;
+    result->digest_schema[0] = '\0';
+    result->operator_version[0] = '\0';
+    result->layout_fingerprint[0] = '\0';
+    result->content_sha256[0] = '\0';
+    std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
+}
 
 void set_error(fullmag_fem_steady_transport_result_v1 *result, const char *message)
 {
@@ -41,6 +107,35 @@ void set_error(fullmag_fem_steady_transport_result_v1 *result, const char *messa
     }
     std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
     result->diagnostics_json[0] = '\0';
+}
+
+void set_error(fullmag_fem_charge_transport_result_v1 *result, const char *message)
+{
+    if (result == nullptr) {
+        return;
+    }
+    std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
+    result->diagnostics_json[0] = '\0';
+    result->electric_potential_v_len = 0;
+    result->charge_current_density_xyz_apm2_len = 0;
+    result->charge_converged = 0;
+    result->charge_iterations = 0;
+    result->charge_relative_residual = 0.0;
+    result->net_boundary_current_a = 0.0;
+    for (double &component : result->current_density_volume_average_apm2) {
+        component = 0.0;
+    }
+}
+
+void set_error(fullmag_fem_charge_transport_result_v3 *result, const char *message)
+{
+    if (result == nullptr) {
+        return;
+    }
+    set_error(&result->base, message);
+    result->terminal_voltages_v_len = 0;
+    result->measured_outward_currents_a_len = 0;
+    result->gauge_terminal_indices_len = 0;
 }
 
 void set_error(fullmag_fem_steady_transport_rt0_result_v1 *result, const char *message)
@@ -116,6 +211,77 @@ void set_error(
     set_error(&result->rt0, message);
 }
 
+void set_error(
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *result,
+    const char *message)
+{
+    if (result == nullptr || result->struct_size < sizeof(*result)) return;
+    result->electric_potential_v_len = 0;
+    result->stable_vertex_ids_len = 0;
+    result->vertex_xyz_m_len = 0;
+    result->stable_vertex_id_version[0] = '\0';
+    result->source_view_identity_digest[0] = '\0';
+    std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
+}
+
+void set_error(
+    fullmag_fem_direct_oersted_snapshot_result_v1 *result,
+    const char *message)
+{
+    if (result == nullptr || result->struct_size < sizeof(*result)) return;
+    result->target_records_len = 0;
+    result->source_target_pairs = 0;
+    result->refined_pairs = 0;
+    result->unconverged_pair_count = 0;
+    result->maximum_pair_error_apm = 0.0;
+    result->kernel_evaluations = 0;
+    result->ledger_leaf_visits = 0;
+    result->base_quadrature_order = 0;
+    result->maximum_subdivision_depth = 0;
+    result->absolute_tolerance_apm = 0.0;
+    result->relative_tolerance = 0.0;
+    result->relative_scale_floor_apm = 0.0;
+    result->maximum_source_target_pairs = 0;
+    result->maximum_final_leaves_per_target = 0;
+    result->maximum_kernel_evaluations = 0;
+    result->maximum_ledger_leaf_visits = 0;
+    result->schema_version[0] = '\0';
+    result->operator_version[0] = '\0';
+    result->quadrature_scope[0] = '\0';
+    result->estimated_error_policy[0] = '\0';
+    result->roundoff_indicator_policy[0] = '\0';
+    result->source_view_identity_digest[0] = '\0';
+    std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
+}
+
+template <typename Result, typename Solve>
+int call_with_charge_snapshot(Result *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *snapshot,
+    Solve solve)
+{
+    if (snapshot == nullptr ||
+        snapshot->abi_version != FULLMAG_FEM_STEADY_TRANSPORT_RT0_CHARGE_SNAPSHOT_ABI_VERSION ||
+        snapshot->struct_size != sizeof(*snapshot) || snapshot->reserved_flags != 0) {
+        const char *message = "RT0 charge snapshot result ABI header mismatch";
+        if (result == nullptr || result->struct_size >= sizeof(*result)) {
+            set_error(result, message);
+        }
+        set_error(snapshot, message);
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    set_error(snapshot, "");
+    if (result != nullptr && result->struct_size < sizeof(*result)) {
+        set_error(snapshot, "RT0 result ABI size is smaller than its layout");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const int status = solve();
+    if (status != FULLMAG_FEM_OK) {
+        set_error(snapshot, result != nullptr ? result->error_message
+            : "RT0 charge snapshot requires a non-null result");
+    }
+    return status;
+}
+
 #if FULLMAG_HAS_MFEM_STACK
 
 constexpr const char *kConstitutiveVersion =
@@ -128,6 +294,12 @@ constexpr const char *kM2OperatorVersion =
     "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1";
 constexpr const char *kPhysicalResidualVersion =
     "transport_balance_integrated_l2.v1";
+constexpr const char *kChargeConstitutiveVersion =
+    FULLMAG_FEM_CHARGE_TRANSPORT_CONSTITUTIVE_VERSION;
+constexpr const char *kChargeOperatorVersion =
+    FULLMAG_FEM_CHARGE_TRANSPORT_OPERATOR_VERSION;
+constexpr const char *kChargePhysicalResidualVersion =
+    FULLMAG_FEM_CHARGE_TRANSPORT_PHYSICAL_RESIDUAL_VERSION;
 
 bool equals(const char *actual, const char *expected)
 {
@@ -389,9 +561,118 @@ void validate_request(
     }
 }
 
+void validate_charge_request_header(
+    const fullmag_fem_charge_transport_request_v1 &request,
+    const fullmag_fem_charge_transport_result_v1 &result)
+{
+    if (request.abi_version != FULLMAG_FEM_CHARGE_TRANSPORT_ABI_VERSION ||
+        request.struct_size != sizeof(fullmag_fem_charge_transport_request_v1)) {
+        throw std::invalid_argument("charge transport request ABI header mismatch");
+    }
+    if (result.abi_version != FULLMAG_FEM_CHARGE_TRANSPORT_ABI_VERSION ||
+        result.struct_size != sizeof(fullmag_fem_charge_transport_result_v1)) {
+        throw std::invalid_argument("charge transport result ABI header mismatch");
+    }
+    if (request.reserved_flags != 0 || result.reserved_flags != 0) {
+        throw std::invalid_argument("charge transport reserved_flags must be zero");
+    }
+    if (request.execution_lane == FULLMAG_FEM_STEADY_TRANSPORT_GPU_DOUBLE) {
+        throw std::domain_error(
+            "FEM charge transport GPU is unavailable; strict requests cannot fall back to CPU");
+    }
+    if (request.execution_lane != FULLMAG_FEM_STEADY_TRANSPORT_CPU_DOUBLE) {
+        throw std::invalid_argument("unknown FEM charge transport execution lane");
+    }
+}
+
+void validate_charge_request(
+    const fullmag_fem_charge_transport_request_v1 &request,
+    const fullmag_fem_charge_transport_result_v1 &result,
+    const MeshView &mesh,
+    bool prescribed_terminal_currents = false)
+{
+    validate_charge_request_header(request, result);
+    if (!equals(request.constitutive_version, kChargeConstitutiveVersion) ||
+        !equals(request.operator_version, kChargeOperatorVersion) ||
+        !equals(request.physical_residual_version, kChargePhysicalResidualVersion)) {
+        throw std::invalid_argument(
+            "unsupported FEM charge transport constitutive/operator/residual version");
+    }
+    if (request.mesh.periodic_node_pairs != nullptr ||
+        request.mesh.periodic_node_pairs_len != 0 ||
+        request.mesh.periodic_boundary_pair_markers != nullptr ||
+        request.mesh.periodic_boundary_pair_markers_len != 0) {
+        throw std::domain_error(
+            "periodic charge transport requires a separately versioned realization");
+    }
+    if (!pointer_matches_count(
+            request.charge_conductivity_spm_per_element,
+            request.charge_conductivity_spm_per_element_len) ||
+        request.charge_conductivity_spm_per_element_len != mesh.n_elements) {
+        throw std::invalid_argument(
+            "charge conductivity must contain one value per tetrahedron");
+    }
+    if (!pointer_matches_count(
+            request.dirichlet_boundary_attributes,
+            request.dirichlet_boundary_count) ||
+        !pointer_matches_count(
+            request.dirichlet_boundary_values_v,
+            request.dirichlet_boundary_count)) {
+        throw std::invalid_argument(
+            "charge Dirichlet attributes and values must have equal presence");
+    }
+    if (!prescribed_terminal_currents &&
+        request.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_BOUNDARY_REFERENCE &&
+        request.dirichlet_boundary_count == 0) {
+        throw std::invalid_argument(
+            "boundary-reference charge gauge requires an electrode");
+    }
+    if (request.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL &&
+        request.dirichlet_boundary_count != 0) {
+        throw std::invalid_argument(
+            "zero-mean charge gauge conflicts with fixed-potential electrodes");
+    }
+    if (request.charge_gauge != FULLMAG_FEM_STEADY_TRANSPORT_BOUNDARY_REFERENCE &&
+        request.charge_gauge != FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL) {
+        throw std::invalid_argument("unknown FEM charge transport gauge");
+    }
+    if (!(std::isfinite(request.relative_tolerance) &&
+            request.relative_tolerance > 0.0 && request.relative_tolerance < 1.0)) {
+        throw std::invalid_argument(
+            "charge transport relative_tolerance must be finite and lie in (0, 1)");
+    }
+    if (request.absolute_tolerance != 0.0) {
+        throw std::domain_error(
+            "FEM charge transport absolute_tolerance is not implemented; use zero");
+    }
+    if (request.maximum_iterations == 0 ||
+        request.maximum_iterations > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        throw std::invalid_argument(
+            "charge transport maximum_iterations must fit a positive int");
+    }
+    if (result.electric_potential_v == nullptr ||
+        result.electric_potential_v_capacity < mesh.n_nodes) {
+        throw std::invalid_argument(
+            "electric_potential_v output capacity is smaller than n_nodes");
+    }
+    if (result.charge_current_density_xyz_apm2 == nullptr ||
+        result.charge_current_density_xyz_apm2_capacity < 3u * mesh.n_nodes) {
+        throw std::invalid_argument(
+            "charge current output capacity is smaller than 3*n_nodes");
+    }
+    for (uint64_t i = 0; i < mesh.n_elements; ++i) {
+        const double sigma = request.charge_conductivity_spm_per_element[i];
+        if (!(std::isfinite(sigma) && sigma > 0.0)) {
+            throw std::invalid_argument(
+                "charge conductivity must be finite and positive");
+        }
+    }
+}
+
 std::unique_ptr<mfem::Mesh> import_mesh(
     const fullmag_fem_mesh_desc &descriptor,
-    const MeshView &view)
+    const MeshView &view,
+    bool accepted_geometry_preflight = false)
 {
     auto mesh = std::make_unique<mfem::Mesh>(
         3,
@@ -408,8 +689,11 @@ std::unique_ptr<mfem::Mesh> import_mesh(
         for (int local = 0; local < 4; ++local) {
             tetrahedron[local] = static_cast<int>(indices[local]);
         }
-        // A unique attribute preserves arbitrary elementwise conductivity.
-        mesh->AddTet(tetrahedron, static_cast<int>(element + 1u));
+        // Legacy material coefficients index unique attributes. The accepted
+        // scalar workflow indexes ElementNo and preserves explicit markers.
+        const int attribute = accepted_geometry_preflight && descriptor.cell_markers_len != 0
+            ? static_cast<int>(descriptor.cell_markers[element]) : static_cast<int>(element + 1u);
+        mesh->AddTet(tetrahedron, attribute);
     }
     for (uint32_t boundary = 0; boundary < view.boundary_markers.size(); ++boundary) {
         const uint32_t *indices = view.boundary_faces.data() + static_cast<size_t>(boundary) * 3u;
@@ -419,6 +703,9 @@ std::unique_ptr<mfem::Mesh> import_mesh(
         }
         const uint32_t attribute = view.boundary_markers[boundary];
         mesh->AddBdrTriangle(triangle, static_cast<int>(attribute));
+    }
+    if (accepted_geometry_preflight) {
+        fullmag::fem::transport::validate_terminal_current_mesh(*mesh);
     }
     mesh->FinalizeTopology();
     mesh->Finalize(false, true);
@@ -491,6 +778,325 @@ fullmag::fem::transport::StableMeshVertexIdentities rt0_stable_ids(
             "stable vertex identities must be nonzero and unique");
     }
     return ids;
+}
+
+std::string accepted_charge_string(const char *value, const char *name)
+{
+    rt0_require(value != nullptr, std::string(name) + " must not be null");
+    std::size_t length = 0;
+    while (length <= 4096 && value[length] != '\0') ++length;
+    rt0_require(length != 0 && length <= 4096,
+        std::string(name) + " must be nonempty and at most 4096 bytes");
+    return std::string(value, length);
+}
+
+MeshView validate_accepted_charge_input_mesh(const fullmag_fem_mesh_desc &mesh)
+{
+    const std::uint64_t maximum_elements = fullmag::fem::transport::ConservativeConstraintRank::kMaximumRows;
+    rt0_require(mesh.abi_version == FULLMAG_FEM_MESH_DESC_ABI_VERSION &&
+            mesh.struct_size == sizeof(mesh), "accepted charge mesh ABI mismatch");
+    rt0_require(mesh.cell_types_len > 0 && mesh.cell_types_len <= maximum_elements &&
+            mesh.nodes_xyz_len > 0 && mesh.nodes_xyz_len % 3 == 0 &&
+            mesh.nodes_xyz_len / 3 <= 4 * mesh.cell_types_len &&
+            mesh.facet_types_len > 0 && mesh.facet_types_len <= 4 * mesh.cell_types_len,
+        "accepted charge mesh counts exceed bounded tetrahedral support");
+    rt0_require(mesh.cell_nodes_len == 4 * mesh.cell_types_len &&
+            mesh.facet_nodes_len == 3 * mesh.facet_types_len,
+        "accepted charge mesh requires complete tet4/tri3 CSR");
+    const auto optional_count = [](const auto *pointer, std::uint64_t length, std::uint64_t expected) {
+        return pointer_matches_count(pointer, length) && (length == 0 || length == expected);
+    };
+    rt0_require(optional_count(mesh.cell_markers, mesh.cell_markers_len, mesh.cell_types_len) &&
+            optional_count(mesh.cell_global_ordinals, mesh.cell_global_ordinals_len, mesh.cell_types_len) &&
+            optional_count(mesh.facet_global_ordinals, mesh.facet_global_ordinals_len, mesh.facet_types_len),
+        "accepted charge optional mesh arrays have inconsistent pointer/count");
+    if (mesh.periodic_node_pairs != nullptr || mesh.periodic_node_pairs_len != 0 ||
+        mesh.periodic_boundary_pair_markers != nullptr || mesh.periodic_boundary_pair_markers_len != 0) {
+        throw std::domain_error("accepted terminal charge does not support periodic mesh metadata");
+    }
+    rt0_require(mesh.facet_roles != nullptr && mesh.facet_roles_len == mesh.facet_types_len,
+        "accepted charge facet role pointer/count is invalid");
+    for (std::uint64_t facet = 0; facet < mesh.facet_roles_len; ++facet) {
+        if (mesh.facet_roles[facet] == FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM) {
+            throw std::domain_error("accepted terminal charge does not support periodic seams");
+        }
+    }
+    // Existing importer checks the remaining required pointers and CSR ranges.
+    auto view = make_mesh_view(mesh);
+    rt0_require(mesh.cell_offsets[0] == 0 && mesh.cell_offsets[mesh.cell_types_len] == mesh.cell_nodes_len &&
+            mesh.facet_offsets[0] == 0 && mesh.facet_offsets[mesh.facet_types_len] == mesh.facet_nodes_len,
+        "accepted charge CSR must start at zero and consume the full node arrays");
+    for (std::uint64_t index = 0; index < mesh.nodes_xyz_len; ++index) {
+        rt0_require(std::isfinite(mesh.nodes_xyz[index]), "accepted charge coordinates must be finite");
+    }
+    for (std::uint64_t index = 0; index < mesh.cell_markers_len; ++index) {
+        rt0_require(mesh.cell_markers[index] > 0 && mesh.cell_markers[index] <= static_cast<std::uint32_t>(INT_MAX),
+            "accepted charge cell markers must be positive and representable");
+    }
+    using LocalFace = std::array<std::uint32_t, 3>;
+    std::map<LocalFace, unsigned> incidence;
+    for (std::uint64_t element = 0; element < view.n_elements; ++element) {
+        const auto *vertices = view.elements.data() + 4 * element;
+        std::array<std::uint32_t, 4> unique{vertices[0], vertices[1], vertices[2], vertices[3]};
+        std::sort(unique.begin(), unique.end());
+        rt0_require(std::adjacent_find(unique.begin(), unique.end()) == unique.end(),
+            "accepted charge tetrahedron repeats a vertex");
+        for (unsigned opposite = 0; opposite < 4; ++opposite) {
+            LocalFace key{};
+            unsigned corner = 0;
+            for (unsigned local = 0; local < 4; ++local) if (local != opposite) key[corner++] = vertices[local];
+            std::sort(key.begin(), key.end());
+            rt0_require(++incidence[key] <= 2, "accepted charge mesh has nonmanifold face incidence");
+        }
+    }
+    std::set<LocalFace> declared, exterior;
+    for (std::uint64_t facet = 0; facet < mesh.facet_types_len; ++facet) {
+        const auto role = mesh.facet_roles[facet];
+        if (role == FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM) {
+            throw std::domain_error("accepted terminal charge does not support periodic seams");
+        }
+        rt0_require(role == FULLMAG_FEM_FACET_ROLE_EXTERIOR || role == FULLMAG_FEM_FACET_ROLE_MATERIAL_INTERFACE,
+            "accepted charge facet has an unknown role");
+        const auto begin = mesh.facet_offsets[facet], end = mesh.facet_offsets[facet + 1];
+        rt0_require(mesh.facet_types[facet] == FULLMAG_FEM_FACET_TRI3 && end >= begin &&
+                end - begin == 3 && end <= mesh.facet_nodes_len,
+            "accepted charge facet CSR is not triangular");
+        LocalFace key{};
+        for (unsigned corner = 0; corner < 3; ++corner) {
+            key[corner] = mesh.facet_nodes[begin + corner];
+            rt0_require(key[corner] < view.n_nodes, "accepted charge facet references an unknown node");
+        }
+        std::sort(key.begin(), key.end());
+        rt0_require(declared.insert(key).second && incidence.count(key) == 1,
+            "accepted charge facet is repeated or not an actual tetrahedral face");
+        if (role == FULLMAG_FEM_FACET_ROLE_EXTERIOR) {
+            rt0_require(incidence.at(key) == 1 && mesh.facet_markers[facet] > 0 &&
+                    mesh.facet_markers[facet] <= static_cast<std::uint32_t>(INT_MAX),
+                "accepted charge exterior facet is interior or has an invalid marker");
+            exterior.insert(key);
+        } else {
+            rt0_require(incidence.at(key) == 2, "accepted charge material interface must be an interior face");
+        }
+    }
+    for (const auto &[key, count] : incidence) {
+        if (count == 1) rt0_require(exterior.count(key) == 1,
+            "accepted charge exterior boundary is incomplete");
+    }
+    return view;
+}
+
+void copy_rt0_text(char *destination, std::size_t capacity, const std::string &value, const char *name);
+
+struct ResolvedAcceptedChargeRequest {
+    std::unique_ptr<mfem::Mesh> mesh;
+    fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest charge;
+};
+
+ResolvedAcceptedChargeRequest resolve_accepted_charge_request(
+    const fullmag_fem_accepted_terminal_charge_request_v1 &request)
+{
+    rt0_require(request.abi_version == FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_ABI_VERSION &&
+            request.struct_size == sizeof(request) && request.reserved_flags == 0,
+        "accepted terminal charge ABI header mismatch");
+    if (request.execution_lane == FULLMAG_FEM_STEADY_TRANSPORT_GPU_DOUBLE) {
+        throw std::domain_error("accepted terminal charge requires CPU/double; GPU has no silent fallback");
+    }
+    rt0_require(request.execution_lane == FULLMAG_FEM_STEADY_TRANSPORT_CPU_DOUBLE &&
+            request.reserved_execution == 0 && request.reserved_solver == 0,
+        "accepted terminal charge execution/solver header is invalid");
+    rt0_require(request.maximum_iterations > 0 && request.maximum_iterations <= static_cast<std::uint32_t>(INT_MAX) &&
+            std::isfinite(request.absolute_jump_tolerance_v) && request.absolute_jump_tolerance_v >= 0 &&
+            std::isfinite(request.relative_jump_tolerance) && request.relative_jump_tolerance >= 0 &&
+            std::isfinite(request.algebraic_relative_tolerance) && request.algebraic_relative_tolerance > 0 &&
+            request.algebraic_relative_tolerance < 1,
+        "accepted terminal charge solver policy is invalid");
+    const auto view = validate_accepted_charge_input_mesh(request.mesh);
+    rt0_require(request.conductivity_spm_per_element != nullptr &&
+            request.conductivity_spm_per_element_len == view.n_elements,
+        "accepted terminal charge conductivity count must equal element count");
+    rt0_require(request.terminals != nullptr && request.terminal_count > 0 &&
+            request.terminal_count <= view.boundary_markers.size() &&
+            pointer_matches_count(request.interfaces, request.interface_count) &&
+            request.interface_count <= view.boundary_markers.size() / 2,
+        "accepted terminal charge terminal/interface pointer/count is invalid");
+    (void)accepted_charge_string(request.stable_vertex_identities.version, "stable vertex version");
+    fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest charge;
+    charge.stable_vertex_identities = rt0_stable_ids(request.stable_vertex_identities, view);
+    charge.conductivity_spm_per_element.assign(request.conductivity_spm_per_element,
+        request.conductivity_spm_per_element + request.conductivity_spm_per_element_len);
+    charge.absolute_jump_tolerance_v = request.absolute_jump_tolerance_v;
+    charge.relative_jump_tolerance = request.relative_jump_tolerance;
+    charge.algebraic_relative_tolerance = request.algebraic_relative_tolerance;
+    charge.maximum_iterations = static_cast<int>(request.maximum_iterations);
+    std::uint64_t terminal_faces = 0;
+    for (std::uint64_t index = 0; index < request.terminal_count; ++index) {
+        const auto &input = request.terminals[index];
+        rt0_require(input.boundary_face_vertex_ids != nullptr && input.face_count > 0 &&
+                input.face_count <= view.boundary_markers.size() - terminal_faces &&
+                std::isfinite(input.requested_outward_current_a),
+            "accepted terminal charge face pointer/count or current is invalid");
+        terminal_faces += input.face_count;
+        fullmag::fem::antenna_field_solve::ResolvedChargeTerminal terminal;
+        terminal.id = accepted_charge_string(input.id, "terminal ID");
+        terminal.requested_outward_current_a = input.requested_outward_current_a;
+        for (std::uint64_t face = 0; face < input.face_count; ++face) {
+            terminal.boundary_face_vertex_ids.push_back({input.boundary_face_vertex_ids[3 * face],
+                input.boundary_face_vertex_ids[3 * face + 1], input.boundary_face_vertex_ids[3 * face + 2]});
+        }
+        charge.terminals.push_back(std::move(terminal));
+    }
+    for (std::uint64_t index = 0; index < request.interface_count; ++index) {
+        const auto &input = request.interfaces[index];
+        fullmag::fem::transport::Rt0InterfaceFacePair pair;
+        pair.id = accepted_charge_string(input.id, "interface ID");
+        for (unsigned corner = 0; corner < 3; ++corner) {
+            pair.first_face_vertex_ids[corner] = input.first_face_vertex_ids[corner];
+            pair.second_face_vertex_ids[corner] = input.second_face_vertex_ids[corner];
+            for (unsigned side = 0; side < 2; ++side) pair.vertex_pairs[corner][side] = input.vertex_pairs[corner][side];
+        }
+        charge.interface_pairs.push_back(std::move(pair));
+    }
+    auto mesh = import_mesh(request.mesh, view, true);
+    charge.mesh = mesh.get();
+    return {std::move(mesh), std::move(charge)};
+}
+
+int solve_accepted_terminal_charge(const fullmag_fem_accepted_terminal_charge_request_v1 &request,
+    fullmag_fem_accepted_terminal_charge_result_v1 &result)
+{
+    static_assert(fullmag::fem::antenna_field_solve::AcceptedTerminalChargeSource::maximum_digest_preimage_bytes ==
+        FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_MAX_PAYLOAD_BYTES, "accepted charge payload limits differ");
+    if (request.execution_lane == FULLMAG_FEM_STEADY_TRANSPORT_GPU_DOUBLE) {
+        throw std::domain_error("accepted terminal charge requires CPU/double; GPU has no silent fallback");
+    }
+    rt0_require(result.canonical_payload != nullptr && result.canonical_payload_capacity > 0 &&
+            result.canonical_payload_capacity <= FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_MAX_PAYLOAD_BYTES,
+        "accepted terminal charge payload pointer/capacity is invalid");
+    const auto resolved = resolve_accepted_charge_request(request);
+    const auto source = fullmag::fem::antenna_field_solve::solve_accepted_terminal_charge_source(resolved.charge);
+    const auto &payload = source->canonical_content_bytes();
+    rt0_require(!payload.empty() && payload.size() <= result.canonical_payload_capacity,
+        "accepted terminal charge payload capacity is insufficient");
+    rt0_require(source->content_digest().size() == 64, "accepted terminal charge digest is invalid");
+    copy_rt0_text(result.digest_schema, sizeof(result.digest_schema), source->digest_schema, "digest schema");
+    copy_rt0_text(result.operator_version, sizeof(result.operator_version), source->operator_version, "operator version");
+    copy_rt0_text(result.layout_fingerprint, sizeof(result.layout_fingerprint),
+        FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_LAYOUT_FINGERPRINT, "accepted charge ABI fingerprint");
+    copy_rt0_text(result.content_sha256, sizeof(result.content_sha256), source->content_digest(), "content digest");
+    std::copy(payload.begin(), payload.end(), result.canonical_payload);
+    result.canonical_payload_len = payload.size();
+    result.error_message[0] = '\0';
+    return FULLMAG_FEM_OK;
+}
+
+int solve_accepted_external_lead(const fullmag_fem_accepted_external_lead_request_v1 &request,
+    fullmag_fem_accepted_external_lead_result_v1 &result)
+{
+    namespace workflow = fullmag::fem::antenna_field_solve;
+    static_assert(workflow::AcceptedTerminalChargeSource::maximum_digest_preimage_bytes ==
+        FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_MAX_PAYLOAD_BYTES, "external lead bundle payload limits differ");
+    rt0_require(request.charge.abi_version == FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_ABI_VERSION &&
+            request.charge.struct_size == sizeof(request.charge) && request.charge.reserved_flags == 0,
+        "external lead bundle nested charge ABI header mismatch");
+    if (request.charge.execution_lane == FULLMAG_FEM_STEADY_TRANSPORT_GPU_DOUBLE) {
+        throw std::domain_error("accepted external lead bundle requires CPU/double; GPU has no silent fallback");
+    }
+    rt0_require(result.canonical_payload != nullptr && result.canonical_payload_capacity > 0 &&
+            result.canonical_payload_capacity <= FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_MAX_PAYLOAD_BYTES,
+        "external lead bundle payload pointer/capacity is invalid");
+    rt0_require(request.base_quadrature_order >= 2 && request.base_quadrature_order <= 16 &&
+            request.maximum_subdivision_depth >= 0 && request.maximum_subdivision_depth <= 6 &&
+            std::isfinite(request.absolute_tolerance_apm) && request.absolute_tolerance_apm >= 0 &&
+            std::isfinite(request.relative_tolerance) && request.relative_tolerance >= 0 &&
+            request.maximum_source_target_pairs > 0 && request.maximum_source_target_pairs <= 1'000'000 &&
+            pointer_matches_count(request.target_xyz_m, request.target_count) &&
+            request.target_count <= request.maximum_source_target_pairs,
+        "external lead bundle quadrature policy or target pointer/count is invalid");
+    // Each ordered target contributes 252 bytes before the fixed field/bundle headers.
+    rt0_require(request.target_count <= FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_MAX_PAYLOAD_BYTES / 252,
+        "external lead bundle target record exceeds its preflight budget");
+    const auto resolved = resolve_accepted_charge_request(request.charge);
+    const auto vertices = static_cast<std::uint64_t>(resolved.mesh->GetNV());
+    const auto boundary_count = static_cast<std::uint64_t>(resolved.mesh->GetNBE());
+    rt0_require(request.device_vertex_ids != nullptr && request.lead_vertex_ids != nullptr &&
+            request.device_vertex_count > 0 && request.device_vertex_count <= vertices &&
+            request.lead_vertex_count > 0 && request.lead_vertex_count == vertices - request.device_vertex_count,
+        "external lead bundle partition pointer/count is invalid");
+    rt0_require(request.boundary_faces != nullptr && request.boundary_face_count == boundary_count &&
+            request.branches != nullptr && request.branch_count > 0 &&
+            request.branch_count <= resolved.charge.interface_pairs.size(),
+        "external lead bundle boundary/branch pointer/count is invalid");
+    rt0_require(request.target_count == 0 || static_cast<std::uint64_t>(resolved.mesh->GetNE()) <=
+            request.maximum_source_target_pairs / request.target_count,
+        "external lead bundle exceeds its source-target pair budget");
+    workflow::AcceptedExternalLeadSourceRequest closure;
+    closure.closure_revision = accepted_charge_string(request.closure_revision, "closure revision");
+    closure.device_vertex_ids.assign(request.device_vertex_ids,
+        request.device_vertex_ids + request.device_vertex_count);
+    closure.lead_vertex_ids.assign(request.lead_vertex_ids, request.lead_vertex_ids + request.lead_vertex_count);
+    for (std::uint64_t index = 0; index < request.boundary_face_count; ++index) {
+        const auto &input = request.boundary_faces[index];
+        rt0_require(input.reserved == 0 && input.role >= FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_BOUNDARY_INSULATING &&
+                input.role <= FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_BOUNDARY_DEVICE_INTERFACE,
+            "external lead bundle boundary header is invalid");
+        workflow::ExternalLeadSourceBoundaryFace face;
+        std::copy(std::begin(input.vertex_ids), std::end(input.vertex_ids), face.vertex_ids.begin());
+        face.role = static_cast<workflow::ExternalLeadSourceBoundaryRole>(input.role);
+        if (face.role == workflow::ExternalLeadSourceBoundaryRole::Insulating) {
+            rt0_require(input.circuit_id == nullptr || input.circuit_id[0] == '\0',
+                "external lead insulating face must have an empty circuit ID");
+        } else {
+            face.circuit_id = accepted_charge_string(input.circuit_id, "boundary circuit ID");
+        }
+        closure.boundary_faces.push_back(std::move(face));
+    }
+    std::uint64_t observed_pairs = 0;
+    for (std::uint64_t index = 0; index < request.branch_count; ++index) {
+        const auto &input = request.branches[index];
+        rt0_require(input.interface_pair_ids != nullptr && input.interface_pair_count > 0 &&
+                input.interface_pair_count <= resolved.charge.interface_pairs.size() - observed_pairs &&
+                std::isfinite(input.requested_device_outward_current_a),
+            "external lead bundle branch pointer/count or current is invalid");
+        observed_pairs += input.interface_pair_count;
+        workflow::ExternalLeadBranchObservation branch;
+        branch.id = accepted_charge_string(input.id, "device branch ID");
+        branch.requested_device_outward_current_a = input.requested_device_outward_current_a;
+        for (std::uint64_t pair = 0; pair < input.interface_pair_count; ++pair) {
+            branch.interface_pair_ids.push_back(accepted_charge_string(input.interface_pair_ids[pair], "branch pair ID"));
+        }
+        closure.branch_observations.push_back(std::move(branch));
+    }
+    rt0_require(observed_pairs == resolved.charge.interface_pairs.size(),
+        "external lead bundle must observe every interface exactly once");
+    std::vector<std::array<double, 3>> targets;
+    targets.reserve(static_cast<std::size_t>(request.target_count));
+    for (std::uint64_t target = 0; target < request.target_count; ++target) {
+        std::array<double, 3> point{};
+        for (unsigned component = 0; component < 3; ++component) {
+            point[component] = request.target_xyz_m[3 * target + component];
+            rt0_require(std::isfinite(point[component]), "external lead bundle target must be finite");
+        }
+        targets.push_back(point);
+    }
+    fullmag::fem::oersted::DirectTetraQuadratureOptions options;
+    options.base_quadrature_order = request.base_quadrature_order;
+    options.maximum_subdivision_depth = request.maximum_subdivision_depth;
+    options.absolute_tolerance_apm = request.absolute_tolerance_apm;
+    options.relative_tolerance = request.relative_tolerance;
+    options.maximum_source_target_pairs = request.maximum_source_target_pairs;
+    const auto bundle = workflow::solve_accepted_external_lead_bundle(resolved.charge, std::move(closure), targets, options);
+    rt0_require(!bundle.canonical_content_bytes.empty() &&
+            bundle.canonical_content_bytes.size() <= result.canonical_payload_capacity && bundle.content_digest.size() == 64,
+        "external lead bundle payload capacity is insufficient or digest is invalid");
+    copy_rt0_text(result.digest_schema, sizeof(result.digest_schema), bundle.digest_schema, "bundle digest schema");
+    copy_rt0_text(result.operator_version, sizeof(result.operator_version), bundle.operator_version, "bundle operator version");
+    copy_rt0_text(result.layout_fingerprint, sizeof(result.layout_fingerprint),
+        FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_LAYOUT_FINGERPRINT, "external lead ABI fingerprint");
+    copy_rt0_text(result.content_sha256, sizeof(result.content_sha256), bundle.content_digest, "bundle content digest");
+    std::copy(bundle.canonical_content_bytes.begin(), bundle.canonical_content_bytes.end(), result.canonical_payload);
+    result.canonical_payload_len = bundle.canonical_content_bytes.size();
+    result.error_message[0] = '\0';
+    return FULLMAG_FEM_OK;
 }
 
 std::vector<fullmag::fem::transport::ConservativeCurrentBoundaryFace>
@@ -943,6 +1549,224 @@ int solve(
     return FULLMAG_FEM_OK;
 }
 
+void validate_disjoint_charge_terminal_nodes(
+    const fullmag_fem_charge_transport_request_v1 &request,
+    const MeshView &mesh)
+{
+    std::map<uint32_t, uint64_t> terminal_by_attribute;
+    for (uint64_t index = 0; index < request.dirichlet_boundary_count; ++index) {
+        if (!terminal_by_attribute.emplace(
+                request.dirichlet_boundary_attributes[index], index).second) {
+            throw std::invalid_argument("charge terminal attributes must be unique");
+        }
+    }
+    std::vector<int64_t> terminal_by_node(mesh.n_nodes, -1);
+    for (std::size_t face = 0; face < mesh.boundary_markers.size(); ++face) {
+        const auto terminal = terminal_by_attribute.find(mesh.boundary_markers[face]);
+        if (terminal == terminal_by_attribute.end()) {
+            continue;
+        }
+        for (std::size_t local = 0; local < 3; ++local) {
+            const auto node = mesh.boundary_faces[3 * face + local];
+            auto &owner = terminal_by_node[node];
+            if (owner >= 0 && owner != static_cast<int64_t>(terminal->second)) {
+                throw std::invalid_argument(
+                    "charge terminal boundaries share an H1 node");
+            }
+            owner = static_cast<int64_t>(terminal->second);
+        }
+    }
+}
+
+int solve_charge(
+    const fullmag_fem_charge_transport_request_v1 &request,
+    fullmag_fem_charge_transport_result_v1 &result,
+    double *dirichlet_boundary_currents_a = nullptr,
+    uint64_t dirichlet_boundary_currents_a_capacity = 0,
+    uint64_t *dirichlet_boundary_currents_a_len = nullptr,
+    const fullmag_fem_charge_transport_request_v3 *current_request = nullptr,
+    fullmag_fem_charge_transport_result_v3 *current_result = nullptr)
+{
+    validate_charge_request_header(request, result);
+    const MeshView mesh_view = make_mesh_view(request.mesh);
+    const bool prescribed_currents = current_request != nullptr;
+    if (prescribed_currents != (current_result != nullptr)) {
+        throw std::invalid_argument("terminal-current request and result must be supplied together");
+    }
+    validate_charge_request(request, result, mesh_view, prescribed_currents);
+    if (dirichlet_boundary_currents_a_len != nullptr) {
+        validate_disjoint_charge_terminal_nodes(request, mesh_view);
+    }
+    std::vector<std::vector<int>> terminal_groups;
+    std::vector<double> requested_currents;
+    if (prescribed_currents) {
+        if (request.charge_gauge != FULLMAG_FEM_STEADY_TRANSPORT_BOUNDARY_REFERENCE ||
+            request.dirichlet_boundary_count != 0 ||
+            current_request->terminal_count == 0 ||
+            current_request->terminal_count > static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
+            current_request->terminal_attribute_offsets_len != current_request->terminal_count + 1 ||
+            current_request->terminal_attribute_offsets == nullptr ||
+            !pointer_matches_count(current_request->terminal_boundary_attributes,
+                current_request->terminal_boundary_attributes_len) ||
+            current_request->requested_outward_currents_a == nullptr ||
+            current_result->terminal_voltages_v == nullptr ||
+            current_result->terminal_voltages_v_capacity < current_request->terminal_count ||
+            current_result->measured_outward_currents_a == nullptr ||
+            current_result->measured_outward_currents_a_capacity < current_request->terminal_count ||
+            current_result->gauge_terminal_indices == nullptr ||
+            current_result->gauge_terminal_indices_capacity < current_request->terminal_count) {
+            throw std::invalid_argument("terminal-current ABI inputs or output capacities are invalid");
+        }
+        const auto *offsets = current_request->terminal_attribute_offsets;
+        if (offsets[0] != 0 ||
+            offsets[current_request->terminal_count] !=
+                current_request->terminal_boundary_attributes_len) {
+            throw std::invalid_argument("terminal attribute offsets do not cover the input");
+        }
+        for (uint64_t terminal = 0; terminal < current_request->terminal_count; ++terminal) {
+            if (offsets[terminal] >= offsets[terminal + 1] ||
+                offsets[terminal + 1] > current_request->terminal_boundary_attributes_len) {
+                throw std::invalid_argument("terminal attribute offsets are not strictly increasing");
+            }
+            std::vector<int> group;
+            for (uint64_t index = offsets[terminal]; index < offsets[terminal + 1]; ++index) {
+                const uint32_t attribute = current_request->terminal_boundary_attributes[index];
+                if (attribute == 0 || attribute > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+                    throw std::invalid_argument("terminal boundary attribute is invalid");
+                }
+                group.push_back(static_cast<int>(attribute));
+            }
+            terminal_groups.push_back(std::move(group));
+            requested_currents.push_back(
+                current_request->requested_outward_currents_a[terminal]);
+        }
+    }
+    auto mesh = import_mesh(request.mesh, mesh_view);
+
+    mfem::Vector conductivity_values(static_cast<int>(mesh_view.n_elements));
+    for (uint32_t i = 0; i < mesh_view.n_elements; ++i) {
+        conductivity_values[static_cast<int>(i)] =
+            request.charge_conductivity_spm_per_element[i];
+    }
+    mfem::PWConstCoefficient conductivity(conductivity_values);
+
+    // The one-way charge projection is J=-sigma*grad(V) and does not read
+    // magnetization.  Keep a zero coefficient here so any accidental future
+    // spin/magnetoresistive evaluation fails loudly instead of manufacturing
+    // a synthetic magnetic state for a metallic conductor.
+    mfem::Vector no_magnetization(3);
+    no_magnetization = 0.0;
+    mfem::VectorConstantCoefficient magnetization(no_magnetization);
+    fullmag::fem::transport::SteadyTransportParameters parameters;
+    parameters.relative_tolerance = request.relative_tolerance;
+    parameters.maximum_iterations = static_cast<int>(request.maximum_iterations);
+
+    fullmag::fem::transport::SteadyTransportOracle oracle(
+        *mesh, conductivity, magnetization, parameters);
+    const auto charge_marker = boundary_marker(
+        *mesh,
+        request.dirichlet_boundary_attributes,
+        request.dirichlet_boundary_count);
+    BoundaryScalarCoefficient charge_boundary(
+        request.dirichlet_boundary_attributes,
+        request.dirichlet_boundary_values_v,
+        request.dirichlet_boundary_count);
+    const auto charge_gauge =
+        request.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL
+            ? fullmag::fem::transport::ChargeGauge::ZeroMeanPotential
+            : fullmag::fem::transport::ChargeGauge::BoundaryReference;
+    fullmag::fem::transport::ChargeTerminalCurrentSolution current_solution;
+    fullmag::fem::transport::ChargeSolveDiagnostics diagnostics;
+    if (prescribed_currents) {
+        current_solution = oracle.solve_charge_terminal_currents(
+            terminal_groups, requested_currents);
+        diagnostics = current_solution.diagnostics;
+    } else {
+        diagnostics = oracle.solve_charge(charge_marker, charge_boundary, charge_gauge);
+    }
+    if (!diagnostics.converged) {
+        throw std::runtime_error("FEM charge transport solve did not converge");
+    }
+    if (dirichlet_boundary_currents_a_len != nullptr) {
+        if (dirichlet_boundary_currents_a_capacity < request.dirichlet_boundary_count ||
+            (request.dirichlet_boundary_count != 0 && dirichlet_boundary_currents_a == nullptr)) {
+            throw std::invalid_argument(
+                "charge transport terminal-current result capacity is too small");
+        }
+        for (uint64_t index = 0; index < request.dirichlet_boundary_count; ++index) {
+            dirichlet_boundary_currents_a[index] = oracle.boundary_weak_current_a(
+                static_cast<int>(request.dirichlet_boundary_attributes[index]));
+        }
+        *dirichlet_boundary_currents_a_len = request.dirichlet_boundary_count;
+    }
+    copy_scalar(
+        oracle.electric_potential(), result.electric_potential_v, mesh_view.n_nodes);
+    copy_by_vdim(
+        oracle.charge_current_density(),
+        3,
+        result.charge_current_density_xyz_apm2,
+        mesh_view.n_nodes);
+    result.electric_potential_v_len = mesh_view.n_nodes;
+    result.charge_current_density_xyz_apm2_len = 3u * mesh_view.n_nodes;
+    result.charge_converged = diagnostics.converged ? 1 : 0;
+    result.charge_iterations = static_cast<uint32_t>(diagnostics.iterations);
+    result.charge_relative_residual = diagnostics.relative_residual;
+    result.net_boundary_current_a = diagnostics.net_boundary_current_a;
+    for (int component = 0; component < 3; ++component) {
+        result.current_density_volume_average_apm2[component] =
+            diagnostics.current_density_volume_average_apm2[component];
+    }
+    result.error_message[0] = '\0';
+    std::snprintf(
+        result.diagnostics_json,
+        sizeof(result.diagnostics_json),
+        "{\"schema_version\":\"fem_charge_transport_diagnostics.v1\"," \
+        "\"constitutive_version\":\"%s\",\"operator_version\":\"%s\"," \
+        "\"physical_residual_version\":\"%s\"," \
+        "\"execution_lane\":\"fem_cpu_double\"," \
+        "\"charge_converged\":true,\"charge_iterations\":%u," \
+        "\"charge_relative_residual\":%.17g," \
+        "\"net_boundary_current_A\":%.17g," \
+        "\"current_density_volume_average_Apm2\":[%.17g,%.17g,%.17g]}",
+        kChargeConstitutiveVersion,
+        kChargeOperatorVersion,
+        kChargePhysicalResidualVersion,
+        result.charge_iterations,
+        result.charge_relative_residual,
+        result.net_boundary_current_a,
+        result.current_density_volume_average_apm2[0],
+        result.current_density_volume_average_apm2[1],
+        result.current_density_volume_average_apm2[2]);
+    if (prescribed_currents) {
+        for (uint64_t terminal = 0; terminal < current_request->terminal_count; ++terminal) {
+            current_result->terminal_voltages_v[terminal] =
+                current_solution.terminal_voltage_v[static_cast<std::size_t>(terminal)];
+            current_result->measured_outward_currents_a[terminal] =
+                current_solution.measured_outward_current_a[static_cast<std::size_t>(terminal)];
+        }
+        for (std::size_t index = 0; index < current_solution.gauge_terminal_indices.size(); ++index) {
+            current_result->gauge_terminal_indices[index] =
+                static_cast<uint32_t>(current_solution.gauge_terminal_indices[index]);
+        }
+        current_result->terminal_voltages_v_len = current_request->terminal_count;
+        current_result->measured_outward_currents_a_len = current_request->terminal_count;
+        current_result->gauge_terminal_indices_len =
+            current_solution.gauge_terminal_indices.size();
+        std::snprintf(
+            result.diagnostics_json,
+            sizeof(result.diagnostics_json),
+            "{\"schema_version\":\"fem_charge_terminal_current_diagnostics.v3\","
+            "\"operator_version\":\"%s\",\"execution_lane\":\"fem_cpu_double\","
+            "\"terminal_count\":%llu,\"gauge_component_count\":%llu,"
+            "\"charge_converged\":true,\"charge_relative_residual\":%.17g}",
+            kChargeOperatorVersion,
+            static_cast<unsigned long long>(current_request->terminal_count),
+            static_cast<unsigned long long>(current_solution.gauge_terminal_indices.size()),
+            result.charge_relative_residual);
+    }
+    return FULLMAG_FEM_OK;
+}
+
 int solve_m2(
     const fullmag_fem_steady_transport_m2_request_v1 &request,
     fullmag_fem_steady_transport_result_v1 &result)
@@ -1170,7 +1994,11 @@ int solve_rt0(
     fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1
         *vector_potential_result = nullptr,
     const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1
-        *vector_potential_request = nullptr)
+        *vector_potential_request = nullptr,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1
+        *charge_snapshot = nullptr,
+    fullmag_fem_direct_oersted_snapshot_result_v1
+        *quadrature_snapshot = nullptr)
 {
     validate_rt0_header(request, result);
     const MeshView device_mesh_view = make_mesh_view(request.base.mesh, true);
@@ -1268,6 +2096,41 @@ int solve_rt0(
     const auto view = fullmag::fem::transport::ConservativeCurrentView::Build(build);
     const auto &field = view->field();
     const auto &records = view->canonical_face_flux_records();
+    std::vector<double> charge_vertex_xyz;
+    if (charge_snapshot != nullptr) {
+        const auto *potential = view->charge_potential_vertex_values_v();
+        const auto &ids = view->stable_vertex_identities();
+        const auto *mesh = view->space().GetMesh();
+        const auto count = static_cast<std::uint64_t>(mesh->GetNV());
+        rt0_require(potential != nullptr && potential->size() == count &&
+                ids.local_to_stable.size() == count,
+            "RT0 charge snapshot is absent or has inconsistent vertex ordering");
+        rt0_require(count <= std::numeric_limits<std::uint64_t>::max() / 3u &&
+                charge_snapshot->electric_potential_v != nullptr &&
+                charge_snapshot->electric_potential_v_capacity >= count &&
+                charge_snapshot->stable_vertex_ids != nullptr &&
+                charge_snapshot->stable_vertex_ids_capacity >= count &&
+                charge_snapshot->vertex_xyz_m != nullptr &&
+                charge_snapshot->vertex_xyz_m_capacity >= 3u * count,
+            "RT0 charge snapshot output capacity is smaller than the combined mesh");
+        charge_vertex_xyz.reserve(static_cast<std::size_t>(3u * count));
+        for (int vertex = 0; vertex < mesh->GetNV(); ++vertex) {
+            rt0_require(std::isfinite(potential->at(vertex)),
+                "RT0 charge snapshot potential is non-finite");
+            for (int component = 0; component < 3; ++component) {
+                const double coordinate = mesh->GetVertex(vertex)[component];
+                rt0_require(std::isfinite(coordinate),
+                    "RT0 charge snapshot coordinate is non-finite");
+                charge_vertex_xyz.push_back(coordinate);
+            }
+        }
+        copy_rt0_text(charge_snapshot->stable_vertex_id_version,
+            sizeof(charge_snapshot->stable_vertex_id_version), ids.version,
+            "RT0 charge snapshot stable vertex ID version");
+        copy_rt0_text(charge_snapshot->source_view_identity_digest,
+            sizeof(charge_snapshot->source_view_identity_digest),
+            view->identity().view_identity_digest, "RT0 charge snapshot source digest");
+    }
     if (result.rt0_dof_values == nullptr ||
         result.rt0_dof_values_capacity < static_cast<std::uint64_t>(field.Size())) {
         throw std::invalid_argument("RT0 dof output capacity is smaller than the RT0 space");
@@ -1376,16 +2239,73 @@ int solve_rt0(
         std::snprintf(
             oersted_result->diagnostics_json,
             sizeof(oersted_result->diagnostics_json),
-            "{\"schema_version\":\"fem_oersted_direct_tetra_quadrature.v1\","
+            "{\"schema_version\":\"%s\","
             "\"operator_version\":\"%s\",\"source_view_identity_digest\":\"%s\","
             "\"target_count\":%llu,\"source_target_pairs\":%llu,"
             "\"unconverged_pair_count\":%llu,\"maximum_pair_error_apm\":%.17g}",
+            oersted_result->operator_version,
             oersted_result->operator_version,
             oersted_result->source_view_identity_digest,
             static_cast<unsigned long long>(target_count),
             static_cast<unsigned long long>(oersted_result->source_target_pairs),
             static_cast<unsigned long long>(oersted_result->unconverged_pair_count),
             oersted_result->maximum_pair_error_apm);
+        if (quadrature_snapshot != nullptr) {
+            rt0_require(direct.target_diagnostics.size() == target_count &&
+                    direct.h_xyz_apm.size() == target_count * 3u,
+                "OE-F1 target ledger count differs from the raw field");
+            for (std::size_t index = 0; index < target_count; ++index) {
+                auto &record = quadrature_snapshot->target_records[index];
+                const auto &diagnostic = direct.target_diagnostics[index];
+                for (std::size_t component = 0; component < 3u; ++component) {
+                    record.target_xyz_m[component] = target_points[index][component];
+                    record.h_xyz_apm[component] = direct.h_xyz_apm[3u * index + component];
+                }
+                record.estimated_error_apm = diagnostic.estimated_error_apm;
+                record.tolerance_apm = diagnostic.tolerance_apm;
+                record.roundoff_indicator_apm = diagnostic.roundoff_indicator_apm;
+                record.final_leaf_count = diagnostic.final_leaf_count;
+                record.kernel_evaluations = diagnostic.kernel_evaluations;
+                record.ledger_leaf_visits = diagnostic.ledger_leaf_visits;
+            }
+            quadrature_snapshot->source_target_pairs = direct.diagnostics.source_target_pairs;
+            quadrature_snapshot->refined_pairs = direct.diagnostics.refined_pairs;
+            quadrature_snapshot->unconverged_pair_count = direct.diagnostics.unconverged_pair_count;
+            quadrature_snapshot->maximum_pair_error_apm = direct.diagnostics.maximum_pair_error_apm;
+            quadrature_snapshot->kernel_evaluations = direct.diagnostics.kernel_evaluations;
+            quadrature_snapshot->ledger_leaf_visits = direct.diagnostics.ledger_leaf_visits;
+            quadrature_snapshot->base_quadrature_order = options.base_quadrature_order;
+            quadrature_snapshot->maximum_subdivision_depth = options.maximum_subdivision_depth;
+            quadrature_snapshot->absolute_tolerance_apm = options.absolute_tolerance_apm;
+            quadrature_snapshot->relative_tolerance = options.relative_tolerance;
+            quadrature_snapshot->relative_scale_floor_apm = 0.0;
+            quadrature_snapshot->maximum_source_target_pairs = options.maximum_source_target_pairs;
+            quadrature_snapshot->maximum_final_leaves_per_target =
+                fullmag::fem::oersted::DirectTetraQuadrature::maximum_final_leaves_per_target;
+            quadrature_snapshot->maximum_kernel_evaluations =
+                fullmag::fem::oersted::DirectTetraQuadrature::maximum_kernel_evaluations;
+            quadrature_snapshot->maximum_ledger_leaf_visits =
+                fullmag::fem::oersted::DirectTetraQuadrature::maximum_ledger_leaf_visits;
+            copy_rt0_text(quadrature_snapshot->schema_version,
+                sizeof(quadrature_snapshot->schema_version),
+                "fem_direct_oersted_target_snapshot.v1", "OE-F1 snapshot schema");
+            copy_rt0_text(quadrature_snapshot->operator_version,
+                sizeof(quadrature_snapshot->operator_version),
+                direct.operator_version, "OE-F1 snapshot operator");
+            copy_rt0_text(quadrature_snapshot->quadrature_scope,
+                sizeof(quadrature_snapshot->quadrature_scope),
+                "global_target", "OE-F1 quadrature scope");
+            copy_rt0_text(quadrature_snapshot->estimated_error_policy,
+                sizeof(quadrature_snapshot->estimated_error_policy),
+                "sum_final_leaf_l2_difference.v1", "OE-F1 error policy");
+            copy_rt0_text(quadrature_snapshot->roundoff_indicator_policy,
+                sizeof(quadrature_snapshot->roundoff_indicator_policy),
+                "weighted_terms_binary64_epsilon.v1", "OE-F1 roundoff policy");
+            copy_rt0_text(quadrature_snapshot->source_view_identity_digest,
+                sizeof(quadrature_snapshot->source_view_identity_digest),
+                direct.source_view_identity_digest, "OE-F1 snapshot source digest");
+            quadrature_snapshot->target_records_len = target_count;
+        }
     }
     if (vector_potential_result != nullptr || vector_potential_request != nullptr) {
         rt0_require(vector_potential_result != nullptr &&
@@ -1484,12 +2404,195 @@ int solve_rt0(
             static_cast<unsigned long long>(vector_potential_result->nodal_h_xyz_apm_len),
             mixed.diagnostics.nodal_projection_residual);
     }
+    if (charge_snapshot != nullptr) {
+        const auto &potential = *view->charge_potential_vertex_values_v();
+        const auto &ids = view->stable_vertex_identities().local_to_stable;
+        std::copy(potential.begin(), potential.end(), charge_snapshot->electric_potential_v);
+        std::copy(ids.begin(), ids.end(), charge_snapshot->stable_vertex_ids);
+        std::copy(charge_vertex_xyz.begin(), charge_vertex_xyz.end(),
+            charge_snapshot->vertex_xyz_m);
+        charge_snapshot->electric_potential_v_len = potential.size();
+        charge_snapshot->stable_vertex_ids_len = ids.size();
+        charge_snapshot->vertex_xyz_m_len = charge_vertex_xyz.size();
+    }
     return FULLMAG_FEM_OK;
 }
 
 #endif
 
 } // namespace
+
+extern "C" int fullmag_fem_solve_charge_transport_v1(
+    const fullmag_fem_charge_transport_request_v1 *request,
+    fullmag_fem_charge_transport_result_v1 *result)
+{
+    if (request == nullptr || result == nullptr) {
+        set_error(result, "charge transport requires non-null request and result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        return solve_charge(*request, *result);
+    } catch (const std::domain_error &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    } catch (const std::invalid_argument &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INVALID;
+    } catch (const std::exception &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    set_error(result,
+        "FEM charge transport requires a runtime built with FULLMAG_USE_MFEM_STACK=ON");
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+extern "C" int fullmag_fem_solve_charge_transport_v2(
+    const fullmag_fem_charge_transport_request_v1 *request,
+    fullmag_fem_charge_transport_result_v2 *result)
+{
+    if (request == nullptr || result == nullptr) {
+        set_error(result == nullptr ? nullptr : &result->base,
+            "charge transport v2 requires non-null request and result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        result->dirichlet_boundary_currents_a_len = 0;
+        return solve_charge(
+            *request,
+            result->base,
+            result->dirichlet_boundary_currents_a,
+            result->dirichlet_boundary_currents_a_capacity,
+            &result->dirichlet_boundary_currents_a_len);
+    } catch (const std::domain_error &error) {
+        set_error(&result->base, error.what());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    } catch (const std::invalid_argument &error) {
+        set_error(&result->base, error.what());
+        return FULLMAG_FEM_ERR_INVALID;
+    } catch (const std::exception &error) {
+        set_error(&result->base, error.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    set_error(&result->base,
+        "FEM charge transport requires a runtime built with FULLMAG_USE_MFEM_STACK=ON");
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+extern "C" int fullmag_fem_solve_charge_transport_v3(
+    const fullmag_fem_charge_transport_request_v3 *request,
+    fullmag_fem_charge_transport_result_v3 *result)
+{
+    if (request == nullptr || result == nullptr) {
+        set_error(result, "charge terminal-current v3 requires non-null request and result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    result->terminal_voltages_v_len = 0;
+    result->measured_outward_currents_a_len = 0;
+    result->gauge_terminal_indices_len = 0;
+    if (request->abi_version != FULLMAG_FEM_CHARGE_TERMINAL_CURRENT_ABI_VERSION ||
+        request->struct_size != sizeof(*request) || request->reserved_flags != 0 ||
+        result->abi_version != FULLMAG_FEM_CHARGE_TERMINAL_CURRENT_ABI_VERSION ||
+        result->struct_size != sizeof(*result) || result->reserved_flags != 0) {
+        set_error(result, "charge terminal-current v3 ABI header mismatch");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        return solve_charge(request->base, result->base,
+            nullptr, 0, nullptr, request, result);
+    } catch (const std::domain_error &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    } catch (const std::invalid_argument &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INVALID;
+    } catch (const std::exception &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    set_error(result,
+        "FEM charge terminal-current solve requires FULLMAG_USE_MFEM_STACK=ON");
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+extern "C" int fullmag_fem_solve_accepted_terminal_charge_v1(
+    const fullmag_fem_accepted_terminal_charge_request_v1 *request,
+    fullmag_fem_accepted_terminal_charge_result_v1 *result)
+{
+    if (request == nullptr || result == nullptr) {
+        set_error(result, "accepted terminal charge requires non-null request and result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    set_error(result, "");
+    if (request->abi_version != FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_ABI_VERSION ||
+        request->struct_size != sizeof(*request) || request->reserved_flags != 0 ||
+        result->abi_version != FULLMAG_FEM_ACCEPTED_TERMINAL_CHARGE_ABI_VERSION ||
+        result->struct_size != sizeof(*result) || result->reserved_flags != 0) {
+        set_error(result, "accepted terminal charge ABI header mismatch");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        return solve_accepted_terminal_charge(*request, *result);
+    } catch (const std::domain_error &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    } catch (const std::invalid_argument &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INVALID;
+    } catch (const std::exception &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    set_error(result, "accepted terminal charge requires FULLMAG_USE_MFEM_STACK=ON");
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+extern "C" int fullmag_fem_solve_accepted_external_lead_field_v1(
+    const fullmag_fem_accepted_external_lead_request_v1 *request,
+    fullmag_fem_accepted_external_lead_result_v1 *result)
+{
+    if (request == nullptr || result == nullptr) {
+        set_error(result, "accepted external lead bundle requires non-null request and result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    set_error(result, "");
+    if (request->abi_version != FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_ABI_VERSION ||
+        request->struct_size != sizeof(*request) || request->reserved_flags != 0 ||
+        result->abi_version != FULLMAG_FEM_ACCEPTED_EXTERNAL_LEAD_ABI_VERSION ||
+        result->struct_size != sizeof(*result) || result->reserved_flags != 0) {
+        set_error(result, "accepted external lead bundle ABI header mismatch");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        return solve_accepted_external_lead(*request, *result);
+    } catch (const std::domain_error &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    } catch (const std::invalid_argument &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INVALID;
+    } catch (const std::exception &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    set_error(result, "accepted external lead bundle requires FULLMAG_USE_MFEM_STACK=ON");
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
 
 extern "C" int fullmag_fem_solve_steady_transport_v1(
     const fullmag_fem_steady_transport_request_v1 *request,
@@ -1555,17 +2658,20 @@ extern "C" int fullmag_fem_solve_steady_transport_m2_v1(
 #endif
 }
 
-extern "C" int fullmag_fem_solve_steady_transport_rt0_v1(
+static int solve_steady_transport_rt0_impl(
     const fullmag_fem_steady_transport_rt0_request_v1 *request,
-    fullmag_fem_steady_transport_rt0_result_v1 *result)
+    fullmag_fem_steady_transport_rt0_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot)
 {
+    (void)charge_snapshot;
     if (request == nullptr || result == nullptr) {
         set_error(result, "RT0 transport requires non-null request and result");
         return FULLMAG_FEM_ERR_INVALID;
     }
 #if FULLMAG_HAS_MFEM_STACK
     try {
-        return solve_rt0(*request, *result);
+        return solve_rt0(*request, *result, nullptr, nullptr, nullptr, nullptr,
+            charge_snapshot);
     } catch (const std::domain_error &error) {
         set_error(result, error.what());
         return FULLMAG_FEM_ERR_UNAVAILABLE;
@@ -1583,10 +2689,14 @@ extern "C" int fullmag_fem_solve_steady_transport_rt0_v1(
 #endif
 }
 
-extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
+static int solve_steady_transport_rt0_oersted_impl(
     const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
-    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result)
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot,
+    fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature_snapshot = nullptr)
 {
+    (void)charge_snapshot;
+    (void)quadrature_snapshot;
     if (request == nullptr || result == nullptr) {
         set_error(result, "RT0 Oersted transport requires non-null request and result");
         return FULLMAG_FEM_ERR_INVALID;
@@ -1612,7 +2722,8 @@ extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
                 "RT0 Oersted target point buffer length must be a multiple of three");
         }
         validate_rt0_header(request->rt0, result->rt0);
-        return solve_rt0(request->rt0, result->rt0, result, request);
+        return solve_rt0(request->rt0, result->rt0, result, request, nullptr,
+            nullptr, charge_snapshot, quadrature_snapshot);
     } catch (const std::domain_error &error) {
         set_error(result, error.what());
         return FULLMAG_FEM_ERR_UNAVAILABLE;
@@ -1630,10 +2741,12 @@ extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
 #endif
 }
 
-extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+static int solve_steady_transport_rt0_oersted_vector_potential_impl(
     const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,
-    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result)
+    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot)
 {
+    (void)charge_snapshot;
     if (request == nullptr || result == nullptr) {
         set_error(result, "RT0 OE-F2 transport requires non-null request and result");
         return FULLMAG_FEM_ERR_INVALID;
@@ -1661,7 +2774,8 @@ extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v
             nullptr,
             nullptr,
             result,
-            request);
+            request,
+            charge_snapshot);
     } catch (const std::domain_error &error) {
         set_error(result, error.what());
         return FULLMAG_FEM_ERR_UNAVAILABLE;
@@ -1677,4 +2791,104 @@ extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v
         "FEM RT0 OE-F2 requires a runtime built with FULLMAG_USE_MFEM_STACK=ON");
     return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif
+}
+
+extern "C" int fullmag_fem_solve_steady_transport_rt0_v1(
+    const fullmag_fem_steady_transport_rt0_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_result_v1 *result)
+{
+    return solve_steady_transport_rt0_impl(request, result, nullptr);
+}
+
+extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result)
+{
+    return solve_steady_transport_rt0_oersted_impl(request, result, nullptr);
+}
+
+extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result)
+{
+    return solve_steady_transport_rt0_oersted_vector_potential_impl(request, result, nullptr);
+}
+
+extern "C" int fullmag_fem_solve_steady_transport_rt0_with_charge_snapshot_v1(
+    const fullmag_fem_steady_transport_rt0_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot)
+{
+    return call_with_charge_snapshot(result, charge_snapshot, [&] {
+        return solve_steady_transport_rt0_impl(request, result, charge_snapshot);
+    });
+}
+
+extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_with_charge_snapshot_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot)
+{
+    return call_with_charge_snapshot(result, charge_snapshot, [&] {
+        return solve_steady_transport_rt0_oersted_impl(request, result, charge_snapshot);
+    });
+}
+
+extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_with_snapshots_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot,
+    fullmag_fem_direct_oersted_snapshot_result_v1 *quadrature_snapshot)
+{
+    const auto fail = [&](const char *message, int status) {
+        if (result != nullptr && result->struct_size >= sizeof(*result)) {
+            set_error(result, message);
+        }
+        set_error(charge_snapshot, message);
+        set_error(quadrature_snapshot, message);
+        return status;
+    };
+    if (quadrature_snapshot == nullptr ||
+        quadrature_snapshot->abi_version != FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_ABI_VERSION ||
+        quadrature_snapshot->reserved_flags != 0 ||
+        quadrature_snapshot->struct_size != sizeof(*quadrature_snapshot)) {
+        return fail("OE-F1 quadrature snapshot ABI header mismatch", FULLMAG_FEM_ERR_INVALID);
+    }
+    set_error(quadrature_snapshot, "");
+    if (request == nullptr || result == nullptr ||
+        request->abi_version != FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION ||
+        request->struct_size != sizeof(*request) || request->reserved_flags != 0 ||
+        result->struct_size < sizeof(*result)) {
+        return fail("OE-F1 snapshot requires valid request and result", FULLMAG_FEM_ERR_INVALID);
+    }
+    const auto target_count = request->target_points_xyz_len / 3u;
+    if (request->target_points_xyz_len % 3u != 0 || target_count == 0 ||
+        target_count > FULLMAG_FEM_DIRECT_OERSTED_SNAPSHOT_MAX_TARGETS ||
+        request->target_points_xyz == nullptr ||
+        quadrature_snapshot->target_records == nullptr ||
+        quadrature_snapshot->target_records_capacity < target_count) {
+        return fail("OE-F1 snapshot target buffer/count/capacity mismatch", FULLMAG_FEM_ERR_INVALID);
+    }
+    const int status = call_with_charge_snapshot(result, charge_snapshot, [&] {
+        return solve_steady_transport_rt0_oersted_impl(
+            request, result, charge_snapshot, quadrature_snapshot);
+    });
+    if (status != FULLMAG_FEM_OK) {
+        // Copy before resetting result: snprintf source/destination must not alias.
+        char message[256];
+        std::snprintf(message, sizeof(message), "%s", result->error_message);
+        return fail(message, status);
+    }
+    return status;
+}
+
+extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_with_charge_snapshot_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge_snapshot)
+{
+    return call_with_charge_snapshot(result, charge_snapshot, [&] {
+        return solve_steady_transport_rt0_oersted_vector_potential_impl(
+            request, result, charge_snapshot);
+    });
 }

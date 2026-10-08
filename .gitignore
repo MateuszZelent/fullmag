@@ -133,6 +133,9 @@ apps/control-room/.next-audit/*
 .worktrees/
 worktrees/
 
+# Canonical Windows project storage (the main checkout owns its worktrees).
+/storage/
+
 public_docs/_build/
 tests/vlad/
 apps/control-room/.next*

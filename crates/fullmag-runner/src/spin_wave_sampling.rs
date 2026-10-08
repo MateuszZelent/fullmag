@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use crate::types::{AuxiliaryArtifact, RunError};
-use fullmag_ir::{BackendPlanIR, DriveActivationIR, ExecutionPlanIR, ProblemIR};
+use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, ProblemIR};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct P1CrossSectionProbeRow {
@@ -633,15 +633,10 @@ pub(crate) fn requested_finite_k_artifacts(
             "finite-k time-domain analysis currently requires a FEM plan",
         ));
     };
-    let active_stage_id = fem.time_stage.active_stage_id.as_deref();
-    let has_active_drive = fem.field_drives.iter().any(|drive| {
-        drive.enabled
-            && match &drive.activation {
-                DriveActivationIR::AllTimeEvolution {} => true,
-                DriveActivationIR::StageIds { stage_ids } => active_stage_id
-                    .is_some_and(|active| stage_ids.iter().any(|stage| stage == active)),
-            }
-    });
+    let has_active_drive = fem
+        .field_drives
+        .iter()
+        .any(|drive| crate::time_events::resolved_field_drive_is_active(drive, &fem.time_stage));
     if !has_active_drive {
         return Ok(vec![]);
     }

@@ -2055,6 +2055,1589 @@
         ],
         "type": "object"
       },
+      "AntennaExternalLeadInspectionResource": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AntennaInspectionStageRecordResource"
+          },
+          {
+            "properties": {
+              "manifest": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AntennaInspectionManifestResource"
+                  }
+                ]
+              },
+              "record_content_digest": {
+                "type": "string"
+              },
+              "request_scope_epoch": {
+                "type": "string"
+              },
+              "resource_id": {
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "runtime_stage_id": {
+                "type": "string"
+              },
+              "session_epoch": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "stage_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "resource_id",
+              "session_id",
+              "session_epoch",
+              "request_scope_epoch",
+              "run_id",
+              "runtime_stage_id",
+              "stage_revision",
+              "record_content_digest"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AntennaFieldBasisResource": {
+        "properties": {
+          "current_balance_certificate_digest": {
+            "type": "string"
+          },
+          "current_density_per_ampere": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "electric_potential_per_ampere": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "magnetic_field_per_ampere": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "measured_positive_terminal_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "normalization_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "normalization_scale": {
+            "format": "double",
+            "type": "number"
+          },
+          "oersted_operator_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "quadrature_diagnostics": {},
+          "quadrature_evidence": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaQuadratureEvidenceRefResource"
+              }
+            ]
+          }
+        },
+        "required": [
+          "port_mode_id",
+          "measured_positive_terminal_current_a",
+          "normalization_current_a",
+          "normalization_scale",
+          "current_balance_certificate_digest",
+          "electric_potential_per_ampere",
+          "current_density_per_ampere",
+          "magnetic_field_per_ampere",
+          "quadrature_diagnostics"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldBinaryRefResource": {
+        "properties": {
+          "layout": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "scalar_type": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "value_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "scalar_type",
+          "layout",
+          "unit",
+          "value_count"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldModelResource": {
+        "enum": [
+          "quasistatic_conduction_biot_savart3d"
+        ],
+        "type": "string"
+      },
+      "AntennaFieldSolutionRefResource": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "output_id",
+          "asset_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldSolutionResource": {
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "bases": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaFieldBasisResource"
+            },
+            "type": "array"
+          },
+          "component": {
+            "type": "string"
+          },
+          "conductor_positions": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "gauge_policy": {
+            "type": "string"
+          },
+          "geometry_revision": {
+            "type": "string"
+          },
+          "material_revision": {
+            "type": "string"
+          },
+          "mesh_digest": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "string"
+          },
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "requested_execution": {},
+          "resolved_execution": {},
+          "resource_id": {
+            "type": "string"
+          },
+          "sample_carrier": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaSampleCarrierResource"
+              }
+            ]
+          },
+          "sample_positions": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "sample_topology": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/AntennaFieldSolutionSignaturesResource"
+          },
+          "solution_id": {
+            "type": "string"
+          },
+          "solver_policy": {},
+          "source_object_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_projection_signature": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "resource_id",
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "schema_version",
+          "asset_id",
+          "status",
+          "solution_id",
+          "source_object_id",
+          "current_transport_id",
+          "stage_id",
+          "geometry_revision",
+          "material_revision",
+          "mesh_digest",
+          "requested_execution",
+          "resolved_execution",
+          "gauge_policy",
+          "solver_policy",
+          "signatures",
+          "content_digest",
+          "quantity",
+          "component",
+          "conductor_positions",
+          "sample_positions",
+          "assumptions",
+          "bases"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldSolutionSignaturesResource": {
+        "properties": {
+          "current_solution_signature": {
+            "type": "string"
+          },
+          "field_solution_signature": {
+            "type": "string"
+          },
+          "target_projection_signatures": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "current_solution_signature",
+          "field_solution_signature",
+          "target_projection_signatures"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldSolveStageResource": {
+        "additionalProperties": false,
+        "properties": {
+          "conductor_mesh_policy": {
+            "type": "string"
+          },
+          "conservative_current_view_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "field_sampling_domain": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "$ref": "#/components/schemas/AntennaFieldModelResource"
+          },
+          "oersted_realization": {
+            "$ref": "#/components/schemas/AntennaOerstedRealizationResource"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaNamedOutputResource"
+            },
+            "type": "array"
+          },
+          "port_mode_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "solver_policy": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "target_refs": {
+            "items": {
+              "$ref": "#/components/schemas/FieldTargetResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "source_object_id",
+          "current_transport_id",
+          "port_mode_ids",
+          "model",
+          "oersted_realization",
+          "conductor_mesh_policy",
+          "field_sampling_domain",
+          "target_refs",
+          "solver_policy",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldTargetResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "global"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AntennaInspectionManifestResource": {
+        "properties": {
+          "bundle": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "charge_content_sha256": {
+            "type": "string"
+          },
+          "closure_revision": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "device_potential": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "device_vertex_ids": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "drive_id": {
+            "type": "string"
+          },
+          "field_content_sha256": {
+            "type": "string"
+          },
+          "input_pins": {},
+          "magnetic_field": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "requested_execution": {},
+          "resolved_execution": {},
+          "sample_positions": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "sampling_carrier": {
+            "$ref": "#/components/schemas/AntennaInspectionSamplingResource"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solver_policy": {},
+          "source_content_sha256": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "validation_scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "validation_scope",
+          "source_object_id",
+          "current_transport_id",
+          "drive_id",
+          "closure_revision",
+          "input_pins",
+          "requested_execution",
+          "resolved_execution",
+          "solver_policy",
+          "sampling_carrier",
+          "charge_content_sha256",
+          "source_content_sha256",
+          "field_content_sha256",
+          "content_digest",
+          "bundle",
+          "sample_positions",
+          "magnetic_field",
+          "device_vertex_ids",
+          "device_potential"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionOutputResource": {
+        "additionalProperties": false,
+        "properties": {
+          "inspection_ref": {
+            "$ref": "#/components/schemas/AntennaInspectionReferenceResource"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "manifest_ref": {
+            "type": "string"
+          },
+          "payload_units": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "reused_existing": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "inspection_ref",
+          "manifest_ref",
+          "payload_units",
+          "reused_existing"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionPayloadResource": {
+        "properties": {
+          "byte_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layout": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "scalar_type": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "value_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "byte_count",
+          "scalar_type",
+          "layout",
+          "unit",
+          "value_count"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionReferenceResource": {
+        "additionalProperties": false,
+        "properties": {
+          "content_digest": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "output_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionSamplingResource": {
+        "properties": {
+          "carrier_kind": {
+            "type": "string"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/AntennaFieldTargetResource"
+          },
+          "location": {
+            "type": "string"
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topology_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "carrier_kind",
+          "location",
+          "topology_digest",
+          "sample_count"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionStageRecordResource": {
+        "additionalProperties": false,
+        "properties": {
+          "diagnostic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_scope": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaInspectionOutputResource"
+            },
+            "type": "array"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "resolved_action": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "stage_kind",
+          "resolved_action",
+          "stage_id",
+          "port_mode_id",
+          "output_id",
+          "status",
+          "qualification",
+          "field_scope",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "AntennaNamedOutputResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "quantity"
+        ],
+        "type": "object"
+      },
+      "AntennaOerstedRealizationResource": {
+        "enum": [
+          "direct_tetra_quadrature",
+          "vector_potential_solver"
+        ],
+        "type": "string"
+      },
+      "AntennaPortBranchResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "inlet_terminal_ref": {
+            "type": "string"
+          },
+          "outlet_terminal_ref": {
+            "type": "string"
+          },
+          "signed_weight": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "inlet_terminal_ref",
+          "outlet_terminal_ref",
+          "signed_weight"
+        ],
+        "type": "object"
+      },
+      "AntennaPortModeResource": {
+        "additionalProperties": false,
+        "properties": {
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaPortBranchResource"
+            },
+            "type": "array"
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "normalization_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "source_object_id",
+          "current_transport_id",
+          "branches"
+        ],
+        "type": "object"
+      },
+      "AntennaQuadratureEvidenceRefResource": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_length": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "target_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "path",
+          "sha256",
+          "byte_length",
+          "target_count"
+        ],
+        "type": "object"
+      },
+      "AntennaResolvedAssetKindResource": {
+        "enum": [
+          "resolved_asset"
+        ],
+        "type": "string"
+      },
+      "AntennaResolvedAssetRefResource": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AntennaResolvedAssetKindResource"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "stage_id",
+          "output_id",
+          "asset_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaSampleCarrierResource": {
+        "additionalProperties": false,
+        "properties": {
+          "carrier_kind": {
+            "type": "string"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/AntennaFieldTargetResource"
+          },
+          "location": {
+            "type": "string"
+          },
+          "topology_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "carrier_kind",
+          "location",
+          "topology_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaSolutionRefResource": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AntennaStageOutputRefResource"
+          },
+          {
+            "$ref": "#/components/schemas/AntennaResolvedAssetRefResource"
+          },
+          {
+            "$ref": "#/components/schemas/AntennaFieldSolutionRefResource"
+          }
+        ]
+      },
+      "AntennaSourceSpectrumResource": {
+        "properties": {
+          "amplitude_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "amplitude_unit": {
+            "type": "string"
+          },
+          "coherent_gain": {
+            "format": "double",
+            "type": "number"
+          },
+          "component": {
+            "type": "string"
+          },
+          "component_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "equivalent_noise_bandwidth_bins": {
+            "format": "double",
+            "type": "number"
+          },
+          "field_signature": {
+            "type": "string"
+          },
+          "k_u_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "k_v_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/AntennaSpectrumPayloadResource"
+          },
+          "payloads": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaSpectrumPayloadsResource"
+              }
+            ]
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "power_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/AntennaSpectrumSamplingResource"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "solution_content_digest": {
+            "type": "string"
+          },
+          "solution_id": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "target_projection_signature": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wave_vector_unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_id",
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "schema_version",
+          "request_id",
+          "output_id",
+          "solution_id",
+          "source_object_id",
+          "port_mode_id",
+          "solution_content_digest",
+          "content_digest",
+          "field_signature",
+          "quantity",
+          "component",
+          "component_labels",
+          "k_u_count",
+          "k_v_count",
+          "amplitude_count",
+          "power_count",
+          "coherent_gain",
+          "equivalent_noise_bandwidth_bins",
+          "normalization",
+          "amplitude_unit",
+          "wave_vector_unit",
+          "sampling",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumKGridResource": {
+        "additionalProperties": false,
+        "properties": {
+          "k_u_rad_per_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "k_v_rad_per_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "k_u_rad_per_m",
+          "k_v_rad_per_m"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumNormalizationResource": {
+        "enum": [
+          "integral_si",
+          "unitary_discrete"
+        ],
+        "type": "string"
+      },
+      "AntennaSpectrumOutsidePolicyResource": {
+        "enum": [
+          "error",
+          "zero"
+        ],
+        "type": "string"
+      },
+      "AntennaSpectrumPayloadResource": {
+        "properties": {
+          "content_type": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content_type",
+          "format"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumPayloadsResource": {
+        "properties": {
+          "amplitudes_re_im": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "k_u_rad_per_m": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "k_v_rad_per_m": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "power": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          }
+        },
+        "required": [
+          "k_u_rad_per_m",
+          "k_v_rad_per_m",
+          "amplitudes_re_im",
+          "power"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumRequestResource": {
+        "additionalProperties": false,
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "equilibrium_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "mode_basis_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nonuniform_k_grid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaSpectrumKGridResource"
+              }
+            ]
+          },
+          "normalization": {
+            "$ref": "#/components/schemas/AntennaSpectrumNormalizationResource"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "port_mode_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sampling_plane": {
+            "$ref": "#/components/schemas/AntennaSpectrumSamplingPlaneResource"
+          },
+          "solution_ref": {
+            "$ref": "#/components/schemas/AntennaSolutionRefResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "transform": {
+            "$ref": "#/components/schemas/AntennaSpectrumTransformResource"
+          },
+          "window": {
+            "$ref": "#/components/schemas/AntennaSpectrumWindowResource"
+          }
+        },
+        "required": [
+          "id",
+          "solution_ref",
+          "target",
+          "transform",
+          "sampling_plane",
+          "window",
+          "normalization",
+          "component",
+          "output_id"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumSamplingPlaneResource": {
+        "additionalProperties": false,
+        "properties": {
+          "axis_u": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "axis_v": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "extent_u_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "extent_v_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "interpolation": {
+            "type": "string"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "outside_policy": {
+            "$ref": "#/components/schemas/AntennaSpectrumOutsidePolicyResource"
+          },
+          "sample_count_u": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_count_v": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "origin_m",
+          "axis_u",
+          "axis_v",
+          "extent_u_m",
+          "extent_v_m",
+          "sample_count_u",
+          "sample_count_v",
+          "interpolation",
+          "outside_policy"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumSamplingResource": {
+        "properties": {
+          "axis_u": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "axis_v": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "extent_u_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "extent_v_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "fourier_origin_uv_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "fourier_phase_convention": {
+            "type": "string"
+          },
+          "interpolation": {
+            "type": "string"
+          },
+          "mapping_digest": {
+            "type": "string"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "outside_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outside_policy": {
+            "type": "string"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "realization": {
+            "type": "string"
+          },
+          "sample_count_u": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_count_v": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solution_id": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "source_sample_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AntennaFieldTargetResource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "solution_id",
+          "source_object_id",
+          "port_mode_id",
+          "target",
+          "origin_m",
+          "axis_u",
+          "axis_v",
+          "extent_u_m",
+          "extent_v_m",
+          "sample_count_u",
+          "sample_count_v",
+          "interpolation",
+          "realization",
+          "outside_policy",
+          "outside_count",
+          "source_sample_count",
+          "mapping_digest",
+          "fourier_origin_uv_m",
+          "fourier_phase_convention"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumTransformResource": {
+        "enum": [
+          "spatial_fft",
+          "nonuniform_spatial_fft"
+        ],
+        "type": "string"
+      },
+      "AntennaSpectrumWindowResource": {
+        "enum": [
+          "rectangular",
+          "hann",
+          "hamming",
+          "blackman"
+        ],
+        "type": "string"
+      },
+      "AntennaStageOutputCatalogResource": {
+        "properties": {
+          "content_digest": {
+            "type": "string"
+          },
+          "diagnostic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaStageOutputResource"
+            },
+            "type": "array"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "solution_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_kind": {
+            "type": "string"
+          },
+          "stage_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_id",
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "stage_revision",
+          "schema_version",
+          "stage_id",
+          "stage_kind",
+          "port_mode_id",
+          "status",
+          "outputs",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaStageOutputRefResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_output"
+                ],
+                "type": "string"
+              },
+              "output_id": {
+                "type": "string"
+              },
+              "stage_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage_id",
+              "output_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AntennaStageOutputResource": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "manifest_ref": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reused_existing": {
+            "type": "boolean"
+          },
+          "solution_ref": {
+            "$ref": "#/components/schemas/AntennaStageOutputSolutionReferenceResource"
+          }
+        },
+        "required": [
+          "kind",
+          "output_id",
+          "solution_ref",
+          "manifest_ref",
+          "quantity_ids",
+          "reused_existing"
+        ],
+        "type": "object"
+      },
+      "AntennaStageOutputSolutionReferenceResource": {
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "output_id",
+          "asset_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaTargetProjectionResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "solution": {
+            "$ref": "#/components/schemas/AntennaSolutionRefResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          }
+        },
+        "required": [
+          "id",
+          "solution",
+          "target",
+          "output_id"
+        ],
+        "type": "object"
+      },
+      "AntennaWaveformBandwidthDeclarationResource": {
+        "additionalProperties": false,
+        "properties": {
+          "f_max_hz": {
+            "description": "Authored physical upper band for pulse or piecewise-linear waveforms.\nIt is not inferred from pulse duration, spacing, or Nyquist frequency.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "f_max_hz"
+        ],
+        "type": "object"
+      },
       "ApiErrorDiagnosticResponse": {
         "properties": {
           "code": {
@@ -16254,6 +17837,14 @@
               "null"
             ]
           },
+          "conservative_current_source": {
+            "additionalProperties": true,
+            "description": "Authored current-driven request; no accepted field SHA exists yet.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "conservative_current_view": {
             "additionalProperties": true,
             "description": "Optional explicit accepted RT0/H(div) source descriptor.  It remains a\nJSON object at the scene boundary so every closure field survives UI\nround-trip; the planner performs mesh-exact typed validation.",
@@ -29317,6 +30908,31 @@
               },
               "kind": {
                 "enum": [
+                  "equipotential_current_terminal"
+                ],
+                "type": "string"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
                   "voltage_electrode"
                 ],
                 "type": "string"
@@ -29400,7 +31016,8 @@
       "SceneChargePotentialGauge": {
         "enum": [
           "dirichlet_reference",
-          "zero_mean"
+          "zero_mean",
+          "terminal_reference"
         ],
         "type": "string"
       },
@@ -31111,6 +32728,30 @@
       },
       "SceneResource": {
         "properties": {
+          "antenna_field_solve_stages": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaFieldSolveStageResource"
+            },
+            "type": "array"
+          },
+          "antenna_port_modes": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaPortModeResource"
+            },
+            "type": "array"
+          },
+          "antenna_spectrum_requests": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaSpectrumRequestResource"
+            },
+            "type": "array"
+          },
+          "antenna_target_projections": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaTargetProjectionResource"
+            },
+            "type": "array"
+          },
           "couplings": {
             "items": {
               "$ref": "#/components/schemas/SceneCoupling"
@@ -31217,6 +32858,12 @@
           "selections": {
             "items": {
               "$ref": "#/components/schemas/SelectionDefinitionSchema"
+            },
+            "type": "array"
+          },
+          "solved_antenna_drives": {
+            "items": {
+              "$ref": "#/components/schemas/SolvedAntennaDriveResource"
             },
             "type": "array"
           },
@@ -35068,6 +36715,57 @@
         ],
         "type": "object"
       },
+      "SolvedAntennaDriveResource": {
+        "additionalProperties": false,
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/DriveActivationResource"
+          },
+          "bandwidth_declaration": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaWaveformBandwidthDeclarationResource"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "peak_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "projection_ref": {
+            "type": "string"
+          },
+          "time_origin": {
+            "$ref": "#/components/schemas/FieldTimeOriginResource"
+          },
+          "waveform": {
+            "$ref": "#/components/schemas/TimeDependenceResource"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "projection_ref",
+          "port_mode_id",
+          "peak_current_a",
+          "waveform",
+          "time_origin",
+          "activation"
+        ],
+        "type": "object"
+      },
       "SolverEnergyCurrentResource": {
         "properties": {
           "anisotropy": {
@@ -37129,6 +38827,13 @@
               "null"
             ]
           },
+          "antenna_solve_stage_id": {
+            "description": "Exact authored antenna definition ID, not the study node or runtime ID.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "artifact_refs": {
             "items": {
               "type": "string"
@@ -37406,12 +39111,24 @@
             },
             "type": "array"
           },
+          "request_scope_epoch": {
+            "type": "string"
+          },
           "revision": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
+          "run_id": {
+            "type": "string"
+          },
           "runtime_state": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
             "type": "string"
           },
           "stage_statuses": {
@@ -37433,6 +39150,10 @@
           }
         },
         "required": [
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "run_id",
           "revision",
           "runtime_state",
           "total_stages",
@@ -47177,6 +48898,704 @@
         },
         "tags": [
           "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/field-solutions/{solution_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_field_solutions_solution_id",
+        "parameters": [
+          {
+            "description": "Published antenna field solution id",
+            "in": "path",
+            "name": "solution_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaFieldSolutionResource"
+                }
+              }
+            },
+            "description": "Published antenna field solution metadata"
+          },
+          "304": {
+            "description": "Field solution metadata not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "Field solution artifact not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale current-session request scope"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/field-solutions/{solution_id}/payloads/{payload_kind}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_field_solutions_solution_id_payloads_payload_kind",
+        "parameters": [
+          {
+            "description": "Published antenna field solution id",
+            "in": "path",
+            "name": "solution_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "conductor_positions, sample_positions, sample_topology, electric_potential_per_ampere, current_density_per_ampere, or magnetic_field_per_ampere",
+            "in": "path",
+            "name": "payload_kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for per-port V, J, or H payloads",
+            "in": "query",
+            "name": "port_mode_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Strong ETag from a previous binary payload response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Verified binary antenna field payload"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial verified binary antenna field payload"
+          },
+          "304": {
+            "description": "Binary payload not modified for the supplied ETag"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported payload or invalid port selector"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field solution or payload not found; missing payload uses code missing_payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale current-session request scope"
+          },
+          "416": {
+            "description": "Requested binary payload range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/source-spectra/{output_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_source_spectra_output_id",
+        "parameters": [
+          {
+            "description": "Published antenna source spectrum output id",
+            "in": "path",
+            "name": "output_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaSourceSpectrumResource"
+                }
+              }
+            },
+            "description": "Published antenna source spectrum metadata"
+          },
+          "304": {
+            "description": "Source spectrum metadata not modified for the supplied ETag"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source spectrum artifact or payload not found; missing payloads use code missing_payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale current-session request scope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source spectrum sampling topology is unsupported; code unsupported_topology"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind",
+        "parameters": [
+          {
+            "description": "Published antenna source spectrum output id",
+            "in": "path",
+            "name": "output_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Binary payload name: k_u_rad_per_m, k_v_rad_per_m, amplitudes_re_im, or power",
+            "in": "path",
+            "name": "payload_kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Strong ETag from a previous binary payload response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary antenna source-spectrum payload"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial binary antenna source-spectrum payload"
+          },
+          "304": {
+            "description": "Binary payload not modified for the supplied ETag"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source-spectrum payload not found; code missing_payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale current-session request scope"
+          },
+          "416": {
+            "description": "Requested binary payload range is not satisfiable"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source spectrum sampling topology is unsupported; code unsupported_topology"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection",
+        "parameters": [
+          {
+            "description": "Exact runtime stage ID, not the authored antenna stage ID",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Previous strong ETag",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaExternalLeadInspectionResource"
+                }
+              }
+            },
+            "description": "Inspection record and manifest-only metadata; never a drive basis"
+          },
+          "304": {
+            "description": "Unchanged manifest-only resource"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "No registered inspection result"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale request scope or owner changed during read"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid inspection record or manifest"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Filesystem or worker failure"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/payloads/{payload_kind}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_payloads_payload_kind",
+        "parameters": [
+          {
+            "description": "Exact runtime stage ID",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "bundle, sample_positions, magnetic_field, device_vertex_ids, device_potential",
+            "in": "path",
+            "name": "payload_kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required sha256: digest from inspection_ref, not the stage record digest",
+            "in": "query",
+            "name": "content_digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Previous strong ETag",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "One byte range",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Fully verified inspection binary payload"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Verified payload byte range"
+          },
+          "304": {
+            "description": "Unchanged, after full integrity validation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid payload kind or query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "No registered result"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale request scope, owner changed, terminal result or digest mismatch"
+          },
+          "416": {
+            "description": "Invalid byte range"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid manifest or binary payload"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Filesystem or worker failure"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_stages_stage_id_output_catalog",
+        "parameters": [
+          {
+            "description": "Antenna field-solve stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical session, scientific epoch and request_scope_epoch; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Strong ETag from a previous catalog response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaStageOutputCatalogResource"
+                }
+              }
+            },
+            "description": "Published antenna stage output catalog"
+          },
+          "304": {
+            "description": "Antenna stage output catalog not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "Antenna stage output catalog not found"
+          },
+          "409": {
+            "description": "Stale request scope or antenna stage output catalog identity conflict"
+          }
+        },
+        "tags": [
+          "data"
         ]
       }
     },
@@ -62113,6 +64532,7 @@
     "eigenmodes",
     "frequency_response",
     "hysteresis",
+    "antenna_field_solve",
     "change_device",
     "add_field_drive",
     "remove_field_drive",

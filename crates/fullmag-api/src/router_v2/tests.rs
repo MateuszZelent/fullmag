@@ -166,6 +166,11 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         spin_transports: Vec::new(),
         spin_torques: Vec::new(),
         oersted_terms: Vec::new(),
+        antenna_port_modes: Vec::new(),
+        antenna_field_solve_stages: Vec::new(),
+        antenna_target_projections: Vec::new(),
+        solved_antenna_drives: Vec::new(),
+        antenna_spectrum_requests: Vec::new(),
         excitation_analysis: None,
     };
     fullmag_authoring::scene_document_from_script_builder(&builder)
@@ -963,6 +968,7 @@ fn public_m1_fem_run_fixture() -> (fullmag_ir::ProblemIR, fullmag_runner::FemMes
             operator_version: "fem_charge_conforming_h1_p1.transparent.v1".into(),
         },
         conservative_current_view: None,
+        conservative_current_source: None,
         structured_current_closure: None,
     };
     problem.current_modules = vec![CurrentModuleIR::CurrentTransport {
@@ -1052,6 +1058,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
             stages: vec![
                 StageExecutionRecord {
                     stage_id: None,
+                    antenna_solve_stage_id: None,
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
@@ -1090,6 +1097,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                 },
                 StageExecutionRecord {
                     stage_id: None,
+                    antenna_solve_stage_id: None,
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
@@ -2394,6 +2402,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             stages: vec![
                 StageExecutionRecord {
                     stage_id: None,
+                    antenna_solve_stage_id: None,
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
@@ -2432,6 +2441,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 },
                 StageExecutionRecord {
                     stage_id: None,
+                    antenna_solve_stage_id: None,
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
@@ -21636,6 +21646,19 @@ async fn dispatch_compute_fields_command(state: &Arc<AppState>, command_id: &str
     record.dispatched_at_unix_ms = Some(1_700_000_001_000);
 }
 
+async fn publish_compute_fields_result(state: &Arc<AppState>, command_id: &str) {
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("compute_fields requires a live session");
+    snapshot.engine_log.push(crate::types::EngineLogEntry {
+        timestamp_unix_ms: 1_700_000_001_000,
+        level: "success".to_string(),
+        message: "Field snapshots computed for the current magnetization".to_string(),
+        source: None,
+        phase_id: None,
+        command_id: Some(command_id.to_string()),
+    });
+}
+
 async fn reconcile_compute_fields_command(state: &Arc<AppState>) -> bool {
     let snapshot = state
         .current_live_state
@@ -21748,6 +21771,7 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
     );
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     let dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(dispatched["status"], "dispatched");
 
@@ -21878,6 +21902,7 @@ async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_req
     assert!(requirements[1]["carrier_fingerprint"].is_string());
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     let dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(dispatched["status"], "dispatched");
 
@@ -21985,6 +22010,7 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
         .expect("full magnetization field should be present");
 
     dispatch_compute_fields_command(&state, &command_id).await;
+    publish_compute_fields_result(&state, &command_id).await;
 
     {
         let mut guard = state.current_live_state.write().await;
@@ -22123,6 +22149,7 @@ async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readabl
         .is_some_and(|value| !value.is_empty()));
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     assert!(!reconcile_compute_fields_command(&state).await);
     let still_dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(still_dispatched["status"], "dispatched");
@@ -22172,6 +22199,7 @@ async fn compute_fields_command_contract_resolves_fem_full_requirement() {
     assert_eq!(requirements[0]["generation_id"], "42");
 
     dispatch_compute_fields_command(&state, command_id).await;
+    publish_compute_fields_result(&state, command_id).await;
     let dispatched = get_command_detail(&app, command_id).await;
     assert_eq!(dispatched["status"], "dispatched");
 
@@ -22616,6 +22644,7 @@ async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hysteresis-run".into()),
@@ -22821,6 +22850,7 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Cancelled,
                 command_id: Some("cmd-solve".into()),
@@ -23334,6 +23364,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: None,
+                antenna_solve_stage_id: None,
                 kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
@@ -24231,6 +24262,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-003".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_frequency_response".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-stage-3".into()),
@@ -24685,6 +24717,7 @@ async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-hyst".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -24786,6 +24819,7 @@ async fn hysteresis_progress_endpoint_reports_active_first_point_before_completi
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -24877,6 +24911,7 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-angle".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -24961,6 +24996,7 @@ async fn hysteresis_progress_endpoint_uses_measurement_axis_for_live_projection(
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-measurement-axis".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25052,6 +25088,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-magnetic-average".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25144,6 +25181,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-volume-average".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25236,6 +25274,7 @@ async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() 
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-snapshot-fem-average".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25368,6 +25407,7 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -25526,6 +25566,7 @@ async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
@@ -25676,6 +25717,7 @@ async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
@@ -25861,6 +25903,7 @@ async fn hysteresis_execution_tree_uses_settle_trace_status_for_completed_points
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
@@ -26043,6 +26086,7 @@ async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-branches".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -26165,6 +26209,7 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-relax".into()),
@@ -26397,6 +26442,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
@@ -27173,8 +27219,10 @@ async fn session_import_replace_project_reports_semantic_differences_without_com
         )
         .await
         .unwrap();
-    assert_eq!(export_response.status(), StatusCode::OK);
-    let fms_base64 = body_json(export_response).await["fms_base64"]
+    let export_status = export_response.status();
+    let export_json = body_json(export_response).await;
+    assert_eq!(export_status, StatusCode::OK, "{export_json}");
+    let fms_base64 = export_json["fms_base64"]
         .as_str()
         .expect("export must include fms payload")
         .to_string();
@@ -29965,6 +30013,871 @@ async fn artifacts_list_returns_304_when_etag_matches() {
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
     let body = body_bytes(second).await;
     assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn antenna_result_resources_publish_metadata_and_etags() {
+    let state = test_app_state_with_live_session().await;
+    let magnet_target_signature = format!("sha256:{}", "4".repeat(64));
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-antenna-result-resources-{}",
+        uuid_v4_hex()
+    ));
+    let field_dir = artifact_dir.join("antenna/field_solutions/solution-1");
+    let spectrum_dir = artifact_dir.join("antenna/source_spectra/spectrum-output");
+    fs::create_dir_all(&field_dir).expect("field solution artifact directory");
+    fs::create_dir_all(&spectrum_dir).expect("source spectrum artifact directory");
+    fs::create_dir_all(field_dir.join("port-1")).expect("port payload directory");
+    let field_payload = |name: &str, values: &[f64], layout: &str, unit: &str| {
+        let bytes = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+        fs::write(field_dir.join(name), &bytes).expect("write field payload");
+        serde_json::json!({
+            "path": format!("antenna/field_solutions/solution-1/{name}"),
+            "sha256": format!("{:x}", Sha256::digest(&bytes)),
+            "scalar_type": "float64_le",
+            "layout": layout,
+            "unit": unit,
+            "value_count": values.len()
+        })
+    };
+    let conductor_positions = field_payload(
+        "conductor_positions_xyz_m.f64le", &[0.0, 0.0, 0.0], "node_xyz_interleaved", "m"
+    );
+    let sample_positions = field_payload(
+        "sample_positions_xyz_m.f64le", &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        "sample_xyz_interleaved", "m"
+    );
+    let potential = field_payload("port-1/V_per_A.f64le", &[1.0], "node_scalar", "V/A");
+    let current = field_payload(
+        "port-1/J_per_A.f64le", &[1.0, 0.0, 0.0],
+        "sample_xyz_interleaved", "A/m^2/A"
+    );
+    let magnetic = field_payload(
+        "port-1/H_per_A.f64le", &[0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+        "sample_xyz_interleaved", "A/m/A"
+    );
+    let mut field_manifest = serde_json::json!({
+            "schema_version": "antenna_field_solution.v1",
+            "asset_id": "asset-1",
+            "status": "ready",
+            "solution_id": "solution-1",
+            "source_object_id": "antenna-1",
+            "current_transport_id": "current-1",
+            "stage_id": "solve-1",
+            "geometry_revision": "geometry-1",
+            "material_revision": "material-1",
+            "mesh_digest": "mesh-1",
+            "requested_execution": {"backend": "fem", "device": "cpu"},
+            "resolved_execution": {"backend": "fem", "device": "cpu"},
+            "gauge_policy": "zero_mean",
+            "solver_policy": {"linear": "cg"},
+            "signatures": {
+                "current_solution_signature": format!("sha256:{}", "1".repeat(64)),
+                "field_solution_signature": format!("sha256:{}", "2".repeat(64)),
+                "target_projection_signatures": {
+                    "global": format!("sha256:{}", "3".repeat(64)),
+                    "magnet": magnet_target_signature
+                }
+            },
+            "conductor_positions": conductor_positions,
+            "sample_positions": sample_positions,
+            "sample_carrier": {
+                "domain": {"kind": "object", "object_id": "magnet"},
+                "carrier_kind": "fem_mesh_asset:magnet",
+                "location": "node",
+                "topology_digest": format!("sha256:{}", "4".repeat(64))
+            },
+            "sample_topology": null,
+            "assumptions": ["static current", "linear conductor"],
+            "bases": [{
+                "port_mode_id": "port-1",
+                "measured_positive_terminal_current_a": 1.0,
+                "normalization_current_a": 1.0,
+                "normalization_scale": 1.0,
+                "current_balance_certificate_digest": "sha256:balance",
+                "electric_potential_per_ampere": potential,
+                "current_density_per_ampere": current,
+                "magnetic_field_per_ampere": magnetic,
+                "oersted_operator_version": fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION,
+                "quadrature_diagnostics": {
+                    "order": 2,
+                    "operator_version": fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION
+                }
+            }]
+        });
+    field_manifest["content_digest"] = serde_json::json!(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&field_manifest).unwrap())
+    ));
+    fs::write(
+        field_dir.join("manifest.v1.json"),
+        serde_json::to_vec_pretty(&field_manifest).expect("serialize field solution manifest"),
+    )
+    .expect("write field solution manifest");
+    fs::write(
+        spectrum_dir.join("spectrum.v1.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "antenna_source_spectrum_artifact.v1",
+            "request_id": "spectrum-request-1",
+            "output_id": "spectrum-output",
+            "solution_id": "solution-1",
+            "source_object_id": "antenna-1",
+            "port_mode_id": "port-1",
+            "solution_content_digest": "sha256:solution",
+            "content_digest": "sha256:spectrum",
+            "sampling": {
+                "schema_version": "antenna_spectrum_sampling.v1",
+                "solution_id": "solution-1",
+                "source_object_id": "antenna-1",
+                "port_mode_id": "port-1",
+                "target": {"kind": "global"},
+                "origin_m": [0.0, 0.0, 0.0],
+                "axis_u": [1.0, 0.0, 0.0],
+                "axis_v": [0.0, 1.0, 0.0],
+                "extent_u_m": 1.0,
+                "extent_v_m": 1.0,
+                "sample_count_u": 2,
+                "sample_count_v": 2,
+                "interpolation": "fem_element",
+                "realization": "fem_p1_interpolation_v1",
+                "outside_policy": "zero",
+                "outside_count": 0,
+                "source_sample_count": 4,
+                "mapping_digest": "sha256:mapping",
+                "fourier_origin_uv_m": [-0.5, -0.5],
+                "fourier_phase_convention": "centered_plane_origin_phase_corrected.v1"
+            },
+            "spectrum": {
+                "schema_version": "antenna_source_spectrum.v1",
+                "request_id": "spectrum-request-1",
+                "output_id": "spectrum-output",
+                "component": "H_z",
+                "k_u_rad_per_m": [0.0, 1.0],
+                "k_v_rad_per_m": [0.0, 1.0],
+                "component_labels": ["z"],
+                "amplitudes_re_im": [[1.0, 0.0]],
+                "power": [1.0],
+                "coherent_gain": 1.0,
+                "equivalent_noise_bandwidth_bins": 1.0,
+                "normalization": "unitary_discrete",
+                "amplitude_unit": "A/m/A",
+                "wave_vector_unit": "rad/m"
+            }
+        }))
+        .expect("serialize source spectrum artifact"),
+    )
+    .expect("write source spectrum artifact");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let field = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let field_status = field.status();
+    let field_etag = field.headers().get("etag").cloned();
+    let field_json = body_json(field).await;
+    assert_eq!(field_status, StatusCode::OK, "{field_json}");
+    let field_etag = field_etag.expect("successful antenna metadata has an ETag");
+    assert_eq!(field_json["bases"][0]["magnetic_field_per_ampere"]["sha256"],
+        format!("{:x}", Sha256::digest(fs::read(field_dir.join("port-1/H_per_A.f64le")).unwrap())));
+    assert_eq!(field_json["solution_id"], "solution-1");
+    assert_eq!(field_json["quantity"], "H_ant_basis");
+    assert_eq!(field_json["sample_positions"]["value_count"], 6);
+    assert_eq!(field_json["sample_carrier"]["domain"]["object_id"], "magnet");
+    assert_eq!(field_json["sample_carrier"]["location"], "node");
+    assert!(field_json["target_projection_signature"].is_null());
+    assert_eq!(
+        field_json["signatures"]["target_projection_signatures"]["magnet"],
+        magnet_target_signature
+    );
+
+    let field_not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field_not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(field_not_modified).await.is_empty());
+
+    let field_manifest_path = field_dir.join("manifest.v1.json");
+    let mut tampered_field_manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&field_manifest_path).expect("read field manifest"))
+            .expect("parse field manifest");
+    tampered_field_manifest["assumptions"] = serde_json::json!(["updated assumption"]);
+    fs::write(&field_manifest_path, serde_json::to_vec(&tampered_field_manifest).unwrap())
+        .expect("update field metadata without changing declared content digest");
+    let changed_field = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed_field.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(&field_manifest_path, serde_json::to_vec(&field_manifest).unwrap())
+        .expect("restore verified field manifest");
+
+    let field_payload_uri = "/v2/sessions/current/data/antenna/field-solutions/solution-1/payloads/magnetic_field_per_ampere?port_mode_id=port-1";
+    let field_bytes = app
+        .clone()
+        .oneshot(Request::builder().uri(field_payload_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(field_bytes.status(), StatusCode::OK);
+    let field_payload_etag = field_bytes.headers().get("etag").unwrap().clone();
+    assert_eq!(body_bytes(field_bytes).await.len(), 6 * 8);
+    let sample_positions_binary = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1/payloads/sample_positions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sample_positions_binary.status(), StatusCode::OK);
+    assert_eq!(body_bytes(sample_positions_binary).await.len(), 6 * 8);
+    let field_range = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(field_payload_uri)
+                .header("range", "bytes=0-7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field_range.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(body_bytes(field_range).await, vec![0u8; 8]);
+    let field_payload_not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(field_payload_uri)
+                .header("if-none-match", field_payload_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field_payload_not_modified.status(), StatusCode::NOT_MODIFIED);
+    let write_rehashed_field_manifest = |mut manifest: serde_json::Value| {
+        manifest.as_object_mut().unwrap().remove("content_digest");
+        manifest["content_digest"] = serde_json::json!(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&manifest).unwrap())
+        ));
+        fs::write(&field_manifest_path, serde_json::to_vec(&manifest).unwrap())
+            .expect("write rehashed field solution manifest");
+    };
+    let mut missing_operator = field_manifest.clone();
+    missing_operator["bases"][0].as_object_mut().unwrap().remove("oersted_operator_version");
+    write_rehashed_field_manifest(missing_operator);
+    let response = app.clone().oneshot(
+        Request::builder().uri(field_payload_uri)
+            .header("if-none-match", field_payload_etag.clone())
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let mut mismatched_operator = field_manifest.clone();
+    mismatched_operator["bases"][0]["quadrature_diagnostics"]["operator_version"] =
+        serde_json::json!(fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION);
+    write_rehashed_field_manifest(mismatched_operator);
+    let response = app.clone().oneshot(
+        Request::builder().uri(field_payload_uri)
+            .header("if-none-match", field_payload_etag.clone())
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let mut legacy_manifest = field_manifest.clone();
+    let mut invalid_signature = field_manifest.clone();
+    invalid_signature["signatures"]["current_solution_signature"] =
+        serde_json::json!("sha256:current");
+    write_rehashed_field_manifest(invalid_signature);
+    let response = app.clone().oneshot(
+        Request::builder().uri(field_payload_uri)
+            .header("if-none-match", field_payload_etag.clone())
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let mut single_target_manifest = field_manifest.clone();
+    single_target_manifest["signatures"]["target_projection_signatures"] =
+        serde_json::json!({"magnet": magnet_target_signature});
+    write_rehashed_field_manifest(single_target_manifest);
+    let single_target_response = app.clone().oneshot(
+        Request::builder()
+            .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(single_target_response.status(), StatusCode::OK);
+    let single_target_json = body_json(single_target_response).await;
+    assert!(single_target_json["target_projection_signature"].is_null());
+    assert_eq!(single_target_json["signatures"]["target_projection_signatures"]["magnet"], magnet_target_signature);
+    legacy_manifest.as_object_mut().unwrap().remove("sample_carrier");
+    write_rehashed_field_manifest(legacy_manifest);
+    let legacy_response = app.clone().oneshot(
+        Request::builder()
+            .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(legacy_response.status(), StatusCode::OK);
+    assert!(body_json(legacy_response).await["sample_carrier"].is_null());
+    for (key, value) in [
+        ("carrier_kind", serde_json::json!("")),
+        ("location", serde_json::json!("cell")),
+        ("topology_digest", serde_json::json!("sha256:invalid")),
+        ("domain", serde_json::json!({"kind": "object", "object_id": ""})),
+    ] {
+        let mut invalid_carrier = field_manifest.clone();
+        invalid_carrier["sample_carrier"][key] = value;
+        write_rehashed_field_manifest(invalid_carrier);
+        let response = app.clone().oneshot(
+            Request::builder().uri(field_payload_uri)
+                .header("if-none-match", field_payload_etag.clone())
+                .body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR, "{key}");
+    }
+    let mut false_shape = field_manifest.clone();
+    false_shape["bases"][0]["current_density_per_ampere"]["value_count"] =
+        serde_json::json!(6);
+    write_rehashed_field_manifest(false_shape);
+    let invalid_shape = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(field_payload_uri)
+                .header("if-none-match", field_payload_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_shape.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let mut false_unit = field_manifest.clone();
+    false_unit["bases"][0]["magnetic_field_per_ampere"]["unit"] =
+        serde_json::json!("T/A");
+    write_rehashed_field_manifest(false_unit);
+    let invalid_unit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_unit.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let mut false_normalization = field_manifest.clone();
+    false_normalization["bases"][0]["normalization_scale"] = serde_json::json!(2.0);
+    write_rehashed_field_manifest(false_normalization);
+    let invalid_normalization = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_normalization.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let mut duplicated_payload = field_manifest.clone();
+    let mut second_basis = duplicated_payload["bases"][0].clone();
+    second_basis["port_mode_id"] = serde_json::json!("port-2");
+    duplicated_payload["bases"].as_array_mut().unwrap().push(second_basis);
+    write_rehashed_field_manifest(duplicated_payload);
+    let invalid_payload_alias = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_payload_alias.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let mut missing_identity = field_manifest.clone();
+    missing_identity["source_object_id"] = serde_json::json!("");
+    write_rehashed_field_manifest(missing_identity);
+    let invalid_identity = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_identity.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(&field_manifest_path, serde_json::to_vec(&field_manifest).unwrap())
+        .expect("restore verified field solution manifest");
+    let missing_port = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1/payloads/magnetic_field_per_ampere")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_port.status(), StatusCode::BAD_REQUEST);
+
+    let magnetic_path = field_dir.join("port-1/H_per_A.f64le");
+    let non_finite_bytes = [0.0, f64::NAN, 0.0, 0.0, 1.0, 0.0]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    fs::write(&magnetic_path, &non_finite_bytes).expect("write non-finite field payload");
+    let mut non_finite_manifest = field_manifest.clone();
+    non_finite_manifest["bases"][0]["magnetic_field_per_ampere"]["sha256"] =
+        serde_json::json!(format!("{:x}", Sha256::digest(&non_finite_bytes)));
+    write_rehashed_field_manifest(non_finite_manifest);
+    let non_finite_payload = app
+        .clone()
+        .oneshot(Request::builder().uri(field_payload_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(non_finite_payload.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let _ = field_payload(
+        "port-1/H_per_A.f64le", &[0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+        "sample_xyz_interleaved", "A/m/A"
+    );
+
+    let invalid_topology_bytes = [0u32, 1, 0, 2]
+        .iter()
+        .flat_map(|index| index.to_le_bytes())
+        .collect::<Vec<_>>();
+    fs::write(field_dir.join("sample_topology.u32le"), &invalid_topology_bytes)
+        .expect("write out-of-bounds topology payload");
+    let mut invalid_topology_manifest = field_manifest.clone();
+    invalid_topology_manifest["sample_topology"] = serde_json::json!({
+        "path": "antenna/field_solutions/solution-1/sample_topology.u32le",
+        "sha256": format!("{:x}", Sha256::digest(&invalid_topology_bytes)),
+        "scalar_type": "uint32_le",
+        "layout": "tet4_connectivity",
+        "unit": "1",
+        "value_count": 4
+    });
+    write_rehashed_field_manifest(invalid_topology_manifest);
+    let invalid_topology = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_topology.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(&field_manifest_path, serde_json::to_vec(&field_manifest).unwrap())
+        .expect("restore verified field solution manifest");
+
+    fs::write(&magnetic_path, [0u8; 4]).expect("truncate field payload");
+    let corrupt_payload = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt_payload.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let corrupt_binary = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(field_payload_uri)
+                .header("if-none-match", field_payload_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt_binary.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::remove_file(&magnetic_path).expect("remove field payload fixture");
+    let missing_payload = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_payload.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(missing_payload).await["code"], "missing_payload");
+    let _ = field_payload(
+        "port-1/H_per_A.f64le", &[0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+        "sample_xyz_interleaved", "A/m/A"
+    );
+
+    let spectrum = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(spectrum.status(), StatusCode::OK);
+    let spectrum_etag = spectrum.headers().get("etag").unwrap().clone();
+    let spectrum_json = body_json(spectrum).await;
+    assert_eq!(spectrum_json["output_id"], "spectrum-output");
+    assert_eq!(spectrum_json["k_u_count"], 2);
+    assert_eq!(spectrum_json["sampling"]["realization"], "fem_p1_interpolation_v1");
+
+    let spectrum_manifest_path = spectrum_dir.join("spectrum.v1.json");
+    let mut spectrum_manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&spectrum_manifest_path).expect("read spectrum manifest"))
+            .expect("parse spectrum manifest");
+    spectrum_manifest["sampling"]["mapping_digest"] =
+        serde_json::json!("sha256:updated-mapping");
+    fs::write(&spectrum_manifest_path, serde_json::to_vec(&spectrum_manifest).unwrap())
+        .expect("update spectrum metadata without changing declared content digest");
+    let changed_spectrum = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .header("if-none-match", spectrum_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed_spectrum.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(changed_spectrum).await["sampling"]["mapping_digest"],
+        "sha256:updated-mapping"
+    );
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    fs::write(field_dir.join("manifest.v1.json"), b"not-json")
+        .expect("corrupt field manifest");
+    let corrupt = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn antenna_source_spectrum_v2_serves_hashed_binary_payloads_with_ranges() {
+    let state = test_app_state_with_live_session().await;
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-antenna-spectrum-v2-{}",
+        uuid_v4_hex()
+    ));
+    let spectrum_dir = artifact_dir.join("antenna/source_spectra/spectrum-output");
+    fs::create_dir_all(&spectrum_dir).expect("source spectrum artifact directory");
+    let f64_payload = |values: &[f64]| {
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>()
+    };
+    let k_u = f64_payload(&[0.0, 1.0]);
+    let k_v = f64_payload(&[0.0, 2.0]);
+    let amplitudes = f64_payload(&[1.0, 0.0, 2.0, -1.0, 3.0, 0.0, 4.0, 0.0]);
+    let power = f64_payload(&[1.0, 5.0, 9.0, 16.0]);
+    let digest = |bytes: &[u8]| format!("sha256:{:x}", Sha256::digest(bytes));
+    fs::write(
+        spectrum_dir.join("k_u_rad_per_m.f64le"),
+        &k_u,
+    )
+    .expect("write k_u payload");
+    fs::write(
+        spectrum_dir.join("k_v_rad_per_m.f64le"),
+        &k_v,
+    )
+    .expect("write k_v payload");
+    fs::write(
+        spectrum_dir.join("amplitudes_re_im.f64le"),
+        &amplitudes,
+    )
+    .expect("write amplitudes payload");
+    fs::write(spectrum_dir.join("power.f64le"), &power).expect("write power payload");
+    let payload_ref = |name: &str, bytes: &[u8], layout: &str, unit: &str, value_count: usize| {
+        serde_json::json!({
+            "path": format!("antenna/source_spectra/spectrum-output/{name}.f64le"),
+            "sha256": digest(bytes),
+            "scalar_type": "float64_le",
+            "layout": layout,
+            "unit": unit,
+            "value_count": value_count
+        })
+    };
+    let mut spectrum_manifest = serde_json::json!({
+            "schema_version": "antenna_source_spectrum_artifact.v2",
+            "request_id": "spectrum-request-1",
+            "output_id": "spectrum-output",
+            "solution_id": "solution-1",
+            "source_object_id": "antenna-1",
+            "port_mode_id": "port-1",
+            "solution_content_digest": "sha256:solution",
+            "sampling": {
+                "schema_version": "antenna_spectrum_sampling.v1",
+                "solution_id": "solution-1",
+                "source_object_id": "antenna-1",
+                "port_mode_id": "port-1",
+                "target": {"kind": "global"},
+                "origin_m": [0.0, 0.0, 0.0],
+                "axis_u": [1.0, 0.0, 0.0],
+                "axis_v": [0.0, 1.0, 0.0],
+                "extent_u_m": 1.0,
+                "extent_v_m": 1.0,
+                "sample_count_u": 2,
+                "sample_count_v": 2,
+                "interpolation": "fem_element",
+                "transform": "spatial_fft",
+                "window": "rectangular",
+                "fourier_realization": "structured_fft_rustfft_centered_v1",
+                "realization": "fem_p1_interpolation_v1",
+                "outside_policy": "zero",
+                "outside_count": 0,
+                "source_sample_count": 4,
+                "mapping_digest": "sha256:mapping",
+                "fourier_origin_uv_m": [-0.5, -0.5],
+                "fourier_phase_convention": "centered_plane_origin_phase_corrected.v1"
+            },
+            "spectrum": {
+                "schema_version": "antenna_source_spectrum.v1",
+                "request_id": "spectrum-request-1",
+                "output_id": "spectrum-output",
+                "component": "z",
+                "component_labels": ["z"],
+                "k_u_count": 2,
+                "k_v_count": 2,
+                "amplitude_count": 4,
+                "power_count": 4,
+                "coherent_gain": 1.0,
+                "equivalent_noise_bandwidth_bins": 1.0,
+                "normalization": "unitary_discrete",
+                "amplitude_unit": "A/m/A",
+                "wave_vector_unit": "rad/m"
+            },
+            "payloads": {
+                "k_u_rad_per_m": payload_ref("k_u_rad_per_m", &k_u, "axis_u_1d", "rad/m", 2),
+                "k_v_rad_per_m": payload_ref("k_v_rad_per_m", &k_v, "axis_v_1d", "rad/m", 2),
+                "amplitudes_re_im": payload_ref("amplitudes_re_im", &amplitudes, "component_kv_ku_complex_re_im", "A/m/A", 8),
+                "power": payload_ref("power", &power, "kv_ku_power", "(A/m/A)^2", 4)
+            }
+        });
+    spectrum_manifest["content_digest"] = serde_json::json!(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&spectrum_manifest).unwrap())
+    ));
+    fs::write(
+        spectrum_dir.join("spectrum.v2.json"),
+        serde_json::to_vec_pretty(&spectrum_manifest)
+            .expect("serialize source spectrum v2 manifest"),
+    )
+    .expect("write source spectrum v2 manifest");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let metadata = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metadata.status(), StatusCode::OK);
+    let metadata_json = body_json(metadata).await;
+    assert_eq!(metadata_json["schema_version"], "antenna_source_spectrum_artifact.v2");
+    assert_eq!(metadata_json["payloads"]["amplitudes_re_im"]["value_count"], 8);
+
+    let mut tampered_manifest = spectrum_manifest.clone();
+    tampered_manifest["spectrum"]["coherent_gain"] = serde_json::json!(0.5);
+    let manifest_path = spectrum_dir.join("spectrum.v2.json");
+    fs::write(&manifest_path, serde_json::to_vec(&tampered_manifest).unwrap())
+        .expect("tamper source spectrum manifest");
+    let tampered_metadata = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tampered_metadata.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(&manifest_path, serde_json::to_vec(&spectrum_manifest).unwrap())
+        .expect("restore source spectrum manifest");
+
+    for (pointer, replacement) in [
+        ("/spectrum/coherent_gain", serde_json::json!(0.5)),
+        ("/payloads/power/unit", serde_json::json!("wrong")),
+        ("/sampling/fourier_phase_convention", serde_json::json!("wrong")),
+    ] {
+        let mut invalid = spectrum_manifest.clone();
+        *invalid.pointer_mut(pointer).unwrap() = replacement;
+        invalid.as_object_mut().unwrap().remove("content_digest");
+        invalid["content_digest"] = serde_json::json!(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&invalid).unwrap())
+        ));
+        fs::write(&manifest_path, serde_json::to_vec(&invalid).unwrap())
+            .expect("write rehashed inconsistent source spectrum manifest");
+        let response = app.clone().oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let binary_response = app.clone().oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/power")
+                .body(Body::empty())
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(binary_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    fs::write(&manifest_path, serde_json::to_vec(&spectrum_manifest).unwrap())
+        .expect("restore source spectrum manifest after semantic tamper");
+
+    let binary = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(binary.status(), StatusCode::OK);
+    assert_eq!(binary.headers()[header::CONTENT_TYPE], "application/octet-stream");
+    let binary_etag = binary.headers()[header::ETAG].clone();
+    assert_eq!(body_bytes(binary).await, amplitudes);
+
+    let not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .header(header::IF_NONE_MATCH, binary_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(not_modified).await.is_empty());
+
+    fs::write(spectrum_dir.join("power.f64le"), b"corrupted")
+        .expect("corrupt a different spectrum payload");
+    let incomplete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .header(header::IF_NONE_MATCH, binary_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(incomplete.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fs::write(spectrum_dir.join("power.f64le"), &power)
+        .expect("restore other spectrum payload");
+
+    let partial = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .header(header::RANGE, "bytes=0-7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(partial.headers()[header::CONTENT_RANGE], "bytes 0-7/64");
+    assert_eq!(body_bytes(partial).await, amplitudes[..8]);
+
+    fs::write(spectrum_dir.join("amplitudes_re_im.f64le"), b"corrupted")
+        .expect("corrupt amplitudes payload");
+    let corrupt = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
 }
 
 #[tokio::test]
@@ -34661,6 +35574,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
             stage_statuses: vec![StageLifecycleState::Completed],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
@@ -34821,6 +35735,7 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Running,
                 command_id: None,
@@ -34948,6 +35863,7 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -35048,6 +35964,7 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -35127,6 +36044,7 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -35682,6 +36600,7 @@ async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
+                antenna_solve_stage_id: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -50340,3 +51259,6 @@ mod session_scope;
 
 #[path = "tests/workspace_items.rs"]
 mod workspace_items;
+
+#[path = "tests/antenna_inspection.rs"]
+mod antenna_inspection;

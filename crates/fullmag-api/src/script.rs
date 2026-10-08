@@ -155,7 +155,7 @@ pub(crate) async fn sync_current_live_script_with_request(
     req: ScriptSyncRequest,
 ) -> Result<ScriptSyncResponse, ApiError> {
     let workspace_root = state.current_workspace_root.clone();
-    let (script_path, scene_document, has_input_script) = {
+    let (script_path, scene_document, has_input_script, origin) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
@@ -171,6 +171,7 @@ pub(crate) async fn sync_current_live_script_with_request(
             script_path,
             snapshot.scene_document.clone(),
             has_input_script,
+            script_origin(&workspace_root, authored_script_path),
         )
     };
 
@@ -178,11 +179,17 @@ pub(crate) async fn sync_current_live_script_with_request(
         "[fullmag-api] RX <- frontend script sync {}",
         script_path.display()
     );
-    let user_file = has_input_script
-        && script_origin(&workspace_root, &script_path.to_string_lossy())
-            == SCRIPT_ORIGIN_USER_FILE;
+    let user_file = origin == SCRIPT_ORIGIN_USER_FILE;
     let managed_copy = user_file.then(|| managed_export_copy_path(&workspace_root, &script_path));
-    let mut response = if has_input_script {
+    if !has_input_script && req.overrides.is_some() {
+        return Err(ApiError::bad_request(
+            "explicit script overrides require an existing input script",
+        ));
+    }
+    let render_scene = scene_document.is_some()
+        && matches!(origin, SCRIPT_ORIGIN_GENERATED | SCRIPT_ORIGIN_NONE)
+        && req.overrides.is_none();
+    let mut response = if has_input_script && !render_scene {
         if !script_path.is_file() {
             return Err(ApiError::bad_request(format!(
                 "script path does not exist: {}",
@@ -201,12 +208,15 @@ pub(crate) async fn sync_current_live_script_with_request(
         let script_path_for_helper = script_path.clone();
         let managed_copy_for_helper = managed_copy.clone();
         run_blocking_script_operation(move || {
-            rewrite_script_via_python_helper(
+            rewrite_script_via_python_helper_with_policy(
                 &repo_root,
                 &workspace_root,
                 &script_path_for_helper,
                 overrides.as_ref(),
                 managed_copy_for_helper.as_deref(),
+                PythonHelperOutputPolicy::Bounded {
+                    workspace_root: &workspace_root,
+                },
             )
         })
         .await?
@@ -221,7 +231,7 @@ pub(crate) async fn sync_current_live_script_with_request(
         let script_path_for_helper = script_path.clone();
         let scene_document = scene_document.clone();
         run_blocking_script_operation(move || {
-            render_scene_document_via_python_helper(
+            render_scene_document_via_python_helper_bounded(
                 &repo_root,
                 &workspace_root,
                 &script_path_for_helper,
@@ -328,12 +338,13 @@ where
         .map_err(|error| ApiError::internal(format!("script helper task failed: {error}")))?
 }
 
-pub(crate) fn rewrite_script_via_python_helper(
+fn rewrite_script_via_python_helper_with_policy(
     repo_root: &Path,
     workspace_root: &Path,
     script_path: &Path,
     overrides: Option<&Value>,
     export_copy: Option<&Path>,
+    policy: PythonHelperOutputPolicy<'_>,
 ) -> Result<ScriptSyncResponse, ApiError> {
     let mut helper_args = vec![
         "-m".to_string(),
@@ -370,7 +381,7 @@ pub(crate) fn rewrite_script_via_python_helper(
         None
     };
 
-    let output = run_python_helper(repo_root, &helper_args);
+    let output = run_python_helper_with_policy(repo_root, &helper_args, policy);
     if let Some(path) = overrides_path {
         let _ = std::fs::remove_file(path);
     }
@@ -1086,6 +1097,102 @@ mod tests {
     use super::*;
     use crate::artifacts::{parse_eigen_dispersion_csv, sanitize_artifact_relative_path};
     use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn generated_scene_sync_reexports_new_run_stage_and_preserves_explicit_rewrite() {
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let workspace =
+            std::env::temp_dir().join(format!("fullmag-generated-sync-{}", uuid_v4_hex()));
+        {
+            let state_mut = Arc::get_mut(&mut state).expect("unique test state");
+            state_mut.repo_root = repo_root();
+            state_mut.current_workspace_root = workspace.clone();
+        }
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().expect("live snapshot");
+            snapshot.session.script_path.clear();
+            snapshot.scene_document = Some(
+                serde_json::from_value(serde_json::json!({
+                    "version": "scene.v2", "revision": 1,
+                    "scene": {"name": "generated_sync_waveguide"},
+                    "objects": [{
+                        "id": "waveguide", "name": "waveguide", "role": "magnet",
+                        "geometry": {"geometry_kind": "Box",
+                            "geometry_params": {"size": [100e-9, 40e-9, 10e-9]}},
+                        "material_ref": "permalloy", "magnetization_ref": "uniform"
+                    }],
+                    "materials": [{"id": "permalloy", "name": "Permalloy",
+                        "properties": {"Ms": 800e3, "Aex": 13e-12, "alpha": 0.02}}],
+                    "magnetization_assets": [{"id": "uniform", "name": "Uniform",
+                        "kind": "preset_texture", "preset_kind": "uniform",
+                        "preset_params": {"direction": [1.0, 0.0, 0.0]}, "preset_version": 1}],
+                    "study": {"backend": "fdm", "requested_backend": "fdm",
+                        "requested_device": "cpu", "requested_precision": "double",
+                        "fdm": {"default_cell": [10e-9, 10e-9, 10e-9]}}
+                }))
+                .expect("FDM waveguide authoring scene"),
+            );
+        }
+        let first =
+            sync_current_live_script_with_request(&state, ScriptSyncRequest { overrides: None })
+                .await
+                .expect("initial generated sync");
+        assert_eq!(first.source_kind, "scene_document");
+        {
+            let mut current = state.current_live_state.write().await;
+            let scene = current.as_mut().unwrap().scene_document.as_mut().unwrap();
+            scene.revision += 1;
+            scene.study.stages = serde_json::from_value(serde_json::json!([{
+                "kind": "run", "entrypoint_kind": "flat_run",
+                "until_seconds": "1e-12", "fixed_timestep": "1e-13"
+            }]))
+            .expect("Run stage");
+        }
+        let second =
+            sync_current_live_script_with_request(&state, ScriptSyncRequest { overrides: None })
+                .await
+                .expect("generated re-export");
+        assert_eq!(second.source_kind, "scene_document");
+        assert_eq!(second.script_path, first.script_path);
+        assert!(fs::read_to_string(&second.script_path)
+            .unwrap()
+            .contains("study.stages.add_run("));
+        let explicit = sync_current_live_script_with_request(
+            &state,
+            ScriptSyncRequest {
+                overrides: Some(serde_json::json!({})),
+            },
+        )
+        .await
+        .expect("explicit overrides must use rewrite");
+        assert_eq!(explicit.source_kind, "flat_script");
+        assert!(explicit.source_script_modified);
+        fs::remove_dir_all(workspace).expect("remove test workspace");
+    }
+
+    #[tokio::test]
+    async fn explicit_overrides_without_input_script_are_rejected() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        state
+            .current_live_state
+            .write()
+            .await
+            .as_mut()
+            .unwrap()
+            .session
+            .script_path
+            .clear();
+        let error = sync_current_live_script_with_request(
+            &state,
+            ScriptSyncRequest {
+                overrides: Some(serde_json::json!({})),
+            },
+        )
+        .await
+        .expect_err("overrides cannot be silently ignored without a source script");
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
 
     #[test]
     fn sanitize_artifact_relative_path_rejects_parent_segments() {

@@ -1471,6 +1471,7 @@ function Viewport3DModelLayerStack({
           <TopologyMeshLayer
             adoptionRegistry={adoptionRegistry}
             colors={colors}
+            primitiveModel={primitiveModel}
             sessionIdentity={sessionIdentity}
             fieldModel={fieldModel}
             getPartSettings={getPartSettings}

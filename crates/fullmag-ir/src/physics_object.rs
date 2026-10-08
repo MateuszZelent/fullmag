@@ -1,11 +1,12 @@
 use crate::{
-    AbsorbingBoundaryLayerIR, AirBoxPolicyIR, BackendPolicyIR, CouplingIR, CurrentModuleIR,
-    ElasticBodyIR, ElasticMaterialIR, EnergyTermIR, ExcitationAnalysisIR, FdmPeriodicityIR,
-    GeometryAssetsIR, GeometryIR, InitialMagnetizationIR, MagnetostrictionLawIR, MaterialIR,
-    MaterialParameterAssignmentIR, MechanicalBoundaryConditionIR, MechanicalLoadIR,
+    AbsorbingBoundaryLayerIR, AirBoxPolicyIR, AntennaFieldSolveStageIR, AntennaPortModeIR,
+    AntennaSpectrumRequestIR, AntennaTargetProjectionRefIR, BackendPolicyIR, CouplingIR,
+    CurrentModuleIR, ElasticBodyIR, ElasticMaterialIR, EnergyTermIR, ExcitationAnalysisIR,
+    FdmPeriodicityIR, GeometryAssetsIR, GeometryIR, InitialMagnetizationIR, MagnetostrictionLawIR,
+    MaterialIR, MaterialParameterAssignmentIR, MechanicalBoundaryConditionIR, MechanicalLoadIR,
     MeshSemanticsIR, ObjectRegionIR, PlanarMonitorIR, ProblemIR, ProblemMeta, RegionIR,
-    RegionRefIR, RegionalFieldDriveIR, SpinTorqueModuleIR, SpinTransportModuleIR, StudyIR,
-    SurfaceRefIR, ValidationProfileIR,
+    RegionRefIR, RegionalFieldDriveIR, SolvedAntennaDriveIR, SpinTorqueModuleIR,
+    SpinTransportModuleIR, StudyIR, SurfaceRefIR, ValidationProfileIR,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -232,6 +233,16 @@ pub struct ProblemIRV04 {
     pub current_modules: Vec<CurrentModuleIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_drives: Vec<RegionalFieldDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_port_modes: Vec<AntennaPortModeIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_field_solve_stages: Vec<AntennaFieldSolveStageIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_target_projections: Vec<AntennaTargetProjectionRefIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub solved_antenna_drives: Vec<SolvedAntennaDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_spectrum_requests: Vec<AntennaSpectrumRequestIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ExcitationAnalysisIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -315,6 +326,16 @@ struct ProblemIRV04Wire {
     #[serde(default)]
     field_drives: Vec<RegionalFieldDriveIR>,
     #[serde(default)]
+    antenna_port_modes: Vec<AntennaPortModeIR>,
+    #[serde(default)]
+    antenna_field_solve_stages: Vec<AntennaFieldSolveStageIR>,
+    #[serde(default)]
+    antenna_target_projections: Vec<AntennaTargetProjectionRefIR>,
+    #[serde(default)]
+    solved_antenna_drives: Vec<SolvedAntennaDriveIR>,
+    #[serde(default)]
+    antenna_spectrum_requests: Vec<AntennaSpectrumRequestIR>,
+    #[serde(default)]
     excitation_analysis: Option<ExcitationAnalysisIR>,
     #[serde(default)]
     spin_torque_modules: Vec<SpinTorqueModuleIR>,
@@ -385,6 +406,11 @@ impl From<ProblemIRV04Wire> for ProblemIRV04 {
             validation_profile: wire.validation_profile,
             current_modules: wire.current_modules,
             field_drives: wire.field_drives,
+            antenna_port_modes: wire.antenna_port_modes,
+            antenna_field_solve_stages: wire.antenna_field_solve_stages,
+            antenna_target_projections: wire.antenna_target_projections,
+            solved_antenna_drives: wire.solved_antenna_drives,
+            antenna_spectrum_requests: wire.antenna_spectrum_requests,
             excitation_analysis: wire.excitation_analysis,
             spin_torque_modules: wire.spin_torque_modules,
             spin_transport_modules: wire.spin_transport_modules,

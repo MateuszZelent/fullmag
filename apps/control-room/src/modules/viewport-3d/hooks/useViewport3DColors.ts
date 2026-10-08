@@ -33,6 +33,7 @@ export function readViewport3DColorsFromStyles(
 ): Viewport3DColors | null {
   const read = (name: string) => styles.getPropertyValue(name).trim();
   const accent = read("--fm-accent");
+  const antenna = read("--fm-surface-antenna");
   const accentStrong = read("--fm-accent-strong");
   const background = read("--fm-bg-viewport");
   const danger = read("--fm-danger");
@@ -47,6 +48,7 @@ export function readViewport3DColorsFromStyles(
   if (accent && background && field && mesh && wire) {
     return {
       accent,
+      antenna,
       accentStrong,
       background,
       danger,
@@ -193,6 +195,7 @@ function sameViewport3DColors(
 ): boolean {
   return (
     left?.accent === right.accent &&
+    left.antenna === right.antenna &&
     left.accentStrong === right.accentStrong &&
     left.background === right.background &&
     left.danger === right.danger &&

@@ -11,7 +11,8 @@ use crate::artifact_pipeline::ArtifactRecorder;
 use crate::constraints::FrozenSpinsCheckpointV1;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::artifacts::{
-    capture_initial_cuda_fields, record_cuda_due_outputs, record_cuda_final_outputs,
+    capture_initial_cuda_fields, record_cuda_due_outputs,
+    record_cuda_final_outputs,
 };
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler;
@@ -113,17 +114,44 @@ fn apply_regional_drive_energy(
         if !resolved.drive.enabled {
             continue;
         }
-        let time_offset_s = match resolved.drive.time_origin {
-            fullmag_ir::FieldTimeOriginIR::StageLocal => plan.time_stage.start_time_s,
-            fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
-        };
-        let multiplier =
-            evaluate_time_dependence(&resolved.drive.waveform, stats.time - time_offset_s);
+        let waveform_time_s = super::canonical_fdm_waveform_time(
+            plan,
+            resolved.drive.time_origin,
+            stats.time,
+        );
+        let multiplier = evaluate_time_dependence(&resolved.drive.waveform, waveform_time_s);
         for (index, (m, field)) in magnetization.iter().zip(&resolved.field_xyz).enumerate() {
             if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
                 continue;
             }
             magnetization_dot_field += multiplier
+                * plan.material.saturation_magnetisation
+                * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
+        }
+    }
+    for resolved in &plan.solved_antenna_drive_bases {
+        if !resolved.drive.activation.is_active_for(
+            plan.time_stage.study_kind,
+            plan.time_stage.active_stage_id.as_deref(),
+        ) {
+            continue;
+        }
+        let waveform_time_s = super::canonical_fdm_waveform_time(
+            plan,
+            resolved.drive.time_origin,
+            stats.time,
+        );
+        let multiplier = evaluate_time_dependence(&resolved.drive.waveform, waveform_time_s);
+        for (index, (m, field)) in magnetization
+            .iter()
+            .zip(&resolved.field_xyz_apm_per_a)
+            .enumerate()
+        {
+            if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
+                continue;
+            }
+            magnetization_dot_field += multiplier
+                * resolved.drive.peak_current_a
                 * plan.material.saturation_magnetisation
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
@@ -148,6 +176,91 @@ fn adaptive_batch_execution_eligible(plan: &FdmPlanIR, live: bool) -> bool {
         && plan.relaxation.is_none()
         && plan.spin_transport_plans.is_empty()
         && !live
+}
+
+#[cfg(feature = "cuda")]
+fn append_solved_antenna_drive_events(
+    events: &mut Vec<f64>,
+    drive: &fullmag_ir::SolvedAntennaDriveIR,
+    stage_start_s: f64,
+    waveform_origin_s: f64,
+    stage_end_s: f64,
+    tolerance_s: f64,
+) {
+    let offsets = match &drive.waveform {
+        fullmag_ir::TimeDependenceIR::Pulse { t_on, t_off } => vec![*t_on, *t_off],
+        fullmag_ir::TimeDependenceIR::PiecewiseLinear { points } => {
+            points.iter().map(|[time_s, _]| *time_s).collect()
+        }
+        fullmag_ir::TimeDependenceIR::Constant
+        | fullmag_ir::TimeDependenceIR::Sinusoidal { .. }
+        | fullmag_ir::TimeDependenceIR::SincPulse { .. } => Vec::new(),
+    };
+    for offset_s in offsets {
+        let time_s = match drive.time_origin {
+            fullmag_ir::FieldTimeOriginIR::StageLocal => waveform_origin_s + offset_s,
+            fullmag_ir::FieldTimeOriginIR::Absolute => offset_s,
+        };
+        if time_s > stage_start_s + tolerance_s && time_s < stage_end_s - tolerance_s {
+            events.push(time_s);
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_drive_event_schedule(plan: &FdmPlanIR, until_seconds: f64) -> Vec<f64> {
+    let stage_start_s = plan.time_stage.start_time_s;
+    let stage_end_s = stage_start_s + until_seconds;
+    let tolerance_s = crate::schedules::OUTPUT_TIME_TOLERANCE;
+    let mut events = vec![stage_start_s, stage_end_s];
+    events.extend(crate::time_events::resolved_stage_drive_discontinuities_with_origin(
+        &plan.field_drives,
+        &plan.solved_antenna_drive_bases,
+        stage_start_s,
+        plan.time_stage.waveform_origin_time_s(),
+        stage_end_s,
+        tolerance_s,
+    ));
+    for resolved in &plan.solved_antenna_drive_bases {
+        if resolved.drive.activation.is_active_for(
+            plan.time_stage.study_kind,
+            plan.time_stage.active_stage_id.as_deref(),
+        ) {
+            append_solved_antenna_drive_events(
+                &mut events,
+                &resolved.drive,
+                stage_start_s,
+                plan.time_stage.waveform_origin_time_s(),
+                stage_end_s,
+                tolerance_s,
+            );
+        }
+    }
+    events.retain(|time_s| time_s.is_finite());
+    events.sort_by(f64::total_cmp);
+    events.dedup_by(|right, left| (*right - *left).abs() <= tolerance_s);
+    events
+}
+
+#[cfg(feature = "cuda")]
+fn cap_cuda_target_to_drive_event(
+    plan: &FdmPlanIR,
+    current_solver_time_s: f64,
+    proposed_target_solver_time_s: f64,
+    drive_events_s: &[f64],
+) -> f64 {
+    let current_absolute_s = super::canonical_fdm_time(plan, current_solver_time_s);
+    let proposed_absolute_s = super::canonical_fdm_time(plan, proposed_target_solver_time_s);
+    drive_events_s
+        .iter()
+        .copied()
+        .find(|event_s| {
+            *event_s > current_absolute_s + crate::schedules::OUTPUT_TIME_TOLERANCE
+                && *event_s < proposed_absolute_s - crate::schedules::OUTPUT_TIME_TOLERANCE
+        })
+        .map_or(proposed_target_solver_time_s, |event_s| {
+            event_s - plan.time_stage.start_time_s
+        })
 }
 
 #[cfg(feature = "cuda")]
@@ -290,6 +403,24 @@ pub(crate) fn execute_cuda_fdm(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let has_dynamic_drive = plan
+        .regional_field_drive_bases
+        .iter()
+        .any(|basis| {
+            basis.drive.enabled
+                && !matches!(basis.drive.waveform, fullmag_ir::TimeDependenceIR::Constant)
+        })
+        || plan.solved_antenna_drive_bases.iter().any(|basis| {
+            !matches!(basis.drive.waveform, fullmag_ir::TimeDependenceIR::Constant)
+        });
+    if has_dynamic_drive
+        && plan.time_stage.waveform_origin_time_s() != plan.time_stage.start_time_s
+    {
+        return Err(RunError {
+            message: "exact stage-local waveform resume is not qualified for FDM CUDA execution"
+                .to_string(),
+        });
+    }
     crate::solver_runtime::selection::reject_frozen_spins_cuda_plan_execution(plan)?;
     if plan.frozen_spins.is_some() && direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
         return Err(RunError {
@@ -434,7 +565,14 @@ pub(crate) fn execute_cuda_fdm(
         ArtifactRecorder::in_memory(provenance.clone())
     };
     let default_scalar_trace = scalar_schedules.is_empty();
-    capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
+    let drive_event_schedule = cuda_drive_event_schedule(plan, until_seconds);
+    capture_initial_cuda_fields(
+        &backend,
+        plan,
+        cell_count,
+        &mut field_schedules,
+        &mut artifacts,
+    )?;
 
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
@@ -493,6 +631,12 @@ pub(crate) fn execute_cuda_fdm(
                     &scalar_schedules,
                     &field_schedules,
                 );
+                let target_time = cap_cuda_target_to_drive_event(
+                    plan,
+                    current_time,
+                    target_time,
+                    &drive_event_schedule,
+                );
                 let Some(batch) =
                     backend.step_adaptive_batch_interruptible(dt, target_time, max_steps, None)?
                 else {
@@ -525,6 +669,7 @@ pub(crate) fn execute_cuda_fdm(
                 apply_regional_drive_energy(plan, &mut sampled_stats, &magnetization);
                 record_cuda_due_outputs(
                     &backend,
+                    plan,
                     cell_count,
                     &sampled_stats,
                     Some(&magnetization),
@@ -590,7 +735,12 @@ pub(crate) fn execute_cuda_fdm(
                 }
             }
 
-            let dt_step = dt.min(until_seconds - current_time);
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                super::canonical_fdm_time(plan, current_time),
+                dt.min(until_seconds - current_time),
+                &drive_event_schedule,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let interrupt_requested = live
                 .as_ref()
                 .and_then(|consumer| consumer.interrupt_requested);
@@ -764,6 +914,7 @@ pub(crate) fn execute_cuda_fdm(
             }
             record_cuda_due_outputs(
                 &backend,
+                plan,
                 cell_count,
                 &sampled_stats,
                 magnetization_cache.as_deref(),
@@ -833,6 +984,7 @@ pub(crate) fn execute_cuda_fdm(
 
     record_cuda_final_outputs(
         &backend,
+        plan,
         cell_count,
         latest_stats.clone(),
         default_scalar_trace,
@@ -1019,11 +1171,14 @@ mod adaptive_batch_tests {
     use super::{
         adaptive_batch_target, execute_cuda_fdm, resolve_observation_policy, OutputSchedule,
     };
+    use crate::fdm::gpu::cuda::{canonical_fdm_time, canonical_fdm_waveform_time};
     use crate::fdm::gpu::cuda::native::NativeStatsMode;
     use fullmag_ir::{
         AdaptiveTimeStepIR, AdaptiveToleranceModeIR, BackendTarget, ExchangeBoundaryCondition,
-        ExecutionMode, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
-        IntegratorChoice, OutputIR,
+        ExecutionMode, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, FieldDriveKindIR,
+        FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, GridDimensions, IntegratorChoice,
+        OutputIR, RegionalFieldDriveIR, ResolvedSolvedAntennaDriveBasisIR, SolvedAntennaDriveIR,
+        StudyKindIR, TimeDependenceIR,
     };
 
     fn schedule(next_time: f64) -> OutputSchedule {
@@ -1061,6 +1216,93 @@ mod adaptive_batch_tests {
 
         assert_eq!(target, 1.0e-11);
         assert_eq!(max_steps, 64);
+    }
+
+    #[test]
+    fn native_cuda_stage_clock_maps_to_the_canonical_waveform_clock() {
+        let mut plan = FdmPlanIR::default();
+        plan.time_stage.start_time_s = 10.0;
+
+        assert_eq!(canonical_fdm_time(&plan, 0.25), 10.25);
+        assert_eq!(
+            canonical_fdm_waveform_time(
+                &plan,
+                fullmag_ir::FieldTimeOriginIR::StageLocal,
+                0.25,
+            ),
+            0.25
+        );
+        assert_eq!(
+            canonical_fdm_waveform_time(
+                &plan,
+                fullmag_ir::FieldTimeOriginIR::Absolute,
+                0.25,
+            ),
+            10.25
+        );
+    }
+
+    #[test]
+    fn cuda_drive_event_schedule_includes_regional_and_solved_antenna_edges() {
+        let mut plan = FdmPlanIR::default();
+        plan.time_stage.start_time_s = 10.0;
+        plan.time_stage.study_kind = StudyKindIR::TimeEvolution;
+        plan.field_drives = vec![RegionalFieldDriveIR {
+            id: "regional".into(),
+            name: "Regional".into(),
+            kind: FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
+            waveform: TimeDependenceIR::Pulse {
+                t_on: 1.0,
+                t_off: 2.0,
+            },
+            time_origin: FieldTimeOriginIR::StageLocal,
+            activation: fullmag_ir::DriveActivationIR::AllTimeEvolution {},
+            migration: None,
+        }];
+        plan.solved_antenna_drive_bases = vec![ResolvedSolvedAntennaDriveBasisIR {
+            drive: SolvedAntennaDriveIR {
+                id: "solved".into(),
+                name: "Solved".into(),
+                projection_ref: "projection".into(),
+                port_mode_id: "mode".into(),
+                peak_current_a: 1.0,
+                waveform: TimeDependenceIR::Pulse {
+                    t_on: 12.0,
+                    t_off: 13.0,
+                },
+                bandwidth_declaration: None,
+                time_origin: FieldTimeOriginIR::Absolute,
+                activation: fullmag_ir::DriveActivationIR::AllTimeEvolution {},
+            },
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            field_xyz_apm_per_a: vec![[0.0, 1.0, 0.0]],
+            projection_signature: "signature".into(),
+        }];
+
+        assert_eq!(
+            cuda_drive_event_schedule(&plan, 5.0),
+            vec![10.0, 11.0, 12.0, 13.0, 15.0]
+        );
+        assert_eq!(
+            cap_cuda_target_to_drive_event(&plan, 0.0, 5.0, &cuda_drive_event_schedule(&plan, 5.0)),
+            1.0
+        );
+        plan.time_stage.start_time_s = 10.5;
+        plan.time_stage.waveform_origin_time_s = Some(10.0);
+        assert_eq!(
+            cuda_drive_event_schedule(&plan, 4.5),
+            vec![10.5, 11.0, 12.0, 13.0, 15.0]
+        );
+        assert_eq!(
+            canonical_fdm_waveform_time(&plan, FieldTimeOriginIR::StageLocal, 0.25),
+            0.75
+        );
     }
 
     #[test]

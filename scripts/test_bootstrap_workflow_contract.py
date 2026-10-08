@@ -1,7 +1,10 @@
 import configparser
+import json
+import os
 from pathlib import Path
 import subprocess
 import unittest
+from unittest.mock import mock_open, patch
 
 import yaml
 
@@ -217,6 +220,36 @@ jobs:
         run = "./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts"
         self.assertIn(install, rust_job)
         self.assertLess(rust_job.index(install), rust_job.index(run))
+
+    def test_rust_contracts_resolve_artifact_storage_before_running_tests(self) -> None:
+        workflow = yaml.safe_load((ROOT / ".github/workflows/bootstrap.yml").read_text())
+        steps = workflow["jobs"]["rust-contracts"]["steps"]
+        index = next(i for i, step in enumerate(steps)
+                     if step.get("name") == "Resolve storage for API artifact fixtures")
+        self.assertEqual(steps[index + 1]["name"], "Run Rust quantity, API and CLI contracts")
+        lines = steps[index]["run"].rstrip().splitlines()
+        self.assertEqual(lines[-1], "PY")
+        source = "\n".join(lines[1:-1])
+        reply = subprocess.CompletedProcess(
+            [], 0, json.dumps({"storage_root": str(ROOT.parent / "storage")}), ""
+        )
+        output = mock_open()
+        with patch.dict(os.environ, {"GITHUB_ENV": "fixture-env"}), \
+                patch("subprocess.run", return_value=reply) as resolver, \
+                patch("builtins.open", output):
+            exec(source, {})
+        self.assertIn("scripts/fullmag_storage.py", resolver.call_args.args[0])
+        self.assertIn("--create", resolver.call_args.args[0])
+        self.assertTrue(resolver.call_args.kwargs["check"])
+        output.assert_called_once_with("fixture-env", "a", encoding="utf-8")
+        output().write.assert_called_once_with(
+            f"FULLMAG_PROJECT_STORAGE_ROOT={ROOT.parent / 'storage'}\n"
+        )
+        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(2, [])), \
+                patch("builtins.open", mock_open()) as output:
+            with self.assertRaises(subprocess.CalledProcessError):
+                exec(source, {})
+            output.assert_not_called()
 
     def test_texture_compatibility_regressions_run_in_required_contract_jobs(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()

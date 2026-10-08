@@ -168,12 +168,14 @@ const VIEW_CUBE_FACE_SHADE: Record<ViewCubeFaceModel["id"], number> = {
 export function ViewCube3DBox({
   colors,
   controls,
+  onDrag,
   onOrbit,
   onOrbitEnd,
   onSnap,
 }: {
   colors: Viewport3DColors;
   controls?: ViewportCameraControlsHandle;
+  onDrag: (deltaX: number, deltaY: number) => void;
   onOrbit: (deltaX: number) => void;
   onOrbitEnd: () => void;
   onSnap: (direction: Direction3) => void;
@@ -183,6 +185,9 @@ export function ViewCube3DBox({
   const gl = useThree((state) => state.gl);
   const cubeGroupRef = useRef<Group>(null);
   const onSnapRef = useLatestRef(onSnap);
+  const onDragRef = useLatestRef(onDrag);
+  const onDragEndRef = useLatestRef(onOrbitEnd);
+  const controlsRef = useLatestRef(controls);
   const faces = useMemo(() => buildViewCubeFaces(), []);
   const hud = useMemo(() => resolveHudColors(colors), [colors]);
   const faceColors = useMemo(() => buildViewCubeFaceColors(hud), [hud]);
@@ -205,8 +210,8 @@ export function ViewCube3DBox({
   }, [gl, hoveredTargetId]);
   useEffect(() => () => setCanvasCursor(gl.domElement, ""), [gl]);
 
-  // The HUD draws without depth, so faces turned away and the edges behind
-  // the cube are hidden explicitly; otherwise the cube reads as a wireframe.
+  // Cube chrome keeps explicit face/edge visibility; the separate depth-only
+  // body below occludes the compass without exposing the widget to scene depth.
   useFrame(({ camera: frameCamera }) => {
     const cube = cubeGroupRef.current;
     if (!cube) return;
@@ -242,8 +247,49 @@ export function ViewCube3DBox({
     const resizeObserver = new ResizeObserver(() => {
       cachedRect = element.getBoundingClientRect();
     });
+    let gesture: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+      lastX: number;
+      lastY: number;
+      direction: Direction3;
+      dragged: boolean;
+      controls?: ViewportCameraControlsHandle;
+      enabled?: boolean;
+    } | null = null;
+    let consumeClick = false;
+    const handleClick = (event: MouseEvent) => {
+      if (!consumeClick) return;
+      consumeClick = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    const finishGesture = (event?: PointerEvent) => {
+      if (!gesture || (event && event.pointerId !== gesture.pointerId)) return;
+      const completed = gesture;
+      gesture = null;
+      if (completed.controls) completed.controls.enabled = completed.enabled;
+      setCanvasCursor(element, "");
+      if (completed.dragged) onDragEndRef.current();
+      else if (event?.type === "pointerup") onSnapRef.current(completed.direction);
+    };
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      if (!gesture.dragged && Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) <= 3) return;
+      gesture.dragged = true;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onDragRef.current(event.clientX - gesture.lastX, event.clientY - gesture.lastY);
+      gesture.lastX = event.clientX;
+      gesture.lastY = event.clientY;
+      setCanvasCursor(element, "grabbing");
+    };
 
     const handlePointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 || gesture) return;
+      consumeClick = false;
       const group = cubeGroupRef.current;
       if (!group) return;
 
@@ -264,28 +310,70 @@ export function ViewCube3DBox({
         raycaster.intersectObject(group, true),
       );
       if (!direction) return;
+      consumeClick = true;
 
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      onSnapRef.current(direction);
+      const orbitControls = controlsRef.current;
+      gesture = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        direction,
+        dragged: false,
+        controls: orbitControls,
+        enabled: orbitControls?.enabled,
+      };
+      if (orbitControls) orbitControls.enabled = false;
+      setCanvasCursor(element, "grab");
     };
 
     resizeObserver.observe(element);
     element.addEventListener("pointerdown", handlePointerDown, {
       capture: true,
     });
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", finishGesture, { capture: true });
+    window.addEventListener("pointercancel", finishGesture, { capture: true });
+    element.addEventListener("click", handleClick, { capture: true });
+    const handleBlur = () => finishGesture();
+    window.addEventListener("blur", handleBlur);
     return () => {
+      finishGesture();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", finishGesture, { capture: true });
+      window.removeEventListener("pointercancel", finishGesture, { capture: true });
+      element.removeEventListener("click", handleClick, { capture: true });
+      window.removeEventListener("blur", handleBlur);
       element.removeEventListener("pointerdown", handlePointerDown, {
         capture: true,
       });
       resizeObserver.disconnect();
     };
-  }, [camera, gl, onSnapRef, raycastState]);
+  }, [camera, controlsRef, gl, onDragEndRef, onDragRef, onSnapRef, raycastState]);
 
   return (
     <group>
-      <group ref={cubeGroupRef}>
+      <group ref={cubeGroupRef} renderOrder={WIDGET_RENDER_ORDER}>
+        {/* Start an isolated HUD depth layer after the scene has rendered.
+            The ring must test against the cube, not the simulation geometry.
+            Keep this in the transparent list before every visible HUD part. */}
+        <mesh
+          onBeforeRender={(renderer) => renderer.clearDepth()}
+          renderOrder={WIDGET_RENDER_ORDER - 1}
+          raycast={() => {}}
+        >
+          <boxGeometry args={[VIEW_CUBE_FACE_SIZE, VIEW_CUBE_FACE_SIZE, VIEW_CUBE_FACE_SIZE]} />
+          <meshBasicMaterial
+            colorWrite={false}
+            depthTest
+            depthWrite
+            transparent
+          />
+        </mesh>
         <mesh
           renderOrder={WIDGET_RENDER_ORDER}
           userData={{ viewCubeFallbackBox: true }}
@@ -323,7 +411,6 @@ export function ViewCube3DBox({
               hud={hud}
               hoveredTargetId={hoveredTargetId}
               onHoverChange={setHoveredTargetId}
-              onSnap={onSnap}
             />
           );
         })}
@@ -520,7 +607,7 @@ function OrbitRing3D({
         />
         <meshBasicMaterial
           color={bandColor}
-          depthTest={false}
+          depthTest
           depthWrite={false}
           opacity={hovered ? 0.5 : 0.92}
           side={DoubleSide}
@@ -532,7 +619,8 @@ function OrbitRing3D({
         <Line
           key={index}
           color={edgeColor}
-          depthTest={false}
+          depthTest
+          depthWrite={false}
           lineWidth={1.2}
           opacity={0.95}
           points={points}
@@ -542,7 +630,8 @@ function OrbitRing3D({
       ))}
       <Line
         color={edgeColor}
-        depthTest={false}
+        depthTest
+        depthWrite={false}
         lineWidth={1}
         opacity={0.8}
         points={COMPASS_TICK_POINTS}
@@ -553,6 +642,7 @@ function OrbitRing3D({
       {COMPASS_HEADINGS.map((heading) => (
         <HudTextSprite
           key={heading.label}
+          depthTest
           opacity={heading.positive ? 1 : 0.8}
           position={[
             Math.cos(heading.angle) * ORBIT_RING_RADIUS,
@@ -584,7 +674,7 @@ function OrbitRing3D({
           <coneGeometry args={[3.2, 7, 3]} />
           <meshBasicMaterial
             color={hovered ? hud.chip : hud.label}
-            depthTest={false}
+            depthTest
             depthWrite={false}
             toneMapped={false}
             transparent
@@ -663,7 +753,6 @@ function ViewCubeFacePanel({
   hoveredTargetId,
   hud,
   onHoverChange,
-  onSnap,
   shade,
 }: {
   accent: string;
@@ -676,7 +765,6 @@ function ViewCubeFacePanel({
   hoveredTargetId: string | null;
   hud: Viewport3DHudColors;
   onHoverChange: (id: string | null) => void;
-  onSnap: (direction: Direction3) => void;
 }) {
   const placement = VIEW_CUBE_FACE_PLACEMENTS[face.id];
   const label = VIEW_CUBE_FACE_LABELS[face.id];
@@ -693,6 +781,7 @@ function ViewCubeFacePanel({
     <group
       ref={groupRef}
       position={placement.position}
+      renderOrder={WIDGET_RENDER_ORDER}
       rotation={placement.rotation}
     >
       {face.targets.map((target, index) => {
@@ -712,12 +801,6 @@ function ViewCubeFacePanel({
         return (
           <mesh
             key={`${face.id}:${target.id}`}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              event.nativeEvent.preventDefault();
-              event.nativeEvent.stopImmediatePropagation();
-              onSnap(target.direction as Direction3);
-            }}
             onPointerOut={() => onHoverChange(null)}
             onPointerOver={(event) => {
               event.stopPropagation();
@@ -818,7 +901,7 @@ function AutoOrientText({
   });
 
   return (
-    <group position={[0, 0, 0.28]} ref={ref}>
+    <group position={[0, 0, 0.28]} ref={ref} renderOrder={WIDGET_RENDER_ORDER}>
       <mesh renderOrder={WIDGET_RENDER_ORDER + 5}>
         <planeGeometry args={[widthPx, heightPx]} />
         <meshBasicMaterial

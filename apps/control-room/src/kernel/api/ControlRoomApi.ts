@@ -54,6 +54,13 @@ import {
   DATA_QUANTITIES_PATH,
   DATA_ARTIFACT_PATH,
   DATA_ARTIFACTS_PATH,
+  DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH,
+  DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH,
+  DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH,
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
   DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH,
@@ -367,6 +374,13 @@ import type {
   FrequencyDomainJsonArtifactResource,
   FrequencyDomainTextArtifactResource,
   ArtifactResource,
+  AntennaFieldSolutionResource,
+  AntennaFieldPayloadKind,
+  AntennaExternalLeadInspectionResource,
+  AntennaInspectionPayloadKind,
+  AntennaStageOutputCatalogResource,
+  AntennaSpectrumPayloadKind,
+  AntennaSourceSpectrumResource,
   FrequencyDomainFieldResource,
   FrequencyDomainSweepProgressResource,
   HysteresisAdaptiveRefinementResource,
@@ -829,6 +843,7 @@ function savedGeometryBinaryQuery(geometry: SavedFieldGeometryResource, limit: n
 }
 const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
 export const MAX_TOPOLOGY_BYTES = 512 * 1024 * 1024;
+export const MAX_ANTENNA_INSPECTION_BYTES = 128 * 1024 * 1024;
 const FIELD_MATERIALIZATION_TIMEOUT_MS = 5_000;
 const FIELD_MATERIALIZATION_RETRY_MS = 250;
 const FIELD_MATERIALIZATION_REQUEST_KEY = "current-field-cache";
@@ -1721,6 +1736,72 @@ export class ControlRoomApi {
   };
 
   readonly data = {
+    antenna: {
+      fieldSolution: (solutionId: string, options?: RequestOptions) =>
+        this.requestJson<AntennaFieldSolutionResource>(
+          DATA_ANTENNA_FIELD_SOLUTION_PATH,
+          options,
+          { path: { solution_id: solutionId } },
+        ),
+      fieldSolutionPayload: (
+        solutionId: string,
+        payloadKind: AntennaFieldPayloadKind,
+        portModeId?: string,
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestBinaryBytes(
+          DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH,
+          options,
+          { solution_id: solutionId, payload_kind: payloadKind },
+          portModeId ? { port_mode_id: portModeId } : undefined,
+        ),
+      stageOutputCatalog: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<AntennaStageOutputCatalogResource>(
+          DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      externalLeadInspection: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<AntennaExternalLeadInspectionResource>(
+          DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      externalLeadInspectionPayload: (
+        stageId: string,
+        payloadKind: AntennaInspectionPayloadKind,
+        contentDigest: string,
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestBinaryBytes(
+          DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH,
+          {
+            ...options,
+            maxResponseBytes: Math.min(
+              options?.maxResponseBytes ?? MAX_ANTENNA_INSPECTION_BYTES,
+              MAX_ANTENNA_INSPECTION_BYTES,
+            ),
+          },
+          { stage_id: stageId, payload_kind: payloadKind },
+          { content_digest: contentDigest },
+        ),
+      sourceSpectrum: (outputId: string, options?: RequestOptions) =>
+        this.requestJson<AntennaSourceSpectrumResource>(
+          DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
+          options,
+          { path: { output_id: outputId } },
+        ),
+      sourceSpectrumPayload: (
+        outputId: string,
+        payloadKind: AntennaSpectrumPayloadKind,
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestBinaryBytes(
+          DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
+          options,
+          { output_id: outputId, payload_kind: payloadKind },
+        ),
+    },
     artifacts: {
       list: (options?: RequestOptions) =>
         this.requestJson<ArtifactResource[]>(DATA_ARTIFACTS_PATH, options),

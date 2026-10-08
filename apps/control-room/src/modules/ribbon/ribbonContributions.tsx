@@ -78,6 +78,7 @@ import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import {
+  resolveActiveLaneDiscretization,
   resolveActiveLaneOperation,
   type ActiveLaneCapabilitySnapshot,
 } from "@/kernel/resources/useActiveLaneCapabilities";
@@ -282,7 +283,7 @@ function physicsInteractionMenu(
         tooltip: operation.enabled ? undefined : operation.reason,
         disabled: !operation.enabled,
         commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
-        commandInput: { interactionId: spec.id },
+        commandInput: { interactionId: spec.id, ...(scope === "global" ? { scope: "global" } : {}) },
       };
     }),
     ...(scope === "global" ? [createFieldDriveItem] : []),
@@ -321,6 +322,7 @@ const geometryTab: RibbonTabContent = {
         { id: "geometry.add-cylinder",     icon: icon(Cylinder), label: "Cylinder",       iconColor: "text-cyan-400" },
         { id: "geometry.add-sphere",       icon: icon(Circle),   label: "Sphere",         iconColor: "text-violet-400" },
         { id: "geometry.add-microstrip-antenna", icon: icon(RadioTower), label: "Microstrip", iconColor: "text-rose-300" },
+        { id: "geometry.add-cpw-antenna", icon: icon(RadioTower), label: "CPW", iconColor: "text-sky-400" },
         { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      disabled: true, iconColor: "text-purple-300" },
         { id: "builder-add-disk",          icon: icon(Disc),     label: "Disk",           disabled: true, iconColor: "text-sky-400" },
         { id: "geometry.add-thin-film",    icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
@@ -516,7 +518,7 @@ const physicsTab: RibbonTabContent = {
       actions: [
         { id: "manage-rf",      icon: icon(RadioTower), label: "RF Sources",  disabled: true, iconColor: "text-cyan-400",    menu: menu("physics-rf", "RF source", ["Add microstrip", "Add CPW", "List sources"]) },
         { id: "add-microstrip", icon: icon(Plus),       label: "Microstrip",  commandId: "geometry.add-microstrip-antenna", iconColor: "text-teal-400" },
-        { id: "add-cpw",        icon: icon(Plus),       label: "CPW",         disabled: true, iconColor: "text-sky-400" },
+        { id: "add-cpw",        icon: icon(Plus),       label: "CPW",         commandId: "geometry.add-cpw-antenna", iconColor: "text-sky-400" },
       ],
     },
   ],
@@ -788,12 +790,9 @@ function ribbonDiscretization(context: RibbonBuildContext): RibbonDiscretization
   // null while unresolved), which then fails closed below.
   if (context.sessionStatus === undefined) return "fem";
   if (context.sessionStatus === null) return "unknown";
-  const value = context.sessionStatus.domain?.discretization
-    ?.trim()
-    .toLowerCase();
-  if (value === "fdm") return "fdm";
-  if (value === "fem") return "fem";
-  return "unknown";
+  return resolveActiveLaneDiscretization(
+    context.sessionStatus.capabilities?.active_lane ?? null,
+  );
 }
 
 function buildGeometryTabContent(

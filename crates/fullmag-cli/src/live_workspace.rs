@@ -475,7 +475,7 @@ impl LocalLiveWorkspace {
         Ok(())
     }
 
-    fn current_artifact_dir(&self) -> Result<PathBuf> {
+    pub(crate) fn current_artifact_dir(&self) -> Result<PathBuf> {
         let path = self
             .state
             .lock()
@@ -513,6 +513,16 @@ impl LocalLiveWorkspace {
     pub fn push_log(&self, level: &str, message: impl Into<String>) {
         if let Ok(mut state) = self.state.lock() {
             push_engine_log(&mut state.engine_log, level, message);
+        }
+        self.publish_snapshot();
+    }
+
+    pub fn push_command_log(&self, command_id: &str, level: &str, message: impl Into<String>) {
+        if let Ok(mut state) = self.state.lock() {
+            push_engine_log(&mut state.engine_log, level, message);
+            if let Some(entry) = state.engine_log.last_mut() {
+                entry.command_id = Some(command_id.to_string());
+            }
         }
         self.publish_snapshot();
     }

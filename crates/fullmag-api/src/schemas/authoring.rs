@@ -239,6 +239,213 @@ pub struct SceneMaterialResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaPortBranchResource {
+    pub id: String,
+    pub inlet_terminal_ref: String,
+    pub outlet_terminal_ref: String,
+    pub signed_weight: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaPortModeResource {
+    pub schema_version: String,
+    pub id: String,
+    pub source_object_id: String,
+    pub current_transport_id: String,
+    pub branches: Vec<AntennaPortBranchResource>,
+    #[serde(default = "default_antenna_normalization_current_a")]
+    pub normalization_current_a: f64,
+}
+
+fn default_antenna_normalization_current_a() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaFieldModelResource {
+    QuasistaticConductionBiotSavart3d,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaOerstedRealizationResource {
+    DirectTetraQuadrature,
+    VectorPotentialSolver,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaNamedOutputResource {
+    pub id: String,
+    pub quantity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaFieldSolveStageResource {
+    pub id: String,
+    pub source_object_id: String,
+    pub current_transport_id: String,
+    pub port_mode_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_view_ref: Option<String>,
+    pub model: AntennaFieldModelResource,
+    pub oersted_realization: AntennaOerstedRealizationResource,
+    pub conductor_mesh_policy: String,
+    pub field_sampling_domain: FieldTargetResource,
+    pub target_refs: Vec<FieldTargetResource>,
+    pub solver_policy: String,
+    pub outputs: Vec<AntennaNamedOutputResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaFieldSolutionRefResource {
+    pub stage_id: String,
+    pub output_id: String,
+    pub asset_id: String,
+    pub content_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub enum AntennaStageOutputRefResource {
+    StageOutput { stage_id: String, output_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaResolvedAssetKindResource {
+    ResolvedAsset,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaResolvedAssetRefResource {
+    pub kind: AntennaResolvedAssetKindResource,
+    pub stage_id: String,
+    pub output_id: String,
+    pub asset_id: String,
+    pub content_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum AntennaSolutionRefResource {
+    StageOutput(AntennaStageOutputRefResource),
+    ResolvedAsset(AntennaResolvedAssetRefResource),
+    Published(AntennaFieldSolutionRefResource),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaTargetProjectionResource {
+    pub id: String,
+    pub solution: AntennaSolutionRefResource,
+    pub target: FieldTargetResource,
+    pub output_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaWaveformBandwidthDeclarationResource {
+    /// Authored physical upper band for pulse or piecewise-linear waveforms.
+    /// It is not inferred from pulse duration, spacing, or Nyquist frequency.
+    pub f_max_hz: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SolvedAntennaDriveResource {
+    pub id: String,
+    pub name: String,
+    pub projection_ref: String,
+    pub port_mode_id: String,
+    pub peak_current_a: f64,
+    pub waveform: TimeDependenceResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth_declaration: Option<AntennaWaveformBandwidthDeclarationResource>,
+    pub time_origin: FieldTimeOriginResource,
+    pub activation: DriveActivationResource,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaSpectrumTransformResource {
+    SpatialFft,
+    NonuniformSpatialFft,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaSpectrumWindowResource {
+    Rectangular,
+    Hann,
+    Hamming,
+    Blackman,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaSpectrumNormalizationResource {
+    IntegralSi,
+    UnitaryDiscrete,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaSpectrumOutsidePolicyResource {
+    Error,
+    Zero,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaSpectrumSamplingPlaneResource {
+    pub origin_m: [f64; 3],
+    pub axis_u: [f64; 3],
+    pub axis_v: [f64; 3],
+    pub extent_u_m: f64,
+    pub extent_v_m: f64,
+    pub sample_count_u: u32,
+    pub sample_count_v: u32,
+    pub interpolation: String,
+    pub outside_policy: AntennaSpectrumOutsidePolicyResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaSpectrumKGridResource {
+    pub k_u_rad_per_m: Vec<f64>,
+    pub k_v_rad_per_m: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaSpectrumRequestResource {
+    pub id: String,
+    pub solution_ref: AntennaSolutionRefResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_mode_id: Option<String>,
+    pub target: FieldTargetResource,
+    pub transform: AntennaSpectrumTransformResource,
+    pub sampling_plane: AntennaSpectrumSamplingPlaneResource,
+    pub window: AntennaSpectrumWindowResource,
+    pub normalization: AntennaSpectrumNormalizationResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonuniform_k_grid: Option<AntennaSpectrumKGridResource>,
+    pub component: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equilibrium_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode_basis_ref: Option<String>,
+    pub output_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -273,6 +480,21 @@ pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub current_modules: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<AntennaPortModeResource>)]
+    pub antenna_port_modes: Vec<fullmag_ir::AntennaPortModeIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<AntennaFieldSolveStageResource>)]
+    pub antenna_field_solve_stages: Vec<fullmag_ir::AntennaFieldSolveStageIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<AntennaTargetProjectionResource>)]
+    pub antenna_target_projections: Vec<fullmag_ir::AntennaTargetProjectionRefIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<SolvedAntennaDriveResource>)]
+    pub solved_antenna_drives: Vec<fullmag_ir::SolvedAntennaDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<AntennaSpectrumRequestResource>)]
+    pub antenna_spectrum_requests: Vec<fullmag_ir::AntennaSpectrumRequestIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_transports: Vec<fullmag_authoring::SceneCurrentTransport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1684,5 +1906,111 @@ mod stage_autosave_tests {
             .validate()
             .unwrap_err()
             .contains("scalar tables only"));
+    }
+
+    #[test]
+    fn scene_round_trips_antenna_composition_resources_without_field_drive_substitution() {
+        let scene: SceneResource = serde_json::from_value(serde_json::json!({
+            "antenna_port_modes": [{
+                "schema_version": "antenna_port_mode.v2",
+                "id": "port_1",
+                "source_object_id": "antenna_1",
+                "current_transport_id": "transport_1",
+                "branches": [{
+                    "id": "signal",
+                    "inlet_terminal_ref": "signal_in",
+                    "outlet_terminal_ref": "signal_out",
+                    "signed_weight": 1.0
+                }, {
+                    "id": "return",
+                    "inlet_terminal_ref": "return_in",
+                    "outlet_terminal_ref": "return_out",
+                    "signed_weight": -1.0
+                }]
+            }],
+            "antenna_field_solve_stages": [{
+                "id": "solve_1",
+                "source_object_id": "antenna_1",
+                "current_transport_id": "transport_1",
+                "port_mode_ids": ["port_1"],
+                "conservative_current_view_ref": "transport_1:rt0",
+                "model": "quasistatic_conduction_biot_savart3d",
+                "oersted_realization": "direct_tetra_quadrature",
+                "conductor_mesh_policy": "authored_shared_domain",
+                "field_sampling_domain": {"kind": "global"},
+                "target_refs": [{"kind": "global"}],
+                "solver_policy": "production_default",
+                "outputs": [{"id": "basis", "quantity": "H_ant_basis"}]
+            }],
+            "antenna_target_projections": [{
+                "id": "projection_1",
+                "solution": {
+                    "stage_id": "solve_1",
+                    "output_id": "basis",
+                    "asset_id": "asset_1",
+                    "content_digest": "sha256:asset"
+                },
+                "target": {"kind": "global"},
+                "output_id": "projected"
+            }],
+            "solved_antenna_drives": [{
+                "id": "drive_1",
+                "name": "Drive 1",
+                "projection_ref": "projection_1",
+                "port_mode_id": "port_1",
+                "peak_current_a": 0.01,
+                "waveform": {"kind": "constant"},
+                "time_origin": "stage_local",
+                "activation": {"kind": "all_time_evolution"}
+            }],
+            "antenna_spectrum_requests": [{
+                "id": "spectrum_1",
+                "solution_ref": {
+                    "stage_id": "solve_1",
+                    "output_id": "basis",
+                    "asset_id": "asset_1",
+                    "content_digest": "sha256:asset"
+                },
+                "target": {"kind": "global"},
+                "transform": "spatial_fft",
+                "sampling_plane": {
+                    "origin_m": [0.0, 0.0, 0.0],
+                    "axis_u": [1.0, 0.0, 0.0],
+                    "axis_v": [0.0, 1.0, 0.0],
+                    "extent_u_m": 1.0,
+                    "extent_v_m": 1.0,
+                    "sample_count_u": 2,
+                    "sample_count_v": 2,
+                    "interpolation": "fem_element",
+                    "outside_policy": "error"
+                },
+                "window": "rectangular",
+                "normalization": "integral_si",
+                "component": "x",
+                "output_id": "spectrum_out"
+            }]
+        }))
+        .unwrap();
+        let value = serde_json::to_value(scene).unwrap();
+        assert_eq!(value["antenna_port_modes"][0]["id"], "port_1");
+        assert_eq!(value["antenna_field_solve_stages"][0]["id"], "solve_1");
+        assert_eq!(value["antenna_target_projections"][0]["id"], "projection_1");
+        assert_eq!(value["solved_antenna_drives"][0]["id"], "drive_1");
+        assert_eq!(value["antenna_spectrum_requests"][0]["id"], "spectrum_1");
+        let mut symbolic = value.clone();
+        let stage_output = serde_json::json!({
+            "kind": "stage_output",
+            "stage_id": "solve_1",
+            "output_id": "basis"
+        });
+        symbolic["antenna_target_projections"][0]["solution"] = stage_output.clone();
+        symbolic["antenna_spectrum_requests"][0]["solution_ref"] = stage_output.clone();
+        let scene: SceneResource = serde_json::from_value(symbolic).unwrap();
+        let round_trip = serde_json::to_value(scene).unwrap();
+        assert_eq!(round_trip["antenna_target_projections"][0]["solution"], stage_output);
+        assert_eq!(round_trip["antenna_spectrum_requests"][0]["solution_ref"], stage_output);
+        assert!(value["field_drives"].get("drives").is_none_or(|drives| {
+            drives.as_array().is_some_and(Vec::is_empty)
+        }));
     }
 }

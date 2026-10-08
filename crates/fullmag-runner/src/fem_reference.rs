@@ -24,7 +24,8 @@ use fullmag_ir::{
 };
 
 use crate::antenna_fields::{
-    combined_antenna_field_at_time, compute_per_unit_antenna_fields, has_time_varying_antenna,
+    compute_per_unit_antenna_fields, dynamic_antenna_drive_terms, has_time_varying_antenna,
+    static_antenna_field, validate_antenna_zeeman_mask_lengths,
 };
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::compute_torque_field;
@@ -454,12 +455,9 @@ pub(crate) fn build_problem_and_state(
         }
     }
 
+    validate_antenna_zeeman_mask_lengths(&plan.antenna_zeeman_masks, plan.mesh.nodes.len())?;
     let per_unit_fields = compute_per_unit_antenna_fields(plan)?;
-    let initial_antenna_field = if per_unit_fields.is_empty() {
-        None
-    } else {
-        Some(combined_antenna_field_at_time(plan, &per_unit_fields, 0.0))
-    };
+    let initial_antenna_field = static_antenna_field(plan, &per_unit_fields);
     let terms = EffectiveFieldTerms {
         exchange: plan.enable_exchange,
         demag: plan.enable_demag,
@@ -509,6 +507,11 @@ pub(crate) fn build_problem_and_state(
         }
         None => FemLlgProblem::with_terms(topology, material, dynamics, terms),
     };
+    problem
+        .set_dynamic_field_drives(dynamic_antenna_drive_terms(plan, &per_unit_fields))
+        .map_err(|error| RunError {
+            message: format!("configure FEM dynamic antenna field basis: {error}"),
+        })?;
     if let Some(normal) = plan.dmi_interface_normal {
         problem.set_dmi_interface_normal(normal);
     }
@@ -605,20 +608,31 @@ fn execute_reference_fem_impl(
         });
     }
 
-    let (mut problem, mut state) = build_problem_and_state(plan)?;
-    // Precompute per-unit-current Biot-Savart fields for time-varying updates.
-    let per_unit_antenna_fields = if has_time_varying_antenna(plan) {
-        compute_per_unit_antenna_fields(plan)?
-    } else {
-        vec![]
-    };
-    let has_time_varying = !per_unit_antenna_fields.is_empty();
-    // For the observation parameter we use the field already baked into the problem.
-    let antenna_field_at = |p: &FemLlgProblem, n: usize| -> Vec<[f64; 3]> {
-        p.terms
-            .per_node_field
+    let (problem, mut state) = build_problem_and_state(plan)?;
+    let per_unit_antenna_fields = compute_per_unit_antenna_fields(plan)?;
+    let dynamic_antenna_drives = dynamic_antenna_drive_terms(plan, &per_unit_antenna_fields);
+    let static_antenna_field = problem.terms.per_node_field.clone();
+    let antenna_node_count = state.magnetization().len();
+    // Observation payloads must expose the same time-dependent antenna field
+    // that the engine evaluates in the LLG RHS, without mutating the static
+    // field term owned by the problem.
+    let antenna_field_at = |time_seconds: f64| -> Vec<[f64; 3]> {
+        let n = antenna_node_count;
+        let mut field = static_antenna_field
             .clone()
-            .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; n])
+            .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; n]);
+        for drive in &dynamic_antenna_drives {
+            let multiplier = drive.multiplier_at(time_seconds);
+            if multiplier == 0.0 {
+                continue;
+            }
+            for (node, basis) in drive.basis_field.iter().enumerate().take(n) {
+                field[node][0] += basis[0] * multiplier;
+                field[node][1] += basis[1] * multiplier;
+                field[node][2] += basis[2] * multiplier;
+            }
+        }
+        field
     };
     let initial_magnetization = state.magnetization().to_vec();
 
@@ -642,7 +656,7 @@ fn execute_reference_fem_impl(
     let default_scalar_trace = scalar_schedules.is_empty();
 
     if default_scalar_trace {
-        let ant = antenna_field_at(&problem, state.magnetization().len());
+        let ant = antenna_field_at(state.time_seconds);
         record_scalar_snapshot(
             &problem,
             &state,
@@ -656,7 +670,7 @@ fn execute_reference_fem_impl(
             &mut artifacts,
         )?;
     } else {
-        let ant = antenna_field_at(&problem, state.magnetization().len());
+        let ant = antenna_field_at(state.time_seconds);
         record_due_outputs(
             &problem,
             &state,
@@ -682,7 +696,7 @@ fn execute_reference_fem_impl(
     let mut cancelled = false;
     let mut paused = false;
     let mut current_observables = {
-        let ant = antenna_field_at(&problem, state.magnetization().len());
+        let ant = antenna_field_at(state.time_seconds);
         observe_state(&problem, &state, &ant)?
     };
     let mut current_stats = make_step_stats(
@@ -778,14 +792,6 @@ fn execute_reference_fem_impl(
         }
 
         let dt_step = dt.min(until_seconds - state.time_seconds);
-        // Update antenna field for time-varying drives (e.g. sinusoidal RF).
-        if has_time_varying {
-            problem.terms.per_node_field = Some(combined_antenna_field_at_time(
-                plan,
-                &per_unit_antenna_fields,
-                state.time_seconds,
-            ));
-        }
         let wall_start = Instant::now();
         let report = problem
             .step_with_workspace(&mut state, dt_step, &mut integrator_ws)
@@ -839,7 +845,7 @@ fn execute_reference_fem_impl(
         artifacts.record_solver_step(&current_stats);
 
         if !default_scalar_trace || !field_schedules.is_empty() {
-            let ant = antenna_field_at(&problem, state.magnetization().len());
+            let ant = antenna_field_at(state.time_seconds);
             let field_due_now = field_schedules
                 .iter()
                 .any(|schedule| is_due(state.time_seconds, schedule.next_time));
@@ -966,7 +972,7 @@ fn execute_reference_fem_impl(
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
-                let ant = antenna_field_at(&problem, state.magnetization().len());
+                let ant = antenna_field_at(state.time_seconds);
                 let observables = observe_state(&problem, &state, &ant)?;
                 current_observables = observables.clone();
                 Some(build_mesh_preview_field_with_active_mask(
@@ -1086,18 +1092,11 @@ fn execute_reference_fem_impl(
         // and the time-dependent external terms move forward.
         if !scalar_schedules.is_empty() || !field_schedules.is_empty() {
             state.time_seconds = 0.0;
-            if has_time_varying {
-                problem.terms.per_node_field = Some(combined_antenna_field_at_time(
-                    plan,
-                    &per_unit_antenna_fields,
-                    state.time_seconds,
-                ));
-            }
             // The initial scalar row may already have been emitted above.
             // Calling the common scheduler here is idempotent for scalar
             // schedules and additionally emits field/snapshot outputs at t=0
             // when no scalar schedule was requested.
-            let ant = antenna_field_at(&problem, state.magnetization().len());
+            let ant = antenna_field_at(state.time_seconds);
             record_due_outputs(
                 &problem,
                 &state,
@@ -1129,14 +1128,7 @@ fn execute_reference_fem_impl(
                     break;
                 }
                 state.time_seconds = next_time.min(until_seconds);
-                if has_time_varying {
-                    problem.terms.per_node_field = Some(combined_antenna_field_at_time(
-                        plan,
-                        &per_unit_antenna_fields,
-                        state.time_seconds,
-                    ));
-                }
-                let ant = antenna_field_at(&problem, state.magnetization().len());
+                let ant = antenna_field_at(state.time_seconds);
                 record_due_outputs(
                     &problem,
                     &state,
@@ -1156,13 +1148,6 @@ fn execute_reference_fem_impl(
             }
         }
         state.time_seconds = until_seconds;
-        if has_time_varying {
-            problem.terms.per_node_field = Some(combined_antenna_field_at_time(
-                plan,
-                &per_unit_antenna_fields,
-                state.time_seconds,
-            ));
-        }
     }
     if !cancelled {
         let until_label = if until_seconds.is_finite() {
@@ -1179,7 +1164,7 @@ fn execute_reference_fem_impl(
         );
     }
 
-    let final_ant = antenna_field_at(&problem, state.magnetization().len());
+    let final_ant = antenna_field_at(state.time_seconds);
     record_final_outputs(
         &problem,
         &state,
@@ -1880,14 +1865,92 @@ fn select_base_field(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, AirBoxConfigIR, ExchangeBoundaryCondition,
-        ExecutionPrecision, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
-        FemObjectSegmentIR, FemPlanIR, IntegratorChoice, MaterialIR, MeshIR, RelaxationAlgorithmIR,
-        RelaxationControlIR, ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR,
-        SelectionCertificateIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
-        SELECTION_CERTIFICATE_SCHEMA_VERSION,
+        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, AirBoxConfigIR,
+        AntennaFieldSourceModelIR, CurrentModuleIR, DriveActivationIR,
+        ExchangeBoundaryCondition, ExecutionPrecision, FemMeshPartIR, FemMeshPartRole,
+        FemMeshPartSelector, FemObjectSegmentIR, FemPlanIR, FieldTimeOriginIR, IntegratorChoice,
+        MaterialIR, MeshIR, RelaxationAlgorithmIR, RelaxationControlIR,
+        ResolvedAntennaZeemanMaskIR, ResolvedFrozenSpinsPlanIR,
+        ResolvedSolvedAntennaDriveBasisIR, RfDriveIR, SelectionAuthoredFingerprintIR,
+        SelectionCertificateIR, SolvedAntennaDriveIR, TimeDependenceIR,
+        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn reference_antenna_drive_maps_stage_clock_to_waveform_origin() {
+        let mut plan = make_test_plan(false);
+        plan.time_stage.start_time_s = 10.0;
+        plan.time_stage.active_stage_id = Some("run".into());
+        let make_basis = |id: &str, time_origin| ResolvedSolvedAntennaDriveBasisIR {
+            drive: SolvedAntennaDriveIR {
+                id: id.into(),
+                name: id.into(),
+                projection_ref: "projection".into(),
+                port_mode_id: "common".into(),
+                peak_current_a: 0.25,
+                waveform: TimeDependenceIR::Sinusoidal {
+                    frequency_hz: 0.25,
+                    phase_rad: 0.3,
+                    offset: 0.1,
+                },
+                bandwidth_declaration: None,
+                time_origin,
+                activation: DriveActivationIR::StageIds {
+                    stage_ids: vec!["run".into()],
+                },
+            },
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            field_xyz_apm_per_a: vec![[4.0, 0.0, 0.0]; 4],
+            projection_signature: "verified".into(),
+        };
+        plan.solved_antenna_drive_bases = vec![
+            make_basis("local", FieldTimeOriginIR::StageLocal),
+            make_basis("absolute", FieldTimeOriginIR::Absolute),
+        ];
+
+        let terms = dynamic_antenna_drive_terms(&plan, &[]);
+        let expected_local = 0.3_f64.cos() + 0.1;
+        let expected_absolute = -0.3_f64.cos() + 0.1;
+        assert_eq!(terms.len(), 2);
+        assert_eq!(terms[0].basis_field[0], [1.0, 0.0, 0.0]);
+        assert!((terms[0].multiplier_at(1.0) - expected_local).abs() < 1.0e-12);
+        assert!((terms[1].multiplier_at(1.0) - expected_absolute).abs() < 1.0e-12);
+
+        let absolute_waveform = plan.solved_antenna_drive_bases[1].drive.waveform.clone();
+        plan.antenna_zeeman_masks = vec![ResolvedAntennaZeemanMaskIR {
+            source: "prescribed".into(),
+            object: "magnet".into(),
+            amplitude_b_t: 0.0,
+            direction: [1.0, 0.0, 0.0],
+            spatial_profile: None,
+            waveform: Some(absolute_waveform.clone()),
+            field_xyz: vec![[2.0, 0.0, 0.0]; 4],
+        }];
+        plan.current_modules = vec![CurrentModuleIR::AntennaFieldSource {
+            name: "legacy".into(),
+            model: AntennaFieldSourceModelIR::Mqs2p5dAz,
+            solver: None,
+            antenna: None,
+            drive: Some(RfDriveIR {
+                current_a: 2.0,
+                waveform: Some(absolute_waveform),
+            }),
+            air_box_factor: None,
+            object: None,
+            field: None,
+            spatial_profile: None,
+            waveform: None,
+        }];
+        let per_unit_fields = vec![vec![[3.0, 0.0, 0.0]; 4]];
+        let terms = dynamic_antenna_drive_terms(&plan, &per_unit_fields);
+        assert_eq!(terms.len(), 4);
+        assert_eq!(terms[0].basis_field[0], [2.0, 0.0, 0.0]);
+        assert_eq!(terms[3].basis_field[0], [6.0, 0.0, 0.0]);
+        assert!((terms[0].multiplier_at(1.0) - expected_absolute).abs() < 1.0e-12);
+        assert!((terms[3].multiplier_at(1.0) - expected_absolute).abs() < 1.0e-12);
+    }
 
     fn make_test_plan(enable_demag: bool) -> FemPlanIR {
         FemPlanIR {
@@ -1952,10 +2015,12 @@ mod tests {
             enable_demag,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            charge_transport_plans: vec![],
             spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -2349,10 +2414,12 @@ mod tests {
             enable_demag: true,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            charge_transport_plans: vec![],
             spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -2542,10 +2609,12 @@ mod tests {
             enable_demag: true,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            charge_transport_plans: vec![],
             spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

@@ -13,6 +13,10 @@ use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR};
 use crate::dispatch::{self, FdmEngine, FemEngine};
 use crate::fdm::cpu::reference as cpu_reference;
 #[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::artifacts::{
+    copy_cuda_field_snapshot_with_plan, copy_cuda_live_preview_field,
+};
+#[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::residency::FdmGpuReceiptLifecycle;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeFdmPreviewSnapshot};
@@ -76,14 +80,18 @@ pub(crate) fn cached_preview_quantities_for(
 
 fn interactive_time_event_schedule(
     drives: &[fullmag_ir::RegionalFieldDriveIR],
+    solved_bases: &[fullmag_ir::ResolvedSolvedAntennaDriveBasisIR],
     stage_start_s: f64,
+    waveform_origin_time_s: f64,
     duration_s: f64,
     output_periods_s: impl IntoIterator<Item = f64>,
 ) -> Vec<f64> {
     let stage_end_s = stage_start_s + duration_s;
-    let mut times = crate::time_events::build_resolved_stage_event_schedule(
+    let mut times = crate::time_events::build_resolved_stage_event_schedule_with_origin(
         drives,
+        solved_bases,
         stage_start_s,
+        waveform_origin_time_s,
         stage_end_s,
         &[],
         crate::schedules::OUTPUT_TIME_TOLERANCE,
@@ -2654,6 +2662,10 @@ impl CpuInteractiveFdmPreviewRuntime {
             quantities,
         );
         let sample_count = self.state.magnetization().len();
+        crate::antenna_fields::validate_fdm_antenna_sample_counts(
+            &self.plan_signature,
+            sample_count,
+        )?;
         self.problem.terms.per_node_field =
             cpu_reference::resolved_per_node_external_field_for_count(
                 &self.plan_signature,
@@ -2791,7 +2803,9 @@ impl CpuInteractiveFdmPreviewRuntime {
             cpu_reference::resolved_regional_field_drives(plan, base_time);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             std::iter::empty(),
         );
@@ -3142,7 +3156,9 @@ impl CpuInteractiveFdmPreviewRuntime {
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             output_periods,
         );
@@ -3424,10 +3440,13 @@ impl CudaInteractiveFdmPreviewRuntime {
                 ),
             });
         }
-        self.backend.copy_live_preview_field(
+        copy_cuda_live_preview_field(
+            &self.backend,
+            &self.plan_signature,
             request,
             self.original_grid,
             self.plan_signature.active_mask.as_deref(),
+            self.total_time,
         )
     }
 
@@ -3450,10 +3469,13 @@ impl CudaInteractiveFdmPreviewRuntime {
             }
             let mut preview_request = request.clone();
             preview_request.quantity = quantity.to_string();
-            cached.push(self.backend.copy_live_preview_field(
+            cached.push(copy_cuda_live_preview_field(
+                &self.backend,
+                &self.plan_signature,
                 &preview_request,
                 self.original_grid,
                 self.plan_signature.active_mask.as_deref(),
+                self.total_time,
             )?);
         }
 
@@ -3474,6 +3496,16 @@ impl CudaInteractiveFdmPreviewRuntime {
             &cached_preview_quantities_for(display_state),
         );
         if quantities.is_empty() {
+            return Ok(None);
+        }
+        if quantities.iter().any(|quantity| {
+            normalized_quantity_name(quantity)
+                .ok()
+                .is_some_and(|name| name == "H_ant")
+        }) {
+            // H_ant is retained as a runner-side per-cell basis rather than a
+            // native CUDA observable.  Keep this pass synchronous so the
+            // host-materialized field follows the same time as the live step.
             return Ok(None);
         }
         let base_request = display_state.preview_request();
@@ -3536,7 +3568,9 @@ impl CudaInteractiveFdmPreviewRuntime {
         let base_time = self.total_time;
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             std::iter::empty(),
         );
@@ -3890,7 +3924,9 @@ impl CudaInteractiveFdmPreviewRuntime {
         let default_scalar_trace = scalar_schedules.is_empty();
         capture_initial_cuda_runtime_fields(
             &self.backend,
+            &self.plan_signature,
             cell_count,
+            self.total_time,
             &mut field_schedules,
             &mut artifacts,
         )?;
@@ -3903,7 +3939,9 @@ impl CudaInteractiveFdmPreviewRuntime {
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             output_periods,
         );
@@ -4091,8 +4129,10 @@ impl CudaInteractiveFdmPreviewRuntime {
 
             record_due_cuda_runtime_outputs(
                 &self.backend,
+                &self.plan_signature,
                 cell_count,
                 &local_stats,
+                self.total_time,
                 &mut scalar_schedules,
                 &mut field_schedules,
                 &mut steps,
@@ -4126,8 +4166,10 @@ impl CudaInteractiveFdmPreviewRuntime {
         );
         record_final_cuda_runtime_outputs(
             &self.backend,
+            &self.plan_signature,
             cell_count,
             latest_local_stats,
+            self.total_time,
             default_scalar_trace,
             &scalar_schedules,
             &field_schedules,
@@ -4313,7 +4355,9 @@ impl CpuInteractiveFemPreviewRuntime {
         let base_time = self.state.time_seconds;
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             std::iter::empty(),
         );
@@ -4658,7 +4702,9 @@ impl CpuInteractiveFemPreviewRuntime {
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             output_periods,
         );
@@ -4987,9 +5033,12 @@ impl GpuInteractiveFemPreviewRuntime {
             });
         }
         if normalized_quantity_name(&request.quantity).ok() == Some("H_ant") {
+            let time = self.backend.snapshot_step_stats(self.node_count)?.time;
+            let antenna_field =
+                crate::antenna_fields::compute_antenna_field_at_time(&self.plan_signature, time)?;
             return Ok(build_mesh_preview_field_with_active_mask(
                 request,
-                &self.antenna_field,
+                &antenna_field,
                 None,
             ));
         }
@@ -5006,6 +5055,11 @@ impl GpuInteractiveFemPreviewRuntime {
             active_fem_preview_quantities(FemEngine::NativeGpu, &self.plan_signature, quantities);
         let mut cached = Vec::new();
         let mut seen = HashSet::new();
+        let antenna_time = if quantities.iter().any(|quantity| *quantity == "H_ant") {
+            Some(self.backend.snapshot_step_stats(self.node_count)?.time)
+        } else {
+            None
+        };
 
         for quantity in quantities
             .iter()
@@ -5017,9 +5071,13 @@ impl GpuInteractiveFemPreviewRuntime {
             let mut preview_request = request.clone();
             preview_request.quantity = quantity.to_string();
             if quantity == "H_ant" {
+                let antenna_field = crate::antenna_fields::compute_antenna_field_at_time(
+                    &self.plan_signature,
+                    antenna_time.expect("H_ant requested with captured time"),
+                )?;
                 cached.push(build_mesh_preview_field_with_active_mask(
                     &preview_request,
-                    &self.antenna_field,
+                    &antenna_field,
                     None,
                 ));
             } else {
@@ -5063,10 +5121,15 @@ impl GpuInteractiveFemPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        self.backend.begin_stage(base_time)?;
+        self.backend.begin_stage_with_waveform_origin(
+            base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
+        )?;
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             std::iter::empty(),
         );
@@ -5333,6 +5396,15 @@ impl GpuInteractiveFemPreviewRuntime {
         let mut scalar_schedules = collect_scalar_schedules(outputs)?;
         let mut field_schedules = collect_field_schedules(outputs)?;
         let default_scalar_trace = scalar_schedules.is_empty();
+        let base_step = self.total_steps;
+        let base_time = self.total_time;
+        let waveform_origin_time_s = plan.time_stage.waveform_origin_time_s.unwrap_or(base_time);
+        let split_waveform_clock = waveform_origin_time_s != base_time;
+        if split_waveform_clock {
+            self.backend
+                .begin_stage_with_waveform_origin(base_time, waveform_origin_time_s)?;
+            self.backend.snapshot_step_stats(self.node_count)?;
+        }
         capture_initial_native_fem_runtime_fields(
             &self.backend,
             self.node_count,
@@ -5340,16 +5412,18 @@ impl GpuInteractiveFemPreviewRuntime {
             &mut artifacts,
         )?;
 
-        let base_step = self.total_steps;
-        let base_time = self.total_time;
-        self.backend.begin_stage(base_time)?;
+        if !split_waveform_clock {
+            self.backend.begin_stage(base_time)?;
+        }
         let output_periods = scalar_schedules
             .iter()
             .chain(field_schedules.iter())
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
             &plan.field_drives,
+            &plan.solved_antenna_drive_bases,
             base_time,
+            plan.time_stage.waveform_origin_time_s.unwrap_or(base_time),
             until_seconds,
             output_periods,
         );
@@ -5980,7 +6054,9 @@ fn copy_native_fem_base_field_values(
 #[cfg(feature = "cuda")]
 fn capture_initial_cuda_runtime_fields(
     backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
     cell_count: usize,
+    time_seconds: f64,
     field_schedules: &mut [OutputSchedule],
     artifacts: &mut ArtifactRecorder,
 ) -> Result<(), RunError> {
@@ -6002,7 +6078,11 @@ fn capture_initial_cuda_runtime_fields(
             scope: "full".into(),
             revision: (0 as u64).saturating_add(1),
             values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(
-                backend, cell_count, &name,
+                backend,
+                plan,
+                cell_count,
+                time_seconds,
+                &name,
             )?),
         })?;
     }
@@ -6013,8 +6093,10 @@ fn capture_initial_cuda_runtime_fields(
 #[cfg(feature = "cuda")]
 fn record_due_cuda_runtime_outputs(
     backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
     cell_count: usize,
     stats: &StepStats,
+    time_seconds: f64,
     scalar_schedules: &mut [OutputSchedule],
     field_schedules: &mut [OutputSchedule],
     steps: &mut Vec<StepStats>,
@@ -6048,7 +6130,11 @@ fn record_due_cuda_runtime_outputs(
             scope: "full".into(),
             revision: (stats.step as u64).saturating_add(1),
             values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(
-                backend, cell_count, &name,
+                backend,
+                plan,
+                cell_count,
+                time_seconds,
+                &name,
             )?),
         })?;
     }
@@ -6059,8 +6145,10 @@ fn record_due_cuda_runtime_outputs(
 #[cfg(feature = "cuda")]
 fn record_final_cuda_runtime_outputs(
     backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
     cell_count: usize,
     latest_stats: Option<StepStats>,
+    time_seconds: f64,
     default_scalar_trace: bool,
     scalar_schedules: &[OutputSchedule],
     field_schedules: &[OutputSchedule],
@@ -6105,7 +6193,13 @@ fn record_final_cuda_runtime_outputs(
             location: "sample".into(),
             scope: "full".into(),
             revision: (latest_stats.step as u64).saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(backend, cell_count, name)?),
+            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(
+                backend,
+                plan,
+                cell_count,
+                time_seconds,
+                name,
+            )?),
         })?;
     }
     let _ = scalar_schedules;
@@ -6115,13 +6209,16 @@ fn record_final_cuda_runtime_outputs(
 #[cfg(feature = "cuda")]
 fn copy_cuda_field_values(
     backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
     cell_count: usize,
+    time_seconds: f64,
     name: &str,
 ) -> Result<Vec<[f64; 3]>, RunError> {
     if let Some(dot_pos) = name.find('.') {
         let base = &name[..dot_pos];
         let component = &name[dot_pos + 1..];
-        let full = copy_cuda_base_field_values(backend, cell_count, base)?;
+        let full =
+            copy_cuda_field_snapshot_with_plan(backend, plan, base, cell_count, time_seconds)?;
         let idx = match component {
             "x" => 0,
             "y" => 1,
@@ -6138,29 +6235,7 @@ fn copy_cuda_field_values(
         return Ok(full.iter().map(|value| [value[idx], 0.0, 0.0]).collect());
     }
 
-    copy_cuda_base_field_values(backend, cell_count, name)
-}
-
-#[cfg(feature = "cuda")]
-fn copy_cuda_base_field_values(
-    backend: &NativeFdmBackend,
-    cell_count: usize,
-    name: &str,
-) -> Result<Vec<[f64; 3]>, RunError> {
-    match name {
-        "m" => backend.copy_m(cell_count),
-        "H_ex" => backend.copy_h_ex(cell_count),
-        "H_demag" => backend.copy_h_demag(cell_count),
-        "H_ext" => backend.copy_h_ext(cell_count),
-        "H_eff" => backend.copy_h_eff(cell_count),
-        "torque" => backend.copy_torque(cell_count),
-        other => Err(RunError {
-            message: format!(
-                "unsupported interactive CUDA output field snapshot '{}'",
-                other
-            ),
-        }),
-    }
+    copy_cuda_field_snapshot_with_plan(backend, plan, name, cell_count, time_seconds)
 }
 
 fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, RunError> {
