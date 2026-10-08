@@ -365,8 +365,14 @@ function useResourceLoader<TData>({
   const resolveRevisionLatest = useEffectEvent(
     resolveRevision ?? NOOP_RESOLVE_REVISION,
   );
+  const retryResourceKey = useRef(runtimeResourceKey);
 
   useEffect(() => {
+    if (retryResourceKey.current !== runtimeResourceKey) {
+      // A failure in one session/client scope must not delay another resource.
+      retryResourceKey.current = runtimeResourceKey;
+      errorCountRef.current = 0;
+    }
     if (!enabled) return;
     const hasManualRefresh = refreshToken !== loadedRefreshToken;
     if (pauseLoad && !hasManualRefresh) {

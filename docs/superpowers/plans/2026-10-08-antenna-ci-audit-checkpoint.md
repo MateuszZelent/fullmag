@@ -772,3 +772,46 @@ waveguide: trzy próby OCC odrzucono za zdegenerowane tetraedry, wynik to
 PR #147 pozostaje Draft. Dalej: źródłowo związany frontend i diagnostyka
 antennaPreview, przyczyna opóźnienia scope B, pozostałe błędy CI oraz pełne
 native/current→field→basis→LLG/FFT i kwalifikacja T00–T18.
+
+## Izolacja backoffu i odzyskanie aktualnych źródeł frontendu
+
+Baza: `d9fa2e8baf8d4e441d9c5eed9b9799d4e13a3e97`.
+`useResource.ts::useResourceLoader` resetuje teraz hook-local licznik błędów
+przy zmianie pełnego `runtimeResourceKey`, obejmującego scope klienta i sesji.
+Wcześniej ten sam zamontowany hook przenosił licznik między zasobami.
+Zmiana obejmuje wspólny loader `useResource` i `useResourceSelector`; nie
+zmienia backoffu w obrębie tego samego klucza, polityki retry w runtime
+store, cache, transportu ani OpenAPI. To poprawka izolacji stanu, nie
+udowodniony jeszcze pełny odbiór fazy B z CI.
+
+Dodano regresję obu hooków: nieudane A, zmiana samego resource key bez
+remountu, gotowe B po 1 ms i dokładnie dwa wywołania każdego loadera.
+Dotychczasowa regresja preparation A/B zachowuje predykaty, zakresy,
+liczności i czasy. Nowej regresji nie uruchomiono ani nie kompilowano
+lokalnie. TypeScript noEmit/no-incremental PASS/0 (sesja 75497), scoped
+ESLint, architecture hygiene, API hygiene oraz whitespace PASS/0.
+Wykonanie zachowania pozostaje wymagane w CI/runtime.
+
+Niezależna diagnostyka wykazała brak procesu `dev-server.mjs` i ownera
+44016 przy działających dzieciach Next 56828/45996. Log ownera kończy się
+`source mirror failed: Source changed continuously while mirroring the
+staged Control Room`. Backend i jego watcher nadal działają. To brak
+relay HMR, a nie dowód nowej regresji aktualnego modelu anteny.
+
+Po sprawdzeniu identycznych `package.json`, `pnpm-lock.yaml` i
+`pnpm-workspace.yaml` wykonano istniejący
+`scripts/dev-source-mirror.mjs::mirrorDevSourcesOnce` na dokładnej
+mutowalnej kopii frontend-sources `ae9f4e3519c04fdcbf558e3a2eb3f018`.
+Exit 0 (sesja 71063); SHA256 aktualnego hooka, tokens.css oraz primitive
+render-model buildera zgadzają się ze staged tree. Bez zmian zależności,
+snapshotu backendu, restartu i mutacji sceny. To jednorazowe uzgodnienie,
+nie odtworzenie stałego relay ani zarządzana recepta recovery.
+Po odebraniu HMR przeglądarka pokazuje canvas, falowód i złotą antenę;
+błąd boundary zniknął, `Compiling` false, token separatora `1px`.
+Canvas ma atrybuty width=444/height=365 oraz widoczne bounds
+444,656×365,531 px. Zrzut ekranu potwierdza odzyskanie sceny.
+Odczyt `canvas.getContext()` nie jest obsługiwany przez read-only DOM
+API przeglądarki (`TypeError`); nie potwierdzono `isContextLost()` ani
+drawing buffer i nie zaliczono pełnego WebGL smoke. Heatmapa niewykonana.
+Następnie uzupełnić pomiar WebGL aktualnego viewportu, usunąć
+otwarte defekty oraz kontynuować cały T00–T18. PR pozostaje Draft.

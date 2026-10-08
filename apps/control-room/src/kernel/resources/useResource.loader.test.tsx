@@ -177,6 +177,57 @@ describe("useResource loader callback", () => {
     }
   });
 
+  it("does not carry failure backoff into a different resource key", async () => {
+    vi.useFakeTimers();
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: {},
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+      resources,
+    } as unknown as KernelApi;
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error("resource A failed"))
+      .mockResolvedValueOnce({ source: "B" });
+    const selectorLoad = vi.fn()
+      .mockRejectedValueOnce(new Error("selector A failed"))
+      .mockResolvedValueOnce({ source: "B" });
+
+    function Harness({ scope }: { scope: string }) {
+      useResource({ load, resourceKey: `test:${scope}` });
+      useResourceSelector({
+        load: selectorLoad,
+        resourceKey: `test:selector:${scope}`,
+        selector: (resource) => resource.status,
+      });
+      return null;
+    }
+
+    const render = (scope: string) => (
+      <KernelContext.Provider value={kernel}><Harness scope={scope} /></KernelContext.Provider>
+    );
+    try {
+      await act(async () => root.render(render("A")));
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(sharedResourceRuntimeStore.getSnapshot("test:A").status).toBe("error");
+      expect(sharedResourceRuntimeStore.getSnapshot("test:selector:A").status).toBe("error");
+
+      // Keep the same mounted hooks: only their resource identities change.
+      await act(async () => root.render(render("B")));
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(selectorLoad).toHaveBeenCalledTimes(2);
+      expect(sharedResourceRuntimeStore.getSnapshot("test:B").status).toBe("ready");
+      expect(sharedResourceRuntimeStore.getSnapshot("test:selector:B").status).toBe("ready");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("uses the latest loader when a retry timer fires after a loader change", async () => {
     vi.useFakeTimers();
     const dom = installSimulationPreparationTestDom();
