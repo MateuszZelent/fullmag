@@ -11,6 +11,20 @@ export interface RibbonTabDef {
   label: string;
 }
 
+/**
+ * Contextual tab of the analysis module that owns the selected Results node
+ * (ADR 0054). It is ribbon-local state, never the persisted layout tab, so
+ * the Results navigator stays in the left panel while it is shown.
+ */
+export const ANALYSIS_CONTEXT_TAB_ID = "analysis-context" as const;
+export type RibbonStripTabId = RibbonTabId | typeof ANALYSIS_CONTEXT_TAB_ID;
+
+export interface RibbonStripTabDef {
+  contextual?: boolean;
+  id: RibbonStripTabId;
+  label: string;
+}
+
 export interface RibbonAction {
   type?: "checkbox" | "button";
   id: string;

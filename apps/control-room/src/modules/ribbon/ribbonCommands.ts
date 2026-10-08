@@ -44,6 +44,8 @@ import {
   type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
+export const RIBBON_ANALYSIS_SHOW_CHART_COMMAND = "ribbon.analysis.show-chart";
+export const RIBBON_ANALYSIS_SHOW_FIELD_COMMAND = "ribbon.analysis.show-field";
 export const RIBBON_VISUALIZATION_PATCH_STATE_COMMAND =
   "ribbon.visualization.patch-state";
 export const RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND =
@@ -132,6 +134,38 @@ export function visualizationAirboxCommandInput(
 }
 
 export const RIBBON_COMMANDS: CommandContribution[] = [
+  {
+    id: RIBBON_ANALYSIS_SHOW_CHART_COMMAND,
+    title: "Show analysis chart",
+    group: "ribbon-analysis",
+    category: "View",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.layout),
+    disabledReason: (context) => (context.layout ? null : "Workspace layout is unavailable."),
+    isActive: (context) =>
+      context.layout?.get().activeViewportMainModuleId === "analysis-plots",
+    run: (context) => {
+      context.layout?.setActiveViewportMainModule("analysis-plots");
+      context.layout?.setFocusedSlot("viewport-main");
+      return { status: "completed" };
+    },
+  },
+  {
+    id: RIBBON_ANALYSIS_SHOW_FIELD_COMMAND,
+    title: "Show field in the 3D viewport",
+    group: "ribbon-analysis",
+    category: "View",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.layout),
+    disabledReason: (context) => (context.layout ? null : "Workspace layout is unavailable."),
+    isActive: (context) =>
+      context.layout?.get().activeViewportMainModuleId === "viewport-3d",
+    run: (context) => {
+      context.layout?.setActiveViewportMainModule("viewport-3d");
+      context.layout?.setFocusedSlot("viewport-main");
+      return { status: "completed" };
+    },
+  },
   {
     id: RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND,
     title: "Move selected object",

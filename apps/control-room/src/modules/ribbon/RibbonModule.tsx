@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import {
@@ -51,6 +51,8 @@ import {
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { analysisModuleIdForNodeKind } from "@/kernel/analysis-modules/analysisSurfaceRouting";
+import { ANALYSIS_FEATURE_MANIFESTS } from "@/kernel/analysis-modules/analysisModuleManifests";
 import {
   EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   useObjectVisualizationController,
@@ -70,6 +72,7 @@ import {
 } from "@/shared/ui/Dialog";
 
 import {
+  buildAnalysisContextTabContent,
   buildRibbonTabContent,
   resolveRibbonVisualizationTarget,
 } from "./ribbonContributions";
@@ -83,7 +86,12 @@ import {
 } from "./ribbonResourcePolicy";
 import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { RibbonTabStrip } from "./RibbonTabStrip";
-import { RIBBON_TABS } from "./ribbonTypes";
+import {
+  ANALYSIS_CONTEXT_TAB_ID,
+  RIBBON_TABS,
+  type RibbonStripTabDef,
+  type RibbonStripTabId,
+} from "./ribbonTypes";
 
 type RibbonRuntimeStatus = {
   capabilities: Pick<
@@ -370,11 +378,42 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     [activeAnalysisFieldId, activeAnalysisFieldLabel],
   );
 
+  // Contextual tab of the analysis module that owns the selected Results node
+  // (ADR 0054). It is shown, and active, whenever such a node is selected;
+  // choosing another tab dismisses it until a different module's node is selected.
+  const contextModuleId = analysisModuleIdForNodeKind(selection.kind ?? "");
+  const contextModuleTitle = contextModuleId
+    ? ANALYSIS_FEATURE_MANIFESTS.find((manifest) => manifest.id === contextModuleId)?.title ?? null
+    : null;
+  const [dismissedContextModuleId, setDismissedContextModuleId] = useState<string | null>(null);
+  const contextTabActive = Boolean(contextModuleTitle) && dismissedContextModuleId !== contextModuleId;
+  const stripActiveTab: RibbonStripTabId = contextTabActive ? ANALYSIS_CONTEXT_TAB_ID : activeTab;
+  const stripTabs = useMemo<readonly RibbonStripTabDef[]>(() => {
+    if (!contextModuleTitle) return RIBBON_TABS;
+    const resultsIndex = RIBBON_TABS.findIndex((tab) => tab.id === "results");
+    return [
+      ...RIBBON_TABS.slice(0, resultsIndex + 1),
+      { contextual: true, id: ANALYSIS_CONTEXT_TAB_ID, label: contextModuleTitle },
+      ...RIBBON_TABS.slice(resultsIndex + 1),
+    ];
+  }, [contextModuleTitle]);
+  const handleTabClick = useCallback(
+    (tabId: RibbonStripTabId) => {
+      if (tabId === ANALYSIS_CONTEXT_TAB_ID) {
+        setDismissedContextModuleId(null);
+        return;
+      }
+      setDismissedContextModuleId(contextModuleId);
+      setActiveTab(tabId);
+    },
+    [contextModuleId, setActiveTab],
+  );
+
   const tabContent = useMemo(
     () => {
       void commandVersion;
       void objectMoveToolState;
-      return buildRibbonTabContent(activeTab, {
+      const buildContext = {
         activeAnalysisField,
         api: kernel.api,
         commandContext,
@@ -394,11 +433,15 @@ export default function RibbonModule({ kernel }: ModuleProps) {
         visualization,
         visualizationSnapshot,
         visualizationState: visualizationState.data,
-      });
+      };
+      return contextTabActive
+        ? buildAnalysisContextTabContent(buildContext)
+        : buildRibbonTabContent(activeTab, buildContext);
     },
     [
       activeAnalysisField,
       activeTab,
+      contextTabActive,
       commandContext,
       commandVersion,
       objectMoveToolState,
@@ -452,13 +495,13 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     <WorkspaceRenderProfiler id="RibbonModule">
       <div className="fm-ribbon">
       <RibbonTabStrip
-        activeTabId={activeTab}
-        tabs={RIBBON_TABS}
-        onTabClick={setActiveTab}
+        activeTabId={stripActiveTab}
+        tabs={stripTabs}
+        onTabClick={handleTabClick}
       />
       <RibbonGroupsRow
         groups={groups}
-        activeTabId={activeTab}
+        activeTabId={stripActiveTab}
         onAction={handleAction}
         onCommandDetail={setSelectedCommandId}
       />

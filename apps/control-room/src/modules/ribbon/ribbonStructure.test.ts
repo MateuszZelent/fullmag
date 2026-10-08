@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   ALL_TAB_CONTENT,
+  buildAnalysisContextTabContent,
   buildRibbonTabContent,
   resolveRibbonVisualizationTarget,
   stripProductionRibbonPlaceholders,
@@ -3206,6 +3207,22 @@ describe("ribbon structure", () => {
         ?.groups.find((group) => group.id === "quantity")
         ?.actions.some((action) => action.id === "res-analysis-field"),
     ).toBe(false);
+  });
+
+  it("offers only working commands on the analysis contextual tab", () => {
+    const content = buildAnalysisContextTabContent();
+    const commandIds = content.groups.flatMap((group) => group.actions.map((action) => action.commandId));
+
+    expect(content.groups.map((group) => group.id)).toEqual(["analysis-view", "analysis-mode-field"]);
+    expect(commandIds).toEqual([
+      "ribbon.analysis.show-chart",
+      "ribbon.analysis.show-field",
+      "analysis.frequency-domain.stop-3d-animation",
+      "analysis.frequency-domain.clear-3d-overlay",
+    ]);
+    const registered = new Set(RIBBON_COMMANDS.map((command) => command.id));
+    expect(registered.has("ribbon.analysis.show-chart")).toBe(true);
+    expect(registered.has("ribbon.analysis.show-field")).toBe(true);
   });
 
   it("leaves the mode visualization when another quantity is chosen", async () => {

@@ -186,8 +186,12 @@ właścicielem „Mode visualization”: te same sekcje Display, Surface colorin
 Vectors, ikony i sesja edycji co Inspector ferromagnetyka. Dochodzą tylko
 sekcje nav „Complex representation” i „Phase & animation”. Stare „Render
 controls” (`FrequencyDomainModeDisplayControls`) zniknęły z tej trasy.
-Pozostaje: rama dla pozostałych Inspectorów wyników, zakładka kontekstowa
-ribbonu, rozszerzenie testu kontraktu projektu.
+Część 4b: zakładka kontekstowa ribbonu (np. „Dispersion”) pojawia się po
+zaznaczeniu węzła modułu analizy, obok Results; to stan lokalny ribbonu, więc
+lewy panel zostaje przy nawigatorze wyników. Zawiera tylko działające komendy:
+wykres / pole 3D w głównym obszarze, zatrzymanie animacji, wyjście z widoku
+modu. Pozostaje: rama dla pozostałych Inspectorów wyników i rozszerzenie
+testu kontraktu projektu.
 
 - Kernel składa treść modułu w ramę z spec 32 §12 (identyfikacja, pasek
   czterech metryk, główna karta, sekcje nawigacyjne, kontekst, stopka).

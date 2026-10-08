@@ -128,6 +128,8 @@ import {
   statusMenu,
 } from "./ribbonCommon";
 import {
+  RIBBON_ANALYSIS_SHOW_CHART_COMMAND,
+  RIBBON_ANALYSIS_SHOW_FIELD_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
   RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
@@ -1037,6 +1039,44 @@ export function buildRibbonTabContent(
     ? applyCommandState(resolvedContent, context)
     : resolvedContent;
 
+  return isProductionRibbonBuild()
+    ? stripProductionRibbonPlaceholders(withCommandState, context?.commands)
+    : withCommandState;
+}
+
+/**
+ * Contextual tab of the analysis module that owns the selected Results node
+ * (ADR 0054). Only commands that work today are offered: switching the main
+ * view between the analysis chart and the 3D field, and controlling the
+ * shown mode field.
+ */
+export function buildAnalysisContextTabContent(context?: RibbonBuildContext): RibbonTabContent {
+  const content: RibbonTabContent = {
+    tabId: "results",
+    groups: [
+      {
+        id: "analysis-view",
+        title: "View",
+        subtitle: "chart · field",
+        tone: "compute",
+        actions: [
+          { id: "analysis-show-chart", icon: icon(BarChart3), label: "Chart", iconColor: "text-sky-300", commandId: RIBBON_ANALYSIS_SHOW_CHART_COMMAND },
+          { id: "analysis-show-field", icon: icon(Box), label: "3D field", iconColor: "text-teal-400", commandId: RIBBON_ANALYSIS_SHOW_FIELD_COMMAND },
+        ],
+      },
+      {
+        id: "analysis-mode-field",
+        title: "Mode field",
+        subtitle: "viewport quantity",
+        tone: "neutral",
+        actions: [
+          { id: "analysis-stop-animation", icon: icon(Pause), label: "Stop animation", commandId: "analysis.frequency-domain.stop-3d-animation" },
+          { id: "analysis-clear-field", icon: icon(Trash2), label: "Leave mode view", commandId: "analysis.frequency-domain.clear-3d-overlay" },
+        ],
+      },
+    ],
+  };
+  const withCommandState = context?.commands ? applyCommandState(content, context) : content;
   return isProductionRibbonBuild()
     ? stripProductionRibbonPlaceholders(withCommandState, context?.commands)
     : withCommandState;
