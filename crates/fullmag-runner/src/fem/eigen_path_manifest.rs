@@ -38,6 +38,12 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
     {
         requested_outputs.push("mode_fields");
     }
+    if outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenDiagnostics { .. }))
+    {
+        requested_outputs.push("diagnostics");
+    }
     let mode_metadata_paths = eigen_path_mode_metadata_paths(mode_artifacts);
     let computed_sample_indices = result
         .samples

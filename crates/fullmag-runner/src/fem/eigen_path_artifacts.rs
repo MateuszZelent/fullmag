@@ -1001,6 +1001,20 @@ mod output_publication_tests {
             let manifest = build_eigen_path_frequency_domain_manifest(
                 FemEngine::CpuNative, &result, &artifacts,
                 &residual_transport_test_plan(), &[]);
+            assert_eq!(manifest["requested_execution"]["outputs"], serde_json::json!([]));
+            let diagnostic_manifest = build_eigen_path_frequency_domain_manifest(
+                FemEngine::CpuNative, &result, &artifacts,
+                &residual_transport_test_plan(),
+                &[OutputIR::EigenDiagnostics {
+                    include_tracking: true,
+                    include_residuals: true,
+                    include_overlaps: true,
+                    include_tangent_leakage: true,
+                    include_orthogonality: true,
+                }],
+            );
+            assert_eq!(diagnostic_manifest["requested_execution"]["outputs"],
+                       serde_json::json!(["diagnostics"]));
             for stem in ["accepted_fem_equilibrium_fields", "certified_fem_equilibrium_fields",
                          "recomputed_fem_linearization_certificate"] {
                 let key = format!("{stem}_{version}_paths");
