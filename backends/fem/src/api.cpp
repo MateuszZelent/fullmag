@@ -4442,8 +4442,99 @@ static FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve_impl(
             "k0_poisson_airbox_gpu_attestation_abi_required");
     }
 
+    constexpr std::size_t kModalTinyMassMatrixPointerEnd =
+        offsetof(FullmagFemModalEigenRequest, tiny_validation_mass_matrix_row_major) +
+        sizeof(request->tiny_validation_mass_matrix_row_major);
+    const bool tiny_mass_matrix_pointer_layout_valid =
+        known_modal_abi &&
+        request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION &&
+        request->struct_size >= kModalTinyMassMatrixPointerEnd;
+    const bool tiny_mass_matrix_boundary_layout_valid =
+        tiny_mass_matrix_pointer_layout_valid &&
+        native_request.tiny_validation_enabled != 0 &&
+        native_request.tiny_validation_tangent_dof_count == 2 &&
+        (native_request.tiny_validation_stiffness_matrix_row_major != nullptr ||
+         native_request.tiny_validation_stiffness_diagonal != nullptr) &&
+        request->tiny_validation_mass_matrix_row_major != nullptr &&
+        native_request.tiny_validation_mass_matrix_row_major != nullptr;
+    const bool tiny_mass_matrix_pointer_matches_native =
+        tiny_mass_matrix_boundary_layout_valid &&
+        request->tiny_validation_mass_matrix_row_major ==
+            native_request.tiny_validation_mass_matrix_row_major;
+
     fd::FrequencyDomainContractResult native_result =
         fd::solve_modal_eigen_contract(native_request);
+    if (tiny_mass_matrix_boundary_layout_valid &&
+        native_result.status == fd::FrequencyDomainStatus::solve_error &&
+        native_result.error_message ==
+            "modal tiny validation gyrotropic mass matrix is singular") {
+        double public_tiny_mass_matrix_snapshot[4]{};
+        double native_tiny_mass_matrix_snapshot[4]{};
+        if (tiny_mass_matrix_pointer_matches_native) {
+            for (std::size_t index = 0; index < 4; ++index) {
+                public_tiny_mass_matrix_snapshot[index] =
+                    request->tiny_validation_mass_matrix_row_major[index];
+                native_tiny_mass_matrix_snapshot[index] =
+                    native_request.tiny_validation_mass_matrix_row_major[index];
+            }
+        }
+        const auto json_number = [](double value) {
+            if (!std::isfinite(value)) {
+                return std::string("null");
+            }
+            char buffer[64]{};
+            const int written = std::snprintf(buffer, sizeof(buffer), "%.17g", value);
+            if (written <= 0 || static_cast<std::size_t>(written) >= sizeof(buffer)) {
+                return std::string("null");
+            }
+            return std::string(buffer);
+        };
+        std::string boundary_field =
+            "\"tiny_validation_cabi_boundary\":{"
+            "\"public_abi_version\":" +
+            std::to_string(request->abi_version) +
+            ",\"public_struct_size\":" + std::to_string(request->struct_size) +
+            ",\"public_request_sizeof\":" +
+            std::to_string(sizeof(FullmagFemModalEigenRequest)) +
+            ",\"public_mass_pointer_offset\":" +
+            std::to_string(offsetof(
+                FullmagFemModalEigenRequest,
+                tiny_validation_mass_matrix_row_major)) +
+            ",\"public_mass_pointer_size\":" +
+            std::to_string(sizeof(request->tiny_validation_mass_matrix_row_major)) +
+            ",\"public_mass_pointer_matches_native\":" +
+            std::string(tiny_mass_matrix_pointer_matches_native ? "true" : "false") +
+            ",\"native_abi_version\":" +
+            std::to_string(native_request.abi_version) +
+            ",\"native_struct_size\":" + std::to_string(native_request.struct_size) +
+            ",\"native_request_sizeof\":" +
+            std::to_string(sizeof(fd::ModalEigenRequest));
+        boundary_field += ",\"public_mass_matrix_row_major\":";
+        if (tiny_mass_matrix_pointer_matches_native) {
+            boundary_field += "[" +
+                json_number(public_tiny_mass_matrix_snapshot[0]) + "," +
+                json_number(public_tiny_mass_matrix_snapshot[1]) + "," +
+                json_number(public_tiny_mass_matrix_snapshot[2]) + "," +
+                json_number(public_tiny_mass_matrix_snapshot[3]) +
+                "],\"native_mass_matrix_row_major\":[";
+            boundary_field +=
+                json_number(native_tiny_mass_matrix_snapshot[0]) + "," +
+                json_number(native_tiny_mass_matrix_snapshot[1]) + "," +
+                json_number(native_tiny_mass_matrix_snapshot[2]) + "," +
+                json_number(native_tiny_mass_matrix_snapshot[3]) + "]}";
+        } else {
+            boundary_field += "null,\"native_mass_matrix_row_major\":null}";
+        }
+        std::string &diagnostics = native_result.diagnostics_json;
+        if (!diagnostics.empty() && diagnostics.back() == '}') {
+            diagnostics.pop_back();
+            if (diagnostics.size() > 1) {
+                diagnostics.push_back(',');
+            }
+            diagnostics += boundary_field;
+            diagnostics.push_back('}');
+        }
+    }
     if (accepted_certificate_binding_status !=
         FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNSPECIFIED) {
         native_result.certificate_binding.status = accepted_certificate_binding_status;

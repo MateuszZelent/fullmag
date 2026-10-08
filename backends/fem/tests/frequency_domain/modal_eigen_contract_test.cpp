@@ -3367,6 +3367,28 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
         std::numeric_limits<double>::quiet_NaN();
     FullmagFemFrequencyDomainResult raw_vector_wins_result =
         fullmag_fem_modal_eigen_solve(&raw_vector_wins);
+    if (raw_vector_wins_result.status != FULLMAG_FEM_FD_OK) {
+        std::fprintf(
+            stderr,
+            "INFO: modal C ABI fixture case=raw_vector_wins abi=%u struct_size=%llu "
+            "request_size=%zu mass_offset=%zu mass_field_size=%zu "
+            "request_mass_ptr=%p fixture_mass_ptr=%p pointer_matches=%d "
+            "fixture_mass=[%.17g,%.17g,%.17g,%.17g]\n",
+            static_cast<unsigned int>(raw_vector_wins.abi_version),
+            static_cast<unsigned long long>(raw_vector_wins.struct_size),
+            sizeof(raw_vector_wins),
+            offsetof(FullmagFemModalEigenRequest, tiny_validation_mass_matrix_row_major),
+            sizeof(raw_vector_wins.tiny_validation_mass_matrix_row_major),
+            const_cast<void *>(static_cast<const void *>(
+                raw_vector_wins.tiny_validation_mass_matrix_row_major)),
+            const_cast<void *>(static_cast<const void *>(gyrotropic_mass_matrix_row_major)),
+            raw_vector_wins.tiny_validation_mass_matrix_row_major ==
+                gyrotropic_mass_matrix_row_major,
+            gyrotropic_mass_matrix_row_major[0],
+            gyrotropic_mass_matrix_row_major[1],
+            gyrotropic_mass_matrix_row_major[2],
+            gyrotropic_mass_matrix_row_major[3]);
+    }
     report_unexpected_success_status("raw_vector_wins", raw_vector_wins_result);
     check(raw_vector_wins_result.status == FULLMAG_FEM_FD_OK,
           "a finite raw vector must take precedence over a nonfinite fixed-array fallback");
