@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 33, `implemented_pending_browser`: 8, `implemented_pending_ci`: 4, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 94. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 34, `implemented_pending_browser`: 8, `implemented_pending_ci`: 3, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 94. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -32,7 +32,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4060116342](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116342) / #97 | `crates/fullmag-runner/src/eigen/tracking.rs` | valid_unfixed | Confidence=edge.score pozostaje mieszanym score; test źródłowy oczekuje confidence .83 i overlap .8. Verifier wymaga równości dla modal_overlap_weighted_score. |
 | [4060116349](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116349) / #97 | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | valid_unfixed | Kod 1e-4, opublikowane równanie 1e-9. |
 | [4060116354](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116354) / #97 | `tests/standard_problems/mumag/comsol_nonzero_k_dispersion/materialize_real_asset.py` | valid_unfixed | benchmark_mesh.accepted=false nadal daje summary/materialization_status passed, run_receipt status passed i exit 0; konsumenci status/exit mogą zaliczyć odrzuconą siatkę. |
-| [4060116361](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116361) / #97 | `backends/fem/CMakeLists.txt` | implemented_pending_ci | Komentarz nad kodem deklaruje odrzucenie stubu, lecz faktyczne wyszukiwanie go dopuszcza. P1 oryginału niepoparte katastrofą produkcyjną; P2 dla build/runtime contracts. |
+| [4060116361](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116361) / #97 | `backends/fem/CMakeLists.txt` | implemented | Komentarz nad kodem deklaruje odrzucenie stubu, lecz faktyczne wyszukiwanie go dopuszcza. P1 oryginału niepoparte katastrofą produkcyjną; P2 dla build/runtime contracts. |
 | [4060116372](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116372) / #97 | `apps/runner-console/src/views/StorageView.js` | already_fixed | Backend ma per-hub _resources_scan_lock i cache publication po skanie. Równoległe HTTP requests/retries współdzielą jeden pełny scan, więc zgłoszone mnożenie rekursywnych skanów jest naprawione. Krótki UI timeout to odrębne #4061898648. |
 | [4060116379](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116379) / #97 | `scripts/local_runner/build_entrypoint.py` | duplicate | Ten sam hard-coded release timeline dla runtime_only/contract receipts co #4106577193. Powtórzenie 4106577193. |
 | [4060687814](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060687814) / #97 | `apps/control-room/src/modules/field-map/FieldMapModule.tsx` | already_fixed | Aktualny HEAD ma retencję klatki oraz regresję identity-scoped; zgłoszone pending refresh nie odmontowuje już PlanarSurface. |
@@ -833,3 +833,8 @@ poprawka cdb018997 porównuje pełne canonical IDs i unikalność zamiast stałe
 Dry-run suite37775759392: 77PASS37subtests, jeden starszy lifecycle fixtureFAIL
 przed scientific gate przez brak modelu/runtime binding. Fixture uzupełniono
 w053e5e869; production gates nie zmieniono, mock nie stanowi physics proof.
+
+CUDA proof: run37777057359 / SHA69104903e / native job113310469941 SUCCESS.
+Log: dziewięć configure regresji, OK, bez skips; późniejszy CABI również SUCCESS.
+Review4060116361 implemented w zakresie selekcji ścieżek. Pliki fixture nie
+stanowią rzeczywistych bibliotek drivera; managed link/loader nadal NOT VERIFIED.
