@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 37, `implemented_pending_browser`: 8, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 89. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 37, `implemented_pending_browser`: 8, `implemented_pending_ci`: 7, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 87. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -245,7 +245,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4207979056](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979056) / #97 | `packages/fullmag-py/src/fullmag/model/study.py` | implemented | Nowy błąd typu publicznej solver tolerance. fullmag/model/study.py:186 zamienia residual_tolerance=True przez float na 1.0, podczas gdy _positive_int:215 jawnie odrzuca bool dla iteration limits. FemEigenSolverPolicyIR dopuszcza dodatnie 1.0, więc literal bool staje się rzeczywistą tolerancją. Odrzucić bool przed konwersją. |
 | [4207979065](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979065) / #97 | `backends/fem/include/frequency_domain/mode_kinematics.hpp` | duplicate | Ta sama soft-mode uwaga; źródło już poprawione. mode_kinematics.hpp:13 ma default=0.0, a mode_kinematics_test.cpp testuje ±1rad/s/±1kHz i both phasors. Publiczne dodatnie mody nie są usuwane przez 1e5rad/s. Provider/scientific qualification nie wynika z source fix. Powtórzenie 4206565211. |
 | [4207979074](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979074) / #97 | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | valid_unfixed | Nowy brak kontrolowanej walidacji reserved marker. _gmsh_swept.py:1943ff Box layered route nie odrzuca airbox.boundary_marker=10, lecz interface używa physical surface10 i Gamma_out używa boundary_marker (:2219). Pozostałe routes mają guard (:2516/:3211). Dodać guard przed meshingiem, nie przemianowywać semantycznych grup. |
-| [4207979082](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979082) / #97 | `apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.tsx` | valid_unfixed | Nowy brak canonical residual w UI. frequencyDomainChartModels.ts:940/1505 czyta residual_norm/relative_residual_norm, ale typed spectrum.v3 mode publikuje residual_relative_l2. EigenModeInspectorPanel podsumowuje spectrumPoint.residualNorm, zatem poprawny relative-L2 jest pokazywany jako unavailable. Zachować jawnie jego semantykę w parserze/modelu. |
+| [4207979082](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979082) / #97 | `apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.tsx` | implemented_pending_ci | Canonical relative/absolute L2 pozostają rozdzielone w parserze i Inspectorze; legacy norm jest jawnie type unspecified, zero valid, canonical negative/nonfinite odrzucone. |
 | [4207979094](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979094) / #97 | `scripts/local_runner/ui_dist/src/views/StorageView.js` | duplicate | Ten sam wcześniejszy drift source/ui_dist retencji; obecny source naprawiony w WIP. apps/runner-console/src/views/StorageView.js:25 ma scopes, :82/148 getRetentionPlan, :143 async accepted/running; canonical builder zachował shipped features. Sam drift nie jest już valid_unfixed, integracja źródeł wymaga rozliczenia przez root. Powtórzenie 4204074481. |
 | [4207979104](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979104) / #97 | `crates/fullmag-api/src/router_v2/handlers/model/authoring.rs` | valid_unfixed | Nowy backend PATCH tri-state bug, odrębny od frontend null draft #4204074511. schemas/authoring.rs:110 używa Option<ParallelExecutionResource>, a handlers/model/authoring.rs:3020 mutuje tylko Some, więc missing i explicit null zlewają się. Nullable requested_cpu_threads:109 ma osobny patch carrier; parallel_execution potrzebuje analogicznego rozróżnienia. |
 | [4207979111](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207979111) / #97 | `crates/fullmag-ir/src/study_v04.rs` | valid_unfixed | Nowa strict-wire luka V04, odrębna od semantycznego count validation. study_v04.rs:135 używa legacy SamplingIR, a prevalidation:449 sprawdza tylko study keys i nie sprawdza sampling. Nieznane study.sampling pola znikają podczas deserializacji/roundtrip. Dodać strict V04 adapter lub nested prevalidation bez zmiany legacy V03. |
@@ -253,7 +253,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4208794541](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4208794541) / #97 | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | duplicate | Ta sama utrata SI w swept quality. _gmsh_swept.py:2420–2435 dzieli nodes przez SCALE i kopiuje quality/per_domain_quality bez cubic conversion; analogicznie ring. Volume metrics pozostają w µm^3 przy nodes w m; poprawka musi obejmować wszystkie volume-bearing pola. Powtórzenie 4060116295. |
 | [4208794550](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4208794550) / #97 | `crates/fullmag-ir/src/study_v04.rs` | duplicate | Ten sam pełny semantic validation V04 gap. study_v04.rs:330 zwraca po BC/k_sampling; count/target/dynamics/outputs nie dzielą reguł V03. Powtórzenie także nowego4207587076. Powtórzenie 4204074492. |
 | [4208794557](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4208794557) / #97 | `apps/control-room/src/kernel/resources/studyRuntimeResources.ts` | duplicate | Ten sam retained identity guard studyRuntimeResources.ts:837; data o niezmienionym session/epoch/run jest odrzucane w stale. Powtórzenie4207587028 i istniejącego error-refresh defect. Powtórzenie 4204074508. |
-| [4208794569](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4208794569) / #97 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | valid_unfixed | Nowy drugi gate raw/fixed representation. floquet_modal_solver.cpp:89–93 akceptuje fixed fallback tylko raw=null AND len<=0, podczas gdy modal_eigen_solver effective-vector helper używa OR i ABI macierz dopuszcza null/len3 oraz nonnull/len0. Publiczny raw-null może być kanonizowany wcześniej, lecz direct C++ provider caller i niekanonizowany nonnull/len0 nadal mogą być niespójnie odrzucone. |
+| [4208794569](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4208794569) / #97 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | implemented_pending_ci | Direct Floquet stosuje tę samą regułę raw/fixed k co helper modalny; wybrany malformed raw nadal odrzucony, fallback i finite/nonzero zachowane. |
 | [4208794575](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4208794575) / #97 | `scripts/local_runner/retention_service.py` | duplicate | Duplikat async source/ui_dist drift. Bieżący source StorageView.js:143–148 obserwuje planning/accepted/running przez getRetentionPlan, API ma singular method, więc rekomendacja dotyczy starszego snapshotu; source fix jest obecny, jego delivery rozlicza root. Powtórzenie 4204074481. |
 | [4208794592](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4208794592) / #97 | `scripts/run_nonzero_k_validation_controller.py` | implemented_pending_ci | Wymuszono LF kontrolera bez osłabienia exact-byte attestation; dodano checkout/blob/capsule regression. |
 | [4208794606](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4208794606) / #97 | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | duplicate | Ten sam per-stage output renderer bug. script_builder.py:612 wybiera pierwszy stage z outputs i emituje save globalnie przed _render_stages; późniejsze outputs nie są emitowane lokalnie. Wcześniejszy ledger obejmuje retroaktywną aktywację i utratę późniejszych outputs. Powtórzenie 4061684295. |
@@ -1266,3 +1266,35 @@ przedstawiono wyniku jako clean. Produkcyjna ścieżka nie dostała tych pętli.
 Trwa następna niezależna poprawka4207979082: canonical relative-L2 w spectrum
 nie jest dziś propagowany do Inspector fallback; wymaga jawnego zachowania
 semantyki norm zamiast przepisywania legacy norm na relative L2.
+
+### Checkpoint po wykonaniu nowych bramek i kolejnych korektach
+
+ControlRoom37815314214/job113442341472 SUCCESS: nowy diagnostics/renderer/types
+oraz Vitest wykonane. Browser113442341615 FAILURE przed chart cases z powodu
+legacy locator(main) trafiającego w dwa elementy. Poprawka2c0a794e538ed1486771735c06b58e84ac05bb7f
+wybiera jednoznaczny main.fm-workspace-shell. Rerun37816649176: ControlRoom PASS,
+browser113446890379 FAILURE na Checking sessions przed otwarciem Analysis.
+Trwa aktualizacja bootstrap fixture do rzeczywistego kontraktu katalogu sesji;
+nie pomijamy base smoke ani nie osłabiamy admission/selection assertions.
+
+Python37815314214/job113442341646 FAILURE: exact-count już przeszedł, ale
+centroidowy selector nie znalazł region edge samples. Marker1 jest magnetic,
+air0 — source review wyklucza pomyłkę markerów. Commit
+c63ecba5b850aac96a8aca113db6e77e0f70346d mierzy thin-film samples przez midpointy
+przy pełnej długości każdej krawędzi, zachowuje mediany4–12nm i bulk>=10nm,
+fail na pustej próbce, oraz ma negatywną40nm geometrię/air duplicate guard.
+Nota0104 validator exit0; actualGmsh density nadal wymaga świeżego CI.
+
+Provider37814613673 FAILURE: fem_modal_eigen_contract zbudowany, następny
+fem_floquet_modal_solver_contract compile FAIL na result.modes, którego DTO
+nie ma. CTest nie wykonano. Naprawa471628198e29842eb0f29afb9d62d089e851621a
+używa accepted_modes i zachowuje fail-closed assertion. Artefakt
+ci-37814613673-slepc-artifact zapisany. Nowy provider37819089840/job113455190008
+potwierdzony IN_PROGRESS na471628198; tania bramka raw/fixed37819435932 również
+zlecona, wynik nie jest jeszcze rozliczony.
+
+Raw/fixed3d2070e7db73e048a53849d089c5677211883db4 oraz typed residual
+fda11e674883b59f5942859ff2107310e915c9e8 są opublikowane po source review;
+nie uznano ich za runtime/science qualified. Przy residual hook78/100 wskazuje
+dwie istniejące struktury JSX/key w peak browser, poza zmienionymi hunkami;
+nie tłumiono diagnostyki ani nie deklarowano clean wyniku.
