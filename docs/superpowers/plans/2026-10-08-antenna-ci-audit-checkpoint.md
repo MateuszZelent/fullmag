@@ -474,3 +474,33 @@ następnemu commitowi przed sprawdzeniem jego własnego CI.
 PR pozostaje Draft, bez merge, cleanup ani restartu workspace. Następny krok:
 uzupełnić kontrakt 0920, zbadać obie nieudane bramki i uzyskać review oraz
 brakujące dowody runtime/nauki przed scaleniem. Zapis WIP nie zamyka T00–T18.
+
+## T18 — domknięty strukturalny kontrakt noty 0920
+
+Dodano sąsiadującą mapę źródeł: 14 nazwanych równań, 69 symboli z SI,
+41 pozycji tabeli publicznego API i 37 jednoznacznych źródeł. Nota zawiera
+cztery osobne realizacje, macierz source_visible, bibliografię i indeks
+path + symbol z linkami do niezmiennego commita. Gaussian jest jawnym
+zadanym profilem; nie zastępuje solve 3D przewodnika.
+
+Uzgodniono wzór i pseudokod czasu z waveform origin, również po resume.
+Jednostki Gamma opisują rzeczywistą moc binów, a nie PSD na Hz; częstotliwość
+ma odrębny symbol nu. Oddzielono masę geometryczną projekcji od Ms-weighted
+realizacji energii. Nie promowano źródłowego mixed-mesh path do qualified.
+
+Read-only review znalazł pięć Required: stary stage_start w pseudokodzie,
+globalny opis FEM-only predykatów, nadmierną deklarację classifiera Cylinder,
+nieistniejącą estymatę błędu w komunikacie oraz nieudowodnione ostrzeganie
+ogona sinc/rekomendację próbkowania. Wszystkie poprawiono po sprawdzeniu
+źródeł. Ponowny scoped review: brak pozostałych Required/Blocker.
+
+Focused validator 0920 exit 0; public-example guard exit 0; aktualny
+przykład Python i dokładna zgodność fragmentu JSON PASS bez LLG; scoped
+whitespace PASS. Niezmieniony validator miał wcześniej 33/33 interpretowanych
+testów PASS; nie kompilowano testów jednostkowych. Changed-page gate będzie
+sprawdzony na rzeczywistym nowym HEAD po zapisaniu mapy w Git.
+
+Nie jest to odbiór strict Sphinx/render, całego CI ani T18/T00–T18.
+Pozostają: kierunek Gamma source_trace, runtime FFT/resume, spójność PBC,
+waveform-independent cache/provenance i pełna kwalifikacja czterech lanes.
+PR Draft, bez merge, restartu workspace lub usuwania danych.

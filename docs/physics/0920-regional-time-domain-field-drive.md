@@ -13,9 +13,9 @@
   `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
 
 **Stan odbioru:** opis rozdziela kontrakt docelowy od dowodów wykonania.
-Obecność kodu nie jest kwalifikacją czterech realizacji. Uzupełnianie mapy
-źródeł i rozdziału publicznego API pozostaje WIP; nota nie ma jeszcze odbioru
-publication gate. Nie wolno traktować poniższych progów jako wyników testów.
+Obecność kodu nie jest kwalifikacją czterech realizacji. Mapa źródeł i rozdział
+publicznego API opisują bieżący kontrakt; pełny publiczny build i odbiór
+numeryczny pozostają otwarte. Nie wolno traktować poniższych progów jako wyników testów.
 
 (problem-statement)=
 ## 1. Scope and physical meaning
@@ -136,6 +136,17 @@ kształt wymuszenia, nie prąd w amperach.
 | $\tau$ | argument czasu pojedynczego przebiegu | $\mathrm{s}$ |
 | $t_{\mathrm{abs}}$ | czas absolutny symulacji | $\mathrm{s}$ |
 | $t_{\mathrm{stage,start}}$ | początek czasu przebiegu dla etapu bez wznowienia | $\mathrm{s}$ |
+| $t_{\mathrm{waveform,origin}}$ | absolutny początek przebiegu, zachowany przy wznowieniu | $\mathrm{s}$ |
+| $S_G$ | przestrzenna obwiednia Gaussa z rzeczywistą nośną | $1$ |
+| $r_x$ | współrzędna x punktu obserwacji | $\mathrm{m}$ |
+| $r_y$ | współrzędna y punktu obserwacji | $\mathrm{m}$ |
+| $x_c$ | środek obwiedni w osi x | $\mathrm{m}$ |
+| $y_c$ | środek obwiedni w osi y | $\mathrm{m}$ |
+| $x_o$ | niezależny początek nośnej w osi x | $\mathrm{m}$ |
+| $\sigma_x$ | standardowa szerokość obwiedni w osi x | $\mathrm{m}$ |
+| $\sigma_y$ | standardowa szerokość obwiedni w osi y | $\mathrm{m}$ |
+| $\lambda$ | długość fali przestrzennej nośnej | $\mathrm{m}$ |
+| $\varphi_s$ | faza przestrzenna w radianach | $1$ |
 | $f$ | funkcja przebiegu czasowego | $1$ |
 | $a$ | amplituda czasowego sinc; w analizie Gamma także indeks osi | $1$ |
 | $f_c$ | częstotliwość odcięcia czasowego sinc | $\mathrm{Hz}$ |
@@ -158,14 +169,15 @@ kształt wymuszenia, nie prąd w amperach.
 | $P_b$ | moc binu pierwszej składowej poprzecznej | $1$ |
 | $P_c$ | moc binu drugiej składowej poprzecznej | $1$ |
 | $b$ | indeks pierwszej osi poprzecznej | $1$ |
+| $\nu$ | częstotliwość osi analizy Gamma | $\mathrm{Hz}$ |
 
 Bieżący `build_gamma_response_with_detrend` używa normalizacji
 `one_sided_abs_fft_squared_over_N_sum_window_squared`: pola nazwane `*_psd`
 zawierają moc binu bezwymiarowej odpowiedzi, nie gęstość per Hz. Docelowa
 gęstość widmowa wymaga osobnej, jawnej normalizacji częstotliwościowej;
 nie wolno zmieniać jednostek przez samo przemianowanie osi.
-W równaniu Gamma argument $f$ oznacza częstotliwość w $\mathrm{Hz}$,
-nie bezwymiarową funkcję czasową oznaczoną wcześniej tym samym symbolem.
+W równaniu Gamma argument $\nu$ oznacza częstotliwość, nie bezwymiarową
+funkcję czasową $f$.
 
 Historyczne identyfikatory ilości:
 
@@ -222,10 +234,27 @@ W_{\mathrm{Hann}}(\xi)=\sin^2\left[\pi\left(
 \frac{\xi}{\mathrm{width\_m}}+\frac12\right)\right].
 ```
 
-A geometry mask uses `chi_G(r) S_envelope(r)`. Version 1 accepts only geometry
-predicates with deterministic native evaluation: `Box`, `Cylinder`,
-`Translate`, `Difference`, `Union`, and `Intersection`. Imported geometry and
-curves without a stable predicate are rejected before execution.
+Dla `GaussianPlaneWaveFieldProfile` kod `spatial_point_value` realizuje
+profil rzeczywisty, niezależny od z:
+
+```{math}
+:label: regional-drive-spatial-gaussian
+S_G(\mathbf r)=\exp\left[-\frac12\left(
+\frac{(r_x-x_c)^2}{\sigma_x^2}+\frac{(r_y-y_c)^2}{\sigma_y^2}
+\right)\right]\cos\left[\frac{2\pi(r_x-x_o)}{\lambda}+\varphi_s\right].
+```
+
+$\sigma_x,\sigma_y,\lambda>0$. Parametry `center_x_m`, `center_y_m`
+oznaczają $x_c,y_c$; `carrier_origin_x_m` oznacza $x_o$ i nie przesuwa
+obwiedni. `sigma_x_m`, `sigma_y_m`, `wavelength_m`, `carrier_phase_rad`
+odpowiadają pozostałym symbolom. To zadane pole, nie rozwiązanie prądu
+w przewodniku i nie samodzielny dowód wzbudzenia propagującej fali spinowej.
+
+Maska używa wskaźnika geometrii mnożącego envelope. Native FEM obsługuje
+`Box`, `Cylinder`, `Translate`, `Difference`, `Union`, `Intersection`.
+FDM używa kanonicznego `GeometryPredicate` i obsługuje także `Sphere`;
+nie jest to deklaracja wsparcia Sphere w FEM. Geometria bez wspieranego
+deterministycznego predykatu musi zostać jawnie odrzucona.
 
 ## 4. Stage clock, activation, and waveforms
 
@@ -240,12 +269,16 @@ The time argument is
 ```{math}
 :label: regional-drive-stage-clock
 \tau_q=\begin{cases}
-t_{\mathrm{abs}}-t_{\mathrm{stage,start}},&\texttt{stage_local},\\
+t_{\mathrm{abs}}-t_{\mathrm{waveform,origin}},&\texttt{stage_local},\\
 t_{\mathrm{abs}},&\texttt{absolute}.
 \end{cases}
 ```
 
-`stage_local` is the default. The closed waveform catalogue is:
+`stage_local` is the default. `TimeStageContextIR::waveform_origin_time_s`
+zwraca zapisany origin, a dla starszych planów bez niego początek segmentu
+$t_{\mathrm{stage,start}}$. Przy wznowieniu te dwie wartości mogą się różnić;
+ponowne zerowanie fazy byłoby zmianą fizycznego wymuszenia.
+The closed waveform catalogue is:
 
 | Kind | Definition |
 |---|---|
@@ -264,8 +297,10 @@ f(\tau)=a\frac{\sin(2\pi f_c(\tau-t_0))}
 ```
 
 evaluated with a stable series near zero. `f_c>0`, `t0>=0`, PWL times are
-strictly increasing, and all values are finite. A validator warns when the
-sinc tail at stage start exceeds `1e-4 |a|`. Raw Python or JavaScript callbacks
+strictly increasing, and all values are finite. Docelowa kontrola ma ostrzegać
+przy ogonie sinc na początku etapu większym niż `1e-4 |a|`; obecny
+`validate_time_dependence` sprawdza domeny parametrów, nie tę estymatę ogona.
+Raw Python or JavaScript callbacks
 are forbidden because they cannot round-trip, reproduce, or execute on GPU.
 
 (discrete-realization)=
@@ -281,9 +316,11 @@ w_{qc}=V_c^{-1}\int_{V_c}\chi_{T_q}(\mathbf r)S_q(\mathbf r)dV,
 ```
 
 Global uniform gives exactly one on active cells. Region markers give zero or
-one. A conservative Box/Cylinder/Translate/Union/Intersection/Difference cell
-classifier proves cells wholly inside or outside a geometry mask; only mask
-boundary cells use deterministic adaptive integration. Smooth analytic sinc
+one. Klasyfikator FDM dowodzi inside/outside dla Box i propaguje wynik przez
+Translate/CSG. Cylinder zawsze otrzymuje Boundary, tak samo fallback dla
+innych predykatów: kwadratura adaptacyjna nie jest ograniczona wyłącznie do
+rzeczywistych komórek brzegowych. Dowód inside/outside oszczędza integrację
+tylko tam, gdzie faktycznie został wykonany. Smooth analytic sinc
 profiles (sinc and Gaussian) use a fixed order-4 tensor Gauss rule, because discontinuity-driven
 subdivision is neither necessary nor a valid smooth-profile performance
 strategy. Bieżący `adaptive_cell_average` porównuje bezwymiarowe średnie
@@ -314,13 +351,15 @@ w_{qi}=M_i^{-1}\int_{\Omega_m}\phi_i\chi_{T_q}S_q\,dV,
 \mathbf H^0_{qi}=\frac{B_q}{\mu_0}\hat{\mathbf e}_q w_{qi}.
 ```
 
-The same lumped mass and material weighting are used for the LLG field,
-energy, response moments, and quantity readback. Global uniform must produce
+Geometric lumped mass defines this projection. Material-weighted energy and
+response moments need their own consistent Ms weighting (see 14.3); their
+equivalence must be verified, not inferred from the existence of nodal fields.
+Global uniform must produce
 `w_i=1` on every active magnetic degree of freedom to solver tolerance. Version
 1 rejects `fe_order != 1`; broadcasting nodal values to higher-order degrees
 of freedom is forbidden.
 
-The qualified mixed `prism6`/`pyramid5`/`tet4` P1 time-domain lane used by the
+The source-visible mixed `prism6`/`pyramid5`/`tet4` P1 time-domain path used by the
 shared-domain comparison accepts the global uniform spatial profile exactly:
 after MFEM publishes the magnetic nodal mass row sums, every active node gets
 the prescribed field value and every air-only node gets zero. This lane does
@@ -345,8 +384,9 @@ Only cut geometry-mask tetrahedra use:
    `phi_i chi S` integrals;
 3. deterministic eight-way midpoint subdivision when the difference exceeds
    `1e-6` times sub-tetra volume;
-4. maximum depth 10, after which materialization fails with element id,
-   estimated error, and depth;
+4. maximum depth 10, after which materialization fails with element id and
+   maximum depth; zapis estymaty błędu jest wymaganiem docelowej diagnostyki,
+   nie polem bieżącego komunikatu;
 5. division by `M_i`; inactive zero-mass nodes receive zero.
 
 The subdivision diagonal and reduction order are deterministic and included in
@@ -397,7 +437,7 @@ Every explicit RK substage evaluates
 
 ```text
 t_eval = t_n + c[s] * dt
-tau_q = stage_local ? t_eval - stage_start : t_eval
+tau_q = stage_local ? t_eval - waveform_origin : t_eval
 lambda_q = waveform_q(tau_q)
 H_drive = sum_q lambda_q * H0_q
 H_eff = existing_effective_field(m_stage, t_eval) + H_drive
@@ -415,9 +455,12 @@ value. FSAL and cached RHS state are invalidated on an event or drive revision.
 
 FFT products require exact uniform snapshots `t_start+n*dt_out`; the stepper
 must land on those times rather than Fourier transforming irregular samples.
-The validator checks Nyquist, recommends at least ten samples per period at a
-sinc cutoff, and records accepted/rejected steps, min/max `dt`, event caps,
-field revision, and `max ||m|-1|`. The double-precision norm-drift gate after
+Docelowy odbiór obejmuje kontrolę Nyquista, rekomendację dziesięciu próbek
+na okres przy cutoff sinc oraz zapis accepted/rejected steps, min/max dt,
+event caps, field revision i norm drift. Nie są to pola samego walidatora
+przebiegu. Obecne auto-sampling sinc stosuje guard 1.3, czyli częstość
+próbkowania 2.6 razy cutoff; nie spełnia to samo przez się rekomendacji 10.
+The double-precision norm-drift gate after
 normalization is `1e-10` with no NaN or Inf.
 
 (problem-ir)=
@@ -625,7 +668,7 @@ sum of both transverse powers,
 
 ```{math}
 :label: regional-drive-gamma-psd
-S_\Gamma(f)=P_b(f)+P_c(f),\qquad \{a,b,c\}=\{x,y,z\}.
+S_\Gamma(\nu)=P_b(\nu)+P_c(\nu),\qquad \{a,b,c\}=\{x,y,z\}.
 ```
 
 The artifact therefore retains both transverse reference moments, both time
@@ -724,3 +767,132 @@ but it must not draw an absent result as zero.
 
 Capability states remain `source_visible`, `executable`, or `validated` based
 on these proofs. Source presence alone never promotes a lane.
+
+(implementation-mapping)=
+## 14. Realizacje i macierz dowodów
+
+Fizyka jest wspólna. Poniższe statusy oznaczają odczytane źródła, nie pełny
+odbiór numeryczny. Żaden wiersz nie dziedziczy kwalifikacji innego urządzenia.
+
+| Solver | Device | Status | Faktyczna realizacja | Brakujący odbiór |
+|---|---|---|---|---|
+| FDM | CPU | source_visible | planner cell-average, Rust waveform i CPU RHS | refinement, event/RK, energia/readback i response benchmark |
+| FDM | GPU | source_visible | planner na CPU, baza i mnożnik czasu w CUDA | double parity, każdy integrator, brak transferów per RHS |
+| FEM | CPU | source_visible | MFEM P1/lumped projection, waveform C++, energia | spójne PBC tolerance, refinement, resume i native runtime |
+| FEM | GPU | source_visible | projekcja na CPU, upload bazy i descriptorów, device materialization | device trajectory, energy/readback, runtime double parity |
+
+### 14.1. FDM CPU
+
+`resolve_fdm_regional_field_drives` wyznacza średnią komórkową przed RHS.
+`RegionalFieldDriveTerm::multiplier_at` oblicza przebieg, a
+`regional_field_drives_add_into_at_time` sumuje bazę do H_eff.
+Nie całkuje profilu przestrzennego na każdym kroku. Obecny signature zawiera
+waveform, dlatego niezależność cache od zmian przebiegu pozostaje wymaganiem.
+RHS `llg_rhs_from_field_at` ma również wariant bez precesji; pokazane równanie
+dotyczy włączonej precesji i samego momentu pola, bez dodatkowych direct torques.
+
+### 14.2. FDM GPU
+
+`regional_field_drive_component` konsumuje przygotowane bazy i descriptor
+czasu w CUDA. To realizacja wspólnego sumowania, nie ponowne rozwiązanie
+przewodnika. Obecność funkcji device nie potwierdza publicznego support dla
+każdego profilu, integratora ani precyzji. Wymagane są rzeczywiste przebiegi
+device z porównaniem do CPU i pomiarem transferów, nie tylko kompilacja.
+
+### 14.3. FEM CPU
+
+`project_regional_field_drive_bases` buduje bazy w przestrzeni P1, następnie
+`materialize_regional_field_drive` mnoży je przez przebieg. Energia
+`regional_field_drive_energy` używa Ms-weighted mass bilinear przy polu
+elementowym materiału; w pozostałym przypadku sumy lumped z lokalnym Ms.
+Nie należy utożsamiać tych dwóch dyskretnych realizacji materiału.
+Tolerancje PBC w rozdziale 7 są jawnie nieuzgodnione. To osobny wymagany
+odbiór, nie pretekst do uśrednienia sprzecznych węzłów.
+
+### 14.4. FEM GPU
+
+`gpu_regional_field_drive_upload` przenosi wyprojektowane na CPU bazy
+i typowane parametry przebiegów do device. Kernel materializacji sumuje
+bazy w chwili ewaluacji i zapisuje H_drive/H_eff. Nie jest to projekcja
+FEM na GPU ani precompute conductor na GPU. Trzeba niezależnie potwierdzić
+czas podetapów RK, energię i revision/readback po resume oraz parity double.
+
+### 14.5. Zakres automatycznych kontroli
+
+Przykład z rozdziału 9.2 wykonano na Python bez LLG; wynik `drive.to_ir()`
+jest dokładnie równy pokazanemu JSON. Źródłowa regresja origin Gamma ma
+wcześniejszy PASS 4/4; nie wykonuje Rust ani FFT. Mapa obok noty sprawdza
+strukturę i jednoznaczność deklaracji, nie zgodność matematyczną ani numerics.
+Wymagane kwalifikacje pozostają listą odbioru w rozdziale 13. Docelowa suma
+dwóch osi poprzecznych dotyczy dowolnej równowagi, ale obecny collector realizuje
+tylko my/mz; źródło podatności nadal wymaga naprawy kierunku.
+
+(scientific-bibliography)=
+## 15. Bibliografia naukowa
+
+Równania Zeemana i dynamiki należą do standardowego modelu mikromagnetycznego.
+Źródła poniżej uzasadniają model, nie kwalifikują kodu Fullmag. Definicje
+Gaussa/sinc są jawnymi zadanymi funkcjami; nie aproksymują tutaj rozwiązania
+Maxwella ani sprzężenia zwrotnego przewodnika.
+
+- W. F. Brown Jr., *Micromagnetics*, Wiley (1963): energia i wariacyjny model;
+  [dane bibliograficzne NIST](https://math.nist.gov/oommf/doc/userguide21a2/userguide/bibliography.html).
+- T. L. Gilbert, *A Lagrangian formulation of the gyromagnetic equation of the
+  magnetization field*, Phys. Rev. 100, 1243 (1955): tłumienie Gilberta;
+  [dane bibliograficzne NIST](https://math.nist.gov/oommf/doc/userguide21a2/userguide/bibliography.html).
+- L. Landau i E. Lifshitz, *On the theory of the dispersion of magnetic
+  permeability in ferromagnetic bodies*, Physik. Z. Sowjetunion 8, 153–169 (1935);
+  [wydanie zebrane](https://doi.org/10.1016/B978-0-08-036364-6.50008-9).
+- J. R. Dormand i P. J. Prince, *A family of embedded Runge-Kutta formulae*,
+  J. Comput. Appl. Math. 6, 19–26 (1980);
+  [DOI](https://doi.org/10.1016/0771-050X(80)90013-3). Odbiór FSAL/eventów
+  wymaga własnych testów Fullmag; cytowanie metody ich nie zastępuje.
+
+(source-code-index)=
+## 16. Indeks źródeł i dowodów
+
+Linki wskazują niezmienny commit a9e094f5ab67d54167cbd464c58c4f7eb3250b06,
+w którym poniższe deklaracje istnieją. Stable path + symbol jest kluczem mapy;
+linia nie jest tożsamością. Kolumna dowodów jawnie rozróżnia source i runtime.
+Regresje authoringu: `RegionalFieldDriveTests`; zegar: osobny skrypt source.
+Żaden test Rust/native nie był kompilowany w tym etapie.
+
+| Równanie/kontrakt | Ścieżka | Symbol | Realizacja | Dowód / ograniczenie | Link immutable |
+|---|---|---|---|---|---|
+| Authoring i to_ir regionalnego źródła | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class RegionalFieldDrive` | wspólna | Python przykład wykonany; solver nie | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/model/antenna.py) |
+| Typowane cele global/object/region | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class FieldTarget` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/model/antenna.py) |
+| Walidacja i lowering parametrów Gaussa | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class GaussianPlaneWaveFieldProfile` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/model/antenna.py) |
+| Normalizacja osi i parametry sinc | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class SincFieldProfile` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/model/antenna.py) |
+| Maska oraz uniform/sinc envelope | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class GeometryMaskFieldProfile` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/model/antenna.py) |
+| Wybór etapów bez aktywacji Relax | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class DriveActivation` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/model/antenna.py) |
+| Przebieg sinc i obiektowe lowering | `packages/fullmag-py/src/fullmag/model/energy.py` | `class SincPulse` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/model/energy.py) |
+| Rejestr nazw i tożsamości study | `packages/fullmag-py/src/fullmag/world.py` | `class StudyFieldDriveRegistry` | wspólna | przykład wykonany | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/world.py) |
+| Eksport typowanych wariantów | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_regional_field_drive_expr` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/runtime/script_builder.py) |
+| Migracja prescribed mask, nie conductor solve | `packages/fullmag-py/src/fullmag/model/problem.py` | `_migrate_legacy_prescribed_field_sources` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/src/fullmag/model/problem.py) |
+| Kanoniczny regionalny descriptor | `crates/fullmag-ir/src/study.rs` | `RegionalFieldDriveIR` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-ir/src/study.rs) |
+| Walidacja kolekcji, referencji i parametrów | `crates/fullmag-ir/src/validation.rs` | `validate_field_drives` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-ir/src/validation.rs) |
+| Zamknięty katalog i domeny przebiegów | `crates/fullmag-ir/src/field_drive_validation.rs` | `validate_time_dependence` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-ir/src/field_drive_validation.rs) |
+| Origin przebiegu i legacy fallback | `crates/fullmag-ir/src/plan.rs` | `TimeStageContextIR` | wspólna | source arithmetic; Rust niewykonany | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-ir/src/plan.rs) |
+| Cell-average basis i obecny signature z waveform | `crates/fullmag-plan/src/regional_field_drive.rs` | `resolve_fdm_regional_field_drives` | FDM CPU/GPU | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-plan/src/regional_field_drive.rs) |
+| Sinc/maska/Gauss w punkcie kwadratury | `crates/fullmag-plan/src/regional_field_drive.rs` | `spatial_point_value` | FDM CPU/GPU | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-plan/src/regional_field_drive.rs) |
+| Normalizowany sinc i przestrzenne okno | `crates/fullmag-plan/src/regional_field_drive.rs` | `sinc_value` | FDM CPU/GPU | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-plan/src/regional_field_drive.rs) |
+| Skalar czasu mnożący statyczną bazę | `crates/fullmag-engine/src/fdm/shared/terms.rs` | `RegionalFieldDriveTerm` | FDM CPU | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-engine/src/fdm/shared/terms.rs) |
+| Dodanie pola do H_eff tylko na aktywnych komórkach | `crates/fullmag-engine/src/fdm/cpu/fields/zeeman.rs` | `regional_field_drives_add_into_at_time` | FDM CPU | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-engine/src/fdm/cpu/fields/zeeman.rs) |
+| Gilbert RHS z polem H i lokalnym alpha | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_from_field_at` | FDM CPU | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-engine/src/fdm/cpu/fields.rs) |
+| Device waveform i sumowanie składowej bazy | `backends/fdm/gpu/cuda/interactions/regional_field_drive.cuh` | `regional_field_drive_component` | FDM GPU | source_visible; parity niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/backends/fdm/gpu/cuda/interactions/regional_field_drive.cuh) |
+| Lumped L2 projection i bieżące tolerancje PBC | `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp` | `project_regional_field_drive_bases` | FEM CPU | source_visible; kontrakt tolerancji otwarty | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp) |
+| Skalowanie H0 przez waveform w czasie RHS | `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp` | `materialize_regional_field_drive` | FEM CPU | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp) |
+| Zewnętrzna energia Zeemana bez czynnika 1/2 | `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp` | `regional_field_drive_energy` | FEM CPU | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp) |
+| Gilbert RHS AoS bez kompozycji interakcji | `backends/fem/cpu/mfem/integrators/llg_rhs.cpp` | `llg_rhs_aos` | FEM CPU | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/backends/fem/cpu/mfem/integrators/llg_rhs.cpp) |
+| Upload bazy CPU do device, nie GPU projection | `backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cu` | `gpu_regional_field_drive_upload` | FEM GPU | source_visible; parity niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cu) |
+| Harmonogram zdarzeń z waveform origin | `crates/fullmag-runner/src/time_events.rs` | `build_resolved_stage_event_schedule_with_origin` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-runner/src/time_events.rs) |
+| Faktyczne pola provenance v1, nie pełny target manifest | `crates/fullmag-runner/src/regional_field_drive_artifacts.rs` | `RegionalFieldDriveManifest` | wspólna | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-runner/src/regional_field_drive_artifacts.rs) |
+| Średnia ważona momentem | `crates/fullmag-runner/src/spin_wave_response.rs` | `moment_weighted_component` | analiza | source_visible | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-runner/src/spin_wave_response.rs) |
+| Dwie składowe my/mz i ich suma bin powers | `crates/fullmag-runner/src/spin_wave_response.rs` | `build_gamma_transverse_response_with_detrend` | analiza | source_visible; osie ogólne nie | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-runner/src/spin_wave_response.rs) |
+| Collector global/uniform i ograniczenie direction source | `crates/fullmag-runner/src/spin_wave_response.rs` | `append_requested_spin_wave_artifacts` | analiza | origin source regression 4/4; Rust/FFT nie | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-runner/src/spin_wave_response.rs) |
+| Snapshoty FEM i odmowa nieważnych przekrojów | `crates/fullmag-runner/src/spin_wave_sampling.rs` | `requested_finite_k_artifacts` | analiza FEM | source_visible; pełne S(k,f) nie | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-runner/src/spin_wave_sampling.rs) |
+| Regresje authoringu w repo, nie dowód solve | `packages/fullmag-py/tests/test_regional_field_drive.py` | `class RegionalFieldDriveTests` | wspólna | test source; nie uruchamiano w tym etapie | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/packages/fullmag-py/tests/test_regional_field_drive.py) |
+| Wykonywalna arytmetyka origin collectora | `scripts/test_gamma_waveform_origin_source.py` | `class GammaWaveformOriginSourceTests` | analiza | wcześniejsze 4/4 PASS; source-only | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/scripts/test_gamma_waveform_origin_source.py) |
+| Box/CSG classifier; Cylinder i fallback Boundary | `crates/fullmag-plan/src/regional_field_drive.rs` | `geometry_cell_relation` | FDM CPU/GPU | source_visible; runtime niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-plan/src/regional_field_drive.rs) |
+| Gauss-Duffy smooth oraz adaptacja maski z max depth 10 | `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp` | `integrate_profile_adaptive` | FEM CPU | source_visible; runtime niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp) |
+| Auto-sinc guard i rzeczywista częstość próbkowania | `crates/fullmag-plan/src/sampling.rs` | `resolve_auto_sampling_for_stage` | wspólna | source_visible; runtime niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-plan/src/sampling.rs) |
