@@ -494,7 +494,7 @@ pub(super) fn prepare_process_pool_samples(
             }
         }
     }
-    for response in &pool_result.responses {
+    for response in pool_result.responses {
         let sample = samples
             .iter()
             .find(|sample| sample.sample_index == response.sample_index)
@@ -554,7 +554,7 @@ pub(super) fn prepare_process_pool_samples(
             });
         }
         let artifacts = pool
-            .load_artifacts(response)
+            .load_artifacts(&response)
             .map_err(|message| RunError { message })?;
         let point_plan =
             super::eigen_path::eigen_path_single_k_point_plan(&worker_plan, sample, false, None)?;
@@ -588,13 +588,19 @@ pub(super) fn prepare_process_pool_samples(
                 ),
             });
         }
+        // Artifact and run validation above borrow the response. Transfer the
+        // already validated vector instead of keeping and cloning each payload.
+        let final_magnetization = response
+            .run
+            .expect("worker run payload was validated above")
+            .final_magnetization;
         if precomputed
             .insert(
                 sample.sample_index,
                 PrecomputedSingleK {
                     result,
                     mode_artifacts,
-                    final_magnetization: run.final_magnetization.clone(),
+                    final_magnetization,
                 },
             )
             .is_some()
