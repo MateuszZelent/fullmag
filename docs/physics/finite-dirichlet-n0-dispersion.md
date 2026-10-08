@@ -334,6 +334,35 @@ pozostaje `NOT VERIFIED`.
 - Tolerancje naukowe nie zostały zmienione; różnica open-film–finite-airbox
   nie jest automatycznie błędem numerycznym.
 
+(ui-selected-only-diagnostic)=
+## 11.1. Mała demonstracja UI: siedem wybranych modów DE
+
+Pilot `de-smoke-ui-seven` demonstruje odczyt wyników i analizę pola,
+bez certyfikacji pełnego widma. Zachowuje film 40×40×10 nm, PBC xy,
+Bx=0.1 T, Ms=800 kA/m, A=13 pJ/m i finite airbox Dirichleta ±2 µm.
+Wybiera po jednym modzie `target="nearest"` względem tej samej dodatniej
+częstotliwości dla $k_y=(-25,-15,-5,0,5,15,25)\,\mathrm{rad/\mu m}$,
+$k_x=k_z=0$. Python/IR, CSV i pola zachowują rad/m.
+
+Referencja n=0 jest porównaniem po obliczeniu. Mod nearest nie dowodzi
+n=0 ani ciągłości tej samej gałęzi; połączenie punktów w UI służy
+orientacji, a ciągłość wymaga osobnej oceny pól/overlapów.
+Provenance zachowuje `selection_scope="selected_only"`,
+`window_complete=false`, `qualification="NOT VERIFIED"`.
+
+Siatka L0 z trzema warstwami filmu służy szybkiej demonstracji.
+Fizyczny residual pozostaje 1e-8, wraz z bramkami magnetycznymi
+oraz magnetostatycznymi. Brak próbki, niespójny wektor, target lub
+odrzucony mod przerywa odbiór. Nie odbijamy punktów symetrycznie.
+Pełna kwalifikacja wymaga zbieżności siatki/airboxu, kompletności
+okna oraz porównania niezależnego.
+
+Mapa realizacji: `examples/fem_de_smoke_numeric.py` → publiczny
+Eigenmodes/KPath → ProblemIR eigensolve → FEM CPU Floquet i demag.
+FEM CPU: planowane wykonanie/NOT VERIFIED; FEM GPU i FDM CPU/GPU:
+poza zakresem pilota. Animacja UI używa istniejącej fazy prezentacji;
+jej szybkość nie jest częstotliwością fizyczną modu w GHz.
+
 (scientific-bibliography)=
 ## 12. Bibliografia naukowa
 
@@ -360,6 +389,9 @@ pozostaje `NOT VERIFIED`.
 | Niezależna kwadratura | `scripts/test_finite_dirichlet_thin_film_oracle.py::test_surface_and_volume_green_quadrature_reproduce_both_factors` | source-level math | PASS; bez native build |
 | Binding plotera | `scripts/test_plot_de_bv_dispersion_comparison.py::test_plot_selected_only_rejects_unqualified_record` | artifact diagnostic | PASS |
 | Binding kolektora | `scripts/test_signed_de_bv_dispersion.py::test_nearest_record_binds_native_target_and_full_residual` | artifact diagnostic | PASS |
+| UI seven authoring | `examples/fem_de_smoke_numeric.py::SAMPLING` | FEM CPU selected-only | NOT VERIFIED runtime |
+| UI seven metadata binding | `scripts/run_de_100nm_pilot.py::validate_selected_only_metadata` | managed diagnostic | NOT VERIFIED runtime |
+| Per-sample nearest diagnostics | `scripts/validate_de_smoke_rows.py::validate_selected_only_diagnostics` | artifact guard | testy CI wymagane |
 
 Źródła i testy pokazują implementację referencji; żaden z nich nie zastępuje
 managed runtime, dowodu GPU, zbieżności FEM ani porównania COMSOL.

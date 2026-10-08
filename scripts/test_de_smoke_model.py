@@ -88,6 +88,66 @@ def test_de_smoke_preserves_physical_problem(monkeypatch, sampling, ky, mode_cou
     assert "dispersion_validation" not in meta
 
 
+def test_ui_seven_is_a_nearest_selected_only_k_path_with_one_mode(monkeypatch):
+    ky = [-25e6, -15e6, -5e6, 0.0, 5e6, 15e6, 25e6]
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", "ui-seven")
+    monkeypatch.delenv("FULLMAG_DE_SMOKE_MODAL_TARGET", raising=False)
+    monkeypatch.delenv("FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ", raising=False)
+    monkeypatch.delenv("FULLMAG_DE_SMOKE_SOLVER_RTOL", raising=False)
+    fm.reset()
+    try:
+        loaded = fm.load_problem_from_script(
+            ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+        eigen = loaded.stages[-1].problem.to_ir(
+            requested_backend="fem", execution_mode="strict",
+            execution_precision="double", include_geometry_assets=False)
+    finally:
+        fm.reset()
+
+    study = eigen["study"]
+    metadata = eigen["problem_meta"]["runtime_metadata"]["de_smoke"]
+    vectors = [[0.0, value, 0.0] for value in ky]
+    assert study["target"] == {"kind": "nearest", "frequency_hz": 10.0e9}
+    assert study["count"] == 1
+    assert [point["k_vector"] for point in study["k_sampling"]["points"]] == vectors
+    assert study["k_sampling"]["samples_per_segment"] == [1] * 6
+    mode = next(output for output in study["sampling"]["outputs"] if output["kind"] == "eigen_mode")
+    assert mode["indices"] == [0]
+    assert mode["sample_selector"]["sample_indices"] == list(range(7))
+    assert metadata["sampling"] == "ui-seven"
+    assert metadata["k_vectors_rad_per_m"] == vectors
+    assert metadata["requested_mode_count"] == 1
+    assert metadata["eigen_solver_rtol"] == 1e-8
+    assert metadata["modal_target"] == "nearest"
+    assert metadata["target_frequency_hz"] == 10.0e9
+    assert metadata["selection_scope"] == "selected_only"
+    assert metadata["window_complete"] is False
+    assert metadata["frequency_window_hz"] is None
+    assert metadata["qualification"] == "NOT VERIFIED"
+    assert metadata["purpose"] == "ui_diagnostic"
+    assert metadata["branch_continuity"] == "NOT VERIFIED"
+    assert "dispersion_validation" not in metadata
+
+
+@pytest.mark.parametrize(("environment", "message"), [
+    ({"FULLMAG_DE_SMOKE_MODAL_TARGET": "frequency_window"}, "ui-seven requires a nearest"),
+    ({"FULLMAG_DE_SMOKE_SOLVER_RTOL": "1e-7"}, "ui-seven requires FULLMAG_DE_SMOKE_SOLVER_RTOL exactly 1e-8"),
+])
+def test_ui_seven_rejects_window_claims_and_tolerance_changes(monkeypatch, environment, message):
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", "ui-seven")
+    monkeypatch.delenv("FULLMAG_DE_SMOKE_MODAL_TARGET", raising=False)
+    monkeypatch.delenv("FULLMAG_DE_SMOKE_SOLVER_RTOL", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    fm.reset()
+    try:
+        with pytest.raises(ValueError, match=message):
+            fm.load_problem_from_script(
+                ROOT / "examples/fem_de_smoke_numeric.py", lightweight_assets=True)
+    finally:
+        fm.reset()
+
+
 def test_nearest_single_k_target_is_explicitly_selected_only(monkeypatch):
     monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", "k2")
     monkeypatch.setenv("FULLMAG_DE_SMOKE_MODAL_TARGET", "nearest")

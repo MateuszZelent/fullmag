@@ -1,9 +1,15 @@
 from pathlib import Path
 import csv
 import json
+import math
 import pytest
 from validate_de_smoke_rows import (
-    load_spectrum_v3_modes, validate_rows, validate_selected_only_diagnostics, SAMPLING)
+    load_spectrum_v3_modes,
+    validate_rows,
+    validate_selected_only_diagnostics,
+    SAMPLING,
+    UI_SEVEN_SAMPLING,
+)
 
 MS = 800000.0
 MU0 = 4.0 * 3.141592653589793 * 1e-7
@@ -89,6 +95,88 @@ def diagnostics(sampling, *, probe_status='passed', missing_sample=None,
 
 def write_diagnostics(path, sampling, **kwargs):
     path.write_text(json.dumps(diagnostics(sampling, **kwargs)),encoding='utf-8')
+
+
+def write_ui_seven_metadata(path, *, target_hz=10e9, mutation=None):
+    write_metadata(path)
+    data = json.loads(path.read_text(encoding='utf-8'))
+    model = data['problem_meta']['runtime_metadata']['de_smoke']
+    vectors = [[0.0, k, 0.0] for k in SAMPLING[UI_SEVEN_SAMPLING]]
+    model.update(
+        sampling=UI_SEVEN_SAMPLING,
+        orientation='M0=x,k=y,normal=z',
+        k_vectors_rad_per_m=vectors,
+        requested_mode_count=1,
+        modal_target='nearest',
+        target_frequency_hz=target_hz,
+        selection_scope='selected_only',
+        window_complete=False,
+        purpose='ui_diagnostic',
+        branch_continuity='NOT VERIFIED',
+    )
+    if mutation == 'wrong_vector':
+        model['k_vectors_rad_per_m'][0][1] = -24e6
+    elif mutation == 'wrong_target':
+        model['target_frequency_hz'] = target_hz + 1e9
+    elif mutation == 'window_complete':
+        model['window_complete'] = True
+    elif mutation == 'wrong_count':
+        model['requested_mode_count'] = 2
+    elif mutation == 'wrong_rtol':
+        model['eigen_solver_rtol'] = 1e-7
+    path.write_text(json.dumps(data), encoding='utf-8')
+    return vectors
+
+
+def write_ui_seven_diagnostics(path, *, target_hz=10e9, mutation=None):
+    data = diagnostics(UI_SEVEN_SAMPLING)
+    vectors = [[0.0, k, 0.0] for k in SAMPLING[UI_SEVEN_SAMPLING]]
+    for record in data['sample_solver_diagnostics']:
+        sample_index = record['sample_index']
+        vector = list(vectors[sample_index])
+        record['k_vector'] = vector
+        sample = record['diagnostics']
+        sample.update(
+            target_kind='nearest_frequency',
+            target_frequency_hz=target_hz,
+            spectrum_completeness='selected_only',
+            window_complete=False,
+            requested_mode_count=1,
+            k_vector_rad_m=vector,
+        )
+    data.update(
+        sample_count=len(vectors),
+        requested_mode_count=1,
+        target_kind='nearest_frequency',
+        target_frequency_hz=target_hz,
+        spectrum_completeness='selected_only',
+        window_complete=False,
+    )
+    if mutation == 'missing_record':
+        data['sample_solver_diagnostics'].pop(2)
+        data['sample_count'] -= 1
+    elif mutation == 'duplicate_record':
+        data['sample_solver_diagnostics'][-1]['sample_index'] = 5
+    elif mutation == 'wrong_vector':
+        data['sample_solver_diagnostics'][4]['k_vector'] = [0.0, 4e6, 0.0]
+    elif mutation == 'wrong_target':
+        data['sample_solver_diagnostics'][4]['diagnostics']['target_frequency_hz'] = target_hz + 1e9
+    elif mutation == 'wrong_scope':
+        data['sample_solver_diagnostics'][4]['diagnostics']['spectrum_completeness'] = 'complete_window'
+    elif mutation == 'window_complete':
+        data['sample_solver_diagnostics'][4]['diagnostics']['window_complete'] = True
+    elif mutation == 'wrong_mode_count':
+        data['sample_solver_diagnostics'][4]['diagnostics']['requested_mode_count'] = 2
+    elif mutation == 'root_wrong_alias_target':
+        data['target_omega_rad_s'] = (target_hz + 1e9) * math.tau
+    elif mutation == 'root_wrong_mode_count':
+        data['requested_mode_count'] = 2
+    elif mutation == 'root_float_mode_count':
+        data['requested_mode_count'] = 1.0
+    elif mutation == 'root_only':
+        data.pop('sample_solver_diagnostics')
+    path.write_text(json.dumps(data), encoding='utf-8')
+    return vectors
 
 
 def write_selected_diagnostics(path, *, target_hz=12.5e9, target_kind='nearest_frequency',
@@ -261,6 +349,118 @@ def test_selected_only_rows_use_a_separate_scope_without_window_claim(tmp_path):
     assert result['status'] == 'pass'
     assert result['selection_scope'] == 'selected_only'
     assert result['qualification'] == 'NOT VERIFIED'
+
+
+def test_ui_seven_selected_only_rows_validate_every_signed_sample_and_gamma(tmp_path):
+    csv_path = tmp_path / 'dispersion.csv'
+    write(csv_path, rows(UI_SEVEN_SAMPLING))
+    diagnostics_path = tmp_path / 'solver.v1.json'
+    write_ui_seven_diagnostics(diagnostics_path)
+    metadata_path = tmp_path / 'metadata.json'
+    write_ui_seven_metadata(metadata_path)
+    write_spectrum_v3(tmp_path / 'spectrum.v3.json', UI_SEVEN_SAMPLING)
+
+    with pytest.raises(ValueError, match='requires selected-only'):
+        validate_rows(csv_path, UI_SEVEN_SAMPLING, diagnostics_path, metadata_path)
+    result = validate_rows(
+        csv_path, UI_SEVEN_SAMPLING, diagnostics_path, metadata_path,
+        selection_scope='selected_only')
+
+    assert result['mode_rows'] == result['sample_count'] == 7
+    assert result['selection_scope'] == 'selected_only'
+    assert result['qualification'] == 'NOT VERIFIED'
+    assert [item['sample_index'] for item in result['dynamic_demag_operator_probes']] == [0, 1, 2, 4, 5, 6]
+    assert result['gamma_demag_operator_probe']['sample_index'] == 3
+    assert result['gamma_demag_operator_probe']['status'] == 'passed'
+    assert 'spectrum_completeness' not in result
+    assert 'branch_continuity' not in result
+
+
+@pytest.mark.parametrize('mutation,match', [
+    ('missing_row', 'missing DE-SMOKE samples'),
+    ('duplicate_row', 'duplicate mode or branch'),
+    ('wrong_vector', 'wavevector does not match'),
+    ('residual', 'exceeds'),
+])
+def test_ui_seven_rows_reject_missing_duplicate_wrong_vector_and_residual(tmp_path, mutation, match):
+    csv_path = tmp_path / 'dispersion.csv'
+    selected_rows = rows(UI_SEVEN_SAMPLING)
+    if mutation == 'missing_row':
+        selected_rows.pop(6)
+    elif mutation == 'duplicate_row':
+        selected_rows.append(dict(selected_rows[5]))
+    elif mutation == 'wrong_vector':
+        selected_rows[4]['ky_rad_per_m'] = 4e6
+    write(csv_path, selected_rows)
+    diagnostics_path = tmp_path / 'solver.v1.json'
+    write_ui_seven_diagnostics(diagnostics_path)
+    metadata_path = tmp_path / 'metadata.json'
+    write_ui_seven_metadata(metadata_path)
+    spectrum_path = tmp_path / 'spectrum.v3.json'
+    write_spectrum_v3(
+        spectrum_path, UI_SEVEN_SAMPLING,
+        residual=2e-8 if mutation == 'residual' else 1e-12)
+
+    with pytest.raises(ValueError, match=match):
+        validate_rows(
+            csv_path, UI_SEVEN_SAMPLING, diagnostics_path, metadata_path,
+            selection_scope='selected_only')
+
+
+@pytest.mark.parametrize('mutation', ['missing_sample', 'duplicate_mode'])
+def test_ui_seven_spectrum_requires_exactly_mode_zero_for_all_samples(tmp_path, mutation):
+    csv_path = tmp_path / 'dispersion.csv'
+    write(csv_path, rows(UI_SEVEN_SAMPLING))
+    diagnostics_path = tmp_path / 'solver.v1.json'
+    write_ui_seven_diagnostics(diagnostics_path)
+    metadata_path = tmp_path / 'metadata.json'
+    write_ui_seven_metadata(metadata_path)
+    spectrum_path = tmp_path / 'spectrum.v3.json'
+    write_spectrum_v3(spectrum_path, UI_SEVEN_SAMPLING)
+    data = json.loads(spectrum_path.read_text(encoding='utf-8'))
+    if mutation == 'missing_sample':
+        data['samples'].pop(5)
+        data['sample_count'] -= 1
+    else:
+        extra_mode = dict(data['samples'][3]['modes'][0])
+        extra_mode['raw_mode_index'] = 1
+        data['samples'][3]['modes'].append(extra_mode)
+    spectrum_path.write_text(json.dumps(data), encoding='utf-8')
+
+    with pytest.raises(ValueError, match='ui-seven selected-only spectrum'):
+        validate_rows(
+            csv_path, UI_SEVEN_SAMPLING, diagnostics_path, metadata_path,
+            selection_scope='selected_only')
+
+
+def test_ui_seven_native_diagnostics_require_all_indexed_targeted_vectors(tmp_path):
+    path = tmp_path / 'solver.v1.json'
+    vectors = write_ui_seven_diagnostics(path)
+    report = validate_selected_only_diagnostics(
+        path, 10e9, expected_sample_count=7, expected_vectors=vectors)
+
+    assert report['status'] == 'pass'
+    assert report['target_kind'] == 'nearest_frequency'
+    assert report['spectrum_completeness'] == 'selected_only'
+    assert report['window_complete'] is False
+    assert report['sample_indices'] == list(range(7))
+    assert report['requested_mode_count'] == 1
+    assert report['k_vectors_rad_per_m'] == vectors
+    assert report['per_sample_target_frequency_hz'] == [10e9] * 7
+
+
+@pytest.mark.parametrize('mutation', [
+    'missing_record', 'duplicate_record', 'wrong_vector', 'wrong_target',
+    'wrong_scope', 'window_complete', 'wrong_mode_count', 'root_only',
+    'root_wrong_alias_target', 'root_wrong_mode_count', 'root_float_mode_count',
+])
+def test_ui_seven_native_diagnostics_reject_partial_or_mismatched_sample_records(tmp_path, mutation):
+    path = tmp_path / 'solver.v1.json'
+    vectors = write_ui_seven_diagnostics(path, mutation=mutation)
+
+    with pytest.raises(ValueError):
+        validate_selected_only_diagnostics(
+            path, 10e9, expected_sample_count=7, expected_vectors=vectors)
 
 
 def test_selected_only_native_diagnostics_require_exact_target(tmp_path):

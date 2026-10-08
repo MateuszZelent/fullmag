@@ -227,6 +227,33 @@ def _build_context_for_container_cleanup(root: Path) -> pilot.managed.BuildConte
     )
 
 
+_FIXTURE_MODEL_SHA256 = "a" * 64
+
+
+def _fixture_runtime_artifacts(root, case):
+    run_id, session_id = "run-session-17", "session-17"
+    workspace = root / f"{case}-{run_id}-0"
+    artifacts = workspace / "artifacts"
+    artifacts.mkdir(parents=True)
+    log_root = root / case
+    log_root.mkdir(exist_ok=True)
+    container = "/workspace/benchmark-output/" + workspace.name
+    summary = {"status": "completed", "backend": "fem", "mode": "strict", "precision": "double",
+               "workspace_dir": container, "artifact_dir": container + "/artifacts",
+               "run_id": run_id, "session_id": session_id}
+    manifest = {"schema": "fullmag.run_manifest.v1", "status": "completed", "exit_code": 0,
+                "source": {"sha256": _FIXTURE_MODEL_SHA256}, "run_id": run_id, "session_id": session_id,
+                "outputs": [{"path": "artifacts/metadata.json", "kind": "metadata"}]}
+    storage = {"schema": "fullmag.output_storage.resolved.v1", "state": "succeeded",
+               "resolved": {"output_dir": container, "run_id": run_id}}
+    metadata = {"source_hash": _FIXTURE_MODEL_SHA256,
+                "problem_meta": {"runtime_metadata": {"producer_run_id": run_id}}}
+    for path, value in [(log_root / "runtime.log", summary), (workspace / "fullmag-run.json", manifest),
+                        (workspace / "output-storage.json", storage), (artifacts / "metadata.json", metadata)]:
+        path.write_text(json.dumps(value), encoding="utf-8")
+    return artifacts
+
+
 _real_container_cleanup = pilot.managed._cleanup_benchmark_container
 
 
@@ -262,6 +289,7 @@ class PilotTests(unittest.TestCase):
     def test_successful_execution_remains_scientifically_unqualified(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
+            case_dir = _fixture_runtime_artifacts(root, "de100")
             context = _build_context_for_container_cleanup(root)
             request = {"source": {}, "job": {}, "runtime": {}}
             with patch.object(pilot.managed, "_run_request", return_value=request), \
@@ -270,7 +298,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={"case": "c1"}), \
                  patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
-                self.assertEqual(pilot.execute(context, root, ["docker"], "abc"), 0)
+                self.assertEqual(pilot.execute(context, root, ["docker"], _FIXTURE_MODEL_SHA256), 0)
             compose_env.assert_called_once_with(context.layout, context.image_digest)
             result = json.loads((root / "run-result.json").read_text())
             self.assertEqual(result["status"], "completed_unqualified")
@@ -344,6 +372,7 @@ class PilotTests(unittest.TestCase):
     def test_smoke_receipt_and_artifacts_remain_separate(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
+            case_dir = _fixture_runtime_artifacts(root, "de-smoke-two")
             context = _build_context_for_container_cleanup(root)
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
@@ -353,13 +382,13 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot, "validate_smoke_potential_fields", return_value={"qualification": "NOT VERIFIED"}) as field_check, \
                  patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
-                self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 0)
-            validate.assert_called_once_with(root / "de-smoke-two", "c1")
+                self.assertEqual(pilot.execute(context, root, ["docker"], _FIXTURE_MODEL_SHA256, pilot="de-smoke-two"), 0)
+            validate.assert_called_once_with(case_dir, "c1")
             row_check.assert_called_once_with(
-                root / "de-smoke-two/eigen/dispersion.csv", "two",
-                root / "de-smoke-two/eigen/diagnostics/solver.v1.json",
-                root / "de-smoke-two/metadata.json")
-            field_check.assert_called_once_with(root / "de-smoke-two", 2)
+                case_dir / "eigen/dispersion.csv", "two",
+                case_dir / "eigen/diagnostics/solver.v1.json",
+                case_dir / "metadata.json")
+            field_check.assert_called_once_with(case_dir, 2)
             request = json.loads((root / "run-request.json").read_text())
             result = json.loads((root / "run-result.json").read_text())
             self.assertEqual(request["schema"], "fullmag.de-smoke.request.v1")
@@ -371,6 +400,7 @@ class PilotTests(unittest.TestCase):
     def test_smoke_invalid_rows_cannot_be_completed(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
+            case_dir = _fixture_runtime_artifacts(root, "de-smoke-two")
             context = _build_context_for_container_cleanup(root)
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
@@ -379,7 +409,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot, "validate_rows", side_effect=ValueError("missing DE-SMOKE samples")), \
                  patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
-                self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 1)
+                self.assertEqual(pilot.execute(context, root, ["docker"], _FIXTURE_MODEL_SHA256, pilot="de-smoke-two"), 1)
             result = json.loads((root / "run-result.json").read_text())
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["return_code"], 0)
@@ -477,6 +507,7 @@ class PilotTests(unittest.TestCase):
     def test_smoke_inconsistent_field_cannot_be_completed_after_exit_zero(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
+            case_dir = _fixture_runtime_artifacts(root, "de-smoke-two")
             context = _build_context_for_container_cleanup(root)
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
@@ -486,7 +517,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot, "validate_smoke_potential_fields", side_effect=ValueError("gradient mismatch")), \
                  patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
-                self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 1)
+                self.assertEqual(pilot.execute(context, root, ["docker"], _FIXTURE_MODEL_SHA256, pilot="de-smoke-two"), 1)
             result = json.loads((root / "run-result.json").read_text())
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["return_code"], 0)
@@ -657,7 +688,8 @@ class PilotTests(unittest.TestCase):
     def test_schur_action_failure_does_not_block_solver_artifact_export(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            case = root / "de-smoke-k2/eigen/diagnostics"
+            case_dir = _fixture_runtime_artifacts(root, "de-smoke-k2")
+            case = case_dir / "eigen/diagnostics"
             case.mkdir(parents=True)
             (case / "solver.v1.json").write_text(json.dumps({
                 "floquet_schur_action_diagnostic": _schur_action_fixture(status="failed"),
@@ -673,7 +705,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(
-                    context, root, ["docker"], "abc", pilot="de-smoke-k2",
+                    context, root, ["docker"], _FIXTURE_MODEL_SHA256, pilot="de-smoke-k2",
                     schur_action_diagnostic=True,
                 ), 0)
             result = json.loads((root / "run-result.json").read_text())
@@ -1510,6 +1542,74 @@ class PilotTests(unittest.TestCase):
                     context, Path("/outputs"), pilot="de-smoke-k2",
                     nearest_target_frequency_ghz="10")
 
+    def test_ui_seven_pilot_uses_nearest_selected_only_and_records_ui_diagnostic(self):
+        self.assertEqual(pilot.PILOTS[pilot.UI_SEVEN_PILOT][1], "ui-seven")
+        self.assertFalse(pilot._is_single_k_pilot(pilot.UI_SEVEN_PILOT))
+        request = {"source": {}, "job": {}, "runtime": {}}
+
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            context = _build_context_for_container_cleanup(output)
+            with patch.object(
+                pilot.managed,
+                "_compose_command",
+                return_value=["docker", "compose", "run", "fem-modal-cpu", "placeholder"],
+            ):
+                command = pilot.compose_command(
+                    context, output, pilot=pilot.UI_SEVEN_PILOT)
+                shell = command[-1]
+                self.assertIn("export FULLMAG_DE_SMOKE_SAMPLING=ui-seven", shell)
+                self.assertIn("export FULLMAG_DE_SMOKE_MODAL_TARGET=nearest", shell)
+                self.assertIn("export FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ=10", shell)
+                self.assertIn("export FULLMAG_DE_SMOKE_SOLVER_RTOL=1e-8", shell)
+                self.assertNotIn("FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ", shell)
+                self.assertNotIn("FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ", shell)
+                with self.assertRaisesRegex(pilot.managed.BenchmarkError, "ui-seven requires nearest"):
+                    pilot.compose_command(
+                        context, output, pilot=pilot.UI_SEVEN_PILOT,
+                        spectral_target="frequency_window")
+                with self.assertRaisesRegex(pilot.managed.BenchmarkError, "solver rtol sweep"):
+                    pilot.compose_command(
+                        context, output, pilot=pilot.UI_SEVEN_PILOT,
+                        solver_rtol="1e-7")
+                for legacy_path in ("de-smoke-two", "de-smoke-positive-six"):
+                    with self.subTest(legacy_path=legacy_path), self.assertRaisesRegex(
+                        pilot.managed.BenchmarkError, "single-k"):
+                        pilot.compose_command(
+                            context, output, pilot=legacy_path,
+                            spectral_target="nearest")
+
+            with patch.object(pilot.managed, "_run_request", return_value=request), \
+                    patch.object(pilot.managed, "_compose_environment", return_value={}), \
+                    patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
+                    patch.object(pilot, "resolve_runtime_artifact_root",
+                                 return_value=(output / "de-smoke-ui-seven", {"binding": "fixture"})), \
+                    patch.object(pilot.managed, "_validate_case_artifacts", return_value={}), \
+                    patch.object(pilot, "validate_rows", return_value={
+                        "selection_scope": "selected_only", "sample_count": 7,
+                        "qualification": "NOT VERIFIED"}) as row_check, \
+                    patch.object(pilot, "validate_smoke_potential_fields", return_value={}), \
+                    patch.object(pilot, "validate_selected_only_metadata", return_value={
+                        "selection_scope": "selected_only", "window_complete": False,
+                        "qualification": "NOT VERIFIED", "sample_count": 7}), \
+                    patch.object(pilot.managed, "_cleanup_benchmark_container",
+                                 side_effect=_fixture_container_cleanup), \
+                    patch("builtins.print"):
+                self.assertEqual(pilot.execute(
+                    context, output, command, "a" * 64, pilot=pilot.UI_SEVEN_PILOT), 0)
+            row_check.assert_called_once()
+            self.assertEqual(row_check.call_args.kwargs["selection_scope"], "selected_only")
+            stored_request = json.loads((output / "run-request.json").read_text())
+            result = json.loads((output / "run-result.json").read_text())
+            self.assertEqual(stored_request["selection_scope"], "selected_only")
+            self.assertIs(stored_request["window_complete"], False)
+            self.assertEqual(stored_request["qualification"], "NOT VERIFIED")
+            self.assertEqual(stored_request["purpose"], "ui_diagnostic")
+            self.assertEqual(stored_request["branch_continuity"], "NOT VERIFIED")
+            self.assertEqual(result["status"], "completed_unqualified")
+            self.assertEqual(result["qualification"], "NOT VERIFIED")
+            self.assertEqual(result["artifacts"]["row_preflight"]["sample_count"], 7)
+
     def test_selected_only_metadata_validator_does_not_claim_window(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1541,6 +1641,129 @@ class PilotTests(unittest.TestCase):
             (root / "metadata.json").write_text(json.dumps(metadata))
             with self.assertRaisesRegex(pilot.managed.BenchmarkError, "window_complete"):
                 pilot.validate_selected_only_metadata(root, 12.5e9)
+
+
+    def test_ui_seven_selected_only_metadata_crosschecks_all_native_sample_identity(self):
+        target_hz = 10e9
+        ky_values = (-25e6, -15e6, -5e6, 0.0, 5e6, 15e6, 25e6)
+        vectors = [[0.0, value, 0.0] for value in ky_values]
+
+        def write_case(root, *, metadata_mutation=None, native_mutation=None):
+            root = Path(root)
+            model = {
+                "schema": "fullmag.de-smoke.v1",
+                "sampling": "ui-seven",
+                "orientation": "M0=x,k=y,normal=z",
+                "modal_target": "nearest",
+                "target_frequency_hz": target_hz,
+                "selection_scope": "selected_only",
+                "window_complete": False,
+                "requested_mode_count": 1,
+                "eigen_solver_rtol": 1e-8,
+                "k_vectors_rad_per_m": [list(vector) for vector in vectors],
+                "purpose": "ui_diagnostic",
+                "branch_continuity": "NOT VERIFIED",
+            }
+            if metadata_mutation == "wrong_target":
+                model["target_frequency_hz"] = target_hz + 1e9
+            elif metadata_mutation == "window_complete":
+                model["window_complete"] = True
+            elif metadata_mutation == "wrong_vector":
+                model["k_vectors_rad_per_m"][0][1] = -24e6
+            elif metadata_mutation == "wrong_count":
+                model["requested_mode_count"] = 2
+            elif metadata_mutation == "wrong_rtol":
+                model["eigen_solver_rtol"] = 1e-7
+            elif metadata_mutation == "wrong_purpose":
+                model["purpose"] = "scientific_result"
+            elif metadata_mutation == "branch_verified":
+                model["branch_continuity"] = "verified"
+            (root / "metadata.json").write_text(json.dumps({
+                "problem_meta": {"runtime_metadata": {"de_smoke": model}},
+            }))
+
+            records = []
+            for sample_index, vector in enumerate(vectors):
+                sample_target = target_hz + 1e9 if (
+                    native_mutation == "wrong_target" and sample_index == 4) else target_hz
+                sample_scope = "complete_window" if (
+                    native_mutation == "wrong_scope" and sample_index == 4) else "selected_only"
+                sample_window = True if (
+                    native_mutation == "window_complete" and sample_index == 4) else False
+                sample_count = 2 if (
+                    native_mutation == "wrong_count" and sample_index == 4) else 1
+                record_vector = [0.0, 4e6, 0.0] if (
+                    native_mutation == "wrong_vector" and sample_index == 4) else list(vector)
+                records.append({
+                    "sample_index": sample_index,
+                    "k_vector": record_vector,
+                    "diagnostics": {
+                        "target_kind": "nearest_frequency",
+                        "target_frequency_hz": sample_target,
+                        "spectrum_completeness": sample_scope,
+                        "window_complete": sample_window,
+                        "requested_mode_count": sample_count,
+                        "k_vector_rad_m": list(record_vector),
+                    },
+                })
+            if native_mutation == "missing_record":
+                records.pop(2)
+            elif native_mutation == "duplicate_record":
+                records[-1]["sample_index"] = 5
+            native = {
+                "sample_count": 7,
+                "requested_mode_count": 1,
+                "target_kind": "nearest_frequency",
+                "target_frequency_hz": target_hz,
+                "spectrum_completeness": "selected_only",
+                "window_complete": False,
+                "sample_solver_diagnostics": records,
+            }
+            if native_mutation == "root_only":
+                native.pop("sample_solver_diagnostics")
+            diagnostics = root / "eigen/diagnostics"
+            diagnostics.mkdir(parents=True)
+            (diagnostics / "solver.v1.json").write_text(json.dumps(native))
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_case(root)
+            report = pilot.validate_selected_only_metadata(
+                root, target_hz, pilot.UI_SEVEN_SAMPLING)
+            self.assertEqual(report["sampling"], pilot.UI_SEVEN_SAMPLING)
+            self.assertEqual(report["sample_count"], 7)
+            self.assertEqual(report["mode_count"], 1)
+            self.assertEqual(report["selection_scope"], "selected_only")
+            self.assertIs(report["window_complete"], False)
+            self.assertEqual(report["qualification"], "NOT VERIFIED")
+            self.assertEqual(report["native_diagnostics"]["sample_indices"], list(range(7)))
+            self.assertEqual(report["native_diagnostics"]["k_vectors_rad_per_m"], vectors)
+
+        for mutation, message in (
+            ("wrong_target", "target frequency"),
+            ("window_complete", "window_complete"),
+            ("wrong_vector", "signed k vectors"),
+            ("wrong_count", "exactly one mode"),
+            ("wrong_rtol", "exactly 1e-8"),
+            ("wrong_purpose", "purpose=ui_diagnostic"),
+            ("branch_verified", "branch continuity"),
+        ):
+            with TemporaryDirectory() as temporary, self.subTest(metadata_mutation=mutation):
+                root = Path(temporary)
+                write_case(root, metadata_mutation=mutation)
+                with self.assertRaisesRegex(pilot.managed.BenchmarkError, message):
+                    pilot.validate_selected_only_metadata(root, target_hz, pilot.UI_SEVEN_SAMPLING)
+
+        for mutation in (
+            "missing_record", "duplicate_record", "wrong_target", "wrong_scope",
+            "window_complete", "wrong_vector", "wrong_count", "root_only",
+        ):
+            with TemporaryDirectory() as temporary, self.subTest(native_mutation=mutation):
+                root = Path(temporary)
+                write_case(root, native_mutation=mutation)
+                with self.assertRaisesRegex(
+                    pilot.managed.BenchmarkError, "native diagnostics are missing or inconsistent"):
+                    pilot.validate_selected_only_metadata(root, target_hz, pilot.UI_SEVEN_SAMPLING)
 
 
 

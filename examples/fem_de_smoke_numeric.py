@@ -6,7 +6,9 @@ each shift for a full four-mode bundle. FULLMAG_DE_SMOKE_MODAL_TARGET=nearest
 selects the mode nearest the finite positive
 FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ at one single-k point; this is a
 selected-only diagnostic and cannot certify a complete frequency window or a
-dispersion curve. FULLMAG_DE_SMOKE_SAMPLING=five selects
+dispersion curve. The separately named ui-seven pilot applies one nearest-frequency
+target to seven signed DE path samples and remains selected-only, without spectrum
+completeness or branch-continuity claims. FULLMAG_DE_SMOKE_SAMPLING=five selects
 all five prescribed points; signed-eleven selects Gamma and five pairs of
 positive/negative ky, one mode per point. signed-fifteen selects the prescribed
 signed DE path from -25 to +25 rad/um, one mode per point. References are evaluated after the native solve;
@@ -37,7 +39,7 @@ AIR_GROWTH_RATE = _AIR_GROWTH_RATE_VALUES[_AIR_GROWTH_RATE_TEXT]
 _SINGLE_K_NAMES = {f"{prefix}k{k}" for prefix in ("", "bv-") for k in range(-25, 26)}
 _PATH_NAMES = {
     "two", "five", "positive-six", "bv-positive-six", "positive-26",
-    "bv-positive-26", "signed-eleven", "signed-fifteen",
+    "bv-positive-26", "signed-eleven", "signed-fifteen", "ui-seven",
 }
 if SAMPLING not in _SINGLE_K_NAMES | _PATH_NAMES:
     raise ValueError(f"Unsupported FULLMAG_DE_SMOKE_SAMPLING: {SAMPLING}")
@@ -50,6 +52,7 @@ KY = ((float(_single_k_name[1:]) * 1e6,) if IS_SINGLE else
       (0.0, 1e6, 2e6, 3e6, 5e6) if SAMPLING == "five" else
       (-25e6, -20e6, -15e6, -10e6, -7e6, -5e6, -2e6, 0.0,
        2e6, 5e6, 7e6, 10e6, 15e6, 20e6, 25e6) if SAMPLING == "signed-fifteen" else
+      (-25e6, -15e6, -5e6, 0.0, 5e6, 15e6, 25e6) if SAMPLING == "ui-seven" else
       (-3e6, -2e6, -1.5e6, -1e6, -0.5e6, 0.0,
        0.5e6, 1e6, 1.5e6, 2e6, 3e6))
 REQUESTED_MODE_COUNT = 4 if SAMPLING in ("two", "five") else 1
@@ -60,7 +63,10 @@ FREQUENCY_MIN_HZ = 12e9 if SAMPLING in ("k25", "k-25") else 8.5e9
 FREQUENCY_MAX_HZ = 16e9 if (SAMPLING in (
     "k25", "k-25", "positive-six", "positive-26", "signed-fifteen"
 ) or (IS_SINGLE and not IS_BV and abs(KY[0]) >= 15e6)) else 12e9
-MODAL_TARGET = os.environ.get("FULLMAG_DE_SMOKE_MODAL_TARGET", "frequency_window")
+_DEFAULT_MODAL_TARGET = "nearest" if SAMPLING == "ui-seven" else "frequency_window"
+MODAL_TARGET = os.environ.get("FULLMAG_DE_SMOKE_MODAL_TARGET", _DEFAULT_MODAL_TARGET)
+if SAMPLING == "ui-seven" and MODAL_TARGET != "nearest":
+    raise ValueError("ui-seven requires a nearest selected-only modal target")
 if MODAL_TARGET not in {"frequency_window", "nearest"}:
     raise ValueError(
         "FULLMAG_DE_SMOKE_MODAL_TARGET must be 'frequency_window' or 'nearest', "
@@ -87,9 +93,9 @@ def _configured_frequency_window_hz(default_min, default_max, modal_target):
 FREQUENCY_MIN_HZ, FREQUENCY_MAX_HZ = _configured_frequency_window_hz(
     FREQUENCY_MIN_HZ, FREQUENCY_MAX_HZ, MODAL_TARGET)
 
-if MODAL_TARGET == "nearest" and not IS_SINGLE:
+if MODAL_TARGET == "nearest" and not IS_SINGLE and SAMPLING != "ui-seven":
     raise ValueError(
-        "FULLMAG_DE_SMOKE_MODAL_TARGET=nearest requires exactly one single-k sampling point"
+        "FULLMAG_DE_SMOKE_MODAL_TARGET=nearest requires one single-k point or the ui-seven pilot"
     )
 if MODAL_TARGET == "nearest" and REQUESTED_MODE_COUNT != 1:
     raise ValueError("nearest DE-SMOKE selection requires one requested mode")
@@ -126,6 +132,8 @@ _RTOL_VALUES = {"1e-8": 1e-8, "1e-7": 1e-7, "1e-6": 1e-6}
 _requested_rtol = os.environ.get("FULLMAG_DE_SMOKE_SOLVER_RTOL", "1e-8")
 if _requested_rtol not in _RTOL_VALUES:
     raise ValueError("FULLMAG_DE_SMOKE_SOLVER_RTOL must be 1e-8, 1e-7 or 1e-6")
+if SAMPLING == "ui-seven" and _requested_rtol != "1e-8":
+    raise ValueError("ui-seven requires FULLMAG_DE_SMOKE_SOLVER_RTOL exactly 1e-8")
 EIGEN_SOLVER_RTOL = _RTOL_VALUES[_requested_rtol]
 EIGEN_SOLVER_MAX_OUTER_ITERATIONS = 2000
 MS_A_PER_M = 800000.0
@@ -238,6 +246,8 @@ study.runtime_metadata("de_smoke", {
     "eigen_solver_max_outer_iterations": EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
     "analytic_comparison": "postsolve_only",
     "qualification": "NOT VERIFIED",
+    **({"purpose": "ui_diagnostic", "branch_continuity": "NOT VERIFIED"}
+       if SAMPLING == "ui-seven" else {}),
 })
 study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
                        dt=RELAX_DT_S, relax_alpha=0.5,

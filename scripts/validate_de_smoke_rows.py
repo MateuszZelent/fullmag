@@ -10,8 +10,11 @@ import math
 from pathlib import Path
 import re
 
+UI_SEVEN_SAMPLING = "ui-seven"
+
 SAMPLING = {
     "two": (0.0, 2e6),
+    UI_SEVEN_SAMPLING: tuple(k * 1e6 for k in (-25, -15, -5, 0, 5, 15, 25)),
     "five": (0.0, 1e6, 2e6, 3e6, 5e6),
     "k2": (2e6,),
     "k25": (25e6,),
@@ -421,44 +424,137 @@ def load_solver_diagnostics(path: Path):
     return diagnostics
 
 
-def validate_selected_only_diagnostics(path: Path, expected_target_frequency_hz: float):
-    """Validate the native selected-only contract for one single-k sample.
+def validate_selected_only_diagnostics(
+    path: Path,
+    expected_target_frequency_hz: float,
+    *,
+    expected_sample_count: int = 1,
+    expected_vectors=None,
+):
+    """Validate nearest-mode scope and, when requested, every path sample.
 
-    Metadata describes the requested authoring, but it is not evidence that the
-    native provider executed that request.  This check therefore reads the
-    published ``solver.v1.json`` and validates the native target/completeness
-    fields.  Current native producers publish the target as
-    ``target_omega_rad_s`` (and its ``target_tau_rad_s`` alias); a direct
-    ``target_frequency_hz`` field is accepted for forward-compatible providers.
+    A single-k compatibility caller may use root diagnostics. Multi-sample
+    selected-only validation requires exact per-sample records so root-level
+    fields cannot stand in for the whole path.
     """
     if (isinstance(expected_target_frequency_hz, bool) or
             not isinstance(expected_target_frequency_hz, (int, float)) or
             not math.isfinite(expected_target_frequency_hz) or
             expected_target_frequency_hz <= 0.0):
         raise ValueError("selected-only expected target frequency must be finite and positive")
+    if (isinstance(expected_sample_count, bool) or
+            not isinstance(expected_sample_count, int) or expected_sample_count < 1):
+        raise ValueError("selected-only expected sample count must be a positive integer")
+
+    normalized_vectors = None
+    if expected_vectors is not None:
+        if (not isinstance(expected_vectors, (list, tuple)) or
+                len(expected_vectors) != expected_sample_count):
+            raise ValueError("selected-only expected vectors must match the sample count")
+        normalized_vectors = []
+        for sample_index, vector in enumerate(expected_vectors):
+            if not isinstance(vector, (list, tuple)) or len(vector) != 3:
+                raise ValueError(f"selected-only expected vector {sample_index} must have three components")
+            normalized = []
+            for axis, value in enumerate(vector):
+                if (isinstance(value, bool) or not isinstance(value, (int, float)) or
+                        not math.isfinite(value)):
+                    raise ValueError(
+                        f"selected-only expected vector {sample_index}[{axis}] must be finite")
+                normalized.append(float(value))
+            normalized_vectors.append(normalized)
+    elif expected_sample_count > 1:
+        raise ValueError("multi-sample selected-only validation requires expected k vectors")
+
     diagnostics = load_solver_diagnostics(path)
     records = diagnostics.get("sample_solver_diagnostics")
-    payload = dict(diagnostics)
-    if records is not None:
-        if not isinstance(records, list) or len(records) != 1:
-            raise ValueError("selected-only native diagnostics require one sample record")
-        record = records[0]
-        sample_index = record.get("sample_index") if isinstance(record, dict) else None
-        if (not isinstance(record, dict) or isinstance(sample_index, bool) or
-                not isinstance(sample_index, int) or sample_index != 0):
-            raise ValueError("selected-only native diagnostics must identify sample 0")
-        sample_payload = record.get("diagnostics")
-        if not isinstance(sample_payload, dict):
-            raise ValueError("selected-only native sample diagnostics must be an object")
-        payload = dict(sample_payload)
-        for key in (
-                "target_kind", "target_frequency_hz", "target_omega_rad_s",
-                "target_tau_rad_s", "spectrum_completeness", "window_complete"):
-            if key not in diagnostics:
-                continue
-            root_value = diagnostics[key]
-            sample_value = sample_payload.get(key)
+    sample_payloads = None
+    record_vectors = None
+    if records is None:
+        if expected_sample_count != 1:
+            raise ValueError(
+                f"selected-only native diagnostics require exactly {expected_sample_count} indexed sample records")
+        sample_payloads = [dict(diagnostics)]
+        record_vectors = [None]
+    else:
+        if not isinstance(records, list) or len(records) != expected_sample_count:
+            if expected_sample_count == 1:
+                raise ValueError("selected-only native diagnostics require one sample record")
+            raise ValueError(
+                f"selected-only native diagnostics require exactly {expected_sample_count} indexed sample records")
+        by_sample = {}
+        vectors_by_sample = {}
+        for position, record in enumerate(records):
+            sample_index = record.get("sample_index") if isinstance(record, dict) else None
+            if (not isinstance(record, dict) or isinstance(sample_index, bool) or
+                    not isinstance(sample_index, int) or sample_index < 0 or
+                    sample_index >= expected_sample_count):
+                if expected_sample_count == 1:
+                    raise ValueError("selected-only native diagnostics must identify sample 0")
+                raise ValueError(
+                    f"selected-only native diagnostics record {position} has an invalid sample index")
+            if sample_index in by_sample:
+                raise ValueError(
+                    f"selected-only native diagnostics contain duplicate sample {sample_index}")
+            sample_payload = record.get("diagnostics")
+            if not isinstance(sample_payload, dict):
+                raise ValueError("selected-only native sample diagnostics must be an object")
+            by_sample[sample_index] = dict(sample_payload)
+            if normalized_vectors is not None:
+                vector = record.get("k_vector")
+                if not isinstance(vector, list) or len(vector) != 3:
+                    raise ValueError(
+                        f"selected-only native sample {sample_index} is missing its k vector")
+                parsed_vector = []
+                for axis, value in enumerate(vector):
+                    if (isinstance(value, bool) or not isinstance(value, (int, float)) or
+                            not math.isfinite(value)):
+                        raise ValueError(
+                            f"selected-only native sample {sample_index} has invalid k_vector[{axis}]")
+                    parsed_vector.append(float(value))
+                if any(not math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-12)
+                       for actual, expected in zip(parsed_vector, normalized_vectors[sample_index])):
+                    raise ValueError(
+                        f"selected-only native sample {sample_index} k vector disagrees with the request")
+                nested_vector = sample_payload.get("k_vector_rad_m")
+                if nested_vector is not None:
+                    if (not isinstance(nested_vector, list) or len(nested_vector) != 3 or
+                            any(isinstance(value, bool) or not isinstance(value, (int, float)) or
+                                not math.isfinite(value) for value in nested_vector) or
+                            any(not math.isclose(float(actual), expected, rel_tol=1e-12, abs_tol=1e-12)
+                                for actual, expected in zip(nested_vector, normalized_vectors[sample_index]))):
+                        raise ValueError(
+                            f"selected-only native sample {sample_index} diagnostic vector disagrees with the request")
+                vectors_by_sample[sample_index] = parsed_vector
+        if set(by_sample) != set(range(expected_sample_count)):
+            raise ValueError("selected-only native diagnostics have missing sample indices")
+        sample_payloads = [by_sample[index] for index in range(expected_sample_count)]
+        record_vectors = [vectors_by_sample[index] for index in range(expected_sample_count)]
+
+        root_sample_count = diagnostics.get("sample_count")
+        if root_sample_count is not None or expected_sample_count > 1:
+            if (isinstance(root_sample_count, bool) or
+                    not isinstance(root_sample_count, int) or
+                    root_sample_count != expected_sample_count):
+                raise ValueError("selected-only native sample_count disagrees with its records")
+        root_mode_count = diagnostics.get("requested_mode_count")
+        if root_mode_count is not None or expected_sample_count > 1:
+            if (isinstance(root_mode_count, bool) or not isinstance(root_mode_count, int) or
+                    root_mode_count != 1):
+                raise ValueError("selected-only native diagnostics must request one mode")
+
+    alias_keys = (
+        "target_kind", "target_frequency_hz", "target_omega_rad_s",
+        "target_tau_rad_s", "spectrum_completeness", "window_complete",
+        "requested_mode_count",
+    )
+    for key in alias_keys:
+        if key not in diagnostics:
+            continue
+        root_value = diagnostics[key]
+        for sample_payload in sample_payloads:
             if key in sample_payload:
+                sample_value = sample_payload[key]
                 both_numbers = (
                     isinstance(root_value, (int, float)) and not isinstance(root_value, bool) and
                     isinstance(sample_value, (int, float)) and not isinstance(sample_value, bool))
@@ -469,54 +565,94 @@ def validate_selected_only_diagnostics(path: Path, expected_target_frequency_hz:
                 if not agree:
                     raise ValueError(
                         f"native selected-only root and sample diagnostics disagree for {key}")
-            else:
-                payload[key] = root_value
-    if payload.get("target_kind") != "nearest_frequency":
-        raise ValueError("native selected-only diagnostics must declare target_kind=nearest_frequency")
-    if payload.get("spectrum_completeness") != "selected_only":
-        raise ValueError("native selected-only diagnostics must declare spectrum_completeness=selected_only")
-    if payload.get("window_complete") is not False:
-        raise ValueError("native selected-only diagnostics must declare window_complete=false")
+            elif expected_sample_count == 1:
+                sample_payload[key] = root_value
 
-    def finite_positive(name):
+    def finite_positive(payload, name):
         value = payload.get(name)
         if (isinstance(value, bool) or not isinstance(value, (int, float)) or
                 not math.isfinite(value) or value <= 0.0):
             raise ValueError(f"native selected-only diagnostics have invalid {name}")
         return float(value)
 
-    direct_hz = None
-    if "target_frequency_hz" in payload:
-        direct_hz = finite_positive("target_frequency_hz")
-    omega_hz = None
-    if "target_omega_rad_s" in payload:
-        omega_hz = finite_positive("target_omega_rad_s") / math.tau
-    tau_hz = None
-    if "target_tau_rad_s" in payload:
-        tau_hz = finite_positive("target_tau_rad_s") / math.tau
-    native_targets = [value for value in (direct_hz, omega_hz, tau_hz) if value is not None]
-    if not native_targets:
-        raise ValueError("native selected-only diagnostics have no target frequency")
-    canonical_hz = native_targets[0]
-    if any(not math.isclose(value, canonical_hz, rel_tol=1e-12, abs_tol=1e-6)
-           for value in native_targets[1:]):
-        raise ValueError("native selected-only target fields disagree")
-    if not math.isclose(canonical_hz, float(expected_target_frequency_hz),
-                        rel_tol=1e-12, abs_tol=1e-6):
-        raise ValueError("native selected-only target frequency disagrees with the request")
-    return {
+    for key, expected_value in (
+            ("target_kind", "nearest_frequency"),
+            ("spectrum_completeness", "selected_only"),
+            ("window_complete", False)):
+        if (key in diagnostics and
+                (type(diagnostics[key]) is not type(expected_value) or
+                 diagnostics[key] != expected_value)):
+            raise ValueError(f"native selected-only root diagnostics have invalid {key}")
+
+    root_targets = []
+    for key, divisor in (
+            ("target_frequency_hz", 1.0),
+            ("target_omega_rad_s", math.tau),
+            ("target_tau_rad_s", math.tau)):
+        if key in diagnostics:
+            root_targets.append(finite_positive(diagnostics, key) / divisor)
+    if root_targets:
+        root_target_hz = root_targets[0]
+        if any(not math.isclose(value, root_target_hz, rel_tol=1e-12, abs_tol=1e-6)
+               for value in root_targets[1:]):
+            raise ValueError("native selected-only root target fields disagree")
+        if not math.isclose(root_target_hz, float(expected_target_frequency_hz),
+                            rel_tol=1e-12, abs_tol=1e-6):
+            raise ValueError("native selected-only root target frequency disagrees with the request")
+
+    target_fields = []
+    target_frequencies = []
+    for sample_index, payload in enumerate(sample_payloads):
+        if payload.get("target_kind") != "nearest_frequency":
+            raise ValueError("native selected-only diagnostics must declare target_kind=nearest_frequency")
+        if payload.get("spectrum_completeness") != "selected_only":
+            raise ValueError("native selected-only diagnostics must declare spectrum_completeness=selected_only")
+        if payload.get("window_complete") is not False:
+            raise ValueError("native selected-only diagnostics must declare window_complete=false")
+        if expected_sample_count > 1:
+            mode_count = payload.get("requested_mode_count")
+            if isinstance(mode_count, bool) or not isinstance(mode_count, int) or mode_count != 1:
+                raise ValueError(
+                    f"native selected-only sample {sample_index} must request exactly one mode")
+
+        direct_hz = finite_positive(payload, "target_frequency_hz") if "target_frequency_hz" in payload else None
+        omega_hz = finite_positive(payload, "target_omega_rad_s") / math.tau if "target_omega_rad_s" in payload else None
+        tau_hz = finite_positive(payload, "target_tau_rad_s") / math.tau if "target_tau_rad_s" in payload else None
+        native_targets = [value for value in (direct_hz, omega_hz, tau_hz) if value is not None]
+        if not native_targets:
+            raise ValueError("native selected-only diagnostics have no target frequency")
+        canonical_hz = native_targets[0]
+        if any(not math.isclose(value, canonical_hz, rel_tol=1e-12, abs_tol=1e-6)
+               for value in native_targets[1:]):
+            raise ValueError("native selected-only target fields disagree")
+        if not math.isclose(canonical_hz, float(expected_target_frequency_hz),
+                            rel_tol=1e-12, abs_tol=1e-6):
+            raise ValueError(
+                f"native selected-only sample {sample_index} target frequency disagrees with the request")
+        target_frequencies.append(canonical_hz)
+        target_fields.append(
+            "target_frequency_hz" if direct_hz is not None else
+            "target_omega_rad_s" if omega_hz is not None else "target_tau_rad_s")
+
+    report = {
         "status": "pass",
         "source": str(Path(path)),
-        "target_kind": payload["target_kind"],
-        "spectrum_completeness": payload["spectrum_completeness"],
+        "target_kind": "nearest_frequency",
+        "spectrum_completeness": "selected_only",
         "window_complete": False,
-        "target_frequency_hz": canonical_hz,
-        "target_field": ("target_frequency_hz" if direct_hz is not None else
-                          "target_omega_rad_s" if omega_hz is not None else
-                          "target_tau_rad_s"),
+        "target_frequency_hz": target_frequencies[0],
+        "target_field": target_fields[0],
         "qualification": "NOT VERIFIED",
     }
-
+    if expected_sample_count > 1:
+        report.update({
+            "sample_count": expected_sample_count,
+            "sample_indices": list(range(expected_sample_count)),
+            "requested_mode_count": 1,
+            "k_vectors_rad_per_m": record_vectors,
+            "per_sample_target_frequency_hz": target_frequencies,
+        })
+    return report
 
 def diagnostics_by_sample(diagnostics, required_sample_indices, fallback_probe_key):
     sample_records = diagnostics.get("sample_solver_diagnostics")
@@ -1007,7 +1143,10 @@ def validate_rows(path: Path, sampling: str, solver_diagnostics_path: Path,
     if selection_scope not in {"frequency_window", "selected_only"}:
         raise ValueError("unsupported DE-SMOKE selection scope")
     expected = SAMPLING[sampling]
-    if selection_scope == "selected_only" and len(expected) != 1:
+    if sampling == UI_SEVEN_SAMPLING and selection_scope != "selected_only":
+        raise ValueError("ui-seven DE-SMOKE requires selected-only validation")
+    if (selection_scope == "selected_only" and len(expected) != 1 and
+            sampling != UI_SEVEN_SAMPLING):
         raise ValueError("selected-only DE-SMOKE validation requires one k sample")
     required_probe_samples = [index for index, wavevector in enumerate(expected) if wavevector != 0.0]
     if not required_probe_samples and sampling not in ("k0", "bv-k0"):
@@ -1041,7 +1180,19 @@ def validate_rows(path: Path, sampling: str, solver_diagnostics_path: Path,
     if (isinstance(solver_rtol, bool) or not isinstance(solver_rtol, (int, float)) or
             not math.isfinite(solver_rtol) or solver_rtol <= 0):
         raise ValueError("DE-SMOKE eigen_solver_rtol must be finite and positive")
+    if sampling == UI_SEVEN_SAMPLING:
+        if solver_rtol != 1e-8:
+            raise ValueError("ui-seven DE-SMOKE solver tolerance must be exactly 1e-8")
+        requested_mode_count = model.get("requested_mode_count")
+        if (isinstance(requested_mode_count, bool) or
+                not isinstance(requested_mode_count, int) or requested_mode_count != 1):
+            raise ValueError("ui-seven DE-SMOKE metadata must request exactly one mode")
     native_modes = load_spectrum_v3_modes(Path(path).parent / "spectrum.v3.json")
+    if sampling == UI_SEVEN_SAMPLING:
+        expected_mode_keys = {(sample_index, 0) for sample_index in range(len(expected))}
+        if set(native_modes) != expected_mode_keys:
+            raise ValueError(
+                "ui-seven selected-only spectrum requires exactly raw mode 0 for samples 0 through 6")
     if sampling == "parallel-probe":
         expected_mode_keys = {(sample_index, 0) for sample_index in range(len(expected))}
         if set(native_modes) != expected_mode_keys:
@@ -1149,6 +1300,11 @@ def validate_rows(path: Path, sampling: str, solver_diagnostics_path: Path,
             })
     if sampling in DENSE_SAMPLING and len(rows) != len(expected):
         raise ValueError("dense DE/BV rows require exactly one mode for each requested sample")
+    if sampling == UI_SEVEN_SAMPLING and (
+            len(rows) != len(expected) or
+            any(row["raw_mode_index"] != 0 for row in rows)):
+        raise ValueError(
+            "ui-seven selected-only rows require exactly raw mode 0 for samples 0 through 6")
     if sampling == "parallel-probe" and (
             len(rows) != len(expected) or
             any(row["raw_mode_index"] != 0 for row in rows)):

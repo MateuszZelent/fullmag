@@ -31,6 +31,7 @@ from validate_de_smoke_rows import (
     PARALLEL_PROBE_FREQUENCY_WINDOW_HZ,
     PARALLEL_PROBE_VECTORS_RAD_PER_M,
     SAMPLING,
+    UI_SEVEN_SAMPLING,
     validate_parallel_probe_metadata,
     validate_parallel_probe_solver_artifacts,
     validate_rows,
@@ -45,7 +46,8 @@ from run_de_ui_model import copy_web
 
 MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
 NEAREST_PILOT = "de-smoke-nearest-k2"
-NEAREST_PILOTS = frozenset((NEAREST_PILOT,))
+UI_SEVEN_PILOT = "de-smoke-ui-seven"
+NEAREST_PILOTS = frozenset((NEAREST_PILOT, UI_SEVEN_PILOT))
 DEFAULT_NEAREST_TARGET_FREQUENCY_GHZ = 10.0
 SIGNED_FIFTEEN_PILOT = "de-smoke-signed-fifteen"
 PARALLEL_PROBE_PILOT = "de-smoke-parallel-probe"
@@ -104,6 +106,7 @@ PILOTS = {
     SIGNED_FIFTEEN_PILOT: ("examples/fem_de_smoke_numeric.py", "signed-fifteen"),
     PARALLEL_PROBE_PILOT: ("examples/fem_de_smoke_numeric.py", PARALLEL_PROBE_SAMPLING),
     NEAREST_PILOT: ("examples/fem_de_smoke_numeric.py", "k2"),
+    UI_SEVEN_PILOT: ("examples/fem_de_smoke_numeric.py", UI_SEVEN_SAMPLING),
 }
 for _geometry_prefix in ("", "bv-"):
     for _k_um in range(-25, 26):
@@ -858,9 +861,9 @@ def _modal_selection(pilot, target_frequency_ghz=None, spectral_target=None):
         spectral_target = "nearest" if alias_nearest else "frequency_window"
     if spectral_target == "frequency_window":
         return "frequency_window", None
-    if not _is_single_k_pilot(pilot):
+    if not _is_single_k_pilot(pilot) and pilot != UI_SEVEN_PILOT:
         raise managed.BenchmarkError(
-            "nearest target requires an existing single-k DE/BV/Γ pilot"
+            "nearest target requires an existing single-k DE/BV/Γ pilot or the ui-seven pilot"
         )
     if target_frequency_ghz is None:
         target_frequency_ghz = DEFAULT_NEAREST_TARGET_FREQUENCY_GHZ
@@ -1299,6 +1302,8 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         raise managed.BenchmarkError("parallel probe inputs are restricted to de-smoke-parallel-probe")
     modal_target, target_frequency_hz = _modal_selection(
         pilot, nearest_target_frequency_ghz, spectral_target)
+    if pilot == UI_SEVEN_PILOT and modal_target != "nearest":
+        raise managed.BenchmarkError("ui-seven requires nearest selected-only mode targeting")
     frequency_window = _frequency_window_bounds(
         pilot, modal_target, frequency_min_ghz, frequency_max_ghz
     )
@@ -1376,6 +1381,8 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         *(["export FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ="
            + format(target_frequency_hz / 1.0e9, ".17g")]
           if modal_target == "nearest" else []),
+        *(["export FULLMAG_DE_SMOKE_SOLVER_RTOL=1e-8"]
+          if pilot == UI_SEVEN_PILOT else []),
         *(["export FULLMAG_DE_SMOKE_FREQUENCY_MIN_GHZ="
            + format(frequency_window["min_ghz"], ".17g"),
             "export FULLMAG_DE_SMOKE_FREQUENCY_MAX_GHZ="
@@ -1769,11 +1776,11 @@ def _validate_schur_action_payload(payload, report):
 
 
 def validate_selected_only_metadata(case_dir, expected_target_frequency_hz, expected_sampling=None):
-    """Validate authoring and native scope of a one-point nearest-mode pilot.
+    """Validate selected-only authoring and native scope without claiming a window.
 
-    Metadata proves the request, while ``solver.v1.json`` proves that the
-    native provider preserved the selected-only contract.  Neither promotes
-    the artifact to a complete window or dispersion result.
+    Existing aliases remain one-point checks. The explicitly named ui-seven
+    pilot is the sole multi-sample selected-only case and must bind all seven
+    native sample records to their requested vectors and common target.
     """
     try:
         metadata = json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))
@@ -1798,25 +1805,56 @@ def validate_selected_only_metadata(case_dir, expected_target_frequency_hz, expe
                              rel_tol=1e-12, abs_tol=0.0)):
         raise managed.BenchmarkError("selected-only DE-SMOKE target frequency disagrees with the request")
     sampling = model.get("sampling")
-    if not isinstance(sampling, str) or sampling not in {
-            f"{prefix}k{k}" for prefix in ("", "bv-") for k in range(-25, 26)}:
-        raise managed.BenchmarkError("selected-only DE-SMOKE metadata does not identify one single-k sample")
+    if not isinstance(sampling, str):
+        raise managed.BenchmarkError("selected-only DE-SMOKE sampling is missing")
     if expected_sampling is not None and sampling != expected_sampling:
         raise managed.BenchmarkError("selected-only DE-SMOKE sampling disagrees with the request")
-    requested_mode_count = model.get("requested_mode_count")
-    if isinstance(requested_mode_count, bool) or requested_mode_count != 1:
-        raise managed.BenchmarkError("selected-only DE-SMOKE metadata requests more than one mode")
-    vectors = model.get("k_vectors_rad_per_m")
-    if not isinstance(vectors, list) or len(vectors) != 1:
-        raise managed.BenchmarkError("selected-only DE-SMOKE metadata contains more than one k vector")
+
+    if sampling == UI_SEVEN_SAMPLING:
+        expected_vectors = [[0.0, value, 0.0] for value in SAMPLING[UI_SEVEN_SAMPLING]]
+        if model.get("purpose") != "ui_diagnostic":
+            raise managed.BenchmarkError("ui-seven metadata must declare purpose=ui_diagnostic")
+        if model.get("branch_continuity") != "NOT VERIFIED":
+            raise managed.BenchmarkError("ui-seven branch continuity must remain NOT VERIFIED")
+        if model.get("orientation") != "M0=x,k=y,normal=z":
+            raise managed.BenchmarkError("ui-seven selected-only metadata has the wrong DE orientation")
+        if model.get("k_vectors_rad_per_m") != expected_vectors:
+            raise managed.BenchmarkError("ui-seven selected-only metadata has the wrong signed k vectors")
+        solver_rtol = model.get("eigen_solver_rtol")
+        if (isinstance(solver_rtol, bool) or not isinstance(solver_rtol, (int, float)) or
+                solver_rtol != 1e-8):
+            raise managed.BenchmarkError("ui-seven selected-only solver tolerance must be exactly 1e-8")
+        requested_mode_count = model.get("requested_mode_count")
+        if (isinstance(requested_mode_count, bool) or
+                not isinstance(requested_mode_count, int) or requested_mode_count != 1):
+            raise managed.BenchmarkError("ui-seven selected-only metadata must request exactly one mode")
+        expected_sample_count = len(expected_vectors)
+    else:
+        if sampling not in {
+                f"{prefix}k{k}" for prefix in ("", "bv-") for k in range(-25, 26)}:
+            raise managed.BenchmarkError(
+                "selected-only DE-SMOKE metadata does not identify one single-k sample")
+        requested_mode_count = model.get("requested_mode_count")
+        if isinstance(requested_mode_count, bool) or requested_mode_count != 1:
+            raise managed.BenchmarkError("selected-only DE-SMOKE metadata requests more than one mode")
+        vectors = model.get("k_vectors_rad_per_m")
+        if not isinstance(vectors, list) or len(vectors) != 1:
+            raise managed.BenchmarkError("selected-only DE-SMOKE metadata contains more than one k vector")
+        expected_vectors = None
+        expected_sample_count = 1
+
     try:
         native = validate_selected_only_diagnostics(
-            case_dir / "eigen/diagnostics/solver.v1.json", expected_target_frequency_hz)
+            case_dir / "eigen/diagnostics/solver.v1.json",
+            expected_target_frequency_hz,
+            expected_sample_count=expected_sample_count,
+            expected_vectors=expected_vectors,
+        )
     except (OSError, ValueError) as error:
         raise managed.BenchmarkError(
             "selected-only DE-SMOKE native diagnostics are missing or inconsistent"
         ) from error
-    return {
+    report = {
         "schema": "fullmag.de-smoke-selected-only-preflight.v1",
         "status": "pass",
         "qualification": "NOT VERIFIED",
@@ -1828,6 +1866,10 @@ def validate_selected_only_metadata(case_dir, expected_target_frequency_hz, expe
         "native_diagnostics": native,
         "pending": ["full frequency-window coverage", "dispersion comparison and convergence"],
     }
+    if sampling == UI_SEVEN_SAMPLING:
+        report["sample_count"] = expected_sample_count
+        report["k_vectors_rad_per_m"] = expected_vectors
+    return report
 
 
 def validate_mesh_level_metadata(case_dir, requested):
@@ -2060,6 +2102,9 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     if model_identity:
         request["model_source"] = model_identity
     request["scientific_gate"] = {"qualification": "NOT VERIFIED", "reason": "postsolve comparison and convergence required"}
+    if pilot == UI_SEVEN_PILOT:
+        request["purpose"] = "ui_diagnostic"
+        request["branch_continuity"] = "NOT VERIFIED"
     managed._write_new_json(output / "run-request.json", request)
     result = {"schema": f"fullmag.{schema_name}.result.v1", "pilot": pilot, "status": "failed",
               "qualification": "NOT VERIFIED", "started_at_unix": time.time(),

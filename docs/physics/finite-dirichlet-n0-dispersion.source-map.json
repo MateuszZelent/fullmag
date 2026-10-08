@@ -149,7 +149,10 @@
       "path": "scripts/test_signed_de_bv_dispersion.py",
       "symbol": "test_nearest_record_binds_native_target_and_full_residual",
       "responsibility": "Nearest collector artifact binding regression."
-    }
+    },
+    {"id": "source-ui-selected-model", "path": "examples/fem_de_smoke_numeric.py", "symbol": "SAMPLING", "responsibility": "Explicit ui-seven selected-only DE sampling; unchanged geometry, demag and physical tolerance."},
+    {"id": "source-ui-selected-driver", "path": "scripts/run_de_100nm_pilot.py", "symbol": "validate_selected_only_metadata", "responsibility": "Bind seven sample vectors, common nearest target and unqualified UI diagnostic scope."},
+    {"id": "source-ui-selected-diagnostics", "path": "scripts/validate_de_smoke_rows.py", "symbol": "validate_selected_only_diagnostics", "responsibility": "Require all indexed nearest sample records rather than last-sample/root diagnostics."}
   ],
   "public_api": {
     "parameters": [],
@@ -179,6 +182,7 @@
   "limitations": [
     "Uniform n=0 slab reference is not an exact FEM result.",
     "Antidot, nonuniform material, higher thickness modes and asymmetric boundary physics are outside scope.",
-    "Missing resolved air padding produces an explicit NOT_AVAILABLE gap rather than a hardcoded value."
+    "Missing resolved air padding produces an explicit NOT_AVAILABLE gap rather than a hardcoded value.",
+    "UI seven selected-only sampling does not certify full spectrum, n=0 identity or branch continuity."
   ]
 }

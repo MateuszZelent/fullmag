@@ -22,7 +22,7 @@ jobs:
         env:
           PYTHONPATH: scripts
           MPLBACKEND: Agg
-        run: python -B -m pytest -q scripts/test_de_ui_session_scope.py scripts/test_run_de_100nm_pilot.py scripts/test_frontend_source_workspace.py
+        run: python -B -m pytest -q scripts/test_de_ui_session_scope.py scripts/test_run_de_100nm_pilot.py scripts/test_frontend_source_workspace.py scripts/test_de_smoke_model.py scripts/test_validate_de_smoke_rows.py scripts/test_fullmag_storage.py
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -31,12 +31,16 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 32
       - uses: pnpm/action-setup@v6
         with:
           version: 10.8.1
       - uses: actions/setup-node@v6
         with:
           node-version: 24.18.0
+      - name: Install source contract search tool
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Prepare isolated managed frontend workspace
         id: frontend-workspace
         run: |
@@ -62,5 +66,27 @@ jobs:
           pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" check:api-hygiene
       - name: Lint
         run: pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" lint
+      - name: Review changed React sources with pinned Doctor
+        run: >-
+          node "${{ steps.frontend-workspace.outputs.workspace }}/node_modules/react-doctor/bin/react-doctor.js"
+          apps/control-room --verbose --scope changed
+          --base 1195663c67943cb57f6716bdd73639d9fe917e4f
+          --no-score --no-supply-chain --no-dead-code --no-parallel --yes
+          --output-dir "$FULLMAG_PROJECT_STORAGE_ROOT/builds/dispersion-ui-ci/react-doctor"
       - name: Run Control Room regressions
         run: pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" test
+  native-resource-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../storage/builds/dispersion-ui-ci/native-contracts/cargo-target
+      RUST_MIN_STACK: 8388608
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate resource and managed-store contracts
+        run: |
+          cargo test -p fullmag-runtime-control --lib accepted_store --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api frequency_domain_dispersion_resource --no-fail-fast
