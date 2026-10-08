@@ -6084,6 +6084,12 @@ Ich przygotowanie zależności i Cargo pozostaje zarządzane przez środowisko T
 
 ## T15. Zbudować spójne UI i naprawić utratę parametrów/draftu
 
+**Przyrost 2026-10-08 — stacje CPW:** istniejący edytor obsługuje pięć
+wymiarów przekroju CPW, zachowując transakcje, parametry i nowsze szkice po ACK.
+Model: 4 interpretowane kontrole PASS; browser microstrip/CPW: 19/19 PASS.
+Pełne dowody i granice w [checkpointcie edytora CPW](2026-10-08-antenna-cpw-station-editor-checkpoint.md).
+To authoring z kontrolowanym transportem, nie native solve ani zamknięcie T15.
+
 ### Checkpoint 2026-10-08 — kontrakt próbkowania widma Python
 
 [Checkpoint zakresu i eksportu FFT](2026-10-08-antenna-spectrum-sampling-checkpoint.md):

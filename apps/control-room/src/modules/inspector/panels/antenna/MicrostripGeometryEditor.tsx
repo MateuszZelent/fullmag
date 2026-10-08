@@ -16,9 +16,10 @@ import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
-  buildMicrostripGeometry,
+  antennaLayoutGeometry,
+  buildAntennaLayoutGeometry,
+  CPW_STATION_FIELDS,
   insertWidthStation,
-  microstripGeometry,
   widthStationDraft,
   widthStationsEqual,
   type WidthStationDraft,
@@ -42,7 +43,7 @@ export function MicrostripGeometryEditor({ objectId, scene, status, refetch }: P
   const { api, resources } = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const draftKey = `${sessionScopeKey ?? "unconfirmed"}|${objectId}`;
-  const geometry = microstripGeometry(scene, objectId);
+  const geometry = antennaLayoutGeometry(scene, objectId);
   const sourceGeometry = geometry ? JSON.stringify(geometry) : "";
   const [localState, setLocalState] = useState<LocalDraft | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
@@ -76,7 +77,7 @@ export function MicrostripGeometryEditor({ objectId, scene, status, refetch }: P
     setFeedbackState(null);
   }
 
-  function updateStation(rowId: string, patch: Partial<Pick<WidthStationDraft, "s" | "signalWidthM">>) {
+  function updateStation(rowId: string, patch: Partial<Omit<WidthStationDraft, "rowId">>) {
     update(stations.map((station) => station.rowId === rowId ? { ...station, ...patch } : station));
   }
 
@@ -84,7 +85,7 @@ export function MicrostripGeometryEditor({ objectId, scene, status, refetch }: P
     if (!geometry || !canSave || !sessionScopeKey || typeof revision !== "number") return;
     let patchedGeometry;
     try {
-      patchedGeometry = buildMicrostripGeometry(geometry, stations);
+      patchedGeometry = buildAntennaLayoutGeometry(geometry, stations);
     } catch (error) {
       setFeedbackState({ key: draftKey, kind: "error", message: error instanceof Error ? error.message : String(error) });
       return;
@@ -97,10 +98,10 @@ export function MicrostripGeometryEditor({ objectId, scene, status, refetch }: P
         geometry: patchedGeometry,
       }, { sessionScopeKey });
       const committedRevision = acknowledgedAuthoringSceneRevision(response);
-      const committedGeometry = microstripGeometry(response.committed_scene, objectId);
-      if (!committedGeometry) {
+      const committedGeometry = antennaLayoutGeometry(response.committed_scene, objectId);
+      if (!committedGeometry || committedGeometry.geometry_kind !== geometry.geometry_kind) {
         refetch();
-        throw new Error("Geometry ACK omitted the microstrip conductor. Refetch before saving again.");
+        throw new Error("Geometry ACK omitted the matching antenna layout. Refetch before saving again.");
       }
       publishCommittedSceneResource(resources, response.committed_scene, committedRevision, undefined, false, sessionScopeKey, api.resourceCacheScope);
       invalidateAuthoringMutationDependents(resources, "geometry", committedRevision);
@@ -118,8 +119,8 @@ export function MicrostripGeometryEditor({ objectId, scene, status, refetch }: P
     }
   }
 
-  return <InspectorGroup title="Microstrip width stations" collapsible defaultOpen>
-    <FeedbackBanner kind="warning" message="Signal width is a 3D conductor dimension. Changes invalidate the existing conductor mesh and field basis." />
+  return <InspectorGroup title={geometry.geometry_kind === "CPWAntennaLayout" ? "CPW width stations" : "Microstrip width stations"} collapsible defaultOpen>
+    <FeedbackBanner kind="warning" message="Station widths and gaps are 3D conductor dimensions. Changes invalidate the existing conductor mesh and field basis." />
     {stations.map((station, index) => <div className="fm-microstrip-station" key={station.rowId}>
       <FormField
         label={`Station ${index + 1} position`}
@@ -134,6 +135,13 @@ export function MicrostripGeometryEditor({ objectId, scene, status, refetch }: P
         value={station.signalWidthM}
         onChange={(event) => updateStation(station.rowId, { signalWidthM: event.currentTarget.value })}
       />
+      {geometry.geometry_kind === "CPWAntennaLayout" ? CPW_STATION_FIELDS.map((field) => <FormField
+        key={field.key}
+        label={`Station ${index + 1} ${field.label}`}
+        unit="m"
+        value={station[field.key] ?? ""}
+        onChange={(event) => updateStation(station.rowId, { [field.key]: event.currentTarget.value })}
+      />) : null}
       {index > 0 && index < stations.length - 1 ? <Button type="button" onClick={() => update(stations.filter((current) => current.rowId !== station.rowId))}>Remove station {index + 1}</Button> : null}
     </div>)}
     {conflict ? <FeedbackBanner kind="error" message="Conductor geometry changed on the server. Review the current stations and explicitly rebase your draft before saving." /> : null}

@@ -26,19 +26,24 @@ try {
   const channel = process.env.FULLMAG_ANTENNA_STATIONS_BROWSER_CHANNEL;
   if (channel && !["chrome", "msedge"].includes(channel)) throw new Error("Unsupported managed browser channel");
   browser = await playwright.chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
+  for (const layout of ["microstrip", "cpw"]) {
+  const layoutUrl = new URL(url);
+  if (layout === "cpw") layoutUrl.searchParams.set("layout", "cpw");
   page = await browser.newPage({ viewport: { width: 1280, height: 1000 }, acceptDownloads: false });
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("console", (message) => { if (message.type() === "error" && !message.text().startsWith("Failed to load resource:")) consoleErrors.push(message.text()); });
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+  await page.goto(layoutUrl.href, { waitUntil: "domcontentloaded", timeout });
   await page.waitForFunction(() => Boolean(window.__antennaStationsFixture), undefined, { timeout });
   const editor = page.getByTestId("antenna-stations-editor");
   const read = () => page.evaluate(() => window.__antennaStationsFixture.read());
   const ready = async () => { await page.waitForFunction(() => document.querySelector('[data-testid="antenna-stations-editor"]')?.getAttribute("data-resource-status") === "ready", undefined, { timeout }); };
-  const screenshot = async (name) => { const path = resolve(reportDirectory, `${name}.png`); await page.screenshot({ path, fullPage: true }); screenshots.push(path); };
+  const screenshot = async (name) => { const path = resolve(reportDirectory, `${layout}-${name}.png`); await page.screenshot({ path, fullPage: true }); screenshots.push(path); };
   const clickWithoutFocus = async (label) => editor.getByRole("button", { name: label, exact: true }).evaluate((button) => button.click());
   const values = () => editor.locator(".fm-microstrip-station").evaluateAll((rows) => rows.map((row) => [...row.querySelectorAll("input")].map((input) => input.value)));
   const expectValues = async (expected) => assert.deepEqual((await values()).map(([s, width]) => [Number(s), Number(width)]), expected);
   await ready();
+  const originalParams = (await read()).scene.objects[0].geometry.geometry_params;
+  assert.equal(await editor.locator(".fm-microstrip-station").first().locator("input").count(), layout === "cpw" ? 6 : 2);
   await expectValues([[0, 40e-9], [0.25, 30e-9], [0.75, 20e-9], [1, 10e-9]]);
   assert.equal(await editor.getByRole("button", { name: "Save width stations", exact: true }).isDisabled(), true);
   await screenshot("01-before-remove");
@@ -80,7 +85,7 @@ try {
     const scroll = document.querySelector('[data-testid="antenna-stations-scroll"]');
     const focus = window.__antennaStationRetained.width;
     focus.focus({ preventScroll: true }); focus.setSelectionRange(1, 3);
-    scroll.scrollTop = 100;
+    scroll.scrollTop += focus.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 100;
     if (scroll.scrollTop < 50) throw new Error("Actual panel lacks scroll overflow; scroll proof is inconclusive");
     const controls = [...root.querySelectorAll("input"), root.querySelector('[data-slot="inspector-group-trigger"]'), ...[...root.querySelectorAll("button")].filter((button) => button.textContent === "Add station" || button.textContent?.startsWith("Remove station")), document.querySelector('[data-testid="antenna-stations-unrelated"]')];
     const proof = { root, scroll, scrollTop: scroll.scrollTop, focus, controls: controls.map((element) => ({ element, disabled: element.disabled, opacity: getComputedStyle(element).opacity })), rootChanged: 0, controlIdentityChanges: 0, disabledChanges: 0, opacityChanges: 0, activeOpacityAnimations: 0, maxScrollDelta: 0 };
@@ -109,8 +114,17 @@ try {
   assert.equal(writes[0].body.kind, "patch_object_geometry");
   assert.equal(writes[0].body.base_revision, beforeWrite.revision);
   const submittedStations = writes[0].body.geometry.geometry_params.stations;
-  assert.deepEqual(submittedStations, [{ s: 0, signal_width_m: 40e-9 }, { s: 0.375, signal_width_m: interpolatedWidth }, { s: 0.75, signal_width_m: 18e-9 }, { s: 1, signal_width_m: 10e-9 }]);
-  for (const station of submittedStations) assert.deepEqual(Object.keys(station).sort(), ["s", "signal_width_m"], "UI-local row IDs leaked to canonical geometry JSON");
+  const extraFields = ["left_gap_m", "right_gap_m", "left_ground_width_m", "right_ground_width_m"];
+  const expectedStations = [{ s: 0, signal_width_m: 40e-9 }, { s: 0.375, signal_width_m: interpolatedWidth }, { s: 0.75, signal_width_m: 18e-9 }, { s: 1, signal_width_m: 10e-9 }];
+  if (layout === "cpw") {
+    for (let index = 0; index < expectedStations.length; index++) {
+      for (const field of extraFields) expectedStations[index][field] = index === 1
+        ? (originalParams.stations[0][field] + originalParams.stations[2][field]) / 2 : originalParams.stations[index][field];
+    }
+  }
+  assert.deepEqual(submittedStations, expectedStations);
+  for (const station of submittedStations) assert.deepEqual(Object.keys(station).sort(), ["s", "signal_width_m", ...(layout === "cpw" ? extraFields : [])].sort(), "UI-local row IDs leaked to canonical geometry JSON");
+  assert.deepEqual({ ...writes[0].body.geometry.geometry_params, stations: [] }, { ...originalParams, stations: [] }, "Station edit changed unrelated physical parameters");
   assert.equal(await retainedWidth.isDisabled(), false);
   assert.equal(await editor.getByRole("button", { name: "Add station", exact: true }).isDisabled(), false);
   assert.equal(await editor.getByRole("button", { name: "Save width stations", exact: true }).isDisabled(), true);
@@ -226,6 +240,23 @@ try {
   assert.equal(await editor.getByRole("button", { name: "Save width stations", exact: true }).isDisabled(), true, "Clean external geometry update retained obsolete local values");
   checks.push({ name: "server insertion at a moved station's former position cannot collide with its retained DOM identity", passed: true, evidence: movedProof });
   await screenshot("13-moved-station-after-server-insert");
+  if (layout === "cpw") {
+    const gap = editor.getByRole("textbox", { name: "Station 4 left gap", exact: true });
+    await gap.fill("25e-9");
+    await clickWithoutFocus("Save width stations");
+    await page.waitForFunction(() => window.__antennaStationsFixture.read().pendingWrites === 1, undefined, { timeout });
+    const submitted = (await read()).calls.filter((call) => call.method === "POST").at(-1).body.geometry.geometry_params.stations[3];
+    assert.equal(submitted.left_gap_m, 25e-9);
+    await gap.fill("27e-9");
+    await page.evaluate(() => window.__antennaStationsFixture.releaseWrite());
+    await page.waitForFunction(() => document.querySelector('[data-testid="antenna-stations-editor"]')?.getAttribute("data-scene-revision") === "7", undefined, { timeout });
+    await ready();
+    assert.equal(await gap.inputValue(), "27e-9");
+    assert.equal((await read()).scene.objects[0].geometry.geometry_params.stations[3].left_gap_m, 25e-9);
+    assert.equal((await editor.innerText()).includes("Conductor geometry changed on the server"), false);
+    checks.push({ name: "CPW independent gap transaction preserves the newer in-flight gap draft", passed: true });
+    await screenshot("14-cpw-gap-ack");
+  }
   const beforeIdle = await read();
   await page.waitForTimeout(300);
   const final = await read();
@@ -240,7 +271,10 @@ try {
   assert.equal(pageErrors.length, 0, pageErrors.join(" | "));
   assert.equal(consoleErrors.length, 0, consoleErrors.join(" | "));
   checks.push({ name: "bounded workflow and settled idle have no polling, implicit mutation or runtime/console errors", passed: true, requests: final.calls.length, renders: final.renderCommits });
-  requestEvidence = final;
+  requestEvidence = { ...(requestEvidence ?? {}), [layout]: final };
+  await page.close();
+  page = null;
+  }
 } catch (error) {
   failure = error instanceof Error ? error.message : String(error);
   if (page) {

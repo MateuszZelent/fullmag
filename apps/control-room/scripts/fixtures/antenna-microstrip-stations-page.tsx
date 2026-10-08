@@ -44,6 +44,17 @@ function makeFixture() {
       conductors: [{ id: "signal", kind: "signal" }, { id: "return", kind: "return" }],
     },
   };
+  if (typeof window !== "undefined" && new URL(window.location.href).searchParams.get("layout") === "cpw") {
+    geometry.geometry_kind = "CPWAntennaLayout";
+    const params = geometry.geometry_params as JsonObject;
+    delete params.return_width_m;
+    delete params.return_offset_m;
+    params.stations = (params.stations as JsonObject[]).map((station, index) => ({ ...station,
+      left_gap_m: (10 + index * 2) * 1e-9, right_gap_m: (30 - index * 2) * 1e-9,
+      left_ground_width_m: (80 + index * 10) * 1e-9, right_ground_width_m: (150 - index * 10) * 1e-9,
+    }));
+    params.conductors = [{ id: "trace", kind: "signal" }, { id: "left", kind: "ground_left" }, { id: "right", kind: "ground_right" }];
+  }
   const state = { scene: { revision: 1, scene_revision: 1, objects: [{ id: OBJECT_ID, name: "Microstrip fixture", geometry, notes: "initial" }] } as SceneResource, renderCommits: 0, holdScene: false };
   const calls: Call[] = [];
   const unexpected: string[] = [];
@@ -120,7 +131,7 @@ function makeFixture() {
       const stations = params?.stations;
       if (!Array.isArray(stations) || stations.length !== 4) throw new Error("Expected four committed fixture stations");
       const revision = Number(state.scene.revision) + 1;
-      const updated = { ...current, geometry_params: { ...params, stations: [stations[0], stations[1], { s: 0.75, signal_width_m: 19e-9 }, stations[2], stations[3]] } };
+      const updated = { ...current, geometry_params: { ...params, stations: [stations[0], stations[1], { ...(stations[2] as JsonObject), s: 0.75, signal_width_m: 19e-9 }, stations[2], stations[3]] } };
       state.scene = { ...state.scene, revision, scene_revision: revision, objects: state.scene.objects?.map((entry) => entry.id === OBJECT_ID ? { ...entry, geometry: updated } : entry) };
       resources.invalidate(MODEL_SCENE_PATH, revision);
       resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
