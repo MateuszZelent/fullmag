@@ -206,6 +206,8 @@ export function chartSeriesRenderModel(
         colorIndex: colorIndexBySeriesId.get(item.id) ?? visibleIndex,
         id: item.id,
         kind: item.kind ?? "line",
+        showSymbols: item.showSymbols,
+        analyticReference: item.quantity === "analytic_frequency",
         label: item.label || item.quantity,
         points: item.points,
         unit: item.unit,
@@ -240,8 +242,10 @@ export function chartPointFromEChartsClick(
   if (!series) return null;
 
   if ("data" in record) {
-    if (!Array.isArray(record.data)) return null;
-    const sourceRowIndex = record.data[2];
+    const data = Array.isArray(record.data) ? record.data :
+      record.data && typeof record.data === "object" && "value" in record.data ? record.data.value : null;
+    if (!Array.isArray(data)) return null;
+    const sourceRowIndex = data[2];
     if (typeof sourceRowIndex !== "number" || !Number.isInteger(sourceRowIndex)) return null;
     const pointIndex = series.points.findIndex((point) => point.rowIndex === sourceRowIndex);
     return pointIndex >= 0 ? { pointIndex, seriesId: series.id } : null;

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
@@ -23,6 +23,9 @@ import {
 } from "../analysisWorkbenchModel";
 import { frequencyDomainXAxisLabel } from "../frequencyDomainSeriesAdapter";
 import { EChartsSurface } from "./EChartsSurface";
+import { DispersionAxisControls } from "./DispersionAxisControls";
+import { DispersionModeAction } from "./DispersionModeAction";
+import { availableDispersionAxes, defaultDispersionAxis, projectDispersionSeries, type DispersionAxis } from "@/shared/domain/analysis/dispersionChartAxes";
 import {
   type FmrModalDrivenComparisonModel,
   frequencyDomainResultTitle,
@@ -98,6 +101,21 @@ export function AnalysisFrequencySurface({
     [series],
   );
   const tableId = series[0]?.source.tableId ?? "frequency-domain";
+  const isDispersion = tableId === "frequency-domain:eigen-dispersion";
+  const datasetKey = `${physicalContext?.runId ?? series[0]?.sourceIdentity?.runId ?? ""}:${physicalContext?.stageId ?? ""}:${series[0]?.source.resourceKey ?? ""}:${chartId ?? ""}`;
+  const [axisChoice, setAxisChoice] = useState<{ datasetKey: string; axis: DispersionAxis } | null>(null);
+  const availableAxes = useMemo(() => availableDispersionAxes(series), [series]);
+  const automaticAxis = useMemo(() => defaultDispersionAxis(series), [series]);
+  const requestedAxis = axisChoice?.datasetKey === datasetKey ? axisChoice.axis : automaticAxis;
+  const axis = availableAxes.includes(requestedAxis) ? requestedAxis : automaticAxis;
+  const displaySeries = useMemo(() => isDispersion ? projectDispersionSeries(series, axis, selectedPoint) : series, [axis, isDispersion, selectedPoint, series]);
+  const chartDisplayUnits = useMemo(() => isDispersion ? { wavevector: "rad/µm", ...displayUnits } : displayUnits, [displayUnits, isDispersion]);
+  const displayedSelection = useMemo(() => {
+    if (!selectedPoint || !isDispersion) return selectedPoint;
+    const entry = displaySeries.find((item) => item.id === selectedPoint.seriesId);
+    const point = entry?.points.find((item) => item.rowIndex === selectedPoint.point.rowIndex);
+    return point ? { ...selectedPoint, point, xLabel: entry?.xAxisLabel } : null;
+  }, [displaySeries, isDispersion, selectedPoint]);
   const titleChart = frequencyTitleChart(tableId, calculationMode);
   const surfaceTitle = titleChart
     ? frequencyDomainResultTitle(titleChart, physicalContext?.classification ?? null)
@@ -111,8 +129,8 @@ export function AnalysisFrequencySurface({
     [qualifiedCalculationMode, series, status],
   );
   const selectedPointSummary = useMemo(
-    () => buildFrequencyDomainCursorSummary(selectedPoint, qualifiedCalculationMode, series),
-    [qualifiedCalculationMode, selectedPoint, series],
+    () => buildFrequencyDomainCursorSummary(displayedSelection, qualifiedCalculationMode, displaySeries),
+    [displaySeries, displayedSelection, qualifiedCalculationMode],
   );
   const physicalMetadata = frequencyPhysicalMetadata(
     physicalContext,
@@ -209,7 +227,7 @@ export function AnalysisFrequencySurface({
     };
   });
 
-  const visibleSeries = series.filter(({ id }) => selected.has(id));
+  const visibleSeries = displaySeries.filter(({ id }) => selected.has(id));
 
   const legend = (
     <ChartLegend
@@ -242,6 +260,14 @@ export function AnalysisFrequencySurface({
           : null}
         &ensp;{selectedPointSummary.inspectorTarget}
       </span>
+      {isDispersion && displayedSelection ? <DispersionModeAction
+        kernel={kernel} available={displayedSelection.point.modeFieldAvailable === true}
+        target={{ runId: physicalContext?.runId ?? null, stageId: physicalContext?.stageId ?? null,
+          sampleIndex: displayedSelection.point.sampleIndex, modeIndex: displayedSelection.point.modeIndex,
+          sampleId: displayedSelection.point.sampleId, modeId: displayedSelection.point.itemId }}
+        onSelectPoint={() => onPointSelect(displayedSelection)}
+        identity={`${datasetKey}:${displayedSelection.seriesId}:${displayedSelection.point.rowIndex}`}
+      /> : null}
     </div>
   ) : undefined;
 
@@ -259,6 +285,11 @@ export function AnalysisFrequencySurface({
   ) : null;
   const toolbar = <>
     {workflowToolbar}
+    {isDispersion ? <DispersionAxisControls
+      axis={axis} axes={availableAxes} unit={chartDisplayUnits?.wavevector ?? "rad/µm"}
+      onAxisChange={(next) => setAxisChoice({ datasetKey, axis: next })}
+      onUnitChange={(unit) => onDisplayUnitsChange({ wavevector: unit })}
+    /> : null}
     <ChartDisplayUnitControls displayUnits={displayUnits ?? {}} onDisplayUnitsChange={onDisplayUnitsChange} series={series} />
   </>;
 
@@ -303,18 +334,19 @@ export function AnalysisFrequencySurface({
           <div className="fm-analysis-plots__empty" role="status">Select at least one signal</div>
         ) : (
           <EChartsSurface
-            allSeries={series}
+            key={isDispersion ? `${datasetKey}:${axis}` : undefined}
+            allSeries={displaySeries}
             bus={kernel.bus}
             chartId={chartId}
             dataStatus={status}
             descriptorId={descriptorId}
-            displayUnits={displayUnits}
-            initialRange={range}
+            displayUnits={chartDisplayUnits}
+            initialRange={isDispersion && axis !== "path" ? null : range}
             onPointSelect={onPointSelect}
-            onRangeChange={onRangeChange}
+            onRangeChange={isDispersion && axis !== "path" ? undefined : onRangeChange}
             series={visibleSeries}
             presentation={presentation}
-            xAxisLabel={frequencyDomainXAxisLabel(series)}
+            xAxisLabel={frequencyDomainXAxisLabel(displaySeries)}
           />
         )}
       </div>

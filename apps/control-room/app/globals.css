@@ -37,6 +37,7 @@
 @import "../src/design/styles/viewport-3d.css" layer(fm-modules);
 @import "../src/design/styles/field-map.css" layer(fm-modules);
 @import "../src/design/styles/analysis-plots.css" layer(fm-modules);
+@import "../src/design/styles/analysis-dispersion.css" layer(fm-modules);
 @import "../src/design/styles/results-dataset-browser.css" layer(fm-modules);
 @import "../src/design/styles/live-charts.css" layer(fm-modules);
 @import "../src/design/styles/footer.css" layer(fm-modules);

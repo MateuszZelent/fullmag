@@ -163,7 +163,7 @@ export function buildFrequencyDomainCursorSummary(
     const fmr = calculationMode === "fmr_modal";
     return { inspectorTarget: fmr ? "FMR mode inspector and 3D overlay controls" : "Mode inspector and 3D mode controls", title: fmr ? "FMR mode" : "eigen mode", xLabel: descriptor.xAxis.label, xValue, yLabel: yAxisLabel, yValue };
   }
-  if (point.source.tableId === "frequency-domain:eigen-dispersion") return { inspectorTarget: "Dispersion point inspector", linewidthValue: point.point.linewidthHz != null ? formatFrequencyHz(point.point.linewidthHz) : null, title: "dispersion point", xLabel: point.point.label ? "k-label" : descriptor.xAxis.label, xValue: point.point.label ?? xValue, yLabel: yAxisLabel, yValue };
+  if (point.source.tableId === "frequency-domain:eigen-dispersion") return { inspectorTarget: "Dispersion point inspector", linewidthValue: point.point.linewidthHz != null ? formatFrequencyHz(point.point.linewidthHz) : null, title: "dispersion point", xLabel: point.xLabel ?? (point.point.label ? "k-label" : descriptor.xAxis.label), xValue: point.xLabel ? xValue : point.point.label ?? xValue, yLabel: yAxisLabel, yValue };
   if (point.source.tableId === "frequency-domain:response-sweep") {
     const fmr = calculationMode === "fmr_response";
     return { inspectorTarget: fmr ? "FMR response point inspector and 3D response overlay" : "Response point inspector and 3D response controls", title: fmr ? "FMR response point" : "response point", xLabel: descriptor.xAxis.label, xValue, yLabel: point.quantity || descriptor.yAxes[0]?.label || "response", yValue };

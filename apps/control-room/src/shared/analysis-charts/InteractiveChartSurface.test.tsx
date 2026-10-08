@@ -82,6 +82,24 @@ describe("InteractiveChartSurface", () => {
     });
   });
 
+  it("maps an ECharts object value payload through its original row index", () => {
+    const dispersionSeries = [{
+      ...series[0]!,
+      points: [
+        { rowIndex: 0, x: 0, y: 1 },
+        { rowIndex: 2, x: 2, y: 3 },
+      ],
+    }];
+    const click = chartPointFromEChartsClick({
+      data: { value: [2, 3, 2] },
+      dataIndex: 0,
+      seriesIndex: 0,
+    }, dispersionSeries);
+
+    expect(click).toEqual({ pointIndex: 1, seriesId: "analysis:mx" });
+    expect(dispersionSeries[0]!.points[click!.pointIndex]!.rowIndex).toBe(2);
+  });
+
   it("preserves requested scatter and defaults unspecified series to line", () => {
     const scatterSeries = [{ ...series[0]!, kind: "scatter" as const }];
     const surface = {

@@ -2,7 +2,21 @@ import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
 
-export interface ChartPoint {
+/** Physical point metadata retained for dispersion inspection and projection. */
+export interface DispersionChartPointMetadata {
+  branchId?: string | null;
+  itemId?: string | null;
+  sampleId?: string | null;
+  wavevectorRadPerM?: readonly [number, number, number] | null;
+  sampleIndex?: number;
+  modeIndex?: number;
+  residualNorm?: number | null;
+  selected?: boolean;
+  modeFieldAvailable?: boolean;
+}
+
+export interface ChartPoint extends DispersionChartPointMetadata {
+  breakBefore?: boolean;
   branchId?: string | null;
   itemId?: string | null;
   label?: string | null;
@@ -33,6 +47,7 @@ export interface ChartSeries {
   dimension?: string;
   id: string;
   kind?: "line" | "scatter";
+  showSymbols?: boolean;
   label: string;
   points: readonly ChartPoint[];
   quantity: string;
@@ -42,5 +57,6 @@ export interface ChartSeries {
   sourceIdentity?: ChartSeriesSourceIdentity;
   status: ResourceStatus;
   unit: string;
+  xAxisLabel?: string;
   xUnit: string;
 }

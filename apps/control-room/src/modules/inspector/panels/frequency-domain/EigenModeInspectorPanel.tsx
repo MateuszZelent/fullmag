@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Play, RotateCw } from "lucide-react";
+import { Activity, RotateCw } from "lucide-react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
@@ -28,6 +28,15 @@ import {
   modeFieldComponentOptions,
   selectedField3DPlotStatus,
 } from "./FrequencyDomainHelpers";
+import { EigenModePhaseControls } from "./EigenModePhaseControls";
+import {
+  buildEigenModeIdentityViewModel,
+  formatSignedWavevectorKf,
+  hasCompleteEigenModeOverlayIdentity,
+  isCurrentEigenModeOverlay,
+  phaseRadForEigenModeViewChange,
+  type EigenModeOverlayIdentity,
+} from "./EigenModeInspectorModel";
 import {
   FrequencyDomainModeDisplayControls,
   analysisFieldViewLabel,
@@ -36,41 +45,11 @@ import {
   useFrequencyDomainModeDisplaySettings,
 } from "../FrequencyDomainModeDisplayControls";
 
-export interface EigenModeIdentityViewModel {
-  branchId: string | null;
-  fieldId: string | null;
-  label: string;
-  modeIndex: number | null;
-  resourceRef: string | null;
-  sampleIndex: number | null;
-}
-
-export function buildEigenModeIdentityViewModel(input: {
-  branchId?: string | null;
-  fieldId?: string | null;
-  modeIndex?: number | null;
-  resourceRef?: string | null;
-  sampleIndex?: number | null;
-}): EigenModeIdentityViewModel {
-  const sampleIndex = input.sampleIndex ?? null;
-  const modeIndex = input.modeIndex ?? null;
-  return {
-    branchId: input.branchId ?? null,
-    fieldId: input.fieldId ?? null,
-    label:
-      sampleIndex == null || modeIndex == null
-        ? "not selected"
-        : `sample ${sampleIndex}, mode ${modeIndex}`,
-    modeIndex,
-    resourceRef: input.resourceRef ?? null,
-    sampleIndex,
-  };
-}
-
 export function EigenModeInspectorPanel({
   selection,
 }: InspectorPanelProps) {
   const summary = useEigenModeSummary(selection);
+  const kernel = useKernel();
   const modeDisplaySettings = useFrequencyDomainModeDisplaySettings({
     activation: {
       commandId: "analysis.eigen.plot-mode-3d",
@@ -84,31 +63,94 @@ export function EigenModeInspectorPanel({
     },
     sourceDetail: "results.eigen.mode",
   });
+  const activeOverlay = modeDisplaySettings.activeAnalysisFieldOverlay;
+  const activeOverlayMatchesSelection = isCurrentEigenModeOverlay(
+    activeOverlay,
+    summary.overlayIdentity,
+  );
+  const selectedOverlay = activeOverlayMatchesSelection ? activeOverlay : null;
+  const phaseRad = phaseRadForEigenModeViewChange(
+    activeOverlay,
+    summary.overlayIdentity,
+  );
+  const phaseDisabledReason = !summary.field3DReady
+    ? summary.field3DStatus
+    : activeOverlay
+      ? "A different field is active. Plot the selected eigen mode to enable its phase controls."
+      : "Plot the selected eigen mode to enable phase controls; a newly plotted mode starts at 0°.";
+  const componentLabel = selectedOverlay
+    ? summary.componentOptions.find(
+        (option) => option.value === modeDisplaySettings.component,
+      )?.label ?? modeDisplaySettings.component
+    : "not active for selected mode";
+  const selectedAnimationRateHz = selectedOverlay?.animation?.animationRateHz;
+  const visualCycleRateHz =
+    selectedAnimationRateHz != null && selectedAnimationRateHz > 0
+      ? selectedAnimationRateHz
+      : 1;
+
+  const setPhase = (nextPhaseRad: number): void => {
+    if (!summary.field3DReady || !activeOverlayMatchesSelection) return;
+    void kernel.commands.execute(
+      "analysis.eigen.set-mode-3d-phase",
+      createCommandContext("inspector", kernel, {
+        sourceDetail: "results.eigen.mode",
+      }),
+      { phaseRad: nextPhaseRad },
+    );
+  };
+  const setAnimation = (next: {
+    animatePhase: boolean;
+    animationRateHz: number;
+  }): void => {
+    if (!summary.field3DReady || !activeOverlayMatchesSelection) return;
+    void kernel.commands.execute(
+      "analysis.eigen.set-mode-3d-animation",
+      createCommandContext("inspector", kernel, {
+        sourceDetail: "results.eigen.mode",
+      }),
+      next,
+    );
+  };
 
   return (
     <div
       data-inspector-owner="frequency-domain.eigen-mode"
       data-inspector-surface="eigen-mode"
     >
-      <InspectorGroup title="Eigen Mode Control" badge={summary.badge}>
-        <FieldRow label="Canonical object" value="Eigenmodes mode" />
+      <InspectorGroup title="Selected eigen mode" badge={summary.badge}>
         <FieldRow label="Mode identity" value={summary.modeIdentity} />
+        <FieldRow label="Sample ID" value={summary.sampleId} />
+        <FieldRow label="Mode ID" value={summary.modeId} />
+        <FieldRow label="Branch" value={summary.branchId} />
         <FieldRow label="Frequency" value={summary.frequencyDisplay} />
-        <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
-        <FieldRow label="Decay rate (Gamma)" value={summary.decayRate} />
-        <FieldRow label="Linewidth (FWHM)" value={summary.linewidthFwhm} />
-        <FieldRow label="Q-factor" value={summary.qualityFactor} />
-        <FieldRow label="Angular frequency" value={summary.angularFrequency} />
-        <FieldRow label="Mode field" value={summary.fieldStatus} />
-        <FieldRow label="Mode field resource" value={summary.fieldResource} />
-        <FieldRow label="Available field views" value={summary.availableViews} />
-        <FieldRow label="Absolute residual (L2)" value={summary.residualAbsoluteL2} />
-        <FieldRow label="Relative residual (L2)" value={summary.residualRelativeL2} />
-        <FieldRow label="Residual scope" value={summary.residualScope} />
-        <FieldRow label="Spectrum residual (type unspecified)" value={summary.residualSpectrumReported} />
-        <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
-        <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
-        <FieldRow label="3D workflow" value={summary.workflow} />
+        <FieldRow label="Signed k vector" value={summary.wavevectorDisplay} />
+        <FieldRow
+          label="k-path coordinate"
+          value={summary.kPathCoordinateDisplay}
+        />
+        <FieldRow
+          label="Current view"
+          value={
+            selectedOverlay
+              ? analysisFieldViewLabel(normalizeAnalysisFieldView(selectedOverlay.query.view))
+              : "not active for selected mode"
+          }
+        />
+        <FieldRow label="Current component" value={componentLabel} />
+        <EigenModePhaseControls
+          animatePhase={selectedOverlay?.animation?.animatePhase ?? false}
+          animationRateHz={visualCycleRateHz}
+          disabled={!summary.field3DReady || !activeOverlayMatchesSelection}
+          disabledReason={
+            !summary.field3DReady || !activeOverlayMatchesSelection
+              ? phaseDisabledReason
+              : null
+          }
+          phaseRad={phaseRad}
+          onAnimationChange={setAnimation}
+          onSetPhase={setPhase}
+        />
       </InspectorGroup>
       <InspectorGroup
         title="Eigen Mode 3D Visualization"
@@ -126,15 +168,45 @@ export function EigenModeInspectorPanel({
           label="Volume inspection roadmap"
           value="clip planes and shader opacity remain planned for internal-mode inspection"
         />
-        <FrequencyDomainModeDisplayControls
-          componentOptions={summary.componentOptions}
-          disabled={!summary.field3DReady}
-          labelPrefix="Eigen mode"
+        {activeOverlayMatchesSelection ? (
+          <FrequencyDomainModeDisplayControls
+            componentOptions={summary.componentOptions}
+            disabled={!summary.field3DReady}
+            labelPrefix="Eigen mode"
+            settings={modeDisplaySettings}
+            viewDefaultValue={summary.defaultView}
+            viewOptions={summary.availableViewValues}
+          />
+        ) : (
+          <small role="status">
+            {summary.field3DReady
+              ? "Plot the selected eigen mode to change its current view or component."
+              : summary.field3DStatus}
+          </small>
+        )}
+        <EigenMode3DActions
+          currentOverlayMatchesSelection={activeOverlayMatchesSelection}
           settings={modeDisplaySettings}
-          viewDefaultValue={summary.defaultView}
-          viewOptions={summary.availableViewValues}
+          summary={summary}
         />
-        <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
+      </InspectorGroup>
+      <InspectorGroup title="Eigen Mode Control" badge={summary.badge}>
+        <FieldRow label="Canonical object" value="Eigenmodes mode" />
+        <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
+        <FieldRow label="Decay rate (Gamma)" value={summary.decayRate} />
+        <FieldRow label="Linewidth (FWHM)" value={summary.linewidthFwhm} />
+        <FieldRow label="Q-factor" value={summary.qualityFactor} />
+        <FieldRow label="Angular frequency" value={summary.angularFrequency} />
+        <FieldRow label="Mode field" value={summary.fieldStatus} />
+        <FieldRow label="Mode field resource" value={summary.fieldResource} />
+        <FieldRow label="Available field views" value={summary.availableViews} />
+        <FieldRow label="Absolute residual (L2)" value={summary.residualAbsoluteL2} />
+        <FieldRow label="Relative residual (L2)" value={summary.residualRelativeL2} />
+        <FieldRow label="Residual scope" value={summary.residualScope} />
+        <FieldRow label="Spectrum residual (type unspecified)" value={summary.residualSpectrumReported} />
+        <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
+        <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
+        <FieldRow label="3D workflow" value={summary.workflow} />
       </InspectorGroup>
     </div>
   );
@@ -143,9 +215,11 @@ export function EigenModeInspectorPanel({
 EigenModeInspectorPanel.displayName = "EigenModeInspectorPanel";
 
 function EigenMode3DActions({
+  currentOverlayMatchesSelection,
   settings,
   summary,
 }: {
+  currentOverlayMatchesSelection: boolean;
   settings: ReturnType<typeof useFrequencyDomainModeDisplaySettings>;
   summary: ReturnType<typeof useEigenModeSummary>;
 }) {
@@ -156,36 +230,25 @@ function EigenMode3DActions({
       | "real"
       | "imag"
       | "abs"
-      | "phase"
-      | "animate",
+      | "phase",
   ): void => {
     if (!summary.field3DReady) return;
-    const animate = view === "animate";
+    if (currentOverlayMatchesSelection) {
+      settings.setView(view);
+      return;
+    }
     void kernel.commands.execute(
-      animate
-        ? "analysis.frequency-domain.set-3d-animation"
-        : "analysis.eigen.plot-mode-3d",
+      "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.eigen.mode",
       }),
       {
-        animatePhase: animate ? true : undefined,
-        animationRateHz: animate ? 1 : undefined,
         fieldId: summary.fieldId,
         label: summary.modeIdentity,
         phaseRad: 0,
         source: "eigen-mode",
-        view: animate ? "phase_rotated_real" : view,
+        view,
       },
-    );
-  };
-  const stopAnimation = (): void => {
-    if (!summary.field3DReady) return;
-    void kernel.commands.execute(
-      "analysis.frequency-domain.stop-3d-animation",
-      createCommandContext("inspector", kernel, {
-        sourceDetail: "results.eigen.mode",
-      }),
     );
   };
   const disabled = !summary.field3DReady;
@@ -225,13 +288,6 @@ function EigenMode3DActions({
       variant: "secondary" as const,
       view: "phase" as const,
     },
-    {
-      icon: Play,
-      label: "Animate",
-      title: "Animate selected eigen mode phase in 3D",
-      variant: "secondary" as const,
-      view: "animate" as const,
-    },
   ];
 
   return (
@@ -242,7 +298,7 @@ function EigenMode3DActions({
       {actions.map((entry) => {
         const Icon = entry.icon;
         const isActive =
-          entry.view !== "animate" &&
+          currentOverlayMatchesSelection &&
           isActiveAnalysisFieldView(
             settings,
             summary.fieldId,
@@ -267,21 +323,6 @@ function EigenMode3DActions({
           </Button>
         );
       })}
-      <Button
-        aria-label="Stop selected eigen mode animation"
-        className="fm-inspector-action-button"
-        disabled={disabled}
-        size="sm"
-        title={
-          disabled ? summary.field3DStatus : "Stop selected eigen mode animation"
-        }
-        type="button"
-        variant="secondary"
-        onClick={stopAnimation}
-      >
-        <RotateCw aria-hidden="true" size={13} />
-        <span>Stop animate</span>
-      </Button>
     </div>
   );
 }
@@ -304,6 +345,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
   const modePayload = readEigenModeResourcePayload(eigenMode.data, sampleIndex, modeIndex);
   const componentSummary = record(modePayload?.component_summary);
   const frequencyHz =
+    finiteNumber(ref?.frequencyHz) ??
     finiteNumber(modePayload?.frequency_real_hz) ??
     spectrumPoint?.frequencyHz ??
     null;
@@ -331,10 +373,26 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
   const identity = buildEigenModeIdentityViewModel({
     branchId: ref?.branchId,
     fieldId,
+    modeId: ref?.modeId,
     modeIndex,
     resourceRef: fieldResource,
+    sampleId: ref?.sampleId,
     sampleIndex,
   });
+  const overlayIdentity: EigenModeOverlayIdentity = {
+    analysisRunId: ref?.analysisRunId ?? null,
+    analysisStageId: ref?.analysisStageId ?? null,
+    artifactRevision: ref?.artifactRevision ?? null,
+    fieldId,
+    frequencyHz: finiteNumber(ref?.frequencyHz),
+    kPathCoordinateRadPerM: finiteNumber(ref?.kPathCoordinateRadPerM),
+    modeId: ref?.modeId ?? null,
+    modeIndex,
+    nodeId: ref?.nodeId ?? null,
+    sampleId: ref?.sampleId ?? null,
+    sampleIndex,
+    wavevectorKf: ref?.wavevectorKf ?? null,
+  };
   const availableViews = fieldMeta.data?.available_views ?? [];
   const defaultView = fieldMeta.data?.default_view ?? availableViews[0] ?? null;
   const dominantPolarization = stringValue(modePayload?.dominant_polarization);
@@ -364,10 +422,16 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     frequencyHz != null && linewidthFwhmHz && linewidthFwhmHz > 0
       ? frequencyHz / linewidthFwhmHz
       : null;
+  const identityReady =
+    ref?.kind.startsWith("results.eigen") === true &&
+    hasCompleteEigenModeOverlayIdentity(overlayIdentity);
   const field3DReady =
-    fieldMeta.status === "ready" && canPlotSelectedFieldIn3D(fieldMeta.data);
-  const field3DStatus =
-    fieldMeta.status === "ready"
+    identityReady &&
+    fieldMeta.status === "ready" &&
+    canPlotSelectedFieldIn3D(fieldMeta.data);
+  const field3DStatus = !identityReady
+    ? "selected eigen mode identity incomplete"
+    : fieldMeta.status === "ready"
       ? selectedField3DPlotStatus(fieldMeta.data)
       : fieldMeta.status === "loading"
         ? "mode field metadata loading"
@@ -428,6 +492,15 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     qualityFactor:
       qualityFactor == null ? "not available" : formatNumber(qualityFactor),
     modeIdentity: identity.label,
+    modeId: identity.modeId ?? "not available",
+    overlayIdentity,
+    branchId: identity.branchId ?? "not available",
+    sampleId: identity.sampleId ?? "not available",
+    wavevectorDisplay: formatSignedWavevectorKf(ref?.wavevectorKf),
+    kPathCoordinateDisplay:
+      overlayIdentity.kPathCoordinateRadPerM === null
+        ? "not available"
+        : `${formatNumber(overlayIdentity.kPathCoordinateRadPerM)} rad/m`,
     phaseConvention,
     residualAbsoluteL2: formatNumberOrUnavailable(residual.absoluteL2),
     residualRelativeL2: formatNumberOrUnavailable(residual.relativeL2),

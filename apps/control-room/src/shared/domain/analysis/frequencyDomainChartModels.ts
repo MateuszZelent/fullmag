@@ -1,3 +1,5 @@
+import type { DispersionChartPointMetadata } from "./chartSeries";
+
 import { fieldVectorResourceKey as canonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
 import {
@@ -345,7 +347,7 @@ export function frequencyResponseSeriesUnit(
   return model.series.find((series) => series.quantity === quantity)?.unit ?? NOT_PUBLISHED_UNIT;
 }
 
-export interface FrequencyDomainChartPoint {
+export interface FrequencyDomainChartPoint extends DispersionChartPointMetadata {
   breakBefore?: boolean;
   label?: string | null;
   linewidthHz?: number | null;
@@ -1104,6 +1106,7 @@ export function buildEigenDispersionChartModel(
           ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
           ...(point.linewidthHz != null ? { linewidthHz: point.linewidthHz } : {}),
           rowIndex,
+          ...dispersionChartPointMetadata(point),
           x: point.pathS,
           y: point.frequencyHz / frequencyScale.divisor,
         };
@@ -1125,6 +1128,7 @@ export function buildEigenDispersionChartModel(
           : {}),
         ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
         rowIndex,
+        ...dispersionChartPointMetadata(point),
         x: point.pathS,
         y: point.analyticFrequencyHz! / frequencyScale.divisor,
       };
@@ -2250,4 +2254,17 @@ export function calculateSpatialOverlap(
 
   const overlap = Math.sqrt(sumReal * sumReal + sumImag * sumImag) / (Math.sqrt(normUSq) * Math.sqrt(normVSq));
   return Math.min(1.0, Math.max(0.0, overlap));
+}
+
+function dispersionChartPointMetadata(point: EigenDispersionPoint): DispersionChartPointMetadata {
+  return {
+    branchId: point.branchId,
+    itemId: point.modeId ?? null,
+    sampleId: point.sampleId ?? null,
+    wavevectorRadPerM: point.wavevectorKf ?? null,
+    sampleIndex: point.sampleIndex,
+    modeIndex: point.rawModeIndex,
+    residualNorm: point.residualNorm,
+    modeFieldAvailable: eigenModeFieldAvailable(point),
+  };
 }

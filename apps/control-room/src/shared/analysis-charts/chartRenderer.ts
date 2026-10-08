@@ -1,3 +1,5 @@
+import type { DispersionChartPointMetadata } from "@/shared/domain/analysis/chartSeries";
+
 import type { EChartsOption } from "echarts";
 
 import {
@@ -29,7 +31,8 @@ export type ChartRenderStatus =
   | "error"
   | "aborted";
 
-export interface ChartRenderPoint {
+export interface ChartRenderPoint extends DispersionChartPointMetadata {
+  linewidthHz?: number | null;
   branchId?: string | null;
   breakBefore?: boolean;
   itemId?: string | null;
@@ -59,6 +62,8 @@ export interface ChartRenderSeries {
   colorIndex?: number;
   id: string;
   kind: "line" | "scatter";
+  showSymbols?: boolean;
+  analyticReference?: boolean;
   label: string;
   points: readonly ChartRenderPoint[];
   unit: string;
@@ -203,6 +208,7 @@ function computeXScale(model: ChartRenderModel): ChartDisplayTransform {
   return createChartDisplayTransform(
     model.xAxis.unit,
     chartValueExtrema(iterateXValues(model.series)),
+    model.provenance?.displayUnits?.x,
   );
 }
 
@@ -291,6 +297,10 @@ export function chartRenderModelToEChartsOption(
     model.series.map((series) => [seriesDisplayName(series, yScales), series]),
   );
 
+  const pointsBySeriesName = new Map(model.series.map((series) => [
+    seriesDisplayName(series, yScales), new Map(series.points.map((point) => [point.rowIndex, point])),
+  ]));
+
   const textMuted = resolvedTokens.textMuted;
   const textPrimary = resolvedTokens.textPrimary;
   const fontFamily = resolvedTokens.fontFamily;
@@ -331,22 +341,24 @@ export function chartRenderModelToEChartsOption(
       return {
         // NOTE: No `sampling` property — data is already server-decimated.
         connectNulls: false,
-        data: series.points.flatMap((point) => [
+        data: series.points.flatMap<Array<number | null> | { value: number[]; symbol: string; symbolSize: number; itemStyle: { borderColor: string; borderWidth: number } }>((point) => [
           ...(series.kind === "line" && point.breakBefore
             ? [[point.x, null, null]]
             : []),
-          [point.x, point.y, point.rowIndex],
+          point.selected
+            ? { value: [point.x, point.y, point.rowIndex], symbol: "circle", symbolSize: 10, itemStyle: { borderColor: textPrimary, borderWidth: 2 } }
+            : [point.x, point.y, point.rowIndex],
         ]),
         emphasis: {
           lineStyle: { color, width: 3 },
           scale: false,
         },
         itemStyle: color ? { color } : undefined,
-        lineStyle: { color, width: 1.5 },
+        lineStyle: { color, width: 1.5, type: series.analyticReference ? "dashed" : "solid" },
         name: seriesDisplayName(series, yScales),
         progressive: 0,
-        showSymbol: series.kind === "scatter",
-        symbol: series.kind === "scatter" ? "circle" : "none",
+        showSymbol: series.kind === "scatter" || series.showSymbols || series.points.some((point) => point.selected),
+        symbol: series.analyticReference ? "diamond" : series.kind === "scatter" || series.showSymbols ? "circle" : "none",
         symbolSize: 4,
         type: series.kind,
         yAxisIndex: series.yAxis,
@@ -366,7 +378,7 @@ export function chartRenderModelToEChartsOption(
           ? xScale.formatValue(rawXVal)
           : sanitizeLabelText(String(first.axisValue ?? ""));
         const lines: string[] = [
-          `${sanitizeLabelText(model.xAxis.label || "x")}: ${xVal}`,
+          `${sanitizeLabelText(parseLabelAndUnit(model.xAxis.label || "x", model.xAxis.unit).baseLabel)}: ${xVal}`,
         ];
         for (const p of params as Array<{
           seriesName?: string;
@@ -382,9 +394,27 @@ export function chartRenderModelToEChartsOption(
             ? String(p.value[1] ?? "—")
             : "—";
           lines.push(`  ${sanitizeLabelText(p.seriesName ?? "")}: ${yVal}`);
+          const row = Array.isArray(p.value) ? p.value[2] : undefined;
+          const point = typeof row === "number" ? pointsBySeriesName.get(p.seriesName ?? "")?.get(row) : undefined;
+          if (point?.wavevectorRadPerM?.every(Number.isFinite)) {
+            const labels = ["kₓ", "kᵧ", "k_z"];
+            lines.push(point.wavevectorRadPerM.map((value, index) =>
+              `${labels[index]} = ${formatDispersionValue(value / 1e6)} rad/µm`,
+            ).join(" · "));
+          }
+          if (point?.modeIndex != null) {
+            lines.push(`mode ${point.modeIndex + 1}${point.sampleIndex == null ? "" : ` · sample ${point.sampleIndex + 1}`}${point.modeFieldAvailable === undefined ? "" : point.modeFieldAvailable ? " · 3D field available" : " · 3D field unavailable"}`);
+          }
+          if (point?.residualNorm != null && Number.isFinite(point.residualNorm)) {
+            lines.push(`reported residual: ${point.residualNorm.toExponential(3)}`);
+          }
+          if (point?.linewidthHz != null && Number.isFinite(point.linewidthHz)) {
+            lines.push(`linewidth: ${formatDispersionValue(point.linewidthHz / 1e6)} MHz`);
+          }
         }
         const rowId = Array.isArray(first.data) ? first.data[2] : undefined;
-        if (typeof rowId === "number" || typeof rowId === "string") {
+        const scientificPoint = typeof rowId === "number" && (params as Array<{ seriesName?: string }>).some((item) => pointsBySeriesName.get(item.seriesName ?? "")?.get(rowId)?.modeIndex != null);
+        if (!scientificPoint && (typeof rowId === "number" || typeof rowId === "string")) {
           lines.push(`row id: ${sanitizeLabelText(rowId)}`);
         }
         return lines.join("\n");
@@ -464,4 +494,8 @@ export function chartRenderModelToEChartsOption(
       };
     }),
   };
+}
+
+function formatDispersionValue(value: number): string {
+  return Number(value.toPrecision(5)).toLocaleString("en-US", { maximumSignificantDigits: 5 });
 }

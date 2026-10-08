@@ -133,3 +133,36 @@ describe("chart renderer owner", () => {
     expect(source).not.toContain("Math.max(1, ...model.series.map");
   });
 });
+
+
+describe("dispersion scientific presentation", () => {
+  const dispersion: ChartRenderModel = {
+    ariaLabel: "Dispersion", key: "dispersion", status: "ready",
+    provenance: { dataRevision: 1, decimation: "none", query: "ky", resourceKey: "dispersion", displayUnits: { x: "rad/µm" } },
+    xAxis: { label: "kᵧ [rad/m]", unit: "rad/m" }, yAxes: [{ label: "Frequency", unit: "Hz" }],
+    series: [{ id: "band", label: "Branch 1", kind: "line", unit: "Hz", yAxis: 0, showSymbols: true,
+      points: [{ x: -25e6, y: 12e9, rowIndex: 7, wavevectorRadPerM: [0, -25e6, 0], modeIndex: 1, sampleIndex: 0, residualNorm: 2e-12, modeFieldAvailable: true, selected: true }] }],
+  };
+  it("renders scaled wavevector units, sampled symbols and selection without mutating SI", () => {
+    const option = chartRenderModelToEChartsOption(dispersion);
+    expect(option.xAxis).toMatchObject({ name: "kᵧ [rad/µm]" });
+    expect(option.series).toEqual([expect.objectContaining({ showSymbol: true,
+      data: [expect.objectContaining({ value: [-25e6, 12e9, 7], symbolSize: 10 })] })]);
+    expect(dispersion.series[0]?.points[0]?.x).toBe(-25e6);
+  });
+  it("shows physical metadata instead of an internal row id in the tooltip", () => {
+    const option = chartRenderModelToEChartsOption(dispersion);
+    const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
+    const tooltip = formatter([{ axisValue: -25e6, data: [-25e6, 12e9, 7], value: [-25e6, 12e9, 7], seriesName: "Branch 1 [GHz]" }]);
+    expect(tooltip).toContain("-25 rad/µm");
+    expect(tooltip).toContain("mode 2");
+    expect(tooltip).toContain("3D field available");
+    expect(tooltip).toContain("2.000e-12");
+    expect(tooltip).not.toContain("row id");
+    expect(tooltip).not.toContain("[rad/m]");
+  });
+  it("visually distinguishes analytic references", () => {
+    const option = chartRenderModelToEChartsOption({ ...dispersion, series: [{ ...dispersion.series[0]!, analyticReference: true }] });
+    expect(option.series).toEqual([expect.objectContaining({ symbol: "diamond", lineStyle: expect.objectContaining({ type: "dashed" }) })]);
+  });
+});

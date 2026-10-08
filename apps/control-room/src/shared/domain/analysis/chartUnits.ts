@@ -88,6 +88,7 @@ const UNIT_DEFINITIONS: Readonly<Record<string, Omit<ChartUnit, "unit">>> =
     },
     "kA/m": { canonicalUnit: "A/m", dimension: "field", scaleToCanonical: 1e3 },
     "MA/m": { canonicalUnit: "A/m", dimension: "field", scaleToCanonical: 1e6 },
+    "rad/µm": { canonicalUnit: "rad/m", dimension: "wavevector", scaleToCanonical: 1e6 },
     "rad/m": {
       canonicalUnit: "rad/m",
       dimension: "wavevector",

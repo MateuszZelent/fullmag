@@ -74,6 +74,7 @@ export function frequencyDomainXAxisLabel(
 ): string {
   const first = series.find((entry) => entry.points.length > 0) ?? series[0];
   if (!first) return "x";
+  if (first.xAxisLabel) return `${first.xAxisLabel} [${first.xUnit}]`;
   const descriptor = descriptorForFrequencyTable(first.source.tableId);
   if (descriptor.xAxis.unit === "1" || descriptor.xAxis.unit === "series-defined") {
     return descriptor.xAxis.label;

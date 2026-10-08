@@ -290,6 +290,7 @@ function chartCursorPointFromSeriesPoint(
     seriesId: series.id,
     source: series.source,
     unit: series.unit,
+    ...(series.xAxisLabel ? { xLabel: series.xAxisLabel } : {}),
     xUnit: series.xUnit,
   };
 }
