@@ -1139,3 +1139,33 @@ Dodatkowy source P1: modal thickness_average_z sumuje globalnodes zamiast target
 membership, więc drugi body/air o tym samymXY może zaniżać/zmieniać średnią.
 Spec26 wymaga complete target nodes. Trwa wspólna korekta scalar+Re/Im projection
 z osobnym membership filter i negativefixture2targets+air, bez zmiany fieldindexmap.
+
+### Zielony pełny GUI gate — granica dowodu
+
+GHA 37804977808 na 87f5b0e2d1cf006ae0a81ed42d3220f61cdc2cd5 SUCCESS:
+ControlRoom113406787415 oraz browser113406787679 SUCCESS. Types/lint/Vitest oraz
+Inspector modal handoff i browser/WebGL wykonane. Osiem chart findings nadal
+pending_browser: specyficzne alias/gap/scatter/spectrum-key/decimation przypadki
+mają jawne Vitest PASS, ale obecny smoke nie odtwarza tych wszystkich przypadków.
+Dodatkowy P1 world-Z target membership jest w naprawie niezależnie od green gate.
+
+Poprawka architektury buildu opublikowana jako c51e55fab8d64aecf1bb18858baf906b3dda1be0.
+Nowy CPU-SLEPc run 37806509470 / job 113412099816 potwierdzony IN_PROGRESS.
+NEV refill draft nie jest commitowany: stałe initial NCV/MPD, bounded total EPS
+budget, cancellation i explicit partial / certified last pool wymagają review/GHA.
+Kontrakt zakresu output (uwaga 4060116242) pozostaje do decyzji użytkownika; kolejne
+niezależne części planu nie są przez to zatrzymane.
+
+### Izolacja projekcji world-Z według targetu — source checkpoint
+
+Commit d4a8c9d300cea5e4cdb590e6a0b1f7a605eb010c opublikowany na branchu zadania.
+Membership targetu jest oddzielny od mapowania indeksów payloadu. Scalar oraz
+Re/Im thickness_average_z filtrują bounds i akumulację przez pełny wybór węzłów
+obiektu, również wewnętrznych. Cache uwzględnia membership. Regresje obejmują
+permutowane indeksy globalne i dwa ciała plus airbox ze wspólnymi kolumnami XY.
+Review czterech plików i scoped diff check PASS. Types/Vitest/browser nowego
+SHA: NOT VERIFIED; uruchomiono GHA 37809144683. Poprzedni green GUI nie zastępuje
+tej bramki. Hook React Doctor zgłosił tylko istniejące dwa await-in-loop w
+chunking/yieldToMain; nie usuwano mechanizmu responsywności i cancellation.
+CPU-SLEPc run 37806509470 / job 113412099816 potwierdzony IN_PROGRESS; pozostaje
+na c51e55fab i nie dowodzi jeszcze niecommitowanego NEV refill.
