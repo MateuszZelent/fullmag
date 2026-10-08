@@ -735,7 +735,12 @@ describe("frequencyDomainChartModels", () => {
     const point = matched.branches[0]!.points[0]!;
     expect(point.pathS).toBe(1e7);
     expect(point.wavevectorKf).toEqual([1e7, 0, 0]);
-    expect(buildEigenBranchPointModeSelectionRef("acoustic", point).wavevectorKf).toEqual([1e7, 0, 0]);
+    const selection = buildEigenBranchPointModeSelectionRef("acoustic", point);
+    expect(selection.type).toBe("frequency-domain");
+    if (selection.type !== "frequency-domain") {
+      throw new Error("Eigen branch mode selection must have frequency-domain identity");
+    }
+    expect(selection.wavevectorKf).toEqual([1e7, 0, 0]);
 
     for (const key of ["session_id", "run_id", "stage_id", "artifact_set_id", "mesh_generation_id"] as const) {
       const mismatched = buildEigenBranchesModel(branches, { ...dispersion, [key]: "foreign" });

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+} from "@/kernel/api/apiPaths";
 import type { FrequencyDomainJsonArtifactResource } from "@/kernel/api/apiTypes";
 import type { EigenBranchPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
@@ -47,7 +51,7 @@ function modalManifestResource(
         stage_id: "eigenmodes",
         study_product: "modal_eigen",
       },
-      resource_key: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
       revision: "sha256:manifest-revision-7",
       run_id: owner.run_id ?? "run-7",
       schema_version: "frequency_domain_manifest.v1",
@@ -101,7 +105,7 @@ describe("EigenBranchInspectorPanel point model", () => {
         artifact_set_id: "sha256:artifact-set-7",
         content_digest: "sha256:branches-bytes-7",
         mesh_generation_id: "mesh-7",
-        resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+        resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
         revision: "sha256:branches-revision-7",
         run_id: "run-7",
         schema_version: "frequency_domain_eigen_branches.v2",
@@ -165,7 +169,7 @@ describe("EigenBranchInspectorPanel point model", () => {
     const artifact: FrequencyDomainJsonArtifactResource = {
       artifact_set_id: "sha256:artifact-set-7",
       artifact_path: "eigen/branches.v2.json",
-      resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
       revision: "sha256:branches-revision-7",
       run_id: "run-7",
       schema_version: "frequency_domain_eigen_branches.v2",
