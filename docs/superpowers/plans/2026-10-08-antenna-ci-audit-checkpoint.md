@@ -5,6 +5,8 @@
 Kontynuacja T01 oraz bramek integracji T18, nie zamknięcie całego planu
 T00–T18. Punkt wyjścia: `fbfae6818522b4f368ee53f2dff36690af1a466c`.
 PR: https://github.com/MateuszZelent/fullmag/pull/147, nadal Draft.
+Commit zweryfikowanego przyrostu:
+`0a7d2d7cfd73ecf273b48e90ff636066b2dab8d2`, wypchnięty na branch PR.
 Pobrany `origin/master`: `2a3c6becb9c7e111ae1497ec0cd9ac9576acba95`,
 już zawarty w branchu. Worktree przed przyrostem było czyste.
 
