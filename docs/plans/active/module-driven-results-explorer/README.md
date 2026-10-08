@@ -173,6 +173,15 @@ właściciela. Część 2b (węzły z katalogu zbiorów × szablony manifestów,
 
 ### Etap 4 — Inspectory w stylu ferromagnetyka i zakładki kontekstowe
 
+Stan: **część 4a wdrożona w źródłach.** Inspector wizualizacji modu
+(`object.mode_visualization`) to teraz `VisualizationTargetInspectorPanel` z
+właścicielem „Mode visualization”: te same sekcje Display, Surface coloring,
+Vectors, ikony i sesja edycji co Inspector ferromagnetyka. Dochodzą tylko
+sekcje nav „Complex representation” i „Phase & animation”. Stare „Render
+controls” (`FrequencyDomainModeDisplayControls`) zniknęły z tej trasy.
+Pozostaje: rama dla pozostałych Inspectorów wyników, zakładka kontekstowa
+ribbonu, rozszerzenie testu kontraktu projektu.
+
 - Kernel składa treść modułu w ramę z spec 32 §12 (identyfikacja, pasek
   czterech metryk, główna karta, sekcje nawigacyjne, kontekst, stopka).
   Ribbon dostaje zakładkę kontekstową.

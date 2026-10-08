@@ -1125,9 +1125,14 @@ const OBJECT_VISUALIZATION_OWNER: VisualizationInspectorOwner = {
 };
 
 export function VisualizationTargetInspectorPanel({
+  children,
   owner,
   selection,
-}: InspectorPanelProps & { owner: VisualizationInspectorOwner }) {
+}: InspectorPanelProps & {
+  /** Owner-specific nav sections (e.g. complex representation and phase for a mode), shown after "View" in 3D. */
+  children?: React.ReactNode;
+  owner: VisualizationInspectorOwner;
+}) {
   const panel = useObjectVisualizationPanelState(selection);
   const {
     carrierIdentity,
@@ -1246,6 +1251,7 @@ export function VisualizationTargetInspectorPanel({
           icon={<Eye aria-hidden="true" size={20} strokeWidth={1.5} />}
           size="compact"
         />
+        {children ? <div className="fm-viz-nav-sections">{children}</div> : null}
         {scientificInspectorContext}
       </div>
     );
@@ -1270,6 +1276,7 @@ export function VisualizationTargetInspectorPanel({
       <InspectorGroup title="View">
         <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
       </InspectorGroup>
+      {children ? <div className="fm-viz-nav-sections">{children}</div> : null}
       <ObjectVisualizationPanelView
         key={visualizationTargetKey(stablePanel.target)}
         panel={stablePanel}

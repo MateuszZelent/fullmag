@@ -1,5 +1,6 @@
 "use client";
 
+import { Play, Waves } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -12,24 +13,21 @@ import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
 import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { Button } from "@/shared/ui/Button";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import {
-  VisualizationContextSwitch,
-  useVisualizationViewContext,
-} from "../visualization/VisualizationContextSwitch";
-import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
+import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
+import { useVisualizationViewContext } from "../visualization/VisualizationContextSwitch";
 import {
   analysisFieldViewOptions,
   canPlotSelectedFieldIn3D,
-  modeFieldComponentOptions,
   selectedField3DPlotStatus,
 } from "./frequency-domain/FrequencyDomainHelpers";
 import {
   DEFAULT_ANALYSIS_FIELD_VIEW,
-  FrequencyDomainModeDisplayControls,
   normalizeAnalysisFieldView,
   useFrequencyDomainModeDisplaySettings,
 } from "./FrequencyDomainModeDisplayControls";
@@ -368,12 +366,6 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
       fieldMeta.status,
     ],
   );
-  const modeComponentOptions = useMemo(
-    () => fieldMeta.status === "ready"
-      ? modeFieldComponentOptions(fieldMeta.data)
-      : [],
-    [fieldMeta.data, fieldMeta.status],
-  );
   const modeFieldReady = fieldMeta.status === "ready" &&
     fieldMeta.data != null &&
     canPlotSelectedFieldIn3D(fieldMeta.data);
@@ -465,31 +457,46 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
     visualizationViewContext,
   ]);
 
-  if (!target) {
-    return (
-      <InspectorGroup title="Mode Visualization">
-        <p className="fm-inspector-empty">No mode visualization target selected.</p>
-      </InspectorGroup>
-    );
-  }
+  // The surrounding VisualizationTargetInspectorPanel owns View, Display,
+  // surface coloring and vectors (spec 32 §12); only mode-specific sections live here.
+  if (!target || visualizationViewContext === "planar") return null;
 
-  if (visualizationViewContext === "planar") {
-    return (
-      <div className="fm-inspector-panel">
-        <InspectorGroup title="View">
-          <VisualizationContextSwitch />
-        </InspectorGroup>
-        <PlanarVisualizationSection selection={selection} />
-      </div>
-    );
-  }
+  const viewValue = modeViewOptions.includes(settings.view) ? settings.view : requestedView;
+  const viewSummary = MODE_VIEW_LABELS[viewValue] ?? viewValue;
+  const animation = activeTargetOverlay?.animation;
 
   return (
     <>
-      <InspectorGroup title="View">
-        <VisualizationContextSwitch />
+      <InspectorGroup
+        icon={<Waves aria-hidden="true" size={16} strokeWidth={1.75} />}
+        summary={viewSummary}
+        title="Complex representation"
+        variant="nav"
+      >
+        <InspectorPropertyRow label="Part">
+          <SegmentedControl
+            aria-label="Mode complex representation"
+            disabled={!modeFieldReady}
+            options={modeViewOptions.map((option) => ({
+              label: MODE_VIEW_LABELS[option] ?? option,
+              value: option,
+            }))}
+            value={viewValue}
+            onValueChange={settings.setView}
+          />
+        </InspectorPropertyRow>
+        {!modeFieldReady ? (
+          <FeedbackBanner kind="warning" message={modeFieldStatus} />
+        ) : null}
       </InspectorGroup>
-      <InspectorGroup title="Phase and animation">
+      <InspectorGroup
+        icon={<Play aria-hidden="true" size={16} strokeWidth={1.75} />}
+        summary={animation?.animatePhase
+          ? `${animation.animationRateHz ?? 1} cycle/s`
+          : `φ ${overlayPhaseRad.toFixed(2)} rad`}
+        title="Phase & animation"
+        variant="nav"
+      >
         <ModeVisualizationPhaseControl
           key={`${target.fieldId}:${target.source}`}
           animate={activeTargetOverlay?.animation?.animatePhase ?? false}
@@ -512,25 +519,21 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
           }}
           phaseRad={String(overlayPhaseRad)}
         />
-      </InspectorGroup>
-      {!modeFieldReady ? (
-        <p className="fm-inspector-empty" role="status">
-          {modeFieldStatus}
+        <p className="text-fm-xs text-fm-muted">
+          Playback rate is visual only; the physical frequency of the mode does not change.
         </p>
-      ) : null}
-      <InspectorGroup title="Render controls">
-        <FrequencyDomainModeDisplayControls
-          componentOptions={modeComponentOptions}
-          disabled={!modeFieldReady}
-          labelPrefix="Mode visualization"
-          settings={settings}
-          viewDefaultValue={requestedView}
-          viewOptions={modeViewOptions}
-        />
       </InspectorGroup>
     </>
   );
 }
+
+const MODE_VIEW_LABELS: Readonly<Record<string, string>> = {
+  abs: "|m̃|",
+  imag: "Im",
+  phase: "arg",
+  phase_rotated_real: "Rotated",
+  real: "Re",
+};
 
 export function ModeVisualizationInspectorPanel(props: InspectorPanelProps) {
   return <ModeVisualizationViewControls {...props} />;
