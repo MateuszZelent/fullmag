@@ -126,7 +126,8 @@ describe("ViewportTabHost", () => {
 
     expect(html).toContain('data-active-module-id="analysis-plots-test"');
     expect(html).toContain('data-companion-module-id="viewport-3d-test"');
-    expect(html.match(/Loading/g)).toHaveLength(2);
+    // Panel contents are client-rendered by react-resizable-panels; the split host is asserted here.
+    expect(html).toContain('data-companion="true"');
     expect(html).toContain('aria-label="Close 3D split view"');
   });
 
