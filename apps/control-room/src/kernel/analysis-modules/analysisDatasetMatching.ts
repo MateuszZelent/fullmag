@@ -17,11 +17,13 @@ export function datasetRuleMismatch(
   if (!rule.productKinds.includes(dataset.product_kind)) {
     return `product ${dataset.product_kind} is not handled`;
   }
-  if (rule.itemKinds && !rule.itemKinds.some((kind) => dataset.item_kinds.includes(kind))) {
+  const itemKinds = new Set(dataset.item_kinds);
+  if (rule.itemKinds && !rule.itemKinds.some((kind) => itemKinds.has(kind))) {
     return `item kinds ${dataset.item_kinds.join(", ") || "none"} do not include ${rule.itemKinds.join(" | ")}`;
   }
+  const axesByRole = new Map(dataset.axes.map((axis) => [axis.role, axis]));
   for (const requirement of rule.requiredAxes ?? []) {
-    const axis = dataset.axes.find((candidate) => candidate.role === requirement.role);
+    const axis = axesByRole.get(requirement.role);
     if (!axis) {
       return `no ${requirement.role} axis`;
     }
@@ -33,7 +35,7 @@ export function datasetRuleMismatch(
     }
   }
   for (const role of rule.absentAxes ?? []) {
-    if (dataset.axes.some((axis) => axis.role === role)) {
+    if (axesByRole.has(role)) {
       return `has a ${role} axis`;
     }
   }
