@@ -1384,3 +1384,31 @@ lecz bez tekstu; applied tuple [1,2.25,1], host top830/height326 i pointer y919.
 Zachowano log ci-37826316640-browser.log oraz screenshot w artefakcie GHA.
 To konkretny nowy dowód dla diagnozy tooltip/scroll/formatter; nie usunięto
 asercji i nie uznano ośmiu browser uwag za zamknięte. Worker analizuje artefakt.
+
+### Checkpoint 2026-10-08 — diagnosis browser/density i brakujące pokrycie
+
+GHA37826981190/job113482245789: receipt tests7/7 PASS, comparator13/13 PASS
+oraz validate_rows61/61 PASS. Rendering/report test był skipped (brak Matplotlib),
+więc uwaga4061684269 pozostaje pending do uzupełnienia tego pokrycia.
+Workflow otrzymał instalację i jawny import Matplotlib; zmiana source WIP.
+Ten sam job meshing FAIL na region_lengths=[]; dowód z wcześniejszego SHA jest
+aktualny dla niezmienionego kodu, bez kwalifikacji density realization.
+
+Artefakt browser11571014585 pokazuje charthost top830 i pointer919 nad dolnym
+Telemetry dock. Poprawka `bdd18e2372546cff26c346d37afa26e2201e7870` jest na remote:
+exact chart scrollIntoView przed convertToPixel, bez zmiany tooltip/click/source/
+Inspector/residual assertions. Source review i Node syntax/diff PASS, hook68/100
+z tymi samymi siedmioma ostrzeżeniami. GHA37828142497 joby113486219556/113486219973
+potwierdzone live; browser proof pozostaje NOT VERIFIED.
+
+Density source trace potwierdził scoped layer partition, exact1element extrusion,
+body volume tags oraz 3D Min(upper)/Max(lower) composition. Nie potwierdził przyczyny
+pustej próbki na rzeczywistej siatce. Trwa empty-safe failure capture w testach;
+workflow będzie zachowywał mesh/edge/field diagnostics po failure. Geometria,
+ROI i progi nie są rozluźniane.
+
+Uwaga4061684283 nadal valid_unfixed: serial i adaptive Relax→Eigen bootstrap
+checkpointują raw artifacts, lecz nie blokują promotion/parsing non-Completed.
+Zwykłe process workers posiadają taki gate. Projekt poprawki musi zachować typed
+Cancelled/Paused, nie mapować ich na generic RunError przez parsowanie tekstu.
+Nie uznano samego fail-closed generic guard za pełną naprawę terminal semantics.

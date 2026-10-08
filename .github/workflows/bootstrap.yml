@@ -461,6 +461,8 @@ jobs:
 
       - name: Run DE pilot receipt-bound comparison regressions
         run: |
+          python -m pip install 'matplotlib>=3,<4'
+          python -c 'import matplotlib'
           python -B scripts/test_de_pilot_receipts.py -v
           python -B scripts/test_compare_de_100nm_pilot.py -v
           python -m pytest -q scripts/test_validate_de_smoke_rows.py
@@ -470,6 +472,13 @@ jobs:
           FULLMAG_MESH_FAILURE_ARTIFACT_DIR: ${{ runner.temp }}/fullmag-mesh-failure-artifacts
         run: python -X faulthandler -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v
 
+      - name: Preserve Python meshing failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-meshing-failure-diagnostics
+          path: ${{ runner.temp }}/fullmag-mesh-failure-artifacts
+          if-no-files-found: ignore
       - name: Run texture compatibility contracts
         run: >-
           python -m pytest -q

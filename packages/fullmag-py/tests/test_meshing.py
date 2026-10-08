@@ -259,6 +259,67 @@ def _tet_edge_lengths_by_cylinder_scope(
     return region_lengths, bulk_lengths
 
 
+def _tet_edge_midpoint_coverage_summary(
+    mesh: object,
+    owner_marker: int,
+    *,
+    radius: float,
+    half_height: float,
+) -> dict[str, object]:
+    nodes = np.asarray(mesh.nodes, dtype=np.float64)
+    elements = np.asarray(mesh.elements, dtype=np.int32)
+    element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+    owner_element_indices = np.flatnonzero(element_markers == owner_marker)
+    owner_elements = elements[owner_element_indices]
+    edge_slots = np.asarray(
+        [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
+        dtype=np.int32,
+    )
+    edge_node_indices = owner_elements[:, edge_slots]
+    edge_points = nodes[edge_node_indices]
+    edge_midpoints = edge_points.mean(axis=2)
+    edge_lengths = np.linalg.norm(
+        edge_points[:, :, 0, :] - edge_points[:, :, 1, :],
+        axis=2,
+    )
+    radial_distance = np.hypot(edge_midpoints[:, :, 0], edge_midpoints[:, :, 1])
+    axial_distance = np.abs(edge_midpoints[:, :, 2])
+    within_radius = radial_distance <= radius
+    within_half_height = axial_distance <= half_height
+    within_cylinder = within_radius & within_half_height
+    radial_excess = np.maximum(radial_distance - radius, 0.0)
+    axial_excess = np.maximum(axial_distance - half_height, 0.0)
+    distance_to_region = np.hypot(radial_excess, axial_excess)
+    nearest_region_edge = None
+    if distance_to_region.size:
+        local_cell_index, edge_index = np.unravel_index(
+            int(np.argmin(distance_to_region)),
+            distance_to_region.shape,
+        )
+        nearest_region_edge = {
+            "element_index": int(owner_element_indices[local_cell_index]),
+            "edge_index": int(edge_index),
+            "distance_to_region_m": float(
+                distance_to_region[local_cell_index, edge_index]
+            ),
+            "radial_midpoint_distance_m": float(
+                radial_distance[local_cell_index, edge_index]
+            ),
+            "absolute_midpoint_z_m": float(
+                axial_distance[local_cell_index, edge_index]
+            ),
+            "edge_length_m": float(edge_lengths[local_cell_index, edge_index]),
+        }
+    return {
+        "owner_element_count": int(len(owner_elements)),
+        "owner_edge_midpoint_count": int(edge_midpoints.shape[0] * edge_midpoints.shape[1]),
+        "edge_midpoints_within_radius_count": int(within_radius.sum()),
+        "edge_midpoints_within_half_height_count": int(within_half_height.sum()),
+        "edge_midpoints_within_finite_cylinder_count": int(within_cylinder.sum()),
+        "nearest_edge_midpoint_to_finite_cylinder": nearest_region_edge,
+    }
+
+
 def _write_density_failure_capture(
     artifact_dir: Path,
     *,
@@ -272,6 +333,7 @@ def _write_density_failure_capture(
     region_edge_lengths: list[float],
     bulk_edge_lengths: list[float],
     evidence_context: dict[str, object],
+    sample_membership: str = "tetrahedron_centroid",
 ) -> None:
     import hashlib
 
@@ -288,6 +350,21 @@ def _write_density_failure_capture(
         nodes[edge_nodes[:, :, 0]] - nodes[edge_nodes[:, :, 1]],
         axis=2,
     )
+    edge_midpoints = nodes[edge_nodes].mean(axis=2)
+    edge_midpoint_roi_mask = (
+        (np.hypot(edge_midpoints[:, :, 0], edge_midpoints[:, :, 1]) <= cylinder_radius)
+        & (np.abs(edge_midpoints[:, :, 2]) <= cylinder_half_height)
+    )
+    edge_midpoint_coverage = _tet_edge_midpoint_coverage_summary(
+        SimpleNamespace(
+            nodes=nodes,
+            elements=elements,
+            element_markers=element_markers,
+        ),
+        magnetic_marker,
+        radius=cylinder_radius,
+        half_height=cylinder_half_height,
+    )
     mesh_path = artifact_dir / "mesh-and-roi.npz"
     np.savez_compressed(
         mesh_path,
@@ -301,12 +378,26 @@ def _write_density_failure_capture(
         finite_cylinder_element_mask=cylinder_mask,
         selected_roi_element_indices=np.flatnonzero(magnetic_mask & cylinder_mask),
         bulk_element_indices=np.flatnonzero(magnetic_mask & ~cylinder_mask),
+        edge_midpoint_roi_mask=edge_midpoint_roi_mask,
+        selected_roi_edge_midpoint_indices=np.argwhere(
+            magnetic_mask[:, None] & edge_midpoint_roi_mask
+        ),
         region_edge_lengths_m=np.asarray(region_edge_lengths),
         bulk_edge_lengths_m=np.asarray(bulk_edge_lengths),
     )
 
     def statistics(lengths: list[float]) -> dict[str, object]:
         values = np.asarray(lengths, dtype=np.float64)
+        if values.size == 0:
+            return {
+                "count": 0,
+                "finite_count": 0,
+                "min_m": None,
+                "p05_m": None,
+                "median_m": None,
+                "p95_m": None,
+                "max_m": None,
+            }
         return {
             "count": int(values.size),
             "finite_count": int(np.isfinite(values).sum()),
@@ -327,11 +418,22 @@ def _write_density_failure_capture(
                 "magnetic_marker": magnetic_marker,
                 "cylinder_radius_m": cylinder_radius,
                 "cylinder_half_height_m": cylinder_half_height,
-                "membership": "magnetic marker and finite-cylinder tetrahedron centroid",
+                "membership": (
+                    "magnetic marker and finite-cylinder edge midpoint"
+                    if sample_membership == "edge_midpoint"
+                    else "magnetic marker and finite-cylinder tetrahedron centroid"
+                ),
                 "edge_weighting": "six edges per tetrahedron, shared edges repeated",
                 "roi_element_count": int((magnetic_mask & cylinder_mask).sum()),
+                "centroid_roi_element_count": int(
+                    (magnetic_mask & cylinder_mask).sum()
+                ),
+                "roi_edge_midpoint_count": edge_midpoint_coverage[
+                    "edge_midpoints_within_finite_cylinder_count"
+                ],
                 "bulk_element_count": int((magnetic_mask & ~cylinder_mask).sum()),
             },
+            "edge_midpoint_coverage": edge_midpoint_coverage,
             "region_edge_statistics": statistics(region_edge_lengths),
             "bulk_edge_statistics": statistics(bulk_edge_lengths),
             "mesh_payload": {
@@ -12235,6 +12337,87 @@ class RegionMeshPolicyTests(unittest.TestCase):
             self.assertEqual(evidence["mesh_payload"]["element_count"], 1)
             self.assertEqual(evidence["report"]["build_mode"], "conformal_occ")
 
+    def test_density_failure_capture_preserves_empty_roi(self) -> None:
+        nodes = np.asarray(
+            [
+                [10e-9, 0.0, 0.0],
+                [11e-9, 0.0, 0.0],
+                [10e-9, 1e-9, 0.0],
+                [10e-9, 0.0, 1e-9],
+            ],
+            dtype=np.float64,
+        )
+        elements = np.asarray([[0, 1, 2, 3]], dtype=np.int32)
+        element_markers = np.asarray([1], dtype=np.int32)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact_dir = Path(tmp_dir) / "empty-density-roi"
+            _write_density_failure_capture(
+                artifact_dir,
+                test_id="empty-density-roi-regression",
+                nodes=nodes,
+                elements=elements,
+                element_markers=element_markers,
+                magnetic_marker=1,
+                cylinder_radius=2e-9,
+                cylinder_half_height=2e-9,
+                region_edge_lengths=[],
+                bulk_edge_lengths=[1e-9] * 6,
+                evidence_context={"inputs": {"fixture": "finite-tetrahedron-outside-roi"}},
+                sample_membership="edge_midpoint",
+            )
+
+            mesh_path = artifact_dir / "mesh-and-roi.npz"
+            evidence_path = artifact_dir / "failure-evidence.json"
+            evidence_text = evidence_path.read_text(encoding="utf-8")
+            evidence = json.loads(evidence_text)
+            self.assertEqual(
+                evidence["schema_version"], "fullmag.meshing.density_failure.v1"
+            )
+            self.assertEqual(evidence["units"], {"coordinates": "m", "edge_lengths": "m"})
+            self.assertNotIn("NaN", evidence_text)
+            self.assertEqual(
+                evidence["selection"]["membership"],
+                "magnetic marker and finite-cylinder edge midpoint",
+            )
+            self.assertEqual(evidence["selection"]["roi_edge_midpoint_count"], 0)
+            self.assertEqual(
+                evidence["edge_midpoint_coverage"][
+                    "edge_midpoints_within_finite_cylinder_count"
+                ],
+                0,
+            )
+            self.assertEqual(
+                evidence["region_edge_statistics"],
+                {
+                    "count": 0,
+                    "finite_count": 0,
+                    "min_m": None,
+                    "p05_m": None,
+                    "median_m": None,
+                    "p95_m": None,
+                    "max_m": None,
+                },
+            )
+            self.assertTrue(mesh_path.is_file())
+            with np.load(mesh_path) as mesh_data:
+                np.testing.assert_array_equal(mesh_data["nodes_m"], nodes)
+                np.testing.assert_array_equal(mesh_data["elements"], elements)
+                np.testing.assert_array_equal(
+                    mesh_data["element_markers"], element_markers
+                )
+                np.testing.assert_array_equal(
+                    mesh_data["edge_node_indices"],
+                    np.asarray([[[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]]]),
+                )
+                self.assertEqual(mesh_data["edge_lengths_m"].shape, (1, 6))
+                self.assertTrue(np.all(np.isfinite(mesh_data["edge_lengths_m"])))
+                self.assertTrue(np.all(mesh_data["edge_lengths_m"] > 0.0))
+                self.assertEqual(mesh_data["region_edge_lengths_m"].shape, (0,))
+                self.assertEqual(
+                    mesh_data["selected_roi_edge_midpoint_indices"].shape, (0, 2)
+                )
+
     def test_scoped_layer_plane_report_waits_for_postmesh_proof(self) -> None:
         geometry = fm.Box(120e-9, 80e-9, 20e-9, name="thin_box")
         airbox = AirboxOptions(
@@ -12627,20 +12810,177 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 self.assertEqual(len(body_lowers), 1, report.to_dict())
                 self.assertEqual(body_lowers[0]["status"], "applied")
 
+                region_radius_m = 15e-9
+                region_half_height_m = 4e-9
+                sample_membership = (
+                    "edge_midpoint"
+                    if strategy == "thin_film_tetrahedral"
+                    else "tetrahedron_centroid"
+                )
                 region_lengths, bulk_lengths = _tet_edge_lengths_by_cylinder_scope(
                     mesh,
                     1,
-                    radius=15e-9,
-                    half_height=4e-9,
+                    radius=region_radius_m,
+                    half_height=region_half_height_m,
                     classify_edges_by_midpoint=(
                         strategy == "thin_film_tetrahedral"
                     ),
                 )
-                self.assertTrue(region_lengths)
-                self.assertTrue(bulk_lengths)
-                self.assertGreaterEqual(float(np.median(region_lengths)), 4e-9)
-                self.assertLessEqual(float(np.median(region_lengths)), 12e-9)
-                self.assertGreaterEqual(float(np.median(bulk_lengths)), 10e-9)
+                region_median_m = (
+                    float(np.median(region_lengths)) if region_lengths else None
+                )
+                bulk_median_m = (
+                    float(np.median(bulk_lengths)) if bulk_lengths else None
+                )
+                region_median_failed = (
+                    region_median_m is not None
+                    and not 4e-9 <= region_median_m <= 12e-9
+                )
+                bulk_median_failed = (
+                    bulk_median_m is not None and bulk_median_m < 10e-9
+                )
+                density_failed = (
+                    not region_lengths
+                    or not bulk_lengths
+                    or region_median_failed
+                    or bulk_median_failed
+                )
+                density_failure_message = None
+                if density_failed:
+                    nodes = np.asarray(mesh.nodes, dtype=np.float64)
+                    elements = np.asarray(mesh.elements, dtype=np.int32)
+                    element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+                    body_mask = element_markers == 1
+                    body_elements = elements[body_mask]
+                    body_nodes = np.unique(body_elements.reshape(-1))
+                    layer_planes_m = (
+                        np.linspace(-10e-9, 10e-9, layer_count + 1).tolist()
+                        if layer_count is not None
+                        else None
+                    )
+                    layer_plane_node_counts = (
+                        [
+                            int(
+                                np.count_nonzero(
+                                    np.abs(nodes[body_nodes, 2] - plane) <= 1e-15
+                                )
+                            )
+                            for plane in layer_planes_m
+                        ]
+                        if layer_planes_m is not None
+                        else None
+                    )
+                    layer_cell_counts = None
+                    if layer_planes_m is not None:
+                        body_centroid_z = nodes[body_elements, 2].mean(axis=1)
+                        layer_cell_counts = [
+                            int(
+                                np.count_nonzero(
+                                    (body_centroid_z >= lower - 1e-15)
+                                    & (body_centroid_z <= upper + 1e-15)
+                                )
+                            )
+                            for lower, upper in zip(
+                                layer_planes_m[:-1],
+                                layer_planes_m[1:],
+                                strict=True,
+                            )
+                        ]
+                    edge_midpoint_coverage = _tet_edge_midpoint_coverage_summary(
+                        mesh,
+                        1,
+                        radius=region_radius_m,
+                        half_height=region_half_height_m,
+                    )
+                    realized_field_statuses = [
+                        {
+                            key: field.get(key)
+                            for key in (
+                                "kind",
+                                "role",
+                                "source",
+                                "target",
+                                "status",
+                                "reason",
+                            )
+                            if key in field
+                        }
+                        for field in report.size_fields_realized
+                    ]
+                    failure_summary = {
+                        "strategy": strategy,
+                        "build_mode": report.build_mode,
+                        "airbox_size_m": list(airbox_size),
+                        "body_cell_count": int(len(body_elements)),
+                        "body_node_count": int(len(body_nodes)),
+                        "requested_layer_count": layer_count,
+                        "requested_layer_planes_m": layer_planes_m,
+                        "body_node_count_per_layer_plane": layer_plane_node_counts,
+                        "body_cell_count_per_layer": layer_cell_counts,
+                        "region_radius_m": region_radius_m,
+                        "region_half_height_m": region_half_height_m,
+                        "sample_membership": sample_membership,
+                        "region_edge_count": int(len(region_lengths)),
+                        "bulk_edge_count": int(len(bulk_lengths)),
+                        "region_median_edge_length_m": region_median_m,
+                        "bulk_median_edge_length_m": bulk_median_m,
+                        "edge_midpoint_coverage": edge_midpoint_coverage,
+                        "realized_size_field_statuses": realized_field_statuses,
+                    }
+                    failure_evidence = {
+                        **failure_summary,
+                        "mesh_workflow": mesh_workflow,
+                        "mesh_build_report": report.to_dict(),
+                    }
+                    artifact_root = os.environ.get(
+                        "FULLMAG_MESH_FAILURE_ARTIFACT_DIR"
+                    )
+                    if artifact_root:
+                        artifact_dir = (
+                            Path(artifact_root)
+                            / "direct-layered-box-region-floor-actual-density"
+                            / strategy
+                        )
+                        failure_summary["artifact_dir"] = str(artifact_dir)
+                        failure_evidence["artifact_dir"] = str(artifact_dir)
+                        try:
+                            _write_density_failure_capture(
+                                artifact_dir,
+                                test_id=self.id(),
+                                nodes=nodes,
+                                elements=elements,
+                                element_markers=element_markers,
+                                magnetic_marker=1,
+                                cylinder_radius=region_radius_m,
+                                cylinder_half_height=region_half_height_m,
+                                region_edge_lengths=region_lengths,
+                                bulk_edge_lengths=bulk_lengths,
+                                evidence_context=failure_evidence,
+                                sample_membership=sample_membership,
+                            )
+                        except Exception as capture_error:
+                            failure_summary["artifact_capture_error"] = (
+                                f"{type(capture_error).__name__}: {capture_error}"
+                            )
+                    density_failure_message = (
+                        "density failure evidence: "
+                        + json.dumps(
+                            failure_summary,
+                            allow_nan=False,
+                            separators=(",", ":"),
+                        )
+                    )
+                self.assertTrue(region_lengths, density_failure_message)
+                self.assertTrue(bulk_lengths, density_failure_message)
+                self.assertGreaterEqual(
+                    float(np.median(region_lengths)), 4e-9, density_failure_message
+                )
+                self.assertLessEqual(
+                    float(np.median(region_lengths)), 12e-9, density_failure_message
+                )
+                self.assertGreaterEqual(
+                    float(np.median(bulk_lengths)), 10e-9, density_failure_message
+                )
                 self.assertGreater(
                     np.count_nonzero(np.asarray(mesh.element_markers) == 0),
                     0,
