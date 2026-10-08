@@ -75,7 +75,7 @@ export const DISPERSION_ANALYSIS_MANIFEST: AnalysisFeatureManifest = {
     "analysis.dispersion.reference": "analysis.dispersion.reference.v1",
     "analysis.dispersion.mode_visualization": "analysis.dispersion.mode_visualization.v1",
   },
-  load: () => import("@/modules/analysis-dispersion/dispersionAnalysisModule"),
+  load: () => import("@/modules/analysis-dispersion/public"),
 };
 
 export const RESONANCE_ANALYSIS_MANIFEST: AnalysisFeatureManifest = {
@@ -113,7 +113,7 @@ export const RESONANCE_ANALYSIS_MANIFEST: AnalysisFeatureManifest = {
     { kind: "analysis.resonance.quality", parent: "dataset", role: "quality", title: "Quality & provenance", instantiation: "auto" },
   ],
   definitionSchemas: {},
-  load: () => import("@/modules/analysis-resonance/resonanceAnalysisModule"),
+  load: () => import("@/modules/analysis-resonance/public"),
 };
 
 export const TIME_DOMAIN_ANALYSIS_MANIFEST: AnalysisFeatureManifest = {
@@ -135,7 +135,7 @@ export const TIME_DOMAIN_ANALYSIS_MANIFEST: AnalysisFeatureManifest = {
     { kind: "analysis.time-domain.quality", parent: "dataset", role: "quality", title: "Quality & provenance", instantiation: "auto" },
   ],
   definitionSchemas: {},
-  load: () => import("@/modules/analysis-time-domain/timeDomainAnalysisModule"),
+  load: () => import("@/modules/analysis-time-domain/public"),
 };
 
 export const ANALYSIS_FEATURE_MANIFESTS: readonly AnalysisFeatureManifest[] = [
