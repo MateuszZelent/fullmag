@@ -1657,16 +1657,15 @@ async function selectInspectorResultBranch(
   await expandInspectorNode(page, resultRootId);
   await expandInspectorNode(page, dispersionRootId);
   await expandInspectorNode(page, modalStageId);
-  const branchesId = `${modalStageId}:branches`;
-  await expandInspectorNode(page, branchesId);
-  const branchId = `${branchesId}:branch:branch-0`;
-  await ensureModelNodeVisible(page, branchId);
-  await page.locator(`[data-node-id="${branchId}"]`).click();
-  await page.waitForFunction(
-    (id) => document.querySelector(`[data-node-id="${id}"]`)?.getAttribute("aria-selected") === "true",
-    branchId,
-    { timeout: 60_000 },
-  );
+  await selectResultInspectorNode(page, inspector, `${modalStageId}:dispersion`, {
+    owner: "frequency-domain-results-dispersion-modal-relation",
+    heading: "Dispersion Relation",
+    label: "Modal dispersion relation before branch selection",
+  });
+  await inspector.getByRole("button", {
+    name: "Select branch branch-0 for inspector controls",
+    exact: true,
+  }).click();
   await inspector.locator(
     '[data-inspector-owner="frequency-domain.eigen-branch"][data-inspector-surface="eigen-branch-detail"]',
   ).waitFor({ state: "visible", timeout: 60_000 });
