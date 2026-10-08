@@ -112,6 +112,8 @@ pełnego current → reusable field → LLG/FFT oraz wszystkich czterech realiza
 ## Drugi przyrost — fixture FEM i semantyczny eksport CSG
 
 Punkt wyjścia: `c423b4c310f27c20e7cd37e7e1049f1cb0143cad`.
+Commit przyrostu: `92ee66c6ab025e74b117c6254374b5b3b1d1f6d2`,
+wypchnięty na branch PR #147.
 
 - `crates/fullmag-runner/src/native_fem.rs::make_test_plan`: dodano
   `charge_transport_plans: vec![]` do istniejącego konstruktora objętego
