@@ -110,7 +110,7 @@ async function main() {
       timeout: timeoutMs,
       waitUntil: "domcontentloaded",
     });
-    await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
+    await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
     await openAnalysisPlots(page);
     await verifyAnalysisSurfaceContract(page);
     const selectedDatasetRef = await selectPublishedDataset(page);
@@ -780,7 +780,7 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
 
     try {
       await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
-      await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
+      await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
       await openAnalysisPlots(page);
       await selectFrequencyDomainSubview(page, fixture.surfaceLabel, fixture.subviewId, fixture.subviewLabel);
 
