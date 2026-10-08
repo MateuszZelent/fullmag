@@ -379,6 +379,35 @@ export function resolveSceneResourceRevision(
   );
 }
 
+const NO_SCENE_DOCUMENT_MESSAGES = new Set([
+  "no authoring scene document",
+  "no scene document available for current workspace",
+]);
+
+export function isExpectedMissingSceneDocumentError(error: unknown): boolean {
+  return (
+    error instanceof ControlRoomApiError &&
+    error.status === 404 &&
+    error.code === "not_found" &&
+    NO_SCENE_DOCUMENT_MESSAGES.has(error.message)
+  );
+}
+
+export function shouldNotifySceneDependentResourceError(
+  error: unknown,
+): boolean {
+  return !isExpectedMissingSceneDocumentError(error);
+}
+
+export function hasReadySceneDocumentResource(
+  scene:
+    | Pick<ResourceResult<SceneResource>, "data" | "status">
+    | null
+    | undefined,
+): boolean {
+  return scene?.status === "ready" && scene.data !== null;
+}
+
 export function resolveJsonResourceRevision(
   data: unknown,
 ): ResourceRevision | null {
@@ -587,6 +616,7 @@ export function useSceneResource(options: ResourceHookOptions = {}) {
   return useResource<SceneResource>({
     enabled: options.enabled !== false && sessionIdentity !== null,
     load,
+    notifyOnError: shouldNotifySceneDependentResourceError,
     resolveRevision: resolveSceneResourceRevision,
     resourceKey,
   });
@@ -910,6 +940,7 @@ export function useMeshCapabilitiesResource(options: ResourceHookOptions = {}) {
 
 export function useMeshSemanticsResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
+  const scene = useSceneResource({ enabled: options.enabled !== false });
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     MESH_SEMANTICS_RESOURCE_KEY,
   );
@@ -920,8 +951,12 @@ export function useMeshSemanticsResource(options: ResourceHookOptions = {}) {
   );
 
   return useResource<MeshSemanticsResource>({
-    enabled: options.enabled !== false && sessionIdentity !== null,
+    enabled:
+      options.enabled !== false &&
+      sessionIdentity !== null &&
+      hasReadySceneDocumentResource(scene),
     load,
+    notifyOnError: shouldNotifySceneDependentResourceError,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
   });
@@ -1861,6 +1896,7 @@ export function useObjectMeshPolicyResource(
 
 export function useUniverseMeshPolicyResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
+  const scene = useSceneResource({ enabled: options.enabled !== false });
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     MESH_UNIVERSE_POLICY_RESOURCE_KEY,
   );
@@ -1871,8 +1907,12 @@ export function useUniverseMeshPolicyResource(options: ResourceHookOptions = {})
   );
 
   return useResource<MeshUniverseConfigResource>({
-    enabled: options.enabled !== false && sessionIdentity !== null,
+    enabled:
+      options.enabled !== false &&
+      sessionIdentity !== null &&
+      hasReadySceneDocumentResource(scene),
     load,
+    notifyOnError: shouldNotifySceneDependentResourceError,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
   });

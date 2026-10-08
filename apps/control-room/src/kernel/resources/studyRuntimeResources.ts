@@ -150,6 +150,8 @@ import {
 import { tableRowsMinRefetchIntervalMs } from "../realtime/communicationPolicy";
 
 import {
+  hasReadySceneDocumentResource,
+  shouldNotifySceneDependentResourceError,
   useGeometryValidationResource,
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
@@ -218,6 +220,7 @@ interface SessionScopedResourceOptions<TData> {
   enabled?: boolean;
   load: (context: { sessionScopeKey?: string; signal: AbortSignal }) => Promise<TData>;
   minRefetchIntervalMs?: number;
+  notifyOnError?: boolean | ((error: unknown) => boolean);
   pauseLoad?: boolean;
   retryPolicy?: ResourceRetryPolicy | null;
   resolveRevision?: (data: TData) => ResourceRevision | null;
@@ -2741,14 +2744,16 @@ export function useModelReadinessResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const scene = useSceneResource({ enabled });
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => api.model.readiness({ sessionScopeKey, signal }),
     [api],
   );
 
   return useSessionScopedResource<ModelReadinessResource>({
-    enabled,
+    enabled: enabled && hasReadySceneDocumentResource(scene),
     load,
+    notifyOnError: shouldNotifySceneDependentResourceError,
     resolveRevision: (data) => data.scene_revision,
     resourceKey: MODEL_READINESS_PATH,
   });

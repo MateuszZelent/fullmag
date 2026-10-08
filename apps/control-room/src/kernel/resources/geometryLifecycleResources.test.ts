@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type { DomainMetaResource } from "../api/apiTypes";
 import {
   DATA_MESH_REGION_MEMBERSHIP_PATH,
@@ -70,7 +71,10 @@ import {
   resolveObjectMeshReportResourceKey,
   resolveObjectInteractionResourceKey,
   resolveObjectTopologyResourceKey,
+  hasReadySceneDocumentResource,
+  isExpectedMissingSceneDocumentError,
   resolveSceneResourceRevision,
+  shouldNotifySceneDependentResourceError,
   resolveVisualizationStateRevision,
   publishCommittedSceneResource,
 } from "./geometryLifecycleResources";
@@ -266,6 +270,59 @@ describe("geometry lifecycle resources", () => {
     expect(resolveJsonResourceRevision({ revision: "mesh-7" })).toBe("mesh-7");
     expect(resolveJsonResourceRevision(null)).toBeNull();
     expect(resolveVisualizationStateRevision({ revision: 15 } as never)).toBe(15);
+  });
+
+  it("recognizes only the known missing-scene 404 responses", () => {
+    const missingSceneErrors = [
+      "no authoring scene document",
+      "no scene document available for current workspace",
+    ].map((message) => new ControlRoomApiError(message, 404, null, "not_found"));
+
+    for (const error of missingSceneErrors) {
+      expect(isExpectedMissingSceneDocumentError(error)).toBe(true);
+      expect(shouldNotifySceneDependentResourceError(error)).toBe(false);
+    }
+
+    for (const error of [
+      new ControlRoomApiError("route missing", 404, null, "not_found"),
+      new ControlRoomApiError(
+        "no scene document available for current workspace",
+        500,
+        null,
+        "not_found",
+      ),
+      new ControlRoomApiError(
+        "no scene document available for current workspace",
+        404,
+        null,
+        "different_reason",
+      ),
+      new Error("no scene document available for current workspace"),
+    ]) {
+      expect(isExpectedMissingSceneDocumentError(error)).toBe(false);
+      expect(shouldNotifySceneDependentResourceError(error)).toBe(true);
+    }
+  });
+
+  it("gates scene-dependent authoring resources on a ready canonical scene", () => {
+    expect(
+      hasReadySceneDocumentResource({ data: null, status: "loading" }),
+    ).toBe(false);
+    expect(
+      hasReadySceneDocumentResource({ data: null, status: "error" }),
+    ).toBe(false);
+    expect(
+      hasReadySceneDocumentResource({
+        data: { revision: 5 } as never,
+        status: "stale",
+      }),
+    ).toBe(false);
+    expect(
+      hasReadySceneDocumentResource({
+        data: { revision: 5 } as never,
+        status: "ready",
+      }),
+    ).toBe(true);
   });
 
   it("keys geometry validation by its typed scene revision", () => {
