@@ -332,7 +332,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.kContextKind ? { kContextKind: node.kContextKind } : {}),
       ...(node.normalization ? { normalization: node.normalization } : {}),
       ...(node.artifactPath ? { artifactPath: node.artifactPath } : {}),
-      ...(node.branchId ? { branchId: node.branchId } : {}),
+      ...(node.branchId !== undefined ? { branchId: node.branchId } : {}),
       ...(node.calculationMode ? { calculationMode: node.calculationMode } : {}),
       ...(node.fieldId ? { fieldId: node.fieldId } : {}),
       ...(node.fmrPeakIndex !== undefined
@@ -347,6 +347,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         ? { kPathCoordinateRadPerM: node.kPathCoordinateRadPerM }
         : {}),
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
+      ...(node.modeId !== undefined ? { modeId: node.modeId } : {}),
       nodeId: node.id,
       ...(node.observableId ? { observableId: node.observableId } : {}),
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
@@ -355,6 +356,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         ? { representation: node.analysisFieldRepresentation }
         : {}),
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
+      ...(node.sampleId !== undefined ? { sampleId: node.sampleId } : {}),
       ...(node.analysisFieldSource ? { source: node.analysisFieldSource } : {}),
       ...(node.studyProduct ? { studyProduct: node.studyProduct } : {}),
       type: "frequency-domain",

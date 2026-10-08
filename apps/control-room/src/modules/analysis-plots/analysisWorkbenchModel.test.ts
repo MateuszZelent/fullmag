@@ -2,9 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import type { ChartSeries } from "./chartTableModel";
 import {
+  frequencyDomainChartRouteOverrideFromSelection,
+  frequencyDomainChartRouteOverrideFromSubview,
+  frequencyDomainManifestSupportsChartRoute,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
+import {
   buildFrequencyDomainCursorSummary,
   buildFrequencyDomainWorkflowSummary,
   buildFrequencyDomainWorkbenchSummary,
+  isFixedKModalSpectrumSubview,
+  normalizeFixedKModalRouteOverride,
   resourceStatusFromString,
 } from "./analysisWorkbenchModel";
 
@@ -135,5 +142,97 @@ describe("buildFrequencyDomainWorkbenchSummary", () => {
 
     expect(buildFrequencyDomainWorkbenchSummary(series, "fmr_response", "ready").frequencyRange)
       .toBe("0 THz-9.5 THz");
+  });
+});
+
+describe("fixed-k modal dispersion routing", () => {
+  const publishedSingleKRoute = {
+    mode: "dispersion_modal",
+    primaryChart: "modal-spectrum",
+  } as const;
+  const dispersionSubviewRoute = {
+    mode: "dispersion_modal",
+    primaryChart: "dispersion",
+  } as const;
+  const singleKContext = {
+    kSampling: { kind: "single", vectorRadPerM: [0, 1e7, 0] },
+  } as never;
+
+  it("maps the persisted modal subview and selected mode route to a single-k spectrum", () => {
+    const manifest = {
+      artifacts: {
+        dispersion_csv_path: "eigen/dispersion.csv",
+        spectrum_v2_path: "eigen/spectrum.v2.json",
+      },
+      requested_execution: { calculation_mode: "dispersion_modal" },
+      k_sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0] },
+    };
+    const selectedModeRoute = frequencyDomainChartRouteOverrideFromSelection({
+      ref: { type: "frequency-domain", calculationMode: "dispersion_modal" },
+    } as never);
+    const modalSubviewRoute = frequencyDomainChartRouteOverrideFromSubview(
+      "dispersion.modal",
+    );
+    for (const requestedRoute of [selectedModeRoute, modalSubviewRoute]) {
+      expect(
+        normalizeFixedKModalRouteOverride(
+          requestedRoute,
+          publishedSingleKRoute,
+          singleKContext,
+          "dispersion.modal",
+        ),
+      ).toEqual(publishedSingleKRoute);
+    }
+    expect(
+      frequencyDomainManifestSupportsChartRoute(
+        manifest,
+        normalizeFixedKModalRouteOverride(
+          modalSubviewRoute,
+          publishedSingleKRoute,
+          singleKContext,
+          "dispersion.modal",
+        )!,
+      ),
+    ).toBe(true);
+
+    expect(
+      isFixedKModalSpectrumSubview({
+        activeSurface: "dispersion",
+        activeSubview: "dispersion.modal",
+        resultContext: singleKContext,
+        route: publishedSingleKRoute,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps path dispersion and other dispersion subviews on their published routes", () => {
+    const pathContext = {
+      kSampling: { kind: "path", sampleCount: 7, label: "Γ–X" },
+    } as never;
+
+    expect(
+      normalizeFixedKModalRouteOverride(
+        dispersionSubviewRoute,
+        dispersionSubviewRoute,
+        pathContext,
+        "dispersion.modal",
+      ),
+    ).toEqual(dispersionSubviewRoute);
+    expect(
+      normalizeFixedKModalRouteOverride(
+        dispersionSubviewRoute,
+        publishedSingleKRoute,
+        singleKContext,
+        "dispersion.branches",
+      ),
+    ).toEqual(dispersionSubviewRoute);
+    expect(
+      isFixedKModalSpectrumSubview({
+        activeSurface: "dispersion",
+        activeSubview: "dispersion.modal",
+        resultContext: pathContext,
+        route: publishedSingleKRoute,
+      }),
+    ).toBe(false);
   });
 });

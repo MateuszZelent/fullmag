@@ -907,17 +907,19 @@ describe("selectExplorerNode", () => {
   it("preserves frequency-domain eigen mode metadata for inspectors and 3D plotting", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
-      branchId: "branch-0",
+      branchId: "0",
       contextCommands: ["analysis.eigen.plot-mode-3d"],
       fieldId: "analysis:eigen:sample-0000:mode-0002",
       id: "results:eigen:sample:0:mode:2",
       kind: "results.eigen.mode",
       label: "Sample 0 Mode 2",
+      modeId: "sample-0000/mode-0002",
       modeIndex: 2,
       parentId: "results:eigen:modes",
       resourceRef: analysisFieldVectorResourceKey(
         "analysis:eigen:sample-0000:mode-0002",
       ),
+      sampleId: "k-sample-0000",
       sampleIndex: 0,
     };
 
@@ -927,14 +929,16 @@ describe("selectExplorerNode", () => {
       kind: "results.eigen.mode",
       nodeId: "results:eigen:sample:0:mode:2",
       ref: {
-        branchId: "branch-0",
+        branchId: "0",
         fieldId: "analysis:eigen:sample-0000:mode-0002",
         kind: "results.eigen.mode",
         modeIndex: 2,
+        modeId: "sample-0000/mode-0002",
         nodeId: "results:eigen:sample:0:mode:2",
         resourceRef: analysisFieldVectorResourceKey(
           "analysis:eigen:sample-0000:mode-0002",
         ),
+        sampleId: "k-sample-0000",
         sampleIndex: 0,
         type: "frequency-domain",
       },

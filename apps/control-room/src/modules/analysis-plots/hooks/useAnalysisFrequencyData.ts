@@ -6,7 +6,7 @@
  * Owns:
  *   - /session/frequency-domain/manifest resource
  *   - /session/frequency-domain/spectrum resource (modal-spectrum route)
- *   - /session/frequency-domain/dispersion resource (dispersion route)
+ *   - /session/frequency-domain/dispersion resource (dispersion route or fixed-k identity)
  *   - /session/frequency-domain/branches resource (dispersion route)
  *   - /session/frequency-domain/response-sweep resource (response-sweep route)
  *   - Route resolution (manifest → calculation mode → primaryChart)
@@ -35,6 +35,7 @@ import {
   buildEigenBranchesModel,
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
+  enrichEigenSpectrumChartModelForFixedK,
   buildFrequencyResponseChartModel,
   buildFmrModalDrivenComparisonModel,
   type FrequencyDomainChartRoute,
@@ -49,6 +50,10 @@ import {
 
 import type { ChartSeries } from "../chartTableModel";
 import { frequencyDomainChartSeriesForAnalysisPlots } from "../frequencyDomainSeriesAdapter";
+import {
+  isFixedKModalSpectrumSubview,
+  normalizeFixedKModalRouteOverride,
+} from "../analysisWorkbenchModel";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import type { AnalysisSubview } from "@/kernel/workspace/analysisViewPreferences";
 
@@ -87,7 +92,8 @@ export type AnalysisFrequencyPresentationState = ChartDataPresentationState & {
  * Resource hook: frequency-domain data family.
  *
  * Enabled only when `activeSurface` is "frequency".
- * Only the resource for the active route loads — others remain disabled.
+ * Only active-route resources load. Fixed-k modal spectra also load their
+ * owned dispersion CSV so chart selections retain published mode IDs.
  */
 export function useAnalysisFrequencyData(
   activeSurface: "dispersion" | "resonance-fmr" | "idle",
@@ -115,15 +121,26 @@ export function useAnalysisFrequencyData(
       frequencyDomainManifest.data?.result_manifest?.stage_id,
     ],
   );
-  const frequencyDomainRouteOverride = useSelectionSelector(
+  const selectionRouteOverride = useSelectionSelector(
     frequencyDomainChartRouteOverrideFromSelection,
+  );
+  const frequencyDomainRouteOverride = normalizeFixedKModalRouteOverride(
+    selectionRouteOverride,
+    frequencyDomainManifestRoute,
+    frequencyDomainContext,
+    activeSubview,
   );
   const selectedResultRunId = useSelectionSelector((selection) =>
     selection.ref?.type === "frequency-domain"
       ? selection.ref.analysisRunId ?? null
       : null,
   );
-  const frequencyDomainSubviewRouteOverride = frequencyDomainChartRouteOverrideFromSubview(activeSubview);
+  const frequencyDomainSubviewRouteOverride = normalizeFixedKModalRouteOverride(
+    frequencyDomainChartRouteOverrideFromSubview(activeSubview),
+    frequencyDomainManifestRoute,
+    frequencyDomainContext,
+    activeSubview,
+  );
   const requestedRoutes = [
     frequencyDomainSubviewRouteOverride,
     frequencyDomainRouteOverride,
@@ -159,6 +176,13 @@ export function useAnalysisFrequencyData(
           }
         : selectedRoute;
   const expectedChart = activeSurface === "dispersion" ? "dispersion" : null;
+  const fixedKModalSpectrumSubview = activeSurface !== "idle" &&
+    isFixedKModalSpectrumSubview({
+      activeSurface,
+      activeSubview,
+      resultContext: frequencyDomainContext,
+      route: frequencyDomainRoute,
+    });
   const dispersionChart = frequencyDomainRoute.primaryChart === "dispersion" ||
     frequencyDomainRoute.primaryChart === "response-map";
   const resonanceChart =
@@ -169,7 +193,7 @@ export function useAnalysisFrequencyData(
     frequencyDomainRoute.status === "available";
   const surfaceMismatch = manifestReady && (
     expectedChart !== null
-      ? !dispersionChart
+      ? !dispersionChart && !fixedKModalSpectrumSubview
       : activeSurface === "resonance-fmr" && !resonanceChart
   );
   const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch;
@@ -185,7 +209,10 @@ export function useAnalysisFrequencyData(
     ),
   });
   const frequencyDomainDispersion = useFrequencyDomainEigenDispersionResource({
-    enabled: loadMatchingArtifact && !resultContextMismatch && frequencyDomainRoute.primaryChart === "dispersion",
+    enabled: loadMatchingArtifact && !resultContextMismatch && (
+      frequencyDomainRoute.primaryChart === "dispersion" ||
+      fixedKModalSpectrumSubview
+    ),
   });
   const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
     enabled: loadMatchingArtifact && !resultContextMismatch && frequencyDomainRoute.primaryChart === "dispersion",
@@ -197,9 +224,27 @@ export function useAnalysisFrequencyData(
     ),
   });
 
+  const fixedKWavevector = fixedKModalSpectrumSubview &&
+    frequencyDomainContext.kSampling?.kind === "single"
+    ? frequencyDomainContext.kSampling.vectorRadPerM
+    : null;
   const frequencyDomainSpectrumModel = useMemo(
-    () => buildEigenSpectrumChartModel(frequencyDomainSpectrum.data),
-    [frequencyDomainSpectrum.data],
+    () => fixedKWavevector
+      ? enrichEigenSpectrumChartModelForFixedK({
+          dispersion: frequencyDomainDispersion.data,
+          expectedRunId: frequencyDomainContext.runId,
+          expectedStageId: frequencyDomainContext.stageId,
+          spectrum: frequencyDomainSpectrum.data,
+          wavevectorKf: fixedKWavevector,
+        })
+      : buildEigenSpectrumChartModel(frequencyDomainSpectrum.data),
+    [
+      fixedKWavevector,
+      frequencyDomainContext.runId,
+      frequencyDomainContext.stageId,
+      frequencyDomainDispersion.data,
+      frequencyDomainSpectrum.data,
+    ],
   );
   const frequencyDomainDispersionModel = useMemo(
     () =>

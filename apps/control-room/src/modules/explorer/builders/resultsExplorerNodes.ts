@@ -6,6 +6,7 @@ import {
   frequencyDomainResultContextFromManifest,
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
+  enrichEigenSpectrumChartModelForFixedK,
   buildFrequencyResponseChartModel,
   eigenModeFieldAvailable,
   responseFieldResourcesFromManifest,
@@ -55,15 +56,18 @@ export interface PhysicsFirstResultEntry extends FrequencyDomainResultEvidence {
 }
 
 export interface PhysicsFirstAnalysisFieldTarget {
+  branchId?: string;
   fieldId: string;
   frequencyHz: number;
   frequencyIndex?: number;
   kPathCoordinateRadPerM?: number;
   label: string;
+  modeId?: string;
   modeIndex?: number;
   observableId?: string;
   representation: "complex-vector-xyz";
   resourceRef: string;
+  sampleId?: string;
   sampleIndex?: number;
   source: "eigen-mode" | "frequency-response";
   view: "phase_rotated_real";
@@ -91,15 +95,18 @@ type PostprocessingFamilyDefinition<
 > = Omit<PostprocessingDefinitionInput, "kind"> & { kind: Kind };
 
 interface ResultResourceLike {
+  artifact_set_id?: string | null;
+  content_digest?: string | null;
+  mesh_generation_id?: string | null;
+  revision?: number | string | null;
+  run_id?: string | null;
+  session_id?: string | null;
+  stage_id?: string | null;
   status?: string;
 }
 
 interface ResultManifestLike extends ResultResourceLike {
-  mesh_generation_id?: string | null;
   payload?: unknown;
-  revision?: number | string | null;
-  run_id?: string | null;
-  stage_id?: string | null;
 }
 
 export interface PhysicsFirstResultResourceInput {
@@ -149,7 +156,17 @@ function jsonArtifact(
   resource: (ResultResourceLike & { payload?: unknown }) | null | undefined,
 ): FrequencyDomainJsonArtifactLike | null {
   return resource
-    ? { payload: resource.payload, status: resource.status ?? "idle" }
+    ? {
+        artifact_set_id: resource.artifact_set_id,
+        content_digest: resource.content_digest,
+        mesh_generation_id: resource.mesh_generation_id,
+        payload: resource.payload,
+        revision: resource.revision == null ? null : String(resource.revision),
+        run_id: resource.run_id,
+        session_id: resource.session_id,
+        stage_id: resource.stage_id,
+        status: resource.status ?? "idle",
+      }
     : null;
 }
 
@@ -160,7 +177,22 @@ function dispersionArtifact(
     | undefined,
 ): FrequencyDomainTextArtifactLike | null {
   return resource
-    ? { status: resource.status ?? "idle", text: resource.text }
+    ? {
+        artifact_set_id: resource.artifact_set_id,
+        content_digest: resource.content_digest,
+        ...(resource.path_metadata !== undefined
+          ? {
+              path_metadata: resource.path_metadata as FrequencyDomainTextArtifactLike["path_metadata"],
+            }
+          : {}),
+        mesh_generation_id: resource.mesh_generation_id,
+        revision: resource.revision == null ? null : String(resource.revision),
+        run_id: resource.run_id,
+        session_id: resource.session_id,
+        stage_id: resource.stage_id,
+        status: resource.status ?? "idle",
+        text: resource.text,
+      }
     : null;
 }
 
@@ -292,11 +324,15 @@ function kSamplingForFrequencyContext(
 function modalFieldTargets({
   dispersion,
   kSampling,
+  runId,
   spectrum,
+  stageId,
 }: {
   dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
   kSampling?: FrequencyDomainResultEvidence["kSampling"];
+  runId: string;
   spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
+  stageId: string;
 }): PhysicsFirstAnalysisFieldTarget[] {
   if (kSampling?.kind === "path") {
     return buildEigenDispersionChartModel(dispersionArtifact(dispersion)).points.flatMap((point) => {
@@ -313,9 +349,12 @@ function modalFieldTargets({
         frequencyHz: point.frequencyHz,
         kPathCoordinateRadPerM: point.pathS,
         label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+        ...(point.branchId != null ? { branchId: point.branchId } : {}),
+        ...(point.modeId ? { modeId: point.modeId } : {}),
         modeIndex: point.rawModeIndex,
         representation: "complex-vector-xyz" as const,
         resourceRef: point.modeFieldResourceKey,
+        ...(point.sampleId ? { sampleId: point.sampleId } : {}),
         sampleIndex: point.sampleIndex,
         source: "eigen-mode" as const,
         view: "phase_rotated_real" as const,
@@ -324,34 +363,48 @@ function modalFieldTargets({
     });
   }
   const fixedWavevector = kSampling?.kind === "single" ? kSampling.vectorRadPerM : undefined;
-  return buildEigenSpectrumChartModel(jsonArtifact(spectrum)).points.flatMap((point) =>
-    eigenModeFieldAvailable(point) &&
-    point.modeFieldId &&
-    point.modeFieldResourceKey
-      ? [{
-          fieldId: point.modeFieldId,
-          frequencyHz: point.frequencyHz,
-          label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
-          modeIndex: point.rawModeIndex,
-          representation: "complex-vector-xyz" as const,
-          resourceRef: point.modeFieldResourceKey,
-          sampleIndex: point.sampleIndex,
-          source: "eigen-mode" as const,
-          view: "phase_rotated_real" as const,
-          ...(fixedWavevector
-            ? { wavevectorKf: fixedWavevector }
-            : kSampling?.kind === "grid"
-              ? (() => {
-                  const wavevectorKf = gridWavevectorAtSample(
-                    dispersion?.path_metadata,
-                    point.sampleIndex,
-                  );
-                  return wavevectorKf ? { wavevectorKf } : {};
-                })()
-              : {}),
-        }]
-      : [],
-  );
+  const spectrumData = jsonArtifact(spectrum);
+  const spectrumModel = fixedWavevector
+    ? enrichEigenSpectrumChartModelForFixedK({
+        dispersion: dispersionArtifact(dispersion),
+        expectedRunId: runId,
+        expectedStageId: stageId,
+        spectrum: spectrumData,
+        wavevectorKf: fixedWavevector,
+      })
+    : buildEigenSpectrumChartModel(spectrumData);
+  return spectrumModel.points.flatMap((point) => {
+    if (
+      !eigenModeFieldAvailable(point) ||
+      !point.modeFieldId ||
+      !point.modeFieldResourceKey
+    ) return [];
+    return [{
+      fieldId: point.modeFieldId,
+      frequencyHz: point.frequencyHz,
+      label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+      ...(point.branchId ? { branchId: point.branchId } : {}),
+      ...(point.modeId ? { modeId: point.modeId } : {}),
+      modeIndex: point.rawModeIndex,
+      representation: "complex-vector-xyz" as const,
+      resourceRef: point.modeFieldResourceKey,
+      ...(point.sampleId ? { sampleId: point.sampleId } : {}),
+      sampleIndex: point.sampleIndex,
+      source: "eigen-mode" as const,
+      view: "phase_rotated_real" as const,
+      ...(fixedWavevector
+        ? { wavevectorKf: fixedWavevector }
+        : kSampling?.kind === "grid"
+          ? (() => {
+              const wavevectorKf = gridWavevectorAtSample(
+                dispersion?.path_metadata,
+                point.sampleIndex,
+              );
+              return wavevectorKf ? { wavevectorKf } : {};
+            })()
+          : {}),
+    }];
+  });
 }
 
 function responseFieldTargets(
@@ -528,7 +581,9 @@ export function physicsFirstResultsSnapshotFromResources(
         ? modalFieldTargets({
             dispersion: input.dispersion,
             ...(kSampling ? { kSampling } : {}),
+            runId: resultRunId,
             spectrum: input.spectrum,
+            stageId,
           })
         : responseFieldTargets(payload, input.responseSweep, kSampling ?? undefined),
     artifactRevision,
@@ -674,10 +729,13 @@ function analysisFieldTargetNodes(
         ...(target.kPathCoordinateRadPerM !== undefined
           ? { kPathCoordinateRadPerM: target.kPathCoordinateRadPerM }
           : {}),
+        ...(target.branchId ? { branchId: target.branchId } : {}),
+        ...(target.modeId ? { modeId: target.modeId } : {}),
         ...(target.modeIndex !== undefined ? { modeIndex: target.modeIndex } : {}),
         ...(target.observableId ? { observableId: target.observableId } : {}),
         resourceRef: target.resourceRef,
         ...(entry.normalization ? { normalization: entry.normalization } : {}),
+        ...(target.sampleId ? { sampleId: target.sampleId } : {}),
         ...(target.sampleIndex !== undefined ? { sampleIndex: target.sampleIndex } : {}),
         studyProduct: entry.studyProduct,
         ...(target.wavevectorKf ? { wavevectorKf: target.wavevectorKf } : {}),

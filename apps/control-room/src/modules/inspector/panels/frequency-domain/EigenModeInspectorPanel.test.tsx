@@ -5,6 +5,7 @@ import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisF
 import {
   buildEigenModeIdentityViewModel,
   formatSignedWavevectorKf,
+  isEigenModeInspectorSelection,
   isCurrentEigenModeOverlay,
   phaseRadForEigenModeViewChange,
   type EigenModeOverlayIdentity,
@@ -84,6 +85,23 @@ describe("EigenModeInspectorPanel identity model", () => {
       modeIndex: 5,
       sampleIndex: null,
     });
+  });
+
+  it("accepts only complete selections for published single-mode result routes", () => {
+    expect(
+      isEigenModeInspectorSelection("results.dispersion.modal.mode_at_k", selectedMode),
+    ).toBe(true);
+    expect(
+      isEigenModeInspectorSelection("results.resonance.modal.mode", selectedMode),
+    ).toBe(true);
+    expect(isEigenModeInspectorSelection("results.eigen.mode", selectedMode)).toBe(true);
+    expect(isEigenModeInspectorSelection("results.eigen.root", selectedMode)).toBe(false);
+    expect(
+      isEigenModeInspectorSelection(
+        "results.dispersion.modal.mode_at_k",
+        { ...selectedMode, modeId: null },
+      ),
+    ).toBe(false);
   });
 
   it("only treats an overlay with the selected mode identity as current", () => {

@@ -28,12 +28,14 @@ export function AnalysisSurfaceTabs({
   activeSubview,
   onChange,
   onSubviewChange = () => undefined,
+  subviewLabels,
   subviews = [],
 }: {
   active: AnalysisSurface;
   activeSubview?: AnalysisSubview;
   onChange: (surface: AnalysisSurface) => void;
   onSubviewChange?: (subview: AnalysisSubview) => void;
+  subviewLabels?: Partial<Record<AnalysisSubview, string>>;
   subviews?: readonly AnalysisSubview[];
 }) {
   const surfaceLabel = SURFACES.find((surface) => surface.id === active)?.label ?? "Analysis";
@@ -45,9 +47,9 @@ export function AnalysisSurfaceTabs({
     </div>
     {activeSubview && subviews.length > 0 ? <Select onValueChange={(value) => onSubviewChange(value as AnalysisSubview)} value={activeSubview}>
       <SelectTrigger aria-label={`${surfaceLabel} subview`} className="fm-analysis-plots__subview" data-analysis-subview={activeSubview} density="compact">
-        <SelectValue>{SUBVIEW_LABELS[activeSubview]}</SelectValue>
+        <SelectValue>{subviewLabels?.[activeSubview] ?? SUBVIEW_LABELS[activeSubview]}</SelectValue>
       </SelectTrigger>
-      <SelectContent>{subviews.map((subview) => <SelectItem key={subview} value={subview}>{SUBVIEW_LABELS[subview]}</SelectItem>)}</SelectContent>
+      <SelectContent>{subviews.map((subview) => <SelectItem key={subview} value={subview}>{subviewLabels?.[subview] ?? SUBVIEW_LABELS[subview]}</SelectItem>)}</SelectContent>
     </Select> : null}
   </div>;
 }

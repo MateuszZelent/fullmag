@@ -32,7 +32,7 @@ import { EigenModePhaseControls } from "./EigenModePhaseControls";
 import {
   buildEigenModeIdentityViewModel,
   formatSignedWavevectorKf,
-  hasCompleteEigenModeOverlayIdentity,
+  isEigenModeInspectorSelection,
   isCurrentEigenModeOverlay,
   phaseRadForEigenModeViewChange,
   type EigenModeOverlayIdentity,
@@ -422,9 +422,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     frequencyHz != null && linewidthFwhmHz && linewidthFwhmHz > 0
       ? frequencyHz / linewidthFwhmHz
       : null;
-  const identityReady =
-    ref?.kind.startsWith("results.eigen") === true &&
-    hasCompleteEigenModeOverlayIdentity(overlayIdentity);
+  const identityReady = isEigenModeInspectorSelection(ref?.kind, overlayIdentity);
   const field3DReady =
     identityReady &&
     fieldMeta.status === "ready" &&

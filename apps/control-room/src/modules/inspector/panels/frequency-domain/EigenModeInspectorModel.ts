@@ -73,6 +73,17 @@ export function hasCompleteEigenModeOverlayIdentity(
   );
 }
 
+export function isEigenModeInspectorSelection(
+  kind: string | null | undefined,
+  target: EigenModeOverlayIdentity,
+): boolean {
+  const isModeSelection =
+    kind === "results.eigen.mode" ||
+    kind === "results.dispersion.modal.mode_at_k" ||
+    kind === "results.resonance.modal.mode";
+  return isModeSelection && hasCompleteEigenModeOverlayIdentity(target);
+}
+
 export function isCurrentEigenModeOverlay(
   overlay: AnalysisFieldOverlayState | null,
   target: EigenModeOverlayIdentity,

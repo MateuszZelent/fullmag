@@ -192,6 +192,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
         point,
         responseModel: frequency.frequencyDomainResponseModel,
         routeMode: frequency.frequencyDomainRoute.mode,
+        routePrimaryChart: frequency.frequencyDomainRoute.primaryChart,
         spectrumModel: frequency.frequencyDomainSpectrumModel,
         chartId,
       });
@@ -217,7 +218,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
         y: point.point.y,
       },
     }, "analysis-plots");
-  }, [activeSurface, descriptorId, frequency.frequencyDomainDispersionModel, frequency.frequencyDomainResponseModel, frequency.frequencyDomainRoute.mode, frequency.frequencyDomainSpectrumModel, frequencyArtifactRevision, frequencyResultContext, frequencyChartId, kernel.selection, sourceChartId]);
+  }, [activeSurface, descriptorId, frequency.frequencyDomainDispersionModel, frequency.frequencyDomainResponseModel, frequency.frequencyDomainRoute.mode, frequency.frequencyDomainRoute.primaryChart, frequency.frequencyDomainSpectrumModel, frequencyArtifactRevision, frequencyResultContext, frequencyChartId, kernel.selection, sourceChartId]);
   const onRangeChange = useCallback((range: ChartValueRange) => {
     const targetId = frequencyDescriptorId ?? descriptorId;
     setDescriptorPreference(targetId, completeDescriptorPreference(effectiveDescriptor, effectiveDescriptorSelection, { range: { fromSI: range.fromValue, toSI: range.toValue } }));
@@ -249,6 +250,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     frequencyDomainPresentation: frequency.frequencyDomainPresentation,
     frequencyDomainComparisonModel: frequency.frequencyDomainComparisonModel,
     frequencyDomainCalculationMode: frequency.frequencyDomainRoute.mode,
+    frequencyDomainRoute: frequency.frequencyDomainRoute,
     frequencyDomainTitle: frequency.frequencyDomainTitle,
     frequencyDomainUnavailableReason: frequency.frequencyDomainUnavailableReason,
     frequencyDomainProvenance,
@@ -310,6 +312,7 @@ export function frequencyDomainSelectionFromPoint(input: {
   resultContext?: FrequencyDomainResultContext | null;
   responseModel: AnalysisFrequencyDataResult["frequencyDomainResponseModel"];
   routeMode: AnalysisFrequencyDataResult["frequencyDomainRoute"]["mode"];
+  routePrimaryChart: AnalysisFrequencyDataResult["frequencyDomainRoute"]["primaryChart"];
   spectrumModel: AnalysisFrequencyDataResult["frequencyDomainSpectrumModel"];
 }) {
   const point = input.point;
@@ -340,10 +343,12 @@ export function frequencyDomainSelectionFromPoint(input: {
     );
     return { kind: "results.frequency_response.frequency_point", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: compactSelectionRef({ ...identity, calculationMode: input.routeMode, chartId: input.chartId, fieldId: match?.fieldId ?? undefined, frequencyHz: match?.frequencyHz, frequencyIndex: match?.frequencyIndex ?? undefined, kind: "results.frequency_response.frequency_point", nodeId, observableId: match?.observableId, resourceRef: point.source.resourceKey, source: "frequency-response" as const, type: "frequency-domain" as const }) };
   }
-  const dispersionMode = input.routeMode === "dispersion_modal"
+  const isDispersionChart = input.routeMode === "dispersion_modal" &&
+    input.routePrimaryChart === "dispersion";
+  const dispersionMode = isDispersionChart
     ? input.dispersionModel.points[point.point.rowIndex]
     : null;
-  const mode = input.routeMode === "dispersion_modal"
+  const mode = isDispersionChart
     ? dispersionMode
     : input.spectrumModel.points[point.point.rowIndex];
   const modeFieldAvailable = mode == null || eigenModeFieldAvailable(mode);

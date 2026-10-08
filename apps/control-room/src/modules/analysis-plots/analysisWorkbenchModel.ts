@@ -1,7 +1,14 @@
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
-import type { AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences";
+import type {
+  AnalysisSubview,
+  AnalysisSurface,
+} from "@/kernel/workspace/analysisViewPreferences";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { chartTableWindowValue, type ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
+import type {
+  FrequencyDomainChartRoute,
+  FrequencyDomainResultContext,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 import {
   descriptorForFrequencyTable,
   descriptorForSurface,
@@ -16,6 +23,56 @@ import type { ChartSeries, ChartValueRange, TableRowsLike } from "./chartTableMo
 
 export function surfaceTitle(surface: AnalysisSurface): string {
   return descriptorForSurface(surface).title;
+}
+
+type FrequencyDomainRouteIdentity = Pick<
+  FrequencyDomainChartRoute,
+  "mode" | "primaryChart"
+>;
+
+export function normalizeFixedKModalRouteOverride(
+  requestedRoute: FrequencyDomainRouteIdentity | null,
+  publishedRoute: FrequencyDomainRouteIdentity,
+  resultContext:
+    | Pick<FrequencyDomainResultContext, "kSampling">
+    | null
+    | undefined,
+  activeSubview: AnalysisSubview | null | undefined,
+): FrequencyDomainRouteIdentity | null {
+  if (
+    activeSubview === "dispersion.modal" &&
+    requestedRoute?.mode === "dispersion_modal" &&
+    requestedRoute.primaryChart === "dispersion" &&
+    publishedRoute.mode === "dispersion_modal" &&
+    publishedRoute.primaryChart === "modal-spectrum" &&
+    resultContext?.kSampling?.kind === "single"
+  ) {
+    return { mode: "dispersion_modal", primaryChart: "modal-spectrum" };
+  }
+  return requestedRoute;
+}
+
+export function isFixedKModalSpectrumSubview({
+  activeSurface,
+  activeSubview,
+  resultContext,
+  route,
+}: {
+  activeSurface: AnalysisSurface;
+  activeSubview: AnalysisSubview | null | undefined;
+  resultContext:
+    | Pick<FrequencyDomainResultContext, "kSampling">
+    | null
+    | undefined;
+  route: FrequencyDomainRouteIdentity | null | undefined;
+}): boolean {
+  return (
+    activeSurface === "dispersion" &&
+    activeSubview === "dispersion.modal" &&
+    route?.mode === "dispersion_modal" &&
+    route.primaryChart === "modal-spectrum" &&
+    resultContext?.kSampling?.kind === "single"
+  );
 }
 
 

@@ -130,7 +130,10 @@ import {
   AnalysisPlotsView,
   resultProjectionSelectionFromLegacyPoint,
 } from "./AnalysisPlotsView";
-import { useAnalysisPlotsController } from "./useAnalysisPlotsController";
+import {
+  frequencyDomainSelectionFromPoint,
+  useAnalysisPlotsController,
+} from "./useAnalysisPlotsController";
 
 const props = {
   datasetRefs: [], dynamicStructureFactor: null, dynamicStructureFactorStatus: "idle", frequencyDomainSeries: [], frequencyDomainStatus: "idle", frequencyDomainTitle: "Frequency domain", frequencyDomainUnavailableReason: null,
@@ -350,6 +353,94 @@ describe("Analysis workbench", () => {
     expect(html).toContain('aria-label="Frequency domain"');
     expect(html).toContain("No frequency-domain series available");
     expect(html).not.toContain('data-analysis-panel="dynamics.s-k-f"');
+  });
+
+  it("labels the existing modal subview as fixed-k modes for a single-k spectrum", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        {...props}
+        activeSurface="dispersion"
+        activeSubview="dispersion.modal"
+        frequencyDomainCalculationMode="dispersion_modal"
+        frequencyDomainPresentation={{
+          kind: "ready",
+          physicalContext: {
+            kSampling: { kind: "single", vectorRadPerM: [0, 1e7, 0] },
+          } as never,
+          revision: "sha256:fixed-k-spectrum",
+        }}
+        frequencyDomainRoute={{
+          mode: "dispersion_modal",
+          primaryChart: "modal-spectrum",
+        }}
+      />,
+    );
+
+    expect(html).toContain('data-analysis-subview="dispersion.modal"');
+    expect(html).toContain("Modes at fixed k");
+    expect(html).not.toContain("Modal fₙ(k)");
+  });
+
+  it("maps a fixed-k modal spectrum click through the spectrum mode identity", () => {
+    const selection = frequencyDomainSelectionFromPoint({
+      artifactRevision: "sha256:fixed-k-spectrum",
+      chartId: "dispersion:analysis/frequency-domain/eigen-spectrum",
+      dispersionModel: {
+        points: [{
+          frequencyHz: 2e9,
+          modeFieldAvailable: true,
+          modeFieldId: "wrong-dispersion-field",
+          modeFieldResourceKey: "field://wrong-dispersion-field",
+          modeId: "wrong-dispersion-mode",
+          pathS: 3e7,
+          rawModeIndex: 99,
+          sampleId: "wrong-dispersion-sample",
+          sampleIndex: 99,
+          wavevectorKf: [3e7, 0, 0],
+        }],
+      } as never,
+      point: {
+        label: "Eigenfrequency",
+        point: { rowIndex: 0, x: 1, y: 8e9 },
+        quantity: "frequency",
+        seriesId: "frequency:modal-0",
+        source: {
+          kind: "analysis.frequency_domain",
+          resourceKey: "analysis/frequency-domain/eigen-spectrum",
+          tableId: "frequency-domain:eigen-spectrum",
+        },
+        unit: "Hz",
+        xUnit: "mode index",
+      } as never,
+      resultContext: {
+        kSampling: { kind: "single", vectorRadPerM: [0, 1e7, 0] },
+      } as never,
+      responseModel: { points: [] } as never,
+      routeMode: "dispersion_modal",
+      routePrimaryChart: "modal-spectrum",
+      spectrumModel: {
+        points: [{
+          frequencyHz: 8e9,
+          modeFieldAvailable: true,
+          modeFieldId: "fixed-k-mode-field",
+          modeFieldResourceKey: "field://fixed-k-mode-field",
+          modeId: "sample-0000/mode-0002",
+          rawModeIndex: 2,
+          sampleId: "sample-0000",
+          sampleIndex: 0,
+        }],
+      } as never,
+    });
+
+    expect(selection.ref).toMatchObject({
+      calculationMode: "dispersion_modal",
+      fieldId: "fixed-k-mode-field",
+      modeId: "sample-0000/mode-0002",
+      modeIndex: 2,
+      sampleId: "sample-0000",
+      wavevectorKf: [0, 1e7, 0],
+    });
+    expect(selection.ref).not.toHaveProperty("kPathCoordinateRadPerM");
   });
 
   it("fails closed for a legacy dispersion surface without a frequency artifact", () => {

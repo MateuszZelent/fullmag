@@ -650,6 +650,11 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function stringIdentifier(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return stringValue(value);
+}
+
 function booleanValue(value: unknown): boolean | null {
   if (typeof value === "boolean") return value;
   if (typeof value === "number" && (value === 0 || value === 1)) {
@@ -937,7 +942,7 @@ export function readEigenSpectrumPayload(
       rawModeFieldResourceKey,
     );
     return [{
-      branchId: stringValue(item.branch_id ?? item.branchId),
+      branchId: stringIdentifier(item.branch_id ?? item.branchId),
       dampingRateHz: finiteNumber(item.damping_rate_hz ?? item.dampingRateHz),
       displayModeIndex: modeId == null ? rawModeIndex : displayModeIndex,
       frequencyHz: finiteNumber(
@@ -1030,6 +1035,101 @@ export function buildEigenSpectrumChartModel(
       },
     ],
   };
+}
+
+export function enrichEigenSpectrumChartModelForFixedK({
+  dispersion,
+  expectedRunId,
+  expectedStageId,
+  spectrum,
+  wavevectorKf,
+}: {
+  dispersion: FrequencyDomainTextArtifactLike | null | undefined;
+  expectedRunId: string | null | undefined;
+  expectedStageId: string | null | undefined;
+  spectrum: FrequencyDomainJsonArtifactLike | null | undefined;
+  wavevectorKf: readonly [number, number, number];
+}): FrequencyDomainChartBuildResult<EigenSpectrumPoint> {
+  const spectrumModel = buildEigenSpectrumChartModel(spectrum);
+  if (
+    !spectrum ||
+    !dispersion ||
+    !expectedRunId ||
+    !expectedStageId ||
+    !wavevectorKf.every(Number.isFinite) ||
+    spectrum.status !== "ready" ||
+    dispersion.status !== "ready" ||
+    stringValue(spectrum.run_id) !== expectedRunId ||
+    stringValue(dispersion.run_id) !== expectedRunId ||
+    stringValue(spectrum.stage_id) !== expectedStageId ||
+    stringValue(dispersion.stage_id) !== expectedStageId ||
+    !eigenArtifactsShareOwnership(spectrum, dispersion)
+  ) {
+    return spectrumModel;
+  }
+
+  const dispersionPointsByIdentity = new Map<string, EigenDispersionPoint | null>();
+  for (const point of buildEigenDispersionChartModel(dispersion).points) {
+    const identityKey = dispersionPointIdentityKey(point.sampleIndex, point.rawModeIndex);
+    dispersionPointsByIdentity.set(
+      identityKey,
+      dispersionPointsByIdentity.has(identityKey) ? null : point,
+    );
+  }
+
+  const points = spectrumModel.points.map((point) => {
+    if (
+      !hasUniqueExplicitEigenSpectrumIdentity(
+        spectrum.payload,
+        point.sampleIndex,
+        point.rawModeIndex,
+      )
+    ) return point;
+    const dispersionPoint = dispersionPointsByIdentity.get(
+      dispersionPointIdentityKey(point.sampleIndex, point.rawModeIndex),
+    );
+    if (
+      !dispersionPoint ||
+      !scientificFrequencyValuesAgree(point.frequencyHz, dispersionPoint.frequencyHz) ||
+      !dispersionPoint.wavevectorKf ||
+      !scientificWavevectorsAgree(wavevectorKf, dispersionPoint.wavevectorKf) ||
+      (point.modeId && dispersionPoint.modeId && point.modeId !== dispersionPoint.modeId) ||
+      (point.branchId != null && dispersionPoint.branchId != null &&
+        point.branchId !== dispersionPoint.branchId) ||
+      (point.modeFieldId && dispersionPoint.modeFieldId &&
+        point.modeFieldId !== dispersionPoint.modeFieldId)
+    ) return point;
+
+    return {
+      ...point,
+      ...(point.branchId == null && dispersionPoint.branchId != null
+        ? { branchId: dispersionPoint.branchId }
+        : {}),
+      ...(point.modeId == null && dispersionPoint.modeId
+        ? { modeId: dispersionPoint.modeId }
+        : {}),
+      ...(point.sampleId == null && dispersionPoint.sampleId
+        ? { sampleId: dispersionPoint.sampleId }
+        : {}),
+    };
+  });
+
+  return { ...spectrumModel, points };
+}
+
+function scientificFrequencyValuesAgree(left: number, right: number): boolean {
+  const tolerance = 64 * Number.EPSILON * Math.max(1, Math.abs(left), Math.abs(right));
+  return Math.abs(left - right) <= tolerance;
+}
+
+function scientificWavevectorsAgree(
+  left: readonly number[],
+  right: readonly number[],
+): boolean {
+  return left.length === 3 && right.length === 3 && left.every((component, index) => {
+    const other = right[index];
+    return other !== undefined && scientificFrequencyValuesAgree(component, other);
+  });
 }
 
 export function buildEigenModeSelectionRef(
@@ -1317,7 +1417,7 @@ export function buildEigenBranchDetailChartModel(
   };
 }
 
-function eigenArtifactsShareOwnership(
+export function eigenArtifactsShareOwnership(
   branches: (FrequencyDomainArtifactOwnershipLike & { status: string }) | null | undefined,
   dispersion: FrequencyDomainTextArtifactLike,
 ): boolean {
@@ -1333,6 +1433,76 @@ function eigenArtifactsShareOwnership(
     if (stringValue(branches[key]) !== stringValue(dispersion[key])) return false;
   }
   return true;
+}
+
+/**
+ * True only when the raw spectrum contains one row with these explicitly
+ * published sample and raw-mode indexes. Parser fallback indexes are never
+ * suitable for joining identities across artifacts.
+ */
+export function hasUniqueExplicitEigenSpectrumIdentity(
+  payload: unknown,
+  sampleIndex: number,
+  rawModeIndex: number,
+): boolean {
+  const root = record(payload);
+  if (!root) return false;
+  const nestedPayload = record(root.payload);
+  const directRows = array(
+    root.modes ?? root.spectrum ?? root.rows ?? nestedPayload?.modes,
+  );
+  let matchCount = 0;
+  if (directRows.length > 0) {
+    for (const row of directRows) {
+      const item = record(row);
+      if (!item) continue;
+      const explicitSampleIndex = explicitNonNegativeInteger(
+        item.sample_index ?? item.sampleIndex,
+      );
+      const explicitRawModeIndex = explicitNonNegativeInteger(
+        item.raw_mode_index ?? item.mode_index ?? item.rawModeIndex ?? item.modeIndex,
+      );
+      if (explicitSampleIndex === sampleIndex && explicitRawModeIndex === rawModeIndex) {
+        matchCount += 1;
+      }
+    }
+    return matchCount === 1;
+  }
+
+  const samples = array(root.samples ?? nestedPayload?.samples);
+  for (const sample of samples) {
+    const sampleRecord = record(sample);
+    if (!sampleRecord) continue;
+    const sampleIndexValue =
+      sampleRecord.sample_index ?? sampleRecord.sampleIndex;
+    const explicitSampleIndex = explicitNonNegativeInteger(sampleIndexValue);
+    for (const mode of array(sampleRecord.modes)) {
+      const modeRecord = record(mode);
+      if (!modeRecord) continue;
+      const modeSampleIndexValue = modeRecord.sample_index ?? modeRecord.sampleIndex;
+      const modeSampleIndex = modeSampleIndexValue == null
+        ? explicitSampleIndex
+        : explicitNonNegativeInteger(modeSampleIndexValue);
+      const explicitRawModeIndex = explicitNonNegativeInteger(
+        modeRecord.raw_mode_index ??
+          modeRecord.mode_index ??
+          modeRecord.rawModeIndex ??
+          modeRecord.modeIndex,
+      );
+      if (modeSampleIndex === sampleIndex && explicitRawModeIndex === rawModeIndex) {
+        matchCount += 1;
+      }
+    }
+  }
+  return matchCount === 1;
+}
+
+function explicitNonNegativeInteger(value: unknown): number | null {
+  if (typeof value === "string" && value.trim().length === 0) return null;
+  const parsed = finiteNumber(value);
+  return parsed != null && Number.isSafeInteger(parsed) && parsed >= 0
+    ? parsed
+    : null;
 }
 
 export function buildEigenBranchesModel(

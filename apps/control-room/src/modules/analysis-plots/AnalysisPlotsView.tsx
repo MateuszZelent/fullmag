@@ -25,14 +25,22 @@ import { AnalysisTableSurface } from "./components/AnalysisTableSurface";
 import { DynamicStructureFactorView } from "./DynamicStructureFactorView";
 import { SpinWaveGammaView } from "./SpinWaveGammaView";
 import type { DynamicStructureFactorPointSelection } from "./dynamicStructureFactorModel";
-import { formatXAxisLabel, tableRowsLike, tableWindowTableId } from "./analysisWorkbenchModel";
+import {
+  formatXAxisLabel,
+  isFixedKModalSpectrumSubview,
+  tableRowsLike,
+  tableWindowTableId,
+} from "./analysisWorkbenchModel";
 import type { ChartSeries } from "./chartTableModel";
 import type { AnalysisFrequencyPresentationState } from "./hooks/useAnalysisFrequencyData";
 import type { ChartValueRange } from "./chartTableModel";
 import type { SpinWaveGammaFeatureSelection } from "./spinWaveGammaModel";
 import type { AnalysisResultProjectionSelection } from "./components/AnalysisResultProjectionSurface";
 import type { AnalysisResultItemKind } from "@/shared/domain/analysis/results";
-import type { FmrModalDrivenComparisonModel } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import type {
+  FmrModalDrivenComparisonModel,
+  FrequencyDomainChartRoute,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { ANALYSIS_COMPARISON_UNAVAILABLE_REASON } from "./analysisComparison";
 import {
   legacyDsfPointSelectionRef,
@@ -57,6 +65,7 @@ type AnalysisPlotsViewInput = {
   frequencyDomainUnavailableReason?: string | null;
   frequencyDomainProvenance?: string | null;
   frequencyDomainPresentation?: AnalysisFrequencyPresentationState;
+  frequencyDomainRoute?: Pick<FrequencyDomainChartRoute, "mode" | "primaryChart">;
   kernel: KernelApi;
   onDatasetRefChange?: (datasetRef: string | null) => void;
   onDisplayUnitsChange?: (patch: Record<string, string>) => void;
@@ -126,6 +135,15 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
   const legalSubviews = customSubviews.filter((subview) => canonicalSubviewSet.has(subview));
   const subviews = legalSubviews.length > 0 ? legalSubviews : canonicalSubviews;
   const activeSubview = resolveActiveSubview(surface, requestedActiveSubview, subviews);
+  const fixedKModalSpectrumSubview = isFixedKModalSpectrumSubview({
+    activeSurface: surface,
+    activeSubview,
+    resultContext: props.frequencyDomainPresentation?.physicalContext,
+    route: props.frequencyDomainRoute,
+  });
+  const subviewLabels = fixedKModalSpectrumSubview
+    ? { "dispersion.modal": "Modes at fixed k" }
+    : undefined;
   const isDynamicStructureFactorSubview = activeSubview === "dynamics.s-k-f";
   const isFrequencySubview = activeSubview === "dispersion.modal" || activeSubview === "dispersion.driven-map" || activeSubview === "dispersion.branches" || activeSubview === "resonance.eigenmodes" || activeSubview === "resonance.frequency-response" || activeSubview === "resonance.modal-driven";
   const isHysteresisSubview = activeSubview === "hysteresis.loop" || activeSubview === "hysteresis.branches";
@@ -159,7 +177,7 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
       : undefined;
 
   return <div className="fm-analysis-plots">
-    <AnalysisSurfaceTabs active={surface} activeSubview={activeSubview} onChange={onSurfaceChange} onSubviewChange={onSubviewChange} subviews={subviews} />
+    <AnalysisSurfaceTabs active={surface} activeSubview={activeSubview} onChange={onSurfaceChange} onSubviewChange={onSubviewChange} subviewLabels={subviewLabels} subviews={subviews} />
     {resultProjection ? <AnalysisResultProjectionSurface {...resultProjection} /> : null}
     <section
       className="fm-analysis-plots__panel fm-analysis-plots__panel--primary"

@@ -17,6 +17,7 @@ import {
   buildEigenDispersionChartModel,
   buildEigenModeSelectionRef,
   buildEigenSpectrumChartModel,
+  enrichEigenSpectrumChartModelForFixedK,
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
   buildFmrPeakTableModel,
@@ -105,6 +106,72 @@ describe("frequencyDomainChartModels", () => {
     ]);
     expect(model.series[0]?.unit).toBe("GHz");
     expect(model.series[0]?.xUnit).toBe("1");
+  });
+
+  it("preserves numeric zero branch identity in spectrum JSON", () => {
+    const model = buildEigenSpectrumChartModel(
+      jsonResource({
+        modes: [{
+          branch_id: 0,
+          frequency_hz: 2.5e9,
+          raw_mode_index: 0,
+          sample_index: 0,
+        }],
+      }),
+    );
+
+    expect(model.points[0]?.branchId).toBe("0");
+  });
+
+  it("enriches fixed-k chart points only from one owned frequency and vector match", () => {
+    const spectrum = jsonResource({
+      modes: [{
+        frequency_hz: 2.5e9,
+        raw_mode_index: 0,
+        sample_id: "k-sample-0000",
+        sample_index: 0,
+      }],
+    });
+    const dispersion = textResource([
+      "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,sample_id,mode_id,branch_id,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m",
+      "0,0,0,2500000000,csv-sample-0000,csv-sample-0000/mode-0000,0,20000000,0,0",
+    ].join("\n"));
+    const model = enrichEigenSpectrumChartModelForFixedK({
+      dispersion,
+      expectedRunId: "run-a",
+      expectedStageId: "stage-a",
+      spectrum,
+      wavevectorKf: [2e7, 0, 0],
+    });
+
+    expect(model.points[0]).toMatchObject({
+      branchId: "0",
+      modeId: "csv-sample-0000/mode-0000",
+      sampleId: "k-sample-0000",
+    });
+    expect(buildEigenModeSelectionRef(model.points[0]!)).toMatchObject({
+      branchId: "0",
+      modeId: "csv-sample-0000/mode-0000",
+      sampleId: "k-sample-0000",
+    });
+  });
+
+  it("does not enrich fixed-k chart points without a matching published CSV vector", () => {
+    const model = enrichEigenSpectrumChartModelForFixedK({
+      dispersion: textResource([
+        "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,mode_id,branch_id",
+        "0,0,0,2500000000,sample-0000/mode-0000,0",
+      ].join("\n")),
+      expectedRunId: "run-a",
+      expectedStageId: "stage-a",
+      spectrum: jsonResource({
+        modes: [{ frequency_hz: 2.5e9, raw_mode_index: 0, sample_index: 0 }],
+      }),
+      wavevectorKf: [2e7, 0, 0],
+    });
+
+    expect(model.points[0]?.modeId).toBeNull();
+    expect(model.points[0]?.branchId).toBeNull();
   });
 
   it("honors explicit false mode-field availability even when an id is present", () => {

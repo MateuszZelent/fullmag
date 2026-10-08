@@ -1784,6 +1784,7 @@ describe("AnalysisPlotsView", () => {
       },
       responseModel,
       routeMode: "fmr_response",
+      routePrimaryChart: "response-sweep",
       spectrumModel: buildEigenSpectrumChartModel({ status: "idle" }),
     });
 
@@ -1846,6 +1847,7 @@ describe("AnalysisPlotsView", () => {
       },
       responseModel: buildFrequencyResponseChartModel({ status: "idle" }),
       routeMode: "free_modes",
+      routePrimaryChart: "modal-spectrum",
       spectrumModel,
     });
 
@@ -1900,6 +1902,7 @@ describe("AnalysisPlotsView", () => {
       },
       responseModel: buildFrequencyResponseChartModel({ status: "idle" }),
       routeMode: "dispersion_modal",
+      routePrimaryChart: "dispersion",
       spectrumModel: buildEigenSpectrumChartModel({ status: "idle" }),
     });
 

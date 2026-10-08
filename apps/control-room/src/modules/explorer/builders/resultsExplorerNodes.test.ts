@@ -51,6 +51,74 @@ const drivenGamma = {
   studyProduct: "driven_response",
 } satisfies PhysicsFirstResultEntry;
 
+function fixedKModalInput() {
+  return {
+    currentRun: { revision: 1, run_id: "run-fixed-k" },
+    dispersion: {
+      artifact_set_id: "artifact-set-fixed-k",
+      mesh_generation_id: "mesh-fixed-k",
+      path_metadata: {
+        sampling: {
+          kind: "single",
+          vector_rad_per_m: [2e7, 0, 0],
+        },
+      },
+      revision: "dispersion-r1",
+      run_id: "run-fixed-k",
+      session_id: "session-fixed-k",
+      stage_id: "stage-fixed-k",
+      status: "ready",
+      text: [
+        "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,sample_id,mode_id,branch_id,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m",
+        "0,0,0,2500000000,csv-sample-0000,csv-sample-0000/mode-0000,0,20000000,0,0",
+      ].join("\n"),
+    },
+    manifest: {
+      result_manifest: {
+        mesh_generation_id: "mesh-fixed-k",
+        payload: {
+          equilibrium_identity: "eq-fixed-k",
+          requested_execution: {
+            boundary_context: "floquet_periodic",
+            k_sampling: { kind: "single", vector_rad_per_m: [2e7, 0, 0] },
+          },
+          run_id: "run-fixed-k",
+          stage_id: "stage-fixed-k",
+          study_product: "modal_eigen",
+        },
+        run_id: "run-fixed-k",
+        status: "ready",
+      },
+    },
+    spectrum: {
+      artifact_set_id: "artifact-set-fixed-k",
+      mesh_generation_id: "mesh-fixed-k",
+      payload: {
+        modes: [{
+          frequency_hz: 2.5e9,
+          mode_field_available: true,
+          mode_field_id: "analysis:eigen:k-sample-0000:mode-0000",
+          raw_mode_index: 0,
+          sample_id: "k-sample-0000",
+          sample_index: 0,
+        }],
+        schema_version: "eigen_spectrum.v2",
+      },
+      revision: "spectrum-r1",
+      run_id: "run-fixed-k",
+      session_id: "session-fixed-k",
+      stage_id: "stage-fixed-k",
+      status: "ready",
+    },
+  };
+}
+
+function fixedKModeTarget(input: ReturnType<typeof fixedKModalInput>) {
+  const adapted = physicsFirstResultsSnapshotFromResources(input);
+  return flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+    .find((node) => node.kind === "results.dispersion.modal.mode_at_k");
+}
+
 describe("buildPhysicsFirstResultsTree", () => {
   it("builds run-scoped resonance stages and first-class postprocessing roots", () => {
     const tree = buildPhysicsFirstResultsTree({
@@ -689,6 +757,64 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       source: "eigen-mode",
       studyProduct: "modal_eigen",
       type: "frequency-domain",
+    });
+  });
+
+  it("carries fixed-k v2 mode IDs through a unique owned CSV match", () => {
+    const target = fixedKModeTarget(fixedKModalInput());
+
+    expect(target).toMatchObject({
+      branchId: "0",
+      fieldId: "analysis:eigen:k-sample-0000:mode-0000",
+      kContextKind: "fixed_k",
+      modeId: "csv-sample-0000/mode-0000",
+      modeIndex: 0,
+      sampleId: "k-sample-0000",
+      sampleIndex: 0,
+      wavevectorKf: [2e7, 0, 0],
+    });
+  });
+
+  it("does not enrich fixed-k mode IDs across different run or stage owners", () => {
+    const wrongRun = fixedKModalInput();
+    wrongRun.dispersion.run_id = "other-run";
+    const wrongStage = fixedKModalInput();
+    wrongStage.dispersion.stage_id = "other-stage";
+
+    expect(fixedKModeTarget(wrongRun)).not.toHaveProperty("modeId");
+    expect(fixedKModeTarget(wrongRun)).not.toHaveProperty("branchId");
+    expect(fixedKModeTarget(wrongStage)).not.toHaveProperty("modeId");
+    expect(fixedKModeTarget(wrongStage)).not.toHaveProperty("branchId");
+  });
+
+  it("rejects ambiguous, conflicting, or inferred fixed-k identity matches", () => {
+    const frequencyMismatch = fixedKModalInput();
+    frequencyMismatch.dispersion.text = frequencyMismatch.dispersion.text.replace(
+      "2500000000",
+      "2500000001",
+    );
+    const duplicateCsv = fixedKModalInput();
+    duplicateCsv.dispersion.text = `${duplicateCsv.dispersion.text}\n0,0,0,2500000000,other-sample,other-sample/mode-0000,1,20000000,0,0`;
+    const implicitSpectrumIndex = fixedKModalInput();
+    Reflect.deleteProperty(implicitSpectrumIndex.spectrum.payload.modes[0], "raw_mode_index");
+    const conflictingModeId = fixedKModalInput();
+    Object.assign(conflictingModeId.spectrum.payload.modes[0], {
+      mode_id: "different-mode",
+    });
+
+    for (const input of [
+      frequencyMismatch,
+      duplicateCsv,
+      implicitSpectrumIndex,
+      conflictingModeId,
+    ]) {
+      expect(fixedKModeTarget(input)).not.toHaveProperty("branchId");
+    }
+    expect(fixedKModeTarget(frequencyMismatch)).not.toHaveProperty("modeId");
+    expect(fixedKModeTarget(duplicateCsv)).not.toHaveProperty("modeId");
+    expect(fixedKModeTarget(implicitSpectrumIndex)).not.toHaveProperty("modeId");
+    expect(fixedKModeTarget(conflictingModeId)).toMatchObject({
+      modeId: "different-mode",
     });
   });
 

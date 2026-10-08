@@ -16,6 +16,7 @@ let manifestState: { data: unknown; status: string } = {
 };
 let selectedResultRunId: string | null = null;
 let spectrumState: { data: unknown; status: string } = { data: null, status: "idle" };
+let dispersionState: { data: unknown; status: string } = { data: null, status: "idle" };
 let responseState: { data: unknown; status: string } = { data: null, status: "idle" };
 
 vi.mock("@/kernel/selection/useSelection", () => ({
@@ -25,16 +26,17 @@ vi.mock("@/kernel/selection/useSelection", () => ({
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFrequencyDomainManifestResource: (options: unknown) => { manifest(options); return manifestState; },
   useFrequencyDomainEigenSpectrumResource: (options: unknown) => { spectrum(options); return spectrumState; },
-  useFrequencyDomainEigenDispersionResource: (options: unknown) => { dispersion(options); return { data: null, status: "idle" }; },
+  useFrequencyDomainEigenDispersionResource: (options: unknown) => { dispersion(options); return dispersionState; },
   useFrequencyDomainEigenBranchesResource: (options: unknown) => { branches(options); return { data: null, status: "idle" }; },
   useFrequencyDomainResponseSweepResource: (options: unknown) => { response(options); return responseState; },
 }));
 
 import { useAnalysisFrequencyData } from "./useAnalysisFrequencyData";
 
-function Harness({ surface = "resonance-fmr", activeSubview, showRoute = false }: { surface?: "dispersion" | "resonance-fmr"; activeSubview?: AnalysisSubview; showRoute?: boolean }) {
+function Harness({ surface = "resonance-fmr", activeSubview, showRoute = false, showModeIdentity = false }: { surface?: "dispersion" | "resonance-fmr"; activeSubview?: AnalysisSubview; showRoute?: boolean; showModeIdentity?: boolean }) {
   const data = useAnalysisFrequencyData(surface, activeSubview);
-  return <span>{`${data.frequencyDomainStatus}:${data.frequencyDomainSeries.length}${showRoute ? `:${data.frequencyDomainRoute.primaryChart}:${data.frequencyDomainComparisonModel.readiness}` : ""}`}</span>;
+  const mode = data.frequencyDomainSpectrumModel.points[0];
+  return <span>{`${data.frequencyDomainStatus}:${data.frequencyDomainSeries.length}${showRoute ? `:${data.frequencyDomainRoute.primaryChart}:${data.frequencyDomainComparisonModel.readiness}` : ""}${showModeIdentity ? `:${mode?.modeId ?? "missing"}:${mode?.branchId ?? "missing"}` : ""}`}</span>;
 }
 
 describe("frequency surface mismatch", () => {
@@ -164,6 +166,91 @@ describe("frequency surface mismatch", () => {
       expect(response).toHaveBeenLastCalledWith({ enabled: true });
     } finally {
       spectrumState = { data: null, status: "idle" };
+      responseState = { data: null, status: "idle" };
+      manifestState = { data: { result_manifest: { payload: { artifacts: { response_sweep_v2_path: "response.json" }, requested_execution: { calculation_mode: "fmr_response" }, run_id: "run-current" } } }, status: "ready" };
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("loads the owned fixed-k dispersion CSV to retain chart-selected mode identity", async () => {
+    const owners = {
+      artifact_set_id: "artifact-set-fixed-k",
+      mesh_generation_id: "mesh-fixed-k",
+      run_id: "run-fixed-k",
+      session_id: "session-fixed-k",
+      stage_id: "stage-fixed-k",
+    };
+    manifestState = {
+      data: {
+        result_manifest: {
+          mesh_generation_id: "mesh-fixed-k",
+          payload: {
+            artifacts: {
+              dispersion_csv_path: "dispersion.csv",
+              spectrum_v2_path: "spectrum.json",
+            },
+            equilibrium_identity: "eq-fixed-k",
+            geometry_identity: "geometry-fixed-k",
+            mesh_identity: "mesh-fixed-k",
+            requested_execution: {
+              boundary_context: "floquet_periodic",
+              calculation_mode: "dispersion_modal",
+              k_sampling: { kind: "single", vector_rad_per_m: [2e7, 0, 0] },
+            },
+            run_id: "run-fixed-k",
+            stage_id: "stage-fixed-k",
+            study_product: "modal_eigen",
+          },
+          run_id: "run-fixed-k",
+          stage_id: "stage-fixed-k",
+        },
+      },
+      status: "ready",
+    };
+    spectrumState = {
+      data: {
+        ...owners,
+        payload: {
+          modes: [{
+            frequency_hz: 2.5e9,
+            mode_field_available: true,
+            mode_field_id: "analysis:eigen:k-sample-0000:mode-0000",
+            raw_mode_index: 0,
+            sample_id: "k-sample-0000",
+            sample_index: 0,
+          }],
+        },
+        status: "ready",
+      },
+      status: "ready",
+    };
+    dispersionState = {
+      data: {
+        ...owners,
+        status: "ready",
+        text: [
+          "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,sample_id,mode_id,branch_id,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m",
+          "0,0,0,2500000000,csv-sample-0000,csv-sample-0000/mode-0000,0,20000000,0,0",
+        ].join("\n"),
+      },
+      status: "ready",
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <Harness surface="dispersion" activeSubview="dispersion.modal" showModeIdentity />,
+      ));
+
+      expect(container.textContent).toContain(
+        "csv-sample-0000/mode-0000:0",
+      );
+      expect(dispersion).toHaveBeenLastCalledWith({ enabled: true });
+    } finally {
+      spectrumState = { data: null, status: "idle" };
+      dispersionState = { data: null, status: "idle" };
       responseState = { data: null, status: "idle" };
       manifestState = { data: { result_manifest: { payload: { artifacts: { response_sweep_v2_path: "response.json" }, requested_execution: { calculation_mode: "fmr_response" }, run_id: "run-current" } } }, status: "ready" };
       await act(async () => root.unmount());

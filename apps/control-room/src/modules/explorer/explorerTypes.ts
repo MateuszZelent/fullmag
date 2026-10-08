@@ -379,6 +379,7 @@ export interface ExplorerNode {
   monitorId?: string;
   visualizationTargetId?: string;
   modeIndex?: number;
+  modeId?: string;
   objectId?: string;
   objectRole?: "antenna" | "magnet" | "auxiliary";
   observableId?: string;
@@ -411,6 +412,7 @@ export interface ExplorerNode {
    */
   yAxisIds?: readonly string[];
   sampleIndex?: number;
+  sampleId?: string;
   wavevectorKf?: readonly [number, number, number];
   stageId?: string;
   stageIndex?: number;
