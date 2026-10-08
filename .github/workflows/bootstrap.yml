@@ -476,6 +476,9 @@ jobs:
           python -B scripts/test_compare_de_100nm_pilot.py -v
           python -m pytest -q scripts/test_validate_de_smoke_rows.py
 
+      - name: Run COMSOL A1 receipt-bound frequency comparison contracts
+        run: python -m pytest -q scripts/test_compare_comsol_a1_frequency_reference.py
+
       - name: Run rejected COMSOL benchmark mesh terminal contract
         run: >-
           python -m pytest -q

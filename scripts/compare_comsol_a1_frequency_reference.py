@@ -119,7 +119,14 @@ def _read_numeric(path: Path, reference: dict[int, list[float]]) -> dict[int, li
             frequency = _number(row, frequency_key)
             if frequency <= 0:
                 raise ValueError("Fullmag frequency must be positive")
-            residual = _number(row, "residual_norm") if "residual_norm" in fields else None
+            residual_text = row.get("residual_norm")
+            residual = (
+                _number(row, "residual_norm")
+                if isinstance(residual_text, str) and residual_text.strip()
+                else None
+            )
+            if residual is not None and residual < 0:
+                raise ValueError("Fullmag residual_norm must be nonnegative")
             result.setdefault(sample, []).append({
                 "raw_mode_index": raw_mode,
                 "frequency_hz": frequency,
@@ -190,7 +197,11 @@ def _verify_managed_a1(case_dir: Path) -> dict[str, Any]:
     expected_digest = cases[0].get("required_artifact_hashes", {}).get("eigen/dispersion.csv", {}).get("sha256")
     if not isinstance(expected_digest, str) or expected_digest != _hash(case_dir / "eigen/dispersion.csv"):
         raise ValueError("Fullmag A1 dispersion does not match its managed artifact hash")
-    metadata = json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))
+    metadata_bytes = (case_dir / "metadata.json").read_bytes()
+    metadata_digest = cases[0].get("required_artifact_hashes", {}).get("metadata.json", {}).get("sha256")
+    if not isinstance(metadata_digest, str) or metadata_digest != hashlib.sha256(metadata_bytes).hexdigest():
+        raise ValueError("Fullmag A1 metadata does not match its managed artifact hash")
+    metadata = json.loads(metadata_bytes.decode("utf-8"))
     benchmark = metadata.get("problem_meta", {}).get("runtime_metadata", {}).get("comsol_nonzero_k_dispersion", {})
     if benchmark.get("schema_version") != "fullmag.comsol_nonzero_k_benchmark.v1" or benchmark.get("benchmark_id") != "comsol-py-antidot-square-v1" or benchmark.get("case_id") != "a1":
         raise ValueError("Fullmag metadata is not the A1 benchmark")

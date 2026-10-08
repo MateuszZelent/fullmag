@@ -112,7 +112,23 @@ def test_managed_binding_rejects_tampered_numeric_csv(tmp_path: Path) -> None:
             "material": {"Ms_A_per_m": 8e5, "Aex_J_per_m": 13e-12, "gamma_m_per_A_s": 2.211e5},
         }
     }}}), encoding="utf-8")
+    receipt_path = tmp_path / "run-result.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    original_metadata = (case / "metadata.json").read_bytes()
+    hashes = receipt["cases"][0]["required_artifact_hashes"]
+    hashes["metadata.json"] = {"sha256": hashlib.sha256(original_metadata).hexdigest()}
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
     assert _verify_managed_a1(case)["status"] == "completed_unqualified"
+    (case / "metadata.json").write_bytes(original_metadata + b" ")
+    with pytest.raises(ValueError, match="metadata.*artifact hash"):
+        _verify_managed_a1(case)
+    (case / "metadata.json").write_bytes(original_metadata)
+    del hashes["metadata.json"]
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(ValueError, match="metadata.*artifact hash"):
+        _verify_managed_a1(case)
+    hashes["metadata.json"] = {"sha256": hashlib.sha256(original_metadata).hexdigest()}
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
     numeric.write_text(numeric.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="artifact hash"):
         _verify_managed_a1(case)
@@ -128,3 +144,31 @@ def test_provisional_plot_shows_reference_and_fullmag_points(tmp_path: Path) -> 
     image_path = tmp_path / "comparison.png"
     plot_comparison(reference, report, image_path)
     assert image_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.parametrize("cell", ["", "  "])
+def test_empty_optional_residual_is_unqualified_not_an_error(tmp_path: Path, cell: str) -> None:
+    reference, numeric = tmp_path / "reference.csv", tmp_path / "numeric.csv"
+    write_reference(reference)
+    write_numeric(numeric)
+    with numeric.open(encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    for row in rows:
+        row["residual_norm"] = cell
+    with numeric.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    report = compare_frequencies(read_reference(reference), numeric)
+    assert report["status"] == "frequency_only_unqualified"
+    assert all(item["residual_norm"] is None for item in report["samples"][0]["matches"])
+
+
+@pytest.mark.parametrize("cell", ["NaN", "inf", "-1", "invalid"])
+def test_supplied_invalid_residual_is_rejected(tmp_path: Path, cell: str) -> None:
+    reference, numeric = tmp_path / "reference.csv", tmp_path / "numeric.csv"
+    write_reference(reference)
+    write_numeric(numeric)
+    numeric.write_text(numeric.read_text(encoding="utf-8").replace("1e-10", cell), encoding="utf-8")
+    with pytest.raises(ValueError):
+        compare_frequencies(read_reference(reference), numeric)
