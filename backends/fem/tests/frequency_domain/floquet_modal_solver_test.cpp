@@ -1085,7 +1085,11 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
 #if FULLMAG_FEM_WITH_SLEPC
     constexpr std::size_t q_dimension = 8u;
     constexpr double coefficient_scale = 1.0e-60;
-    constexpr double target_frequency_hz = 1.0e6;
+    constexpr double spectral_center_hz = 1.0e6;
+    constexpr double shift_frequency_hz = spectral_center_hz - 1.0e4;
+    // Keep the requested spectrum and its near-duplicate cluster unchanged,
+    // but isolate this refill/dedup fixture from the separate near-pole KSP
+    // residual-gap case. This shift change does not fix that KSP issue.
     const double frequency_offsets_hz[q_dimension] = {
         -0.003, -0.001, 0.001, 0.003, 0.2, 0.4, 0.6, 0.8};
     std::vector<std::complex<double>> a_diagonal(q_dimension);
@@ -1093,7 +1097,7 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
         q_dimension, std::complex<double>(0.0, -coefficient_scale));
     for (std::size_t row = 0u; row < q_dimension; ++row) {
         a_diagonal[row] = coefficient_scale * fd::omega_rad_s_from_frequency_hz(
-            target_frequency_hz + frequency_offsets_hz[row]);
+            spectral_center_hz + frequency_offsets_hz[row]);
     }
     const auto a_qq = diagonal_complex_csr(q_dimension, a_diagonal);
     const auto b_qq = diagonal_complex_csr(q_dimension, b_diagonal);
@@ -1116,9 +1120,9 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
         fd::SLEPcSparseGyrotropicModalEigenRequest request{};
         request.tangent_dof_count = static_cast<int>(q_dimension);
         request.requested_mode_count = requested_count;
-        request.target_frequency_hz = target_frequency_hz;
-        request.frequency_min_hz = target_frequency_hz - 1.0;
-        request.frequency_max_hz = target_frequency_hz + 1.0;
+        request.target_frequency_hz = shift_frequency_hz;
+        request.frequency_min_hz = spectral_center_hz - 1.0;
+        request.frequency_max_hz = spectral_center_hz + 1.0;
         request.residual_tolerance = 1.0e-10;
         request.max_outer_iterations = outer_budget;
         request.max_linear_iterations = 96;
@@ -1153,7 +1157,7 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
               "refilled modes retain the original descriptor residual gate");
         has_refilled_orthogonal_mode =
             has_refilled_orthogonal_mode ||
-            mode.frequency_hz > target_frequency_hz + 0.1;
+            mode.frequency_hz > spectral_center_hz + 0.1;
     }
     check(has_refilled_orthogonal_mode,
           "the final pool includes a farther mode outside the initial duplicate cluster");
