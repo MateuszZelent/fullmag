@@ -406,3 +406,71 @@ Focused validator całej noty 0980: exit 0. Interpretowany zestaw walidatora:
 33/33 PASS, exit 0, bez kompilowania testów jednostkowych. Scoped whitespace
 PASS. Brak mapy 0920 pozostaje wymaganym otwartym krokiem; pełny gate zmienionych
 stron i publiczny build nadal nie mają odbioru. Nie jest to zamknięcie T18.
+
+## T18/T10 — audyt regionalnego drive i rozpoczęte uzupełnienie 0920
+
+WIP `0920-regional-time-domain-field-drive.md`: 13 istniejących bloków równań
+przeniesiono do nazwanych dyrektyw MyST, dodano tabelę głównych symboli i SI,
+kotwice sekcji oraz jawny rozdział kontraktu docelowego od faktycznego
+manifestu/PBC. Nie zmieniono solvera, tolerancji ani statusu backendów.
+Dokument nadal wymaga kompletnej tabeli API/IR, przykładu, mapy źródeł,
+bibliografii i focused/changed-page validation; zależny WIP nie jest gotowy
+do publikacji ani nie zamyka błędu CI. `git diff --check` PASS.
+
+Źródłowy audyt głównego agenta i niezależnego `regional_drive_source_audit`
+ustalił kolejne wymagane działania, nie nowe deklaracje kwalifikacji:
+
+- Python `model/antenna.py::GaussianPlaneWaveFieldProfile` i
+  `GaussianPlaneWaveAntenna` istnieją; nota wymaga wzoru i wszystkich parametrów.
+- Planner `regional_field_drive.rs::resolve_fdm_regional_field_drives`
+  hashuje cały drive, w tym waveform. Docelowy waveform-independent cache
+  wymaga oddzielonego podpisu przestrzennego oraz faktycznej regresji reuse.
+- `adaptive_cell_average` ma absolutny próg średniej, nie względną tolerancję.
+- FEM `zeeman_regional_field.cpp::project_regional_field_drive_bases`
+  stosuje inne tolerancje PBC niż nominalny kontrakt noty; trzeba uzgodnić
+  kontrakt i wykonać regresję bez maskowania mismatch.
+- `regional_field_drive_artifacts.rs::RegionalFieldDriveManifest` nie
+  zapisuje norm bazy, PBC certificate/ABI/quantity revisions. FSAL count/times
+  pochodzą z harmonogramu, nie telemetry solvera.
+- T10: `spin_wave_response.rs::append_requested_spin_wave_artifacts`
+  liczy StageLocal względem `start_time_s`, nie waveform origin; source_trace
+  pomija direction. Najpierw potrzebna regresja segmentu wznowionego i
+  kierunków pola, następnie poprawka zgodna z kontraktem źródła/podatności.
+- Gamma collector ograniczony do `my`/`mz` i global/uniform. Finite-k
+  `spin_wave_sampling.rs::requested_finite_k_artifacts` wymaga FEM oraz
+  >=4 zgodnych snapshotów m/H_drive, nie odejmuje jawnie m0 i odmawia
+  nieważnych przekrojów zamiast realizować kompletną analizę z maską.
+
+Nie kompilowano testów, nie wykonano nowego solve/LLG ani nie restartowano
+sesji. Pełny plan T00–T18 pozostaje aktywny. Następny krok: domknąć notę/mapę
+0920 oraz rzeczywisty błąd czasu źródła Gamma z wykonywalnym dowodem.
+
+## Zapis całego WIP do Draft PR na polecenie użytkownika — 2026-10-08
+
+Ponowny fetch potwierdził master
+`2a3c6becb9c7e111ae1497ec0cd9ac9576acba95`: zero brakujących commitów
+mastera względem brancha. Istniejący PR #147 kieruje branch
+`codex/microwave-antenna-latest-20260909` do `master`.
+
+Pozostały diff dwóch dokumentów jest zapisywany jako jawny WIP, nie jako
+ukończona publikacja naukowa. Przykład Python w 0920 wykonano bez LLG;
+`drive.to_ir()` jest dokładnie równy pokazanemu fragmentowi JSON (PASS).
+Scoped `git diff --check` PASS. Tabela zawiera 41 wpisów publicznego modelu
+i fabryk. Nadal brakuje mapy źródeł 0920, pełnego kontraktu publikacyjnego
+i jego walidacji; samo zapisanie WIP nie usuwa blockera dokumentacji CI.
+
+Wcześniejszy opis błędu zegara Gamma jest historią audytu: poprawka jest
+już w `7742006934104fe805ebabd1a7393a6f798cd5e1`, a jej dokładne dowody
+i ograniczenia zapisano w `2026-10-08-gamma-waveform-origin-checkpoint.md`.
+Kierunek źródła i kwalifikacja Rust/FFT nadal pozostają otwarte.
+
+Kontrola GitHub dla HEAD 7742006934104fe805ebabd1a7393a6f798cd5e1:
+`build` i `control-room-contracts` FAIL; `rust-contracts` in_progress,
+`managed-fem-qualification` queued. Browser fixture, Python contracts,
+storage guards, canonicalization, generated API, API hygiene, React doctor
+i FDM relaxation mają status success. Nie przypisuje się tych wyników
+następnemu commitowi przed sprawdzeniem jego własnego CI.
+
+PR pozostaje Draft, bez merge, cleanup ani restartu workspace. Następny krok:
+uzupełnić kontrakt 0920, zbadać obie nieudane bramki i uzyskać review oraz
+brakujące dowody runtime/nauki przed scaleniem. Zapis WIP nie zamyka T00–T18.
