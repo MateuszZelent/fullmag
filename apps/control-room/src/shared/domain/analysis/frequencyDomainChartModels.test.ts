@@ -1977,6 +1977,21 @@ describe("frequencyDomainChartModels", () => {
     );
   });
 
+  it("routes one explicitly published wavevector to its modal spectrum", () => {
+    const manifest = {
+      artifacts: { dispersion_csv_path: "eigen/dispersion.csv", spectrum_v2_path: "eigen/spectrum.v2.json" },
+      requested_execution: { calculation_mode: "dispersion_modal" },
+      k_sampling: { kind: "single", vector_rad_per_m: [0, -10e6, 0] },
+    };
+    expect(routeFrequencyDomainCalculationMode(manifest)).toEqual(expect.objectContaining({
+      mode: "dispersion_modal", primaryChart: "modal-spectrum", status: "available",
+    }));
+    expect(routeFrequencyDomainCalculationMode({ ...manifest, artifacts: { dispersion_csv_path: "eigen/dispersion.csv" } }))
+      .toEqual(expect.objectContaining({ primaryChart: "modal-spectrum", status: "unavailable" }));
+    expect(routeFrequencyDomainCalculationMode({ ...manifest, k_sampling: { kind: "path", sample_count: 7 } }))
+      .toEqual(expect.objectContaining({ primaryChart: "dispersion", status: "available" }));
+  });
+
   it("routes dispersion_modal manifests to path_s dispersion charts", () => {
     const route = routeFrequencyDomainCalculationMode({
       artifacts: {

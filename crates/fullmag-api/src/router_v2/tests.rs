@@ -45606,6 +45606,215 @@ async fn frequency_domain_dispersion_missing_resource_has_no_artifact_identity()
     }
 }
 
+fn write_frequency_domain_dispersion_fixture(
+    artifact_dir: &Path,
+    csv_content: &str,
+    path_metadata: &serde_json::Value,
+) {
+    let dispersion_dir = artifact_dir.join("eigen").join("dispersion");
+    fs::create_dir_all(&dispersion_dir).expect("dispersion directory should be created");
+    fs::write(
+        artifact_dir.join("eigen").join("dispersion.csv"),
+        csv_content,
+    )
+    .expect("dispersion CSV should be written");
+    fs::write(
+        dispersion_dir.join("path.json"),
+        serde_json::to_vec(path_metadata).expect("path metadata should serialize"),
+    )
+    .expect("dispersion path metadata should be written");
+}
+
+fn single_k_dispersion_metadata(
+    sampling_k_vector: [f64; 3],
+    top_level_k_vector: Option<[f64; 3]>,
+) -> serde_json::Value {
+    let mut metadata = serde_json::json!({
+        "sampling": {
+            "kind": "single",
+            "k_vector": sampling_k_vector
+        }
+    });
+    if let Some(k_vector) = top_level_k_vector {
+        metadata["k_vector"] = serde_json::json!(k_vector);
+    }
+    metadata
+}
+
+async fn request_frequency_domain_dispersion_resource(
+    app: axum::Router,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_resource_accepts_single_k_sampling_without_path_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let csv_content = concat!(
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n",
+        "0,0,0,10000000,0,G,0,0,1000000000\n",
+        "0,0,0,10000000,0,G,1,0,1100000000\n"
+    );
+    let k_vector = [0.0, 1.0e7, 0.0];
+    for path_metadata in [
+        single_k_dispersion_metadata(k_vector, Some(k_vector)),
+        single_k_dispersion_metadata(k_vector, None),
+    ] {
+        write_frequency_domain_dispersion_fixture(&artifact_dir, csv_content, &path_metadata);
+        let (status, payload) = request_frequency_domain_dispersion_resource(app.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(payload["status"], "ready");
+        assert!(
+            payload.get("path_metadata").is_none(),
+            "single-k sampling must not be exposed as a K-path"
+        );
+    }
+    fs::remove_dir_all(&artifact_dir).expect("temporary artifact root should be removed");
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_resource_rejects_single_k_metadata_drift() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let csv_content = concat!(
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n",
+        "0,0,0,10000000,0,G,0,0,1000000000\n"
+    );
+    write_frequency_domain_dispersion_fixture(
+        &artifact_dir,
+        csv_content,
+        &single_k_dispersion_metadata([0.0, 1.0e7, 0.0], Some([0.0, 1.1e7, 0.0])),
+    );
+
+    let (status, payload) = request_frequency_domain_dispersion_resource(app).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should be present")
+        .contains("k_vector[1] does not match sampling.k_vector"));
+    fs::remove_dir_all(&artifact_dir).expect("temporary artifact root should be removed");
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_resource_rejects_invalid_single_k_vector() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let csv_content = concat!(
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n",
+        "0,0,0,10000000,0,G,0,0,1000000000\n"
+    );
+    for (path_metadata, error_fragment) in [
+        (
+            serde_json::json!({
+                "sampling": {
+                    "kind": "single",
+                    "k_vector": [0.0, 1.0e7]
+                }
+            }),
+            "sampling.k_vector must contain exactly three finite numbers",
+        ),
+        (
+            serde_json::json!({
+                "k_vector": [0.0, 1.0e7, "NaN"],
+                "sampling": {
+                    "kind": "single",
+                    "k_vector": [0.0, 1.0e7, 0.0]
+                }
+            }),
+            "k_vector[2] must be a finite number",
+        ),
+    ] {
+        write_frequency_domain_dispersion_fixture(&artifact_dir, csv_content, &path_metadata);
+        let (status, payload) = request_frequency_domain_dispersion_resource(app.clone()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(payload["error"]
+            .as_str()
+            .expect("error should be present")
+            .contains(error_fragment));
+    }
+    fs::remove_dir_all(&artifact_dir).expect("temporary artifact root should be removed");
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_resource_rejects_single_k_csv_drift() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let csv_content = concat!(
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n",
+        "0,0,0,10000001,0,G,0,0,1000000000\n"
+    );
+    write_frequency_domain_dispersion_fixture(
+        &artifact_dir,
+        csv_content,
+        &single_k_dispersion_metadata([0.0, 1.0e7, 0.0], None),
+    );
+
+    let (status, payload) = request_frequency_domain_dispersion_resource(app).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let error = payload["error"].as_str().expect("error should be present");
+    assert!(error.contains("invalid eigen/dispersion/path.json against eigen/dispersion.csv"));
+    assert!(error.contains("sample_index 0 k_vector[1]"));
+    fs::remove_dir_all(&artifact_dir).expect("temporary artifact root should be removed");
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_resource_rejects_multiple_single_k_samples() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let csv_content = concat!(
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n",
+        "0,0,0,10000000,0,G,0,0,1000000000\n",
+        "1,1,1000000,10000000,0,X,1,0,1100000000\n"
+    );
+    write_frequency_domain_dispersion_fixture(
+        &artifact_dir,
+        csv_content,
+        &single_k_dispersion_metadata([0.0, 1.0e7, 0.0], None),
+    );
+
+    let (status, payload) = request_frequency_domain_dispersion_resource(app).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should be present")
+        .contains("single-k sampling only permits dispersion.csv sample_index 0, got 1"));
+    fs::remove_dir_all(&artifact_dir).expect("temporary artifact root should be removed");
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_resource_rejects_unsupported_sampling_kind() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let csv_content = concat!(
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n",
+        "0,0,0,10000000,0,G,0,0,1000000000\n"
+    );
+    write_frequency_domain_dispersion_fixture(
+        &artifact_dir,
+        csv_content,
+        &serde_json::json!({
+            "sampling": {
+                "kind": "grid",
+                "k_vector": [0.0, 1.0e7, 0.0]
+            }
+        }),
+    );
+
+    let (status, payload) = request_frequency_domain_dispersion_resource(app).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should be present")
+        .contains("unsupported sampling.kind `grid`"));
+    fs::remove_dir_all(&artifact_dir).expect("temporary artifact root should be removed");
+}
+
 #[tokio::test]
 async fn frequency_domain_dispersion_resource_rejects_invalid_path_metadata() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;

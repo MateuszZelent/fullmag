@@ -1222,25 +1222,44 @@ pub async fn get_frequency_domain_eigen_dispersion(
         capture_frequency_domain_artifact_set(&state, &["eigen/dispersion.csv"]).await?;
     captured.bind_artifact_path("eigen/dispersion.csv");
     let csv_snapshot = read_text_artifact_snapshot(&captured.artifact_dir, "eigen/dispersion.csv")?;
-    let path_metadata =
+    let dispersion_sampling_metadata =
         if try_resolve_artifact_path(&captured.artifact_dir, "eigen/dispersion/path.json")?
             .is_some()
         {
-            Some(read_dispersion_path_metadata_resource(
+            Some(read_dispersion_sampling_metadata_resource(
                 &captured.artifact_dir,
                 "eigen/dispersion/path.json",
             )?)
         } else {
             None
         };
-    if let (Some((text, _)), Some(path_metadata)) = (csv_snapshot.as_ref(), path_metadata.as_ref())
-    {
-        validate_dispersion_path_metadata_against_csv(path_metadata, text).map_err(|error| {
-            ApiError::internal(format!(
-                "invalid eigen/dispersion/path.json against eigen/dispersion.csv: {error}"
-            ))
-        })?;
-    }
+    let path_metadata = match dispersion_sampling_metadata {
+        Some(DispersionSamplingMetadata::Path(path_metadata)) => {
+            if let Some((text, _)) = csv_snapshot.as_ref() {
+                validate_dispersion_path_metadata_against_csv(&path_metadata, text).map_err(
+                    |error| {
+                        ApiError::internal(format!(
+                            "invalid eigen/dispersion/path.json against eigen/dispersion.csv: {error}"
+                        ))
+                    },
+                )?;
+            }
+            Some(path_metadata)
+        }
+        Some(DispersionSamplingMetadata::SingleK { k_vector }) => {
+            if let Some((text, _)) = csv_snapshot.as_ref() {
+                validate_single_k_dispersion_metadata_against_csv(k_vector, text).map_err(
+                    |error| {
+                        ApiError::internal(format!(
+                            "invalid eigen/dispersion/path.json against eigen/dispersion.csv: {error}"
+                        ))
+                    },
+                )?;
+            }
+            None
+        }
+        None => None,
+    };
     let (text, content_digest) = csv_snapshot
         .map(|(text, digest)| (Some(text), Some(digest)))
         .unwrap_or((None, None));
@@ -3024,22 +3043,95 @@ fn response_frequency_point_artifacts(
     Ok(paths)
 }
 
-fn read_dispersion_path_metadata_resource(
+enum DispersionSamplingMetadata {
+    Path(FrequencyDomainKPathMetadataResource),
+    SingleK { k_vector: [f64; 3] },
+}
+
+fn read_dispersion_sampling_metadata_resource(
     artifact_dir: &std::path::Path,
     artifact_path: &str,
-) -> Result<FrequencyDomainKPathMetadataResource, ApiError> {
+) -> Result<DispersionSamplingMetadata, ApiError> {
     let value = read_json_artifact_value(artifact_dir, artifact_path)?;
     let normalized = if value.get("sampling").is_some() {
-        value
+        value.clone()
     } else {
-        serde_json::json!({ "sampling": value })
+        serde_json::json!({ "sampling": value.clone() })
     };
-    let mut resource =
-        serde_json::from_value::<FrequencyDomainKPathMetadataResource>(normalized)
-            .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
-    normalize_and_validate_dispersion_path_metadata(&mut resource)
-        .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
-    Ok(resource)
+    let sampling_kind = normalized
+        .get("sampling")
+        .and_then(Value::as_object)
+        .and_then(|sampling| sampling.get("kind"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "invalid {artifact_path}: sampling.kind must be a string"
+            ))
+        })?
+        .to_string();
+    match sampling_kind.as_str() {
+        "path" => {
+            let mut resource =
+                serde_json::from_value::<FrequencyDomainKPathMetadataResource>(normalized)
+                    .map_err(|error| {
+                        ApiError::internal(format!("invalid {artifact_path}: {error}"))
+                    })?;
+            normalize_and_validate_dispersion_path_metadata(&mut resource)
+                .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
+            Ok(DispersionSamplingMetadata::Path(resource))
+        }
+        "single" => {
+            let sampling_k_vector = normalized
+                .get("sampling")
+                .and_then(Value::as_object)
+                .and_then(|sampling| sampling.get("k_vector"));
+            let k_vector = parse_finite_dispersion_k_vector(sampling_k_vector, "sampling.k_vector")
+                .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
+            if let Some(top_level_k_vector) = value.get("k_vector") {
+                let top_level_k_vector =
+                    parse_finite_dispersion_k_vector(Some(top_level_k_vector), "k_vector")
+                        .map_err(|error| {
+                            ApiError::internal(format!("invalid {artifact_path}: {error}"))
+                        })?;
+                for (component_index, (top_level, sampling)) in
+                    top_level_k_vector.iter().zip(k_vector.iter()).enumerate()
+                {
+                    if (top_level - sampling).abs() > 1.0e-12 {
+                        return Err(ApiError::internal(format!(
+                            "invalid {artifact_path}: k_vector[{component_index}] does not match sampling.k_vector"
+                        )));
+                    }
+                }
+            }
+            Ok(DispersionSamplingMetadata::SingleK { k_vector })
+        }
+        other => Err(ApiError::internal(format!(
+            "invalid {artifact_path}: unsupported sampling.kind `{other}`"
+        ))),
+    }
+}
+
+fn parse_finite_dispersion_k_vector(
+    value: Option<&Value>,
+    field: &str,
+) -> Result<[f64; 3], String> {
+    let values = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{field} must contain exactly three finite numbers"))?;
+    if values.len() != 3 {
+        return Err(format!("{field} must contain exactly three finite numbers"));
+    }
+    let mut vector = [0.0; 3];
+    for (index, value) in values.iter().enumerate() {
+        let component = value
+            .as_f64()
+            .ok_or_else(|| format!("{field}[{index}] must be a finite number"))?;
+        if !component.is_finite() {
+            return Err(format!("{field}[{index}] must be a finite number"));
+        }
+        vector[index] = component;
+    }
+    Ok(vector)
 }
 
 fn normalize_and_validate_dispersion_path_metadata(
@@ -3132,6 +3224,34 @@ fn validate_dispersion_path_metadata_against_csv(
                 return Err(format!(
                     "dispersion.csv sample_index {sample_index} label `{actual_label}` \
                      does not match path_metadata `{expected_label}`"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_single_k_dispersion_metadata_against_csv(
+    expected_k_vector: [f64; 3],
+    csv_content: &str,
+) -> Result<(), String> {
+    let csv_samples = parse_dispersion_csv_path_samples(csv_content)?;
+    for (sample_index, csv_sample) in csv_samples {
+        if sample_index != 0 {
+            return Err(format!(
+                "single-k sampling only permits dispersion.csv sample_index 0, got {sample_index}"
+            ));
+        }
+        for (component_index, (actual, expected)) in csv_sample
+            .k_vector
+            .iter()
+            .zip(expected_k_vector.iter())
+            .enumerate()
+        {
+            if (actual - expected).abs() > 1.0e-6 {
+                return Err(format!(
+                    "dispersion.csv sample_index 0 k_vector[{component_index}] = {actual} \
+                     does not match single-k sampling {expected}"
                 ));
             }
         }

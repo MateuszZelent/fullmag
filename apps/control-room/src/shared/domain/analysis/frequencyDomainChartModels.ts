@@ -703,6 +703,18 @@ export function routeFrequencyDomainCalculationMode(
   const mode = normalizeCalculationMode(rawMode);
 
   if (mode === "dispersion_modal") {
+    // A single published wavevector has a modal spectrum, not a k-path.
+    const sampling = typedKSampling(manifest?.k_sampling ?? requested?.k_sampling);
+    if (sampling?.kind === "single") {
+      const hasSpectrum = stringValue(artifacts?.spectrum_v2_path) != null;
+      return {
+        mode,
+        primaryChart: "modal-spectrum",
+        supportingCharts: ["mode-table", "selected-mode-overlay"],
+        status: hasSpectrum ? "available" : "unavailable",
+        unavailableReason: hasSpectrum ? null : "single-wavevector spectrum artifact is missing",
+      };
+    }
     return {
       mode,
       primaryChart: "dispersion",
