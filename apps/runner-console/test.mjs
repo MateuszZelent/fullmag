@@ -12,6 +12,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 console.log('[test] Running Runner Console smoke & unit test suite...');
+const browserSmokeSource = fs.readFileSync(path.join(__dirname, 'browser-smoke.cjs'), 'utf-8');
+assert(browserSmokeSource.includes("require.resolve(playwrightRequest"),
+  'browser smoke must resolve Playwright from the supported Control Room package');
+assert(browserSmokeSource.includes("path.join(repositoryRoot, 'apps', 'control-room')"),
+  'browser smoke Playwright resolution must stay repository-relative');
+assert(browserSmokeSource.includes('FULLMAG_RUNNER_PLAYWRIGHT') &&
+  browserSmokeSource.includes('FULLMAG_RUNNER_CHROMIUM'),
+  'browser smoke must retain explicit dependency overrides');
+assert(browserSmokeSource.includes('playwright install --with-deps chromium'),
+  'missing Playwright Chromium must give the portable provisioning command');
+assert(browserSmokeSource.includes('os.tmpdir()'),
+  'browser smoke screenshot fallback must use the platform temporary directory');
+assert(!browserSmokeSource.includes('C:/Users/Mateusz/.cache/codex-runtimes'),
+  'browser smoke must not depend on a user-private Playwright installation');
+assert(!browserSmokeSource.includes('C:/git/fullmag/storage/cache/windows/playwright-browsers'),
+  'browser smoke must not depend on a host-specific Chromium cache');
+assert(!browserSmokeSource.includes('C:/Windows/Temp'),
+  'browser smoke must not depend on a Windows-only screenshot directory');
 
 // 1. Check index.html
 const indexHtml = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf-8');

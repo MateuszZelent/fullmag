@@ -14,6 +14,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
 const { URL } = require('node:url');
 
@@ -21,16 +22,37 @@ const repositoryRoot = path.resolve(
   process.env.FULLMAG_RUNNER_UI_ROOT || path.resolve(__dirname, '..', '..'),
 );
 const appRoot = path.join(repositoryRoot, 'apps', 'runner-console');
+const controlRoomRoot = path.join(repositoryRoot, 'apps', 'control-room');
 const assetRoot = path.resolve(process.env.FULLMAG_RUNNER_CONSOLE_ASSETS || appRoot);
-const playwrightModule = process.env.FULLMAG_RUNNER_PLAYWRIGHT
-  || 'C:/Users/Mateusz/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright';
-const chromiumExecutable = process.env.FULLMAG_RUNNER_CHROMIUM
-  || 'C:/git/fullmag/storage/cache/windows/playwright-browsers/chromium-1234/chrome-win64/chrome.exe';
+const playwrightRequest = process.env.FULLMAG_RUNNER_PLAYWRIGHT || 'playwright';
+const chromiumOverride = process.env.FULLMAG_RUNNER_CHROMIUM;
 const screenshotPath = process.env.FULLMAG_RUNNER_SMOKE_SCREENSHOT
-  || path.join(process.env.TEMP || process.env.TMP || 'C:/Windows/Temp', 'fullmag-runner-console-browser-smoke.png');
+  || path.join(os.tmpdir(), 'fullmag-runner-console-browser-smoke.png');
 
-const { chromium } = require(playwrightModule);
+function loadPlaywright() {
+  try {
+    const modulePath = require.resolve(playwrightRequest, {
+      paths: [controlRoomRoot],
+    });
+    const playwright = require(modulePath);
+    if (!playwright?.chromium || typeof playwright.chromium.launch !== 'function') {
+      throw new Error('resolved module does not expose chromium.launch');
+    }
+    return { modulePath, chromium: playwright.chromium };
+  } catch (error) {
+    throw new Error(
+      'Could not load Playwright from ' + playwrightRequest +
+        '. Install workspace dependencies with "pnpm install --frozen-lockfile", ' +
+        'or set FULLMAG_RUNNER_PLAYWRIGHT to a compatible package path. ' +
+        'Original error: ' + error.message,
+    );
+  }
+}
 
+const { modulePath: playwrightModulePath, chromium } = loadPlaywright();
+const chromiumExecutable = chromiumOverride
+  ? path.resolve(chromiumOverride)
+  : chromium.executablePath();
 const GIB = 1024 ** 3;
 const MIB = 1024 ** 2;
 const now = Date.now();
@@ -621,7 +643,13 @@ async function run() {
   assert(fs.existsSync(assetRoot) && fs.statSync(assetRoot).isDirectory() &&
     fs.existsSync(path.join(assetRoot, 'index.html')),
   `Runner Console assets not found: ${assetRoot}`);
-  assert(fs.existsSync(chromiumExecutable), `Chromium executable not found: ${chromiumExecutable}`);
+  assert(
+    fs.existsSync(chromiumExecutable),
+    chromiumOverride
+      ? 'FULLMAG_RUNNER_CHROMIUM executable not found: ' + chromiumExecutable
+      : 'Playwright Chromium is not installed at ' + chromiumExecutable +
+        '. Provision it with "pnpm --dir apps/control-room exec playwright install --with-deps chromium".',
+  );
 
   const server = createFixtureServer();
   let browser;
@@ -635,11 +663,19 @@ async function run() {
     const address = await listen(server);
     const baseUrl = `http://127.0.0.1:${address.port}`;
 
-    browser = await chromium.launch({
-      headless: true,
-      executablePath: chromiumExecutable,
-      args: ['--no-sandbox'],
-    });
+    try {
+      browser = await chromium.launch({
+        headless: true,
+        ...(chromiumOverride ? { executablePath: chromiumExecutable } : {}),
+        args: ['--no-sandbox'],
+      });
+    } catch (error) {
+      throw new Error(
+        'Could not launch Chromium at ' + chromiumExecutable +
+          '. Ensure browser dependencies are provisioned with "pnpm --dir apps/control-room exec playwright install --with-deps chromium". ' +
+          'Original error: ' + error.message,
+      );
+    }
     page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     page.on('pageerror', error => pageErrors.push({ message: error.message, stack: error.stack }));
     page.on('console', message => {
@@ -675,7 +711,8 @@ async function run() {
 
     console.log(`[browser-smoke] fixture server: ${baseUrl}`);
     console.log(`[browser-smoke] assets: ${assetRoot}`);
-    console.log(`[browser-smoke] chromium: ${chromiumExecutable}`);
+    console.log('[browser-smoke] Playwright: ' + playwrightModulePath);
+    console.log('[browser-smoke] chromium: ' + chromiumExecutable);
 
     mockMode = 'healthy';
     await gotoView('overview');
