@@ -288,9 +288,15 @@ function typedObservableEvidence(value: unknown): FrequencyDomainResultEvidence[
 
 function typedKSampling(value: unknown): FrequencyDomainResultEvidence["kSampling"] | null {
   const sampling = record(value);
-  if (sampling?.kind === "single" && Array.isArray(sampling.vector_rad_per_m) &&
-    sampling.vector_rad_per_m.length === 3 && sampling.vector_rad_per_m.every((item) => typeof item === "number" && Number.isFinite(item))) {
-    return { kind: "single", vectorRadPerM: sampling.vector_rad_per_m as [number, number, number] };
+  if (sampling?.kind === "single") {
+    // Historic requested-execution records use k_vector; retain their SI values.
+    const vector = sampling.vector_rad_per_m ?? sampling.k_vector;
+    if (!Array.isArray(vector) || vector.length !== 3 ||
+      !vector.every((item) => typeof item === "number" && Number.isFinite(item))) return null;
+    if (sampling.vector_rad_per_m !== undefined && sampling.k_vector !== undefined &&
+      (!Array.isArray(sampling.k_vector) || sampling.k_vector.length !== 3 ||
+        sampling.k_vector.some((item, index) => item !== vector[index]))) return null;
+    return { kind: "single", vectorRadPerM: vector as [number, number, number] };
   }
   if ((sampling?.kind === "path" || sampling?.kind === "grid") &&
     typeof sampling.sample_count === "number" && Number.isSafeInteger(sampling.sample_count) && sampling.sample_count > 0) {

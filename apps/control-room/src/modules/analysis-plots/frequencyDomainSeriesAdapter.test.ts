@@ -277,7 +277,9 @@ describe("frequencyDomainSeriesAdapter", () => {
       }),
     );
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 78539816.33974482, y: 250 },
+      { rowIndex: 0, x: 78539816.33974482, y: 250, branchId: "acoustic",
+        itemId: null, modeFieldAvailable: false, modeIndex: 1, residualNorm: null,
+        sampleId: null, sampleIndex: 0, wavevectorRadPerM: null },
     ]);
   });
 });

@@ -2132,3 +2132,18 @@ describe("frequencyDomainChartModels", () => {
     expect(route.unavailableReason).toBe("spectrum artifact is missing");
   });
 });
+
+describe("historic single-k sampling ownership", () => {
+  it("retains explicit SI k_vector aliases and rejects contradictory vectors", () => {
+    const owner = {
+      run_id: "run-legacy", stage_id: "stage-001", study_product: "modal_eigen",
+      equilibrium_identity: "eq-legacy", boundary_context: "floquet_periodic",
+    };
+    expect(frequencyDomainResultContextFromManifest({ ...owner,
+      requested_execution: { k_sampling: { kind: "single", k_vector: [0, -1e7, 0] } },
+    }).kSampling).toEqual({ kind: "single", vectorRadPerM: [0, -1e7, 0] });
+    expect(frequencyDomainResultContextFromManifest({ ...owner,
+      k_sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0], k_vector: [0, -1e7, 0] },
+    }).kSampling).toBeNull();
+  });
+});

@@ -59,7 +59,8 @@ jobs:
           tracked = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
           inventory = []
           contract_prefixes = ("apps/", "packages/", "scripts/", "docs/", ".github/",
-                               "crates/", "backends/", "tests/", "examples/", "assets/")
+                               "crates/", "backends/", "tests/", "examples/", "assets/",
+                               "docker/", "public_docs/")
           for relative in filter(None, tracked):
               # Agent skill aliases are tracked symlinks, not frontend fixtures.
               if "/" in relative and not relative.startswith(contract_prefixes):
@@ -115,3 +116,5 @@ jobs:
           cargo test -p fullmag-runtime-control --lib accepted_store --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_dispersion_resource --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api observation_store_tests --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api frequency_domain_owner --no-fail-fast
+          cargo test -p fullmag-runner --lib frequency_domain_owner --no-fail-fast
