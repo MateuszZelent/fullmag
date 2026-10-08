@@ -8,6 +8,7 @@ import {
   type LayoutState,
   type PanelPosition,
   type RibbonTabId,
+  type ViewportCompanion,
   type WorkspaceLayoutPresetId,
 } from "./layoutTypes";
 
@@ -41,6 +42,10 @@ export class LayoutController {
         "viewport-3d",
       focusedSlot: nextState.focusedSlot,
       panelVisible: { ...nextState.panelVisible },
+      viewportCompanion: validCompanion(
+        nextState.viewportCompanion ?? null,
+        nextState.activeViewportMainModuleId,
+      ),
     };
     const layoutChanged =
       this.state.activeBottomPanelTab !== next.activeBottomPanelTab ||
@@ -48,6 +53,7 @@ export class LayoutController {
       this.state.activeViewportMainModuleId !== next.activeViewportMainModuleId ||
       this.state.lastSpatialViewportMainModuleId !==
         next.lastSpatialViewportMainModuleId ||
+      !sameCompanion(this.state.viewportCompanion ?? null, next.viewportCompanion ?? null) ||
       this.state.panelVisible.left !== next.panelVisible.left ||
       this.state.panelVisible.right !== next.panelVisible.right ||
       this.state.panelVisible.bottom !== next.panelVisible.bottom;
@@ -113,7 +119,16 @@ export class LayoutController {
         spatialViewportModule(moduleId) ??
         this.state.lastSpatialViewportMainModuleId ??
         "viewport-3d",
+      viewportCompanion: validCompanion(this.state.viewportCompanion ?? null, moduleId),
     };
+    this.notify("workspace:layout-changed");
+  }
+
+  /** Shows `companion` in a split with the active center surface, or closes the split. */
+  setViewportCompanion(companion: ViewportCompanion | null): void {
+    const next = validCompanion(companion, this.state.activeViewportMainModuleId);
+    if (sameCompanion(this.state.viewportCompanion ?? null, next)) return;
+    this.state = { ...this.state, viewportCompanion: next };
     this.notify("workspace:layout-changed");
   }
 
@@ -151,6 +166,19 @@ export class LayoutController {
       listener(this.state);
     }
   }
+}
+
+function validCompanion(
+  companion: ViewportCompanion | null,
+  activeModuleId: ModuleId,
+): ViewportCompanion | null {
+  // A module is never shown twice; selecting the companion as the active
+  // surface closes the split.
+  return companion && companion.moduleId !== activeModuleId ? companion : null;
+}
+
+function sameCompanion(left: ViewportCompanion | null, right: ViewportCompanion | null): boolean {
+  return left?.moduleId === right?.moduleId && left?.placement === right?.placement;
 }
 
 function spatialViewportModule(

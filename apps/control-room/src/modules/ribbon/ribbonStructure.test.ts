@@ -3217,6 +3217,7 @@ describe("ribbon structure", () => {
     expect(commandIds).toEqual([
       "ribbon.analysis.show-chart",
       "ribbon.analysis.show-field",
+      "ribbon.analysis.show-chart-and-field",
       "analysis.frequency-domain.stop-3d-animation",
       "analysis.frequency-domain.clear-3d-overlay",
     ]);

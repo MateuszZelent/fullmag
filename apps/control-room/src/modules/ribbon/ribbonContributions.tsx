@@ -128,6 +128,7 @@ import {
   statusMenu,
 } from "./ribbonCommon";
 import {
+  RIBBON_ANALYSIS_SHOW_CHART_AND_FIELD_COMMAND,
   RIBBON_ANALYSIS_SHOW_CHART_COMMAND,
   RIBBON_ANALYSIS_SHOW_FIELD_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
@@ -1062,6 +1063,7 @@ export function buildAnalysisContextTabContent(context?: RibbonBuildContext): Ri
         actions: [
           { id: "analysis-show-chart", icon: icon(BarChart3), label: "Chart", iconColor: "text-sky-300", commandId: RIBBON_ANALYSIS_SHOW_CHART_COMMAND },
           { id: "analysis-show-field", icon: icon(Box), label: "3D field", iconColor: "text-teal-400", commandId: RIBBON_ANALYSIS_SHOW_FIELD_COMMAND },
+          { id: "analysis-show-chart-and-field", icon: icon(Columns2), label: "Chart + 3D", iconColor: "text-sky-300", commandId: RIBBON_ANALYSIS_SHOW_CHART_AND_FIELD_COMMAND },
         ],
       },
       {

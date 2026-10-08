@@ -219,7 +219,13 @@ wizualizację modu. HUD viewportu pokazuje „Mode · …” zamiast surowego
 identyfikatora pola. Smoke przeglądarkowy viewportu: **NOT VERIFIED** (brak
 zbudowanego workspace w tym worktree). Pozostaje: jeden właściciel
 `active_quantity_id` (nakładka jako resolver wielkości), colorbar/field-meta
-dla `analysis:*`, tryb podziału w `ViewportTabHost`.
+dla `analysis:*`.
+
+Część 5b: tryb podziału w `ViewportTabHost`. Układ ma opcjonalny
+`viewportCompanion` (moduł i ułożenie obok/pod). Host renderuje wtedy aktywny
+moduł i towarzyszący w regulowanym podziale; każdy moduł ma jedną instancję,
+a wybranie towarzyszącego jako aktywnego zamyka podział. Zakładka kontekstowa
+ma akcję „Chart + 3D”.
 
 - `active_quantity_id` niesie identyfikator pola modu; kontroler nakładki
   staje się resolverem wielkości; mod w grupie Quantity ribbonu i w HUD;

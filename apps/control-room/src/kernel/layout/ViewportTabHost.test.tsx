@@ -111,6 +111,25 @@ describe("ViewportTabHost", () => {
     }
   });
 
+  it("mounts the companion surface once beside the active one", () => {
+    const kernel = makeKernel();
+    kernel.modules.register(makeManifest("viewport-3d-test", "3D"));
+    kernel.modules.register(makeManifest("analysis-plots-test", "Plots"));
+    kernel.layout.setActiveViewportMainModule("analysis-plots-test");
+    kernel.layout.setViewportCompanion({ moduleId: "viewport-3d-test", placement: "beside" });
+
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <ViewportTabHost />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain('data-active-module-id="analysis-plots-test"');
+    expect(html).toContain('data-companion-module-id="viewport-3d-test"');
+    expect(html.match(/Loading/g)).toHaveLength(2);
+    expect(html).toContain('aria-label="Close 3D split view"');
+  });
+
   it("falls back to the first registered center surface when persisted active id is stale", () => {
     const modules = [
       makeManifest("viewport-3d-test", "3D"),

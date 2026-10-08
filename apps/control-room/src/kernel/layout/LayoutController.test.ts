@@ -169,4 +169,29 @@ describe("LayoutController", () => {
     controller.setActiveTab("results");
     expect(listener).toHaveBeenCalledTimes(1);
   });
+
+  it("shows a companion surface beside the active one and never the same module twice", () => {
+    const { controller } = setup();
+    controller.setActiveViewportMainModule("analysis-plots");
+    controller.setViewportCompanion({ moduleId: "viewport-3d", placement: "beside" });
+    expect(controller.get().viewportCompanion).toEqual({ moduleId: "viewport-3d", placement: "beside" });
+
+    // Making the companion the active surface closes the split.
+    controller.setActiveViewportMainModule("viewport-3d");
+    expect(controller.get().viewportCompanion).toBeNull();
+
+    controller.setViewportCompanion({ moduleId: "viewport-3d", placement: "below" });
+    expect(controller.get().viewportCompanion).toBeNull();
+  });
+
+  it("notifies only when the companion actually changes", () => {
+    const { controller } = setup();
+    const listener = vi.fn();
+    controller.setActiveViewportMainModule("analysis-plots");
+    controller.subscribe(listener);
+    controller.setViewportCompanion({ moduleId: "viewport-3d", placement: "beside" });
+    controller.setViewportCompanion({ moduleId: "viewport-3d", placement: "beside" });
+    controller.setViewportCompanion(null);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
 });
