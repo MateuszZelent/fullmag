@@ -465,3 +465,57 @@ def test_explicit_world_mesh_uses_resolved_geometry_owner() -> None:
     assert build.call_args.kwargs["geometry_object_ids"] == {
         "magnet-name_geom": "magnet-id", "conductor-name": "conductor-id",
     }
+
+
+@pytest.mark.parametrize("rotated", [False, True])
+def test_six_station_cpw_mesh_preserves_constriction_volume_and_terminals(rotated) -> None:
+    import numpy as np
+    from fullmag.meshing import generate_mesh
+    from fullmag.meshing._gmsh_waveguides import antenna_terminal_marker
+
+    station_values = ((0.0, 1e-6), (0.4, 1e-6), (0.48, 0.2e-6),
+                      (0.52, 0.2e-6), (0.6, 1e-6), (1.0, 1e-6))
+    stations = tuple(fm.CPWWidthStation.symmetric(
+        s=s, signal_width=width, gap=0.5e-6, ground_width=1e-6,
+    ) for s, width in station_values)
+    transform = fm.RigidTransform(
+        rotation=((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+        translation=(3e-6, -2e-6, 5e-6),
+    ) if rotated else fm.RigidTransform.identity()
+    layout = fm.CPWAntennaLayout(
+        name="cpw_rotated" if rotated else "cpw_constriction",
+        length_m=10e-6, thickness_m=100e-9, conductivity_s_per_m=58e6,
+        stations=stations, transform=transform,
+    )
+    assert len(layout.solid_segments()) == 5
+    assert fm.CPWAntennaLayout.from_ir(layout.to_ir()) == layout
+    mesh = generate_mesh(layout, maximum_element_size=0.8e-6,
+                         object_id="immutable-cpw")
+    tetrahedra = mesh.nodes[mesh.elements]
+    determinants = np.linalg.det(tetrahedra[:, 1:] - tetrahedra[:, :1])
+    measured_volume = float(np.sum(np.abs(determinants)) / 6.0)
+    expected_volume = layout.length_m * layout.thickness_m * sum(
+        (right[0] - left[0]) * ((left[1] + right[1]) / 2.0 + 2e-6)
+        for left, right in zip(station_values, station_values[1:])
+    )
+    assert measured_volume == pytest.approx(expected_volume, rel=1e-9, abs=0.0)
+
+    # Every mesh vertex and cell centroid must stay inside authored metal,
+    # including the gaps next to the narrowed trace, after inverse rotation.
+    points = np.concatenate((mesh.nodes, tetrahedra.mean(axis=1)))
+    local = (points - np.asarray(transform.translation_m)) @ np.asarray(transform.rotation_matrix)
+    widths = np.interp(local[:, 0] / layout.length_m,
+                       [s for s, _ in station_values], [width for _, width in station_values])
+    distance = np.abs(local[:, 1])
+    inside_signal = distance <= widths / 2.0 + 1e-14
+    inside_ground = ((distance >= widths / 2.0 + 0.5e-6 - 1e-14)
+                     & (distance <= widths / 2.0 + 1.5e-6 + 1e-14))
+    assert np.all(inside_signal | inside_ground)
+    assert np.all(np.abs(local[:, 2]) <= layout.thickness_m / 2.0 + 1e-14)
+    assert np.all((local[:, 0] >= -1e-14) & (local[:, 0] <= layout.length_m + 1e-14))
+    expected_markers = {
+        antenna_terminal_marker("immutable-cpw", part, selector)
+        for part in layout.conductor_part_ids
+        for selector in ("local_u_min", "local_u_max")
+    }
+    assert {int(marker) for marker in mesh.boundary_markers if int(marker) != 1} == expected_markers
