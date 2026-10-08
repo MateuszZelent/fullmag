@@ -978,3 +978,26 @@ koordynatora, UI ani joba. Ten odczyt nie potwierdza hashy pakietu ani nauki.
 Następne kroki: odbiór poprawki przez CI, osobna diagnoza session store,
 a następnie przypięty aktualny managed pakiet i regular publish→cold load→reuse.
 Pełny cel T00–T18 pozostaje aktywny; bez merge i cleanup.
+
+## T01/T14 — importy regresji CLI po odbiorze CI
+
+Job Rust `113183321354`, run `37738458285`, dla HEAD
+`789eb413d301da4015898c945a20f17df18f42e4` zakończył się exit 101 podczas
+kompilacji `fullmag-cli` z `cfg(test)`, przed wykonaniem regresji CLI.
+Osiem diagnostyk obejmuje dwa wywołania bez importu
+`latch_running_interrupt_request`, trzy bez importu `relative_artifact_ref`
+i trzy closure z jednogenerycznym `Result<()>` rozwiązywanym jako typ std.
+Nie jest to wynik endpointu metadata ani ponowne potwierdzenie wcześniejszych
+błędów session store: ten job nie dotarł do ich wykonania.
+
+Dodano dwa importy z `super` i jawne `anyhow::Result<()>` dla trzech closure.
+Kod produkcyjny, zachowanie publikacji i wszystkie asercje pozostają bez zmian.
+Rustfmt `--emit stdout` parsuje oba pliki; scoped whitespace PASS.
+Lokalnie nie kompilowano ani nie uruchamiano testów jednostkowych zgodnie
+z obowiązującym zakazem. Poprawność rozwiązywania nazw i wykonanie regresji
+muszą być odebrane z kolejnego CI; parser składni nie jest typecheckiem.
+
+Build 39 `66095ee8c61b4b47b808f469a030f381` odczytany przez klienta
+runnera pozostaje `running`, exit code null, na niezmiennej kapsule HEAD
+`789eb413d301da4015898c945a20f17df18f42e4`. Nie obejmuje tej poprawki testów.
+Nie zgłaszano kolejnego ciężkiego buildu ani nie restartowano UI/koordynatora.

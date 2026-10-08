@@ -1218,7 +1218,8 @@ fn apply_step_stats_to_idle_live_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_step_stats_to_idle_live_state, scalar_row_from_stats, CurrentLiveControlState,
+        apply_step_stats_to_idle_live_state, latch_running_interrupt_request, scalar_row_from_stats,
+        CurrentLiveControlState,
         CurrentLiveDisplaySelectionHandle, InteractivePreviewStatus, InteractiveRuntimeHost,
     };
     use crate::live_workspace::{

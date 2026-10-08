@@ -13829,7 +13829,8 @@ mod tests {
         mesh_source_scene_revision, offset_step_update, own_preparation_boundary_failure,
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
         preserve_terminal_stage_history, project_script_export_failure,
-        replace_continuation_after_synthetic_stage, requested_execution_device_for_overrides,
+        relative_artifact_ref, replace_continuation_after_synthetic_stage,
+        requested_execution_device_for_overrides,
         resolve_adaptive_convergence_metric, resolve_preview_field_every_n,
         resolve_rayon_cpu_threads, resolved_shared_domain_object_region_markers,
         run_active_preparation_operation, run_owned_preparation_stage,
@@ -19984,7 +19985,7 @@ mod tests {
     fn antenna_stage_output_catalog_cleans_private_temp_on_pre_rename_cancel() {
         let artifact_dir = temp_test_dir("antenna-stage-output-catalog-cancel");
         let stage_dir = artifact_dir.join("stage");
-        let cancel = || -> Result<()> { Err(anyhow::anyhow!("interrupt_requested")) };
+        let cancel = || -> anyhow::Result<()> { Err(anyhow::anyhow!("interrupt_requested")) };
 
         let error = write_antenna_stage_output_catalog_with_hook(
             &stage_dir,
@@ -20017,7 +20018,7 @@ mod tests {
 
         let conflicting_dir = artifact_dir.join("conflicting");
         let conflicting_path = antenna_stage_output_catalog_path(&conflicting_dir);
-        let competing_writer = || -> Result<()> {
+        let competing_writer = || -> anyhow::Result<()> {
             fs::write(&conflicting_path, &conflicting_bytes)?;
             Ok(())
         };
@@ -20032,7 +20033,7 @@ mod tests {
 
         let identical_dir = artifact_dir.join("identical");
         let identical_path = antenna_stage_output_catalog_path(&identical_dir);
-        let matching_writer = || -> Result<()> {
+        let matching_writer = || -> anyhow::Result<()> {
             fs::write(&identical_path, &identical_bytes)?;
             Ok(())
         };
