@@ -29,7 +29,7 @@ async function load(relativePath) {
   return sourceModule.namespace;
 }
 const { calculateAntennaPlacement: place } = await load("src/shared/domain/geometry/antennaPlacement.ts");
-const { buildAuthoredMicrostripGeometry: build } = await load("src/shared/domain/geometry/authoredMicrostripGeometry.ts");
+const { buildAuthoredMicrostripGeometry: build, buildAuthoredCpwGeometry: buildCpw } = await load("src/shared/domain/geometry/authoredMicrostripGeometry.ts");
 const { resolveAntennaPlacement: resolvePlacement, antennaPlacementTargets: targets } = await load("src/modules/inspector/panels/antenna/AntennaPlacementModel.ts");
 let checks = 0;
 const check = (name, run) => { run(); checks++; console.log(`PASS ${name}`); };
@@ -157,5 +157,31 @@ check("actual inspector model preserves object, conductor, port and physics refe
   assert.equal(liveAntenna.geometry, geometryRef);
   assert.equal(liveAntenna.id, antennaId);
   assert.equal(scene.antenna_port_modes[0].source_object_id, antennaId);
+});
+const cpwParams = { length_m: 1e-6, thickness_m: 10e-9,
+  stations: [0, 0.5, 1].map((s) => ({ s, signal_width_m: s === 0.5 ? 50e-9 : 200e-9,
+    left_gap_m: 30e-9, right_gap_m: 70e-9, left_ground_width_m: 150e-9, right_ground_width_m: 300e-9 })),
+  transform: { rotation_matrix: [[1, 0, 0], [0, 0, -1], [0, 1, 0]], translation_m: [-0.5e-6, 0, 90e-9] },
+  conductors: [{ id: "right", kind: "ground_right" }, { id: "signal", kind: "signal" }, { id: "left", kind: "ground_left" }],
+};
+for (const side of ["above", "below"]) check(`CPW ${side} clearance includes both asymmetric rotated grounds`, () => {
+  const cpwScene = sceneWithAntenna({ geometry: { geometry_kind: "CPWAntennaLayout", geometry_params: cpwParams, bounds_min: [-99, -99, -99], bounds_max: [99, 99, 99] } });
+  const before = JSON.stringify(cpwScene);
+  const result = call(cpwScene, realization, targetId, side);
+  // Independent section arithmetic: rotated left ground reaches -190 nm,
+  // right ground reaches +560 nm; the target occupies [-5, +5] nm.
+  close(result.translation[2], side === "above" ? 245e-9 : -615e-9);
+  const after = buildCpw(cpwParams, { ...canonicalTransform, translation: Array.from(result.translation) });
+  close(side === "above" ? after.boundsMin[2] - realization.bodies[0].bounds_max[2] : realization.bodies[0].bounds_min[2] - after.boundsMax[2], 50e-9);
+  assert.deepEqual(Array.from(after.parts, (part) => part.id), ["signal", "left", "right"]);
+  assert.equal(result.translation[0], canonicalTransform.translation[0]);
+  assert.equal(result.translation[1], canonicalTransform.translation[1]);
+  assert.equal(JSON.stringify(cpwScene), before);
+});
+check("CPW placement rejects invalid gap or ground width instead of using stale bounds", () => {
+  for (const field of ["left_gap_m", "right_gap_m", "left_ground_width_m", "right_ground_width_m"]) {
+    const invalid = { ...cpwParams, stations: cpwParams.stations.map((station, index) => index === 1 ? { ...station, [field]: 0 } : station) };
+    assert.throws(() => call(sceneWithAntenna({ geometry: { geometry_kind: "CPWAntennaLayout", geometry_params: invalid, bounds_min: [-99, -99, -99], bounds_max: [99, 99, 99] } })), new RegExp(field));
+  }
 });
 console.log(`Antenna placement interpreted model: ${checks} checks passed; no UI/transaction/WebGL qualification.`);

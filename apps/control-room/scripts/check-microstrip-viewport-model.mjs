@@ -174,7 +174,50 @@ check("preview budgets and unrepresentable coordinates fail with explicit reason
   assert.throws(() => build({ ...params, stations: Array.from({ length: 8193 }, (_value, index) => ({ s: index / 8192, signal_width_m: 1 })) }, {}), /at most 8192/);
   assert.throws(() => build({ ...params, length_m: 1e40 }, {}), /floating-point coordinate range/);
 });
-console.log(`Microstrip viewport interpreted model: ${checks} checks passed; no WebGL/runtime/solver qualification.`);
+const cpwParams = {
+  length_m: 1, thickness_m: 0.2,
+  stations: [0, 0.5, 1].map((s) => ({ s, signal_width_m: s === 0.5 ? 1 : 2,
+    left_gap_m: 0.3, right_gap_m: 0.7, left_ground_width_m: 2, right_ground_width_m: 3 })),
+  conductors: [{ id: "right-custom", kind: "ground_right" }, { id: "signal-custom", kind: "signal" }, { id: "left-custom", kind: "ground_left" }],
+};
+const cpwObject = { ...object, geometry: { ...object.geometry, geometry_kind: "CPWAntennaLayout", geometry_params: cpwParams } };
+check("CPW carrier keeps three disjoint conductors rather than a bounds box", () => {
+  const carrier = model({ revision: 7, objects: [cpwObject] }, null).objects[0];
+  assert.equal(carrier.kind, "cpw");
+  assert.equal(carrier.objectId, object.id);
+  assert.deepEqual(Array.from(carrier.antennaPreview.parts, (part) => part.id), ["signal-custom", "left-custom", "right-custom"]);
+  close(carrier.bounds.size[1], 8);
+  const buffer = geometry(carrier);
+  try {
+    assert.equal(buffer.getAttribute("position").count, 36);
+    assert.equal(buffer.index.count, 180);
+    assert.deepEqual(Array.from(buffer.userData.conductorParts, (part) => part.id), ["signal-custom", "left-custom", "right-custom"]);
+    for (const [partIndex, part] of carrier.antennaPreview.parts.entries()) {
+      assert.equal(part.indexStart, partIndex * 60);
+      assert.equal(part.indexCount, 60);
+      const indices = Array.from(buffer.index.array.slice(part.indexStart, part.indexStart + part.indexCount));
+      assert.equal(new Set(indices).size, 12);
+      assert.ok(indices.every((index) => index >= partIndex * 12 && index < (partIndex + 1) * 12));
+    }
+    for (const [index, value] of buffer.getAttribute("position").array.entries()) close(value + carrier.bounds.center[index % 3], carrier.antennaPreview.positions[index], 1e-6);
+  } finally { buffer.dispose(); }
+});
+check("CPW mesh freshness rejects absent and mismatched authored revisions", () => {
+  for (const revision of [6, 8, undefined, NaN, 7]) {
+    const carrier = model({ revision: 7, objects: [cpwObject] }, { source_scene_revision: revision, mesh_parts: [{ object_id: object.id }] }).objects[0];
+    assert.equal(carrier.meshState, revision === 7 ? "mesh-ready" : "mesh-stale");
+  }
+});
+check("each invalid CPW station dimension omits the antenna with explicit diagnostics", () => {
+  for (const field of ["signal_width_m", "left_gap_m", "right_gap_m", "left_ground_width_m", "right_ground_width_m"]) {
+    const geometryParams = { ...cpwParams, stations: cpwParams.stations.map((station, index) => index === 1 ? { ...station, [field]: 0 } : station) };
+    const result = model({ revision: 7, objects: [{ ...cpwObject, geometry: { ...cpwObject.geometry, geometry_params: geometryParams } }] }, null);
+    assert.equal(result.objects.length, 0);
+    assert.equal(result.diagnostics[0].objectId, object.id);
+    assert.ok(result.diagnostics[0].message.includes(field));
+  }
+});
+console.log(`Antenna viewport interpreted model: ${checks} checks passed; no WebGL/runtime/solver qualification.`);
 const liveIndex = process.argv.indexOf("--scene-url");
 if (liveIndex !== -1) {
   const url = new URL(process.argv[liveIndex + 1]);
