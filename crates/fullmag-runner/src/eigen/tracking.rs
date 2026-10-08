@@ -1538,6 +1538,36 @@ mod tests {
     use crate::eigen::types::{ConsistentP1TrackingMetric, EigenSolverModel, KSampleDescriptor, SingleKSolveResult};
     use fullmag_ir::{ModeTrackingIR, ModeTrackingMethodIR};
 
+    #[test]
+    fn frequency_clusters_use_anchored_complex_distance_and_additive_tolerance() {
+        let anchored_triplet = [
+            (0, 10.0e9, 0.0),
+            (1, 10.0e9 + 0.9e6, 0.0),
+            (2, 10.0e9 + 1.8e6, 0.0),
+        ];
+        assert_eq!(
+            frequency_clusters(&anchored_triplet),
+            vec![vec![0, 1], vec![2]],
+        );
+
+        // At 10 GHz, a 1.1 MHz separation exceeds the 1 MHz relative bound.
+        let outside_relative_bound = [(0, 10.0e9, 0.0), (1, 10.0e9 + 1.1e6, 0.0)];
+        assert_eq!(
+            frequency_clusters(&outside_relative_bound),
+            vec![vec![0], vec![1]],
+        );
+
+        // A complex-only separation near 1 Hz demonstrates both the imaginary
+        // component and the additive 1e-6 Hz term beyond the 1e-4 relative term.
+        let within_additive_bound = [(0, 1.0, 0.0), (1, 1.0, 1.005e-4)];
+        assert_eq!(frequency_clusters(&within_additive_bound), vec![vec![0, 1]]);
+        let outside_additive_bound = [(0, 1.0, 0.0), (1, 1.0, 1.02e-4)];
+        assert_eq!(
+            frequency_clusters(&outside_additive_bound),
+            vec![vec![0], vec![1]],
+        );
+    }
+
     fn sample(index: usize, modes: Vec<SingleKModeResult>) -> SingleKSolveResult {
         SingleKSolveResult {
             sample: KSampleDescriptor {

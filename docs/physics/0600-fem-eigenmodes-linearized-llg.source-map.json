@@ -36,6 +36,11 @@
       "id": "eq-0600-p00-reference",
       "symbols": ["P00", "k", "t"],
       "sources": ["source-p00"]
+    },
+    {
+      "id": "eq-eigenmode-branch-degeneracy-policy",
+      "symbols": ["delta_f", "f_r", "f_i", "f_r_prime", "f_i_prime"],
+      "sources": ["source-tracking-frequency-cluster-policy", "source-tracking-frequency-cluster-tests"]
     }
   ],
   "symbols": [
@@ -44,6 +49,11 @@
     {"id": "B_alpha", "latex": "$B_\\alpha$", "meaning": "gyrotropic/mass operator", "si_unit": "$\\mathrm{m^3}$"},
     {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
     {"id": "f", "latex": "$f$", "meaning": "cyclic frequency", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "delta_f", "latex": "$\\delta_f$", "meaning": "complex-frequency distance used for private candidate grouping", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "f_r", "latex": "$f_r$", "meaning": "real component of complex frequency", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "f_i", "latex": "$f_i$", "meaning": "imaginary component of complex frequency", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "f_r_prime", "latex": "$f'_r$", "meaning": "real component of comparison complex frequency", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "f_i_prime", "latex": "$f'_i$", "meaning": "imaginary component of comparison complex frequency", "si_unit": "$\\mathrm{Hz}$"},
     {"id": "P00", "latex": "$P_{00}$", "meaning": "thin-film demagnetizing factor", "si_unit": "$1$"},
     {"id": "k", "latex": "$k$", "meaning": "in-plane wave vector magnitude", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
     {"id": "t", "latex": "$t$", "meaning": "film thickness", "si_unit": "$\\mathrm{m}$"}
@@ -66,6 +76,18 @@
       "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
       "symbol": "execute_fem_eigen_path",
       "responsibility": "Execute k samples and publish postsolve comparisons."
+    },
+    {
+      "id": "source-tracking-frequency-cluster-policy",
+      "path": "crates/fullmag-runner/src/eigen/tracking_subspace.rs",
+      "symbol": "frequencies_are_degenerate",
+      "responsibility": "Apply the private absolute-plus-relative complex-frequency grouping bound."
+    },
+    {
+      "id": "source-tracking-frequency-cluster-tests",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "frequency_clusters_use_anchored_complex_distance_and_additive_tolerance",
+      "responsibility": "Regress anchored grouping, complex distance, and the additive/relative boundary; does not qualify physical degeneracy."
     },
     {
       "id": "source-p00",

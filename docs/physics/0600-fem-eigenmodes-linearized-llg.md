@@ -301,9 +301,9 @@ point therefore leaves `overlap_prev` empty for a subspace edge and keeps the
 subspace decision in the internal confidence/diagnostic path until the V2
 artifact extension defines explicit principal-angle fields.
 
-The tracker groups complex frequencies only for numerical degeneracy
-detection.  With real and imaginary frequencies in Hz, the current private
-policy is
+The tracker forms candidate groups from numerical complex-frequency proximity,
+not a physical degeneracy classification.  With real and imaginary
+frequencies in Hz, the current private policy is
 
 ```{math}
 :label: eq-eigenmode-branch-degeneracy-policy
@@ -311,21 +311,28 @@ policy is
 \sqrt{(f_r-f'_r)^2+(f_i-f'_i)^2}
 \leq
 10^{-6}\,\mathrm{Hz}
- +10^{-9}\max\!\left(
+ +10^{-4}\max\!\left(
  \sqrt{f_r^2+f_i^2},
  \sqrt{(f'_r)^2+(f'_i)^2},
  1\,\mathrm{Hz}\right).
 ```
 
-This is a conservative numerical grouping rule for solver round-off around an
-exact crossing, not a claim that bands separated by this value are physically
-identical.  It is intentionally private while the versioned IR/artifact
-contract has no authored degeneracy tolerance.  A degenerate sample adjacent
-to split singleton modes forms a candidate group from the nearest complex
-frequency center and still requires the mass-weighted principal-angle test;
-an ambiguous boundary, unequal rank, invalid vector, mismatched positive mass
-diagonal, or different last sample causes the candidate to be rejected and
-leaves ordinary overlap matching or branch restart in control.
+The relative term is about 1 MHz at 10 GHz, in addition to the 1e-6 Hz
+absolute term.  This numerical heuristic can therefore group physically
+distinct nearby bands; it does not establish physical degeneracy.  It remains
+private while the versioned IR/artifact contract has no authored tolerance.
+The independent replay description in
+`docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md` uses the
+same anchored complex-frequency policy.  Replay and the source-level
+regression do not qualify its scientific use; qualification remains
+NOT VERIFIED.
+
+A candidate group at a split transition still requires the mass-weighted
+principal-angle test.  That test measures geometric continuity between
+candidate subspaces; it does not prove physical degeneracy.  An ambiguous
+boundary, unequal rank, invalid vector, mismatched positive mass diagonal,
+or different last sample causes the candidate to be rejected and leaves
+ordinary overlap matching or branch restart in control.
 
 The present implementation is scoped to right eigenvectors in a common FEM
 coordinate basis.  It is phase-invariant and can transport a rotated basis,
@@ -609,6 +616,11 @@ P_{00}(x)=1+\frac{\exp(-x)-1}{x}, \qquad x=|k|t,
 | $B_\alpha$ | gyrotropic/mass operator | $\mathrm{m^3}$ |
 | $\omega$ | angular frequency | $\mathrm{rad\,s^{-1}}$ |
 | $f$ | cyclic frequency | $\mathrm{Hz}$ |
+| $\delta_f$ | complex-frequency distance used for private candidate grouping | $\mathrm{Hz}$ |
+| $f_r$ | real component of complex frequency | $\mathrm{Hz}$ |
+| $f_i$ | imaginary component of complex frequency | $\mathrm{Hz}$ |
+| $f'_r$ | real component of comparison complex frequency | $\mathrm{Hz}$ |
+| $f'_i$ | imaginary component of comparison complex frequency | $\mathrm{Hz}$ |
 | $P_{00}$ | thin-film demagnetizing factor | $1$ |
 | $k$ | in-plane wave vector magnitude | $\mathrm{rad\,m^{-1}}$ |
 | $t$ | film thickness | $\mathrm{m}$ |
@@ -679,3 +691,5 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `crates/fullmag-plan/src/fem.rs` | `plan_fem_eigen` | Lower the FEM eigen study and enforce capability policy. |
 | `crates/fullmag-runner/src/fem/eigen_path.rs` | `execute_fem_eigen_path` | Execute k samples and publish postsolve comparisons. |
 | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `p00_demag_factor` | Stable analytic P00 reference. |
+| `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `frequencies_are_degenerate` | Apply the private absolute-plus-relative complex-frequency grouping bound. |
+| `crates/fullmag-runner/src/eigen/tracking.rs` | `frequency_clusters_use_anchored_complex_distance_and_additive_tolerance` | Regress anchored grouping, complex distance, and additive/relative tolerance boundaries; does not qualify physical degeneracy. |

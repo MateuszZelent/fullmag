@@ -14,13 +14,12 @@ use num_complex::Complex64;
 // are deliberately private until a versioned IR/artifact contract can expose
 // an authored degeneracy policy; they do not certify a physical mode label.
 const DEGENERACY_ABSOLUTE_FREQUENCY_TOLERANCE_HZ: f64 = 1.0e-6;
-// Was 1.0e-9 (~10 Hz at 10 GHz): tight enough that no two solver-reported
-// frequencies from different k-points, or even a physically degenerate pair on
-// an asymmetric tetrahedral mesh (which splits at 1e-4..1e-6 relative, i.e.
-// kHz-MHz), ever satisfy it in practice -- see audit finding H9
-// (docs/audits/2026-09-15-eigensolve-dispersion-correctness-audit.md). Loosened
-// to a scale that groups genuinely mesh-split degenerate pairs while still
-// well below the smallest physically distinct mode spacing of interest.
+// The complex-frequency distance is bounded by 1e-6 Hz plus 1e-4 times the
+// larger complex-frequency magnitude (with a 1 Hz scale floor). At 10 GHz the
+// relative term is about 1 MHz, so this private tracking heuristic can group
+// physically distinct nearby bands. The later mass-weighted principal-angle
+// overlap measures candidate subspace similarity; it does not prove physical
+// degeneracy.
 const DEGENERACY_RELATIVE_FREQUENCY_TOLERANCE: f64 = 1.0e-4;
 
 #[derive(Debug, Clone, Copy)]
