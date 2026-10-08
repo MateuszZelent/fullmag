@@ -699,6 +699,9 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
             root = Path(directory)
             context = self.fake_context(root)
             output_dir = root / "output"
+            model = context.source_tree / "tests/standard_problems/mumag/comsol_nonzero_k_dispersion/problem.py"
+            model.parent.mkdir(parents=True)
+            model.write_text("# lifecycle fixture; no physical solve\n", encoding="utf-8")
             failed_gate = {
                 "schema_version": benchmark.SCIENTIFIC_GATE_SCHEMA,
                 "status": "not_qualified",
@@ -709,6 +712,10 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                 benchmark.subprocess,
                 "run",
                 return_value=SimpleNamespace(returncode=0),
+            ), patch.object(
+                benchmark,
+                "resolve_runtime_artifact_root",
+                return_value=(output_dir / "c0", {"fixture_only": True}),
             ), patch.object(
                 benchmark,
                 "_validate_case_artifacts",
@@ -738,8 +745,8 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                     ["docker", "compose"],
                     timeout_seconds=30.0,
                 )
-            self.assertEqual(result_code, 0)
             result = json.loads((output_dir / "run-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result_code, 0, result)
             self.assertEqual(result["status"], "completed_unqualified")
             self.assertEqual(result["qualification"], "NOT VERIFIED")
             self.assertEqual(result["cases"][0]["scientific_gate"], failed_gate)
