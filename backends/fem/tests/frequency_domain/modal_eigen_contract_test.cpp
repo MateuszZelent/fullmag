@@ -3281,7 +3281,9 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
     constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
-    const auto check_tiny_matrix_buffer_bindings = [&](const char *case_name,
+    const auto check_tiny_matrix_buffer_bindings = [
+        expected_mass = gyrotropic_mass_row_major,
+        expected_stiffness = stiffness_matrix_row_major](const char *case_name,
                                                        const char *phase,
                                                        const FullmagFemModalEigenRequest &request) {
         char message[256]{};
@@ -3290,23 +3292,26 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
                       "case=%s phase=%s mass pointer must remain bound to the outer fixture buffer",
                       case_name,
                       phase);
-        check(request.tiny_validation_mass_matrix_row_major == gyrotropic_mass_row_major,
+        check(request.tiny_validation_mass_matrix_row_major == expected_mass,
               message);
         std::snprintf(message,
                       sizeof(message),
                       "case=%s phase=%s stiffness pointer must remain bound to the outer fixture buffer",
                       case_name,
                       phase);
-        check(request.tiny_validation_stiffness_matrix_row_major == stiffness_matrix_row_major,
+        check(request.tiny_validation_stiffness_matrix_row_major == expected_stiffness,
               message);
     };
-    const auto tiny_floquet_request = [&]() {
+    const auto tiny_floquet_request = [
+        mass_buffer = gyrotropic_mass_row_major,
+        stiffness_buffer = stiffness_matrix_row_major,
+        &check_tiny_matrix_buffer_bindings]() {
         FullmagFemModalEigenRequest request = base_request();
         request.operator_request.spin_wave_bc_kind = "floquet";
         request.tiny_validation_enabled = 1;
         request.tiny_validation_tangent_dof_count = 2;
-        request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
-        request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+        request.tiny_validation_stiffness_matrix_row_major = stiffness_buffer;
+        request.tiny_validation_mass_matrix_row_major = mass_buffer;
         check_tiny_matrix_buffer_bindings("tiny_floquet_request", "construction", request);
         return request;
     };

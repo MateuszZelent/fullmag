@@ -702,3 +702,9 @@ gdy taki child zgodnie z builderem nie istnieje. Wybiera teraz istniejący objec
 Visualization; zachowano stale Plot disabled, zdrowy canvas, brak obcego uniformu
 oraz brak requestu candidate field. Dodatnia ścieżka run B z prawdziwym overlay
 pozostaje. Wymagane świeże GHA po korektach fixture.
+Run37767620729 zatrzymał CABI już w phase=construction pierwszego requestu, przed
+jakimkolwiek C ABI call w tej funkcji. Jawne pointer init-captures factory/checkera
+zastępują implicit captures tablic. Bufory pozostają zewnętrzne i żywe przez
+cały test; wszystkie niezależne asercje bezpośredniego bindingu oraz solve/destroy
+zachowano. Source review PASS; przyczyna kompilatorowa NOT PROVEN, skuteczność
+naprawy wymaga świeżego GHA. Macierze i physics nie zostały zmienione.
