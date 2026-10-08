@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Results Workbench Mockup</title>
+<!--
+  Fullmag — module-driven Results Explorer, interactive design mockup.
+  Not production code. Spec: docs/specs/frontend-v2/32-results-analysis-feature-modules.md
+  Colours and sizes mirror apps/control-room/src/design/styles/theme.css (Catppuccin Mocha)
+  and tokens.css. Self-contained: no network access required.
+-->
+<style>
+:root{
+  --bg-app:#1e1e2e;--bg-chrome:#181825;--bg-panel:#1e1e2e;--bg-raised:#313244;--bg-viewport:#11111b;
+  --bg-selected:#264069;--bg-muted:#262739;--border-subtle:#313244;--border-default:#45475a;--border-strong:#585b70;
+  --border-muted:#292a3a;--text-1:#cdd6f4;--text-2:#bac2de;--text-3:#9399b2;--accent:#89b4fa;--accent-strong:#b4befe;
+  --accent-soft:#2a2d52;--success:#a6e3a1;--warning:#f9e2af;--danger:#f38ba8;--stale:#cba6f7;--degraded:#fab387;--teal:#94e2d5;
+  --font-ui:"Inter","Aptos","Segoe UI",sans-serif;--font-mono:"JetBrains Mono","Cascadia Code",Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg-app);color:var(--text-1);font-family:var(--font-ui);font-size:12px;font-variant-numeric:tabular-nums}
+button{font-family:inherit;color:inherit}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.mono{font-family:var(--font-mono)}
+.app{display:grid;grid-template-rows:38px 124px minmax(0,1fr) 26px;height:100vh;min-width:1280px}
+/* menu */
+.menu{display:flex;align-items:center;gap:4px;padding:0 12px;background:var(--bg-chrome);border-bottom:1px solid var(--border-subtle)}
+.brand{display:flex;align-items:center;gap:8px;margin-right:10px}
+.brand b{font-size:13px}
+.brand small{display:block;font-size:10px;color:var(--text-3)}
+.nav span{display:inline-flex;align-items:center;height:26px;padding:0 10px;color:var(--text-2);font-weight:500}
+.mockflag{margin-left:auto;font-size:10.5px;color:var(--degraded);border:1px dashed var(--degraded);border-radius:4px;padding:2px 8px}
+/* ribbon */
+.ribbon{display:grid;grid-template-rows:34px 90px;background:var(--bg-chrome);border-bottom:1px solid var(--border-subtle)}
+.rtabs{display:flex;align-items:flex-end;gap:2px;padding:0 8px;border-bottom:1px solid var(--border-subtle)}
+.rtab{height:30px;display:inline-flex;align-items:center;padding:0 12px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--text-3);border:0;background:none;border-radius:4px 4px 0 0}
+.rtab.on{background:var(--bg-app);color:var(--text-1);box-shadow:inset 0 -2px 0 var(--accent)}
+.rtab.ctx{color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.rtab.ctx.on{background:var(--bg-app);color:var(--accent)}
+.rgroups{display:flex;background:var(--bg-app);overflow:hidden}
+.rgroup{display:flex;flex-direction:column;padding:6px 8px 0;border-right:1px solid var(--border-subtle)}
+.rgroup.tone{background:color-mix(in srgb,var(--accent) 6%,var(--bg-app));box-shadow:inset 2px 0 0 var(--accent)}
+.ractions{display:flex;gap:2px;flex:1}
+.ract{width:68px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:4px 0;border:0;background:none;border-radius:4px;font-size:10px;font-weight:600;color:var(--text-2);text-align:center;line-height:1.15;cursor:pointer}
+.ract:hover:not(:disabled){background:var(--bg-raised)}
+.ract.on{background:var(--accent-soft);color:var(--accent)}
+.ract:disabled{opacity:.38;cursor:not-allowed}
+.ract svg{width:20px;height:20px}
+.rlabel{height:18px;font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--text-3);text-align:center;white-space:nowrap}
+.rnote{display:flex;align-items:center;padding:0 16px;color:var(--text-3);font-size:11px;max-width:520px;line-height:1.4}
+/* body */
+.body{display:grid;grid-template-columns:300px 4px minmax(0,1fr) 4px 416px;min-height:0}
+.split{background:var(--border-subtle)}
+.col{display:grid;grid-template-rows:38px minmax(0,1fr);min-height:0;background:var(--bg-panel)}
+.colhead{display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--bg-chrome);border-bottom:1px solid var(--border-subtle);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3)}
+/* explorer */
+.explorer{display:grid;grid-template-rows:38px 32px minmax(0,1fr) auto;min-height:0}
+.etabs{display:flex;gap:12px;padding:0 10px;align-items:stretch;border-bottom:1px solid var(--border-subtle);background:var(--bg-chrome)}
+.etab{display:flex;align-items:center;font-size:12px;font-weight:500;color:var(--text-3);border-bottom:2px solid transparent}
+.etab.on{color:var(--text-1);font-weight:600;border-bottom-color:var(--accent)}
+.efilter{display:flex;align-items:center;gap:6px;margin:4px 8px;padding:0 8px;border:1px solid var(--border-subtle);border-radius:6px;color:var(--text-3);font-size:11px}
+.tree{overflow:auto;padding:2px 4px 8px}
+.row{display:grid;grid-template-columns:16px 10px minmax(0,1fr) auto;align-items:center;gap:4px;min-height:24px;padding-right:6px;border-radius:4px;color:var(--text-2);cursor:pointer;white-space:nowrap;width:100%;border:0;background:none;text-align:left;font-size:12px}
+.row:hover{background:var(--bg-raised)}
+.row.sel{background:color-mix(in srgb,var(--accent) 13%,var(--bg-panel));box-shadow:inset 2px 0 0 var(--accent);color:var(--text-1)}
+.row.dim{color:var(--text-3)}
+.row .lbl{overflow:hidden;text-overflow:ellipsis}
+.row .meta{font-family:var(--font-mono);font-size:10.5px;color:var(--text-3)}
+.chev{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:var(--text-3);border-radius:3px}
+.chev:hover{background:var(--bg-hover,#3b3c4f)}
+.ndot{width:7px;height:7px;border-radius:50%}
+.modlist{border-top:1px solid var(--border-subtle);background:var(--bg-chrome);padding:6px 10px;font-size:10.5px;color:var(--text-3);line-height:1.6}
+.modlist b{color:var(--text-2);font-weight:600}
+/* center */
+.center{display:grid;grid-template-rows:38px 34px minmax(0,1fr) 30px;min-height:0;background:var(--bg-viewport)}
+.vtabs{display:flex;align-items:center;gap:8px;padding:0 8px;background:var(--bg-chrome);border-bottom:1px solid var(--border-subtle)}
+.seg{display:inline-flex;padding:2px;border:1px solid var(--border-subtle);border-radius:7px;background:var(--bg-muted);gap:2px}
+.seg button{height:20px;padding:0 8px;border-radius:5px;border:1px solid transparent;background:none;color:var(--text-3);font-size:11px;font-weight:560;cursor:pointer}
+.seg button.on{background:var(--bg-selected);border-color:var(--border-default);color:var(--accent)}
+.seg button:disabled{opacity:.4;cursor:not-allowed}
+.host{position:relative;min-height:0;overflow:auto;background:var(--bg-panel)}
+.viewhead{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-muted);background:var(--bg-panel);position:sticky;top:0;z-index:2}
+.viewhead h2{margin:0;font-size:13px;font-weight:650}
+.viewhead .sub{color:var(--text-3);font-size:11px}
+.dock{display:flex;align-items:center;gap:14px;padding:0 10px;background:var(--bg-chrome);border-top:1px solid var(--border-subtle);font-size:11px;color:var(--text-3)}
+.banner{display:flex;gap:8px;align-items:center;margin:8px 12px 0;padding:5px 8px;border-radius:4px;font-size:11px}
+.banner.warn{color:var(--warning);background:color-mix(in srgb,var(--warning) 8%,var(--bg-panel));border:1px solid color-mix(in srgb,var(--warning) 25%,transparent)}
+.banner.info{color:var(--text-2);background:var(--bg-muted);border:1px solid var(--border-subtle)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding:12px}
+.card{border:1px solid var(--border-subtle);border-radius:8px;background:var(--bg-chrome);padding:10px 12px}
+.card h3{margin:0 0 6px;font-size:11px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em}
+.kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0;font-size:11.5px}
+.kv span:first-child{color:var(--text-3)}
+.kv span:last-child{font-family:var(--font-mono);font-size:11px;text-align:right}
+.na{color:var(--text-3)!important;font-style:italic;font-family:var(--font-ui)!important}
+table.t{width:100%;border-collapse:collapse;font-size:11px}
+table.t th{text-align:right;color:var(--text-3);font-weight:600;padding:6px 10px;border-bottom:1px solid var(--border-subtle);background:var(--bg-chrome);white-space:nowrap}
+table.t td{text-align:right;padding:5px 10px;border-bottom:1px solid var(--border-muted);font-family:var(--font-mono);font-size:10.5px;white-space:nowrap}
+table.t th:first-child,table.t td:first-child{text-align:left}
+.compose{display:grid;gap:4px;height:100%;min-height:520px;padding:0}
+.compose.beside{grid-template-columns:minmax(0,1fr) 4px minmax(0,1.15fr)}
+.compose.below{grid-template-rows:minmax(0,.8fr) 4px minmax(0,1.2fr)}
+.compose.replace{grid-template-rows:1fr}
+.pane{min-width:0;min-height:0;background:var(--bg-panel);position:relative}
+.pane.v3d{background:var(--bg-viewport)}
+.paneHandle{background:var(--border-subtle)}
+.panehead{display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:11px;color:var(--text-2);border-bottom:1px solid var(--border-muted)}
+.state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:240px;color:var(--text-2);text-align:center;padding:24px}
+.state b{font-size:13px;color:var(--text-1)}
+.spinner{width:18px;height:18px;border-radius:50%;border:2px solid var(--border-default);border-top-color:var(--accent);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spinner{animation:none}}
+/* inspector */
+.insp{display:grid;grid-template-rows:38px auto minmax(0,1fr);min-height:0;background:var(--bg-panel)}
+.ihead{padding:10px 10px 8px;background:var(--bg-chrome);border-bottom:1px solid var(--border-subtle)}
+.crumbs{font-size:11px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ident{display:flex;gap:10px;align-items:center;margin-top:8px}
+.iicon{width:44px;height:44px;border-radius:8px;background:var(--bg-raised);border:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:center;flex:none}
+.ident h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.02em;line-height:1.2}
+.badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.bdg{font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-2);white-space:nowrap}
+.bdg.warn{color:var(--warning);border-color:color-mix(in srgb,var(--warning) 35%,transparent);background:color-mix(in srgb,var(--warning) 10%,transparent)}
+.bdg.ok{color:var(--success);border-color:color-mix(in srgb,var(--success) 35%,transparent);background:color-mix(in srgb,var(--success) 10%,transparent)}
+.bdg.acc{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.bdg.deg{color:var(--degraded);border-color:color-mix(in srgb,var(--degraded) 35%,transparent);background:color-mix(in srgb,var(--degraded) 10%,transparent)}
+.bdg.err{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,transparent);background:color-mix(in srgb,var(--danger) 10%,transparent)}
+.ibody{overflow:auto;padding:4px 10px 16px}
+details.sec{border-bottom:1px solid var(--border-muted)}
+details.sec>summary{display:flex;align-items:center;gap:6px;padding:9px 4px 7px;font-size:11.5px;font-weight:600;cursor:pointer;list-style:none}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary::before{content:"▸";color:var(--text-3);width:10px}
+details.sec[open]>summary::before{content:"▾"}
+.owner{margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:1px 5px;border-radius:3px}
+.owner.k{color:var(--text-2);border:1px solid var(--border-strong)}
+.owner.m{color:var(--accent);border:1px dashed var(--accent)}
+.ir{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:8px;align-items:center;min-height:25px;padding:0 4px 0 16px;font-size:11px}
+.ir>span:first-child{color:var(--text-3)}
+.ir>span:last-child{text-align:right;font-family:var(--font-mono);font-size:10.5px;display:flex;justify-content:flex-end;gap:6px;align-items:center}
+.btn{height:24px;display:inline-flex;align-items:center;gap:6px;padding:0 10px;border-radius:6px;border:1px solid var(--border-default);background:var(--bg-raised);color:var(--text-1);font-size:11px;font-weight:500;cursor:pointer;white-space:nowrap}
+.btn.primary{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.note{margin:4px 4px 8px 16px;font-size:10.5px;color:var(--text-3);line-height:1.45}
+.recompute{margin:8px 4px 8px 16px;padding:8px;border:1px dashed var(--border-strong);border-radius:6px;font-size:10.5px;color:var(--text-3);line-height:1.45}
+.recompute b{display:block;color:var(--text-1);font-size:11px;margin-bottom:2px}
+.cmp{display:grid;grid-template-columns:84px minmax(0,1fr) minmax(0,1fr) 14px;gap:6px;padding:4px 4px 4px 16px;font-size:10.5px;border-top:1px solid var(--border-muted)}
+.cmp span:nth-child(1){color:var(--text-3)}
+.cmp span:nth-child(3){color:var(--degraded)}
+.status{display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--bg-chrome);border-top:1px solid var(--border-subtle);font-size:11px;color:var(--text-3);white-space:nowrap;overflow:hidden}
+.status .sep{width:1px;height:12px;background:var(--border-subtle)}
+svg text{font-family:var(--font-ui)}
+.pt{cursor:pointer}
+.pt:focus{outline:none}
+.pt:focus-visible circle.hit{stroke:var(--accent);stroke-width:2}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="menu">
+    <div class="brand">
+      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="1" y="1" width="18" height="18" rx="5" fill="#2a2d52" stroke="#89b4fa"></rect><path d="M6 14V6h7M6 10h5" stroke="#89b4fa" stroke-width="1.8" fill="none" stroke-linecap="round"></path></svg>
+      <div><b>Fullmag</b><small>thin-film-de-pilot</small></div>
+    </div>
+    <nav class="nav" aria-label="Application menu"><span>Start</span><span>File</span><span>Edit</span><span>View</span><span>Simulation</span><span>Tools</span><span>Help</span></nav>
+    <span class="mockflag">Design mockup — data-driven from module manifests; not production code</span>
+  </header>
+  <section class="ribbon" aria-label="Ribbon">
+    <div class="rtabs" id="rtabs" role="tablist"></div>
+    <div class="rgroups" id="rgroups"></div>
+  </section>
+  <main class="body">
+    <aside class="col explorer" aria-label="Explorer">
+      <div class="etabs"><span class="etab">Model</span><span class="etab on">Results</span><span class="etab">Resources</span><span class="etab">Jobs</span><span class="etab">Diagnostics</span></div>
+      <div class="efilter"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>Filter nodes…</div>
+      <div class="tree" id="tree" role="tree" aria-label="Results tree"></div>
+      <div class="modlist" id="modlist"></div>
+    </aside>
+    <div class="split"></div>
+    <section class="center" aria-label="Viewport">
+      <div class="colhead">Viewport</div>
+      <div class="vtabs"><div class="seg"><button type="button">3D Viewport</button><button type="button">2D View</button><button type="button">Live Charts</button><button type="button" class="on">Analysis</button></div><span style="flex:1"></span><span style="color:var(--text-3);font-size:10.5px">Analysis shows the view of the selected Results node — no sub-tabs</span></div>
+      <div class="host" id="host"></div>
+      <div class="dock"><span>Samples table</span><span>Diagnostics</span><span>Progress</span><span>Logs</span><span style="flex:1"></span><span>Dock collapsed</span></div>
+    </section>
+    <div class="split"></div>
+    <aside class="insp" aria-label="Inspector">
+      <div class="colhead">Inspector</div>
+      <div class="ihead" id="ihead"></div>
+      <div class="ibody" id="ibody"></div>
+    </aside>
+  </main>
+  <footer class="status" id="status"></footer>
+</div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ data */
+// Pilot FEM result (selected_only). Values from the qualified pilot run summary.
+const SAMPLES = [
+  { id: "s1", k: -25, f: 13.502304 }, { id: "s2", k: -15, f: 12.025067 },
+  { id: "s3", k: -5, f: 10.309812 },  { id: "s4", k: 0, f: 9.299250 },
+  { id: "s5", k: 5, f: 10.309817 },   { id: "s6", k: 15, f: 12.025103 },
+  { id: "s7", k: 25, f: 13.502167 },
+];
+// Illustrative open-film reference (Kalinikos–Slavin n=0, DE), evaluated for this mockup only.
+// In production it comes from a backend reference resource (spec 32 §9).
+const REF_CURVE = [[-30,14.4388],[-25,13.6848],[-20,12.9084],[-15,12.0994],[-10,11.2444],[-5,10.3254],[-2.5,9.8347],[0,9.317],[2.5,9.8347],[5,10.3254],[10,11.2444],[15,12.0994],[20,12.9084],[25,13.6848],[30,14.4388]];
+const refAt = (k) => REF_CURVE.find((p) => p[0] === k)[1];
+
+// What the study published for this run (shape of AnalysisResultDatasetManifestResource).
+const RUN = { id: "run-2026-10-08-1422", label: "Run 08.10 14:22" };
+const DATASETS = [{
+  dataset_id: "modal-k-path", title: "DE dispersion along kᵧ", product_kind: "modal_eigen",
+  item_kinds: ["eigen_mode"], k_context: "k_path", axes: ["wavevector", "frequency"],
+  capabilities: { fields: true, branch_tracking: false, comparison: true, export: true, sample_paging: true },
+  status: "partial", completeness: "selected_only",
+}];
+
+// Module manifests: metadata only, evaluated without loading module code.
+const MANIFESTS = [
+  { id: "analysis.dispersion", version: "0.1.0", title: "Dispersion", color: "#89b4fa",
+    matches: [{ productKinds: ["modal_eigen", "driven_response"], kContexts: ["k_path", "k_grid"] }] },
+  { id: "analysis.resonance", version: "0.1.0", title: "Resonance & FMR", color: "#cba6f7",
+    matches: [{ productKinds: ["modal_eigen", "driven_response"], kContexts: ["gamma", "finite_open"] }] },
+  { id: "analysis.hysteresis", version: "0.1.0", title: "Hysteresis", color: "#f9e2af",
+    matches: [{ productKinds: ["hysteresis_loop (proposed)"] }] },
+  { id: "analysis.transmission", version: "0.1.0", title: "Transmission", color: "#94e2d5",
+    matches: [{ productKinds: ["transmission (proposed)"] }] },
+  { id: "analysis.time-domain", version: "0.1.0", title: "Time domain", color: "#fab387",
+    matches: [{ productKinds: ["time_domain_spectrum", "dynamic_structure_factor"] }] },
+];
+
+function evaluateMatch(manifest, ds) {
+  for (const rule of manifest.matches) {
+    if (!rule.productKinds.includes(ds.product_kind)) continue;
+    if (rule.kContexts && !rule.kContexts.includes(ds.k_context)) {
+      return { ok: false, reason: "k context " + ds.k_context + " not in " + rule.kContexts.join(" | ") };
+    }
+    return { ok: true, reason: "product " + ds.product_kind + " · k context " + ds.k_context };
+  }
+  return { ok: false, reason: "product " + ds.product_kind + " not handled" };
+}
+
+/* ------------------------------------------------------------------ state */
+const S = {
+  selected: "results",
+  expanded: new Set(["results", "ds:modal-k-path", "ds:modal-k-path/relation", "ds:modal-k-path/viz"]),
+  loaded: new Set(),
+  loading: null,
+  transient: null,                // sample id selected in a chart, not yet pinned
+  refs: [],                       // user definitions: reference overlays
+  viz: [],                        // user definitions: pinned mode visualizations
+  delta: false,
+  log: ["Kernel registered 5 analysis manifests (metadata only)."],
+};
+let defSeq = 1;
+
+/* ------------------------------------------------------------------ tree */
+const fmtK = (k) => (k > 0 ? "+" : k < 0 ? "−" : "") + Math.abs(k);
+const sampleById = (id) => SAMPLES.find((s) => s.id === id);
+
+function buildTree() {
+  const ds = DATASETS[0];
+  const base = "ds:" + ds.dataset_id;
+  const matched = MANIFESTS.find((m) => evaluateMatch(m, ds).ok);
+  const relationChildren = [
+    { id: base + "/relation/computed", label: "Computed modes", kind: "series", module: matched.id, meta: "7 pts" },
+    ...S.refs.map((r) => ({ id: r.id, label: r.label, kind: "reference", module: matched.id, badge: ["warn", "assumptions"] })),
+  ];
+  if (S.delta && S.refs.length) relationChildren.push({ id: base + "/relation/delta", label: "Δf vs reference", kind: "delta", module: matched.id });
+  const dsNode = {
+    id: base, label: "Dispersion · " + ds.title, kind: "dataset", module: matched.id, badge: ["warn", "partial"], dot: matched.color,
+    children: [
+      { id: base + "/overview", label: "Overview", kind: "overview", module: matched.id },
+      { id: base + "/relation", label: "Dispersion relation", kind: "relation", module: matched.id, meta: "f(k)", children: relationChildren },
+      { id: base + "/branches", label: "Branches", kind: "branches", module: matched.id, badge: ["deg", "unconfirmed"],
+        children: [{ id: base + "/branches/b1", label: "Lowest computed mode · 9.30–13.50 GHz", kind: "branch", module: matched.id }] },
+      { id: base + "/samples", label: "k samples", kind: "samples", module: matched.id, meta: "7",
+        children: SAMPLES.map((s) => ({
+          id: base + "/samples/" + s.id, label: "kᵧ " + fmtK(s.k) + " rad/µm", kind: "sample", module: matched.id, sample: s.id,
+          meta: s.f.toFixed(4) + " GHz",
+          children: [{ id: base + "/samples/" + s.id + "/m1", label: "Mode 1 · " + s.f.toFixed(4) + " GHz", kind: "mode", module: matched.id, sample: s.id }],
+        })) },
+      { id: base + "/viz", label: "Mode visualizations", kind: "vizgroup", module: matched.id, meta: String(S.viz.length),
+        children: S.viz.map((v) => {
+          const s = sampleById(v.sample);
+          return { id: v.id, label: "kᵧ " + fmtK(s.k) + " rad/µm · " + s.f.toFixed(3) + " GHz", kind: "viz", module: matched.id, sample: v.sample, def: v };
+        }) },
+      { id: base + "/quality", label: "Quality & provenance", kind: "quality", module: matched.id },
+    ],
+  };
+  return [{
+    id: "results", label: "Results · " + RUN.label, kind: "results", dot: "#cba6f7",
+    children: [
+      dsNode,
+      { id: "derived", label: "Derived Values", kind: "kernel-gap", dot: "#6c7086", badge: ["", "no owner"] },
+      { id: "tables", label: "Tables", kind: "kernel-gap", dot: "#6c7086", meta: "0" },
+      { id: "exports", label: "Exports", kind: "kernel-gap", dot: "#6c7086", meta: "0" },
+      { id: "views", label: "Saved views", kind: "kernel-gap", dot: "#6c7086", meta: "0" },
+    ],
+  }];
+}
+
+function indexTree(nodes, parent, out) {
+  for (const n of nodes) { n.parent = parent; out.set(n.id, n); if (n.children) indexTree(n.children, n, out); }
+  return out;
+}
+
+/* ------------------------------------------------------------------ chart */
+function chartSvg(o) {
+  const W = 860, H = o.h || 300, x0 = 64, x1 = 840, top = 16, bottom = H - 46;
+  const fmin = 8.5, fmax = 14.5;
+  const X = (k) => x0 + ((k + 30) / 60) * (x1 - x0);
+  const Y = (f) => bottom - ((f - fmin) / (fmax - fmin)) * (bottom - top);
+  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="100%" role="img" aria-label="Dispersion relation f versus k_y">';
+  for (let f = 9; f <= 14; f++) s += '<line x1="' + x0 + '" x2="' + x1 + '" y1="' + Y(f) + '" y2="' + Y(f) + '" stroke="#313244"/>' + '<text x="' + (x0 - 6) + '" y="' + (Y(f) + 4) + '" fill="#9399b2" font-size="10.5" text-anchor="end" class="mono">' + f + "</text>";
+  for (let k = -30; k <= 30; k += 10) s += '<line x1="' + X(k) + '" x2="' + X(k) + '" y1="' + top + '" y2="' + bottom + '" stroke="' + (k === 0 ? "#45475a" : "#292a3a") + '"/>' + '<text x="' + X(k) + '" y="' + (bottom + 16) + '" fill="#9399b2" font-size="10.5" text-anchor="middle">' + (k > 0 ? k : k < 0 ? "−" + -k : 0) + "</text>";
+  s += '<line x1="' + x0 + '" x2="' + x1 + '" y1="' + bottom + '" y2="' + bottom + '" stroke="#585b70"/>';
+  s += '<text x="' + (x0 + x1) / 2 + '" y="' + (H - 8) + '" fill="#bac2de" font-size="11" text-anchor="middle">kᵧ [rad/µm] — signed, k ⊥ M₀ (Damon–Eshbach)</text>';
+  s += '<text x="16" y="' + (top + bottom) / 2 + '" fill="#bac2de" font-size="11" text-anchor="middle" transform="rotate(-90 16 ' + (top + bottom) / 2 + ')">f [GHz]</text>';
+  if (o.showRef) {
+    const pts = REF_CURVE.map((p) => X(p[0]).toFixed(1) + "," + Y(p[1]).toFixed(1)).join(" ");
+    s += '<polyline points="' + pts + '" fill="none" stroke="#fab387" stroke-width="' + (o.emphRef ? 2.4 : 1.6) + '" stroke-dasharray="6 4" opacity="' + (o.dimComputed ? 1 : 0.9) + '"/>';
+  }
+  const link = SAMPLES.map((p) => X(p.k).toFixed(1) + "," + Y(p.f).toFixed(1)).join(" ");
+  s += '<polyline points="' + link + '" fill="none" stroke="#89b4fa" stroke-opacity="' + (o.emphBranch ? 0.9 : 0.4) + '" stroke-width="' + (o.emphBranch ? 1.6 : 1) + '" stroke-dasharray="1.5 3"/>';
+  if (o.cursor) { const c = sampleById(o.cursor); s += '<line x1="' + X(c.k) + '" x2="' + X(c.k) + '" y1="' + top + '" y2="' + bottom + '" stroke="#b4befe" stroke-dasharray="3 3"/>'; }
+  for (const p of SAMPLES) {
+    const pinned = o.pinned === p.id, trans = o.transient === p.id;
+    s += '<g class="pt" data-sample="' + p.id + '" tabindex="0" role="button" aria-label="Sample k_y ' + p.k + " rad per micrometre, " + p.f.toFixed(4) + ' GHz">' +
+      '<circle class="hit" cx="' + X(p.k) + '" cy="' + Y(p.f) + '" r="11" fill="transparent"/>' +
+      '<circle cx="' + X(p.k) + '" cy="' + Y(p.f) + '" r="5" fill="#89b4fa" stroke="#11111b" stroke-width="1.5" opacity="' + (o.dimComputed ? 0.5 : 1) + '"/>' +
+      (pinned ? '<rect x="' + (X(p.k) - 9) + '" y="' + (Y(p.f) - 9) + '" width="18" height="18" fill="none" stroke="#a6e3a1" stroke-width="2" transform="rotate(45 ' + X(p.k) + " " + Y(p.f) + ')"/>' : "") +
+      (trans ? '<circle cx="' + X(p.k) + '" cy="' + Y(p.f) + '" r="9.5" fill="none" stroke="#b4befe" stroke-width="2"/>' : "") + "</g>";
+  }
+  const tip = o.transient && sampleById(o.transient);
+  if (tip && !o.compact) {
+    const tx = Math.min(X(tip.k) + 14, W - 214), ty = Math.min(Y(tip.f) + 10, bottom - 104);
+    const rows = [["f", tip.f.toFixed(6) + " GHz"], ["k vector", "(0, " + tip.k + ", 0) rad/µm"], ["sample · mode", SAMPLES.indexOf(tip) + 1 + " / 7 · Mode 1"], ["branch", "unconfirmed (frequency order)"]];
+    if (o.showRef) rows.splice(1, 0, ["f_ref (open film)*", refAt(tip.k).toFixed(3) + " GHz"]);
+    s += '<rect x="' + tx + '" y="' + ty + '" width="206" height="' + (26 + rows.length * 15) + '" rx="6" fill="#181825" stroke="#45475a"/>';
+    s += '<text x="' + (tx + 10) + '" y="' + (ty + 17) + '" fill="#cdd6f4" font-size="11" font-weight="600">Selected point (not pinned)</text>';
+    rows.forEach((r, i) => { s += '<text x="' + (tx + 10) + '" y="' + (ty + 33 + i * 15) + '" fill="#9399b2" font-size="10">' + r[0] + '</text><text x="' + (tx + 196) + '" y="' + (ty + 33 + i * 15) + '" fill="#cdd6f4" font-size="10" text-anchor="end" class="mono">' + r[1] + "</text>"; });
+  }
+  return s + "</svg>";
+}
+
+function deltaSvg() {
+  const W = 860, H = 150, x0 = 64, x1 = 840, z = 32, X = (k) => x0 + ((k + 30) / 60) * (x1 - x0), Y = (d) => z + (-d / 200) * 86;
+  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="100%" role="img" aria-label="Frequency deviation from reference">';
+  s += '<rect x="' + x0 + '" y="10" width="' + (x1 - x0) + '" height="110" fill="#181825"/><line x1="' + x0 + '" x2="' + x1 + '" y1="' + z + '" y2="' + z + '" stroke="#585b70"/>';
+  s += '<text x="58" y="' + (z + 4) + '" fill="#9399b2" font-size="10.5" text-anchor="end">0</text><text x="58" y="' + (Y(-200) + 4) + '" fill="#9399b2" font-size="10.5" text-anchor="end">−200</text>';
+  s += '<text x="16" y="66" fill="#bac2de" font-size="11" text-anchor="middle" transform="rotate(-90 16 66)">Δf [MHz]</text>';
+  for (const p of SAMPLES) {
+    const d = (p.f - refAt(p.k)) * 1000;
+    s += '<rect x="' + (X(p.k) - 7) + '" y="' + z + '" width="14" height="' + (Y(d) - z) + '" fill="#fab387" opacity=".75"/>';
+    s += '<text x="' + X(p.k) + '" y="' + (Y(d) + 12) + '" fill="#bac2de" font-size="9.5" text-anchor="middle" class="mono">' + d.toFixed(0) + "</text>";
+  }
+  s += '<text x="' + (x0 + x1) / 2 + '" y="142" fill="#9399b2" font-size="10.5" text-anchor="middle">Δf = f_Fullmag − f_reference at computed k only · reference illustrative</text>';
+  return s + "</svg>";
+}
+
+function fieldSvg(def) {
+  const s = sampleById(def.sample);
+  const label = def.part + " m" + (def.comp === "‖·‖" ? "" : def.comp === "x" ? "ₓ" : def.comp === "y" ? "ᵧ" : "_z");
+  return '<svg viewBox="0 0 700 420" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" aria-hidden="true">' +
+    '<defs><linearGradient id="sl" x1="0" x2="1"><stop offset="0" stop-color="#5a7fd1"/><stop offset=".5" stop-color="#c9cfe6"/><stop offset="1" stop-color="#d9827f"/></linearGradient>' +
+    '<linearGradient id="cb" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#3b63c4"/><stop offset=".5" stop-color="#e6e9f2"/><stop offset="1" stop-color="#d0504b"/></linearGradient></defs>' +
+    '<path d="M110 220 L430 150 L600 230 L280 300 Z" fill="none" stroke="#45475a" stroke-dasharray="4 4"/>' +
+    '<path d="M170 225 L410 172 L540 230 L300 283 Z" fill="url(#sl)" stroke="#9399b2"/>' +
+    '<path d="M300 283 L540 230 L540 244 L300 297 Z" fill="#7b86b8"/><path d="M170 225 L300 283 L300 297 L170 239 Z" fill="#4d5a8f"/>' +
+    '<text x="350" y="120" fill="#fab387" font-size="12" font-weight="700" text-anchor="middle" letter-spacing="1">SCHEMATIC — NOT FIELD DATA</text>' +
+    '<text x="350" y="137" fill="#9399b2" font-size="10.5" text-anchor="middle">Production: existing complex surface shader on the bound FMVP v3 payload</text>' +
+    '<g stroke="#f9e2af" stroke-width="2" fill="#f9e2af"><line x1="60" y1="370" x2="120" y2="360"/><path d="M120 360 l-8 -3 l2 7 z"/></g><text x="62" y="388" fill="#f9e2af" font-size="11">M₀ ∥ x</text>' +
+    '<g stroke="#94e2d5" stroke-width="2" fill="#94e2d5"><line x1="60" y1="370" x2="92" y2="346"/><path d="M92 346 l-8 1 l4 6 z"/></g><text x="96" y="344" fill="#94e2d5" font-size="11">k ∥ y</text>' +
+    '<rect x="640" y="110" width="12" height="200" fill="url(#cb)" stroke="#45475a"/><text x="646" y="100" fill="#cdd6f4" font-size="10.5" text-anchor="middle">' + label + "</text>" +
+    '<text x="657" y="116" fill="#bac2de" font-size="10" class="mono">+max</text><text x="657" y="214" fill="#bac2de" font-size="10" class="mono">0</text><text x="657" y="312" fill="#bac2de" font-size="10" class="mono">−max</text>' +
+    '<text x="646" y="330" fill="#9399b2" font-size="9.5" text-anchor="middle">auto · symmetric</text>' +
+    '<g stroke="#bac2de" stroke-width="1.5"><line x1="520" y1="380" x2="584" y2="380"/><line x1="520" y1="376" x2="520" y2="384"/><line x1="584" y1="376" x2="584" y2="384"/></g><text x="552" y="372" fill="#bac2de" font-size="10" text-anchor="middle" class="mono">10 nm</text>' +
+    '<text x="12" y="22" fill="#cdd6f4" font-size="12" font-weight="600">Mode 1 · kᵧ ' + fmtK(s.k) + " rad/µm · " + s.f.toFixed(4) + " GHz</text>" +
+    '<text x="12" y="40" fill="#a6e3a1" font-size="10.5">Field bound to sample ' + (SAMPLES.indexOf(s) + 1) + " · mode 1 · revision matches</text></svg>";
+}
+
+/* ------------------------------------------------------------------ module code (loaded lazily) */
+// Everything below is what analysis.dispersion contributes after load(). The kernel renders nothing
+// module-specific before the module is loaded.
+const DISPERSION_MODULE = {
+  ribbon(node) {
+    const g = [];
+    if (["dataset", "overview", "relation", "series", "reference", "delta", "branches", "branch", "samples", "sample", "mode", "vizgroup", "quality"].includes(node.kind)) {
+      g.push({ title: "Plot", tone: true, actions: [
+        { id: "add-ref", label: "Add\nreference", icon: "ref", disabled: S.refs.length > 0, why: "Reference already added" },
+        { id: "import", label: "Import\nCSV/COMSOL", icon: "import", disabled: true, why: "Needs the import resource (spec 32 §9)" },
+        { id: "compare-run", label: "Compare\nwith run", icon: "compare", disabled: true, why: "No other compatible run in this project" },
+        { id: "delta", label: "Δf vs\nreference", icon: "delta", disabled: !S.refs.length, on: S.delta, why: "Add a reference first" },
+        { id: "contour", label: "Iso-f\ncontour", icon: "contour", disabled: true, why: "Requires a dataset with a 2D k grid; this run publishes a k path" },
+      ] });
+      g.push({ title: "Mode", tone: true, actions: [
+        { id: "create-viz", label: "Create mode\nvisualization", icon: "cube", disabled: !S.transient, why: "Select a point in the dispersion chart first" },
+      ] });
+    }
+    if (node.kind === "viz") {
+      g.push({ title: "Layout", tone: true, actions: ["replace", "below", "beside"].map((p) => ({ id: "place-" + p, label: p === "replace" ? "Field\nonly" : p === "below" ? "Chart +\nfield below" : "Chart +\nfield beside", icon: "layout-" + p, on: node.def.placement === p })) });
+      g.push({ title: "Field", tone: true, actions: [
+        { id: "animate", label: node.def.animate ? "Pause\nphase" : "Animate\nphase", icon: "play", on: node.def.animate },
+      ] });
+    }
+    g.push({ title: "Export", actions: [
+      { id: "export-fig", label: "Figure\nSVG/PNG", icon: "figure" },
+      { id: "export-data", label: "Data +\nmetadata", icon: "data" },
+    ] });
+    return g;
+  },
+  view(node) {
+    const ds = DATASETS[0];
+    const banner = '<div class="banner warn">Partial result: one selected mode per k (selected_only). Band completeness and branch continuity are not established.</div>';
+    switch (node.kind) {
+      case "dataset": case "overview":
+        return head("Overview", "DE dispersion along kᵧ · " + RUN.label) + banner +
+          '<div class="cards">' +
+          card("Study", [["Problem", "film 40 × 40 × 10 nm"], ["Material", "Ms 800 kA/m · A 13 pJ/m"], ["Bias", "0.1 T ∥ x"], ["Interactions", "exchange · demag · Zeeman"], ["Boundary", "Floquet xy · Dirichlet airbox"]]) +
+          card("k path", [["Direction", "k ∥ y ⊥ M₀ (DE)"], ["Range", "−25 … 25 rad/µm"], ["Samples", "7"], ["kd at |k| max", "0.25"]]) +
+          card("Frequencies", [["Min", "9.2993 GHz (Γ)"], ["Max", "13.5023 GHz"], ["Modes per sample", "1 (selected_only)"]]) +
+          card("Solver", [["Method", "FEM · eigen"], ["Requested → resolved", '<span class="na">in Provenance</span>'], ["Completeness", "selected_only"]]) +
+          "</div>";
+      case "relation": case "series": case "reference": case "delta": case "branches": case "branch": case "samples": case "sample": case "mode": {
+        const showRef = S.refs.length > 0;
+        const o = { showRef, emphRef: node.kind === "reference", dimComputed: node.kind === "reference", emphBranch: node.kind === "branch",
+          transient: S.transient, cursor: node.sample || null, h: 330 };
+        const sub = node.kind === "reference" ? "reference highlighted" : node.kind === "branch" ? "branch highlighted — assigned by frequency order only" : node.sample ? "cursor at kᵧ " + fmtK(sampleById(node.sample).k) + " rad/µm" : "click a point to inspect it";
+        return head("Dispersion relation", sub) + banner +
+          '<div style="padding:6px 12px 0">' + chartSvg(o) + "</div>" +
+          (S.delta && showRef ? '<div style="padding:0 12px">' + deltaSvg() + "</div>" : "") +
+          '<div style="display:flex;gap:16px;padding:6px 14px 12px;font-size:10.5px;color:var(--text-2)">' +
+          '<span><span class="ndot" style="display:inline-block;background:#89b4fa"></span> Fullmag FEM · computed</span>' +
+          (showRef ? "<span>┄ Kalinikos–Slavin n=0 open film · reference (illustrative*)</span>" : "") +
+          "<span>··· visual link only — not a tracked branch</span></div>";
+      }
+      case "vizgroup":
+        return head("Mode visualizations", S.viz.length + " pinned") +
+          (S.viz.length ? '<div class="cards">' + S.viz.map((v) => { const s = sampleById(v.sample); return card("kᵧ " + fmtK(s.k) + " rad/µm", [["Frequency", s.f.toFixed(4) + " GHz"], ["Representation", v.part + " m" + v.comp], ["Layout", v.placement]]); }).join("") + "</div>"
+            : stateBox("", "No mode visualizations yet", "Open Dispersion relation, click a point, then choose Create mode visualization. Each visualization becomes a node here and is saved with the project."));
+      case "viz": {
+        const d = node.def;
+        const chart = '<div class="pane"><div class="panehead">Dispersion relation · pinned point ◆</div><div style="padding:4px 8px">' + chartSvg({ showRef: S.refs.length > 0, pinned: d.sample, transient: S.transient, compact: true, h: 300 }) + "</div></div>";
+        const field = '<div class="pane v3d"><div class="panehead" style="background:var(--bg-chrome)">3D Viewport · the single viewport-3d instance</div><div style="position:absolute;inset:30px 0 0 0">' + fieldSvg(d) + "</div></div>";
+        const body = d.placement === "replace" ? field : chart + '<div class="paneHandle"></div>' + field;
+        return head("Mode visualization", "layout: " + d.placement + " · change in ribbon or Inspector") + '<div class="compose ' + d.placement + '" style="height:calc(100% - 40px)">' + body + "</div>";
+      }
+      case "quality":
+        return head("Quality & provenance", "per-sample table") +
+          '<table class="t"><thead><tr><th>k sample</th><th>kᵧ [rad/µm]</th><th>f [GHz]</th><th>Residual</th><th>Im f</th><th>Branch</th><th>State</th></tr></thead><tbody>' +
+          SAMPLES.map((s, i) => "<tr><td>" + (i + 1) + "</td><td>" + fmtK(s.k) + "</td><td>" + s.f.toFixed(6) + '</td><td class="na">not available</td><td class="na">not reported</td><td>unconfirmed</td><td>partial</td></tr>').join("") +
+          "</tbody></table>";
+    }
+    return "";
+  },
+  inspector(node) {
+    const secs = [];
+    if (node.kind === "dataset" || node.kind === "overview") {
+      secs.push(sec("Study setup (read-only)", rows([["k path", "kᵧ −25 … 25 rad/µm"], ["Samples", "7"], ["Target modes", "1 per sample"], ["Method", "FEM eigen"]]) + recompute()));
+      secs.push(sec("Ranges", rows([["f range", "9.2993 – 13.5023 GHz"], ["kd max", "0.25"]])));
+    }
+    if (["relation", "series", "branches", "branch", "samples", "sample", "mode", "delta"].includes(node.kind)) {
+      secs.push(sec("Axes", rows([["k axis", '<span class="seg"><button class="on">kᵧ signed</button><button>path length</button></span>'], ["k unit", "rad/µm"], ["f unit", "GHz"]])));
+      secs.push(sec("Series", rows([["Computed modes", "visible"]].concat(S.refs.map((r) => [r.label, "visible"])))));
+      const t = S.transient && sampleById(S.transient);
+      secs.push(sec("Selected point", t
+        ? rows([["k vector", "(0, " + t.k + ", 0) rad/µm"], ["f", t.f.toFixed(6) + " GHz"], ["Sample · mode", SAMPLES.indexOf(t) + 1 + " / 7 · Mode 1"], ["Branch", '<span style="color:var(--degraded)">unconfirmed</span>'], ["3D field", "available"]]) +
+          '<div style="padding:6px 4px 8px 16px"><button class="btn primary" data-act="create-viz">Create mode visualization</button></div>'
+        : '<div class="note">Click a point in the chart. The selection is temporary until you create a mode visualization from it.</div>'));
+    }
+    if (node.kind === "reference") {
+      secs.push(sec("Comparison status", '<div class="note" style="color:var(--warning)"><b>Different assumptions.</b> The reference is an infinite open film; this run is a 40 × 40 nm Floquet cell in a finite Dirichlet airbox. Agreement does not validate the result.</div>'));
+      secs.push(sec("Reference model", rows([["Model", "Kalinikos–Slavin, n = 0"], ["Source", '<span class="na">backend resource (proposed)</span>'], ["Validity", "kd ≪ 1 · here ≤ 0.25"]])));
+      secs.push(sec("Metadata", '<div class="cmp"><span>Geometry</span><span>40×40×10 nm, Floquet</span><span>infinite film, 10 nm</span><span style="color:var(--warning)">≠</span></div>' +
+        '<div class="cmp"><span>Ms · A</span><span>800 kA/m · 13 pJ/m</span><span>800 kA/m · 13 pJ/m</span><span style="color:var(--success)">=</span></div>' +
+        '<div class="cmp"><span>Bias</span><span>0.1 T ∥ x</span><span>0.1 T in plane</span><span style="color:var(--success)">=</span></div>' +
+        '<div class="cmp"><span>Boundary</span><span>Dirichlet airbox</span><span>open space</span><span style="color:var(--warning)">≠</span></div>' +
+        '<div class="cmp"><span>Profile</span><span>resolved by mesh</span><span>uniform (n = 0)</span><span style="color:var(--warning)">≠</span></div>'));
+    }
+    if (node.kind === "viz") {
+      const d = node.def;
+      const segs = (key, opts) => '<span class="seg">' + opts.map((o) => '<button data-set="' + key + '" data-val="' + o + '" class="' + (d[key] === o ? "on" : "") + '">' + o + "</button>").join("") + "</span>";
+      secs.push(sec("Field (presentation only)", rows([["Part", segs("part", ["Re", "Im", "|m̃|", "arg"])], ["Component", segs("comp", ["x", "y", "z", "‖·‖"])], ["Layout", segs("placement", ["replace", "below", "beside"])], ["Harmonic phase", "90°"], ["Playback", "0.5 cycle/s"]]) +
+        '<div class="note">Playback speed is visual only. The physical eigenfrequency stays ' + sampleById(d.sample).f.toFixed(4) + " GHz.</div>"));
+      secs.push(sec("Layers", rows([["Surface", "Re/Im colour map"], ["Arrows", "off"], ["Slice", "off"], ["Thickness profile", '<span class="na">unsupported — needs line probe</span>']])));
+      secs.push(sec("Framing", rows([["Focus", "magnetic region"], ["Airbox", "outline"]])));
+      secs.push(sec("Definition", rows([["Schema", "analysis.dispersion.mode_visualization.v1"], ["Data ref", "dataset · sample · item"], ["Stored", '<span class="na">in memory (mockup)</span>']])));
+      secs.push(sec("Recompute", recompute()));
+    }
+    if (node.kind === "quality") {
+      secs.push(sec("Completeness", rows([["Spectrum", '<span style="color:var(--warning)">selected_only</span>'], ["Window complete", '<span class="na">not reported</span>']])));
+      secs.push(sec("Tracking", rows([["Score source", '<span style="color:var(--degraded)">frequency order only</span>'], ["Overlap", '<span class="na">not available</span>']])));
+      secs.push(sec("Accuracy", rows([["Residual", '<span class="na">not available</span>'], ["Im f · FWHM · Q", '<span class="na">not reported (≠ 0)</span>']])));
+    }
+    if (node.kind === "vizgroup") secs.push(sec("About", '<div class="note">Children are user-created definitions owned by analysis.dispersion and persisted with the project.</div>'));
+    return secs;
+  },
+};
+
+/* ------------------------------------------------------------------ helpers */
+function head(t, sub) { return '<div class="viewhead"><h2>' + t + '</h2><span class="sub">' + sub + "</span></div>"; }
+function card(t, kvs) { return '<div class="card"><h3>' + t + "</h3>" + kvs.map((r) => '<div class="kv"><span>' + r[0] + "</span><span>" + r[1] + "</span></div>").join("") + "</div>"; }
+function rows(list) { return list.map((r) => '<div class="ir"><span>' + r[0] + "</span><span>" + r[1] + "</span></div>").join(""); }
+function sec(title, html, owner, open) { return { title, html, owner: owner || "m", open: open !== false }; }
+function recompute() { return '<div class="recompute"><b>Needs a new computation</b>k path, mode count, frequency window and mesh belong to the study. Changing them never edits this result.<div style="margin-top:6px"><button class="btn">Open study settings…</button></div></div>'; }
+function stateBox(kind, title, text) { return '<div class="state">' + (kind === "loading" ? '<span class="spinner"></span>' : "") + "<b>" + title + "</b><span>" + text + "</span></div>"; }
+
+const ICONS = {
+  ref: '<path d="M3 18c4-10 14-10 18 0" stroke-dasharray="3 2"/>', import: '<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
+  compare: '<path d="M4 7h11M4 17h16M15 3l4 4-4 4"/>', delta: '<path d="M3 12h18M6 12v-4M10 12v3M14 12v-2M18 12v5"/>',
+  contour: '<ellipse cx="12" cy="12" rx="9" ry="6"/><ellipse cx="12" cy="12" rx="5" ry="3"/>', cube: '<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>',
+  "layout-replace": '<rect x="3" y="4" width="18" height="16" rx="2"/>', "layout-below": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 11h18"/>',
+  "layout-beside": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M11 4v16"/>', play: '<path d="M8 5l11 7-11 7z"/>',
+  figure: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 15l3-3 2 2 3-4"/>', data: '<path d="M5 4h10l4 4v12H5z"/><path d="M8 12h8M8 16h8"/>',
+  vtk: '<path d="M3 8l9-5 9 5-9 5z"/>', state: '<path d="M5 4h14v16l-7-4-7 4z"/>',
+};
+const icon = (n) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">' + (ICONS[n] || "") + "</svg>";
+
+/* ------------------------------------------------------------------ render */
+let NODES = new Map();
+function render() {
+  const tree = buildTree();
+  NODES = indexTree(tree, null, new Map());
+  if (!NODES.has(S.selected)) S.selected = "results";
+  const node = NODES.get(S.selected);
+  const moduleReady = node.module && S.loaded.has(node.module);
+  renderTree(tree);
+  renderModules();
+  renderRibbon(node, moduleReady);
+  renderView(node, moduleReady);
+  renderInspector(node, moduleReady);
+  document.getElementById("status").innerHTML =
+    '<span>Modules loaded: kernel' + (S.loaded.size ? ", " + Array.from(S.loaded).join(", ") : "") + '</span><span class="sep"></span><span>' + S.log[S.log.length - 1] + "</span>";
+}
+
+function renderTree(tree) {
+  const out = [];
+  const walk = (nodes, depth) => {
+    for (const n of nodes) {
+      const has = n.children && n.children.length;
+      const open = S.expanded.has(n.id);
+      const badge = n.badge ? '<span class="bdg ' + n.badge[0] + '">' + n.badge[1] + "</span>" : n.meta ? '<span class="meta">' + n.meta + "</span>" : "<span></span>";
+      out.push('<div class="row' + (n.id === S.selected ? " sel" : "") + (n.kind === "kernel-gap" ? " dim" : "") + '" role="treeitem" aria-selected="' + (n.id === S.selected) + '"' + (has ? ' aria-expanded="' + open + '"' : "") + ' tabindex="0" data-node="' + n.id + '" style="padding-left:' + (2 + depth * 14) + 'px">' +
+        (has ? '<span class="chev" data-toggle="' + n.id + '">' + (open ? "▾" : "▸") + "</span>" : "<span></span>") +
+        '<span class="ndot" style="background:' + (n.dot || (n.kind === "reference" ? "#fab387" : n.kind === "viz" ? "#a6e3a1" : "#6c7086")) + '"></span>' +
+        '<span class="lbl">' + n.label + "</span>" + badge + "</div>");
+      if (has && open) walk(n.children, depth + 1);
+    }
+  };
+  walk(tree, 0);
+  document.getElementById("tree").innerHTML = out.join("");
+}
+
+function renderModules() {
+  const ds = DATASETS[0];
+  document.getElementById("modlist").innerHTML = "<b>Analysis modules</b> (manifests)<br>" + MANIFESTS.map((m) => {
+    const r = evaluateMatch(m, ds);
+    const st = S.loaded.has(m.id) ? "loaded" : r.ok ? "matched · code not loaded" : "no matching dataset";
+    return '<span style="color:' + (r.ok ? m.color : "var(--text-3)") + '">●</span> ' + m.title + " — " + st;
+  }).join("<br>");
+}
+
+function renderRibbon(node, ready) {
+  const ctx = ready && node.module === "analysis.dispersion";
+  const tabs = ["Workspace", "View", "Definitions", "Geometry", "Materials", "Physics", "Mesh", "Study", "Results"];
+  let t = tabs.map((x) => '<button class="rtab' + (x === "Results" && !ctx ? " on" : "") + '" role="tab">' + x + "</button>").join("");
+  if (ctx) t += '<button class="rtab ctx on" role="tab" title="Contextual tab contributed by analysis.dispersion">Dispersion</button>';
+  t += '<button class="rtab" role="tab">Automation</button>';
+  document.getElementById("rtabs").innerHTML = t;
+  let groups;
+  if (ctx) groups = DISPERSION_MODULE.ribbon(node);
+  else groups = [{ title: "Export", actions: [{ id: "vtk", label: "VTK", icon: "vtk" }, { id: "state", label: "State", icon: "state" }] }];
+  let html = groups.map((g) => '<div class="rgroup' + (g.tone ? " tone" : "") + '"><div class="ractions">' + g.actions.map((a) =>
+    '<button class="ract' + (a.on ? " on" : "") + '" data-act="' + a.id + '"' + (a.disabled ? " disabled" : "") + ' title="' + (a.disabled ? a.why : a.label.replace("\n", " ")) + '">' + icon(a.icon) + a.label.replace("\n", "<br>") + "</button>").join("") +
+    '</div><div class="rlabel">' + g.title + "</div></div>").join("");
+  if (!ctx) html += '<div class="rnote">' + (node.module && !ready ? "Loading the module that owns this node…" : "Select a node of an analysis module to show its contextual tab. Results itself only offers kernel actions.") + "</div>";
+  document.getElementById("rgroups").innerHTML = html;
+}
+
+function renderView(node, ready) {
+  const host = document.getElementById("host");
+  if (node.module && !ready) { host.innerHTML = stateBox("loading", "Loading module " + node.module, "First selection of a node owned by this module. Code is fetched once; the rest of the tree stays usable."); return; }
+  if (node.kind === "results") {
+    host.innerHTML = head("Results · " + RUN.label, "datasets published by the study and the modules that match them") +
+      '<table class="t" style="margin-top:4px"><thead><tr><th>Module</th><th>Dataset</th><th>Match</th><th>Reason</th></tr></thead><tbody>' +
+      MANIFESTS.map((m) => { const r = evaluateMatch(m, DATASETS[0]); return "<tr><td>" + m.title + " <span class=\"mono\" style=\"color:var(--text-3)\">" + m.id + "</span></td><td>" + DATASETS[0].dataset_id + "</td><td style=\"color:" + (r.ok ? "var(--success)" : "var(--text-3)") + "\">" + (r.ok ? "matched" : "—") + '</td><td style="font-family:var(--font-ui)">' + r.reason + "</td></tr>"; }).join("") +
+      "</tbody></table>" + '<div class="banner info" style="margin-top:12px">Only matched modules create nodes. A dataset without a module would appear as “Dataset · no analysis module” with a table view.</div>';
+    return;
+  }
+  if (node.kind === "kernel-gap") { host.innerHTML = head(node.label, "kernel node") + stateBox("", "Unavailable", "No persistent owner resource is published for user-defined postprocessing definitions yet (spec 32 §8)."); return; }
+  host.innerHTML = DISPERSION_MODULE.view(node);
+}
+
+function renderInspector(node, ready) {
+  const path = []; for (let n = node; n; n = n.parent) path.unshift(n.label.split(" · ")[0]);
+  const badges = [];
+  if (node.module) badges.push('<span class="bdg acc">' + node.module + "</span>");
+  if (node.kind === "viz") badges.push('<span class="bdg ok">bound</span>');
+  if (node.module) badges.push('<span class="bdg warn">partial</span>');
+  if (node.kind === "reference") badges.push('<span class="bdg deg">different assumptions</span>');
+  document.getElementById("ihead").innerHTML = '<nav class="crumbs" aria-label="Breadcrumbs">' + path.join(" / ") + '</nav><div class="ident"><div class="iicon" style="color:' + (node.module ? "#89b4fa" : "#cba6f7") + '">' + icon(node.kind === "viz" ? "cube" : node.kind === "reference" ? "ref" : "figure") + '</div><div style="min-width:0"><h1>' + node.label + '</h1><div class="badges">' + badges.join("") + "</div></div></div>";
+  const secs = [];
+  secs.push(sec("Identity", rows([["Node kind", node.module ? "analysis.dispersion." + node.kind : node.kind], ["Owner", node.module || "kernel"]]), "k", false));
+  if (node.module && !ready) secs.push(sec("State", stateBox("loading", "Loading module sections", ""), "k"));
+  else if (node.module) secs.push.apply(secs, DISPERSION_MODULE.inspector(node));
+  else if (node.kind === "results") secs.push(sec("Module matching", rows(MANIFESTS.map((m) => [m.title, evaluateMatch(m, DATASETS[0]).ok ? '<span style="color:var(--success)">matched</span>' : '<span class="na">no dataset</span>'])), "k"));
+  else secs.push(sec("State", '<div class="note">No persistent owner resource for this node type yet.</div>', "k"));
+  secs.push(sec("Provenance", rows([["Run · stage", "[run_id] · [stage_id]"], ["Dataset", DATASETS[0].dataset_id + " @ [revision]"], ["Schema", "frequency_domain_eigen_dispersion.v1"], ["Engine · device", "[engine_id] · [device]"]]), "k", false));
+  document.getElementById("ibody").innerHTML = secs.map((s) => '<details class="sec"' + (s.open ? " open" : "") + "><summary>" + s.title + '<span class="owner ' + s.owner + '">' + (s.owner === "k" ? "kernel" : "module") + "</span></summary>" + s.html + "</details>").join("");
+}
+
+/* ------------------------------------------------------------------ behaviour */
+function select(id) {
+  S.selected = id;
+  const n = NODES.get(id);
+  if (n && n.module && !S.loaded.has(n.module) && S.loading !== n.module) {
+    S.loading = n.module;
+    S.log.push("Loading " + n.module + " (first selection)…");
+    render();
+    setTimeout(() => { S.loaded.add(n.module); S.loading = null; S.log.push(n.module + " loaded lazily; contributed view, inspector sections and ribbon"); render(); }, 450);
+    return;
+  }
+  if (n && n.sample && (n.kind === "sample" || n.kind === "mode")) S.transient = n.sample;
+  render();
+}
+
+function act(id) {
+  const base = "ds:" + DATASETS[0].dataset_id;
+  const node = NODES.get(S.selected);
+  if (id === "add-ref" && !S.refs.length) {
+    S.refs.push({ id: "def-" + defSeq++, label: "Reference · KS n=0 open film" });
+    S.expanded.add(base + "/relation");
+    S.log.push("Definition created: reference overlay (owned by analysis.dispersion)");
+    S.selected = S.refs[0].id;
+  } else if (id === "delta" && S.refs.length) {
+    S.delta = !S.delta; if (S.delta) S.selected = base + "/relation/delta"; else if (S.selected.endsWith("/delta")) S.selected = base + "/relation";
+  } else if (id === "create-viz" && S.transient) {
+    const existing = S.viz.find((v) => v.sample === S.transient);
+    if (existing) { S.selected = existing.id; }
+    else {
+      const def = { id: "def-" + defSeq++, sample: S.transient, placement: "beside", part: "Re", comp: "y", animate: false };
+      S.viz.push(def); S.selected = def.id; S.expanded.add(base + "/viz");
+      S.log.push("Definition created: mode visualization pinned to kᵧ " + fmtK(sampleById(def.sample).k) + " rad/µm");
+    }
+  } else if (id.startsWith("place-") && node.def) {
+    node.def.placement = id.slice(6);
+  } else if (id === "animate" && node.def) {
+    node.def.animate = !node.def.animate;
+    S.log.push(node.def.animate ? "Phase animation on (visual rate 0.5 cycle/s, physical f unchanged)" : "Phase animation paused");
+  } else if (id.startsWith("export")) {
+    S.log.push("Export is outside the scope of this mockup");
+  }
+  render();
+}
+
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-toggle]");
+  if (t) { const id = t.dataset.toggle; S.expanded.has(id) ? S.expanded.delete(id) : S.expanded.add(id); render(); return; }
+  const r = e.target.closest("[data-node]"); if (r) { select(r.dataset.node); return; }
+  const a = e.target.closest("[data-act]"); if (a && !a.disabled) { act(a.dataset.act); return; }
+  const p = e.target.closest("[data-sample]"); if (p) { S.transient = p.dataset.sample; render(); return; }
+  const set = e.target.closest("[data-set]");
+  if (set) { const n = NODES.get(S.selected); if (n && n.def) { n.def[set.dataset.set] = set.dataset.val; render(); } }
+});
+document.addEventListener("keydown", (e) => {
+  const row = e.target.closest && e.target.closest("[data-node]");
+  if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); select(row.dataset.node); }
+  if (row && (e.key === "ArrowRight" || e.key === "ArrowLeft")) { e.preventDefault(); const id = row.dataset.node; if (e.key === "ArrowRight") S.expanded.add(id); else S.expanded.delete(id); render(); }
+  const pt = e.target.closest && e.target.closest("[data-sample]");
+  if (pt && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); S.transient = pt.dataset.sample; render(); }
+});
+render();
+</script>
+</body>
+</html>
