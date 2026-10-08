@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 39, `implemented_pending_browser`: 8, `implemented_pending_ci`: 6, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 86. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 40, `implemented_pending_browser`: 8, `implemented_pending_ci`: 6, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 85. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -29,9 +29,9 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4060116309](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116309) / #97 | `crates/fullmag-plan/src/validate.rs` | implemented | Walidacja ogólna dopuszcza branches i sample_selector bez kontroli KSampling::Path; dispatch single-k i requested_mode_indices_for_result konsumują tylko indeksy. |
 | [4060116318](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116318) / #97 | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | duplicate | Ta sama utrata konfiguracji outputów per stage co w #4061684295. Renderer wybiera pierwszy stage z outputami i emituje jego save globalnie; _render_outputs jest wywołane tylko raz, przed renderowaniem stage'y. Powtórzenie 4061684295. |
 | [4060116330](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116330) / #97 | `scripts/run_comsol_dispersion_benchmark.py` | implemented | docker image inspect jest wywołane bez timeout i funkcja przechwytuje tylko OSError; zawieszony Docker może trzymać build_lock bez końca. |
-| [4060116342](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116342) / #97 | `crates/fullmag-runner/src/eigen/tracking.rs` | implemented_pending_ci | Publikowane confidence jest równym scalar overlap; assignment score, fallback i subspace transport zachowane. Regresja rzeczywistego trackera do JSON/CSV. |
+| [4060116342](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116342) / #97 | `crates/fullmag-runner/src/eigen/tracking.rs` | implemented | Publikowane confidence jest równym scalar overlap; assignment score, fallback i subspace transport zachowane. Regresja rzeczywistego trackera do JSON/CSV. |
 | [4060116349](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116349) / #97 | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | valid_unfixed | Kod 1e-4, opublikowane równanie 1e-9. |
-| [4060116354](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116354) / #97 | `tests/standard_problems/mumag/comsol_nonzero_k_dispersion/materialize_real_asset.py` | valid_unfixed | benchmark_mesh.accepted=false nadal daje summary/materialization_status passed, run_receipt status passed i exit 0; konsumenci status/exit mogą zaliczyć odrzuconą siatkę. |
+| [4060116354](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116354) / #97 | `tests/standard_problems/mumag/comsol_nonzero_k_dispersion/materialize_real_asset.py` | implemented_pending_ci | Odrzucony benchmark mesh daje overall summary/receipt failed i exit1. Udana serializacja zachowuje materialization_statuspassed, artefakty i rejection reasons; progów nie zmieniono. |
 | [4060116361](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116361) / #97 | `backends/fem/CMakeLists.txt` | implemented | Komentarz nad kodem deklaruje odrzucenie stubu, lecz faktyczne wyszukiwanie go dopuszcza. P1 oryginału niepoparte katastrofą produkcyjną; P2 dla build/runtime contracts. |
 | [4060116372](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116372) / #97 | `apps/runner-console/src/views/StorageView.js` | already_fixed | Backend ma per-hub _resources_scan_lock i cache publication po skanie. Równoległe HTTP requests/retries współdzielą jeden pełny scan, więc zgłoszone mnożenie rekursywnych skanów jest naprawione. Krótki UI timeout to odrębne #4061898648. |
 | [4060116379](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116379) / #97 | `scripts/local_runner/build_entrypoint.py` | duplicate | Ten sam hard-coded release timeline dla runtime_only/contract receipts co #4106577193. Powtórzenie 4106577193. |
@@ -1412,3 +1412,42 @@ checkpointują raw artifacts, lecz nie blokują promotion/parsing non-Completed.
 Zwykłe process workers posiadają taki gate. Projekt poprawki musi zachować typed
 Cancelled/Paused, nie mapować ich na generic RunError przez parsowanie tekstu.
 Nie uznano samego fail-closed generic guard za pełną naprawę terminal semantics.
+
+### Checkpoint 2026-10-08 — rzeczywiste regresje i dalsze błędy
+
+GHA37826981190/job113482245797 SUCCESS: jawnie wykonano
+weighted_tracking_confidence_publishes_pair_overlap_not_assignment_score oraz
+tracked_pair_overlap_is_published_as_confidence_in_json_and_csv. Uwaga4060116342
+ma implemented na poziomie kontraktu; logci-37826981190-rust.log zachowany.
+
+Artefakt11571579884 z GHA37828957946 zachował rzeczywistą siatkę density failure:
+108tetra/45nodes/15nodes na każdej z−10,0,+10nm; 16 midpoint instances spełnia
+promień15nm, 144 spełnia |z|<=4nm, przecięcie jest puste. Najbliższy midpoint
+ma r3.777nm,z5nm, długość10nm. Offline geometria crossing edges również ujawnia
+coarse edges (mediana39.695nm), więc sama zmiana selector nie naprawia gęstości.
+Capture nie jest kwalifikacją siatki. Root cause sizing nadal nie rozstrzygnięty.
+
+Browser37828142497 przeszedł do screenshot/notification gate, gdzie trzy brakujące
+GET fixtures204 dawały undefined revisions. `49c0ddb6f` dostarcza jawne truthful
+visualization state/composition/universe; notification assertions zachowano.
+Hook68/100 z tymi samymi7warnings, Node/diff/source review PASS.
+`f14bc4496` poprawia source guards na canonical apiPaths, po nowym hygiene failure
+113494275580; bramki nie wyłączono. `2808167f9` naprawia terminal qualification
+materializatora: odrzucony benchmark => summary/receiptfailed, exit1; artefakty
+oraz niezależny materialization_statuspassed zachowane. GHA37830494397 na2808167f9
+zlecono; uwaga4060116354 pozostaje pending do konkretnych regression evidence.
+
+Provider37826986842/job113482264242 terminalFAIL, oba targets compiled i CTest2run,
+0/2PASS. Artifactci-37826986842-slepc-artifact zachowany. ABI fixture odrzucony:
+Aqq descriptor incomplete dimensions or terms. Zidentyfikowano term_presence_mask0
+przy niezerowym h_eff0, trwa minimalna FIELD/digest fixture correction.
+Floquet refill fail po PETSc3.24.6 GMRES recurrence residual1.01898e-79 vs computed
+7.82914e-15 (start3.02639e-15); trwa source diagnosis bez obniżania tolerancji.
+Nie ponowiono provider po samym observation timeout ani nie zamknięto mass gates.
+
+Typed terminal multi-k patch zachowuje raw checkpoint przed admission, blokuje
+Cancelled/Paused/Failed przed promotion/parsing i następną próbką. Review wykryło
+utratę diagnostics przy legalnym checkpoint_rootNone; trwa bezpieczne zachowanie
+raw closure w nieakceptowanym namespace z istniejącą walidacją portable paths.
+Nie uznano WIP za naprawiony kontrakt ani nie publikujemy cancelled spectrum jako
+zaakceptowanego wyniku. PR97 nadal OPEN, całość celu niezakończona.
