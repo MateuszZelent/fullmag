@@ -112,8 +112,17 @@ a żaden tetraedr magnetyczny nie może przecinać wewnętrznej płaszczyzny.
 Dodatkowe poziomy z są błędem, nie dopuszczoną przybliżoną realizacją.
 Każdy zadany przedział GEO ma jawnie jedną warstwę ekstrudowania
 (`numElements=[1]`, znormalizowane `heights=[1.0]`, `recombine=True`).
-Dotyczy to także trasy scoped: ściana źródłowa pozostaje niesiatkowana przed
-ustaleniem owner tags, a pola regionalne zachowują swój zakres w płaszczyźnie.
+Dotyczy to także trasy scoped, lecz meshed extrusion nadal replikuje jedną
+triangulację źródłowego capu airboxu. Samo odłożenie meshingu do czasu owner tags
+nie realizuje lokalnego pola 3D wewnątrz filmu, którego zakres nie obejmuje capu.
+Źródła zachowują definicję regionalną, ale geometria nie zapewnia jej realizacji.
+Actual density gate pozostaje **FAILED**: w badanym regionie nie ma żadnych
+próbek midpoint. Poprawne exact layer planes nie dowodzą lokalnego zagęszczenia.
+Naprawa musi triangulować przekroje w rzeczywistych współrzędnych i owner scopes
+oraz łączyć zgodnie warstwy bez nowych poziomów z. Przeniesienie lub projekcja
+jednej siatki przez powietrze, rozszerzenie ROI i poluzowanie progów nie stanowią
+naprawy. Obecny geometry admission jest szerszy niż potwierdzona realizacja;
+pełna obsługa tej kombinacji pozostaje zadaniem otwartym.
 Pomijanie parametrów warstwy pozwalało Gmsh dodać poziomy z i kończyło się
 odmową exact-count. Poprawka zachowuje bramki liczby płaszczyzn i gęstości;
 jej świeża regresja actualGmsh pozostaje **NOT VERIFIED** do wykonania w CI.

@@ -2150,9 +2150,10 @@ def _generate_coincident_ring_airbox_mesh(
             source_entities = [(2, current_annulus)] + (
                 [(2, current_hole)] if current_hole is not None else []
             )
-            # Keep every requested z interval to one extrusion layer. The
-            # scoped path leaves the source face unmeshed so owner-tagged 3D
-            # fields remain active for in-plane sizing during mesh generation.
+            # Keep every requested z interval to one extrusion layer. Meshed
+            # extrusion still copies one source triangulation through the airbox;
+            # delaying source meshing does not realize interior-only 3D sizing.
+            # Exact layer planes and actual regional density are separate gates.
             extruded = gmsh.model.geo.extrude(
                 source_entities,
                 0.0,
